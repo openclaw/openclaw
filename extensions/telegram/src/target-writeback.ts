@@ -147,7 +147,7 @@ export async function maybePersistResolvedTelegramTarget(params: {
   resolvedChatId: string;
   verbose?: boolean;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
+  trustedInternalWriteback?: boolean;
 }): Promise<void> {
   const raw = params.rawTarget.trim();
   if (!raw) {
@@ -162,7 +162,9 @@ export async function maybePersistResolvedTelegramTarget(params: {
   }
   const { matchKey, resolvedTarget } = rewrite;
   const hasGatewayAdminScope = params.gatewayClientScopes?.includes(TELEGRAM_ADMIN_SCOPE) === true;
-  if (!hasGatewayAdminScope && params.targetWritebackAuthority !== "internal") {
+  const trustedInternalWriteback =
+    params.gatewayClientScopes === undefined && params.trustedInternalWriteback === true;
+  if (!hasGatewayAdminScope && !trustedInternalWriteback) {
     writebackLogger.warn(
       `skipping Telegram target writeback for ${raw} because gateway caller is missing ${TELEGRAM_ADMIN_SCOPE}`,
     );

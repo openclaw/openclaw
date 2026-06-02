@@ -553,7 +553,6 @@ describe("delivery-queue recovery", () => {
         gifPlayback: true,
         silent: true,
         gatewayClientScopes: ["operator.write"],
-        targetWritebackAuthority: "internal",
         mirror: {
           sessionKey: "agent:main:main",
           text: "a",
@@ -583,7 +582,6 @@ describe("delivery-queue recovery", () => {
       replyToMode?: string;
       formatting?: unknown;
       gatewayClientScopes?: string[];
-      targetWritebackAuthority?: string;
       mirror?: unknown;
       session?: unknown;
     };
@@ -599,7 +597,6 @@ describe("delivery-queue recovery", () => {
       chunkMode: "newline",
     });
     expect(deliverInput.gatewayClientScopes).toEqual(["operator.write"]);
-    expect(deliverInput.targetWritebackAuthority).toBe("internal");
     expect(deliverInput.mirror).toEqual({
       sessionKey: "agent:main:main",
       text: "a",

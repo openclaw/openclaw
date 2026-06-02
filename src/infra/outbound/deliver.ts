@@ -206,7 +206,6 @@ type ChannelHandlerParams = {
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
   onPlatformSendStart?: () => Promise<void>;
 };
 
@@ -585,9 +584,6 @@ function createChannelOutboundContextBase(
     mediaLocalRoots: params.mediaAccess?.localRoots,
     mediaReadFile: params.mediaAccess?.readFile,
     gatewayClientScopes: params.gatewayClientScopes,
-    ...(params.targetWritebackAuthority
-      ? { targetWritebackAuthority: params.targetWritebackAuthority }
-      : {}),
   };
 }
 
@@ -658,7 +654,6 @@ type DeliverOutboundPayloadsCoreParams = {
   mirror?: DeliveryMirror;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
 };
 
 type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParams & {
@@ -1277,7 +1272,6 @@ export async function deliverOutboundPayloadsInternal(
         mirror: params.mirror,
         session: params.session,
         gatewayClientScopes: params.gatewayClientScopes,
-        targetWritebackAuthority: params.targetWritebackAuthority,
       }).catch((err: unknown) => {
         if (queuePolicy === "required") {
           throw err;
@@ -1452,7 +1446,6 @@ async function deliverOutboundPayloadsCore(
       silent: params.silent,
       mediaAccess: resolveMediaAccess(mediaSources),
       gatewayClientScopes: params.gatewayClientScopes,
-      targetWritebackAuthority: params.targetWritebackAuthority,
       ...(params.onPlatformSendStart ? { onPlatformSendStart: params.onPlatformSendStart } : {}),
     });
   const baseHandler = await createHandler([]);

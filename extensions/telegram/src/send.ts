@@ -85,7 +85,6 @@ type TelegramSendOpts = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
   maxBytes?: number;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
@@ -145,7 +144,6 @@ type TelegramReactionOpts = {
   verbose?: boolean;
   retry?: RetryConfig;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
 };
 
 type TelegramTypingOpts = {
@@ -390,24 +388,18 @@ async function resolveAndPersistChatId(params: {
   persistTarget: string;
   verbose?: boolean;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
 }): Promise<string> {
   const chatId = await resolveChatId(params.lookupTarget, {
     api: params.api,
     verbose: params.verbose,
   });
-  // Direct Telegram runtime calls are trusted internal callers. Gateway paths
-  // carry a scope list, so absent scopes do not become implicit authority there.
-  const targetWritebackAuthority =
-    params.targetWritebackAuthority ??
-    (params.gatewayClientScopes === undefined ? "internal" : undefined);
   await maybePersistResolvedTelegramTarget({
     cfg: params.cfg,
     rawTarget: params.persistTarget,
     resolvedChatId: chatId,
     verbose: params.verbose,
     gatewayClientScopes: params.gatewayClientScopes,
-    targetWritebackAuthority,
+    ...(params.gatewayClientScopes === undefined ? { trustedInternalWriteback: true } : {}),
   });
   return chatId;
 }
@@ -616,7 +608,6 @@ export async function sendMessageTelegram(
     persistTarget: to,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
   const mediaUrl = opts.mediaUrl?.trim();
   const mediaMaxBytes =
@@ -1082,7 +1073,6 @@ export async function reactMessageTelegram(
     persistTarget: rawTarget,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1124,7 +1114,6 @@ type TelegramDeleteOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
 };
 
 export async function deleteMessageTelegram(
@@ -1141,7 +1130,6 @@ export async function deleteMessageTelegram(
     persistTarget: rawTarget,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1184,7 +1172,6 @@ export async function pinMessageTelegram(
     persistTarget: rawTarget,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1218,7 +1205,6 @@ export async function unpinMessageTelegram(
     persistTarget: rawTarget,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
   const messageId = messageIdInput === undefined ? undefined : normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1281,7 +1267,6 @@ export async function editForumTopicTelegram(
     persistTarget: rawTarget,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
   const messageThreadId = normalizeMessageId(messageThreadIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1333,7 +1318,6 @@ type TelegramEditOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
   textMode?: "markdown" | "html";
   /** Controls whether link previews are shown in the edited message. */
   linkPreview?: boolean;
@@ -1352,7 +1336,6 @@ type TelegramEditReplyMarkupOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: TelegramInlineButtons;
   /** Resolved runtime config from the command or gateway boundary. */
@@ -1377,7 +1360,6 @@ export async function editMessageReplyMarkupTelegram(
     persistTarget: rawTarget,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1422,7 +1404,6 @@ export async function editMessageTelegram(
     persistTarget: rawTarget,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1574,7 +1555,6 @@ type TelegramStickerOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Forum topic thread ID (for forum supergroups) */
@@ -1605,7 +1585,6 @@ export async function sendStickerTelegram(
     persistTarget: to,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
 
   const threadParams = buildTelegramThreadReplyParams({
@@ -1658,7 +1637,6 @@ type TelegramPollOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Forum topic thread ID (for forum supergroups) */
@@ -1689,7 +1667,6 @@ export async function sendPollTelegram(
     persistTarget: to,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
 
   // Normalize the poll input (validates question, options, maxSelections)
@@ -1770,7 +1747,6 @@ type TelegramCreateForumTopicOpts = {
   verbose?: boolean;
   retry?: RetryConfig;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
   /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
   iconColor?: TelegramCreateForumTopicParams["icon_color"];
   /** Custom emoji ID for the topic icon. */
@@ -1815,7 +1791,6 @@ export async function createForumTopicTelegram(
     persistTarget: chatId,
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
-    targetWritebackAuthority: opts.targetWritebackAuthority,
   });
 
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({

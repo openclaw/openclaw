@@ -1077,7 +1077,6 @@ describe("sendMessageTelegram", () => {
       rawTarget: "https://t.me/mychannel",
       resolvedChatId: "-100123",
       gatewayClientScopes: ["operator.write"],
-      targetWritebackAuthority: undefined,
     });
   });
 
@@ -1103,7 +1102,7 @@ describe("sendMessageTelegram", () => {
       rawTarget: "https://t.me/mychannel",
       resolvedChatId: "-100123",
       gatewayClientScopes: undefined,
-      targetWritebackAuthority: "internal",
+      trustedInternalWriteback: true,
     });
   });
 

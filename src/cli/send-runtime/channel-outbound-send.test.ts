@@ -87,29 +87,6 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.to).toBe("+15551234567");
     expect(params.text).toBe("hello");
     expect(params.accountId).toBe("default");
-    expect(params.targetWritebackAuthority).toBe("internal");
-  });
-
-  it("does not grant internal writeback authority to scoped gateway sends", async () => {
-    const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "tg-scoped" }));
-    mocks.loadChannelOutboundAdapter.mockResolvedValue({
-      sendText,
-    });
-
-    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
-    const runtimeSend = createChannelOutboundRuntimeSend({
-      channelId: "telegram" as never,
-      unavailableMessage: "unavailable",
-    });
-
-    await runtimeSend.sendMessage("12345", "hello", {
-      cfg: {},
-      gatewayClientScopes: ["operator.write"],
-    });
-
-    const params = expectSingleCallParams(sendText);
-    expect(params.gatewayClientScopes).toEqual(["operator.write"]);
-    expect(params.targetWritebackAuthority).toBeUndefined();
   });
 
   it("preserves rendered html formatting through lazy text sends", async () => {

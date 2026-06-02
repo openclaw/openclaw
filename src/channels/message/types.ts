@@ -174,7 +174,6 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   silent?: boolean;
   signal?: AbortSignal;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
 };
 
 /** Media send context with validated access hooks and media presentation hints. */

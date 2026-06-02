@@ -68,8 +68,6 @@ export type QueuedDeliveryPayload = {
   session?: OutboundSessionContext;
   /** Gateway caller scopes at enqueue time, preserved for recovery replay. */
   gatewayClientScopes?: readonly string[];
-  /** Internal channel target persistence authority at enqueue time. */
-  targetWritebackAuthority?: "internal";
 };
 
 export interface QueuedDelivery extends QueuedDeliveryPayload {
@@ -119,7 +117,6 @@ export async function enqueueDelivery(
     mirror: params.mirror,
     session: params.session,
     gatewayClientScopes: params.gatewayClientScopes,
-    targetWritebackAuthority: params.targetWritebackAuthority,
     retryCount: 0,
   };
   upsertDeliveryQueueEntry({

@@ -119,6 +119,23 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         expect(saveCronStore).not.toHaveBeenCalled();
       });
 
+      it("does not let internal writeback override non-admin gateway scopes", async () => {
+        await maybePersistResolvedTelegramTarget({
+          cfg: {
+            cron: { store: "/tmp/cron/jobs.json" },
+          } as OpenClawConfig,
+          rawTarget: "t.me/mychannel",
+          resolvedChatId: "-100123",
+          gatewayClientScopes: ["operator.write"],
+          trustedInternalWriteback: true,
+        });
+
+        expect(readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+        expect(writeConfigFile).not.toHaveBeenCalled();
+        expect(loadCronStore).not.toHaveBeenCalled();
+        expect(saveCronStore).not.toHaveBeenCalled();
+      });
+
       it("skips config and cron writeback for gateway callers with an empty scope set", async () => {
         await maybePersistResolvedTelegramTarget({
           cfg: {
@@ -216,7 +233,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         rawTarget: "t.me/mychannel",
         resolvedChatId: "-100123",
         gatewayClientScopes: undefined,
-        targetWritebackAuthority: "internal",
+        trustedInternalWriteback: true,
       });
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
@@ -253,7 +270,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         rawTarget: "t.me/mychannel:topic:9",
         resolvedChatId: "-100123",
         gatewayClientScopes: undefined,
-        targetWritebackAuthority: "internal",
+        trustedInternalWriteback: true,
       });
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);
@@ -285,7 +302,7 @@ export function installMaybePersistResolvedTelegramTargetTests(params?: {
         rawTarget: "@MyChannel",
         resolvedChatId: "-100123",
         gatewayClientScopes: undefined,
-        targetWritebackAuthority: "internal",
+        trustedInternalWriteback: true,
       });
 
       expect(writeConfigFile).toHaveBeenCalledTimes(1);

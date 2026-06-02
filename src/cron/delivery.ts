@@ -107,7 +107,6 @@ async function deliverCronAnnouncePayload(params: {
     bestEffort: false,
     deps: createOutboundSendDeps(params.deps),
     signal: params.abortSignal,
-    targetWritebackAuthority: "internal",
   });
   if (send.status === "failed" || send.status === "partial_failed") {
     throw send.error;

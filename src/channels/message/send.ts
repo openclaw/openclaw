@@ -173,9 +173,6 @@ export async function withDurableMessageSendContext<T>(
   } = params;
   const effectiveSignal = signal ?? abortSignal;
   const queuePolicy = durability === "best_effort" ? "best_effort" : "required";
-  const targetWritebackAuthority =
-    deliveryParams.targetWritebackAuthority ??
-    (Array.isArray(deliveryParams.gatewayClientScopes) ? undefined : "internal");
   let liveState = preview ?? createLiveMessageState<ReplyPayload>();
   const ctx: DurableMessageSendContext = {
     id: `${params.channel}:${params.to}`,
@@ -206,7 +203,6 @@ export async function withDurableMessageSendContext<T>(
           payloads: rendered.payloads,
           renderedBatchPlan: rendered.plan,
           queuePolicy,
-          ...(targetWritebackAuthority ? { targetWritebackAuthority } : {}),
           ...(effectiveSignal ? { abortSignal: effectiveSignal } : {}),
           onPayloadDeliveryOutcome: (outcome) => {
             payloadOutcomes.push(outcome);

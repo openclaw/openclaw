@@ -66,7 +66,6 @@ async function resolveTelegramSendContext(params: {
   formatting?: OutboundDeliveryFormattingOptions;
   silent?: boolean;
   gatewayClientScopes?: readonly string[];
-  targetWritebackAuthority?: "internal";
   resolveSend: ResolveTelegramSendFn;
 }): Promise<{
   send: TelegramSendFn;
@@ -79,7 +78,6 @@ async function resolveTelegramSendContext(params: {
     accountId?: string;
     silent?: boolean;
     gatewayClientScopes?: readonly string[];
-    targetWritebackAuthority?: "internal";
   };
 }> {
   const send = await params.resolveSend(params.deps);
@@ -93,9 +91,6 @@ async function resolveTelegramSendContext(params: {
       accountId: params.accountId ?? undefined,
       silent: params.silent,
       gatewayClientScopes: params.gatewayClientScopes,
-      ...(params.targetWritebackAuthority
-        ? { targetWritebackAuthority: params.targetWritebackAuthority }
-        : {}),
       ...(params.formatting?.parseMode === "HTML" ? { textMode: "html" as const } : {}),
     },
   };
@@ -309,7 +304,6 @@ export function createTelegramOutboundAdapter(
       silent,
       isAnonymous,
       gatewayClientScopes,
-      targetWritebackAuthority,
     }) => {
       const outboundTo = normalizeTelegramOutboundTarget(to);
       const { sendPollTelegram } = await loadSendModule();
@@ -320,7 +314,6 @@ export function createTelegramOutboundAdapter(
         silent: silent ?? undefined,
         isAnonymous: isAnonymous ?? undefined,
         gatewayClientScopes,
-        targetWritebackAuthority,
       });
     },
   };

@@ -158,7 +158,6 @@ function buildRecoveryDeliverParams(entry: QueuedDelivery, cfg: OpenClawConfig, 
     mirror: entry.mirror,
     session: entry.session,
     gatewayClientScopes: entry.gatewayClientScopes,
-    targetWritebackAuthority: entry.targetWritebackAuthority,
     deliveryQueueId: entry.id,
     deliveryQueueStateDir: stateDir,
     skipQueue: true, // Prevent re-enqueueing during recovery.

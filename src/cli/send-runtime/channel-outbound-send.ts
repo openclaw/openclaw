@@ -62,9 +62,6 @@ export function createChannelOutboundRuntimeSend(params: {
           opts.formatting ?? (opts.textMode === "html" ? { parseMode: "HTML" } : undefined),
         gifPlayback: opts.gifPlayback,
         gatewayClientScopes: opts.gatewayClientScopes,
-        ...(opts.gatewayClientScopes === undefined
-          ? { targetWritebackAuthority: "internal" as const }
-          : {}),
       });
       const hasMedia = Boolean(opts.mediaUrl);
       if (opts.blocks && outbound?.sendPayload) {

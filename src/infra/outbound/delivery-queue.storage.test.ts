@@ -48,7 +48,6 @@ describe("delivery-queue storage", () => {
           gifPlayback: true,
           silent: true,
           gatewayClientScopes: ["operator.write"],
-          targetWritebackAuthority: "internal",
           mirror: {
             sessionKey: "agent:main:main",
             text: "hello",
@@ -81,7 +80,6 @@ describe("delivery-queue storage", () => {
       expect(entry.gifPlayback).toBe(true);
       expect(entry.silent).toBe(true);
       expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
-      expect(entry.targetWritebackAuthority).toBe("internal");
       expect(entry.mirror).toEqual({
         sessionKey: "agent:main:main",
         text: "hello",
@@ -237,21 +235,6 @@ describe("delivery-queue storage", () => {
 
       const entry = readQueuedEntry(tmpDir(), id);
       expect(entry.gatewayClientScopes).toEqual(["operator.write"]);
-    });
-
-    it("persists target writeback authority for replay", async () => {
-      const id = await enqueueTextDelivery(
-        {
-          channel: "forum",
-          to: "2",
-          payloads: [{ text: "b" }],
-          targetWritebackAuthority: "internal",
-        },
-        tmpDir(),
-      );
-
-      const entry = readQueuedEntry(tmpDir(), id);
-      expect(entry.targetWritebackAuthority).toBe("internal");
     });
 
     it("persists session context for recovery replay", async () => {
