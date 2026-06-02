@@ -1852,6 +1852,148 @@ describe("openai transport stream", () => {
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
 
+  it("recovers DeepSeek DSML parameter tool calls emitted as text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n<｜DSML｜parameter name="sessionKey" string="true">current</｜DSML｜parameter>\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "session_status",
+        arguments: { sessionKey: "current" },
+        partialArgs: '{"sessionKey":"current"}',
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("recovers split DeepSeek DSML JSON tool calls emitted as text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: '<|DSML|tool_calls><|DSML|invoke name="read">' },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: '{"path":"/tmp/native.md"}</|DSML|invoke>' },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-split-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: { content: "</|DSML|tool_calls>" },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_deepseek_dsml_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+    ]);
+  });
+
+  it("does not recover malformed DeepSeek DSML tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-malformed-dsml-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<｜DSML｜tool_calls>\n<｜DSML｜invoke name="session_status">\n</｜DSML｜invoke>\n</｜DSML｜tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toEqual([]);
+  });
+
   it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
     const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
