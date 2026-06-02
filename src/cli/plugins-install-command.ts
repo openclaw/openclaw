@@ -697,7 +697,6 @@ export async function runPluginInstallCommand(params: {
           snapshot,
           installMode,
           resolvedPath: resolved,
-          safetyOverrides,
           link: true,
           runtime,
         });
@@ -751,7 +750,6 @@ export async function runPluginInstallCommand(params: {
         snapshot,
         installMode,
         resolvedPath: resolved,
-        safetyOverrides,
         runtime,
       });
       if (hookFallback.ok) {
