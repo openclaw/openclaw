@@ -188,7 +188,7 @@ export function createSessionsHistoryTool(opts?: {
         required: true,
       });
       const cfg = loadConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { mainKey, alias, effectiveRequesterKey, currentSessionKeys, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
@@ -230,6 +230,7 @@ export function createSessionsHistoryTool(opts?: {
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "history",
         requesterSessionKey: effectiveRequesterKey,
+        currentSessionKeys,
         visibility,
         a2aPolicy,
       });

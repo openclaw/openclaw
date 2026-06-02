@@ -47,7 +47,7 @@ export function createSessionsSendTool(opts?: {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message", { required: true });
       const cfg = loadConfig();
-      const { mainKey, alias, effectiveRequesterKey, restrictToSpawned } =
+      const { mainKey, alias, effectiveRequesterKey, currentSessionKeys, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
@@ -201,6 +201,7 @@ export function createSessionsSendTool(opts?: {
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "send",
         requesterSessionKey: effectiveRequesterKey,
+        currentSessionKeys,
         visibility: sessionVisibility,
         a2aPolicy,
       });

@@ -38,7 +38,7 @@ export function createSessionsListTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const cfg = loadConfig();
-      const { mainKey, alias, requesterInternalKey, restrictToSpawned } =
+      const { mainKey, alias, requesterInternalKey, currentSessionKeys, restrictToSpawned } =
         resolveSandboxedSessionToolContext({
           cfg,
           agentSessionKey: opts?.agentSessionKey,
@@ -89,6 +89,7 @@ export function createSessionsListTool(opts?: {
       const visibilityGuard = await createSessionVisibilityGuard({
         action: "list",
         requesterSessionKey: effectiveRequesterKey,
+        currentSessionKeys,
         visibility,
         a2aPolicy,
       });

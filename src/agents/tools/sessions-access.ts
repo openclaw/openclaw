@@ -59,6 +59,7 @@ export function resolveSandboxedSessionToolContext(params: {
   visibility: "spawned" | "all";
   requesterInternalKey: string | undefined;
   effectiveRequesterKey: string;
+  currentSessionKeys: ReadonlySet<string>;
   restrictToSpawned: boolean;
 } {
   const { mainKey, alias } = resolveMainSessionAlias(params.cfg);
@@ -72,6 +73,11 @@ export function resolveSandboxedSessionToolContext(params: {
         })
       : undefined;
   const effectiveRequesterKey = requesterInternalKey ?? alias;
+  const currentSessionKeys = new Set(
+    [effectiveRequesterKey, requesterInternalKey, alias, mainKey, "main"].filter(
+      (key): key is string => typeof key === "string" && key.trim().length > 0,
+    ),
+  );
   const restrictToSpawned =
     params.sandboxed === true &&
     visibility === "spawned" &&
@@ -83,6 +89,7 @@ export function resolveSandboxedSessionToolContext(params: {
     visibility,
     requesterInternalKey,
     effectiveRequesterKey,
+    currentSessionKeys,
     restrictToSpawned,
   };
 }
@@ -174,6 +181,7 @@ function treeVisibilityMessage(action: SessionAccessAction): string {
 export async function createSessionVisibilityGuard(params: {
   action: SessionAccessAction;
   requesterSessionKey: string;
+  currentSessionKeys?: ReadonlySet<string>;
   visibility: SessionToolsVisibility;
   a2aPolicy: AgentToAgentPolicy;
 }): Promise<{
@@ -213,7 +221,11 @@ export async function createSessionVisibilityGuard(params: {
       return { allowed: true };
     }
 
-    if (params.visibility === "self" && targetSessionKey !== params.requesterSessionKey) {
+    const isCurrentSession =
+      targetSessionKey === params.requesterSessionKey ||
+      params.currentSessionKeys?.has(targetSessionKey);
+
+    if (params.visibility === "self" && !isCurrentSession) {
       return {
         allowed: false,
         status: "forbidden",
@@ -221,11 +233,7 @@ export async function createSessionVisibilityGuard(params: {
       };
     }
 
-    if (
-      params.visibility === "tree" &&
-      targetSessionKey !== params.requesterSessionKey &&
-      !spawnedKeys?.has(targetSessionKey)
-    ) {
+    if (params.visibility === "tree" && !isCurrentSession && !spawnedKeys?.has(targetSessionKey)) {
       return {
         allowed: false,
         status: "forbidden",
