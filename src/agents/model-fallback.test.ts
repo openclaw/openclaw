@@ -1056,7 +1056,7 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toStrictEqual([]);
   });
 
-  it("lets configured CLI runtimes reach the run callback", async () => {
+  it("lets configured CLI runtimes bypass stale provider auth cooldowns", async () => {
     const cfg = makeCfg({
       agents: {
         defaults: {
@@ -1069,18 +1069,35 @@ describe("runWithModelFallback", () => {
         },
       },
     });
+    const tempDir = await makeAuthTempDir();
+    setAuthRuntimeStore(tempDir, {
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "anthropic:default": { type: "api_key", provider: "anthropic", key: "test-key" },
+        "openai:default": { type: "api_key", provider: "openai", key: "test-key" },
+      },
+      usageStats: {
+        "anthropic:default": {
+          disabledUntil: Date.now() + 60_000,
+          disabledReason: "billing",
+          failureCounts: { rate_limit: 4 },
+        },
+      },
+    });
     const run = vi.fn().mockResolvedValueOnce("cli ok");
 
     const result = await runWithModelFallback({
       cfg,
       provider: "anthropic",
       model: "claude-sonnet-4-6",
+      agentDir: tempDir,
       run,
     });
 
     expect(result.result).toBe("cli ok");
     expect(run).toHaveBeenCalledTimes(1);
     expect(run.mock.calls[0]).toEqual(["anthropic", "claude-sonnet-4-6"]);
+    expect(result.attempts).toStrictEqual([]);
   });
 
   it("does not treat command-lane watchdog timeouts as model fallback failures", async () => {

@@ -739,6 +739,58 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().authProfileId).toBe("openai:work");
   });
 
+  it("skips auto auth-profile resolution for CLI-owned transport", async () => {
+    const sessionKey = "agent:main:direct:codex-cli-owned-transport";
+    const sessionEntry: SessionEntry = {
+      sessionId: "openclaw-session-codex-owned",
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          agentRuntime: { id: "codex" },
+        },
+      },
+    };
+    await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
+    await fs.writeFile(path.join(tmpDir, "auth-profiles.json"), "{", "utf-8");
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("codex cli response"));
+
+    await runAgentAttempt({
+      providerOverride: "codex-cli",
+      originalProvider: "codex-cli",
+      modelOverride: "gpt-5.4",
+      cfg,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey,
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-codex-cli-owned-transport-auth-skip",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai-codex",
+      sessionStore,
+      storePath,
+      sessionHasHistory: false,
+    });
+
+    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
+    expect(firstRunCliAgentArg().authProfileId).toBeUndefined();
+  });
+
   it("selects a google-gemini-cli auth profile for canonical Google models routed through Gemini CLI", async () => {
     const sessionKey = "agent:main:direct:gemini-cli-auth-bridge";
     const sessionEntry: SessionEntry = {
