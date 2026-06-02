@@ -1511,6 +1511,7 @@
                       "logging",
                       "gateway/opentelemetry",
                       "gateway/prometheus",
+                      "gateway/sentry-monitor",
                       "gateway/logging",
                       "gateway/diagnostics",
                       "gateway/troubleshooting"

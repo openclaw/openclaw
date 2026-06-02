@@ -46,6 +46,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "memory-wiki",
   "openshell",
   "phone-control",
+  "sentry-monitor",
   "skill-workshop",
   "talk-voice",
   "thread-ownership",
@@ -60,6 +61,7 @@ const EXPECTED_EMPTY_CONFIG_GATEWAY_STARTUP_PLUGIN_IDS = [
   "file-transfer",
   "memory-core",
   "phone-control",
+  "sentry-monitor",
   "talk-voice",
 ] as const;
 

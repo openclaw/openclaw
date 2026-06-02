@@ -1,0 +1,27 @@
+{
+  "id": "sentry-monitor",
+  "name": "Sentry Monitor",
+  "description": "Forward error-bearing OpenClaw lifecycle events to Sentry (model calls, agent turns, tool calls, message deliveries, subagents, cron runs, abnormal session ends) plus node-level uncaught exceptions / unhandled rejections.",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "dsn": {
+        "type": "string",
+        "description": "Sentry DSN. If unset, the BOON_SENTRY_DSN env var is used. If neither is set, the plugin is inactive (logs a warn and registers no hooks)."
+      },
+      "environment": {
+        "type": "string",
+        "description": "Sentry environment tag. Defaults to the host's hostname."
+      },
+      "tracesSampleRate": {
+        "type": "number",
+        "description": "Sentry traces sample rate. Defaults to 0 (no performance tracing — error events only)."
+      }
+    }
+  }
+}

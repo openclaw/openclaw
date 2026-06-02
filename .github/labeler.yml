@@ -52,6 +52,11 @@
       - any-glob-to-any-file:
           - "extensions/bonjour/**"
           - "docs/gateway/bonjour.md"
+"plugin: sentry-monitor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sentry-monitor/**"
+          - "docs/gateway/sentry-monitor.md"
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
