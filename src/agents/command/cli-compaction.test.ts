@@ -76,12 +76,6 @@ describe("runCliTurnCompactionLifecycle", () => {
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-cli-compaction-"));
-    // Default backends to non-owning so the context-engine compaction-path tests
-    // exercise that path. On current main resolveCliBackendConfig("claude-cli")
-    // resolves the (now ownsNativeCompaction) backend even in unit tests, which
-    // would otherwise route every claude-cli compaction test through the #88315
-    // defer no-op. The ownsNativeCompaction-specific tests override this with an
-    // owning backend to exercise the defer.
     setCliCompactionTestDeps({ resolveCliBackendConfig: () => null });
   });
 

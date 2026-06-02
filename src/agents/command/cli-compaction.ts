@@ -13,6 +13,7 @@ import {
   applyAgentAutoCompactionGuard as applyAgentAutoCompactionGuardImpl,
   resolveEffectiveCompactionMode,
 } from "../agent-settings.js";
+import { resolveCliBackendConfig as resolveCliBackendConfigImpl } from "../cli-backends.js";
 import { classifyCompactionReason } from "../embedded-agent-runner/compact-reasons.js";
 import { buildEmbeddedCompactionRuntimeContext } from "../embedded-agent-runner/compaction-runtime-context.js";
 import {
@@ -29,7 +30,6 @@ import { ensureSelectedAgentHarnessPlugin as ensureSelectedAgentHarnessPluginImp
 import { maybeCompactAgentHarnessSession as maybeCompactAgentHarnessSessionImpl } from "../harness/selection.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { resolveCliBackendConfig as resolveCliBackendConfigImpl } from "../cli-backends.js";
 import {
   clearCliSessionInStore as clearCliSessionInStoreImpl,
   recordCliCompactionInStore as recordCliCompactionInStoreImpl,
@@ -529,18 +529,12 @@ export async function runCliTurnCompactionLifecycle(params: {
     return params.sessionEntry;
   }
 
-  // When the backend declares native compaction ownership but has no harness
-  // compaction endpoint (e.g. claude-cli — Claude Code compacts its own
-  // transcript internally), skip both native-harness and context-engine
-  // compaction. The backend will handle it; OpenClaw returns a no-op.
   const resolvedBackend = cliCompactionDeps.resolveCliBackendConfig(params.provider, params.cfg);
   if (
     resolvedBackend?.ownsNativeCompaction &&
     !isNativeHarnessCompactionSession(params.sessionEntry, params.provider)
   ) {
-    log.info(
-      `CLI backend "${params.provider}" owns native compaction — deferring to backend`,
-    );
+    log.info(`CLI backend "${params.provider}" owns native compaction — deferring to backend`);
     return params.sessionEntry;
   }
 
