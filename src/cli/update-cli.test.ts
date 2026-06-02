@@ -1841,6 +1841,23 @@ describe("update-cli", () => {
     },
   ] as const)("updateCommand dry-run behavior: $name", runUpdateCliScenario);
 
+  it("fails dry-run when explicit tag is not on npm registry", async () => {
+    const tempDir = createCaseDir("openclaw-update");
+    mockPackageInstallStatus(tempDir);
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: null,
+      nodeEngine: null,
+    });
+    vi.mocked(defaultRuntime.exit).mockClear();
+
+    await updateCommand({ dryRun: true, tag: "2026.5.26" });
+
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain("not available on the npm registry");
+  });
+
   it.each([
     {
       name: "table output",

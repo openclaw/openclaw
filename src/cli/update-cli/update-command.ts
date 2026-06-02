@@ -3171,6 +3171,17 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     });
   }
 
+  if (
+    updateInstallKind === "package" &&
+    explicitTag &&
+    targetVersion == null &&
+    canResolveRegistryVersionForPackageTarget(tag)
+  ) {
+    defaultRuntime.error(`Target version ${tag} is not available on the npm registry.`);
+    defaultRuntime.exit(1);
+    return;
+  }
+
   if (opts.dryRun) {
     let mode: UpdateRunResult["mode"] = "unknown";
     if (updateInstallKind === "git") {
