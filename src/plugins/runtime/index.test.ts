@@ -185,6 +185,19 @@ describe("plugin runtime command execution", () => {
     expectRuntimeValue(readValue, expected);
   });
 
+  it("exposes a path-only runtime.events.emitSessionTranscriptUpdate wrapper", () => {
+    const updates: unknown[] = [];
+    const cleanup = onSessionTranscriptUpdate((update) => updates.push(update));
+    try {
+      const runtime = createPluginRuntime();
+      expect(typeof runtime.events.emitSessionTranscriptUpdate).toBe("function");
+      expect(runtime.events.emitSessionTranscriptUpdate("/tmp/session.jsonl")).toBeUndefined();
+      expect(updates).toEqual([{ sessionFile: "/tmp/session.jsonl" }]);
+    } finally {
+      cleanup();
+    }
+  });
+
   it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
     vi.useFakeTimers();
     resetHeartbeatWakeStateForTests();

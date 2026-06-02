@@ -297,6 +297,7 @@ export type PluginRuntimeCore = {
   };
   events: {
     onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
+    emitSessionTranscriptUpdate: typeof import("./runtime-events.js").emitSessionTranscriptUpdate;
     onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
   };
   logging: {
