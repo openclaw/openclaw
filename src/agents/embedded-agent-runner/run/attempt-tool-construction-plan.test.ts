@@ -162,6 +162,31 @@ describe("applyEmbeddedAttemptToolsAllow", () => {
     ).toEqual(["strict__strict_probe", "loose__extra_probe"]);
   });
 
+  it("skips unreadable tool names before policy and plugin group matching", () => {
+    const unreadable = {
+      get name(): string {
+        throw new Error("tool name getter exploded");
+      },
+    };
+    const memoryTool = { name: "memory_search" };
+    const tools = [unreadable, memoryTool, { name: "read" }];
+    const toolMeta = (tool: (typeof tools)[number]) =>
+      tool === memoryTool ? { pluginId: "active-memory" } : undefined;
+
+    expect(applyEmbeddedAttemptToolsAllow(tools, ["read"]).map((tool) => tool.name)).toEqual([
+      "read",
+    ]);
+    expect(applyEmbeddedAttemptToolsAllow(tools, ["*"]).map((tool) => tool.name)).toEqual([
+      "memory_search",
+      "read",
+    ]);
+    expect(
+      applyEmbeddedAttemptToolsAllow(tools, ["active-memory"], { toolMeta }).map(
+        (tool) => tool.name,
+      ),
+    ).toEqual(["memory_search"]);
+  });
+
   it("treats an explicit empty toolsAllow as no tools", () => {
     const tools = [{ name: "exec" }, { name: "read" }, { name: "message" }];
 

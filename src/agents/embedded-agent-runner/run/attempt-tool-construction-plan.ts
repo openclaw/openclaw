@@ -63,6 +63,11 @@ const NO_CODING_TOOL_CONSTRUCTION_PLAN: OpenClawCodingToolConstructionPlan = {
   includePluginTools: false,
 };
 
+type ReadableTool<T extends { name: string }> = {
+  tool: T;
+  name: string;
+};
+
 function cloneCodingToolConstructionPlan(
   plan: OpenClawCodingToolConstructionPlan,
 ): OpenClawCodingToolConstructionPlan {
@@ -89,6 +94,26 @@ function isKnownLocalCodingToolName(normalized: string): boolean {
   );
 }
 
+function readToolName<T extends { name: string }>(tool: T): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" && normalizeToolName(name) ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function collectReadableTools<T extends { name: string }>(tools: T[]): Array<ReadableTool<T>> {
+  const readable: Array<ReadableTool<T>> = [];
+  for (const tool of tools) {
+    const name = readToolName(tool);
+    if (name) {
+      readable.push({ tool, name });
+    }
+  }
+  return readable;
+}
+
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
@@ -102,16 +127,22 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   if (toolsAllow.length === 0) {
     return [];
   }
+  const readableTools = collectReadableTools(tools);
   if (hasWildcardToolAllowlist(toolsAllow)) {
-    return tools;
+    return readableTools.map((entry) => entry.tool);
   }
   const pluginGroups = options?.toolMeta
-    ? buildPluginToolGroups({ tools, toolMeta: options.toolMeta })
+    ? buildPluginToolGroups({
+        tools: readableTools,
+        toolMeta: (entry) => options.toolMeta?.(entry.tool),
+      })
     : undefined;
   const policy = pluginGroups
     ? expandPolicyWithPluginGroups({ allow: toolsAllow }, pluginGroups)
     : { allow: toolsAllow };
-  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
+  return readableTools
+    .filter((entry) => isToolAllowedByPolicyName(entry.name, policy))
+    .map((entry) => entry.tool);
 }
 
 export function mergeForcedEmbeddedAttemptToolsAllow(
