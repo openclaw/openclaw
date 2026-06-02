@@ -459,7 +459,11 @@ async function resolveLatestCompatibleNpmResolution(params: {
   }
 
   const candidates = versions
-    .filter((version) => allowPrereleaseCandidates || !isPrereleaseSemverVersion(version))
+    .filter((version) =>
+      allowPrereleaseCandidates
+        ? isPrereleaseSemverVersion(version)
+        : !isPrereleaseSemverVersion(version),
+    )
     .filter((version) => compareNpmSemver(version, currentVersion) < 0)
     .toSorted(compareNpmSemver)
     .toReversed();

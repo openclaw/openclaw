@@ -872,6 +872,61 @@ describe("updateNpmInstalledPlugins", () => {
     ]);
   });
 
+  it("does not skip unchanged npm plugins when package metadata requires a newer host", async () => {
+    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/msteams",
+      version: "2026.5.28-beta.4",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/msteams",
+      version: "2026.5.28-beta.4",
+      integrity: "sha512-newer",
+      shasum: "newer",
+      openclaw: {
+        extensions: ["./dist/index.js"],
+        install: { minHostVersion: ">=2026.5.28-beta.4" },
+      },
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "msteams",
+        targetDir: installPath,
+        version: "2026.5.28-beta.3",
+        npmResolution: {
+          name: "@openclaw/msteams",
+          version: "2026.5.28-beta.3",
+          resolvedSpec: "@openclaw/msteams@2026.5.28-beta.3",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "msteams",
+        spec: "@openclaw/msteams",
+        installPath,
+        resolvedName: "@openclaw/msteams",
+        resolvedVersion: "2026.5.28-beta.4",
+        resolvedSpec: "@openclaw/msteams@2026.5.28-beta.4",
+        integrity: "sha512-newer",
+        shasum: "newer",
+      }),
+      pluginIds: ["msteams"],
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/msteams");
+    expect(npmInstallCall()?.mode).toBe("update");
+    expect(result.changed).toBe(true);
+    expectRecordFields(result.config.plugins?.installs?.msteams, {
+      source: "npm",
+      version: "2026.5.28-beta.3",
+      resolvedName: "@openclaw/msteams",
+      resolvedVersion: "2026.5.28-beta.3",
+      resolvedSpec: "@openclaw/msteams@2026.5.28-beta.3",
+    });
+  });
+
   it("repairs missing openclaw peer links before skipping unchanged npm plugins", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/codex",

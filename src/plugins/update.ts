@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
@@ -46,6 +47,7 @@ import {
 } from "./install.js";
 import { buildNpmResolutionInstallFields, recordPluginInstall } from "./installs.js";
 import { installPluginFromMarketplace } from "./marketplace.js";
+import { checkMinHostVersion } from "./min-host-version.js";
 import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstall,
@@ -214,6 +216,15 @@ function shouldBypassTrustedOfficialUnchangedNpmCheck(params: {
 }
 
 function isNpmMetadataCompatibleWithCurrentHost(metadata: NpmSpecResolution): boolean {
+  const hostVersion = resolveCompatibilityHostVersion();
+  const installMetadata = metadata.packageOpenClaw?.install;
+  const minHostVersionCheck = checkMinHostVersion({
+    currentVersion: hostVersion,
+    minHostVersion: isRecord(installMetadata) ? installMetadata.minHostVersion : undefined,
+  });
+  if (!minHostVersionCheck.ok) {
+    return false;
+  }
   const pluginApiRangeCheck = resolvePackagePluginApiRange(metadata.packageOpenClaw);
   if (!pluginApiRangeCheck.ok) {
     return false;
@@ -222,7 +233,7 @@ function isNpmMetadataCompatibleWithCurrentHost(metadata: NpmSpecResolution): bo
   if (!pluginApiRange) {
     return true;
   }
-  return satisfiesPluginApiRange(resolveCompatibilityHostVersion(), pluginApiRange);
+  return satisfiesPluginApiRange(hostVersion, pluginApiRange);
 }
 
 function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
