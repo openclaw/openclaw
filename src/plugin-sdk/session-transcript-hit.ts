@@ -4,6 +4,19 @@ import { uniqueStrings } from "../../packages/normalization-core/src/string-norm
 import { parseUsageCountedSessionIdFromFileName } from "../config/sessions/artifacts.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+export {
+  formatSessionTranscriptMemoryHitKey,
+  parseSessionTranscriptMemoryHitKey,
+  resolveSessionTranscriptMemoryHitKeyToSessionKeys,
+} from "./session-transcript-runtime.js";
+export type {
+  ResolveSessionTranscriptMemoryHitKeyParams,
+  SessionTranscriptIdentity,
+  SessionTranscriptMemoryHitIdentity,
+  SessionTranscriptMemoryHitKey,
+  SessionTranscriptMemoryHitKeyParams,
+  SessionTranscriptReadParams,
+} from "./session-transcript-runtime.js";
 
 export { loadCombinedSessionStoreForGateway } from "../config/sessions/combined-store-gateway.js";
 

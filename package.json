@@ -949,6 +949,10 @@
       "types": "./dist/plugin-sdk/session-transcript-hit.d.ts",
       "default": "./dist/plugin-sdk/session-transcript-hit.js"
     },
+    "./plugin-sdk/session-transcript-runtime": {
+      "types": "./dist/plugin-sdk/session-transcript-runtime.d.ts",
+      "default": "./dist/plugin-sdk/session-transcript-runtime.js"
+    },
     "./plugin-sdk/session-visibility": {
       "types": "./dist/plugin-sdk/session-visibility.d.ts",
       "default": "./dist/plugin-sdk/session-visibility.js"
