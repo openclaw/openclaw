@@ -132,6 +132,71 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     ]);
   });
 
+  it("quarantines unreadable tools returned by RuntimePlan normalization", () => {
+    const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
+    const unreadable = { ...createParameterFreeTool(), name: "fuzzplugin_unreadable" } as AgentTool;
+    Object.defineProperty(unreadable, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin normalized name getter exploded");
+      },
+    });
+    const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
+    const normalize = vi.fn(() => [unreadable, healthy]);
+    const runtimePlan = {
+      tools: {
+        normalize,
+        logDiagnostics: vi.fn(),
+      },
+    } as unknown as AgentRuntimePlan;
+
+    expect(
+      normalizeAgentRuntimeTools({
+        runtimePlan,
+        tools: [createParameterFreeTool("source") as AgentTool],
+        provider: "openai",
+        onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
+      }),
+    ).toEqual([healthy]);
+    expect(diagnostics).toEqual([
+      [
+        {
+          toolName: "tool[0]",
+          toolIndex: 0,
+          violations: ["tool[0].name is unreadable"],
+        },
+      ],
+    ]);
+  });
+
+  it("quarantines schemas returned by provider normalization before callers read them", () => {
+    const source = createParameterFreeTool("fuzzplugin_provider_shape") as AgentTool;
+    const healthy = { ...createParameterFreeTool(), name: "healthy" } as AgentTool;
+    const arraySchema = {
+      ...source,
+      parameters: { type: "array", items: { type: "number" } },
+    } as unknown as AgentTool;
+    const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([arraySchema, healthy]);
+
+    expect(
+      normalizeAgentRuntimeTools({
+        tools: [source],
+        provider: "openai",
+        onPreNormalizationSchemaDiagnostics: (entries) => diagnostics.push([...entries]),
+      }),
+    ).toEqual([healthy]);
+    expect(diagnostics).toEqual([
+      [
+        {
+          toolName: "fuzzplugin_provider_shape",
+          toolIndex: 0,
+          violations: ['fuzzplugin_provider_shape.parameters.type must be "object"'],
+        },
+      ],
+    ]);
+  });
+
   it("accepts legacy optional model fields while normalizing RuntimePlan context", () => {
     const tools = [createParameterFreeTool()] as AgentTool[];
     const normalize = vi.fn(() => tools);
