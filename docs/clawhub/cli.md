@@ -67,6 +67,7 @@ When ClawHub scan state or ownership needs maintenance, use the relevant
 standalone command:
 
 ```bash
+clawhub sync --all
 clawhub skill rescan <slug>
 clawhub package transfer @old-owner/package --to new-owner
 ```
