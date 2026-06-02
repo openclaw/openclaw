@@ -226,7 +226,11 @@ export function applyCodexTurnNotificationState(params: {
       turnWatches.armCompletionIdleWatch();
     }
   } else if (rawResponseItemCompletedWithNoActiveItems) {
-    turnWatches.armCompletionIdleWatch();
+    if (isRawReasoningCompletionNotification(notification)) {
+      armPostProgressReplyWatch();
+    } else {
+      turnWatches.armCompletionIdleWatch();
+    }
   } else if (isCurrentTurnNotification && rawToolOutputCompletion) {
     // Raw OpenAI response streams can report the tool-output handoff without
     // a matching app-server `item/completed`; keep the post-tool guard alive.
