@@ -344,7 +344,9 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
                 entry.channel === "qqbot" &&
                 (entry.accountId === account.accountId ||
                   (!entry.accountId && account.accountId === DEFAULT_ACCOUNT_ID)),
-              bypassBackoff: /not connected|disconnected|gateway/i.test(entry.lastError ?? ""),
+              bypassBackoff: /not connected|disconnected|gateway|outbound not configured/i.test(
+                entry.lastError ?? "",
+              ),
             }),
           });
         } catch (err) {
