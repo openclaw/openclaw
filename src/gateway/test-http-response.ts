@@ -1,4 +1,5 @@
-import type { ServerResponse } from "node:http";
+import type { EventEmitter } from "node:events";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
 import { vi } from "vitest";
 
@@ -23,4 +24,28 @@ export function makeMockHttpResponse(): {
     end,
   }) as unknown as ServerResponse;
   return { res, setHeader, end };
+}
+
+export function makeMockHttpReqRes(
+  reqSocket: EventEmitter | null,
+  resSocket: EventEmitter | null,
+): { req: IncomingMessage; res: ServerResponse } {
+  return {
+    req: { socket: reqSocket } as unknown as IncomingMessage,
+    res: { socket: resSocket } as unknown as ServerResponse,
+  };
+}
+
+export async function readClientResponseBody(
+  res: IncomingMessage,
+): Promise<{ status: number; body: string }> {
+  let body = "";
+  res.setEncoding("utf8");
+  res.on("data", (chunk) => {
+    body += chunk;
+  });
+  await new Promise<void>((resolve) => {
+    res.once("end", resolve);
+  });
+  return { status: res.statusCode ?? 0, body };
 }

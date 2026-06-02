@@ -84,6 +84,17 @@ export const createChannelTestPluginBase = (params: {
   },
 });
 
+export const createDirectOutboundTestAdapter = (params: {
+  channel: ChannelId;
+  messageId?: string;
+  resolveTarget?: ChannelOutboundAdapter["resolveTarget"];
+}): ChannelOutboundAdapter => ({
+  deliveryMode: "direct",
+  ...(params.resolveTarget ? { resolveTarget: params.resolveTarget } : {}),
+  sendText: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
+  sendMedia: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
+});
+
 export const createMSTeamsTestPluginBase = (): Pick<
   ChannelPlugin,
   "id" | "meta" | "capabilities" | "config"
