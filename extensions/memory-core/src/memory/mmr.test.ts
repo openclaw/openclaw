@@ -467,3 +467,14 @@ describe("DEFAULT_MMR_CONFIG", () => {
     expect(DEFAULT_MMR_CONFIG.lambda).toBe(0.7);
   });
 });
+
+describe("mmrRerank relevanceScore", () => {
+  it("ranks by relevanceScore when present, not raw score", () => {
+    const items = [
+      { id: "a", score: 0.9, content: "alpha", relevanceScore: 0.1 },
+      { id: "b", score: 0.1, content: "bravo", relevanceScore: 0.9 },
+    ];
+    const out = mmrRerank(items, { enabled: true, lambda: 1 }); // lambda=1 → pure relevance
+    expect(out.map((i) => i.id)).toEqual(["b", "a"]); // b wins on relevanceScore despite lower score
+  });
+});

@@ -13,6 +13,9 @@ export type MMRItem = {
   id: string;
   score: number;
   content: string;
+  // Optional reranked relevance; when present, drives MMR instead of score so
+  // callers can pass a cross-encoder signal without overloading the raw score.
+  relevanceScore?: number;
 };
 
 export type MMRConfig = {
@@ -66,6 +69,10 @@ export function computeMMRScore(relevance: number, maxSimilarity: number, lambda
   return lambda * relevance - (1 - lambda) * maxSimilarity;
 }
 
+// Relevance signal: prefer relevanceScore when a cross-encoder has set it;
+// fall back to raw score so callers without a reranker are unaffected.
+const rel = (i: MMRItem): number => i.relevanceScore ?? i.score;
+
 /**
  * Re-rank items using Maximal Marginal Relevance (MMR).
  *
@@ -78,6 +85,7 @@ export function computeMMRScore(relevance: number, maxSimilarity: number, lambda
  * @param config - MMR configuration (lambda, enabled)
  * @returns Re-ranked items in MMR order
  */
+
 export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
 
@@ -91,7 +99,7 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 
   // If lambda is 1, just return sorted by relevance (no diversity penalty)
   if (clampedLambda === 1) {
-    return [...items].toSorted((a, b) => b.score - a.score);
+    return [...items].toSorted((a, b) => rel(b) - rel(a));
   }
 
   // Pre-tokenize all items for efficiency
@@ -100,9 +108,9 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
     tokenCache.set(item.id, tokenize(item.content));
   }
 
-  // Normalize scores to [0, 1] for fair comparison with similarity
-  const maxScore = Math.max(...items.map((i) => i.score));
-  const minScore = Math.min(...items.map((i) => i.score));
+  // Normalize relevance to [0, 1] for fair comparison with similarity
+  const maxScore = Math.max(...items.map(rel));
+  const minScore = Math.min(...items.map(rel));
   const scoreRange = maxScore - minScore;
 
   const normalizeScore = (score: number): number => {
@@ -121,7 +129,7 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
     let bestMMRScore = -Infinity;
 
     for (const candidate of remaining) {
-      const normalizedRelevance = normalizeScore(candidate.score);
+      const normalizedRelevance = normalizeScore(rel(candidate));
       const maxSim = maxSimilarityToSelected(candidate, selected, tokenCache);
       const mmrScore = computeMMRScore(normalizedRelevance, maxSim, clampedLambda);
 
@@ -152,7 +160,13 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
  * Adapts the generic MMR function to work with the hybrid search result format.
  */
 export function applyMMRToHybridResults<
-  T extends { score: number; snippet: string; path: string; startLine: number },
+  T extends {
+    score: number;
+    snippet: string;
+    path: string;
+    startLine: number;
+    rerankScore?: number;
+  },
 >(results: T[], config: Partial<MMRConfig> = {}): T[] {
   if (results.length === 0) {
     return results;
@@ -169,6 +183,7 @@ export function applyMMRToHybridResults<
       id,
       score: r.score,
       content: r.snippet,
+      relevanceScore: r.rerankScore,
     };
   });
 
