@@ -456,7 +456,7 @@ run_with_spinner() {
                 GUM_STATUS="skipped"
                 GUM_REASON="gum raw mode unavailable"
                 ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-                "$@"
+                "$@" < /dev/null
                 return $?
             fi
             if [[ -s "$gum_out" ]]; then
