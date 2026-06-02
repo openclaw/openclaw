@@ -3320,16 +3320,29 @@ export const chatHandlers: GatewayRequestHandlers = {
           respond(true, ackPayload, undefined, { runId: clientRunId });
           return;
         }
+        const error = errorShape(
+          err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
+          String(err),
+        );
+        // Cache the terminal failure so same-id retries that saw in_flight
+        // return this error instead of re-running preprocessing/staging.
+        setGatewayDedupeEntry({
+          dedupe: context.dedupe,
+          key: `chat:${clientRunId}`,
+          entry: {
+            ts: Date.now(),
+            ok: false,
+            payload: {
+              runId: clientRunId,
+              status: "error" as const,
+              summary: String(err),
+            },
+            error,
+          },
+        });
         activeRunAbort.cleanup();
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
-        respond(
-          false,
-          undefined,
-          errorShape(
-            err instanceof MediaOffloadError ? ErrorCodes.UNAVAILABLE : ErrorCodes.INVALID_REQUEST,
-            String(err),
-          ),
-        );
+        respond(false, undefined, error);
         return;
       }
     }

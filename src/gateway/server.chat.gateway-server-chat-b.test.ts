@@ -563,6 +563,148 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send caches attachment preprocessing failures for duplicates that saw in_flight", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const catalogModels: Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> = [
+      {
+        id: "vision-model",
+        name: "Vision Model",
+        provider: "test-provider",
+        input: ["text", "image"],
+      },
+    ];
+    const firstCatalog =
+      createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "vision-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{
+        id: string;
+        ok: boolean;
+        payload?: unknown;
+        error?: { code?: string; message?: string };
+      }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockImplementationOnce(() => firstCatalog.promise)
+          .mockResolvedValue(catalogModels),
+        getRuntimeConfig,
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        clearChatRunState: vi.fn(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockResolvedValue(undefined);
+
+      const runId = "idem-attachment-preprocess-error";
+      const params = {
+        sessionKey: "main",
+        message: "see image",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "broken.png",
+            content: "not-base64",
+          },
+        ],
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const callSend = (id: string) =>
+        chatHandlers["chat.send"]({
+          req: { type: "req", id, method: "chat.send", params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            responses.push({ id, ok, payload, error });
+          }) as RespondFn,
+          context,
+        });
+
+      const send = Promise.resolve(callSend("send"));
+      await vi.waitFor(() => {
+        expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+
+      await callSend("duplicate");
+      expect(responses).toEqual([
+        {
+          id: "duplicate",
+          ok: true,
+          payload: { runId, status: "in_flight" },
+          error: undefined,
+        },
+      ]);
+
+      firstCatalog.resolve(catalogModels);
+      await send;
+
+      expect(responses[1]).toMatchObject({
+        id: "send",
+        ok: false,
+        payload: undefined,
+      });
+      expect(responses[1]?.error?.message).toContain("invalid base64 content");
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(context.addChatRun).not.toHaveBeenCalled();
+
+      await callSend("retry");
+      expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      expect(responses[2]).toMatchObject({
+        id: "retry",
+        ok: false,
+        payload: {
+          runId,
+          status: "error",
+          summary: expect.stringContaining("invalid base64 content"),
+        },
+      });
+      expect(responses[2]?.error?.message).toContain("invalid base64 content");
+    } finally {
+      firstCatalog.resolve(catalogModels);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 10,
+      });
+    }
+  });
+
   test("chat.abort stops an attachment send while preprocessing is still pending", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const catalogModels: Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> = [
