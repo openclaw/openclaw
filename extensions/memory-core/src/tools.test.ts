@@ -283,9 +283,9 @@ describe("memory_search unavailable payloads", () => {
     expectUnavailableMemorySearchDetails(result.details, {
       error: reason,
       warning:
-        "Memory search is unavailable because the memory index identity does not match the current embedding provider/model/settings.",
+        "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.",
       action:
-        "Run openclaw memory status --index or openclaw memory index --force to rebuild the memory index.",
+        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.",
     });
     expect(searchCalls).toBe(1);
     expect(getMemorySyncMockCalls()).toBe(0);

@@ -111,9 +111,9 @@ async function runMemorySearchToolWithDeadline<T>(params: {
 }
 
 const PAUSED_MEMORY_INDEX_WARNING =
-  "Memory search is unavailable because the memory index identity does not match the current embedding provider/model/settings.";
+  "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.";
 const PAUSED_MEMORY_INDEX_ACTION =
-  "Run openclaw memory status --index or openclaw memory index --force to rebuild the memory index.";
+  "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
 
 function resolvePausedMemoryIndexIdentityReason(status: { custom?: unknown }): string | undefined {
   const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
@@ -339,7 +339,7 @@ export function createMemorySearchTool(options: {
     label: "Memory Search",
     name: "memory_search",
     description:
-      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable and should be surfaced to the user.",
+      "Mandatory recall step: semantically search MEMORY.md + memory/*.md (and optional session transcripts) before answering questions about prior work, decisions, dates, people, preferences, or todos. Optional `corpus=wiki` or `corpus=all` also searches registered compiled-wiki supplements. `corpus=memory` restricts hits to indexed memory files (excludes session transcript chunks from ranking). `corpus=sessions` restricts hits to indexed session transcripts (same visibility rules as session history tools). If response has disabled=true, memory retrieval is unavailable; you must tell the user and include the warning/action guidance.",
     parameters: MemorySearchSchema,
     execute:
       ({ cfg, agentId }) =>
