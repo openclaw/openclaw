@@ -130,9 +130,6 @@ export function createCodexConversationTurnCollector(
       }
       rememberItem(itemId);
       assistantTextByItem.set(itemId, `${assistantTextByItem.get(itemId) ?? ""}${delta}`);
-      if (itemPhaseById.get(itemId) === "commentary") {
-        emitProgress(`Codex: ${assistantTextByItem.get(itemId) ?? ""}`, `assistant:${itemId}`);
-      }
       return;
     }
     if (notification.method === "item/plan/delta") {
@@ -177,6 +174,11 @@ export function createCodexConversationTurnCollector(
         if (text) {
           rememberItem(messageItemId);
           assistantTextByItem.set(messageItemId, text);
+          const phase = readString(item, "phase");
+          if (phase) {
+            itemPhaseById.set(messageItemId, phase);
+          }
+          flushCommentaryProgress(messageItemId, text);
         }
       } else if (item?.type === "plan") {
         const planItemId = itemId ?? "plan";
@@ -210,6 +212,11 @@ export function createCodexConversationTurnCollector(
           if (text) {
             rememberItem(itemId);
             assistantTextByItem.set(itemId, text);
+            const phase = readString(item, "phase");
+            if (phase) {
+              itemPhaseById.set(itemId, phase);
+            }
+            flushCommentaryProgress(itemId, text);
           }
         } else if (item.type === "plan") {
           const itemId = readString(item, "id") ?? `plan-${planOrder.length + 1}`;
@@ -268,7 +275,14 @@ export function createCodexConversationTurnCollector(
     },
   };
 
-  function emitProgress(text: string, key: string, opts?: { force?: boolean }) {
+  function flushCommentaryProgress(itemId: string, text: string) {
+    if (itemPhaseById.get(itemId) !== "commentary") {
+      return;
+    }
+    emitProgress(`Codex: ${text}`, `assistant:${itemId}`, { flush: true });
+  }
+
+  function emitProgress(text: string, key: string, opts?: { force?: boolean; flush?: boolean }) {
     const trimmed = truncateText(text.trim());
     if (!trimmed) {
       return;
@@ -277,7 +291,11 @@ export function createCodexConversationTurnCollector(
       return;
     }
     const now = Date.now();
-    if (!opts?.force && now - (lastProgressAtByKey.get(key) ?? 0) < MIN_PROGRESS_INTERVAL_MS) {
+    if (
+      !opts?.force &&
+      !opts?.flush &&
+      now - (lastProgressAtByKey.get(key) ?? 0) < MIN_PROGRESS_INTERVAL_MS
+    ) {
       lastProgressTextByKey.set(key, trimmed);
       return;
     }
