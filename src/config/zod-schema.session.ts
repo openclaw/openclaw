@@ -5,6 +5,7 @@ import { parseDurationMs } from "../cli/parse-duration.js";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
+  DirectChatRuntimeConfigSchema,
   GroupChatSchema,
   InboundDebounceSchema,
   NativeCommandsSettingSchema,
@@ -157,6 +158,7 @@ export const MessagesSchema = z
     messagePrefix: z.string().optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
+    directChat: DirectChatRuntimeConfigSchema,
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     inbound: InboundDebounceSchema,

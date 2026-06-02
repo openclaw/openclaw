@@ -569,6 +569,25 @@ export const GroupChatSchema = z
   .strict()
   .optional();
 
+export const DirectChatRuntimeConfigSchema = z
+  .union([
+    z.enum(["agent", "auto"]),
+    z
+      .object({
+        resolver: z.enum(["agent", "auto"]).optional(),
+        mode: z.enum(["agent", "simple", "auto"]).optional(),
+        model: z.string().min(1).optional(),
+        thinking: z
+          .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
+          .optional(),
+        context: z.enum(["full", "lightweight"]).optional(),
+        disableTools: z.boolean().optional(),
+        skills: z.array(z.string()).optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
 export const DmConfigSchema = z
   .object({
     historyLimit: z.number().int().min(0).optional(),

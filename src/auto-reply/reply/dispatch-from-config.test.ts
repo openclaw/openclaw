@@ -46,6 +46,42 @@ const mocks = vi.hoisted(() => ({
     aborted: false,
   })),
 }));
+const simpleCompletionMocks = vi.hoisted(() => ({
+  prepareSimpleCompletionModelForAgent: vi.fn(async () => ({
+    selection: {
+      provider: "openai",
+      modelId: "gpt-test",
+      agentDir: "/tmp/agent",
+    },
+    model: {
+      provider: "openai",
+      id: "gpt-test",
+      api: "openai-responses",
+      input: ["text"],
+      output: ["text"],
+    },
+    auth: {
+      mode: "api-key",
+      apiKey: "test-key",
+    },
+  })),
+  completeWithPreparedSimpleCompletionModel: vi.fn(async () => ({
+    role: "assistant",
+    api: "openai-responses",
+    provider: "openai",
+    model: "gpt-test",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      total: 0,
+    },
+    timestamp: 0,
+    stopReason: "stop",
+    content: [{ type: "text", text: "simple answer" }],
+  })),
+}));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageDispatchCompleted: vi.fn(),
   logMessageDispatchStarted: vi.fn(),
@@ -534,6 +570,12 @@ vi.mock("./dispatch-acp-transcript.runtime.js", () => ({
   persistAcpDispatchTranscript: (params: unknown) =>
     transcriptMocks.persistAcpDispatchTranscript(params),
 }));
+vi.mock("../../agents/simple-completion-runtime.js", () => ({
+  prepareSimpleCompletionModelForAgent: (params: unknown) =>
+    simpleCompletionMocks.prepareSimpleCompletionModelForAgent(params),
+  completeWithPreparedSimpleCompletionModel: (params: unknown) =>
+    simpleCompletionMocks.completeWithPreparedSimpleCompletionModel(params),
+}));
 vi.mock("../../config/sessions/transcript.js", () => ({
   appendAssistantMessageToSessionTranscript: (params: unknown) =>
     transcriptMocks.appendAssistantMessageToSessionTranscript(params),
@@ -1001,6 +1043,8 @@ describe("dispatchReplyFromConfig", () => {
       async (payload: ReplyPayload) => payload,
     );
     runtimePluginMocks.ensureRuntimePluginsLoaded.mockClear();
+    simpleCompletionMocks.prepareSimpleCompletionModelForAgent.mockClear();
+    simpleCompletionMocks.completeWithPreparedSimpleCompletionModel.mockClear();
   });
 
   it("loads runtime plugins before reading inbound hook state", async () => {
@@ -1133,6 +1177,288 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("applies directChat lightweight runtime policy to ordinary direct messages", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:6746795052",
+      BodyForAgent: "what's up?",
+    });
+    const cfg = {
+      messages: {
+        directChat: {
+          context: "lightweight",
+          disableTools: true,
+          skills: [],
+        },
+      },
+    } as const satisfies OpenClawConfig;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.bootstrapContextMode).toBe("lightweight");
+      expect(opts?.disableTools).toBe(true);
+      expect(opts?.skillFilter).toStrictEqual([]);
+      return { text: "hi" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not apply directChat runtime policy to group messages", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      SessionKey: "agent:main:telegram:group:-1003774691294",
+      BodyForAgent: "malbot what's up?",
+    });
+    const cfg = {
+      messages: {
+        directChat: {
+          context: "lightweight",
+          disableTools: true,
+          skills: [],
+        },
+      },
+    } as const satisfies OpenClawConfig;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.bootstrapContextMode).toBeUndefined();
+      expect(opts?.disableTools).toBeUndefined();
+      expect(opts?.skillFilter).toBeUndefined();
+      return { text: "hi" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps explicit reply options ahead of directChat defaults", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:6746795052",
+      BodyForAgent: "use full context for this",
+    });
+    const cfg = {
+      messages: {
+        directChat: {
+          context: "lightweight",
+          disableTools: true,
+          skills: [],
+        },
+      },
+    } as const satisfies OpenClawConfig;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      expect(opts?.bootstrapContextMode).toBe("full");
+      expect(opts?.disableTools).toBe(false);
+      expect(opts?.skillFilter).toStrictEqual(["notion"]);
+      return { text: "hi" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: {
+        bootstrapContextMode: "full",
+        disableTools: false,
+        skillFilter: ["notion"],
+      },
+      replyResolver,
+    });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses simple completion for ordinary direct messages when directChat resolver is auto", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:6746795052",
+      BodyForAgent: "what are my top three priorities today?",
+    });
+    const cfg = {
+      messages: {
+        directChat: "auto",
+      },
+    } as const satisfies OpenClawConfig;
+    const replyResolver = vi.fn(async () => ({ text: "agent answer" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(simpleCompletionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        agentId: "main",
+      }),
+    );
+    expect(simpleCompletionMocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg,
+        context: expect.objectContaining({
+          messages: [
+            expect.objectContaining({
+              role: "user",
+              content: "what are my top three priorities today?",
+            }),
+          ],
+        }),
+        options: expect.objectContaining({
+          reasoning: "low",
+        }),
+      }),
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "simple answer" }),
+    );
+  });
+
+  it("passes directChat auto model and thinking overrides into simple completion", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:6746795052",
+      BodyForAgent: "summarize this decision",
+    });
+    const cfg = {
+      messages: {
+        directChat: {
+          resolver: "auto",
+          model: "openai/gpt-5.4-mini",
+          thinking: "minimal",
+        },
+      },
+    } as const satisfies OpenClawConfig;
+    const replyResolver = vi.fn(async () => ({ text: "agent answer" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(simpleCompletionMocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "openai/gpt-5.4-mini",
+      }),
+    );
+    expect(simpleCompletionMocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          reasoning: "minimal",
+        }),
+      }),
+    );
+  });
+
+  it("acknowledges and delegates directChat auto turns when the simple resolver requests capability routing", async () => {
+    setNoAbort();
+    simpleCompletionMocks.completeWithPreparedSimpleCompletionModel.mockResolvedValueOnce({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-test",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+      timestamp: 0,
+      stopReason: "stop",
+      content: [{ type: "text", text: "[[OPENCLAW_DELEGATE]]" }],
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:6746795052",
+      BodyForAgent: "restart the openclaw gateway and check logs",
+    });
+    const cfg = {
+      messages: {
+        directChat: "auto",
+      },
+    } as const satisfies OpenClawConfig;
+    const replyResolver = vi.fn(async () => ({ text: "agent handled it" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(simpleCompletionMocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledTimes(
+      1,
+    );
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "I'll hand this to the right work runner.",
+      }),
+    );
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(replyResolver).toHaveBeenCalledWith(
+      expect.objectContaining({
+        BodyForAgent: "restart the openclaw gateway and check logs",
+      }),
+      expect.any(Object),
+      cfg,
+    );
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "agent handled it" }),
+    );
+  });
+
+  it("keeps explicit direct commands on the normal agent resolver under directChat auto", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:6746795052",
+      BodyForAgent: "/status",
+      CommandBody: "/status",
+      CommandAuthorized: true,
+      CommandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: true,
+        body: "/status",
+      },
+    });
+    const cfg = {
+      messages: {
+        directChat: "auto",
+      },
+    } as const satisfies OpenClawConfig;
+    const replyResolver = vi.fn(async () => ({ text: "agent answer" }) satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(simpleCompletionMocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
   it("records routed Slack thread id on dispatch-owned reply operations", async () => {
@@ -7055,164 +7381,165 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it.each(
-    [
-      {
-        name: "handled without a plugin reply",
-        bindingId: "binding-message-tool-only",
-        conversation: {
-          channel: "telegram",
-          accountId: "default",
-          conversationId: "-1001234567890:topic:11",
-          parentConversationId: "-1001234567890",
-        },
-        ctx: {
-          Provider: "telegram",
-          Surface: "telegram",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "telegram:-1001234567890",
-          To: "telegram:-1001234567890",
-          AccountId: "default",
-          MessageThreadId: 11,
-          ChatType: "group",
-          GroupSubject: "Dev",
-          Body: "observed message",
-        },
-        cfg: emptyConfig,
-        replyOptions: {
-          sourceReplyDeliveryMode: "message_tool_only" as const,
-        },
-        expectedClaim: { channel: "telegram", threadId: 11 },
+  it.each([
+    {
+      name: "handled without a plugin reply",
+      bindingId: "binding-message-tool-only",
+      conversation: {
+        channel: "telegram",
+        accountId: "default",
+        conversationId: "-1001234567890:topic:11",
+        parentConversationId: "-1001234567890",
       },
-      {
-        name: "handled with a plugin reply",
-        bindingId: "binding-message-tool-reply",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel:reply-test",
-        },
-        ctx: {
-          Provider: "discord",
-          Surface: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "discord:channel:reply-test",
-          To: "discord:channel:reply-test",
-          AccountId: "default",
-          ChatType: "channel",
-          Body: "observed message",
-          SessionKey: "agent:main:discord:channel:reply-test",
-        },
-        cfg: {
-          messages: {
-            groupChat: { visibleReplies: "message_tool" },
-          },
-        } as OpenClawConfig,
-        expectedClaim: { channel: "discord" },
-        pluginReply: { text: "Codex native reply" },
-        expectPluginReplyDelivered: true,
+      ctx: {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:-1001234567890",
+        To: "telegram:-1001234567890",
+        AccountId: "default",
+        MessageThreadId: 11,
+        ChatType: "group",
+        GroupSubject: "Dev",
+        Body: "observed message",
       },
-      {
-        name: "suppresses ambient room_event plugin reply",
-        bindingId: "binding-message-tool-room-event",
-        conversation: {
-          channel: "discord",
-          accountId: "default",
-          conversationId: "channel:room-event-test",
-        },
-        ctx: {
-          Provider: "discord",
-          Surface: "discord",
-          OriginatingChannel: "discord",
-          OriginatingTo: "discord:channel:room-event-test",
-          To: "discord:channel:room-event-test",
-          AccountId: "default",
-          ChatType: "group",
-          InboundEventKind: "room_event",
-          Body: "observed message",
-          SessionKey: "agent:main:discord:channel:room-event-test",
-        },
-        cfg: emptyConfig,
-        expectedClaim: { channel: "discord" },
-        pluginReply: { text: "Codex ambient room event reply" },
-        expectPluginReplyDelivered: false,
+      cfg: emptyConfig,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only" as const,
       },
-    ] satisfies Array<{
-      name: string;
-      bindingId: string;
-      conversation: SessionBindingRecord["conversation"];
-      ctx: Partial<MsgContext>;
-      cfg: OpenClawConfig;
-      replyOptions?: { sourceReplyDeliveryMode: "message_tool_only" };
-      expectedClaim: Record<string, unknown>;
-      pluginReply?: ReplyPayload;
-      expectPluginReplyDelivered?: boolean;
-    }>,
-  )("routes plugin-owned bindings under message-tool-only source delivery: $name", async (params) => {
-    setNoAbort();
-    hookMocks.runner.hasHooks.mockImplementation(
-      ((hookName?: string) =>
-        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
-    );
-    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
-      status: "handled",
-      result: params.pluginReply
-        ? { handled: true, reply: params.pluginReply }
-        : { handled: true },
-    });
-    sessionBindingMocks.resolveByConversation.mockReturnValue({
-      bindingId: params.bindingId,
-      targetSessionKey: "plugin-binding:codex:abc123",
-      targetKind: "session",
-      conversation: params.conversation,
-      status: "active",
-      boundAt: 1710000000000,
-      metadata: {
-        pluginBindingOwner: "plugin",
-        pluginId: "openclaw-codex-app-server",
-        pluginRoot: "/tmp/plugin",
+      expectedClaim: { channel: "telegram", threadId: 11 },
+    },
+    {
+      name: "handled with a plugin reply",
+      bindingId: "binding-message-tool-reply",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:reply-test",
       },
-    } satisfies SessionBindingRecord);
-    sessionStoreMocks.currentEntry = {
-      sessionId: "s1",
-      updatedAt: 0,
-      sendPolicy: "allow",
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:reply-test",
+        To: "discord:channel:reply-test",
+        AccountId: "default",
+        ChatType: "channel",
+        Body: "observed message",
+        SessionKey: "agent:main:discord:channel:reply-test",
+      },
+      cfg: {
+        messages: {
+          groupChat: { visibleReplies: "message_tool" },
+        },
+      } as OpenClawConfig,
+      expectedClaim: { channel: "discord" },
+      pluginReply: { text: "Codex native reply" },
+      expectPluginReplyDelivered: true,
+    },
+    {
+      name: "suppresses ambient room_event plugin reply",
+      bindingId: "binding-message-tool-room-event",
+      conversation: {
+        channel: "discord",
+        accountId: "default",
+        conversationId: "channel:room-event-test",
+      },
+      ctx: {
+        Provider: "discord",
+        Surface: "discord",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:channel:room-event-test",
+        To: "discord:channel:room-event-test",
+        AccountId: "default",
+        ChatType: "group",
+        InboundEventKind: "room_event",
+        Body: "observed message",
+        SessionKey: "agent:main:discord:channel:room-event-test",
+      },
+      cfg: emptyConfig,
+      expectedClaim: { channel: "discord" },
+      pluginReply: { text: "Codex ambient room event reply" },
+      expectPluginReplyDelivered: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    bindingId: string;
+    conversation: SessionBindingRecord["conversation"];
+    ctx: Partial<MsgContext>;
+    cfg: OpenClawConfig;
+    replyOptions?: { sourceReplyDeliveryMode: "message_tool_only" };
+    expectedClaim: Record<string, unknown>;
+    pluginReply?: ReplyPayload;
+    expectPluginReplyDelivered?: boolean;
+  }>)(
+    "routes plugin-owned bindings under message-tool-only source delivery: $name",
+    async (params) => {
+      setNoAbort();
+      hookMocks.runner.hasHooks.mockImplementation(
+        ((hookName?: string) =>
+          hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+      );
+      hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+      hookMocks.runner.runInboundClaimForPluginOutcome.mockResolvedValue({
+        status: "handled",
+        result: params.pluginReply
+          ? { handled: true, reply: params.pluginReply }
+          : { handled: true },
+      });
+      sessionBindingMocks.resolveByConversation.mockReturnValue({
+        bindingId: params.bindingId,
+        targetSessionKey: "plugin-binding:codex:abc123",
+        targetKind: "session",
+        conversation: params.conversation,
+        status: "active",
+        boundAt: 1710000000000,
+        metadata: {
+          pluginBindingOwner: "plugin",
+          pluginId: "openclaw-codex-app-server",
+          pluginRoot: "/tmp/plugin",
+        },
+      } satisfies SessionBindingRecord);
+      sessionStoreMocks.currentEntry = {
+        sessionId: "s1",
+        updatedAt: 0,
+        sendPolicy: "allow",
+      };
+      const dispatcher = createDispatcher();
+      const replyResolver = vi.fn(async () => ({ text: "agent reply" }) satisfies ReplyPayload);
 
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx(params.ctx),
-      cfg: params.cfg,
-      dispatcher,
-      replyResolver,
-      replyOptions: params.replyOptions,
-    });
+      const result = await dispatchReplyFromConfig({
+        ctx: buildTestCtx(params.ctx),
+        cfg: params.cfg,
+        dispatcher,
+        replyResolver,
+        replyOptions: params.replyOptions,
+      });
 
-    expect(result).toEqual({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
-    expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
-    expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
-      "openclaw-codex-app-server",
-      expect.objectContaining({
-        content: "observed message",
-        ...params.expectedClaim,
-      }),
-      expect.objectContaining({
-        pluginBinding: expect.objectContaining({ bindingId: params.bindingId }),
-      }),
-    );
-    expect(replyResolver).not.toHaveBeenCalled();
-    if (params.expectPluginReplyDelivered) {
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(params.pluginReply);
-    } else {
-      expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-    }
-  });
+      expect(result).toEqual({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      });
+      expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
+      expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(
+        "openclaw-codex-app-server",
+        expect.objectContaining({
+          content: "observed message",
+          ...params.expectedClaim,
+        }),
+        expect.objectContaining({
+          pluginBinding: expect.objectContaining({ bindingId: params.bindingId }),
+        }),
+      );
+      expect(replyResolver).not.toHaveBeenCalled();
+      if (params.expectPluginReplyDelivered) {
+        expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(params.pluginReply);
+      } else {
+        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("keeps unmentioned plugin-bound fallback from ordinary group agent dispatch", async () => {
     setNoAbort();

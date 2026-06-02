@@ -21,6 +21,7 @@ import {
   resolveInheritedToolPolicyForSession,
   resolveSubagentToolPolicyForSession,
 } from "../../agents/agent-tools.policy.js";
+import { extractAssistantVisibleText } from "../../agents/embedded-agent-utils.js";
 import { selectAgentHarness } from "../../agents/harness/selection.js";
 import {
   buildModelAliasIndex,
@@ -44,6 +45,7 @@ import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { DirectChatRuntimeConfig } from "../../config/types.messages.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { fireAndForgetHook } from "../../hooks/fire-and-forget.js";
@@ -92,6 +94,7 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
   isNativeCommandTurn,
+  isTextSlashCommandTurn,
   resolveCommandTurnContext,
   resolveCommandTurnTargetSessionKey,
 } from "../command-turn-context.js";
@@ -206,7 +209,12 @@ function routeThreadIdsDiffer(
 function isSlackDirectRoutedThreadTurn(
   ctx: Pick<
     FinalizedMsgContext,
-    "ChatType" | "MessageThreadId" | "OriginatingChannel" | "Provider" | "Surface" | "TransportThreadId"
+    | "ChatType"
+    | "MessageThreadId"
+    | "OriginatingChannel"
+    | "Provider"
+    | "Surface"
+    | "TransportThreadId"
   >,
 ): boolean {
   if (normalizeChatType(ctx.ChatType) !== "direct") {
@@ -243,6 +251,9 @@ const runtimePluginsLoader = createLazyImportLoader(
 const replyMediaPathsRuntimeLoader = createLazyImportLoader(
   () => import("./reply-media-paths.runtime.js"),
 );
+const simpleCompletionRuntimeLoader = createLazyImportLoader(
+  () => import("../../agents/simple-completion-runtime.js"),
+);
 
 function loadRouteReplyRuntime() {
   return routeReplyRuntimeLoader.load();
@@ -258,6 +269,10 @@ function loadAbortRuntime() {
 
 function loadTtsRuntime() {
   return ttsRuntimeLoader.load();
+}
+
+function loadSimpleCompletionRuntime() {
+  return simpleCompletionRuntimeLoader.load();
 }
 
 function loadRuntimePlugins() {
@@ -517,6 +532,177 @@ function resolveTurnModelOverride(
     return undefined;
   }
   return normalizeOptionalString(replyOptions.heartbeatModelOverride);
+}
+
+function isOrdinaryDirectChatTurn(ctx: FinalizedMsgContext): boolean {
+  if (normalizeChatType(ctx.ChatType) !== "direct") {
+    return false;
+  }
+  const commandTurn = resolveCommandTurnContext(ctx);
+  const commandBody = commandTurn.body?.trim();
+  if (isNativeCommandTurn(commandTurn)) {
+    return false;
+  }
+  if (isTextSlashCommandTurn(commandTurn) && commandBody?.startsWith("/")) {
+    return false;
+  }
+  if (commandBody?.startsWith("/")) {
+    return false;
+  }
+  if (resolveCommandTurnTargetSessionKey(ctx)) {
+    return false;
+  }
+  return true;
+}
+
+type DirectChatResolverConfig = DirectChatRuntimeConfig & {
+  resolver?: "agent" | "auto";
+  mode?: "agent" | "simple" | "auto";
+};
+
+function normalizeDirectChatResolverConfig(
+  cfg: OpenClawConfig,
+): DirectChatResolverConfig | undefined {
+  const directChat = cfg.messages?.directChat;
+  if (!directChat) {
+    return undefined;
+  }
+  if (typeof directChat === "string") {
+    return { resolver: directChat };
+  }
+  return directChat;
+}
+
+function resolveDirectChatResolver(config: DirectChatResolverConfig | undefined): "agent" | "auto" {
+  if (!config) {
+    return "agent";
+  }
+  if (config.resolver) {
+    return config.resolver;
+  }
+  if (config.mode === "simple" || config.mode === "auto") {
+    return "auto";
+  }
+  return "agent";
+}
+
+function shouldUseDirectChatAutoResolver(params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+}): boolean {
+  const directChat = normalizeDirectChatResolverConfig(params.cfg);
+  return resolveDirectChatResolver(directChat) === "auto" && isOrdinaryDirectChatTurn(params.ctx);
+}
+
+function applyDirectChatRuntimePolicy(params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  replyOptions?: DispatchFromConfigParams["replyOptions"];
+}): DispatchFromConfigParams["replyOptions"] {
+  const directChat = normalizeDirectChatResolverConfig(params.cfg);
+  if (
+    !directChat ||
+    resolveDirectChatResolver(directChat) === "auto" ||
+    !isOrdinaryDirectChatTurn(params.ctx)
+  ) {
+    return params.replyOptions;
+  }
+  const next = { ...params.replyOptions };
+  if (directChat.context === "lightweight" && next.bootstrapContextMode === undefined) {
+    next.bootstrapContextMode = "lightweight";
+  }
+  if (directChat.disableTools === true && next.disableTools === undefined) {
+    next.disableTools = true;
+  }
+  if (directChat.skills !== undefined && next.skillFilter === undefined) {
+    next.skillFilter = directChat.skills;
+  }
+  return next;
+}
+
+function resolveDirectChatUserText(ctx: FinalizedMsgContext): string | undefined {
+  return normalizeOptionalString(
+    ctx.BodyForAgent ?? ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body,
+  );
+}
+
+const DIRECT_CHAT_AUTO_SYSTEM_PROMPT =
+  'You are a fast direct-message resolver. Answer concise chief-of-staff style queries directly. You do not have tools in this lane. If the user asks you to inspect live systems, edit files, run commands, change configuration, browse, or perform an external action, return exactly "[[OPENCLAW_DELEGATE]]" and no other text.';
+const DIRECT_CHAT_DELEGATE_TOKEN = "[[OPENCLAW_DELEGATE]]";
+const DIRECT_CHAT_DELEGATE_ACK = "I'll hand this to the right work runner.";
+
+type DirectChatAutoResolverResult =
+  | {
+      kind: "reply";
+      payload: ReplyPayload;
+    }
+  | {
+      kind: "delegate";
+    };
+
+async function resolveDirectChatAutoReply(params: {
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  sessionAgentId: string;
+  abortSignal?: AbortSignal;
+}): Promise<DirectChatAutoResolverResult | undefined> {
+  if (!shouldUseDirectChatAutoResolver({ cfg: params.cfg, ctx: params.ctx })) {
+    return undefined;
+  }
+  const userText = resolveDirectChatUserText(params.ctx);
+  if (!userText) {
+    return undefined;
+  }
+  const directChat = normalizeDirectChatResolverConfig(params.cfg);
+  const runtime = await loadSimpleCompletionRuntime();
+  const prepared = await runtime.prepareSimpleCompletionModelForAgent({
+    cfg: params.cfg,
+    agentId: params.sessionAgentId,
+    modelRef: directChat?.model,
+  });
+  if ("error" in prepared) {
+    return {
+      kind: "reply",
+      payload: {
+        text: prepared.error,
+        isError: true,
+      },
+    };
+  }
+  const assistant = await runtime.completeWithPreparedSimpleCompletionModel({
+    model: prepared.model,
+    auth: prepared.auth,
+    cfg: params.cfg,
+    context: {
+      systemPrompt: DIRECT_CHAT_AUTO_SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: userText,
+          timestamp: Date.now(),
+        },
+      ],
+    },
+    options: {
+      reasoning: directChat?.thinking ?? "low",
+      signal: params.abortSignal,
+    },
+  });
+  const text =
+    normalizeOptionalString(extractAssistantVisibleText(assistant)) ?? assistant.errorMessage;
+  if (!text) {
+    return undefined;
+  }
+  if (text === DIRECT_CHAT_DELEGATE_TOKEN) {
+    return { kind: "delegate" };
+  }
+  return {
+    kind: "reply",
+    payload: {
+      text,
+      ...(assistant.stopReason === "error" ? { isError: true } : {}),
+    },
+  };
 }
 
 function resolveChannelModelCandidate(params: {
@@ -1308,12 +1494,17 @@ export async function dispatchReplyFromConfig(
     dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
   const getReplyOptions = () => {
     const abortSignal = getDispatchAbortSignal();
-    if (!abortSignal) {
-      return params.replyOptions;
+    const replyOptions = applyDirectChatRuntimePolicy({
+      cfg,
+      ctx,
+      replyOptions: params.replyOptions,
+    });
+    if (!abortSignal && !dispatchReplyOperation) {
+      return replyOptions;
     }
     return {
-      ...params.replyOptions,
-      abortSignal,
+      ...replyOptions,
+      ...(abortSignal ? { abortSignal } : {}),
       queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
     };
@@ -2411,16 +2602,39 @@ export async function dispatchReplyFromConfig(
       };
     };
 
-    const replyResolver =
-      params.replyResolver ??
-      (await traceReplyPhase("reply.load_reply_resolver", () => loadGetReplyFromConfigRuntime()))
-        .getReplyFromConfig;
     const replyConfig = withFullRuntimeReplyConfig(
       params.configOverride ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig) : cfg,
     );
     recordAgentDispatchStarted();
-    const replyResult = await runWithDispatchAbortSignal(getDispatchAbortSignal(), () =>
-      traceReplyPhase("reply.run_reply_resolver", () =>
+    const replyResult = await runWithDispatchAbortSignal(getDispatchAbortSignal(), async () => {
+      const directChatAutoResult = await traceReplyPhase("reply.direct_chat_auto_resolver", () =>
+        resolveDirectChatAutoReply({
+          cfg: replyConfig,
+          ctx,
+          sessionAgentId,
+          abortSignal: getDispatchAbortSignal(),
+        }),
+      );
+      if (directChatAutoResult?.kind === "reply") {
+        return directChatAutoResult.payload;
+      }
+      if (directChatAutoResult?.kind === "delegate" && !suppressDelivery) {
+        const payload = { text: DIRECT_CHAT_DELEGATE_ACK } satisfies ReplyPayload;
+        markInboundDedupeReplayUnsafe();
+        if (shouldRouteToOriginating) {
+          await sendPayloadAsync(payload, getDispatchAbortSignal(), false, "block");
+        } else {
+          const delivered = dispatcher.sendBlockReply(payload);
+          if (delivered) {
+            hasPendingDirectBlockReplyDelivery = true;
+          }
+        }
+      }
+      const replyResolver =
+        params.replyResolver ??
+        (await traceReplyPhase("reply.load_reply_resolver", () => loadGetReplyFromConfigRuntime()))
+          .getReplyFromConfig;
+      return await traceReplyPhase("reply.run_reply_resolver", () =>
         replyResolver(
           ctx,
           {
@@ -2722,8 +2936,8 @@ export async function dispatchReplyFromConfig(
           },
           replyConfig,
         ),
-      ),
-    );
+      );
+    });
     if ((await ensureDispatchReplyOperation("dispatch")).status === "busy") {
       return finishReplyOperationBusyDispatch({ recordAgentDispatchCompleted: true });
     }

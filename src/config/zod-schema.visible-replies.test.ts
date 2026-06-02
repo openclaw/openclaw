@@ -66,6 +66,46 @@ describe("visible reply config schema", () => {
     }
   });
 
+  it("accepts directChat auto resolver policy", () => {
+    const result = validateConfigObjectRaw({
+      messages: {
+        directChat: {
+          resolver: "auto",
+          model: "openai/gpt-5.4-mini",
+          thinking: "low",
+          context: "lightweight",
+          disableTools: true,
+          skills: [],
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.messages?.directChat).toStrictEqual({
+        resolver: "auto",
+        model: "openai/gpt-5.4-mini",
+        thinking: "low",
+        context: "lightweight",
+        disableTools: true,
+        skills: [],
+      });
+    }
+  });
+
+  it("accepts directChat auto string shorthand", () => {
+    const result = validateConfigObjectRaw({
+      messages: {
+        directChat: "auto",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.messages?.directChat).toBe("auto");
+    }
+  });
+
   it("accepts enum unmentioned group inbound values", () => {
     const legacy = validateConfigObjectRaw({
       messages: {

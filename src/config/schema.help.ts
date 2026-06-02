@@ -1863,6 +1863,22 @@ export const FIELD_HELP: Record<string, string> = {
     'Controls visible source replies across direct, group, and channel conversations. "message_tool" requires message(action=send) for visible output and keeps normal final text private. "automatic" posts normal replies as before.',
   "messages.responsePrefix":
     "Prefix text prepended to outbound assistant replies before sending to channels. Use for lightweight branding/context tags and avoid long prefixes that reduce content density.",
+  "messages.directChat":
+    'Resolver policy for ordinary direct-message replies. "auto" keeps casual DMs on the simplest completion lane while preserving normal OpenClaw routing for explicit commands and routed work.',
+  "messages.directChat.resolver":
+    '"agent" keeps ordinary direct-message turns on the normal OpenClaw agent runtime. "auto" starts ordinary direct-message turns on simple completion and reserves the agent runtime for explicit commands/routed work.',
+  "messages.directChat.mode":
+    "Deprecated compatibility alias for messages.directChat.resolver. Use resolver instead.",
+  "messages.directChat.model":
+    "Optional model override for auto-resolved simple direct-message replies. When omitted, the routed agent's effective model is used.",
+  "messages.directChat.thinking":
+    "Optional thinking level for simple direct-message replies. Use low/minimal/off for fast conversational turns; explicit commands can still use normal agent thinking.",
+  "messages.directChat.context":
+    'Controls context loading for ordinary direct-message replies. "lightweight" uses the lean bootstrap path; "full" keeps the normal agent context.',
+  "messages.directChat.disableTools":
+    "Runs ordinary direct-message replies without agent tools when true. Explicit commands and routed sessions keep their configured tool policy.",
+  "messages.directChat.skills":
+    "Optional skill allowlist for ordinary direct-message replies. Use [] to intentionally skip skill context on casual DM turns.",
   "messages.groupChat":
     "Group-message handling controls including mention triggers and history window sizing. Keep mention patterns narrow so group channels do not trigger on every message.",
   "messages.groupChat.mentionPatterns":

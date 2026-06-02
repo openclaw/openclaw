@@ -26,6 +26,51 @@ export type GroupChatConfig = {
   visibleReplies?: "automatic" | "message_tool";
 };
 
+export type DirectChatRuntimeConfig = {
+  /**
+   * Selects how ordinary direct-message replies are resolved.
+   * "agent" keeps the normal OpenClaw agent runtime. "auto" starts with the
+   * simplest completion lane and preserves normal agent routing for explicit
+   * commands/routed sessions.
+   *
+   * Default: "agent".
+   */
+  resolver?: "agent" | "auto";
+  /** @deprecated Use resolver. */
+  mode?: "agent" | "simple" | "auto";
+  /**
+   * Optional model override for auto-resolved simple direct-message replies.
+   * When omitted, the routed agent's effective model is used through the
+   * simple-completion transport.
+   */
+  model?: string;
+  /**
+   * Optional thinking level for simple direct-message replies.
+   */
+  thinking?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "adaptive" | "max";
+  /**
+   * Controls how much runtime context ordinary direct-message replies receive.
+   * "lightweight" keeps DMs responsive while explicit commands/routed sessions
+   * can still use the full agent runtime.
+   *
+   * Default: "full".
+   */
+  context?: "full" | "lightweight";
+  /**
+   * When true, ordinary direct-message replies run without agent tools. This
+   * keeps casual chat from invoking coding/admin surfaces; explicit commands
+   * and routed sessions can still use their configured tools.
+   *
+   * Default: false.
+   */
+  disableTools?: boolean;
+  /**
+   * Optional skills loaded for ordinary direct-message replies. An empty array
+   * intentionally disables skills for the run.
+   */
+  skills?: string[];
+};
+
 export type DmConfig = {
   historyLimit?: number;
 };
@@ -138,6 +183,8 @@ export type MessagesConfig = {
    * Default: none
    */
   responsePrefix?: string;
+  /** Resolver policy for ordinary direct-message chat turns. */
+  directChat?: "agent" | "auto" | DirectChatRuntimeConfig;
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */
