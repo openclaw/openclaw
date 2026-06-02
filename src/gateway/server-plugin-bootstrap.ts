@@ -55,7 +55,7 @@ function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
 
 function logGatewayPluginDiagnostics(params: {
   diagnostics: PluginRegistry["diagnostics"];
-  log: Pick<GatewayPluginBootstrapLog, "error" | "info">;
+  log: Pick<GatewayPluginBootstrapLog, "error" | "info" | "warn">;
 }) {
   for (const diag of params.diagnostics) {
     const details = [
@@ -70,7 +70,7 @@ function logGatewayPluginDiagnostics(params: {
     if (diag.level === "error") {
       params.log.error(message);
     } else {
-      params.log.info(message);
+      params.log.warn(message);
     }
   }
 }

@@ -604,10 +604,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     const declaredNames = normalizePluginToolContractNames(record.contracts);
     if (declaredNames.length === 0) {
       pushDiagnostic({
-        level: "error",
+        level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: "plugin must declare contracts.tools before registering agent tools",
+        message: "plugin must declare contracts.tools before registering agent tools — add a contracts.tools entry to the plugin manifest to enable tool registration",
       });
       return;
     }
@@ -627,10 +627,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
     if (undeclared.length > 0) {
       pushDiagnostic({
-        level: "error",
+        level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `plugin must declare contracts.tools for: ${undeclared.join(", ")}`,
+        message: `plugin must declare contracts.tools for: ${undeclared.join(", ")} — add these tool names to contracts.tools in the plugin manifest`,
       });
       return;
     }
@@ -2084,10 +2084,10 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     });
     if (undeclared.length > 0) {
       pushDiagnostic({
-        level: "error",
+        level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: `plugin must declare contracts.tools for tool metadata: ${undeclared.join(", ")}`,
+        message: `plugin must declare contracts.tools for tool metadata: ${undeclared.join(", ")} — add these tool names to contracts.tools in the plugin manifest`,
       });
       return;
     }

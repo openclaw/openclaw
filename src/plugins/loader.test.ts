@@ -3766,7 +3766,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
       registry.diagnostics.some(
         (entry) =>
           entry.pluginId === "undeclared-tool-owner" &&
-          entry.message === "plugin must declare contracts.tools before registering agent tools",
+          entry.message ===
+            "plugin must declare contracts.tools before registering agent tools — add a contracts.tools entry to the plugin manifest to enable tool registration",
       ),
     ).toBe(true);
   });
@@ -3807,7 +3808,8 @@ module.exports = { id: "throws-after-import", register() {} };`,
       registry.diagnostics.some(
         (entry) =>
           entry.pluginId === "wrong-tool-owner" &&
-          entry.message === "plugin must declare contracts.tools for: runtime_tool",
+          entry.message ===
+            "plugin must declare contracts.tools for: runtime_tool — add these tool names to contracts.tools in the plugin manifest",
       ),
     ).toBe(true);
   });
