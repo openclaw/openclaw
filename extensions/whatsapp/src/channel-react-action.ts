@@ -179,26 +179,55 @@ async function handleWhatsAppUploadFileAction(params: WhatsAppMessageActionParam
   });
 }
 
-export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionParams) {
-  if (params.action === "upload-file") {
-    return await handleWhatsAppUploadFileAction(params);
+function isWhatsAppSource(
+  toolContext: WhatsAppMessageActionParams["toolContext"] | undefined,
+): boolean {
+  return toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
+}
+
+function readWhatsAppActionTarget(params: WhatsAppMessageActionParams): string {
+  const explicitTarget =
+    readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
+  if (explicitTarget) {
+    return explicitTarget;
   }
+  if (isWhatsAppSource(params.toolContext) && params.toolContext?.currentChannelId) {
+    return params.toolContext.currentChannelId;
+  }
+  readStringParam(params.params, "to", { required: true });
+  throw new Error("WhatsApp target is required.");
+}
+
+function readWhatsAppEditMessage(args: Record<string, unknown>): string {
+  const message =
+    readStringParam(args, "message", { allowEmpty: true }) ??
+    readStringParam(args, "text", { allowEmpty: true });
+  if (message === undefined || !message.trim()) {
+    return readStringParam({ message: "" }, "message", {
+      required: true,
+      label: "WhatsApp message edit text",
+    });
+  }
+  return message;
+}
+
+async function handleReactAction(params: WhatsAppMessageActionParams) {
   if (params.action !== "react") {
     throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
   }
-  const isWhatsAppSource = params.toolContext?.currentChannelProvider === WHATSAPP_CHANNEL;
+  const fromWhatsApp = isWhatsAppSource(params.toolContext);
   const explicitTarget =
     readStringParam(params.params, "chatJid") ?? readStringParam(params.params, "to");
   const normalizedTarget = explicitTarget ? normalizeWhatsAppTarget(explicitTarget) : null;
   const normalizedCurrent =
-    isWhatsAppSource && params.toolContext?.currentChannelId
+    fromWhatsApp && params.toolContext?.currentChannelId
       ? normalizeWhatsAppTarget(params.toolContext.currentChannelId)
       : null;
   const isCrossChat =
     normalizedTarget != null &&
     (normalizedCurrent == null || normalizedTarget !== normalizedCurrent);
   const scopedContext =
-    !isWhatsAppSource || isCrossChat || !params.toolContext
+    !fromWhatsApp || isCrossChat || !params.toolContext
       ? undefined
       : {
           currentChannelId: params.toolContext.currentChannelId ?? undefined,
@@ -220,7 +249,7 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
   const inferredParticipant =
     explicitParticipant ||
     explicitMessageId != null ||
-    !isWhatsAppSource ||
+    !fromWhatsApp ||
     isCrossChat ||
     !isWhatsAppGroupJid(explicitTarget ?? params.toolContext?.currentChannelId ?? "")
       ? undefined
@@ -244,4 +273,32 @@ export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionP
   );
 }
 
-export const handleWhatsAppReactAction = handleWhatsAppMessageAction;
+export async function handleWhatsAppMessageAction(params: WhatsAppMessageActionParams) {
+  if (params.action === "upload-file") {
+    return await handleWhatsAppUploadFileAction(params);
+  }
+  if (params.action === "react") {
+    return await handleReactAction(params);
+  }
+  if (params.action === "edit" || params.action === "delete" || params.action === "unsend") {
+    const messageId = readStringParam(params.params, "messageId", { required: true });
+    const message = params.action === "edit" ? readWhatsAppEditMessage(params.params) : undefined;
+    const target = readWhatsAppActionTarget(params);
+    return await handleWhatsAppAction(
+      {
+        action: params.action,
+        chatJid: target,
+        messageId,
+        ...(message !== undefined ? { message } : {}),
+        accountId: params.accountId ?? undefined,
+      },
+      params.cfg,
+    );
+  }
+  throw new Error(`Action ${params.action} is not supported for provider ${WHATSAPP_CHANNEL}.`);
+}
+
+/** @deprecated Use handleWhatsAppMessageAction for new WhatsApp message actions. */
+export async function handleWhatsAppReactAction(params: WhatsAppMessageActionParams) {
+  return await handleWhatsAppMessageAction(params);
+}

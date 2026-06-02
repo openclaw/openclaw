@@ -19,6 +19,8 @@ function makeListener() {
     sendMessage: vi.fn(async () => ({ messageId: "msg-1" })),
     sendPoll: vi.fn(async () => ({ messageId: "poll-1" })),
     sendReaction: vi.fn(async () => {}),
+    editMessage: vi.fn(async () => ({ messageId: "msg-1" })),
+    unsendMessage: vi.fn(async () => {}),
     sendComposingTo: vi.fn(async () => {}),
   };
 }
