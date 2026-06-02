@@ -1939,10 +1939,23 @@ describe("executeNodeHostCommand", () => {
       const params = raw as ShellAllowlistMockParams;
       expect(params.env?.PATH).toBe("");
       expect(params.env?.Path).toBe("");
-      return buildAllowlistEvalResult({
+      return {
+        allowlistMatches: [],
+        analysisOk: true,
         allowlistSatisfied: false,
-        segmentAllowlistEntry: null,
-      });
+        segments: [{ resolution: null, argv: ["/trusted/bin/tool", "--version"] }],
+        segmentAllowlistEntries: [null],
+      };
+    });
+    resolveAllowAlwaysPatternCoverageMock.mockImplementation((raw: unknown) => {
+      const params = raw as { segments?: MockAllowlistSegment[]; env?: NodeJS.ProcessEnv };
+      expect(params.env?.PATH).toBe("");
+      expect(params.env?.Path).toBe("");
+      expect(params.segments?.[0]?.argv[0]).toBe("/trusted/bin/tool");
+      return {
+        complete: true,
+        patterns: [{ pattern: "/trusted/bin/tool" }],
+      };
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
       approvals: { allowlist: [], file: { version: 1, agents: {} } },
@@ -1952,7 +1965,7 @@ describe("executeNodeHostCommand", () => {
     });
 
     const result = await executeNodeHostCommand({
-      command: "tool --version",
+      command: "/trusted/bin/tool --version",
       workdir: "/tmp/work",
       env: { PATH: "/gateway/bin:/usr/bin" },
       security: "allowlist",
@@ -1994,8 +2007,8 @@ describe("executeNodeHostCommand", () => {
       analysisOk: true,
       allowlistSatisfied: false,
       segments: [
-        { resolution: null, argv: ["tool", "a"] },
-        { resolution: null, argv: ["tool", "b"] },
+        { resolution: null, argv: ["/trusted/bin/tool", "a"] },
+        { resolution: null, argv: ["/trusted/bin/tool", "b"] },
       ],
       segmentAllowlistEntries: [null, null],
     });
@@ -2011,7 +2024,7 @@ describe("executeNodeHostCommand", () => {
     });
 
     const result = await executeNodeHostCommand({
-      command: "tool a && tool b",
+      command: "/trusted/bin/tool a && /trusted/bin/tool b",
       workdir: "/tmp/work",
       env: {},
       security: "allowlist",
