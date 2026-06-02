@@ -131,8 +131,55 @@ function isPersistedToolHistoryMessage(message: unknown): boolean {
   );
 }
 
-function hasPersistedToolHistoryMessages(messages: unknown[]): boolean {
-  return messages.some(isPersistedToolHistoryMessage);
+function collectToolCallIds(message: unknown): string[] {
+  if (!message || typeof message !== "object") {
+    return [];
+  }
+  const entry = message as Record<string, unknown>;
+  const ids = [entry.toolCallId, entry.tool_call_id]
+    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    .map((value) => value.trim());
+  if (!Array.isArray(entry.content)) {
+    return ids;
+  }
+  for (const block of entry.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const contentEntry = block as Record<string, unknown>;
+    for (const value of [contentEntry.toolCallId, contentEntry.tool_call_id]) {
+      if (typeof value === "string" && value.trim()) {
+        ids.push(value.trim());
+      }
+    }
+  }
+  return ids;
+}
+
+function currentLiveToolCallIds(state: ChatState): string[] {
+  const toolHost = state as ChatState & { toolStreamOrder?: unknown };
+  return Array.isArray(toolHost.toolStreamOrder)
+    ? toolHost.toolStreamOrder.filter(
+        (value): value is string => typeof value === "string" && value.trim().length > 0,
+      )
+    : [];
+}
+
+function hasPersistedCurrentToolStreamMessages(messages: unknown[], state: ChatState): boolean {
+  const liveToolIds = currentLiveToolCallIds(state);
+  if (liveToolIds.length === 0) {
+    return false;
+  }
+  const persistedToolIds = new Set<string>();
+  for (const message of messages.slice(lastUserMessageIndex(messages) + 1)) {
+    if (!isPersistedToolHistoryMessage(message)) {
+      continue;
+    }
+    for (const id of collectToolCallIds(message)) {
+      persistedToolIds.add(id);
+    }
+  }
+  return liveToolIds.every((id) => persistedToolIds.has(id));
 }
 
 function isTextOnlyContent(content: unknown): boolean {
@@ -901,7 +948,10 @@ async function loadChatHistoryUncached(
         visibleStreamParts.every((part) =>
           hasAssistantStreamPartReplacement(state.chatMessages, part),
         );
-      const historyReplacedToolStream = hasPersistedToolHistoryMessages(state.chatMessages);
+      const historyReplacedToolStream = hasPersistedCurrentToolStreamMessages(
+        state.chatMessages,
+        state,
+      );
       if (visibleStreamParts.length === 0 || historyReplacedStream) {
         // Clear all streaming state — history includes tool results and text
         // inline, so keeping streaming artifacts would cause duplicates.
