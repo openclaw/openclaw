@@ -395,6 +395,21 @@ function shouldResolveLatestCompatibleNpmVersion(spec: ParsedRegistryNpmSpec): b
   );
 }
 
+function shouldResolveCompatiblePrereleaseNpmVersion(params: {
+  spec: ParsedRegistryNpmSpec;
+  currentVersion: string;
+}): boolean {
+  if (!isPrereleaseSemverVersion(params.currentVersion)) {
+    return false;
+  }
+  if (params.spec.selectorKind === "none") {
+    return true;
+  }
+  return (
+    params.spec.selectorKind === "tag" && (params.spec.selector ?? "").toLowerCase() !== "latest"
+  );
+}
+
 function canResolveAroundCompatibilityError(error: PluginInstallFailureResult): boolean {
   return (
     error.code === PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_HOST_VERSION ||
@@ -423,10 +438,15 @@ async function resolveLatestCompatibleNpmResolution(params: {
   timeoutMs: number;
   logger: PluginInstallLogger;
 }): Promise<NpmSpecResolution | null> {
-  if (
-    !shouldResolveLatestCompatibleNpmVersion(params.parsedSpec) ||
-    !params.currentResolution.version
-  ) {
+  if (!params.currentResolution.version) {
+    return null;
+  }
+  const currentVersion = params.currentResolution.version;
+  const allowPrereleaseCandidates = shouldResolveCompatiblePrereleaseNpmVersion({
+    spec: params.parsedSpec,
+    currentVersion,
+  });
+  if (!shouldResolveLatestCompatibleNpmVersion(params.parsedSpec) && !allowPrereleaseCandidates) {
     return null;
   }
 
@@ -438,9 +458,8 @@ async function resolveLatestCompatibleNpmResolution(params: {
     return null;
   }
 
-  const currentVersion = params.currentResolution.version;
   const candidates = versions
-    .filter((version) => !isPrereleaseSemverVersion(version))
+    .filter((version) => allowPrereleaseCandidates || !isPrereleaseSemverVersion(version))
     .filter((version) => compareNpmSemver(version, currentVersion) < 0)
     .toSorted(compareNpmSemver)
     .toReversed();
