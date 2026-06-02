@@ -897,7 +897,12 @@ function hasMemorySource(
   override: MemorySearchConfig | undefined,
 ): boolean {
   const sources = override?.sources ?? defaults?.sources;
-  return sources?.length ? sources.includes("memory") : true;
+  if (!sources?.length || sources.includes("memory")) {
+    return true;
+  }
+  const sessionMemory =
+    override?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+  return !sessionMemory;
 }
 
 function collectMemoryWatchDirs(params: {

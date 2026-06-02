@@ -103,6 +103,22 @@ describe("gateway memory watch config warnings", () => {
       });
     });
   });
+
+  it("warns for sessions-only memory search when session memory is disabled", () => {
+    withLargeMemoryDir((root) => {
+      expectDefaultMemoryWatchWarning({
+        gateway: { mode: "local" },
+        agents: {
+          defaults: {
+            workspace: root,
+            memorySearch: {
+              sources: ["sessions"],
+            },
+          },
+        },
+      });
+    });
+  });
 });
 
 function expectDefaultMemoryWatchWarning(raw: unknown): void {
