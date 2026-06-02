@@ -6,6 +6,8 @@ export const DISCORD_SLASH_COMMAND_DEPLOY_STORE_NAMESPACE = "slash-command-deplo
 export const DISCORD_SLASH_COMMAND_DEPLOY_MAX_ENTRIES = 256;
 export const DISCORD_SLASH_COMMAND_DEPLOY_LEGACY_JSON_RELATIVE_PATH =
   "discord/slash-command-deploy-hashes.json";
+export const DISCORD_COMMAND_DEPLOY_CACHE_LEGACY_JSON_RELATIVE_PATH =
+  "discord/command-deploy-cache.json";
 
 type SlashCommandDeployHashesEntry = {
   version: 1;
