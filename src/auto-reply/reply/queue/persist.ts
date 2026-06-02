@@ -1,13 +1,13 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { getRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
-import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { FollowupQueueState, FollowupRun, QueueDropPolicy, QueueMode } from "./types.js";
 
