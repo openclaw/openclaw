@@ -188,6 +188,40 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     vi.stubGlobal("RTCPeerConnection", FakePeerConnection as unknown as typeof RTCPeerConnection);
   });
 
+  it("does not continue WebRTC setup when stopped while microphone access is pending", async () => {
+    const fetchMock = vi.fn(async () => new Response("answer-sdp"));
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const stopTrack = vi.fn();
+    const track = { stop: stopTrack } as unknown as MediaStreamTrack;
+    const stream = {
+      getAudioTracks: () => [track],
+      getTracks: () => [track],
+    } as unknown as MediaStream;
+    let resolveMedia: (stream: MediaStream) => void = () => undefined;
+    Object.defineProperty(globalThis.navigator, "mediaDevices", {
+      configurable: true,
+      value: {
+        getUserMedia: vi.fn(
+          () =>
+            new Promise<MediaStream>((resolve) => {
+              resolveMedia = resolve;
+            }),
+        ),
+      },
+    });
+    const transport = createOpenAiTransport();
+
+    const startPromise = transport.start();
+    const peer = FakePeerConnection.instances[0];
+    transport.stop();
+    resolveMedia(stream);
+
+    await expect(startPromise).resolves.toBeUndefined();
+    expect(peer?.addTrack).not.toHaveBeenCalled();
+    expect(stopTrack).toHaveBeenCalledTimes(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it("sends provider offer headers with the WebRTC SDP request", async () => {
     const fetchMock = vi.fn(async () => new Response("answer-sdp"));
     vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);

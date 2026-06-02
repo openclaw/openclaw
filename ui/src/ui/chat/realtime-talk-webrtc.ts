@@ -57,27 +57,38 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       throw new Error("Realtime Talk requires browser WebRTC and microphone access");
     }
     this.closed = false;
-    this.peer = new RTCPeerConnection();
+    const peer = new RTCPeerConnection();
+    this.peer = peer;
     this.audio = document.createElement("audio");
     this.audio.autoplay = true;
     this.audio.style.display = "none";
     document.body.append(this.audio);
-    this.peer.addEventListener("track", (event) => {
+    peer.addEventListener("track", (event) => {
       if (this.audio) {
         this.audio.srcObject = event.streams[0];
       }
     });
-    this.media = await navigator.mediaDevices.getUserMedia({ audio: true });
-    for (const track of this.media.getAudioTracks()) {
-      this.peer.addTrack(track, this.media);
+    const media = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (!this.isCurrentPeer(peer)) {
+      media.getTracks().forEach((track) => track.stop());
+      return;
     }
-    this.channel = this.peer.createDataChannel("oai-events");
-    this.channel.addEventListener("open", () => {
+    this.media = media;
+    for (const track of media.getAudioTracks()) {
+      peer.addTrack(track, media);
+    }
+    const channel = peer.createDataChannel("oai-events");
+    if (!this.isCurrentPeer(peer)) {
+      channel.close();
+      return;
+    }
+    this.channel = channel;
+    channel.addEventListener("open", () => {
       this.ctx.callbacks.onStatus?.("listening");
       this.emitTalkEvent({ type: "session.ready" });
     });
-    this.channel.addEventListener("message", (event) => this.handleRealtimeEvent(event.data));
-    this.peer.addEventListener("connectionstatechange", () => {
+    channel.addEventListener("message", (event) => this.handleRealtimeEvent(event.data));
+    peer.addEventListener("connectionstatechange", () => {
       if (this.closed) {
         return;
       }
@@ -86,8 +97,14 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       }
     });
 
-    const offer = await this.peer.createOffer();
-    await this.peer.setLocalDescription(offer);
+    const offer = await peer.createOffer();
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
+    await peer.setLocalDescription(offer);
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
     const sdp = await fetch(this.session.offerUrl ?? "https://api.openai.com/v1/realtime/calls", {
       method: "POST",
       body: offer.sdp,
@@ -97,13 +114,24 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         "Content-Type": "application/sdp",
       },
     });
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
     if (!sdp.ok) {
       throw new Error(`Realtime WebRTC setup failed (${sdp.status})`);
     }
-    await this.peer.setRemoteDescription({
+    const answerSdp = await sdp.text();
+    if (!this.isCurrentPeer(peer)) {
+      return;
+    }
+    await peer.setRemoteDescription({
       type: "answer",
-      sdp: await sdp.text(),
+      sdp: answerSdp,
     });
+  }
+
+  private isCurrentPeer(peer: RTCPeerConnection): boolean {
+    return !this.closed && this.peer === peer;
   }
 
   stop(): void {
