@@ -5,7 +5,12 @@ import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { getRuntimeConfig } from "../io.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
-import { resolveSessionTranscriptPathInDir, resolveStorePath } from "./paths.js";
+import {
+  resolveSessionFilePath,
+  resolveSessionFilePathOptions,
+  resolveSessionTranscriptPathInDir,
+  resolveStorePath,
+} from "./paths.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import {
   getSessionEntry,
@@ -43,6 +48,10 @@ export type SessionTranscriptAccessScope = SessionAccessScope & {
 export type SessionTranscriptRuntimeScope = SessionAccessScope & {
   sessionId: string;
   threadId?: string | number;
+};
+
+export type SessionTranscriptReadScope = SessionTranscriptRuntimeScope & {
+  sessionEntry?: Pick<SessionEntry, "sessionFile">;
 };
 
 export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "sessionId"> & {
@@ -320,6 +329,59 @@ export async function resolveSessionTranscriptRuntimeTarget(
     sessionId: scope.sessionId,
     sessionKey,
   };
+}
+
+/**
+ * Resolves the current file-backed target for read-only transcript callers.
+ * Unlike writer/runtime resolution, this does not persist a missing
+ * `sessionFile`; reader projections must not mutate session metadata.
+ */
+export function resolveSessionTranscriptReadTarget(
+  scope: SessionTranscriptReadScope,
+): SessionTranscriptRuntimeTarget {
+  const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
+  if (!agentId) {
+    throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
+  }
+  const storePath = resolveConcreteReadStorePath(scope.storePath);
+  const sessionStore = storePath ? loadSessionStore(storePath, { skipCache: true }) : undefined;
+  const resolvedStoreEntry = sessionStore
+    ? resolveSessionStoreEntry({ store: sessionStore, sessionKey: scope.sessionKey })
+    : undefined;
+  const sessionEntry =
+    scope.sessionEntry ?? resolvedStoreEntry?.existing ?? loadSessionEntry(scope);
+  const sessionKey = resolvedStoreEntry?.normalizedKey ?? scope.sessionKey;
+  const threadId = scope.threadId ?? parseSessionThreadInfo(scope.sessionKey).threadId;
+  const fallbackSessionFile =
+    !sessionEntry?.sessionFile && storePath && threadId !== undefined
+      ? resolveSessionTranscriptPathInDir(
+          scope.sessionId,
+          path.dirname(path.resolve(storePath)),
+          threadId,
+        )
+      : undefined;
+  const sessionFile = resolveSessionFilePath(
+    scope.sessionId,
+    fallbackSessionFile ? { ...sessionEntry, sessionFile: fallbackSessionFile } : sessionEntry,
+    resolveSessionFilePathOptions({
+      agentId,
+      ...(storePath ? { storePath } : {}),
+    }),
+  );
+  return {
+    agentId,
+    sessionFile,
+    sessionId: scope.sessionId,
+    sessionKey,
+  };
+}
+
+function resolveConcreteReadStorePath(storePath: string | undefined): string | undefined {
+  const trimmed = storePath?.trim();
+  if (!trimmed || trimmed === "(multiple)" || trimmed.includes("{agentId}")) {
+    return undefined;
+  }
+  return trimmed;
 }
 
 function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {

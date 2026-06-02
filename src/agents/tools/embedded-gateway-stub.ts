@@ -4,7 +4,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
-import type { ReadSessionMessagesAsyncOptions } from "../../gateway/session-utils.fs.js";
+import type {
+  ReadSessionMessagesAsyncOptions,
+  SessionTranscriptReadScope,
+} from "../../gateway/session-transcript-readers.js";
 import type { SessionsListResult } from "../../gateway/session-utils.types.js";
 import type { SessionsResolveResult } from "../../gateway/sessions-resolve.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
@@ -66,9 +69,7 @@ interface EmbeddedGatewayRuntime {
     entry: Record<string, unknown> | undefined;
   };
   readSessionMessagesAsync: (
-    sessionId: string,
-    storePath: string,
-    sessionFile: string | undefined,
+    scope: SessionTranscriptReadScope,
     opts: ReadSessionMessagesAsyncOptions,
   ) => Promise<unknown[]>;
   resolveSessionModelRef: (
@@ -149,9 +150,15 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const localMessages =
     sessionId && storePath
       ? await rt.readSessionMessagesAsync(
-          sessionId,
-          storePath,
-          entry?.sessionFile as string | undefined,
+          {
+            agentId: sessionAgentId,
+            ...(typeof entry?.sessionFile === "string"
+              ? { sessionEntry: { sessionFile: entry.sessionFile } }
+              : {}),
+            sessionId,
+            sessionKey,
+            storePath,
+          },
           {
             mode: "recent",
             maxMessages: max,

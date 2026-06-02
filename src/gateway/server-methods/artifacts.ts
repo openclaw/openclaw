@@ -25,7 +25,8 @@ import {
   resolveSessionStoreKey,
   resolveStoredSessionKeyForAgentStore,
 } from "../session-store-key.js";
-import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
+import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
+import { loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -464,9 +465,13 @@ async function loadArtifacts(
   }
   const artifacts: ArtifactRecord[] = [];
   await visitSessionMessagesAsync(
-    sessionId,
-    storePath,
-    entry?.sessionFile,
+    {
+      agentId: resolved.agentId ?? resolveAgentIdFromSessionKey(sessionKey),
+      sessionEntry: entry,
+      sessionId,
+      sessionKey,
+      storePath,
+    },
     (message, seq) => {
       collectArtifactsFromMessage({
         message,

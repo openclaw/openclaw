@@ -90,8 +90,12 @@ vi.mock("./session-utils.js", () => ({
     sessionId: "session-1",
     sessionFile: "/tmp/session-1.jsonl",
   }),
-  readSessionMessagesAsync: async () => [],
   resolveSessionTranscriptCandidates: () => ["/tmp/session-1.jsonl"],
+}));
+
+vi.mock("./session-transcript-readers.js", () => ({
+  readRecentSessionMessagesWithStatsAsync: async () => ({ messages: [], totalMessages: 0 }),
+  readSessionMessagesAsync: async () => [],
 }));
 
 vi.mock("./session-history-state.js", () => ({

@@ -62,7 +62,8 @@ import {
   shouldRetryToolReadProbe,
 } from "./live-tool-probe-utils.js";
 import { startGatewayServer } from "./server.impl.js";
-import { loadSessionEntry, readSessionMessagesAsync } from "./session-utils.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
@@ -1852,10 +1853,18 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   if (!entry?.sessionId) {
     return [];
   }
-  const messages = await readSessionMessagesAsync(entry.sessionId, storePath, entry.sessionFile, {
-    mode: "full",
-    reason: "live model assistant text verification",
-  });
+  const messages = await readSessionMessagesAsync(
+    {
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey,
+      storePath,
+    },
+    {
+      mode: "full",
+      reason: "live model assistant text verification",
+    },
+  );
   const assistantTexts: string[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {

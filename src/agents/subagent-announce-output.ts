@@ -10,6 +10,7 @@ import {
   callGateway,
   getRuntimeConfig,
   readSessionEntry,
+  readSessionMessagesFromFileAsync,
   readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
@@ -24,6 +25,7 @@ type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   readSessionEntry: typeof readSessionEntry;
+  readSessionMessagesFromFileAsync: typeof readSessionMessagesFromFileAsync;
   readSessionMessagesAsync: typeof readSessionMessagesAsync;
   resolveAgentIdFromSessionKey: typeof resolveAgentIdFromSessionKey;
   resolveStorePath: typeof resolveStorePath;
@@ -33,6 +35,7 @@ const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
   getRuntimeConfig,
   readSessionEntry,
+  readSessionMessagesFromFileAsync,
   readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
@@ -201,7 +204,7 @@ export async function readSubagentOutput(
 ): Promise<string | undefined> {
   let messages: unknown[] | undefined;
   if (options?.sessionFile) {
-    const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesAsync(
+    const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesFromFileAsync(
       sessionKey,
       undefined,
       options.sessionFile,

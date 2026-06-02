@@ -94,6 +94,12 @@ import {
 } from "../session-store-key.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
+  readRecentSessionMessagesWithStatsAsync,
+  readRecentSessionTranscriptLines,
+  readSessionMessageCountAsync,
+  readSessionPreviewItemsFromTranscript,
+} from "../session-transcript-readers.js";
+import {
   archiveFileOnDisk,
   buildGatewaySessionRow,
   listSessionsFromStoreAsync,
@@ -101,10 +107,6 @@ import {
   loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
-  readSessionMessageCountAsync,
-  readSessionPreviewItemsFromTranscript,
   resolveDeletedAgentIdFromSessionKey,
   resolveFreshestSessionEntryFromStoreKeys,
   resolveGatewaySessionStoreTarget,
@@ -937,7 +939,13 @@ async function handleSessionSend(params: {
   }
 
   const messageSeq =
-    (await readSessionMessageCountAsync(entry.sessionId, storePath, entry.sessionFile)) + 1;
+    (await readSessionMessageCountAsync({
+      agentId: requestedAgentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
+      storePath,
+    })) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
@@ -1275,10 +1283,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
           continue;
         }
         const items = readSessionPreviewItemsFromTranscript(
-          entry.sessionId,
-          target.storePath,
-          entry.sessionFile,
-          target.agentId,
+          {
+            agentId: target.agentId,
+            sessionEntry: entry,
+            sessionId: entry.sessionId,
+            sessionKey: target.canonicalKey,
+            storePath: target.storePath,
+          },
           limit,
           maxChars,
         );
@@ -1650,11 +1661,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     let runError: unknown;
     let runMeta: Record<string, unknown> | undefined;
     const messageSeq = initialMessage
-      ? (await readSessionMessageCountAsync(
-          createdEntry.sessionId,
-          target.storePath,
-          createdEntry.sessionFile,
-        )) + 1
+      ? (await readSessionMessageCountAsync({
+          agentId: target.agentId,
+          sessionEntry: createdEntry,
+          sessionId: createdEntry.sessionId,
+          sessionKey: target.canonicalKey,
+          storePath: target.storePath,
+        })) + 1
       : undefined;
 
     if (initialMessage) {
@@ -2519,9 +2532,13 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const { messages } = await readRecentSessionMessagesWithStatsAsync(
-      entry.sessionId,
-      storePath,
-      entry.sessionFile,
+      {
+        agentId: requestedAgent.agentId,
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey: target.canonicalKey,
+        storePath,
+      },
       {
         maxMessages: limit,
         maxLines: limit * 20 + 20,
@@ -2736,8 +2753,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
 
     const tail = readRecentSessionTranscriptLines({
       sessionId,
+      sessionKey: target.canonicalKey,
+      sessionEntry: entry,
       storePath,
-      sessionFile: entry?.sessionFile,
       agentId: target.agentId,
       maxLines,
     });

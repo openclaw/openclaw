@@ -2,20 +2,22 @@ import { createHash } from "node:crypto";
 import { describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
-import * as sessionUtils from "./session-utils.js";
+import * as sessionTranscriptReaders from "./session-transcript-readers.js";
 
 describe("SessionHistorySseState", () => {
   test("uses the initial raw snapshot for both first history and seq seeding", () => {
-    const readSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "stale disk message" }],
-        __openclaw: { seq: 1 },
-      },
-    ]);
+    const readSpy = vi
+      .spyOn(sessionTranscriptReaders, "readSessionMessagesAsync")
+      .mockResolvedValue([
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "stale disk message" }],
+          __openclaw: { seq: 1 },
+        },
+      ]);
     try {
       const state = SessionHistorySseState.fromRawSnapshot({
-        target: { sessionId: "sess-main" },
+        target: { sessionId: "sess-main", sessionKey: "global" },
         rawMessages: [
           {
             role: "assistant",
@@ -80,7 +82,7 @@ describe("SessionHistorySseState", () => {
 
   test("uses carried sequence for inline SSE appends", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
+      target: { sessionId: "sess-main", sessionKey: "global" },
       rawMessages: [
         {
           role: "assistant",
@@ -104,7 +106,7 @@ describe("SessionHistorySseState", () => {
 
   test("emits message-tool mirror when silent control reply completes inline append", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
+      target: { sessionId: "sess-main", sessionKey: "global" },
       rawMessages: [
         {
           role: "user",
@@ -239,7 +241,7 @@ describe("SessionHistorySseState", () => {
 
   test("requests refresh when silent control reply completes multiple message-tool mirrors", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
+      target: { sessionId: "sess-main", sessionKey: "global" },
       rawMessages: [
         {
           role: "user",
@@ -315,7 +317,7 @@ describe("SessionHistorySseState", () => {
 
   test("does not emit a no-op hidden inline control reply", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
+      target: { sessionId: "sess-main", sessionKey: "global" },
       rawMessages: [
         {
           role: "user",
@@ -341,7 +343,7 @@ describe("SessionHistorySseState", () => {
     const visibleText = "Here is the answer.";
     const textSha256 = createHash("sha256").update(visibleText).digest("hex");
     const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
+      target: { sessionId: "sess-main", sessionKey: "global" },
       rawMessages: [
         {
           role: "assistant",
@@ -394,7 +396,7 @@ describe("SessionHistorySseState", () => {
 
   test("requests refresh for non-monotonic carried inline sequence", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
+      target: { sessionId: "sess-main", sessionKey: "global" },
       rawMessages: [
         {
           role: "assistant",
@@ -437,9 +439,11 @@ describe("SessionHistorySseState", () => {
   });
 
   test("refreshes limited SSE history from bounded async tail reads", async () => {
-    const fullReadSpy = vi.spyOn(sessionUtils, "readSessionMessagesAsync").mockResolvedValue([]);
+    const fullReadSpy = vi
+      .spyOn(sessionTranscriptReaders, "readSessionMessagesAsync")
+      .mockResolvedValue([]);
     const tailReadSpy = vi
-      .spyOn(sessionUtils, "readRecentSessionMessagesWithStatsAsync")
+      .spyOn(sessionTranscriptReaders, "readRecentSessionMessagesWithStatsAsync")
       .mockResolvedValueOnce({
         messages: [
           {
@@ -452,7 +456,7 @@ describe("SessionHistorySseState", () => {
       });
     try {
       const state = SessionHistorySseState.fromRawSnapshot({
-        target: { sessionId: "sess-main" },
+        target: { sessionId: "sess-main", sessionKey: "global" },
         rawMessages: [
           {
             role: "assistant",
@@ -652,7 +656,7 @@ describe("SessionHistorySseState", () => {
 
   test("does not append heartbeat or internal-only SSE messages", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
-      target: { sessionId: "sess-main" },
+      target: { sessionId: "sess-main", sessionKey: "global" },
       rawMessages: [
         {
           role: "assistant",

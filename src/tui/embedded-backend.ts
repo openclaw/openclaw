@@ -46,7 +46,10 @@ import {
 } from "../gateway/server-methods/chat.js";
 import { loadGatewayModelCatalog } from "../gateway/server-model-catalog.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
-import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
+import {
+  capArrayByJsonBytes,
+  readSessionMessagesAsync,
+} from "../gateway/session-transcript-readers.js";
 import {
   buildGatewaySessionInfo,
   getSessionDefaults,
@@ -57,7 +60,6 @@ import {
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
-  readSessionMessagesAsync,
 } from "../gateway/session-utils.js";
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
@@ -422,11 +424,20 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
       sessionId && storePath
-        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
-            mode: "recent",
-            maxMessages: max,
-            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
-          })
+        ? await readSessionMessagesAsync(
+            {
+              agentId: sessionAgentId,
+              sessionEntry: entry,
+              sessionId,
+              sessionKey: canonicalKey,
+              storePath,
+            },
+            {
+              mode: "recent",
+              maxMessages: max,
+              maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+            },
+          )
         : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,

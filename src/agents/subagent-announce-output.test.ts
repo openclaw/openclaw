@@ -10,6 +10,8 @@ import {
 type CallGateway = typeof import("../gateway/call.js").callGateway;
 type GetRuntimeConfig = typeof import("./subagent-announce.runtime.js").getRuntimeConfig;
 type ReadSessionEntry = typeof import("./subagent-announce.runtime.js").readSessionEntry;
+type ReadSessionMessagesFromFileAsync =
+  typeof import("./subagent-announce.runtime.js").readSessionMessagesFromFileAsync;
 type ReadSessionMessagesAsync =
   typeof import("./subagent-announce.runtime.js").readSessionMessagesAsync;
 type ResolveAgentIdFromSessionKey =
@@ -21,12 +23,15 @@ function installOutputDeps(params: {
   transcriptMessages?: Array<unknown>;
 }) {
   const callGateway = vi.fn(async () => ({ messages: params.messages }));
-  const readSessionMessagesAsync = vi.fn(async () => params.transcriptMessages ?? []);
+  const readSessionMessagesAsync = vi.fn(async () => []);
+  const readSessionMessagesFromFileAsync = vi.fn(async () => params.transcriptMessages ?? []);
   testing.setDepsForTest({
     callGateway: callGateway as unknown as CallGateway,
+    readSessionMessagesFromFileAsync:
+      readSessionMessagesFromFileAsync as unknown as ReadSessionMessagesFromFileAsync,
     readSessionMessagesAsync: readSessionMessagesAsync as unknown as ReadSessionMessagesAsync,
   });
-  return { callGateway, readSessionMessagesAsync };
+  return { callGateway, readSessionMessagesAsync, readSessionMessagesFromFileAsync };
 }
 
 function sessionsYieldTurn(message = "Waiting for subagent completion.") {
@@ -209,7 +214,7 @@ describe("readSubagentOutput", () => {
         sessionFile: "/tmp/openclaw-internal-run.jsonl",
       }),
     ).resolves.toBe("fresh recovered output");
-    expect(deps.readSessionMessagesAsync).toHaveBeenCalledWith(
+    expect(deps.readSessionMessagesFromFileAsync).toHaveBeenCalledWith(
       "agent:main:subagent:child",
       undefined,
       "/tmp/openclaw-internal-run.jsonl",
