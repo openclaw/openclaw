@@ -20,6 +20,10 @@ export type OrphanedTrailingUserPromptMergeResult = {
 
 export type MessageMergeStrategyId = "orphan-trailing-user-prompt";
 
+/**
+ * Strategy hook for reconciling a newly queued user prompt with the active
+ * session leaf when the previous turn left a trailing user message.
+ */
 export type MessageMergeStrategy = {
   id: MessageMergeStrategyId;
   mergeOrphanedTrailingUserPrompt: (
@@ -37,6 +41,10 @@ const defaultMessageMergeStrategy: MessageMergeStrategy = {
 
 let activeMessageMergeStrategy = defaultMessageMergeStrategy;
 
+/**
+ * Resolve the active merge strategy for embedded attempts, allowing tests to
+ * swap strategy behavior without changing runtime call sites.
+ */
 export function resolveMessageMergeStrategy(): MessageMergeStrategy {
   return activeMessageMergeStrategy;
 }
