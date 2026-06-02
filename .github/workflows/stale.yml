@@ -68,7 +68,7 @@ jobs:
           days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -100,7 +100,7 @@ jobs:
           days-before-pr-stale: -1
           days-before-pr-close: -1
           stale-issue-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           operations-per-run: 2000
           ascending: true
           include-only-assigned: true
@@ -172,7 +172,7 @@ jobs:
           days-before-pr-close: 7
           stale-issue-label: stale
           stale-pr-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           exempt-pr-labels: maintainer,no-stale,bad-barnacle
           operations-per-run: 2000
           ascending: true
@@ -203,7 +203,7 @@ jobs:
           days-before-pr-stale: -1
           days-before-pr-close: -1
           stale-issue-label: stale
-          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle
+          exempt-issue-labels: enhancement,maintainer,pinned,security,no-stale,bad-barnacle,clawsweeper:queueable-fix,clawsweeper:source-repro,clawsweeper:fix-shape-clear
           operations-per-run: 2000
           ascending: true
           include-only-assigned: true
@@ -277,6 +277,9 @@ jobs:
               "security",
               "no-stale",
               "bad-barnacle",
+              "clawsweeper:queueable-fix",
+              "clawsweeper:source-repro",
+              "clawsweeper:fix-shape-clear",
             ]);
             const prExemptLabels = new Set(["maintainer", "no-stale", "bad-barnacle"]);
             const maintainerAssociations = new Set(["OWNER", "MEMBER", "COLLABORATOR"]);
