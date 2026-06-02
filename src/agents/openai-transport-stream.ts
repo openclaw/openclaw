@@ -1030,6 +1030,13 @@ function parseTextSignature(
   return { id: signature };
 }
 
+function buildResponsesInputMessage(
+  role: "user" | "system" | "developer",
+  content: ResponseInputMessageContentList,
+): ResponseInputItem.Message {
+  return { type: "message", role, content };
+}
+
 function convertResponsesMessages(
   model: Model,
   context: Context,
@@ -1098,19 +1105,29 @@ function convertResponsesMessages(
   );
   const includeSystemPrompt = options?.includeSystemPrompt ?? true;
   if (includeSystemPrompt && context.systemPrompt) {
-    messages.push({
-      role: model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
-      content: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
-    });
+    messages.push(
+      buildResponsesInputMessage(
+        model.reasoning && options?.supportsDeveloperRole !== false ? "developer" : "system",
+        [
+          {
+            type: "input_text",
+            text: sanitizeTransportPayloadText(
+              stripSystemPromptCacheBoundary(context.systemPrompt),
+            ),
+          },
+        ],
+      ),
+    );
   }
   let msgIndex = 0;
   for (const msg of transformedMessages) {
     if (msg.role === "user") {
       if (typeof msg.content === "string") {
-        messages.push({
-          role: "user",
-          content: [{ type: "input_text", text: sanitizeTransportPayloadText(msg.content) }],
-        });
+        messages.push(
+          buildResponsesInputMessage("user", [
+            { type: "input_text", text: sanitizeTransportPayloadText(msg.content) },
+          ]),
+        );
       } else {
         const content = (
           msg.content.map((item) =>
@@ -1124,7 +1141,7 @@ function convertResponsesMessages(
           ) as ResponseInputMessageContentList
         ).filter((item) => model.input.includes("image") || item.type !== "input_image");
         if (content.length > 0) {
-          messages.push({ role: "user", content });
+          messages.push(buildResponsesInputMessage("user", content));
         }
       }
     } else if (msg.role === "assistant") {
@@ -2058,10 +2075,11 @@ function ensureOpenAICodexResponsesInput(messages: ResponseInput, context: Conte
       "OpenAI Codex Responses requires non-empty input when only systemPrompt is provided.",
     );
   }
-  messages.push({
-    role: "user",
-    content: [{ type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT }],
-  });
+  messages.push(
+    buildResponsesInputMessage("user", [
+      { type: "input_text", text: OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT },
+    ]),
+  );
 }
 
 function resolveOpenAIResponsesTextFormat(

@@ -2218,6 +2218,42 @@ describe("openai transport stream", () => {
     expect(params.input?.[0]?.role).toBe("developer");
   });
 
+  it("serializes Responses input messages with explicit message type and content parts", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "microsoft-foundry",
+        baseUrl: "https://example.services.ai.azure.com/api/projects/demo/openai/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [{ role: "user", content: "hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { input?: unknown };
+
+    expect(params.input).toEqual([
+      {
+        type: "message",
+        role: "system",
+        content: [{ type: "input_text", text: "system" }],
+      },
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "hello" }],
+      },
+    ]);
+  });
+
   it("uses model maxTokens for Responses params when runtime maxTokens is omitted", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -3684,6 +3720,7 @@ describe("openai transport stream", () => {
     expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
     expect(params.input).toEqual([
       {
+        type: "message",
         role: "user",
         content: [{ type: "input_text", text: " " }],
       },
@@ -4051,9 +4088,9 @@ describe("openai transport stream", () => {
         tools: [],
       } as never,
       undefined,
-    ) as { input?: Array<{ content?: string }> };
+    ) as { input?: Array<{ content?: Array<{ text?: string }> }> };
 
-    expect(params.input?.[0]?.content).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input?.[0]?.content?.[0]?.text).toBe("Stable prefix\nDynamic suffix");
   });
 
   it("defaults responses tool schemas to strict on native OpenAI routes", () => {
