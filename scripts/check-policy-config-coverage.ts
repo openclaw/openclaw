@@ -52,12 +52,12 @@ const configPath = path.join(repoRoot, "scripts/lib/policy-config-coverage.jsonc
 
 const config = JSON5.parse(await fs.readFile(configPath, "utf8")) as CoverageConfig;
 const { baseline } = await renderConfigDocBaselineArtifacts();
-const entries = flattenConfigDocBaselineEntries(baseline)
+const monitoredEntries = flattenConfigDocBaselineEntries(baseline)
   .filter((entry) => !entry.hasChildren)
   .filter((entry) => matchesAny(config.monitored, entry.path))
   .toSorted((left, right) => left.path.localeCompare(right.path));
 
-const classified: ClassifiedEntry[] = entries.map((entry) => ({
+const classified: ClassifiedEntry[] = monitoredEntries.map((entry) => ({
   path: entry.path,
   kind: entry.kind,
   classification: config.classifications.find((item) =>
@@ -68,17 +68,17 @@ const unclassified = classified.filter((entry) => entry.classification === undef
 const stale = config.classifications.filter(
   (item) =>
     item.allowNoSchemaPath !== true &&
-    !entries.some((entry) => pathMatchesPattern(item.pattern, entry.path)),
+    !monitoredEntries.some((entry) => pathMatchesPattern(item.pattern, entry.path)),
 );
-const counts = summarize(classified);
+const summaryCounts = summarize(classified);
 
 if (json) {
   console.log(
     JSON.stringify(
       {
         ok: unclassified.length === 0 && stale.length === 0,
-        monitoredPaths: entries.length,
-        counts,
+        monitoredPaths: monitoredEntries.length,
+        counts: summaryCounts,
         unclassified,
         stale,
       },
@@ -87,7 +87,13 @@ if (json) {
     ),
   );
 } else {
-  printTextReport({ monitoredPaths: entries.length, counts, unclassified, stale, classified });
+  printTextReport({
+    monitoredPaths: monitoredEntries.length,
+    counts: summaryCounts,
+    unclassified,
+    stale,
+    classified,
+  });
 }
 
 if (check && (unclassified.length > 0 || stale.length > 0)) {
