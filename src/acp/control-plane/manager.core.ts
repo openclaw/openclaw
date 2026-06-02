@@ -469,7 +469,7 @@ export class AcpSessionManager {
     } catch (error) {
       const saveError = formatErrorMessage(error);
       logVerbose(
-        `acp-manager: before agent:turn:save hook callback failed for ${params.sessionKey}: ${saveError}`,
+        `acp-manager: before agent:turn:transcript:save hook callback failed for ${params.sessionKey}: ${saveError}`,
       );
       this.emitTurnSaveHook({
         ...saveContextBase,
@@ -495,16 +495,16 @@ export class AcpSessionManager {
       }
       if (result.saveOutcome === "skipped") {
         if (result.saveSkipReason !== undefined && typeof result.saveSkipReason !== "string") {
-          throw new Error("invalid ACP turn save skip reason");
+          throw new Error("invalid ACP turn transcript save skip reason");
         }
         return {
           saveOutcome: "skipped",
           ...(result.saveSkipReason ? { saveSkipReason: result.saveSkipReason } : {}),
         };
       }
-      throw new Error("invalid ACP turn save outcome");
+      throw new Error("invalid ACP turn transcript save outcome");
     }
-    throw new Error("invalid ACP turn save outcome");
+    throw new Error("invalid ACP turn transcript save outcome");
   }
 
   private emitTurnSaveHook(context: AcpTurnSaveHookContext): void {
@@ -513,12 +513,12 @@ export class AcpSessionManager {
         triggerInternalHook(
           createInternalHookEvent(
             "agent",
-            "turn:save",
+            "turn:transcript:save",
             context.sessionKey,
             context satisfies AgentTurnSaveHookContext,
           ),
         ),
-      "agent:turn:save internal hook failed",
+      "agent:turn:transcript:save internal hook failed",
     );
   }
 

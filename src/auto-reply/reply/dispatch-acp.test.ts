@@ -528,7 +528,7 @@ describe("tryDispatchAcpReply", () => {
     expect(routeCall().mirror).toBe(false);
   });
 
-  it("persists the ACP transcript before the manager emits successful agent:turn:save", async () => {
+  it("persists the ACP transcript before the manager emits successful agent:turn:transcript:save", async () => {
     setReadyAcpResolution();
     const order: string[] = [];
     transcriptMocks.persistAcpDispatchTranscript.mockImplementationOnce(async () => {
@@ -563,7 +563,7 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
-  it("surfaces ACP transcript persistence failures before successful agent:turn:save", async () => {
+  it("surfaces ACP transcript persistence failures before successful agent:turn:transcript:save", async () => {
     setReadyAcpResolution();
     const order: string[] = [];
     transcriptMocks.persistAcpDispatchTranscript.mockRejectedValueOnce(new Error("disk full"));

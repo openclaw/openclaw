@@ -165,11 +165,11 @@ export type MessagePreprocessedHookEvent = InternalHookEvent & {
 };
 
 /**
- * Context provided to `agent:turn:save` hook handlers.
- * Fired after the ACP turn save phase reaches an outcome.
+ * Context provided to `agent:turn:transcript:save` hook handlers.
+ * Fired after the ACP turn transcript save phase reaches an outcome.
  */
 export type AgentTurnSaveHookContext = {
-  /** Session key identifying the agent session whose turn save phase completed. */
+  /** Session key identifying the agent session whose turn transcript save phase completed. */
   sessionKey: string;
   /** Whether the save phase completed successfully. */
   success: boolean;
@@ -187,10 +187,10 @@ export type AgentTurnSaveHookContext = {
   saveSkipReason?: string;
 };
 
-/** Internal hook event emitted after each agent turn save phase reaches an outcome. */
+/** Internal hook event emitted after each agent turn transcript save phase reaches an outcome. */
 export type AgentTurnSaveHookEvent = InternalHookEvent & {
   type: "agent";
-  action: "turn:save";
+  action: "turn:transcript:save";
   context: AgentTurnSaveHookContext;
 };
 
@@ -481,7 +481,7 @@ export function isMessagePreprocessedEvent(
 }
 
 export function isAgentTurnSaveEvent(event: InternalHookEvent): event is AgentTurnSaveHookEvent {
-  if (!isHookEventTypeAndAction(event, "agent", "turn:save")) {
+  if (!isHookEventTypeAndAction(event, "agent", "turn:transcript:save")) {
     return false;
   }
   const context = getHookContext<AgentTurnSaveHookContext>(event);
