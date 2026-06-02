@@ -1006,6 +1006,16 @@ describe("registerPolicyDoctorChecks", () => {
         target: "oc://policy.jsonc/tools/execPolicy",
       },
       {
+        label: "tools settings",
+        policy: { tools: { settings: {} } },
+        target: "oc://policy.jsonc/tools/settings",
+      },
+      {
+        label: "tools entries",
+        policy: { tools: { entries: [] } },
+        target: "oc://policy.jsonc/tools/entries",
+      },
+      {
         label: "tools profile",
         policy: { tools: { profiles: { deny: ["full"] } } },
         target: "oc://policy.jsonc/tools/profiles/deny",

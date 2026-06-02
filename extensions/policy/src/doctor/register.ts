@@ -1667,26 +1667,6 @@ export function policyContainerShapeFindings(
     ];
   }
   if (isRecord(policy.tools)) {
-    if (policy.tools.settings !== undefined && !isRecord(policy.tools.settings)) {
-      return [
-        policyShapeFinding(
-          policyPath,
-          `oc://${policyDocName}/tools/settings`,
-          `${policyPath} tools.settings must be an object.`,
-          `Fix ${policyPath} so tools.settings is an object.`,
-        ),
-      ];
-    }
-    if (policy.tools.entries !== undefined && !Array.isArray(policy.tools.entries)) {
-      return [
-        policyShapeFinding(
-          policyPath,
-          `oc://${policyDocName}/tools/entries`,
-          `${policyPath} tools.entries must be an array.`,
-          `Fix ${policyPath} so tools.entries is an array.`,
-        ),
-      ];
-    }
     const postureFinding = toolPosturePolicyShapeFinding(policy.tools, {
       policyDocName,
       policyPath,
@@ -2568,12 +2548,10 @@ function toolPosturePolicyShapeFinding(
     "alsoAllow",
     "denyTools",
     "elevated",
-    "entries",
     "exec",
     "fs",
     "profiles",
     "requireMetadata",
-    "settings",
   ];
   const unsupportedTopLevel = unsupportedPolicyKey(tools, allowedTopLevel);
   if (unsupportedTopLevel !== undefined) {
