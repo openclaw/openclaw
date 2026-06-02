@@ -301,7 +301,65 @@ function isUnreferencedSessionArtifactFile(
 // An orphaned `sessions.json.<pid>.<uuid>.tmp` older than this is never a live
 // atomic write (those rename within milliseconds), so it is safe to reclaim
 // regardless of the general unreferenced-artifact age threshold (#56827).
-const SESSION_STORE_TEMP_STALE_MS = 5 * 60 * 1000;
+export const SESSION_STORE_TEMP_STALE_MS = 5 * 60 * 1000;
+
+/**
+ * Reclaim orphaned atomic-write temp files in a sessions directory.
+ *
+ * `writeTextAtomic` stages into `<store>.<pid>.<uuid>.tmp` then renames.
+ * If the process dies between write and rename, the temp is orphaned and
+ * accumulates on disk (#56827). This sweep removes temps older than the
+ * staleness window — safe because live atomic writes rename within ms.
+ *
+ * Call this once at gateway startup (or on first store load) to prevent
+ * unbounded disk waste from repeated crash-orphan cycles.
+ */
+export function sweepOrphanStoreTempsSync(
+  sessionsDir: string,
+  storeBasename: string,
+  options?: {
+    staleMs?: number;
+    log?: SessionDiskBudgetLogger;
+  },
+): { removedFiles: number; freedBytes: number } {
+  const staleMs = options?.staleMs ?? SESSION_STORE_TEMP_STALE_MS;
+  const log = options?.log ?? NOOP_LOGGER;
+  const cutoffMs = Date.now() - staleMs;
+  let removedFiles = 0;
+  let freedBytes = 0;
+
+  try {
+    const entries = fs.readdirSync(sessionsDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile() || !isSessionStoreTempArtifactName(entry.name, storeBasename)) {
+        continue;
+      }
+      const filePath = path.join(sessionsDir, entry.name);
+      const stat = fs.statSync(filePath, { throwIfNoEntry: false });
+      if (!stat?.isFile() || stat.mtimeMs > cutoffMs) {
+        continue;
+      }
+      const size = stat.size;
+      fs.rmSync(filePath, { force: true });
+      removedFiles++;
+      freedBytes += size;
+    }
+  } catch {
+    // Directory may not exist yet (first run) — silently skip.
+    return { removedFiles: 0, freedBytes: 0 };
+  }
+
+  if (removedFiles > 0) {
+    log.info("swept orphaned atomic-write temp files", {
+      sessionsDir,
+      storeBasename,
+      removedFiles,
+      freedBytes,
+    });
+  }
+
+  return { removedFiles, freedBytes };
+}
 // Prompt blobs are written or mtime-refreshed before sessions.json points at
 // them. Treat fresh unreferenced blobs as in-flight so cleanup cannot strand a
 // durable promptRef that is about to be committed by another writer.

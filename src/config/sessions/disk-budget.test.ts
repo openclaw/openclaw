@@ -9,7 +9,11 @@ import {
   resolveTrajectoryPointerFilePath,
 } from "../../trajectory/paths.js";
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
-import { enforceSessionDiskBudget, pruneUnreferencedSessionArtifacts } from "./disk-budget.js";
+import {
+  enforceSessionDiskBudget,
+  pruneUnreferencedSessionArtifacts,
+  sweepOrphanStoreTempsSync,
+} from "./disk-budget.js";
 import { saveSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
@@ -753,6 +757,66 @@ describe("pruneUnreferencedSessionArtifacts", () => {
       await expectPathMissing(staleTemp);
       await expectPathExists(freshTemp);
       expect(result.removedFiles).toBe(1);
+    });
+  });
+});
+
+describe("sweepOrphanStoreTempsSync", () => {
+  it("removes stale orphaned temp files", () => {
+    withTempDir(async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const staleTemp = path.join(
+        dir,
+        "sessions.json.12345.0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b.tmp",
+      );
+      const freshTemp = path.join(
+        dir,
+        "sessions.json.12345.1a2b3c4d-5e6f-4a8b-9c0d-1e2f3a4b5c6d.tmp",
+      );
+
+      nodeFs.writeFileSync(staleTemp, "s".repeat(128), "utf-8");
+      nodeFs.writeFileSync(freshTemp, "f".repeat(128), "utf-8");
+
+      // Make stale temp older than 5 minutes
+      const old = new Date(Date.now() - 10 * 60 * 1000);
+      nodeFs.utimesSync(staleTemp, old, old);
+
+      const result = sweepOrphanStoreTempsSync(dir, "sessions.json");
+
+      expect(nodeFs.existsSync(staleTemp)).toBe(false);
+      expect(nodeFs.existsSync(freshTemp)).toBe(true);
+      expect(result.removedFiles).toBe(1);
+      expect(result.freedBytes).toBe(128);
+    });
+  });
+
+  it("returns zeros when no orphaned temps exist", () => {
+    withTempDir(async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      nodeFs.writeFileSync(storePath, JSON.stringify({}), "utf-8");
+
+      const result = sweepOrphanStoreTempsSync(dir, "sessions.json");
+
+      expect(result.removedFiles).toBe(0);
+      expect(result.freedBytes).toBe(0);
+    });
+  });
+
+  it("skips non-matching temp files", () => {
+    withTempDir(async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const otherTemp = path.join(dir, "other.json.12345.0f9c1a2b-3c4d-4e5f-8a9b-0c1d2e3f4a5b.tmp");
+      nodeFs.writeFileSync(storePath, JSON.stringify({}), "utf-8");
+      nodeFs.writeFileSync(otherTemp, "x".repeat(64), "utf-8");
+
+      const old = new Date(Date.now() - 10 * 60 * 1000);
+      nodeFs.utimesSync(otherTemp, old, old);
+
+      const result = sweepOrphanStoreTempsSync(dir, "sessions.json");
+
+      // other.json.*.tmp should NOT be removed when sweeping for sessions.json
+      expect(nodeFs.existsSync(otherTemp)).toBe(true);
+      expect(result.removedFiles).toBe(0);
     });
   });
 });
