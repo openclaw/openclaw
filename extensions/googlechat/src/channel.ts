@@ -8,7 +8,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { googleChatApprovalAuth } from "./approval-auth.js";
+import { googleChatApprovalCapability } from "./approval-native.js";
 import { createGoogleChatPluginBase, GOOGLECHAT_CHANNEL_ID } from "./channel-base.js";
 import {
   googlechatDirectoryAdapter,
@@ -79,7 +79,7 @@ export const googlechatPlugin = createChatChannelPlugin({
     ...createGoogleChatPluginBase({
       configSchema: buildChannelConfigSchema(GoogleChatConfigSchema),
     }),
-    approvalCapability: googleChatApprovalAuth,
+    approvalCapability: googleChatApprovalCapability,
     secrets: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,
