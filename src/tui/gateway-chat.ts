@@ -239,13 +239,12 @@ export class GatewayChatClient implements TuiBackend {
 
   async describeSession(
     key: string,
-    opts?: { agentId?: string },
+    _opts?: { agentId?: string },
   ): Promise<GatewaySessionList["sessions"][0] | null> {
     const res = await this.client.request<{ session: GatewaySessionList["sessions"][0] | null }>(
       "sessions.describe",
       {
         key,
-        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
         includeDerivedTitles: true,
         includeLastMessage: true,
       },
