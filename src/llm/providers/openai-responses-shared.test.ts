@@ -70,7 +70,7 @@ async function* responseEvents(events: Array<Record<string, unknown>>) {
 }
 
 describe("runResponsesStreamLifecycle", () => {
-  it("disables OpenAI SDK retries for streaming requests by default", async () => {
+  it("does not include maxRetries in request options by default", async () => {
     const capturedOptions: unknown[] = [];
     async function* emptyStream(): AsyncIterable<ResponseStreamEvent> {}
     const stream = new AssistantMessageEventStream();
@@ -103,7 +103,8 @@ describe("runResponsesStreamLifecycle", () => {
     const result = await stream.result();
 
     expect(result.stopReason).toBe("stop");
-    expect(capturedOptions).toEqual([{ maxRetries: 0 }]);
+    expect(capturedOptions).toHaveLength(1);
+    expect(capturedOptions[0]).not.toHaveProperty("maxRetries");
   });
 });
 

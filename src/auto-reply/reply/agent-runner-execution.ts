@@ -2874,6 +2874,34 @@ export async function runAgentTurnWithFallback(params: {
         fallbackModel = err.model;
         continue;
       }
+
+      if (isEmbeddedAttemptSessionTakeoverError(err)) {
+        const preservedPromptError =
+          err && typeof err === "object" && "promptError" in err
+            ? (err as { promptError: unknown }).promptError
+            : undefined;
+
+        if (preservedPromptError) {
+          err = preservedPromptError;
+        } else {
+          params.replyOperation?.fail("run_failed", err);
+          const text = params.isHeartbeat
+            ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+            : "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.";
+          return {
+            kind: "final",
+            payload: markAgentRunFailureReplyPayload({
+              text: resolveExternalRunFailureTextForConversation({
+                text,
+                sessionCtx: params.sessionCtx,
+                isGenericRunnerFailure: false,
+                cfg: params.followupRun.run.config,
+              }),
+            }),
+          };
+        }
+      }
+
       const message = formatErrorMessage(err);
       agentTurnTiming.logIfSlow({
         runId,
@@ -2958,24 +2986,6 @@ export async function runAgentTurnWithFallback(params: {
           kind: "final",
           payload: markAgentRunFailureReplyPayload({
             text: providerRequestError.userMessage,
-          }),
-        };
-      }
-
-      if (isEmbeddedAttemptSessionTakeoverError(err)) {
-        params.replyOperation?.fail("run_failed", err);
-        const text = params.isHeartbeat
-          ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-          : "⚠️ Your message was interrupted because new input arrived while the model was retrying a connection error. Please resend your message.";
-        return {
-          kind: "final",
-          payload: markAgentRunFailureReplyPayload({
-            text: resolveExternalRunFailureTextForConversation({
-              text,
-              sessionCtx: params.sessionCtx,
-              isGenericRunnerFailure: false,
-              cfg: params.followupRun.run.config,
-            }),
           }),
         };
       }
