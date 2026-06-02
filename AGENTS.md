@@ -6,6 +6,7 @@ Skills own workflows; root owns hard policy and routing.
 ## Start
 
 - Repo: `https://github.com/openclaw/openclaw`
+- Velanir fork: read `VELANIR_OPENCLAW.md` before changing bootstrap files, release packaging, runtime install behavior, or upstream merge-conflict resolution.
 - Replies: repo-root refs only: `extensions/telegram/src/index.ts:80`. No absolute paths, no `~/`.
 - Docs/user-visible work: `pnpm docs:list`, then read relevant docs only.
 - Fix/triage answers need source, tests, current/shipped behavior, and dependency contract proof.

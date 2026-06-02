@@ -157,7 +157,8 @@ export type WorkspaceBootstrapFileName =
   | typeof DEFAULT_USER_FILENAME
   | typeof DEFAULT_HEARTBEAT_FILENAME
   | typeof DEFAULT_BOOTSTRAP_FILENAME
-  | typeof DEFAULT_MEMORY_FILENAME;
+  | typeof DEFAULT_MEMORY_FILENAME
+  | (string & {});
 
 export type WorkspaceBootstrapFile = {
   name: WorkspaceBootstrapFileName;
@@ -196,6 +197,27 @@ const VALID_BOOTSTRAP_NAMES: ReadonlySet<string> = new Set([
   DEFAULT_BOOTSTRAP_FILENAME,
   DEFAULT_MEMORY_FILENAME,
 ]);
+
+type ExtraBootstrapLoadOptions = {
+  allowedBasenames?: readonly string[];
+};
+
+function isValidCustomBootstrapBasename(name: string): boolean {
+  return (
+    name.length > 0 && name !== "." && name !== ".." && !name.includes("/") && !name.includes("\\")
+  );
+}
+
+function resolveAllowedBootstrapNames(options?: ExtraBootstrapLoadOptions): ReadonlySet<string> {
+  const allowed = new Set(VALID_BOOTSTRAP_NAMES);
+  for (const rawName of options?.allowedBasenames ?? []) {
+    const name = rawName.trim();
+    if (isValidCustomBootstrapBasename(name)) {
+      allowed.add(name);
+    }
+  }
+  return allowed;
+}
 
 const OPTIONAL_BOOTSTRAP_FILENAMES: ReadonlySet<string> = new Set([
   DEFAULT_SOUL_FILENAME,
@@ -1194,14 +1216,16 @@ async function resolveExtraBootstrapPatternPaths(
 export async function loadExtraBootstrapFiles(
   dir: string,
   extraPatterns: string[],
+  options?: ExtraBootstrapLoadOptions,
 ): Promise<WorkspaceBootstrapFile[]> {
-  const loaded = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns);
+  const loaded = await loadExtraBootstrapFilesWithDiagnostics(dir, extraPatterns, options);
   return loaded.files;
 }
 
 export async function loadExtraBootstrapFilesWithDiagnostics(
   dir: string,
   extraPatterns: string[],
+  options?: ExtraBootstrapLoadOptions,
 ): Promise<{
   files: WorkspaceBootstrapFile[];
   diagnostics: ExtraBootstrapLoadDiagnostic[];
@@ -1210,6 +1234,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
     return { files: [], diagnostics: [] };
   }
   const resolvedDir = resolveUserPath(dir);
+  const allowedBootstrapNames = resolveAllowedBootstrapNames(options);
 
   // Resolve glob patterns into concrete file paths
   const resolvedPaths = new Set<string>();
@@ -1228,9 +1253,12 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
   const diagnostics: ExtraBootstrapLoadDiagnostic[] = [];
   for (const relPath of resolvedPaths) {
     const filePath = path.resolve(resolvedDir, relPath);
-    // Only load files whose basename is a recognized bootstrap filename
     const baseName = path.basename(relPath);
-    if (!VALID_BOOTSTRAP_NAMES.has(baseName)) {
+    // Velanir fork maintenance: keep custom bootstrap basenames as an opt-in
+    // hook option instead of hardcoding product filenames here. If upstream
+    // changes this loader, preserve an equivalent config seam. See
+    // VELANIR_OPENCLAW.md.
+    if (!allowedBootstrapNames.has(baseName)) {
       diagnostics.push({
         path: filePath,
         reason: "invalid-bootstrap-filename",

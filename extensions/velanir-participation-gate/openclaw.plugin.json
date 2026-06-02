@@ -1,0 +1,115 @@
+{
+  "id": "velanir-participation-gate",
+  "activation": {
+    "onStartup": true
+  },
+  "enabledByDefault": false,
+  "name": "Velanir Participation Gate",
+  "description": "Decides whether a digital coworker should respond in group and channel conversations before the main agent runs.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "mode": {
+        "type": "string",
+        "enum": ["shadow", "enforce"],
+        "default": "shadow"
+      },
+      "classifier": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "provider": { "type": "string", "minLength": 1 },
+          "model": { "type": "string", "minLength": 1 },
+          "authProfileId": { "type": "string", "minLength": 1 },
+          "timeoutMs": { "type": "number", "minimum": 1, "default": 5000 },
+          "maxOutputTokens": { "type": "number", "minimum": 1, "default": 20 }
+        }
+      },
+      "context": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": {
+            "type": "string",
+            "enum": ["platform", "static"],
+            "default": "platform"
+          },
+          "maxMessages": { "type": "number", "minimum": 0, "default": 5 },
+          "refreshMs": { "type": "number", "minimum": 1, "default": 300000 }
+        }
+      },
+      "platform": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "authMode": {
+            "type": "string",
+            "enum": ["runtime", "static-token"],
+            "default": "runtime"
+          },
+          "baseUrl": { "type": "string", "minLength": 1 },
+          "coworkerId": { "type": "string", "minLength": 1 },
+          "token": { "type": "string", "minLength": 1 },
+          "endpointPath": { "type": "string", "minLength": 1 }
+        }
+      },
+      "staticContext": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "self": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["id", "names"],
+            "properties": {
+              "id": { "type": "string", "minLength": 1 },
+              "names": { "type": "array", "items": { "type": "string" } },
+              "roleSummary": { "type": "string" }
+            }
+          },
+          "coworkers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["id", "names"],
+              "properties": {
+                "id": { "type": "string", "minLength": 1 },
+                "names": { "type": "array", "items": { "type": "string" } },
+                "roleSummary": { "type": "string" }
+              }
+            }
+          }
+        }
+      },
+      "logging": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "decisions": { "type": "boolean", "default": true },
+          "includeContent": { "type": "boolean", "default": false }
+        }
+      }
+    }
+  },
+  "uiHints": {
+    "mode": {
+      "label": "Mode",
+      "help": "shadow logs decisions without suppressing replies; enforce suppresses skipped group/channel turns."
+    },
+    "platform.authMode": {
+      "label": "Platform Auth Mode",
+      "help": "runtime uses scoped runtime identity tokens. static-token is local/prototype only."
+    },
+    "platform.token": {
+      "label": "Platform Token",
+      "help": "Prototype-only static bearer token. Used only when platform.authMode is static-token.",
+      "sensitive": true
+    },
+    "logging.includeContent": {
+      "label": "Log Message Content",
+      "help": "Default off. Enable only for controlled debugging."
+    }
+  }
+}

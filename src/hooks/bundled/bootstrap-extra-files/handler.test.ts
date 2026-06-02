@@ -7,7 +7,7 @@ import type { AgentBootstrapHookContext } from "../../hooks.js";
 import { createHookEvent } from "../../hooks.js";
 import handler from "./handler.js";
 
-function createBootstrapExtraConfig(paths: string[]): OpenClawConfig {
+function createBootstrapExtraConfig(paths: string[], allowedBasenames?: string[]): OpenClawConfig {
   return {
     hooks: {
       internal: {
@@ -15,6 +15,7 @@ function createBootstrapExtraConfig(paths: string[]): OpenClawConfig {
           "bootstrap-extra-files": {
             enabled: true,
             paths,
+            ...(allowedBasenames ? { allowedBasenames } : {}),
           },
         },
       },
@@ -71,6 +72,45 @@ describe("bootstrap-extra-files hook", () => {
     expect(injected.map((f) => path.relative(tempDir, f.path))).toContain(
       path.join("packages", "core", "AGENTS.md"),
     );
+  });
+
+  it("appends custom basename files when explicitly allowed", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-custom-");
+    await fs.writeFile(path.join(tempDir, "COMPANY.md"), "company", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["COMPANY.md"], ["COMPANY.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:main",
+      rootFiles: [{ name: "AGENTS.md", content: "root agents" }],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:main", context);
+    await handler(event);
+
+    const injected = context.bootstrapFiles.find((f) => f.name === "COMPANY.md");
+    expect(injected?.content).toBe("company");
+  });
+
+  it("keeps custom basename files out of subagent minimal bootstrap context", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-bootstrap-extra-custom-subagent-");
+    await fs.writeFile(path.join(tempDir, "COMPANY.md"), "company", "utf-8");
+
+    const cfg = createBootstrapExtraConfig(["COMPANY.md"], ["COMPANY.md"]);
+    const context = await createBootstrapContext({
+      workspaceDir: tempDir,
+      cfg,
+      sessionKey: "agent:main:subagent:abc",
+      rootFiles: [
+        { name: "AGENTS.md", content: "root agents" },
+        { name: "TOOLS.md", content: "root tools" },
+      ],
+    });
+
+    const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
+    await handler(event);
+    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
   });
 
   it("re-applies subagent bootstrap allowlist after extras are added", async () => {

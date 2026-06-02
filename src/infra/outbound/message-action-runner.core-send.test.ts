@@ -1,6 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { runMessageAction } from "./message-action-runner.js";
 
@@ -67,8 +67,12 @@ function registerSlackTextPlugin() {
 }
 
 describe("runMessageAction core send routing", () => {
+  beforeEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
   afterEach(() => {
-    setActivePluginRegistry(createTestRegistry([]));
+    resetPluginRuntimeStateForTest();
     ttsMocks.maybeApplyTtsToPayload
       .mockReset()
       .mockImplementation(async (params: { payload: unknown }) => params.payload);
@@ -195,13 +199,22 @@ describe("runMessageAction core send routing", () => {
             id: "telegram",
             outbound: {
               deliveryMode: "direct",
-              sendText: vi.fn(),
+              sendText: vi.fn().mockResolvedValue({
+                channel: "telegram",
+                messageId: "t1",
+                chatId: "-1001234567890",
+              }),
             },
             messaging: {
               normalizeTarget: (raw) =>
-                raw === "-1001234567890:topic:42" ? "telegram:-1001234567890:topic:42" : undefined,
+                raw.trim() === "-1001234567890:topic:42"
+                  ? "telegram:-1001234567890:topic:42"
+                  : raw.trim() || undefined,
+              inferTargetChatType: () => "group",
               targetResolver: {
-                looksLikeId: (raw) => raw === "-1001234567890:topic:42",
+                looksLikeId: (_raw, normalized) =>
+                  normalized === "telegram:-1001234567890:topic:42",
+                hint: "<chatId>",
               },
             },
           }),

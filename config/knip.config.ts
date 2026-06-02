@@ -74,6 +74,13 @@ const rootBundledPluginRuntimeDependencies = [
   "tokenjuice",
 ] as const;
 
+const rootPackagedInstallStabilityDependencies = [
+  // @mariozechner/pi-ai declares @mistralai/mistralai as ^2.2.0. Keep this
+  // direct root dependency so npm tarball installs do not float to a broken
+  // newly published Mistral client before our packaged release can be rebuilt.
+  "@mistralai/mistralai",
+] as const;
+
 const config = {
   ignoreFiles: [
     "scripts/**",
@@ -149,6 +156,7 @@ const config = {
         "sqlite-vec",
         "tree-sitter-bash",
         ...rootBundledPluginRuntimeDependencies,
+        ...rootPackagedInstallStabilityDependencies,
       ],
       project: [
         "src/**/*.ts!",

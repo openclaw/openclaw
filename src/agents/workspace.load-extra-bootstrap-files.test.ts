@@ -79,6 +79,38 @@ describe("loadExtraBootstrapFiles", () => {
     ]);
   });
 
+  it("skips custom bootstrap basenames unless they are explicitly allowed", async () => {
+    const workspaceDir = await createWorkspaceDir("custom-default");
+    await fs.writeFile(path.join(workspaceDir, "COMPANY.md"), "company", "utf-8");
+
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      "COMPANY.md",
+    ]);
+
+    expect(files).toHaveLength(0);
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          reason: "invalid-bootstrap-filename",
+          detail: "unsupported bootstrap basename: COMPANY.md",
+        }),
+      ]),
+    );
+  });
+
+  it("loads explicitly allowed custom bootstrap basenames", async () => {
+    const workspaceDir = await createWorkspaceDir("custom-allowed");
+    await fs.writeFile(path.join(workspaceDir, "COMPANY.md"), "company", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["COMPANY.md"], {
+      allowedBasenames: ["COMPANY.md"],
+    });
+
+    expect(files).toHaveLength(1);
+    expect(files[0]?.name).toBe("COMPANY.md");
+    expect(files[0]?.content).toBe("company");
+  });
+
   it("keeps path-traversal attempts outside workspace excluded", async () => {
     const rootDir = await createWorkspaceDir("root");
     const workspaceDir = path.join(rootDir, "workspace");

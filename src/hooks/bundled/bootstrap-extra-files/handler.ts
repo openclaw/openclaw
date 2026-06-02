@@ -22,6 +22,10 @@ function resolveExtraBootstrapPatterns(hookConfig: Record<string, unknown>): str
   return normalizeTrimmedStringList(hookConfig.files);
 }
 
+function resolveAllowedBasenames(hookConfig: Record<string, unknown>): string[] {
+  return normalizeTrimmedStringList(hookConfig.allowedBasenames);
+}
+
 const bootstrapExtraFilesHook: HookHandler = async (event) => {
   if (!isAgentBootstrapEvent(event)) {
     return;
@@ -34,6 +38,7 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
   }
 
   const patterns = resolveExtraBootstrapPatterns(hookConfig as Record<string, unknown>);
+  const allowedBasenames = resolveAllowedBasenames(hookConfig as Record<string, unknown>);
   if (patterns.length === 0) {
     return;
   }
@@ -42,6 +47,7 @@ const bootstrapExtraFilesHook: HookHandler = async (event) => {
     const { files: extras, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(
       context.workspaceDir,
       patterns,
+      { allowedBasenames },
     );
     if (diagnostics.length > 0) {
       log.debug("skipped extra bootstrap candidates", {

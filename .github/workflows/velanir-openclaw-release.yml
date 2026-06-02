@@ -1,0 +1,216 @@
+name: Velanir OpenClaw Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to publish to the Velanir S3 lane, for example v2026.5.4
+        required: true
+        type: string
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: velanir-openclaw-release-${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24.x"
+  PNPM_VERSION: "10.33.2"
+  AWS_REGION: "us-east-1"
+  S3_BUCKET: "oct8-packages"
+  RELEASE_PREFIX: "releases/velanir-openclaw"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          fetch-depth: 0
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "false"
+
+      - name: Verify version matches tag
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Invalid release tag: ${RELEASE_TAG}"
+            exit 1
+          fi
+          TAG_VERSION="${RELEASE_TAG#v}"
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          if [[ "$TAG_VERSION" != "$PKG_VERSION" ]]; then
+            echo "Tag ${RELEASE_TAG} does not match package.json version $PKG_VERSION"
+            exit 1
+          fi
+          echo "Releasing Velanir OpenClaw $PKG_VERSION"
+
+      - name: Test Velanir bootstrap seam
+        run: |
+          set -euo pipefail
+          pnpm test src/agents/workspace.load-extra-bootstrap-files.test.ts src/hooks/bundled/bootstrap-extra-files/handler.test.ts
+
+      - name: Build package
+        run: pnpm build
+
+      - name: Pack Velanir OpenClaw artifact
+        id: pack
+        env:
+          OPENCLAW_PREPACK_PREPARED: "1"
+        run: |
+          set -euo pipefail
+          PACK_OUTPUT="$RUNNER_TEMP/npm-pack-output.txt"
+          npm pack --json 2>&1 | tee "$PACK_OUTPUT"
+          RAW_TARBALL=$(node - "$PACK_OUTPUT" <<'NODE'
+          const fs = require("node:fs");
+          const input = fs.readFileSync(process.argv[2], "utf8");
+
+          function arrayEndFrom(start) {
+            let depth = 0;
+            let inString = false;
+            let escape = false;
+            for (let i = start; i < input.length; i += 1) {
+              const char = input[i];
+              if (inString) {
+                if (escape) {
+                  escape = false;
+                } else if (char === "\\") {
+                  escape = true;
+                } else if (char === "\"") {
+                  inString = false;
+                }
+                continue;
+              }
+              if (char === "\"") {
+                inString = true;
+              } else if (char === "[") {
+                depth += 1;
+              } else if (char === "]") {
+                depth -= 1;
+                if (depth === 0) {
+                  return i + 1;
+                }
+              }
+            }
+            return -1;
+          }
+
+          for (let start = input.indexOf("["); start !== -1; start = input.indexOf("[", start + 1)) {
+            const end = arrayEndFrom(start);
+            if (end === -1) {
+              continue;
+            }
+            try {
+              const parsed = JSON.parse(input.slice(start, end));
+              const first = Array.isArray(parsed) ? parsed[0] : null;
+              if (first && typeof first.filename === "string" && first.filename) {
+                process.stdout.write(first.filename);
+                process.exit(0);
+              }
+            } catch {
+              // Keep scanning; npm lifecycle output can legally precede the JSON.
+            }
+          }
+
+          console.error("Could not find npm pack --json output with a filename.");
+          process.exit(1);
+          NODE
+          )
+          if [[ -z "$RAW_TARBALL" || ! -f "$RAW_TARBALL" ]]; then
+            echo "npm pack did not produce a tarball file." >&2
+            exit 1
+          fi
+          VERSION=$(node -p "require('./package.json').version")
+          TARBALL="velanir-openclaw-${VERSION}.tgz"
+          cp "$RAW_TARBALL" "$TARBALL"
+          shasum -a 256 "$TARBALL" | awk '{print $1}' > "${TARBALL}.sha256"
+          node - "$TARBALL" "$VERSION" <<'NODE'
+          const { execFileSync } = require("node:child_process");
+          const tarball = process.argv[2];
+          const expectedVersion = process.argv[3];
+          const meta = JSON.parse(execFileSync("tar", ["-xOf", tarball, "package/package.json"], { encoding: "utf8" }));
+          if (meta.name !== "openclaw" || meta.version !== expectedVersion || !meta.bin?.openclaw) {
+            throw new Error(`unexpected package metadata: ${meta.name ?? "<missing>"}@${meta.version ?? "<missing>"}`);
+          }
+          NODE
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tarball=${TARBALL}" >> "$GITHUB_OUTPUT"
+          echo "checksum=${TARBALL}.sha256" >> "$GITHUB_OUTPUT"
+
+      - name: Write release manifest
+        id: manifest
+        env:
+          VERSION: ${{ steps.pack.outputs.version }}
+          TARBALL: ${{ steps.pack.outputs.tarball }}
+          CHECKSUM_FILE: ${{ steps.pack.outputs.checksum }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/openclaw/openclaw.git || true
+          git fetch --depth=200 --no-tags upstream main
+          export UPSTREAM_BASE_SHA=$(git merge-base HEAD upstream/main || git rev-parse HEAD)
+          export FORK_SHA=$(git rev-parse HEAD)
+          export CHECKSUM=$(cat "$CHECKSUM_FILE")
+          export MANIFEST="velanir-openclaw-${VERSION}.manifest.json"
+          node - <<'NODE'
+          const fs = require("node:fs");
+          const manifest = {
+            artifactName: process.env.TARBALL,
+            artifactSha256: process.env.CHECKSUM,
+            packageName: "openclaw",
+            packageVersion: process.env.VERSION,
+            forkRepository: process.env.REPOSITORY,
+            forkSha: process.env.FORK_SHA,
+            upstreamRepository: "openclaw/openclaw",
+            upstreamBaseSha: process.env.UPSTREAM_BASE_SHA,
+            builtAt: new Date().toISOString(),
+            patches: [
+              "bootstrap-extra-files.allowedBasenames",
+              "extensions.velanir-participation-gate"
+            ]
+          };
+          fs.writeFileSync(process.env.MANIFEST, `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
+          echo "manifest=${MANIFEST}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: velanir-openclaw-${{ steps.pack.outputs.version }}
+          path: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.checksum }}
+            ${{ steps.manifest.outputs.manifest }}
+          if-no-files-found: error
+
+      - name: Configure AWS credentials
+        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch' }}
+        uses: aws-actions/configure-aws-credentials@8df5847569e6427dd6c4fb1cf565c83acfa8afa7 # v6.0.0
+        with:
+          role-to-assume: ${{ secrets.AWS_RELEASE_ROLE_ARN }}
+          role-session-name: github-actions-velanir-openclaw-release
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Upload release bundle to S3
+        if: ${{ (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')) || github.event_name == 'workflow_dispatch' }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ steps.pack.outputs.version }}"
+          aws s3 cp "${{ steps.pack.outputs.tarball }}" "s3://${S3_BUCKET}/${RELEASE_PREFIX}/velanir-openclaw-${VERSION}.tgz"
+          aws s3 cp "${{ steps.pack.outputs.checksum }}" "s3://${S3_BUCKET}/${RELEASE_PREFIX}/velanir-openclaw-${VERSION}.tgz.sha256"
+          aws s3 cp "${{ steps.manifest.outputs.manifest }}" "s3://${S3_BUCKET}/${RELEASE_PREFIX}/velanir-openclaw-${VERSION}.manifest.json"
+          printf '%s' "$VERSION" | aws s3 cp - "s3://${S3_BUCKET}/${RELEASE_PREFIX}/latest-version.txt"

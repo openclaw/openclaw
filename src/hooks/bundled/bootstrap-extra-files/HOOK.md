@@ -47,7 +47,10 @@ workspace root.
 - `paths` (string[]): preferred list of glob/path patterns.
 - `patterns` (string[]): alias of `paths`.
 - `files` (string[]): alias of `paths`.
+- `allowedBasenames` (string[]): additional exact basenames to accept beyond
+  the built-in bootstrap filenames.
 
 All paths are resolved from the workspace and must stay inside it (including realpath checks).
-Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`,
-`IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+By default, only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`,
+`TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+Use `allowedBasenames` to opt in to additional exact filenames.
