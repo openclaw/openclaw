@@ -3612,7 +3612,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               context.logGateway.warn(
                 `webchat transcript rewrite skipped for final media reply: ${rewriteResult.reason ?? "unknown reason"}`,
               );
-              appendedMessage = replacementMessage;
+              appendedMessage = replacementMessage as unknown as Record<string, unknown>;
             }
           }
         }
