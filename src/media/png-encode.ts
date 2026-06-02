@@ -1,7 +1,3 @@
-/**
- * Minimal PNG encoder for generating simple RGBA images without native dependencies.
- * Used for QR codes, live probes, and other programmatic image generation.
- */
 import { deflateSync } from "node:zlib";
 
 const CRC_TABLE = (() => {
@@ -65,7 +61,8 @@ function encodePng(buffer: Buffer, width: number, height: number, channels: 3 | 
   const raw = Buffer.alloc((stride + 1) * height);
   for (let row = 0; row < height; row += 1) {
     const rawOffset = row * (stride + 1);
-    raw[rawOffset] = 0; // filter: none
+    // Each scanline starts with PNG filter byte 0 so raw RGB/RGBA rows stay literal.
+    raw[rawOffset] = 0;
     buffer.copy(raw, rawOffset + 1, row * stride, row * stride + stride);
   }
   const compressed = deflateSync(raw);
