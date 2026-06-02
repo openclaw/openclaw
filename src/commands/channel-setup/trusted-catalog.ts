@@ -6,7 +6,32 @@ import {
 } from "../../channels/plugins/catalog.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizePluginsConfig, resolveEnableState } from "../../plugins/config-state.js";
+import {
+  normalizePluginsConfig,
+  resolveEffectivePluginActivationState,
+} from "../../plugins/config-state.js";
+import {
+  hasExplicitManifestOwnerTrust,
+  resolveManifestOwnerBasePolicyBlock,
+} from "../../plugins/manifest-owner-policy.js";
+import type { PluginOrigin } from "../../plugins/plugin-origin.types.js";
+
+const LOCAL_CHANNEL_PLUGIN_ORIGINS = ["workspace", "config", "global"] as const;
+
+type LocalChannelPluginOrigin = (typeof LOCAL_CHANNEL_PLUGIN_ORIGINS)[number];
+
+type TrustedCatalogLookupExclusions = {
+  excludeOrigins?: PluginOrigin[];
+  excludePluginRefs?: Array<{ pluginId: string; origin?: PluginOrigin }>;
+};
+
+const LOCAL_CHANNEL_PLUGIN_ORIGIN_SET = new Set<PluginOrigin>(LOCAL_CHANNEL_PLUGIN_ORIGINS);
+
+function isLocalChannelPluginOrigin(
+  origin: PluginOrigin | undefined,
+): origin is LocalChannelPluginOrigin {
+  return origin !== undefined && LOCAL_CHANNEL_PLUGIN_ORIGIN_SET.has(origin);
+}
 
 function resolveEffectiveTrustConfig(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): OpenClawConfig {
   return applyPluginAutoEnable({
@@ -15,23 +40,98 @@ function resolveEffectiveTrustConfig(cfg: OpenClawConfig, env?: NodeJS.ProcessEn
   }).config;
 }
 
-function isTrustedWorkspaceChannelCatalogEntry(
+function resolveTrustedCatalogExtraPaths(cfg: OpenClawConfig): string[] | undefined {
+  const extraPaths = normalizePluginsConfig(cfg.plugins).loadPaths;
+  return extraPaths.length > 0 ? extraPaths : undefined;
+}
+
+function isTrustedLocalChannelCatalogEntry(
   entry: ChannelPluginCatalogEntry | undefined,
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): boolean {
-  if (entry?.origin !== "workspace") {
+  if (!isLocalChannelPluginOrigin(entry?.origin)) {
     return true;
   }
   if (!entry.pluginId) {
     return false;
   }
   const effectiveConfig = resolveEffectiveTrustConfig(cfg, env);
-  return resolveEnableState(
-    entry.pluginId,
-    "workspace",
-    normalizePluginsConfig(effectiveConfig.plugins),
-  ).enabled;
+  const normalizedPlugins = normalizePluginsConfig(effectiveConfig.plugins);
+  if (
+    resolveManifestOwnerBasePolicyBlock({
+      plugin: { id: entry.pluginId },
+      normalizedConfig: normalizedPlugins,
+    }) !== null
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: entry.pluginId,
+    origin: entry.origin,
+    config: normalizedPlugins,
+    rootConfig: effectiveConfig,
+  });
+  return (
+    hasExplicitManifestOwnerTrust({
+      plugin: { id: entry.pluginId },
+      normalizedConfig: normalizedPlugins,
+    }) ||
+    (entry.origin === "workspace" && activationState.source === "auto")
+  );
+}
+
+function resolveRejectedCatalogLookup(
+  rejected: ChannelPluginCatalogEntry[],
+): TrustedCatalogLookupExclusions {
+  const excludePluginRefs: NonNullable<TrustedCatalogLookupExclusions["excludePluginRefs"]> =
+    rejected.flatMap((entry) =>
+      entry.pluginId?.trim()
+        ? [
+            {
+              pluginId: entry.pluginId.trim(),
+              ...(entry.origin ? { origin: entry.origin } : {}),
+            },
+          ]
+        : [],
+    );
+  const excludeOrigins: NonNullable<TrustedCatalogLookupExclusions["excludeOrigins"]> =
+    rejected.flatMap((entry) =>
+      isLocalChannelPluginOrigin(entry.origin) && !entry.pluginId ? [entry.origin] : [],
+    );
+  const lookup: TrustedCatalogLookupExclusions = {};
+  if (excludeOrigins.length > 0) {
+    lookup.excludeOrigins = excludeOrigins;
+  }
+  if (excludePluginRefs.length > 0) {
+    lookup.excludePluginRefs = excludePluginRefs;
+  }
+  return lookup;
+}
+
+function resolveTrustedCatalogEntry(
+  channelId: string,
+  params: {
+    cfg: OpenClawConfig;
+    workspaceDir?: string;
+    env?: NodeJS.ProcessEnv;
+  },
+  rejected: ChannelPluginCatalogEntry[] = [],
+): ChannelPluginCatalogEntry | undefined {
+  const extraPaths = resolveTrustedCatalogExtraPaths(params.cfg);
+  const candidate = getChannelPluginCatalogEntry(channelId, {
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+    ...(extraPaths ? { extraPaths } : {}),
+    ...resolveRejectedCatalogLookup(rejected),
+  });
+  if (!candidate) {
+    return undefined;
+  }
+  if (isTrustedLocalChannelCatalogEntry(candidate, params.cfg, params.env)) {
+    return candidate;
+  }
+  return resolveTrustedCatalogEntry(channelId, params, [...rejected, candidate]);
 }
 
 /** Resolve a catalog entry, falling back to non-workspace metadata when workspace entry is untrusted. */
@@ -43,16 +143,7 @@ export function getTrustedChannelPluginCatalogEntry(
     env?: NodeJS.ProcessEnv;
   },
 ): ChannelPluginCatalogEntry | undefined {
-  const candidate = getChannelPluginCatalogEntry(channelId, {
-    workspaceDir: params.workspaceDir,
-  });
-  if (isTrustedWorkspaceChannelCatalogEntry(candidate, params.cfg, params.env)) {
-    return candidate;
-  }
-  return getChannelPluginCatalogEntry(channelId, {
-    workspaceDir: params.workspaceDir,
-    excludeWorkspace: true,
-  });
+  return resolveTrustedCatalogEntry(channelId, params);
 }
 
 function listChannelPluginCatalogEntriesWithTrustedFallback(
@@ -63,20 +154,17 @@ function listChannelPluginCatalogEntriesWithTrustedFallback(
   },
   onMissingFallback: (entry: ChannelPluginCatalogEntry) => ChannelPluginCatalogEntry[],
 ): ChannelPluginCatalogEntry[] {
+  const extraPaths = resolveTrustedCatalogExtraPaths(params.cfg);
   const unfiltered = listRawChannelPluginCatalogEntries({
     workspaceDir: params.workspaceDir,
+    env: params.env,
+    ...(extraPaths ? { extraPaths } : {}),
   });
-  const fallbackById = new Map(
-    listRawChannelPluginCatalogEntries({
-      workspaceDir: params.workspaceDir,
-      excludeWorkspace: true,
-    }).map((entry) => [entry.id, entry]),
-  );
   return unfiltered.flatMap((entry) => {
-    if (isTrustedWorkspaceChannelCatalogEntry(entry, params.cfg, params.env)) {
+    if (isTrustedLocalChannelCatalogEntry(entry, params.cfg, params.env)) {
       return [entry];
     }
-    const fallback = fallbackById.get(entry.id);
+    const fallback = resolveTrustedCatalogEntry(entry.id, params, [entry]);
     return fallback ? [fallback] : onMissingFallback(entry);
   });
 }
