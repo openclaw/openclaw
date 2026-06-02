@@ -230,6 +230,11 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
+/**
+ * Marks whether retrying the attempt can safely replay the prompt. Mutating
+ * tools, async work, committed delivery, spawned sessions, and cron writes all
+ * count as side effects that make blind replay unsafe.
+ */
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
@@ -247,6 +252,7 @@ export function buildAttemptReplayMetadata(
   };
 }
 
+/** Falls back to replay-unsafe metadata when older attempt records lack replay details. */
 export function resolveAttemptReplayMetadata(attempt: {
   replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
 }): EmbeddedRunAttemptResult["replayMetadata"] {
