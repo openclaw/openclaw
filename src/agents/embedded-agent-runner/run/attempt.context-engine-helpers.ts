@@ -45,6 +45,8 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     params.contextInjectionMode === "continuation-skip" &&
     params.bootstrapContextRunKind !== "heartbeat" &&
     (await params.hasCompletedBootstrapTurn(params.sessionFile));
+  // Continuation-skip and explicit never both produce an empty injection set,
+  // but only a clean full bootstrap later records a durable completion marker.
   const shouldSkipBootstrapInjection =
     params.contextInjectionMode === "never" || isContinuationTurn;
   const shouldRecordCompletedBootstrapTurn =
@@ -89,6 +91,8 @@ export function buildContextEnginePromptCacheInfo(params: {
     promptCache.lastCallUsage = { ...params.lastCallUsage };
   }
   if (params.observation) {
+    // Copy only the stable, serializable observation fields into attempt
+    // results; runtime-only diagnostic objects stay out of persisted metadata.
     promptCache.observation = {
       broke: params.observation.broke,
       ...(typeof params.observation.previousCacheRead === "number"
@@ -178,6 +182,8 @@ export function buildLoopPromptCacheInfo(params: {
     messagesSnapshot: params.messagesSnapshot,
     prePromptMessageCount: params.prePromptMessageCount,
   });
+  // Normalize only the assistant produced by this attempt so older transcript
+  // usage does not masquerade as a fresh cache touch.
   const lastCallUsage = normalizeUsage(currentAttemptAssistant?.usage);
 
   return buildContextEnginePromptCacheInfo({
