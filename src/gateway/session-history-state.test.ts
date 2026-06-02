@@ -331,6 +331,55 @@ describe("SessionHistorySseState", () => {
     });
   });
 
+  test("does not mirror sessions_yield when live wait text is already visible", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-main" },
+      rawMessages: [
+        {
+          role: "user",
+          content: [{ type: "text", text: "start worker" }],
+          __openclaw: { seq: 1 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Still waiting for child completion." }],
+          __openclaw: { seq: 2 },
+        },
+      ],
+    });
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "toolResult",
+        toolName: "sessions_yield",
+        toolCallId: "call-yield-inline",
+        content: JSON.stringify({
+          status: "yielded",
+          message: "Still waiting for child completion.",
+        }),
+      },
+      messageSeq: 3,
+    });
+
+    expect(appended?.messageSeq).toBe(3);
+    expect((appended?.message as { role?: string } | undefined)?.role).toBe("toolResult");
+    const matchingVisibleMessages = state.snapshot().messages.filter((message) => {
+      const entry = message as {
+        content?: Array<{ text?: string }>;
+        openclawVisibleToolMirror?: { toolName?: string };
+      };
+      return entry.content?.[0]?.text === "Still waiting for child completion.";
+    });
+    const mirrors = state.snapshot().messages.filter((message) => {
+      const entry = message as {
+        openclawVisibleToolMirror?: { toolName?: string };
+      };
+      return entry.openclawVisibleToolMirror?.toolName === "sessions_yield";
+    });
+    expect(matchingVisibleMessages).toHaveLength(1);
+    expect(mirrors).toHaveLength(0);
+  });
+
   test("does not duplicate sessions_yield mirrors on later inline appends", () => {
     const state = SessionHistorySseState.fromRawSnapshot({
       target: { sessionId: "sess-main" },
