@@ -12,7 +12,7 @@ type StreamPayload = {
 function runOpenRouterPayload(
   payload: StreamPayload,
   modelId: string,
-  options: Parameters<StreamFn>[2] = {},
+  streamOptions: Parameters<StreamFn>[2] = {},
 ) {
   const baseStreamFn: StreamFn = (model, _context, options) => {
     options?.onPayload?.(payload, model);
@@ -26,7 +26,7 @@ function runOpenRouterPayload(
       id: modelId,
     } as never,
     { messages: [] } as never,
-    options,
+    streamOptions,
   );
 }
 
