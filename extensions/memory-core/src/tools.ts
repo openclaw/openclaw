@@ -110,9 +110,26 @@ async function runMemorySearchToolWithDeadline<T>(params: {
   }
 }
 
-function isPausedMemoryIndexIdentity(status: { custom?: unknown }): boolean {
+const PAUSED_MEMORY_INDEX_WARNING =
+  "Memory search is unavailable because the memory index identity does not match the current embedding provider/model/settings.";
+const PAUSED_MEMORY_INDEX_ACTION =
+  "Run openclaw memory status --index or openclaw memory index --force to rebuild the memory index.";
+
+function resolvePausedMemoryIndexIdentityReason(status: { custom?: unknown }): string | undefined {
   const indexIdentity = asRecord(asRecord(status.custom)?.indexIdentity);
-  return indexIdentity?.status === "mismatched" || indexIdentity?.status === "missing";
+  if (indexIdentity?.status !== "mismatched" && indexIdentity?.status !== "missing") {
+    return undefined;
+  }
+  return typeof indexIdentity.reason === "string" && indexIdentity.reason.trim()
+    ? indexIdentity.reason.trim()
+    : "memory index identity is missing or mismatched";
+}
+
+function buildPausedMemoryIndexUnavailableResult(reason: string) {
+  return buildMemorySearchUnavailableResult(reason, {
+    warning: PAUSED_MEMORY_INDEX_WARNING,
+    action: PAUSED_MEMORY_INDEX_ACTION,
+  });
 }
 
 function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
@@ -406,6 +423,7 @@ export function createMemorySearchTool(options: {
             let model: string | undefined;
             let fallback: unknown;
             let searchMode: string | undefined;
+            let pausedIndexIdentityReason: string | undefined;
             let searchDebug:
               | {
                   backend: string;
@@ -453,13 +471,21 @@ export function createMemorySearchTool(options: {
                   activeMemory = refreshed;
                   rawResults = await activeMemory.manager.search(query, searchOptions);
                 }
-                if (
-                  rawResults.length === 0 &&
-                  activeMemory.manager.sync &&
-                  !isPausedMemoryIndexIdentity(activeMemory.manager.status())
-                ) {
+                const statusBeforeRetry = activeMemory.manager.status();
+                pausedIndexIdentityReason =
+                  resolvePausedMemoryIndexIdentityReason(statusBeforeRetry);
+                if (pausedIndexIdentityReason) {
+                  return;
+                }
+                if (rawResults.length === 0 && activeMemory.manager.sync) {
                   await activeMemory.manager.sync({ reason: "search", force: true });
                   rawResults = await activeMemory.manager.search(query, searchOptions);
+                  pausedIndexIdentityReason = resolvePausedMemoryIndexIdentityReason(
+                    activeMemory.manager.status(),
+                  );
+                  if (pausedIndexIdentityReason) {
+                    return;
+                  }
                 }
                 rawResults = await filterMemorySearchHitsBySessionVisibility({
                   cfg,
@@ -510,6 +536,11 @@ export function createMemorySearchTool(options: {
                   hits: rawResults.length,
                 };
               });
+              if (pausedIndexIdentityReason) {
+                return jsonResult(
+                  buildPausedMemoryIndexUnavailableResult(pausedIndexIdentityReason),
+                );
+              }
             }
             const supplementResults = shouldQuerySupplements
               ? await runUnavailablePhase(

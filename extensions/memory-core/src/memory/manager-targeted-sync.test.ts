@@ -18,7 +18,7 @@ describe("memory targeted session sync", () => {
     expect(sessionsDirty).toBe(true);
   });
 
-  it("retries only targeted sessions after fallback activates during targeted sync", async () => {
+  it("leaves targeted sessions dirty after fallback activates during targeted sync", async () => {
     const activateFallbackProvider = vi.fn(async () => true);
     const syncSessionFiles = vi
       .fn()
@@ -38,13 +38,14 @@ describe("memory targeted session sync", () => {
     });
 
     expect(activateFallbackProvider).toHaveBeenCalledWith("embedding backend failed");
-    expect(syncSessionFiles).toHaveBeenLastCalledWith({
+    expect(syncSessionFiles).toHaveBeenCalledTimes(1);
+    expect(syncSessionFiles).toHaveBeenCalledWith({
       needsFullReindex: false,
       targetSessionFiles: ["/tmp/targeted-fallback.jsonl"],
       progress: undefined,
     });
     expect(result).toEqual({ handled: true, sessionsDirty: true });
-    expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(false);
+    expect(sessionsDirtyFiles.has("/tmp/targeted-fallback.jsonl")).toBe(true);
     expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
   });
 });

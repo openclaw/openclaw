@@ -258,16 +258,17 @@ describe("memory_search unavailable payloads", () => {
     expect(searchCalls).toBe(2);
   });
 
-  it("does not force a sync retry when the index identity is paused", async () => {
+  it("returns unavailable metadata when the index identity is paused", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
       searchCalls += 1;
       return [];
     });
+    const reason = "index was built for provider openai, expected ollama";
     setMemoryCustomStatus({
       indexIdentity: {
         status: "mismatched",
-        reason: "index was built for provider openai, expected ollama",
+        reason,
       },
     });
 
@@ -279,7 +280,13 @@ describe("memory_search unavailable payloads", () => {
     });
     const result = await tool.execute("paused-index", { query: "hidden thread codename" });
 
-    expect((result.details as { results?: unknown[] }).results).toEqual([]);
+    expectUnavailableMemorySearchDetails(result.details, {
+      error: reason,
+      warning:
+        "Memory search is unavailable because the memory index identity does not match the current embedding provider/model/settings.",
+      action:
+        "Run openclaw memory status --index or openclaw memory index --force to rebuild the memory index.",
+    });
     expect(searchCalls).toBe(1);
     expect(getMemorySyncMockCalls()).toBe(0);
   });

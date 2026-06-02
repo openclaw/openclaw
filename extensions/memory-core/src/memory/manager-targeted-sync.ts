@@ -63,17 +63,12 @@ export async function runMemoryTargetedSessionSync(params: {
     if (!activated) {
       throw err;
     }
-    await params.syncSessionFiles({
-      needsFullReindex: false,
-      targetSessionFiles: Array.from(params.targetSessionFiles),
-      progress: params.progress,
-    });
+    for (const targetSessionFile of params.targetSessionFiles) {
+      params.sessionsDirtyFiles.add(targetSessionFile);
+    }
     return {
       handled: true,
-      sessionsDirty: clearMemorySyncedSessionFiles({
-        sessionsDirtyFiles: params.sessionsDirtyFiles,
-        targetSessionFiles: params.targetSessionFiles,
-      }),
+      sessionsDirty: true,
     };
   }
 }
