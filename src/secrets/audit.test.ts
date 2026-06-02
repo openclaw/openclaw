@@ -251,6 +251,137 @@ describe("secrets audit", () => {
     expectFindingCode(report, "PLAINTEXT_FOUND");
   });
 
+  it("scans secret-bearing backup files for plaintext residue", async () => {
+    const authBackupPath = `${fixture.authStorePath}.legacy-flat.123.bak`;
+    const modelsBackupPath = `${fixture.modelsPath}.bak.1`;
+    const envBackupPath = `${fixture.envPath}.bak.2`;
+    await writeJsonFile(authBackupPath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-auth-backup-plaintext", // pragma: allowlist secret
+        },
+      },
+    });
+    await writeJsonFile(modelsBackupPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: "sk-models-backup-plaintext", // pragma: allowlist secret
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+    await fs.writeFile(
+      envBackupPath,
+      `${OPENAI_API_KEY_MARKER}=sk-env-backup-plaintext\n`, // pragma: allowlist secret
+      "utf8",
+    );
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expectFindingFile(report, authBackupPath);
+    expectFindingFile(report, modelsBackupPath);
+    expectFindingFile(report, envBackupPath);
+    expect(report.filesScanned).toEqual(
+      expect.arrayContaining([authBackupPath, modelsBackupPath, envBackupPath]),
+    );
+  });
+
+  it("does not resolve SecretRefs found only in secret-bearing backup files", async () => {
+    const authBackupPath = `${fixture.authStorePath}.refs.bak.1`;
+    const modelsBackupPath = `${fixture.modelsPath}.refs.bak.1`;
+    await writeJsonFile(authBackupPath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", id: "MISSING_BACKUP_ONLY_KEY" },
+        },
+      },
+    });
+    await writeJsonFile(modelsBackupPath, {
+      providers: {
+        openai: {
+          baseUrl: "https://api.openai.com/v1",
+          api: "openai-completions",
+          apiKey: { source: "env", provider: "default", id: "MISSING_BACKUP_MODELS_KEY" },
+          headers: {
+            Authorization: {
+              source: "env",
+              provider: "default",
+              id: "MISSING_BACKUP_HEADER_KEY",
+            },
+          },
+          models: [{ id: "gpt-5", name: "gpt-5" }],
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).toEqual(expect.arrayContaining([authBackupPath, modelsBackupPath]));
+    expect(
+      hasFinding(
+        report,
+        (entry) =>
+          entry.code === "REF_UNRESOLVED" &&
+          (entry.file === authBackupPath || entry.file === modelsBackupPath),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not treat auth backup plaintext as active provider shadowing", async () => {
+    const authBackupPath = `${fixture.authStorePath}.plaintext.bak.1`;
+    await writeJsonFile(fixture.authStorePath, {
+      version: 1,
+      profiles: {},
+    });
+    await writeJsonFile(authBackupPath, {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-auth-backup-only-plaintext", // pragma: allowlist secret
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expectFindingFile(report, authBackupPath);
+    expect(report.summary.shadowedRefCount).toBe(0);
+    expect(
+      hasFinding(report, (entry) => entry.code === "REF_SHADOWED" && entry.file === authBackupPath),
+    ).toBe(false);
+  });
+
+  it("does not include openclaw config backups in the sibling backup scan", async () => {
+    const configBackupPath = `${fixture.configPath}.bak.1`;
+    await writeJsonFile(configBackupPath, {
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            api: "openai-completions",
+            apiKey: "sk-config-backup-owned-by-config-artifact-audit", // pragma: allowlist secret
+            models: [{ id: "gpt-5", name: "gpt-5" }],
+          },
+        },
+      },
+    });
+
+    const report = await runSecretsAudit({ env: fixture.env });
+
+    expect(report.filesScanned).not.toContain(configBackupPath);
+    expect(hasFinding(report, (entry) => entry.file === configBackupPath)).toBe(false);
+  });
+
   it("does not mutate legacy auth.json during audit", async () => {
     await fs.rm(fixture.authStorePath, { force: true });
     await writeJsonFile(fixture.authJsonPath, {
