@@ -5,6 +5,7 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import type { EmbeddedAgentRunResult } from "../types.js";
 
+/** Channel payload shape produced by embedded runs after auto-reply normalization. */
 type EmbeddedRunPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number];
 
 /**
@@ -19,6 +20,7 @@ export function mergeAttemptToolMediaPayloads(params: {
   toolTrustedLocalMedia?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): EmbeddedRunPayload[] | undefined {
+  // Trim and dedupe tool media before merging with assistant-owned payload media.
   const mediaUrls = Array.from(
     new Set(params.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? []),
   );
@@ -50,6 +52,7 @@ export function mergeAttemptToolMediaPayloads(params: {
     return payloads;
   }
 
+  // Reasoning-only turns still need a concrete media payload so channel delivery sees the attachment.
   return [
     ...payloads,
     {
