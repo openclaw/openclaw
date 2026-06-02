@@ -264,21 +264,12 @@ async function writeBranchedSession(params: {
     parentSession: params.parentSessionFile,
   } satisfies SessionHeader;
   const entries = [header, ...pathWithoutLabels, ...labelEntries];
-  const hasAssistant = entries.some(
-    (entry) => entry.type === "message" && entry.message.role === "assistant",
-  );
-  if (hasAssistant) {
-    await fs.mkdir(path.dirname(sessionFile), { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-      {
-        encoding: "utf-8",
-        mode: 0o600,
-        flag: "wx",
-      },
-    );
-  }
+  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
+  await fs.writeFile(sessionFile, `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`, {
+    encoding: "utf-8",
+    mode: 0o600,
+    flag: "wx",
+  });
   return { sessionId, sessionFile };
 }
 

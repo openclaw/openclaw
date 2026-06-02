@@ -354,4 +354,59 @@ describe("forkSessionFromParentRuntime", () => {
     expect(header.id).toBe(fork.sessionId);
     expect(header.parentSession).toBe(resolvedParentSessionFile);
   });
+
+  it("persists the forked transcript when the parent branch has no assistant turn", async () => {
+    const root = await makeRoot("openclaw-parent-fork-noassist-");
+    const sessionsDir = path.join(root, "sessions");
+    await fs.mkdir(sessionsDir);
+    const cwd = path.join(root, "workspace");
+    await fs.mkdir(cwd);
+    const parentSessionFile = path.join(sessionsDir, "parent.jsonl");
+    const parentSessionId = "parent-pending";
+    const lines = [
+      {
+        type: "session",
+        version: 3,
+        id: parentSessionId,
+        timestamp: "2026-05-01T00:00:00.000Z",
+        cwd,
+      },
+      {
+        type: "message",
+        id: "user-1",
+        parentId: null,
+        timestamp: "2026-05-01T00:00:01.000Z",
+        message: { role: "user", content: "pending parent question" },
+      },
+    ];
+    await fs.writeFile(
+      parentSessionFile,
+      `${lines.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      "utf-8",
+    );
+
+    const fork = await forkSessionFromParentRuntime({
+      parentEntry: {
+        sessionId: parentSessionId,
+        sessionFile: parentSessionFile,
+        updatedAt: Date.now(),
+      },
+      agentId: "main",
+      sessionsDir,
+    });
+
+    if (!fork) {
+      throw new Error("expected forked session entry");
+    }
+    const raw = await fs.readFile(fork.sessionFile, "utf-8");
+    const forkedEntries = raw
+      .trim()
+      .split(/\r?\n/u)
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(forkedEntries.map((entry) => entry.type)).toEqual(["session", "message"]);
+    const forkedHeader = forkedEntries[0];
+    expect(forkedHeader?.id).toBe(fork.sessionId);
+    expect(forkedHeader?.cwd).toBe(cwd);
+    expect(raw).toContain("pending parent question");
+  });
 });
