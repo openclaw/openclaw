@@ -1354,8 +1354,10 @@ describe("OpenClaw SDK", () => {
     // consumer reaches the stream, iteration must terminate by rejecting with
     // the pump failure instead of reporting a clean end-of-stream.
     await expect(async () => {
-      for await (const _event of oc.events()) {
+      const drained: OpenClawEvent[] = [];
+      for await (const event of oc.events()) {
         // drain whatever events were delivered before the failure
+        drained.push(event);
       }
     }).rejects.toBe(failure);
 

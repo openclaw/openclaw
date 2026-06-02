@@ -14,7 +14,7 @@ export class EventHub<T> {
   private readonly replayLimit: number;
   private readonly replayEvents: T[] = [];
   private closed = false;
-  private closeError: unknown;
+  private closeError: Error | undefined;
   private readonly listeners = new Set<Listener<T>>();
   private readonly waiters = new Set<() => void>();
 
@@ -41,9 +41,10 @@ export class EventHub<T> {
   close(error?: unknown): void {
     // Record the first failure cause even if the hub was already closed
     // without one, so a pump failure racing a plain consumer-driven close()
-    // still surfaces instead of being swallowed by idempotency.
+    // still surfaces instead of being swallowed by idempotency. Normalize to
+    // an Error so consumers always reject with a throwable cause.
     if (error !== undefined && this.closeError === undefined) {
-      this.closeError = error;
+      this.closeError = error instanceof Error ? error : new Error(String(error));
       this.wakeAllWaiters();
     }
     if (this.closed) {
