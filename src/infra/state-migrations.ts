@@ -377,10 +377,13 @@ function legacyInstalledPluginIndexMatches(
 function readInstallRecordNpmName(
   record: InstalledPluginIndex["installRecords"][string],
 ): string | undefined {
+  const resolvedName = readInstallRecordStringField(record, "resolvedName");
+  const resolvedSpec = readInstallRecordStringField(record, "resolvedSpec");
+  const spec = readInstallRecordStringField(record, "spec");
   return (
-    record.resolvedName ??
-    (record.resolvedSpec ? parseRegistryNpmSpec(record.resolvedSpec)?.name : undefined) ??
-    (record.spec ? parseRegistryNpmSpec(record.spec)?.name : undefined)
+    resolvedName ??
+    (resolvedSpec ? parseRegistryNpmSpec(resolvedSpec)?.name : undefined) ??
+    (spec ? parseRegistryNpmSpec(spec)?.name : undefined)
   );
 }
 
@@ -391,11 +394,22 @@ function readInstallRecordField(
   return (record as Partial<Record<string, unknown>>)[key];
 }
 
+function readInstallRecordStringField(
+  record: InstalledPluginIndex["installRecords"][string],
+  key: string,
+): string | undefined {
+  const value = readInstallRecordField(record, key);
+  return typeof value === "string" ? value : undefined;
+}
+
 function installRecordSpecPinsCurrentVersion(
   record: InstalledPluginIndex["installRecords"][string],
 ): boolean {
-  const parsed = record.spec ? parseRegistryNpmSpec(record.spec) : null;
-  const version = record.resolvedVersion ?? record.version;
+  const spec = readInstallRecordStringField(record, "spec");
+  const parsed = spec ? parseRegistryNpmSpec(spec) : null;
+  const version =
+    readInstallRecordStringField(record, "resolvedVersion") ??
+    readInstallRecordStringField(record, "version");
   return Boolean(
     parsed?.selectorKind === "exact-version" && version && parsed.selector === version,
   );
@@ -406,10 +420,13 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   legacyRecord: InstalledPluginIndex["installRecords"][string];
 }): boolean {
   const { currentRecord, legacyRecord } = params;
-  if (legacyRecord.resolvedSpec && currentRecord.resolvedSpec === legacyRecord.resolvedSpec) {
+  const currentResolvedSpec = readInstallRecordStringField(currentRecord, "resolvedSpec");
+  const legacyResolvedSpec = readInstallRecordStringField(legacyRecord, "resolvedSpec");
+  if (legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec) {
     return true;
   }
-  if (legacyRecord.spec && currentRecord.resolvedSpec === legacyRecord.spec) {
+  const legacySpec = readInstallRecordStringField(legacyRecord, "spec");
+  if (legacySpec && currentResolvedSpec === legacySpec) {
     return true;
   }
   if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
@@ -420,8 +437,12 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   if (!currentNpmName || currentNpmName !== legacyNpmName) {
     return false;
   }
-  const currentVersion = currentRecord.resolvedVersion ?? currentRecord.version;
-  const legacyVersion = legacyRecord.resolvedVersion ?? legacyRecord.version;
+  const currentVersion =
+    readInstallRecordStringField(currentRecord, "resolvedVersion") ??
+    readInstallRecordStringField(currentRecord, "version");
+  const legacyVersion =
+    readInstallRecordStringField(legacyRecord, "resolvedVersion") ??
+    readInstallRecordStringField(legacyRecord, "version");
   return Boolean(
     currentVersion &&
     legacyVersion &&
