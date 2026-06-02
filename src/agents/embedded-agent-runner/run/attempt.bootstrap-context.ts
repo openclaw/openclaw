@@ -12,6 +12,7 @@ export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
 }
 
 function isRelativePathInsideOrEqual(relativePath: string): boolean {
+  // `path.relative` returns "" for the workspace root; reject parent escapes and absolute paths.
   return (
     relativePath === "" ||
     (relativePath !== ".." &&
@@ -35,6 +36,8 @@ export function remapInjectedContextFilesToWorkspace(params: {
   }
   return params.files.map((file) => {
     const relative = path.relative(params.sourceWorkspaceDir, file.path);
+    // Only files that were inside the source workspace can be safely projected
+    // into the target workspace.
     const canRemap = isRelativePathInsideOrEqual(relative);
     return canRemap
       ? {
