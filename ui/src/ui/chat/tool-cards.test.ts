@@ -737,8 +737,6 @@ describe("tool-cards", () => {
     );
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0]?.[0]).toBe(managedImageUrl);
-    expect((fetchMock.mock.calls[0]?.[1] as RequestInit | undefined)?.credentials).toBe(
-      "same-origin",
-    );
+    expect(fetchMock.mock.calls[0]?.[1]?.credentials).toBe("same-origin");
   });
 });
