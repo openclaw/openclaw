@@ -1509,6 +1509,44 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(text).toContain("https://api.acme.io/v1");
   });
 
+  it("sanitizes string-encoded JSON arguments with credential fields before extraction", () => {
+    // Regression: string arguments (OpenAI format) were appended raw, letting
+    // credential values like tokens feed into the hex identifier extractor.
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "functionCall",
+          id: "call_str_cred",
+          name: "auth",
+          arguments: '{"token":"deadbeef12345678","endpoint":"https://api.acme.io/v2"}',
+        },
+      ],
+    });
+    // "token" is a credential field — sanitizeDiagnosticPayload omits it
+    expect(text).not.toContain("deadbeef12345678"); // pragma: allowlist secret
+    // Non-credential fields survive
+    expect(text).toContain("https://api.acme.io/v2");
+  });
+
+  it("passes non-JSON string arguments through without crashing", () => {
+    // String arguments that are not valid JSON should still be included for
+    // identifier extraction (the downstream extractor applies its own
+    // credential-prefix redaction).
+    const text = extractMessageTextForIdentifiers({
+      role: "assistant",
+      content: [
+        {
+          type: "functionCall",
+          id: "call_plain",
+          name: "exec",
+          arguments: "not json at all /srv/app/config.yaml",
+        },
+      ],
+    });
+    expect(text).toContain("/srv/app/config.yaml");
+  });
+
   it("extracts credential-shaped values from tool result content", () => {
     const text = extractMessageTextForIdentifiers({
       role: "toolResult",
@@ -2323,6 +2361,79 @@ describe("compaction-safeguard recent-turn preservation", () => {
 
     expect(result.cancel).not.toBe(true);
     expect(mockSummarizeInStages).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels strict compaction when cap recovery would exceed size limit", async () => {
+    // Regression: when strict mode detects identifier loss after capping and
+    // the recovery block would push the summary past MAX_COMPACTION_SUMMARY_CHARS,
+    // compaction must be cancelled (not return a summary missing required identifiers).
+    mockSummarizeInStages.mockReset();
+    // Produce a summary that exceeds the cap. Capping truncates to
+    // MAX_COMPACTION_SUMMARY_CHARS, leaving no room for the recovery block.
+    const overCapSummary =
+      [
+        "## Decisions",
+        "Keep current flow.",
+        "## Open TODOs",
+        "None.",
+        "## Constraints/Rules",
+        "Follow rules.",
+        "## Pending user asks",
+        "deploy service",
+        "## Exact identifiers",
+        // Intentionally omit the identifier so post-cap validation triggers
+        "None.",
+      ].join("\n") +
+      "\n" +
+      // Push well past the cap so capping truncates to exactly the limit
+      "x".repeat(MAX_COMPACTION_SUMMARY_CHARS + 500);
+    mockSummarizeInStages.mockResolvedValueOnce(overCapSummary);
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      model,
+      recentTurnsPreserve: 0,
+      qualityGuardEnabled: true,
+      qualityGuardMaxRetries: 0,
+    });
+
+    const compactionHandler = createCompactionHandler();
+    const getApiKeyMock = vi.fn().mockResolvedValue("test-key");
+    const mockContext = createCompactionContext({
+      sessionManager,
+      getApiKeyMock,
+    });
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          {
+            role: "user",
+            content: "deploy with hash a1b2c3d4e5f6",
+            timestamp: 1,
+          },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: { read: [], edited: [], written: [] },
+        settings: { reserveTokens: 4_000 },
+        previousSummary: undefined,
+        isSplitTurn: false,
+      },
+      customInstructions: "",
+      signal: new AbortController().signal,
+    };
+
+    const result = (await compactionHandler(event, mockContext)) as {
+      cancel?: boolean;
+      compaction?: { summary?: string };
+    };
+
+    // Must cancel rather than returning a strict summary missing required identifiers
+    expect(result.cancel).toBe(true);
+    const reason = consumeCompactionSafeguardCancelReason(sessionManager);
+    expect(reason).toContain("required identifier");
   });
 
   it("preserves split-turn and recent-turn suffixes when retry fallback is capped", async () => {

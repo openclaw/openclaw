@@ -1359,8 +1359,13 @@ export default function compactionSafeguardExtension(api: ExtensionAPI): void {
             summary = recovered;
           } else {
             log.warn(
-              `Compaction safeguard: final capping removed ${postCapLost.length} identifier(s); recovery would exceed cap, skipping.`,
+              `Compaction safeguard: final capping removed ${postCapLost.length} identifier(s); recovery would exceed cap, cancelling compaction.`,
             );
+            setCompactionSafeguardCancelReason(
+              ctx.sessionManager,
+              `Strict compaction cancelled: ${postCapLost.length} required identifier(s) lost after capping and recovery block exceeds size limit.`,
+            );
+            return { cancel: true };
           }
         }
       }

@@ -273,7 +273,21 @@ export function extractMessageTextForIdentifiers(message: unknown): string {
       if (typeof rec.type === "string" && TOOL_CALL_BLOCK_TYPES.has(rec.type)) {
         const args = rec.arguments ?? rec.input;
         if (typeof args === "string") {
-          parts.push(args);
+          // String-encoded arguments (e.g. OpenAI's JSON-stringified format)
+          // may contain credential fields. Parse and sanitize before extraction
+          // to avoid leaking secrets into the ## Exact identifiers section.
+          try {
+            const parsed: unknown = JSON.parse(args);
+            if (parsed && typeof parsed === "object") {
+              parts.push(JSON.stringify(sanitizeDiagnosticPayload(parsed)));
+            } else {
+              parts.push(args);
+            }
+          } catch {
+            // Not valid JSON; include as-is (identifier extractor will still
+            // apply credential-prefix redaction downstream).
+            parts.push(args);
+          }
         } else if (args && typeof args === "object") {
           try {
             // Redact credential-shaped fields (apiKey, token, password, secret)
