@@ -27,6 +27,8 @@ import type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntrySummary,
+  SessionLifecycleArtifactCleanupParams,
+  SessionLifecycleArtifactCleanupResult,
   SessionEntryUpdateOptions,
   SessionTranscriptAccessScope,
   SessionTranscriptReadScope,
@@ -229,6 +231,34 @@ export async function updateSqliteSessionEntry(
       const next = mergeSessionEntry(fresh, patch);
       writeSessionEntry(writeDatabase, resolved.sessionKey, next);
       result = cloneSessionEntry(next);
+    }, toDatabaseOptions(resolved));
+    return result;
+  });
+}
+
+/** Cleans scoped session lifecycle rows and associated SQLite transcript state. */
+export async function cleanupSqliteSessionLifecycleArtifacts(
+  params: SessionLifecycleArtifactCleanupParams,
+): Promise<SessionLifecycleArtifactCleanupResult> {
+  const sessionKeySegmentPrefix = params.sessionKeySegmentPrefix.trim();
+  const transcriptContentMarker = params.transcriptContentMarker;
+  if (!sessionKeySegmentPrefix || !transcriptContentMarker) {
+    return { removedEntries: 0, archivedTranscriptArtifacts: 0 };
+  }
+
+  const resolved = resolveSqliteReadScope({ storePath: params.storePath });
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let result: SessionLifecycleArtifactCleanupResult = {
+      removedEntries: 0,
+      archivedTranscriptArtifacts: 0,
+    };
+    runOpenClawAgentWriteTransaction((database) => {
+      result = cleanupSqliteSessionLifecycleArtifactsInTransaction(database, {
+        sessionKeySegmentPrefix,
+        transcriptContentMarker,
+        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+        nowMs: params.nowMs ?? Date.now(),
+      });
     }, toDatabaseOptions(resolved));
     return result;
   });
@@ -531,6 +561,196 @@ function readExactSessionEntryRow(
   }
   const entry = parseSessionEntryRow(row);
   return entry ? { entry, row } : undefined;
+}
+
+function sessionKeySegmentStartsWith(sessionKey: string, prefix: string): boolean {
+  const firstSeparator = sessionKey.indexOf(":");
+  if (firstSeparator < 0) {
+    return sessionKey.startsWith(prefix);
+  }
+  const secondSeparator = sessionKey.indexOf(":", firstSeparator + 1);
+  const sessionSegment = secondSeparator < 0 ? sessionKey : sessionKey.slice(secondSeparator + 1);
+  return sessionSegment.startsWith(prefix);
+}
+
+function readSessionTranscriptUpdatedAt(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): number | undefined {
+  const db = getSessionKysely(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("transcript_events")
+      .select((eb) => eb.fn.max<number | bigint>("created_at").as("updated_at"))
+      .where("session_id", "=", sessionId),
+  );
+  if (row?.updated_at === null || row?.updated_at === undefined) {
+    return undefined;
+  }
+  return normalizeSqliteNumber(row.updated_at);
+}
+
+function sqliteTranscriptStateIsReclaimable(params: {
+  database: OpenClawAgentDatabase;
+  sessionId: string;
+  nowMs: number;
+  orphanTranscriptMinAgeMs: number;
+}): boolean {
+  const updatedAt = readSessionTranscriptUpdatedAt(params.database, params.sessionId);
+  return updatedAt === undefined || params.nowMs - updatedAt >= params.orphanTranscriptMinAgeMs;
+}
+
+function sqliteTranscriptStateHasMarker(params: {
+  database: OpenClawAgentDatabase;
+  sessionId: string;
+  transcriptContentMarker: string;
+}): boolean {
+  const db = getSessionKysely(params.database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    params.database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("seq")
+      .where("session_id", "=", params.sessionId)
+      .where("event_json", "like", `%${params.transcriptContentMarker}%`)
+      .limit(1),
+  );
+  return row !== undefined;
+}
+
+function readReferencedSqliteSessionIds(database: OpenClawAgentDatabase): Set<string> {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db.selectFrom("session_entries").select("session_id"),
+  ).rows;
+  return new Set(rows.map((row) => row.session_id));
+}
+
+function deleteSqliteSessionStateIfUnreferenced(params: {
+  database: OpenClawAgentDatabase;
+  referencedSessionIds: ReadonlySet<string>;
+  sessionId: string;
+}): number {
+  if (params.referencedSessionIds.has(params.sessionId)) {
+    return 0;
+  }
+  const hadTranscriptState =
+    readSessionTranscriptUpdatedAt(params.database, params.sessionId) !== undefined;
+  const db = getSessionKysely(params.database.db);
+  executeSqliteQuerySync(
+    params.database.db,
+    db.deleteFrom("sessions").where("session_id", "=", params.sessionId),
+  );
+  return hadTranscriptState ? 1 : 0;
+}
+
+function cleanupSqliteOrphanLifecycleTranscriptState(params: {
+  database: OpenClawAgentDatabase;
+  referencedSessionIds: ReadonlySet<string>;
+  transcriptContentMarker: string;
+  orphanTranscriptMinAgeMs: number;
+  nowMs: number;
+}): number {
+  const db = getSessionKysely(params.database.db);
+  const rows = executeSqliteQuerySync(
+    params.database.db,
+    db.selectFrom("sessions").select("session_id").orderBy("session_id", "asc"),
+  ).rows;
+
+  let removed = 0;
+  // Orphan transcript state is represented by a sessions row without a live
+  // session entry. The marker keeps this scoped to the caller-owned lifecycle.
+  for (const row of rows) {
+    if (params.referencedSessionIds.has(row.session_id)) {
+      continue;
+    }
+    if (
+      !sqliteTranscriptStateIsReclaimable({
+        database: params.database,
+        sessionId: row.session_id,
+        nowMs: params.nowMs,
+        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+      }) ||
+      !sqliteTranscriptStateHasMarker({
+        database: params.database,
+        sessionId: row.session_id,
+        transcriptContentMarker: params.transcriptContentMarker,
+      })
+    ) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      params.database.db,
+      db.deleteFrom("sessions").where("session_id", "=", row.session_id),
+    );
+    removed += 1;
+  }
+  return removed;
+}
+
+function cleanupSqliteSessionLifecycleArtifactsInTransaction(
+  database: OpenClawAgentDatabase,
+  params: {
+    sessionKeySegmentPrefix: string;
+    transcriptContentMarker: string;
+    orphanTranscriptMinAgeMs: number;
+    nowMs: number;
+  },
+): SessionLifecycleArtifactCleanupResult {
+  const db = getSessionKysely(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("session_entries")
+      .select(["session_key", "session_id"])
+      .orderBy("session_key", "asc"),
+  ).rows;
+
+  const removedSessionIds = new Set<string>();
+  let removedEntries = 0;
+  // Delete matching lifecycle entries first; session/transcript state is only
+  // removed after we rebuild the post-delete reference set below.
+  for (const row of rows) {
+    if (!sessionKeySegmentStartsWith(row.session_key, params.sessionKeySegmentPrefix)) {
+      continue;
+    }
+    if (
+      !sqliteTranscriptStateIsReclaimable({
+        database,
+        sessionId: row.session_id,
+        nowMs: params.nowMs,
+        orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+      })
+    ) {
+      continue;
+    }
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("session_entries").where("session_key", "=", row.session_key),
+    );
+    removedSessionIds.add(row.session_id);
+    removedEntries += 1;
+  }
+
+  const referencedSessionIds = readReferencedSqliteSessionIds(database);
+  let archivedTranscriptArtifacts = 0;
+  for (const sessionId of removedSessionIds) {
+    archivedTranscriptArtifacts += deleteSqliteSessionStateIfUnreferenced({
+      database,
+      referencedSessionIds,
+      sessionId,
+    });
+  }
+  archivedTranscriptArtifacts += cleanupSqliteOrphanLifecycleTranscriptState({
+    database,
+    referencedSessionIds,
+    transcriptContentMarker: params.transcriptContentMarker,
+    orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,
+    nowMs: params.nowMs,
+  });
+  return { removedEntries, archivedTranscriptArtifacts };
 }
 
 function writeSessionEntry(
