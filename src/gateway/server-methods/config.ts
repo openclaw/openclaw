@@ -124,6 +124,7 @@ function requireConfigBaseHash(
   return true;
 }
 
+/** Reads the write snapshot only after enforcing the optimistic config hash. */
 async function readConfigWriteSnapshotOrRespond(
   params: unknown,
   respond: RespondFn,
@@ -294,6 +295,7 @@ function parseValidateConfigFromRawOrRespond(
     return null;
   }
   // Validate against runtime shape, but write the source-shaped config the operator submitted.
+  // This preserves redacted/source-only fields while still checking the resolved runtime contract.
   const projectedValidationCandidate = snapshot.valid
     ? applyMergePatch(
         projectSourceOntoRuntimeShape(snapshot.resolved, snapshot.config),
@@ -425,6 +427,7 @@ async function respondWithConfigRestartWrite(params: {
   params.writeResult.queueFollowUp();
 }
 
+/** Captures both raw config diffs and active secrets-expanded auth changes. */
 function shouldDisconnectSharedAuthClientsForConfigWrite(params: {
   prevConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;

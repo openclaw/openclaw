@@ -12,6 +12,7 @@ type ToolDisplayActionSpec = {
   detailKeys?: string[];
 };
 
+/** Static display hints loaded from the tool display config for a tool family or action. */
 export type ToolDisplaySpec = {
   title?: string;
   label?: string;
@@ -19,6 +20,7 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
+/** Parsed bridge-call target used to render tool-search code as the selected downstream tool. */
 export type ToolSearchCodeDisplayTarget = {
   toolName: string;
   displayToolName?: string;
@@ -35,10 +37,12 @@ type CoerceDisplayValueOptions = {
   maxArrayEntries?: number;
 };
 
+/** Normalize missing tool names to the generic display bucket while preserving configured keys. */
 export function normalizeToolName(name?: string): string {
   return (name ?? "tool").trim();
 }
 
+/** Build a readable fallback title for tools that are not in the display config. */
 export function defaultTitle(name: string): string {
   const cleaned = name.replace(/_/g, " ").trim();
   if (!cleaned) {
@@ -75,6 +79,7 @@ function resolveActionArg(args: unknown): string | undefined {
   return action || undefined;
 }
 
+/** Resolve action-specific verb and detail text from raw tool args and configured detail keys. */
 export function resolveToolVerbAndDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
@@ -123,6 +128,7 @@ function coerceDisplayValue(
     }
     const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > maxStringChars) {
+      // Keep both ends of long paths/prompts; the omitted middle is least useful in summaries.
       const half = Math.floor((maxStringChars - 1) / 2);
       return `${firstLine.slice(0, half)}…${firstLine.slice(-(maxStringChars - 1 - half))}`;
     }
@@ -178,11 +184,13 @@ function lookupValueByPath(args: unknown, path: string): unknown {
       return undefined;
     }
     const record = current as Record<string, unknown>;
+    // Detail-key paths are config-owned dotted properties, not arbitrary JS expressions.
     current = record[segment];
   }
   return current;
 }
 
+/** Convert a configured detail key into the compact label shown beside summary values. */
 export function formatDetailKey(raw: string, overrides: Record<string, string> = {}): string {
   let last = "";
   for (const segment of raw.split(".")) {
@@ -415,6 +423,7 @@ function resolveToolSearchCallTarget(
   }
   const idReference = target.match(/^([A-Za-z_$][\w$]*)\.id\b/s);
   if (idReference?.[1]) {
+    // Bridge snippets often describe a tool first, then call tool.id; preserve the real catalog id.
     const describedTarget = collectToolSearchDescribeBindings(code).get(idReference[1]);
     if (describedTarget) {
       return describedTarget;
@@ -502,6 +511,7 @@ function extractObjectLiteralSource(raw: string | undefined): string | undefined
     if (char === "}") {
       depth -= 1;
       if (depth === 0) {
+        // Stop at the matching object boundary so later call syntax is not parsed as args.
         return value.slice(start, i + 1);
       }
     }
@@ -565,6 +575,7 @@ function summarizeToolSearchCallInput(raw: string | undefined): string | undefin
   return undefined;
 }
 
+/** Parse tool-search bridge code into the display target that channel renderers should show. */
 export function resolveToolSearchCodeDisplayTarget(
   args: unknown,
 ): ToolSearchCodeDisplayTarget | undefined {
@@ -724,6 +735,7 @@ function resolveToolVerbAndDetail(params: {
   detailFormatKey?: (raw: string) => string;
 }): { verb?: string; detail?: string } {
   const actionSpec = resolveActionSpec(params.spec, params.action);
+  // Unknown tools still need human verbs; config/action labels override the key-derived fallback.
   const fallbackVerb =
     params.toolKey === "web_search"
       ? "search"
@@ -758,6 +770,7 @@ function resolveToolVerbAndDetail(params: {
   const detailKeys =
     actionSpec?.detailKeys ?? params.spec?.detailKeys ?? params.fallbackDetailKeys ?? [];
   if (!detail && detailKeys.length > 0) {
+    // Configured keys are the generic fallback after tool-specific intent summaries fail.
     detail = resolveDetailFromKeys(params.args, detailKeys, {
       mode: params.detailMode,
       coerce: params.detailCoerce,
@@ -771,6 +784,7 @@ function resolveToolVerbAndDetail(params: {
   return { verb, detail };
 }
 
+/** Normalize a resolved detail string for final display, including multi-field separators. */
 export function formatToolDetailText(
   detail: string | undefined,
   opts: { prefixWithWith?: boolean } = {},

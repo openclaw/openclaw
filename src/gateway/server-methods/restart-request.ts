@@ -34,9 +34,13 @@ function parseRestartDeliveryContext(params: unknown): {
   return { deliveryContext: normalizedContext, threadId };
 }
 
-// Restart sentinels can resume a channel turn after the gateway comes back.
-// Keep only routable delivery fields plus a normalized thread id so malformed
-// UI/tool payloads do not leak arbitrary data into the sentinel file.
+/**
+ * Normalizes restart request payloads before sentinel persistence.
+ *
+ * Restart sentinels can resume a channel turn after the gateway comes back, so
+ * this keeps only routable delivery fields plus a normalized thread id instead
+ * of persisting arbitrary UI/tool payloads.
+ */
 export function parseRestartRequestParams(params: unknown): {
   sessionKey: string | undefined;
   deliveryContext: RestartDeliveryContext | undefined;
@@ -54,7 +58,9 @@ export function parseRestartRequestParams(params: unknown): {
   const restartDelayMsRaw = (params as { restartDelayMs?: unknown }).restartDelayMs;
   const restartDelayMs =
     typeof restartDelayMsRaw === "number" && Number.isFinite(restartDelayMsRaw)
-      ? Math.max(0, Math.floor(restartDelayMsRaw))
+      ? // Sentinel consumers treat this as a timeout value; clamp fractional and
+        // negative input here so restart scheduling never sees non-duration data.
+        Math.max(0, Math.floor(restartDelayMsRaw))
       : undefined;
   return { sessionKey, deliveryContext, threadId, note, continuationMessage, restartDelayMs };
 }

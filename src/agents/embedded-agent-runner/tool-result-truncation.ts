@@ -99,6 +99,7 @@ function appendBoundedTruncationSuffix(params: {
       return finalText;
     }
     if (keptText.length === 0) {
+      // Extremely small caps must still return a bounded string, even if the suffix is clipped.
       return finalText.slice(0, params.maxChars);
     }
     const overflow = finalText.length - params.maxChars;
@@ -212,6 +213,7 @@ export function calculateMaxToolResultChars(contextWindowTokens: number): number
   );
 }
 
+/** Resolve the default live tool-result hard cap tier for a model context window. */
 export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): number {
   if (!Number.isFinite(contextWindowTokens)) {
     return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
@@ -226,6 +228,7 @@ export function resolveAutoLiveToolResultMaxChars(contextWindowTokens: number): 
   return DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
 }
 
+/** Apply the context-share budget and caller hard cap to a model context window. */
 export function calculateMaxToolResultCharsWithCap(
   contextWindowTokens: number,
   hardCapChars: number,
@@ -236,6 +239,7 @@ export function calculateMaxToolResultCharsWithCap(
   return Math.min(maxChars, Math.max(1, hardCapChars));
 }
 
+/** Resolve the active per-agent live tool-result cap, including config overrides. */
 export function resolveLiveToolResultMaxChars(params: {
   contextWindowTokens: number;
   cfg?: OpenClawConfig;
@@ -587,6 +591,7 @@ function buildToolResultReplacementPlan(params: {
     params.branch,
     oversizedReplacements,
   );
+  // Aggregate pressure is calculated after single-result caps so reductions are not double-counted.
   const aggregateReplacements = buildAggregateToolResultReplacements({
     branch: oversizedTrimmedBranch,
     aggregateBudgetChars: params.aggregateBudgetChars,
@@ -605,6 +610,8 @@ function buildToolResultReplacementPlan(params: {
     aggregateReducibleChars,
   };
 }
+
+/** Estimate how much recovery could reclaim from oversized and aggregate tool results. */
 export function estimateToolResultReductionPotential(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;
@@ -796,6 +803,7 @@ async function truncateOversizedToolResultsInTranscriptState(params: {
   };
 }
 
+/** Rewrite oversized tool results in an in-memory SessionManager branch. */
 export function truncateOversizedToolResultsInSessionManager(params: {
   sessionManager: SessionManager;
   contextWindowTokens: number;
@@ -815,6 +823,7 @@ export function truncateOversizedToolResultsInSessionManager(params: {
   }
 }
 
+/** Rewrite oversized tool results in a persisted transcript file under the session write lock. */
 export async function truncateOversizedToolResultsInSession(params: {
   sessionFile: string;
   contextWindowTokens: number;
@@ -829,6 +838,7 @@ export async function truncateOversizedToolResultsInSession(params: {
   let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
 
   try {
+    // Transcript-file rewrites take the session write lock so recovery cannot race live appends.
     sessionLock = await acquireSessionWriteLock({
       sessionFile,
       ...resolveSessionWriteLockOptions(params.config),
@@ -870,6 +880,7 @@ export function isOversizedToolResult(
   return getToolResultTextLength(msg) > maxChars;
 }
 
+/** Fast gate for deciding whether recovery should attempt a tool-result truncation pass. */
 export function sessionLikelyHasOversizedToolResults(params: {
   messages: AgentMessage[];
   contextWindowTokens: number;

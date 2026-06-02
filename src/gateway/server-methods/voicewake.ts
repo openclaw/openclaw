@@ -4,6 +4,7 @@ import { normalizeVoiceWakeTriggers } from "../server-utils.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** RPC handlers for reading/updating global voice wake trigger phrases. */
 export const voicewakeHandlers: GatewayRequestHandlers = {
   "voicewake.get": async ({ respond }) => {
     try {

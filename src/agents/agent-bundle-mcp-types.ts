@@ -3,12 +3,14 @@ import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
+/** Materialized MCP tools plus cleanup for one bundled MCP runtime attachment. */
 export type BundleMcpToolRuntime = {
   tools: AnyAgentTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
   dispose: () => Promise<void>;
 };
 
+/** Per-server catalog metadata exposed to prompts and diagnostics. */
 export type McpServerCatalog = {
   serverName: string;
   safeServerName?: string;
@@ -32,6 +34,7 @@ export type McpServerCatalog = {
   };
 };
 
+/** One MCP tool entry after server-name sanitization and schema normalization. */
 export type McpCatalogTool = {
   serverName: string;
   safeServerName: string;
@@ -42,6 +45,7 @@ export type McpCatalogTool = {
   fallbackDescription: string;
 };
 
+/** Versioned MCP catalog snapshot for a session runtime. */
 export type McpToolCatalog = {
   version: number;
   generatedAt: number;
@@ -50,6 +54,7 @@ export type McpToolCatalog = {
   diagnostics?: readonly McpToolCatalogDiagnostic[];
 };
 
+/** Catalog diagnostic tied back to the MCP server launch summary. */
 export type McpToolCatalogDiagnostic = {
   serverName: string;
   safeServerName: string;
@@ -57,6 +62,7 @@ export type McpToolCatalogDiagnostic = {
   message: string;
 };
 
+/** Long-lived MCP runtime bound to an agent session and workspace. */
 export type SessionMcpRuntime = {
   sessionId: string;
   sessionKey?: string;
@@ -79,6 +85,7 @@ export type SessionMcpRuntime = {
   dispose: () => Promise<void>;
 };
 
+/** Owns session MCP runtime reuse, lookup, binding, idle sweeping, and disposal. */
 export type SessionMcpRuntimeManager = {
   getOrCreate: (params: {
     sessionId: string;

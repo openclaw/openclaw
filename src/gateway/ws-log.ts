@@ -91,6 +91,7 @@ export function shouldLogWs(): boolean {
   return shouldLogSubsystemToConsole("gateway/ws");
 }
 
+/** Shortens connection, request, and run identifiers while preserving recognizable edges. */
 export function shortId(value: string): string {
   const s = value.trim();
   if (UUID_RE.test(s)) {
@@ -102,6 +103,7 @@ export function shortId(value: string): string {
   return `${s.slice(0, 12)}…${s.slice(-4)}`;
 }
 
+/** Formats arbitrary WebSocket log metadata with bounded length and secret redaction. */
 export function formatForLog(value: unknown): string {
   try {
     if (value instanceof Error) {
@@ -167,6 +169,8 @@ function renderErrorChainForLog(error: Error): string {
   let current: unknown = (error as unknown as { cause?: unknown }).cause;
   let depth = 0;
   while (current !== undefined && current !== null && depth < 8) {
+    // Cause chains can be self-referential or very deep; keep enough context for diagnostics
+    // without letting a malformed error make logging unbounded.
     if (current instanceof Error) {
       segments.push(renderSingleErrorForLog(current));
       current = (current as unknown as { cause?: unknown }).cause;
@@ -187,6 +191,7 @@ function compactPreview(input: string, maxLen = 160): string {
   return `${oneLine.slice(0, Math.max(0, maxLen - 1))}…`;
 }
 
+/** Builds compact agent-event metadata for gateway/ws logs without dumping full payloads. */
 export function summarizeAgentEventForWsLog(payload: unknown): Record<string, unknown> {
   if (!payload || typeof payload !== "object") {
     return {};
@@ -224,6 +229,8 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
   }
 
   if (stream === "assistant") {
+    // Assistant payloads can contain full responses/media lists; keep only preview/count fields
+    // so enabling gateway/ws logs does not duplicate transcript content.
     const text = readStringValue(data.text);
     if (text?.trim()) {
       extra.text = compactPreview(text);
@@ -279,12 +286,15 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
   return extra;
 }
 
+/** Writes one gateway/ws log record using the configured verbosity and style. */
 export function logWs(direction: "in" | "out", kind: string, meta?: Record<string, unknown>) {
   if (!shouldLogSubsystemToConsole("gateway/ws")) {
     return;
   }
   const style = getGatewayWsLogStyle();
   if (!isVerbose()) {
+    // Normal logs only surface parse errors, failures, and slow responses; verbose modes opt into
+    // full request/event tracing.
     logWsOptimized(direction, kind, meta);
     return;
   }

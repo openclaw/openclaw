@@ -207,6 +207,8 @@ export function buildCommandsListResult(params: {
 }): CommandsListResult {
   const includeArgs = params.includeArgs !== false;
   const scopeFilter = params.scope ?? "both";
+  // Native scope is provider-facing: command names may be channel-specific.
+  // Text scope is user-facing and keeps slashless primary names plus aliases.
   const nameSurface: CommandNameSurface = scopeFilter === "text" ? "text" : "native";
   const provider = normalizeOptionalLowercaseString(params.provider);
 
@@ -233,6 +235,8 @@ export function buildCommandsListResult(params: {
 
   commands.push(...buildPluginCommandEntries({ provider, nameSurface, cfg: params.cfg }));
 
+  // The protocol cap protects Control UI/autocomplete payload size; ordering
+  // follows registry order so truncation remains deterministic.
   return { commands: commands.slice(0, COMMAND_LIST_MAX_ITEMS) };
 }
 

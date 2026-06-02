@@ -2,6 +2,7 @@ import { vi } from "vitest";
 import type { Mock } from "vitest";
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
+/** Build the active-run record shape used by chat abort handlers. */
 export function createActiveRun(
   sessionKey: string,
   params: {
@@ -47,6 +48,12 @@ type ChatAbortTestContext = Record<string, unknown> & {
 
 type ChatAbortRespondMock = Mock<RespondFn>;
 
+/**
+ * Create a minimal GatewayRequestContext for chat abort tests.
+ *
+ * The default `clearChatRunState` mirrors production cleanup by removing text,
+ * delta, and buffered event state for the run and its derived event channels.
+ */
 export function createChatAbortContext(
   overrides: Record<string, unknown> = {},
 ): ChatAbortTestContext {
@@ -86,6 +93,7 @@ export function createChatAbortContext(
   return context;
 }
 
+/** Invoke a chat abort handler with the shared test context/request wiring. */
 export async function invokeChatAbortHandler(params: {
   handler: GatewayRequestHandler;
   context: ChatAbortTestContext;

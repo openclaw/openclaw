@@ -7,11 +7,11 @@ const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
 
 const SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
 
-// Persist a hidden context reminder so the next turn knows why the runner stopped.
 function buildSessionsYieldContextMessage(message: string): string {
   return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
 }
 
+/** Waits briefly for the abort path triggered by sessions_yield to settle. */
 export async function waitForSessionsYieldAbortSettle(params: {
   settlePromise: Promise<void> | null;
   runId: string;
@@ -45,7 +45,7 @@ export async function waitForSessionsYieldAbortSettle(params: {
   }
 }
 
-// Return a synthetic aborted response so agent runtime unwinds without a real provider call.
+/** Returns an aborted assistant response so the runtime unwinds without a provider call. */
 export function createYieldAbortedResponse(model: {
   api?: string;
   provider?: string;
@@ -105,8 +105,7 @@ export function createYieldAbortedResponse(model: {
   };
 }
 
-// Queue a hidden steering message so agent runtime injects it before the next
-// LLM call once the current assistant turn finishes executing its tool calls.
+/** Queues hidden steering so the current tool turn exits through sessions_yield. */
 export function queueSessionsYieldInterruptMessage(activeSession: {
   agent: { steer: (message: AgentMessage) => void };
 }) {
@@ -120,7 +119,7 @@ export function queueSessionsYieldInterruptMessage(activeSession: {
   });
 }
 
-// Append the caller-provided yield payload as a hidden session message once the run is idle.
+/** Persists caller-provided yield context for the follow-up turn without triggering one. */
 export async function persistSessionsYieldContextMessage(
   activeSession: {
     sendCustomMessage: (
@@ -146,7 +145,7 @@ export async function persistSessionsYieldContextMessage(
   );
 }
 
-// Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
+/** Removes synthetic sessions_yield artifacts from live and persisted transcript state. */
 export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };
@@ -210,6 +209,8 @@ export function stripSessionsYieldArtifacts(activeSession: {
     if (!isYieldAbortAssistant && !isYieldInterruptMessage) {
       break;
     }
+    // Only trim trailing synthetic rows. Earlier artifacts belong to completed
+    // turns and must stay in the transcript graph.
     fileEntries.pop();
     if (last.id) {
       byId.delete(last.id);

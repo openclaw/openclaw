@@ -38,6 +38,8 @@ export function indexPluginNodeCapabilitySurfaces(
       !existing ||
       resolvePluginNodeCapabilityTtlMs(next) < resolvePluginNodeCapabilityTtlMs(existing)
     ) {
+      // Repeated surface declarations collapse to the shortest TTL so a plugin cannot
+      // dilute a stricter grant by registering the same public surface twice.
       indexed[surface] = next;
     }
   }
@@ -68,6 +70,8 @@ function resolvePluginNodeCapabilityStorageKey(surface: PluginNodeCapabilitySurf
     return undefined;
   }
   const scopeKey = surface.scopeKey?.trim();
+  // The NUL separator keeps plugin-owned scopes unambiguous even when either side
+  // contains URL or identifier punctuation that would be valid in a manifest.
   return scopeKey ? `${normalizedSurface}\0${scopeKey}` : normalizedSurface;
 }
 
@@ -178,6 +182,8 @@ export function normalizePluginNodeCapabilityScopedUrl(
       if (!capabilityFromPath || !canonicalPath.startsWith("/")) {
         malformedScopedPath = true;
       } else {
+        // The proxy authorizes against the query token after restoring the original
+        // path, so downstream handlers never need to understand the scoped URL form.
         url.pathname = canonicalPath;
         if (!url.searchParams.has(PLUGIN_NODE_CAPABILITY_QUERY_PARAM)) {
           url.searchParams.set(PLUGIN_NODE_CAPABILITY_QUERY_PARAM, capabilityFromPath);
@@ -287,6 +293,8 @@ export function hasAuthorizedPluginNodeCapability(params: {
       continue;
     }
     if (safeEqualSecret(entry.capability, params.capability)) {
+      // Successful use slides the grant window, but only after the constant-time
+      // compare succeeds for the exact surface and optional plugin scope.
       entry.expiresAtMs = nextExpiresAtMs;
       return true;
     }

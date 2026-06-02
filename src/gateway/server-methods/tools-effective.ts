@@ -86,6 +86,8 @@ function buildToolsEffectiveCacheKey(params: {
   context: TrustedToolsEffectiveContext;
 }): string {
   const context = params.context;
+  // Key only on stable request/session inputs; MCP runtime catalog state is
+  // appended after the base inventory cache so UI polling can reuse this value.
   return JSON.stringify({
     v: 1,
     config: context.runtimeConfigCacheKey,
@@ -124,6 +126,8 @@ function buildMcpConfigSummaryCacheKey(params: {
   context: TrustedToolsEffectiveContext;
   workspaceDir: string;
 }): string {
+  // MCP config summaries are scoped by workspace because spawned sessions may
+  // run from sandbox copies with different MCP discovery roots.
   return JSON.stringify({
     v: 1,
     config: params.context.runtimeConfigCacheKey,
@@ -372,6 +376,8 @@ function filterMcpTools(params: {
   context: TrustedToolsEffectiveContext;
   mcpTools: Parameters<typeof applyFinalEffectiveToolPolicy>[0]["bundledTools"];
 }) {
+  // MCP tools still pass through the final runtime policy so model/channel
+  // restrictions match the tools actually available during an agent turn.
   return applyFinalEffectiveToolPolicy({
     bundledTools: params.mcpTools,
     config: params.context.cfg,
@@ -588,6 +594,8 @@ export const toolsEffectiveHandlers: GatewayRequestHandlers = {
 };
 
 export const testing = {
+  // Tests own cache lifecycle directly so they can assert stale/fresh behavior
+  // without relying on wall-clock sleeps.
   resetToolsEffectiveCacheForTest() {
     toolsEffectiveCache.clear();
     toolsEffectiveInflight.clear();

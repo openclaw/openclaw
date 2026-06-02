@@ -75,6 +75,7 @@ const agentsHandlerDeps = {
   isWorkspaceSetupCompleted,
 };
 
+/** Test-only dependency seam for safe workspace roots and onboarding-state probes. */
 export const testing = {
   setDepsForTests(
     overrides: Partial<{
@@ -181,6 +182,7 @@ async function statWorkspaceFileSafely(
     }
     try {
       // fs-safe roots can reject fixtures that are still valid regular files for listing metadata.
+      // This fallback is metadata-only; content reads still go through fs-safe.
       const stat = await fs.lstat(path.join(workspaceDir, name));
       return toWorkspaceFileMeta(stat);
     } catch {
@@ -361,6 +363,7 @@ async function writeWorkspaceFileOrRespond(params: {
   await fs.mkdir(params.workspaceDir, { recursive: true });
   try {
     const workspaceRoot = await agentsHandlerDeps.root(params.workspaceDir);
+    // Allowlisted filenames still go through fs-safe so links cannot escape the workspace.
     await workspaceRoot.write(params.name, params.content, { encoding: "utf8" });
   } catch (err) {
     if (err instanceof FsSafeError) {
@@ -659,6 +662,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
         workspaceDir && identityWorkspaceDir !== previousWorkspaceDir
           ? previousWorkspaceDir
           : undefined;
+      // Workspace moves may create a blank identity file; prefer the previous
+      // user-edited identity unless the destination already has content.
       const identityContent = await buildIdentityMarkdownOrRespondUnsafe({
         respond,
         workspaceDir: identityWorkspaceDir,
@@ -744,6 +749,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
       const deleteWorkspace = workspaceSharedWith.length === 0;
       const pathsToTrash = [deleteResult.agentDir, deleteResult.sessionsDir];
       if (deleteWorkspace) {
+        // Only trash workspace files and attestations when no other agent
+        // still resolves to the same workspace root.
         pathsToTrash.unshift(deleteResult.workspaceDir);
         for (const [index, attestationPath] of resolveWorkspaceAttestationPaths(
           deleteResult.workspaceDir,
@@ -803,6 +810,8 @@ export const agentsHandlers: GatewayRequestHandlers = {
     let safeRead: ReadResult;
     try {
       const workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+      // Reads reject hardlinks and symlinks, matching write safety for the
+      // UI-editable agent file allowlist.
       safeRead = await workspaceRoot.read(name, {
         hardlinks: "reject",
         nonBlockingRead: true,
@@ -855,6 +864,7 @@ export const agentsHandlers: GatewayRequestHandlers = {
     let workspaceRoot: WorkspaceRoot;
     try {
       workspaceRoot = await agentsHandlerDeps.root(workspaceDir);
+      // The name is allowlisted above; fs-safe still owns containment/link rejection.
       await workspaceRoot.write(name, content, { encoding: "utf8" });
     } catch (err) {
       if (!(err instanceof FsSafeError)) {

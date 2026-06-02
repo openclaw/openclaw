@@ -60,6 +60,8 @@ export async function createAgentConfigEntry(params: {
         identity: params.identity,
         agentDir: params.agentDir,
       });
+      // applyAgentConfig returns the normalized config shape; replace the draft
+      // so derived defaults and bindings stay aligned with persisted state.
       Object.assign(draft, latestNextConfig);
     },
   });
@@ -86,6 +88,7 @@ export async function updateAgentConfigEntry(params: {
         ...(params.model ? { model: params.model } : {}),
         ...(params.identity ? { identity: params.identity } : {}),
       });
+      // Callers pass only changed fields; applyAgentConfig owns merge semantics.
       Object.assign(draft, latestNextConfig);
     },
   });
@@ -106,6 +109,8 @@ export async function deleteAgentConfigEntry(params: { agentId: string }): Promi
       const agentDir = resolveAgentDir(draft, params.agentId);
       const sessionsDir = resolveSessionTranscriptsDirForAgent(params.agentId);
       const result = pruneAgentConfig(draft, params.agentId);
+      // Capture cleanup paths before pruning so filesystem cleanup happens only
+      // after the config mutation commits successfully.
       Object.assign(draft, result.config);
       return {
         workspaceDir,

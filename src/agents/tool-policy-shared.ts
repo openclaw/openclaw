@@ -16,13 +16,16 @@ const TOOL_NAME_ALIASES: Record<string, string> = {
   "apply-patch": "apply_patch",
 };
 
+/** Named tool groups expanded by allow/deny policy evaluation. */
 export const TOOL_GROUPS: Record<string, string[]> = { ...CORE_TOOL_GROUPS };
 
+/** Normalize configured tool names and known aliases into policy lookup keys. */
 export function normalizeToolName(name: string) {
   const normalized = normalizeLowercaseStringOrEmpty(name);
   return TOOL_NAME_ALIASES[normalized] ?? normalized;
 }
 
+/** Return whether a partial user prefix could resolve to an allowed normalized tool name. */
 export function couldNormalizeToolNamePrefixToAllowedTool(
   prefix: string,
   allowedToolNames: Set<string>,
@@ -67,6 +70,7 @@ export function couldNormalizeToolNamePrefixToAllowedTool(
   return false;
 }
 
+/** Normalize a policy list while dropping empty values. */
 export function normalizeToolList(list?: string[]) {
   if (!list) {
     return [];
@@ -74,6 +78,7 @@ export function normalizeToolList(list?: string[]) {
   return list.map(normalizeToolName).filter(Boolean);
 }
 
+/** Expand tool groups after normalization and return unique policy entries. */
 export function expandToolGroups(list?: string[]) {
   const normalized = normalizeToolList(list);
   const expanded: string[] = [];
@@ -88,6 +93,7 @@ export function expandToolGroups(list?: string[]) {
   return uniqueStrings(expanded);
 }
 
+/** Resolve a named built-in tool profile into its allow/deny policy. */
 export function resolveToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   return resolveCoreToolProfilePolicy(profile);
 }

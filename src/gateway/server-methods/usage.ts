@@ -750,6 +750,7 @@ function mergeDailyModelRows(
     : undefined;
 }
 
+/** Loads cost usage with bounded cache entries and in-flight refresh coalescing. */
 async function loadCostUsageSummaryCached(params: {
   startMs: number;
   endMs: number;
@@ -794,6 +795,8 @@ async function loadCostUsageSummaryCached(params: {
         })
   )
     .then((summary) => {
+      // A refreshing summary is useful to return, but its timestamp is not a
+      // freshness proof; leave updatedAt empty so the next caller can refresh.
       setCostUsageCache(cacheKey, {
         summary,
         updatedAt: summary.cacheStatus?.status === "refreshing" ? undefined : Date.now(),
@@ -874,6 +877,7 @@ async function loadAllAgentCostUsageSummary(params: {
   };
 }
 
+/** Merges per-agent cache statuses, preserving the least-fresh aggregate state. */
 function mergeUsageCacheStatus(
   target: UsageCacheStatus | undefined,
   source: UsageCacheStatus,

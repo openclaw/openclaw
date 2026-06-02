@@ -112,6 +112,10 @@ function isOpenClawCliImageCachePath(filePath: string): boolean {
   });
 }
 
+/**
+ * Merge inline attachment images, offloaded attachment images, and prompt-path
+ * images in the order the model should receive them.
+ */
 export function mergePromptAttachmentImages(params: {
   imageOrder?: PromptImageOrderEntry[];
   existingImages?: ImageContent[];
@@ -138,6 +142,8 @@ export function mergePromptAttachmentImages(params: {
         promptImages.push(image);
       }
     }
+    // Keep any images not represented in imageOrder instead of silently
+    // dropping caller-provided attachment blocks from older prompt formats.
     while (inlineIndex < existingImages.length) {
       promptImages.push(existingImages[inlineIndex++]);
     }
@@ -222,6 +228,8 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
 
   const lines = prompt.split(/\r?\n/);
   const uris: string[] = [];
+  // Offloaded attachment markers are appended after the prompt body; scanning
+  // backward prevents ordinary prompt mentions from being classified as attachments.
   for (let index = lines.length - 1; index >= 0 && uris.length < count; index--) {
     const line = lines[index]?.trim();
     if (!line || line.includes("\0")) {
@@ -241,6 +249,10 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
   return uris;
 }
 
+/**
+ * Partition detected prompt references into attachment-owned refs and genuine
+ * prompt text refs so attachments are loaded once but explicit prompt paths remain.
+ */
 export function splitPromptAndAttachmentRefs(params: {
   prompt: string;
   refs: DetectedImageRef[];
@@ -313,7 +325,6 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
   const refs: DetectedImageRef[] = [];
   const seen = new Set<string>();
 
-  // Helper to add a path ref
   const addPathRef = (raw: string) => {
     const trimmed = raw.trim();
     const dedupeKey = normalizeRefForDedupe(trimmed);
@@ -339,9 +350,8 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     refs.push({ raw: trimmed, type: "path", resolved });
   };
 
-  // Pattern for [media attached: path (type) | url] or [media attached N/M: path (type) | url] format
-  // Each bracket = ONE file. The | separates path from URL, not multiple files.
-  // Multi-file format uses separate brackets on separate lines.
+  // Each media-attached bracket represents one file; "|" separates the local
+  // path from its display URL, not multiple files.
   MEDIA_ATTACHED_PATTERN.lastIndex = 0;
   MESSAGE_IMAGE_PATTERN.lastIndex = 0;
   FILE_URL_PATTERN.lastIndex = 0;
@@ -370,10 +380,8 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
       continue;
     }
 
-    // Extract path before the (mime/type) or | delimiter
-    // Format is: path (type) | url  OR  just: path (type)
-    // Path may contain spaces (e.g., "ChatGPT Image Apr 21.png")
-    // Use non-greedy .+? to stop at first image extension
+    // Attachment paths can contain spaces, so the regex stops at the first
+    // image extension before optional mime/display-url metadata.
     const pathMatch = content.match(MEDIA_ATTACHED_PATH_PATTERN);
     if (pathMatch?.[1]) {
       addPathRef(pathMatch[1].trim());
@@ -390,7 +398,8 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
 
   // Remote HTTP(S) URLs are intentionally ignored. Native image injection is local-only.
 
-  // Pattern for file:// URLs - treat as paths since loadWebMedia handles them
+  // Treat file URLs as paths after safe URL decoding so local-root checks see
+  // the same filesystem form as direct path references.
   while ((match = FILE_URL_PATTERN.exec(prompt)) !== null) {
     const raw = match[0];
     const dedupeKey = normalizeRefForDedupe(raw);
@@ -417,14 +426,9 @@ export function detectImageReferences(prompt: string): DetectedImageRef[] {
     }
   }
 
-  // Pattern for file paths (absolute, relative, or home)
-  // Matches:
-  // - /absolute/path/to/file.ext (including paths with special chars like Messages/Attachments)
-  // - ./relative/path.ext
-  // - ../parent/path.ext
-  // - ~/home/path.ext
+  // Scan direct paths last so structured attachment/message patterns get first
+  // chance to normalize and dedupe their refs.
   while ((match = PATH_PATTERN.exec(prompt)) !== null) {
-    // Use capture group 1 (the path without delimiter prefix); skip if undefined
     if (match[1]) {
       addPathRef(match[1]);
     }
@@ -500,8 +504,8 @@ export async function loadImageFromRef(
       return null;
     }
 
-    // EXIF orientation is already normalized by loadWebMedia -> resizeToJpeg
-    // Default to JPEG since optimization converts images to JPEG format
+    // loadWebMedia normalizes orientation via resizeToJpeg; defaulting to JPEG
+    // keeps metadata aligned with the optimized buffer.
     const mimeType = media.contentType ?? "image/jpeg";
     const data = media.buffer.toString("base64");
 

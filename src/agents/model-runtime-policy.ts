@@ -9,8 +9,11 @@ import { listAgentEntries, resolveSessionAgentIds } from "./agent-scope.js";
 export type ModelRuntimePolicySource = "model" | "provider";
 
 export type ResolvedModelRuntimePolicy = {
+  /** Runtime policy selected from the most specific model/provider config that applies. */
   policy?: AgentRuntimePolicyConfig;
+  /** Config layer that supplied the policy. */
   source?: ModelRuntimePolicySource;
+  /** Provider prefix matched from agent model maps when the caller provider was empty. */
   matchedProvider?: string;
 };
 
@@ -22,6 +25,7 @@ type AgentModelRuntimePolicyMatch = {
 };
 
 type AgentModelRuntimePolicyResolution = ResolvedModelRuntimePolicy & {
+  /** Multiple provider-prefixed bare-model matches exist, so selecting either would be unsafe. */
   ambiguous?: true;
 };
 
@@ -62,6 +66,7 @@ function normalizeModelIdForProvider(
   if (slash <= 0) {
     return trimmed;
   }
+  // Provider-qualified model ids only match when their prefix agrees with the caller provider.
   const modelProvider = normalizeProviderId(trimmed.slice(0, slash));
   const expectedProvider = normalizeProviderId(provider ?? "");
   if (expectedProvider && modelProvider !== expectedProvider) {
@@ -92,6 +97,7 @@ function resolvePolicyMatch(
   if (!first) {
     return {};
   }
+  // Empty caller providers can match provider-prefixed bare model entries; fail closed on conflicts.
   if (!callerProvider && matches.some((match) => match.provider !== first.provider)) {
     return { ambiguous: true };
   }
@@ -127,6 +133,7 @@ function modelEntryMatchKind(params: {
   if (!providerMatchesCaller(parsed.provider, callerProvider)) {
     return "none";
   }
+  // Provider wildcards are less specific than exact model entries but beat provider defaults.
   if (parsed.modelId === params.modelId) {
     return "exact";
   }
@@ -185,6 +192,7 @@ function resolveAgentModelEntryRuntimePolicy(params: {
     params.config.agents?.defaults?.models,
   ];
   const callerProvider = normalizeProviderId(params.provider ?? "");
+  // Agent-specific maps have precedence; defaults are consulted only when the scope has no match.
   for (const models of modelMaps) {
     const scopeMatches: AgentModelRuntimePolicyMatch[] = [];
     for (const [key, entry] of Object.entries(models ?? {})) {
@@ -233,6 +241,7 @@ export function resolveModelRuntimePolicy(params: {
     }
   }
 
+  // Precedence: agent exact > provider model exact > agent provider wildcard > provider default.
   const agentModelPolicy = resolveAgentModelEntryRuntimePolicy({ ...params, matchKind: "exact" });
   if (agentModelPolicy.ambiguous) {
     return {};

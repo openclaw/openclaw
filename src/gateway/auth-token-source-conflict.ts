@@ -14,6 +14,7 @@ export type GatewayAuthTokenSourceConflict = {
   diagnostic: string;
 };
 
+/** Detect local shell tokens that can override a different configured gateway token. */
 export function resolveGatewayAuthTokenSourceConflict(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;

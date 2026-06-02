@@ -42,6 +42,7 @@ const DETAIL_LABEL_OVERRIDES: Record<string, string> = {
 };
 const MAX_DETAIL_ENTRIES = 8;
 
+/** Resolve configured display metadata plus argument-derived verb/detail text for a tool call. */
 export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
@@ -69,6 +70,7 @@ export function resolveToolDisplay(params: {
   let { detail } = toolDisplayParts;
 
   if (detail) {
+    // Display summaries should stay stable across machines while still hinting at user paths.
     detail = shortenHomeInString(detail);
   }
 
@@ -82,11 +84,13 @@ export function resolveToolDisplay(params: {
   };
 }
 
+/** Redact and normalize optional tool detail before it reaches chat/channel renderers. */
 export function formatToolDetail(display: ToolDisplay): string | undefined {
   const detailRaw = display.detail ? redactToolDetail(display.detail) : undefined;
   return formatToolDetailText(detailRaw);
 }
 
+/** Format the compact emoji/title/detail string used by tool progress surfaces. */
 export function formatToolSummary(display: ToolDisplay): string {
   const detail = formatToolDetail(display);
   if (detail && (display.name === "bash" || display.name === "exec")) {

@@ -95,6 +95,11 @@ type AttemptSpawnWorkspaceHoisted = {
   sessionManager: SessionManagerMocks;
 };
 
+/**
+ * Default subscription double used by runner tests that need a complete
+ * embedded-session surface without opting into delivery, compaction, or tool
+ * lifecycle side effects.
+ */
 export function createSubscriptionMock(): SubscriptionMock {
   return {
     assistantTexts: [] as string[],
@@ -237,6 +242,10 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   };
 });
 
+/**
+ * Expose Vitest-hoisted doubles so tests can tune the embedded runner boundary
+ * before the cached attempt module is imported.
+ */
 export function getHoisted(): AttemptSpawnWorkspaceHoisted {
   return hoisted;
 }
@@ -842,6 +851,10 @@ vi.mock("./history-image-prune.js", () => ({
   pruneProcessedHistoryImages: () => null,
 }));
 
+/**
+ * Minimal mutable subset of the real AgentSession that runner tests can safely
+ * mutate while still exercising prompt, custom-message, and system-prompt paths.
+ */
 export type MutableSession = {
   sessionId: string;
   messages: unknown[];
@@ -905,6 +918,8 @@ let runEmbeddedAttemptPromise:
 const ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER = "./attempt.ts?spawn-workspace-test";
 
 async function loadRunEmbeddedAttempt() {
+  // Cache the query-suffixed import so every test shares the same module graph
+  // that was initialized with the hoisted mocks above.
   runEmbeddedAttemptPromise ??= (
     import(ATTEMPT_SPAWN_WORKSPACE_TEST_SPECIFIER) as Promise<typeof import("./attempt.js")>
   ).then((mod) => mod.runEmbeddedAttempt);
@@ -915,6 +930,11 @@ export async function preloadRunEmbeddedAttemptForTests(): Promise<void> {
   await loadRunEmbeddedAttempt();
 }
 
+/**
+ * Reset all shared runner doubles to the production-like defaults expected by
+ * the spawn-workspace/context-engine tests. Call this from beforeEach after any
+ * test-specific mock mutation.
+ */
 export function resetEmbeddedAttemptHarness(
   params: {
     includeSpawnSubagent?: boolean;
@@ -1014,6 +1034,10 @@ export function resetEmbeddedAttemptHarness(
   }
 }
 
+/**
+ * Remove temp paths in LIFO order so nested test resources disappear before
+ * their parent workspaces.
+ */
 export async function cleanupTempPaths(tempPaths: string[]) {
   while (tempPaths.length > 0) {
     const target = tempPaths.pop();
@@ -1023,6 +1047,10 @@ export async function cleanupTempPaths(tempPaths: string[]) {
   }
 }
 
+/**
+ * Build the minimal mutable session shape that full-runner tests need without
+ * importing the real session runtime.
+ */
 export function createDefaultEmbeddedSession(params?: {
   initialMessages?: unknown[];
   prompt?: (
@@ -1111,6 +1139,10 @@ export function createDefaultEmbeddedSession(params?: {
   return session;
 }
 
+/**
+ * Pair of context-engine spies for tests that only need bootstrap/assemble
+ * forwarding proof and not maintenance, ingest, or compaction behavior.
+ */
 export function createContextEngineBootstrapAndAssemble() {
   return {
     bootstrap: vi.fn(async (_params: { sessionKey?: string }) => ({ bootstrapped: true })),
@@ -1123,6 +1155,9 @@ export function createContextEngineBootstrapAndAssemble() {
   };
 }
 
+/**
+ * Keep session-key forwarding assertions consistent across context-engine tests.
+ */
 export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining({ sessionKey }));
 }
@@ -1139,6 +1174,10 @@ const testAuthStorage = {
   getApiKey: async () => undefined,
 };
 
+/**
+ * Run a real embedded attempt against an injected context engine while keeping
+ * workspace/session/auth/runtime dependencies mocked at the runner boundary.
+ */
 export async function createContextEngineAttemptRunner(params: {
   contextEngine: {
     bootstrap?: (params: {

@@ -30,6 +30,8 @@ export function startGatewayEventSubscriptions(params: {
     ReturnType<typeof import("./server-chat.js").createAgentEventHandler>
   > | null = null;
   const getAgentEventHandler = () => {
+    // Agent-event handling pulls in chat/session-key code; keep it lazy so gateway startup can
+    // publish readiness before loading the heavier streaming pipeline.
     agentEventHandlerPromise ??= Promise.all([
       import("./server-chat.js"),
       import("./server-session-key.js"),
@@ -68,6 +70,8 @@ export function startGatewayEventSubscriptions(params: {
   let sessionEventsModulePromise: Promise<typeof import("./server-session-events.js")> | null =
     null;
   const getSessionEventsModule = () => {
+    // Transcript/lifecycle broadcasts are cold for minimal gateways and tests; one shared import
+    // promise also keeps concurrent first events from building duplicate handlers.
     sessionEventsModulePromise ??= import("./server-session-events.js");
     return sessionEventsModulePromise;
   };

@@ -9,6 +9,7 @@ import {
 type GatewayAuthTokenResolutionSource = "explicit" | "config" | "secretRef" | "env";
 type GatewayAuthTokenEnvFallback = "never" | "no-secret-ref" | "always";
 
+/** Resolve the local gateway token while reporting whether a secret ref was configured. */
 export async function resolveGatewayAuthToken(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -57,6 +58,8 @@ export async function resolveGatewayAuthToken(params: {
     return { secretRefConfigured: false };
   }
 
+  // Secret refs are canonical when configured; env fallback is only allowed by
+  // callers that can tolerate legacy shell-token behavior.
   const resolved = await resolveConfiguredSecretInputString({
     config: params.cfg,
     env: params.env,

@@ -90,6 +90,7 @@ function resolveProviderRuntimeHandleForPlugins(params: {
   });
 }
 
+/** Build the channel-delivery portion of a runtime plan without forcing full plan creation. */
 export function buildAgentRuntimeDeliveryPlan(
   params: BuildAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
@@ -131,12 +132,14 @@ export function buildAgentRuntimeDeliveryPlan(
   };
 }
 
+/** Build the provider-result classification hooks shared by all runtime plans. */
 export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
   return {
     classifyRunResult: classifyEmbeddedAgentRunResultForModelFallback,
   };
 }
 
+/** Build the provider/model runtime plan once so hot paths reuse resolved plugin/auth/tool state. */
 export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): AgentRuntimePlan {
   const config = asOpenClawConfig(params.config);
   const model = asProviderRuntimeModel(params.model);
@@ -144,6 +147,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   const transport = params.resolvedTransport;
   const toolPlanningConfig = config ? projectConfigOntoRuntimeSourceSnapshot(config) : undefined;
   let toolPlanningMetadataSnapshot: PluginMetadataSnapshot | undefined;
+  /** Load plugin metadata lazily because most runtime turns do not need tool-planning catalogs. */
   const loadToolPlanningMetadataSnapshot = () => {
     toolPlanningMetadataSnapshot ??= loadManifestMetadataSnapshot({
       config: toolPlanningConfig,

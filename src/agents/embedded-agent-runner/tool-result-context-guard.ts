@@ -50,6 +50,7 @@ type MidTurnPrecheckOptions = {
 
 export { CONTEXT_LIMIT_TRUNCATION_NOTICE, formatContextLimitTruncationNotice };
 
+/** Attach transcript-only prompt text so context-engine ingestion sees the full user prompt. */
 export function markTranscriptPromptText(message: AgentMessage, text: string): void {
   Object.defineProperty(message, TRANSCRIPT_PROMPT_TEXT_KEY, {
     configurable: true,
@@ -194,6 +195,7 @@ function truncateToolResultToChars(
 
   const rawText = getToolResultText(msg);
   if (!rawText) {
+    // Non-text tool outputs are collapsed to a notice when their estimated cost alone is too high.
     const omittedChars = Math.max(
       1,
       estimateBudgetToTextBudget(Math.max(estimatedChars - maxChars, 1)),
@@ -215,6 +217,7 @@ function truncateToolResultToChars(
 }
 
 function cloneMessagesForGuard(messages: AgentMessage[]): AgentMessage[] {
+  // Preserve caller-visible history; only the provider-bound context view is truncated.
   return messages.map(
     (msg) => ({ ...(msg as unknown as Record<string, unknown>) }) as unknown as AgentMessage,
   );
@@ -263,6 +266,7 @@ function applyMessageMutationInPlace(
   }
   Object.assign(targetRecord, sourceRecord);
   if (cache) {
+    // The object identity stays stable, so cached estimates must be invalidated manually.
     invalidateMessageCharsCacheEntry(cache, target);
   }
 }
@@ -360,6 +364,7 @@ export function installContextEngineLoopHook(params: {
             .slice(0, checkedPrefixLength)
             .some((message, index) => message !== lastSourceMessages?.[index])));
     if (sourceHistoryChanged) {
+      // A compaction/rewrite reset invalidates the previous fence and assembled view.
       lastSeenLength = null;
       lastAssembledView = null;
     }
@@ -430,6 +435,7 @@ export function installContextEngineLoopHook(params: {
         Array.isArray(assembled.messages) &&
         assembled.messages !== providerMessages
       ) {
+        // Cache the compacted view so repeated guard calls without new messages stay stable.
         lastAssembledView = assembled.messages;
         return assembled.messages;
       }
@@ -450,6 +456,7 @@ export function installContextEngineLoopHook(params: {
   };
 }
 
+/** Install a provider-context guard that truncates oversized tool results before model calls. */
 export function installToolResultContextGuard(params: {
   agent: GuardableAgent;
   contextWindowTokens: number;

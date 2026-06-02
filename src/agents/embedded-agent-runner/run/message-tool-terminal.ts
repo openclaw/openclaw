@@ -5,6 +5,8 @@ import type { AfterToolCallContext, AfterToolCallResult, Agent } from "../../run
 import { normalizeToolName } from "../../tool-policy.js";
 
 const MESSAGE_TOOL_NAME = "message";
+// Explicit route args mean the message tool targeted a different destination;
+// source-reply termination is only safe for implicit replies to the active turn.
 const EXPLICIT_MESSAGE_ROUTE_KEYS = ["channel", "target", "to", "channelId", "provider"];
 const DRY_RUN_DELIVERY_STATUS = "dry_run";
 const SENT_DELIVERY_STATUS = "sent";
@@ -69,6 +71,11 @@ function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
   );
 }
 
+/**
+ * Returns true when a nested tool/hook envelope proves this was only a preview.
+ * Message adapters can report dry-run status in raw results, detail payloads, or
+ * JSON text blocks, so this scan intentionally mirrors delivered-message parsing.
+ */
 function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
   if (!value || typeof value !== "object" || depth > 4) {
     return false;
@@ -103,11 +110,18 @@ function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
     }
   }
 
+  // Delivery adapters may wrap status in provider-specific result/detail
+  // envelopes; bound recursion so malformed tool output cannot hang the hook.
   return RESULT_ENVELOPE_KEYS.some((key) =>
     deliveryEnvelopeIndicatesDryRun(record[key], depth + 1),
   );
 }
 
+/**
+ * Returns true when a nested tool/hook envelope contains durable delivery
+ * evidence. Status alone is accepted only for the canonical `sent` value;
+ * provider-specific receipts must expose a message id.
+ */
 function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean {
   if (!value || typeof value !== "object" || depth > 4) {
     return false;
@@ -142,11 +156,19 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
     }
   }
 
+  // Mirror the dry-run scan shape so terminal detection treats hook rewrites
+  // and raw tool results consistently.
   return RESULT_ENVELOPE_KEYS.some((key) =>
     deliveryEnvelopeIndicatesDelivered(record[key], depth + 1),
   );
 }
 
+/**
+ * Returns true when message-tool-only delivery already sent the final reply.
+ * This is intentionally stricter than "message tool succeeded": explicit
+ * routes, dry runs, failed results, and suppressed sends without delivery proof
+ * must leave the model turn open.
+ */
 export function shouldTerminateAfterMessageToolOnlySend(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   context: AfterToolCallContext;
@@ -167,6 +189,8 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {
   if (isError || isToolResultError(params.context.result)) {
     return false;
   }
+  // Dry-run previews can look structurally successful, but they did not deliver
+  // a channel reply and must not terminate the assistant turn.
   if (
     args.dryRun === true ||
     deliveryEnvelopeIndicatesDryRun(params.context.result) ||
@@ -183,6 +207,10 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {
   return true;
 }
 
+/**
+ * Installs an afterToolCall hook that terminates message-tool-only delivered
+ * replies while preserving any existing hook rewrite output.
+ */
 export function installMessageToolOnlyTerminalHook(params: {
   agent: Agent;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

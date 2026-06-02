@@ -20,6 +20,7 @@ export class HandshakeAuthLogLimiter {
     this.maxEntries = resolveIntegerOption(options?.maxEntries, 256, { min: 1 });
   }
 
+  /** Records one handshake-auth failure key and decides whether this attempt should be logged. */
   register(key: string, nowMs = Date.now()): HandshakeAuthLogDecision {
     const entry = this.entries.get(key);
     if (!entry) {
@@ -48,11 +49,13 @@ export class HandshakeAuthLogLimiter {
     }
     const oldestKey = this.entries.keys().next().value;
     if (oldestKey !== undefined) {
+      // Map insertion order gives a cheap bounded cache; stale keys can re-log once evicted.
       this.entries.delete(oldestKey);
     }
   }
 }
 
+/** Builds the suppression key for repeated missing-credential handshake failures. */
 export function buildHandshakeAuthLogKey(params: {
   reason?: string;
   remoteAddr?: string;
@@ -69,6 +72,7 @@ export function buildHandshakeAuthLogKey(params: {
   ].join("|");
 }
 
+/** Returns true only for benign no-credential retries that should share log suppression. */
 export function shouldLimitMissingCredentialAuthLog(params: {
   reason?: string;
   authProvided?: string;

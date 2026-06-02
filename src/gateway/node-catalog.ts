@@ -48,10 +48,12 @@ type KnownNodeCatalog = {
   entriesById: Map<string, KnownNodeEntry>;
 };
 
+/** Normalizes node surfaces from live and durable sources into stable sorted lists. */
 function uniqueSortedStrings(...items: Array<readonly unknown[] | undefined>): string[] {
   return normalizeSortedUniqueTrimmedStringList(items.flatMap((item) => item ?? []));
 }
 
+/** Projects paired-device records into the node catalog only after node-role proof. */
 function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSource {
   return {
     nodeId: entry.deviceId,
@@ -66,6 +68,7 @@ function buildDevicePairingSource(entry: PairedDevice): KnownNodeDevicePairingSo
   };
 }
 
+/** Projects approved node pairing records into the durable catalog source shape. */
 function buildApprovedNodeSource(entry: NodePairingPairedNode): KnownNodeApprovedSource {
   return {
     nodeId: entry.nodeId,
@@ -92,6 +95,8 @@ function resolveEffectiveLastSeen(params: {
   devicePairing?: KnownNodeDevicePairingSource;
   nodePairing?: KnownNodeApprovedSource;
 }): { lastSeenAtMs?: number; lastSeenReason?: string } {
+  // Live connections are one source of last-seen data, but offline lists should
+  // use the newest durable signal from node-pairing or device-pairing metadata.
   const candidates: Array<{ atMs: number; reason?: string }> = [
     params.live?.connectedAtMs ? { atMs: params.live.connectedAtMs, reason: "connect" } : undefined,
     params.nodePairing?.lastSeenAtMs
@@ -119,6 +124,7 @@ function resolveEffectiveLastSeen(params: {
   };
 }
 
+/** Merges live session data over durable node/device pairing metadata. */
 function buildEffectiveKnownNode(entry: {
   nodeId: string;
   devicePairing?: KnownNodeDevicePairingSource;
@@ -139,6 +145,8 @@ function buildEffectiveKnownNode(entry: {
     deviceFamily: live?.deviceFamily ?? nodePairing?.deviceFamily,
     modelIdentifier: live?.modelIdentifier ?? nodePairing?.modelIdentifier,
     remoteIp: live?.remoteIp ?? nodePairing?.remoteIp ?? devicePairing?.remoteIp,
+    // Connected nodes expose their current effective surface; offline nodes
+    // fall back to the approved durable pairing surface.
     caps: live ? uniqueSortedStrings(live.caps) : uniqueSortedStrings(nodePairing?.caps),
     commands: live
       ? uniqueSortedStrings(live.commands)
@@ -169,11 +177,14 @@ function compareKnownNodes(left: NodeListNode, right: NodeListNode): number {
   return left.nodeId.localeCompare(right.nodeId);
 }
 
+/** Builds a lookup catalog across paired devices, approved nodes, and live sessions. */
 export function createKnownNodeCatalog(params: {
   pairedDevices: readonly PairedDevice[];
   pairedNodes?: readonly NodePairingPairedNode[];
   connectedNodes: readonly NodeSession[];
 }): KnownNodeCatalog {
+  // Device pairings are included only when the current effective role includes
+  // node, so revoked historical node tokens do not keep stale nodes visible.
   const devicePairingById = new Map(
     params.pairedDevices
       .filter((entry) => hasEffectivePairedDeviceRole(entry, "node"))
@@ -209,12 +220,14 @@ export function createKnownNodeCatalog(params: {
   return { entriesById };
 }
 
+/** Lists known nodes with connected nodes first, then stable display-name ordering. */
 export function listKnownNodes(catalog: KnownNodeCatalog): NodeListNode[] {
   return [...catalog.entriesById.values()]
     .map((entry) => entry.effective)
     .toSorted(compareKnownNodes);
 }
 
+/** Returns the merged catalog entry plus its source records for diagnostics/tests. */
 export function getKnownNodeEntry(
   catalog: KnownNodeCatalog,
   nodeId: string,
@@ -222,6 +235,7 @@ export function getKnownNodeEntry(
   return catalog.entriesById.get(nodeId) ?? null;
 }
 
+/** Looks up the effective node-list projection for one node id. */
 export function getKnownNode(catalog: KnownNodeCatalog, nodeId: string): NodeListNode | null {
   return getKnownNodeEntry(catalog, nodeId)?.effective ?? null;
 }

@@ -7,6 +7,7 @@ import type { ResolvedGatewayAuth } from "../../auth.js";
 
 export type AuthProvidedKind = "token" | "bootstrap-token" | "device-token" | "password" | "none";
 
+/** Formats client-facing WebSocket auth failures with client-specific remediation hints. */
 export function formatGatewayAuthFailureMessage(params: {
   authMode: ResolvedGatewayAuth["mode"];
   authProvided: AuthProvidedKind;

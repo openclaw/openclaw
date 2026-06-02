@@ -43,6 +43,7 @@ function withDiagnostics<T extends object>(params: {
     : params.result;
 }
 
+/** Resolve auth for non-interactive probes, preserving diagnostics for unresolved secret refs. */
 export async function resolveGatewayProbeSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -141,6 +142,7 @@ export async function resolveGatewayProbeSurfaceAuth(params: {
   });
 }
 
+/** Resolve auth for interactive clients, including explicit overrides and actionable failures. */
 export async function resolveGatewayInteractiveSurfaceAuth(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -271,6 +273,8 @@ export async function resolveGatewayInteractiveSurfaceAuth(params: {
 
   const shouldUsePassword =
     Boolean(explicitPassword ?? envPassword) || (hasConfiguredPassword && !hasConfiguredToken);
+  // Auto mode chooses password only when the caller/config clearly supplies
+  // one; otherwise token remains the local interactive default.
   if (shouldUsePassword) {
     const password = await resolvePassword();
     return {

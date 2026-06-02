@@ -83,6 +83,8 @@ function dispatchNodeAgentCommand(
 }
 
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
+  // Prefer provider ids before text fingerprints; streaming voice providers can
+  // resend identical partial text with stronger per-call sequence metadata.
   const eventId =
     normalizeOptionalString(obj.eventId) ??
     normalizeOptionalString(obj.providerEventId) ??
@@ -131,6 +133,8 @@ function shouldDropDuplicateVoiceTranscript(params: {
   });
 
   if (recentVoiceTranscripts.size > MAX_RECENT_VOICE_TRANSCRIPTS) {
+    // Prune expired entries first, then trim insertion-order overflow to keep
+    // duplicate suppression bounded under noisy transcript streams.
     const cutoff = params.now - VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS * 2;
     for (const [key, value] of recentVoiceTranscripts) {
       if (value.ts < cutoff) {
@@ -214,12 +218,14 @@ function pruneBoundedTimestampMap(
   }
 }
 
+/** Clears process-local node event dedupe state for isolated gateway tests. */
 export function resetNodeEventDeduplicationForTests() {
   recentVoiceTranscripts.clear();
   recentExecFinishedRuns.clear();
   recentNodePresencePersistAt.clear();
 }
 
+/** Exposes node presence throttle-map size so tests can prove bounded pruning. */
 export function getRecentNodePresencePersistCountForTests() {
   return recentNodePresencePersistAt.size;
 }
@@ -297,6 +303,8 @@ function queueSessionStoreTouch(params: {
   sessionId: string;
   now: number;
 }) {
+  // Voice transcripts should not block the node event frame on session metadata
+  // persistence; failures are logged while the agent turn continues.
   void touchSessionStore({
     cfg: params.cfg,
     sessionKey: params.sessionKey,
@@ -707,6 +715,8 @@ export const handleNodeEvent = async (
           terminal: evt.event === "exec.finished" || evt.event === "exec.denied",
         })
       ) {
+        // Exec lifecycle events must correspond to a gateway-issued system.run;
+        // unmatched events are reported as handled=false instead of enqueued.
         return {
           ok: true,
           event: evt.event,
@@ -862,6 +872,8 @@ export const handleNodeEvent = async (
 
       const lastSeenReason = normalizeNodePresenceAliveReason(obj.trigger);
       try {
+        // Persist both node-pairing and device-pairing last-seen metadata so
+        // offline catalog/listing views can use either durable source.
         const [nodeUpdated, deviceUpdated] = await Promise.all([
           updatePairedNodeMetadata(nodeId, {
             lastSeenAtMs: now,

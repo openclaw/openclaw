@@ -40,6 +40,8 @@ export type LlmBoundaryTokenPressure = {
   renderedChars?: number;
 };
 
+// These estimates intentionally favor safety over tokenizer precision. The
+// precheck only needs route selection before paying for a doomed LLM call.
 function estimateStringTokenPressure(text: string, charsPerToken = ESTIMATED_CHARS_PER_TOKEN) {
   return Math.ceil(estimateStringChars(text) / charsPerToken);
 }
@@ -54,6 +56,8 @@ function estimateJsonPayloadTokenPressure(
       ? Math.ceil(estimateStringChars(serialized) / charsPerToken)
       : 1;
   } catch {
+    // Hostile/cyclic payloads still consume prompt space; keep a bounded
+    // estimate so route selection can continue instead of skipping precheck.
     return 256;
   }
 }
@@ -184,6 +188,7 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   return tokens;
 }
 
+/** Estimates the full rendered LLM boundary, including transcript, system prompt, and prompt. */
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
@@ -202,6 +207,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((historyTokens + systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+/** Estimates only prompt-side rendered content when transcript tokens are known elsewhere. */
 export function estimateRenderedLlmBoundaryTokenPressure(params: {
   systemPrompt?: string;
   prompt: string;
@@ -215,6 +221,7 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+/** Back-compatible name for the transcript-inclusive pre-prompt token estimate. */
 export function estimatePrePromptTokens(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
@@ -239,6 +246,7 @@ function normalizeLlmBoundaryTokenPressure(
   };
 }
 
+/** Routes a prompt through fit, compaction, truncation, or mixed preflight handling. */
 export function shouldPreemptivelyCompactBeforePrompt(params: {
   messages: AgentMessage[];
   unwindowedMessages?: AgentMessage[];
@@ -268,6 +276,8 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
       prompt: params.prompt,
     });
     if (unwindowedEstimatedPromptTokens > estimatedPromptTokens) {
+      // Windowed messages can fit while the durable transcript still overflows;
+      // route from the larger view so the next persistence boundary is safe too.
       estimatedPromptTokens = unwindowedEstimatedPromptTokens;
       messagesForPressure = params.unwindowedMessages;
       pressureSource = "unwindowed_transcript_estimate";
@@ -303,6 +313,8 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     if (toolResultReducibleChars <= 0) {
       route = "compact_only";
     } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
+      // Leave a buffer so a truncation-only route still has room for boundary
+      // overhead, summaries, and estimator drift after tool-result reduction.
       route = "truncate_tool_results_only";
     } else {
       route = "compact_then_truncate";
@@ -320,6 +332,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   };
 }
 
+/** Formats one-line diagnostics for route decisions before prompt submission. */
 export function formatPrePromptPrecheckLog(params: {
   result: PreemptiveCompactionDecision;
   sessionKey?: string;
@@ -352,6 +365,7 @@ export function formatPrePromptPrecheckLog(params: {
   );
 }
 
+/** Builds the durable session context-budget snapshot shown after a precheck. */
 export function buildPrePromptContextBudgetStatus(params: {
   result: PreemptiveCompactionDecision;
   provider: string;

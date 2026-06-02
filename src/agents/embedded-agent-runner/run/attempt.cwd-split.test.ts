@@ -46,6 +46,8 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
     const bootstrapCall = hoisted.resolveBootstrapFilesForRunMock.mock.calls[0]?.[0] as
       | { agentId?: string; workspaceDir?: string }
       | undefined;
+    // Bootstrap/session ownership stays rooted in the agent workspace even when
+    // runtime tools execute from a task-specific cwd.
     expect(bootstrapCall?.workspaceDir).not.toBe("/tmp/task-repo");
     expect(bootstrapCall?.agentId).toBe("main");
 

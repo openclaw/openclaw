@@ -27,12 +27,14 @@ export class UnauthorizedFloodGuard {
     this.logEvery = resolveIntegerOption(options?.logEvery, DEFAULT_LOG_EVERY, { min: 1 });
   }
 
+  /** Records one unauthorized response and decides whether to log or close the socket. */
   registerUnauthorized(): UnauthorizedFloodDecision {
     this.count += 1;
     const shouldClose = this.count > this.closeAfter;
     const shouldLog = this.count === 1 || this.count % this.logEvery === 0 || shouldClose;
 
     if (!shouldLog) {
+      // Keep the next logged line useful without logging every repeated unauthorized RPC.
       this.suppressedSinceLastLog += 1;
       return {
         shouldClose,
@@ -52,12 +54,14 @@ export class UnauthorizedFloodGuard {
     };
   }
 
+  /** Resets flood counters after successful authorization or connection teardown. */
   reset(): void {
     this.count = 0;
     this.suppressedSinceLastLog = 0;
   }
 }
 
+/** Detects repeated unauthorized-role RPCs that should feed the flood guard. */
 export function isUnauthorizedRoleError(error?: ErrorShape): boolean {
   if (!error) {
     return false;

@@ -190,6 +190,9 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      // Undefined/object results are shorthand for successful plugin actions;
+      // explicit `ok: false` stays in-band so callers can distinguish plugin
+      // refusal from Gateway transport/protocol failure.
       const wireResult = result?.ok === false ? result : { ok: true as const, ...result };
       if (!validatePluginsSessionActionResult(wireResult)) {
         respond(
@@ -202,6 +205,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      // Schema validation proves the top-level result shape; this second pass
+      // rejects non-JSON extension payloads before they cross process/UI bounds.
       const jsonFieldError = result ? validatePluginSessionActionJsonFields(result) : undefined;
       if (jsonFieldError) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, jsonFieldError));

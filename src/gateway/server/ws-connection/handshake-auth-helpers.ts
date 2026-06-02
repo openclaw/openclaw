@@ -53,6 +53,7 @@ function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
   }
 }
 
+/** Resolves browser-origin hardening and rate-limit routing for one WebSocket handshake. */
 export function resolveHandshakeBrowserSecurityContext(params: {
   requestOrigin?: string;
   clientIp: string | undefined;
@@ -65,6 +66,8 @@ export function resolveHandshakeBrowserSecurityContext(params: {
   return {
     hasBrowserOriginHeader,
     enforceOriginCheckForAnyClient: hasBrowserOriginHeader,
+    // Browser-origin requests from loopback share a synthetic key per origin so localhost pages
+    // cannot bypass auth throttles by hiding behind 127.0.0.1.
     rateLimitClientIp:
       hasBrowserOriginHeader && isLoopbackAddress(params.clientIp)
         ? resolveBrowserOriginRateLimitKey(params.requestOrigin)
@@ -76,6 +79,7 @@ export function resolveHandshakeBrowserSecurityContext(params: {
   };
 }
 
+/** Returns true when a local reconnect can skip an explicit pairing prompt. */
 export function shouldAllowSilentLocalPairing(params: {
   locality: PairingLocalityKind;
   hasBrowserOriginHeader: boolean;
@@ -197,6 +201,7 @@ function isControlUiBrowserContainerLocalEquivalent(params: {
   );
 }
 
+/** Classifies a handshake into the locality bucket used by pairing and metadata policy. */
 export function resolvePairingLocality(params: {
   connectParams: ConnectParams;
   isLocalClient: boolean;
@@ -253,6 +258,7 @@ export function resolvePairingLocality(params: {
   return "remote";
 }
 
+/** Allows first-party local backend clients to avoid device pairing when auth/locality prove trust. */
 export function shouldSkipLocalBackendSelfPairing(params: {
   connectParams: ConnectParams;
   locality: PairingLocalityKind;
@@ -307,6 +313,7 @@ function buildUnauthorizedHandshakeContext(params: {
   };
 }
 
+/** Verifies device signatures against the current payload shape and the v2 compatibility shape. */
 export function resolveDeviceSignaturePayloadVersion(params: {
   device: {
     id: string;
@@ -339,6 +346,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
     return "v3";
   }
 
+  // v2 remains accepted for already-shipped clients that have not adopted platform/family fields.
   const payloadV2 = buildDeviceAuthPayload(basePayload);
   if (verifyDeviceSignature(params.device.publicKey, payloadV2, params.device.signature)) {
     return "v2";
@@ -360,6 +368,7 @@ function resolveAuthProvidedKind(
           : "none";
 }
 
+/** Builds structured retry guidance for clients after a failed WebSocket auth handshake. */
 export function resolveUnauthorizedHandshakeContext(params: {
   connectAuth: HandshakeConnectAuth | null | undefined;
   failedAuth: GatewayAuthResult;

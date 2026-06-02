@@ -25,6 +25,7 @@ import {
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Gateway RPC handlers for TTS status, synthesis, provider, and persona preferences. */
 export const ttsHandlers: GatewayRequestHandlers = {
   "tts.status": async ({ respond, context }) => {
     try {
@@ -34,6 +35,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const provider = getTtsProvider(config, prefsPath);
       const persona = getTtsPersona(config, prefsPath);
       const autoMode = resolveTtsAutoMode({ config, prefsPath });
+      // Fallback providers are filtered to configured providers so status does
+      // not suggest an automatic handoff that would fail at synthesis time.
       const fallbackProviders = resolveTtsProviderOrder(provider, cfg)
         .slice(1)
         .filter((candidate) => isTtsProviderConfigured(config, candidate, cfg));
@@ -73,6 +76,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
+      // Enable/disable writes only the prefs file; provider/persona config stays
+      // in the gateway config so environment-managed defaults remain intact.
       setTtsEnabled(prefsPath, true);
       respond(true, { enabled: true });
     } catch (err) {
@@ -84,6 +89,7 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
+      // Disable is a preference override, not a config rewrite.
       setTtsEnabled(prefsPath, false);
       respond(true, { enabled: false });
     } catch (err) {
@@ -165,6 +171,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
     try {
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
+      // Store the canonical provider id so aliases and case variants never leak
+      // into the user preference file.
       setTtsProvider(prefsPath, provider);
       respond(true, { provider });
     } catch (err) {
@@ -177,6 +185,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
       const active = getTtsPersona(config, prefsPath);
+      // Surface persona provider/fallback metadata for UI filtering without
+      // exposing the full configured voice/model payload.
       respond(true, {
         active: active?.id ?? null,
         personas: listTtsPersonas(config).map((persona) => ({
@@ -230,6 +240,8 @@ export const ttsHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       const config = resolveTtsConfig(cfg);
       const prefsPath = resolveTtsPrefsPath(config);
+      // Provider listing includes raw model/voice ids for picker UIs; configured
+      // is computed with resolved provider config and timeout defaults.
       respond(true, {
         providers: listSpeechProviders(cfg).map((provider) => ({
           id: provider.id,

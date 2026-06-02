@@ -30,6 +30,11 @@ import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+/**
+ * Narrow hook surface used while assembling a model prompt for one embedded run.
+ * Callers pass the host implementation in; this module owns ordering, fallback,
+ * and error isolation between the hook families.
+ */
 export type PromptBuildHookRunner = {
   hasHooks: (
     hookName:
@@ -93,6 +98,11 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
+/**
+ * Resolves all plugin-provided prompt additions for one attempt. Next-turn
+ * injections are drained once per run id so retry attempts see the same queued
+ * context instead of consuming an empty session store on the second pass.
+ */
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
@@ -182,6 +192,8 @@ export async function resolvePromptBuildHookResult(params: {
           })
       : undefined);
   return {
+    // Preserve legacy before_agent_start ordering as the fallback value, while
+    // allowing before_prompt_build to override the system prompt when present.
     systemPrompt: promptBuildResult?.systemPrompt ?? beforeAgentStartResult?.systemPrompt,
     prependContext: joinPresentTextSegments([
       queuedContext.prependContext,
@@ -208,6 +220,7 @@ export async function resolvePromptBuildHookResult(params: {
   };
 }
 
+/** Subagent and cron sessions use the compact prompt path; user-facing sessions keep full context. */
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
   if (!sessionKey) {
     return "full";
@@ -243,6 +256,10 @@ export function shouldWarnOnOrphanedUserRepair(
 
 export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
 
+/**
+ * Distinguishes an empty active prompt from a prompt that only became empty
+ * after historical images were pruned out of the visible turn payload.
+ */
 export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
@@ -321,6 +338,9 @@ function summarizeStructuredJsonString(value: string): string {
   return value;
 }
 
+// Structured prompt parts can contain nested media refs, circular objects, or
+// provider-specific payloads. Keep the fallback readable and bounded before it
+// is merged into the next prompt.
 function sanitizeStructuredJsonValue(
   value: unknown,
   depth = 0,
@@ -463,6 +483,11 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+/**
+ * Moves a trailing queued user message back into the active prompt. The leaf is
+ * always removed so replay does not resend the same user turn as both history
+ * and prompt text.
+ */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
@@ -483,6 +508,7 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   };
 }
 
+/** Resolves the effective filesystem policy for tools that run inside this attempt workspace. */
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
@@ -493,6 +519,7 @@ export function resolveAttemptFsWorkspaceOnly(params: {
   });
 }
 
+/** Inserts dynamic system additions after the cache boundary to preserve the cacheable prefix. */
 export function prependSystemPromptAddition(params: {
   systemPrompt: string;
   systemPromptAddition?: string;
@@ -500,10 +527,9 @@ export function prependSystemPromptAddition(params: {
   return prependSystemPromptAdditionAfterCacheBoundary(params);
 }
 
-// Per-turn media-generation task hints depend on live session state, so they must
-// be routed BELOW the system-prompt cache boundary (via prependSystemPromptAddition)
-// rather than placed in the static prepend slot — keeping them above the boundary
-// shifted the cacheable prefix turn-to-turn and broke prompt caching (#85203).
+// Per-turn media-generation task hints depend on live session state. Keep them
+// below the system-prompt cache boundary so the cacheable prefix stays stable
+// while delivery waits can still tell the model about active media tasks.
 export function resolveAttemptMediaTaskSystemPromptAddition(params: {
   sessionKey?: string;
   trigger?: EmbeddedRunAttemptParams["trigger"];
@@ -610,6 +636,7 @@ export function buildAfterTurnRuntimeContext(params: {
   };
 }
 
+/** Builds after-turn context when the caller only has provider usage metadata. */
 export function buildAfterTurnRuntimeContextFromUsage(
   params: Omit<Parameters<typeof buildAfterTurnRuntimeContext>[0], "currentTokenCount"> & {
     lastCallUsage?: NormalizedUsage;

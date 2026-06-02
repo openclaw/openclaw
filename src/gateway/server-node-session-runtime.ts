@@ -14,6 +14,8 @@ export function createGatewayNodeSessionRuntime(params: {
   const nodeSubscriptions = createNodeSubscriptionManager();
   const sessionEventSubscribers = createSessionEventSubscriberRegistry();
   const sessionMessageSubscribers = createSessionMessageSubscriberRegistry();
+  // Session/node fan-out reuses pre-serialized payloads from the subscription
+  // manager so each subscribed node receives identical event bytes.
   const nodeSendEvent = (opts: {
     nodeId: string;
     event: string;

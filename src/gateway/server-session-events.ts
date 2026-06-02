@@ -29,6 +29,8 @@ function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string
     const defaultAgentId = normalizeAgentId(resolveDefaultAgentId(getRuntimeConfig()));
     if (normalizedAgentId) {
       const scopedKey = `agent:${normalizeAgentId(normalizedAgentId)}:global`;
+      // Default-agent global subscribers may still be listening on the legacy unscoped key;
+      // non-default agents stay scoped so their transcript updates do not cross streams.
       return normalizeAgentId(normalizedAgentId) === defaultAgentId
         ? [scopedKey, sessionKey]
         : [scopedKey];
@@ -111,6 +113,7 @@ function buildGatewaySessionSnapshot(params: {
   };
 }
 
+/** Creates the serialized transcript-update broadcaster used by gateway runtime subscriptions. */
 export function createTranscriptUpdateBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
@@ -118,6 +121,8 @@ export function createTranscriptUpdateBroadcastHandler(params: {
 }) {
   let broadcastQueue = Promise.resolve();
   return (update: SessionTranscriptUpdate): void => {
+    // Transcript writes can arrive faster than snapshot/message-count reads; serialize them so
+    // clients observe message sequence and session metadata in the same order as persistence.
     broadcastQueue = broadcastQueue
       .then(() => handleTranscriptUpdateBroadcast(params, update))
       .catch(() => undefined);
@@ -149,6 +154,8 @@ async function handleTranscriptUpdateBroadcast(
     connIds.add(connId);
   }
   for (const broadcastKey of resolveSessionMessageBroadcastKeys(sessionKey, effectiveAgentId)) {
+    // Direct message subscribers get the same event as broad session-list subscribers, with
+    // de-duping by connection id when a client is subscribed through both paths.
     for (const connId of params.sessionMessageSubscribers.get(broadcastKey)) {
       connIds.add(connId);
     }
@@ -158,6 +165,8 @@ async function handleTranscriptUpdateBroadcast(
   }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   if (messageSeq === undefined) {
+    // Older transcript notifications may not carry a sequence; recover it from the persisted
+    // transcript count so late subscribers can order the pushed message deterministically.
     const { entry, storePath } = loadSessionEntry(sessionKey, { agentId: visibleAgentId });
     messageSeq = entry?.sessionId
       ? asPositiveSafeInteger(
@@ -215,6 +224,7 @@ async function handleTranscriptUpdateBroadcast(
   );
 }
 
+/** Creates the lifecycle broadcaster for session list/metadata changes. */
 export function createLifecycleEventBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;

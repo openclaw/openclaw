@@ -608,6 +608,8 @@ function shouldPreservePromptErrorAfterCleanupError(params: {
   promptError: unknown;
   cleanupError: unknown;
 }): boolean {
+  // A session takeover during cleanup is a secondary ownership signal; preserving
+  // the prompt failure keeps retry/failover logic focused on the real model error.
   return (
     Boolean(params.promptError) &&
     params.cleanupError instanceof EmbeddedAttemptSessionTakeoverError
@@ -767,6 +769,14 @@ function collectAttemptExplicitToolAllowlistSources(params: {
   ]);
 }
 
+/**
+ * Execute one embedded model attempt from workspace setup through prompt
+ * submission, transcript cleanup, diagnostics, and resource teardown.
+ *
+ * The outer run loop owns retry/failover; this function owns per-attempt state
+ * such as sandbox cwd resolution, session write-lock ownership, hook context,
+ * tool/runtime construction, and final payload derivation.
+ */
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {

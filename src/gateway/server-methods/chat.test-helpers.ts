@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 
+/** Create a minimal persisted transcript file for tests that need session-parent injection. */
 export function createTranscriptFixtureSync(params: {
   prefix: string;
   sessionId: string;

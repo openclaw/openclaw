@@ -81,6 +81,8 @@ type ModelCallObservationState = {
   lastStreamProgressAt?: number;
 };
 
+// Keep stream progress sparse: the activity clock refreshes on every chunk, but
+// diagnostic events are throttled so token streams do not flood observers.
 const MODEL_CALL_STREAM_PROGRESS_INTERVAL_MS = 30_000;
 const MODEL_CALL_STREAM_PROGRESS_REASON = "model_call:stream_progress";
 const MODEL_CALL_STREAM_RETURN_TIMEOUT_MS = 1000;
@@ -463,6 +465,8 @@ function withDiagnosticTraceparentHeader(
       assignRequestPayloadBytes(state, payload);
       return undefined;
     }
+    // Measure the payload that actually reaches the provider after any
+    // provider/runtime onPayload rewrite, not just the runner's original input.
     const result = originalOnPayload(payload, model);
     if (isPromiseLike(result)) {
       return result.then((replacement) => {
@@ -508,6 +512,8 @@ async function safeReturnIterator(iterator: AsyncIterator<unknown>): Promise<voi
   }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
+    // Do not let an SDK stream with a stuck async iterator.return() hold the
+    // model-call wrapper forever after consumers stop iterating early.
     await Promise.race([
       Promise.resolve(returnResult).catch(() => undefined),
       new Promise<void>((resolve) => {
@@ -553,6 +559,8 @@ async function* observeModelCallIterator<T>(
     throw err;
   } finally {
     if (!terminalEmitted) {
+      // Early consumer exit still counts as a completed observed call; the
+      // provider stream is closed best-effort first so resources can settle.
       await safeReturnIterator(iterator);
       emitModelCallCompleted(eventBase, startedAt, state);
     }
@@ -576,6 +584,8 @@ function observeModelCallStream<T extends AsyncIterable<unknown>>(
     hasNonConfigurableIterator = true;
   }
   if (hasNonConfigurableIterator) {
+    // Some SDK streams expose a non-configurable async iterator. Return a thin
+    // iterable facade instead of proxying so diagnostic observation still works.
     return {
       [Symbol.asyncIterator]: observedIterator,
     } as T;
@@ -611,6 +621,12 @@ function observeModelCallResult(
   return result;
 }
 
+/**
+ * Wraps a stream function with model.call diagnostic events and trace
+ * propagation. The wrapper preserves the provider's result shape while observing
+ * payload bytes, stream bytes, timing, errors, optional model content, and
+ * plugin model_call_started/model_call_ended hooks.
+ */
 export function wrapStreamFnWithDiagnosticModelCallEvents(
   streamFn: StreamFn,
   ctx: ModelCallDiagnosticContext,
@@ -628,6 +644,8 @@ export function wrapStreamFnWithDiagnosticModelCallEvents(
       modelContent,
       contentCapture: ctx.contentCapture,
     };
+    // Attach child trace context to provider requests so downstream HTTP/tooling
+    // can correlate stream activity with the model.call lifecycle events.
     const propagatedOptions = withDiagnosticTraceparentHeader(options, trace, state);
 
     try {

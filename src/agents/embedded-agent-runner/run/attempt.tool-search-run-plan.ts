@@ -16,6 +16,7 @@ export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
 
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
 
+/** Tool Search allowlist state split between visible prompt tools and replay-safe tools. */
 export type ToolSearchRunPlan = {
   visibleAllowedToolNames: Set<string>;
   replayAllowedToolNames: Set<string>;
@@ -23,6 +24,7 @@ export type ToolSearchRunPlan = {
   emptyAllowlistCallableNames: string[];
 };
 
+/** Build the callable names used to decide whether an explicit allowlist resolved to nothing. */
 export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   effectiveToolNames: string[];
   autoAddedToolSearchControlNames?: Set<string>;
@@ -32,6 +34,7 @@ export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
     ...params.effectiveToolNames.filter(
       (toolName) => !params.autoAddedToolSearchControlNames?.has(toolName),
     ),
+    // Cataloged tools are hidden behind Tool Search controls but still count as callable surface.
     ...Array.from(
       { length: params.toolSearchCatalogToolCount },
       (_, index) => `tool-search:${index}`,
@@ -39,6 +42,7 @@ export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   ];
 }
 
+/** Identify Tool Search controls added by policy rather than explicitly requested by the user. */
 export function buildAutoAddedToolSearchControlNamesForAllowlistCheck(params: {
   toolSearchControlsEnabled: boolean;
   explicitAllowlistSources: Array<{ entries: string[] }>;
@@ -95,6 +99,7 @@ export function buildToolSearchRunPlan(params: {
   if (params.controlsEnabled) {
     for (const controlName of params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES) {
       if (visibleAllowedToolNames.has(controlName)) {
+        // Replay must still accept visible control calls after compaction hides direct tools.
         replayAllowedToolNames.add(controlName);
       }
     }

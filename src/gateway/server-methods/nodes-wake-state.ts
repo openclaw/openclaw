@@ -16,9 +16,12 @@ type NodeWakeState = {
   inFlight?: Promise<NodeWakeAttempt>;
 };
 
+// Wake state is process-local coalescing only; durable APNs registration state
+// lives in infra/push-apns and is cleared independently on invalid responses.
 export const nodeWakeById = new Map<string, NodeWakeState>();
 export const nodeWakeNudgeById = new Map<string, number>();
 
+/** Clears wake throttles for a node after disconnect/registration lifecycle changes. */
 export function clearNodeWakeState(nodeId: string): void {
   nodeWakeById.delete(nodeId);
   nodeWakeNudgeById.delete(nodeId);

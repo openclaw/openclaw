@@ -87,6 +87,7 @@ export type SerializedEventPayload = {
   readonly [SERIALIZED_EVENT_PAYLOAD]: true;
 };
 
+/** Serializes once for fan-out paths that send the same payload to many node sockets. */
 export function serializeEventPayload(payload: unknown): SerializedEventPayload | null {
   if (payload === undefined) {
     return null;
@@ -162,6 +163,7 @@ export class NodeRegistry {
   private pendingInvokes = new Map<string, PendingInvoke>();
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
+  /** Registers the latest live session for a node id and preserves declared/effective surfaces. */
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
     const nodeId = connect.device?.id ?? connect.client.id;
@@ -225,6 +227,8 @@ export class NodeRegistry {
       return null;
     }
     this.nodesByConn.delete(connId);
+    // Only the current connection owns the node-id slot; stale disconnects must not
+    // remove a newer replacement session for the same node id.
     const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
     if (unregistersCurrentNode) {
       this.nodesById.delete(nodeId);
@@ -357,6 +361,8 @@ export class NodeRegistry {
       return null;
     }
 
+    // Effective surfaces can only shrink to approved runtime state; they cannot
+    // invent commands/capabilities the node did not declare during connect.
     const declaredCommands = new Set(node.declaredCommands);
     const nextCommands = surface.commands.filter((command) => declaredCommands.has(command));
     node.commands = nextCommands;
@@ -435,6 +441,8 @@ export class NodeRegistry {
         error: { code: "UNAVAILABLE", message: "failed to send invoke to node" },
       };
     }
+    // system.run emits exec lifecycle events after the invoke frame leaves; remember
+    // the run/session binding so later node events cannot spoof unrelated runs.
     const systemRunEvent = resolvePendingSystemRunEvent({
       command: params.command,
       params: invokeParams,
@@ -628,6 +636,8 @@ export class NodeRegistry {
     if (!pending) {
       return false;
     }
+    // Results are accepted only from the connection that received the invoke, so
+    // reconnects cannot complete or fail stale requests from another socket.
     if (pending.nodeId !== params.nodeId || pending.connId !== params.connId) {
       return false;
     }
@@ -703,6 +713,8 @@ export class NodeRegistry {
       return false;
     }
     try {
+      // payloadJSON carries a branded JSON fragment from serializeEventPayload;
+      // this avoids repeated stringify work while keeping raw-string callers out.
       const payloadFragment = payloadJSON ? `,"payload":${payloadJSON.json}` : "";
       node.client.socket.send(
         `{"type":"event","event":${JSON.stringify(event)}${payloadFragment}}`,

@@ -111,6 +111,8 @@ function wrapStreamHandleUnhandledStopReason(
             if (!normalizedMessage) {
               throw err;
             }
+            // Emit exactly one synthetic terminal event; otherwise consumers
+            // that keep iterating after the recovered error could see duplicates.
             emittedSyntheticTerminal = true;
             return {
               done: false as const,
@@ -135,6 +137,11 @@ function wrapStreamHandleUnhandledStopReason(
   return stream;
 }
 
+/**
+ * Converts provider "Unhandled stop reason" failures into assistant error
+ * messages so callers get a deliverable terminal turn instead of a raw thrown
+ * provider exception.
+ */
 export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     try {

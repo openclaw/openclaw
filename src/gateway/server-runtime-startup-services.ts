@@ -10,12 +10,14 @@ export type GatewayChannelManager = Parameters<
   typeof startChannelHealthMonitor
 >[0]["channelManager"];
 
+/** Starts channel health checks from gateway config, returning null when explicitly disabled. */
 export function startGatewayChannelHealthMonitor(params: {
   cfg: OpenClawConfig;
   channelManager: GatewayChannelManager;
 }): ChannelHealthMonitor | null {
   const healthCheckMinutes = params.cfg.gateway?.channelHealthCheckMinutes;
   if (healthCheckMinutes === 0) {
+    // Zero is the operator-facing disable switch; undefined keeps the production default.
     return null;
   }
   const staleEventThresholdMinutes = params.cfg.gateway?.channelStaleEventThresholdMinutes;
@@ -30,6 +32,7 @@ export function startGatewayChannelHealthMonitor(params: {
   });
 }
 
+/** Builds the startup-time service handles that are safe before scheduled services activate. */
 export function startGatewayRuntimeServices(params: {
   minimalTestGateway: boolean;
   cfgAtStart: OpenClawConfig;
@@ -45,6 +48,8 @@ export function startGatewayRuntimeServices(params: {
     channelManager: params.channelManager,
   });
 
+  // Startup owns channel health immediately, but heartbeat/model-pricing stay inert until
+  // activateGatewayScheduledServices runs after the core gateway is ready.
   return {
     heartbeatRunner: createNoopHeartbeatRunner(),
     channelHealthMonitor,

@@ -252,8 +252,11 @@ function markUpdateSentinelFailureIfPending(reason) {
 
 export type ManagedServiceUpdateHandoffResult = {
   status: "started";
+  /** PID of the detached helper process when the platform reports one. */
   pid?: number;
+  /** User-facing command equivalent for shell fallback guidance. */
   command: string;
+  /** Helper log path retained after sensitive handoff files are removed. */
   logPath: string;
 };
 
@@ -294,9 +297,12 @@ export function formatManagedServiceUpdateCommand(timeoutMs?: number): string {
   return args.join(" ");
 }
 
+/** Remove restart-supervisor hints that would make the handoff child inherit the live service. */
 export function stripSupervisorHintEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const next = { ...env };
   for (const key of SUPERVISOR_HINT_ENV_VARS) {
+    // Keep the real service identity markers; only transient respawn hints are
+    // stripped so the update command can still diagnose its managed runtime.
     if (SERVICE_IDENTITY_ENV_VARS.has(key)) {
       continue;
     }
@@ -405,6 +411,10 @@ async function resolveHandoffSpawn(params: {
   };
 }
 
+/**
+ * Start a detached helper that waits for the current gateway process to exit,
+ * then runs `openclaw update --yes` outside the live managed service.
+ */
 export async function startManagedServiceUpdateHandoff(params: {
   root: string;
   timeoutMs?: number;
@@ -450,6 +460,8 @@ export async function startManagedServiceUpdateHandoff(params: {
   await fs.writeFile(paramsPath, `${JSON.stringify(helperParams, null, 2)}\n`, { mode: 0o600 });
   await fs.writeFile(metaPath, `${JSON.stringify(metaFile, null, 2)}\n`, { mode: 0o600 });
 
+  // The helper receives the sentinel meta path through env for status reporting,
+  // while the JSON params file carries paths that are deleted after handoff.
   const env = {
     ...stripSupervisorHintEnv(params.env ?? process.env),
     [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
@@ -479,6 +491,7 @@ export async function startManagedServiceUpdateHandoff(params: {
   };
 }
 
+/** Message shown when the gateway cannot safely spawn an out-of-service update helper. */
 export function buildManagedServiceHandoffUnavailableMessage(command: string): string {
   return [
     "Package updates cannot safely run inside the live gateway process.",

@@ -5,6 +5,7 @@ import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import type { ChatRunEntry } from "./server-chat.js";
 import type { DedupeEntry } from "./server-shared.js";
 
+/** Gateway services and mutable chat state available while handling node-originated events. */
 export type NodeEventContext = {
   deps: CliDeps;
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
@@ -40,6 +41,7 @@ export type NodeEventContext = {
   logGateway: { warn: (msg: string) => void };
 };
 
+/** Wire event envelope sent by a connected node before payload parsing. */
 export type NodeEvent = {
   event: string;
   payloadJSON?: string | null;

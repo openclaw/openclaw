@@ -14,6 +14,7 @@ function makeAbortError(signal: AbortSignal): Error {
   return err;
 }
 
+/** Races a promise against an AbortSignal and normalizes abort rejections. */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(makeAbortError(signal));
@@ -24,6 +25,8 @@ export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<
       reject(makeAbortError(signal));
     };
     signal.addEventListener("abort", onAbort, { once: true });
+    // Always remove the listener after either side settles so long-running
+    // agent attempts do not retain stale promise closures.
     promise.then(
       (value) => {
         signal.removeEventListener("abort", onAbort);

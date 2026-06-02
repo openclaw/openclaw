@@ -66,6 +66,8 @@ function resolveChannelOperationParams<TParams extends ChannelOperationParams>(p
   respond: RespondFn;
   validate: Validator<TParams>;
 }): { params: TParams; rawChannel: unknown; channelId: ChannelId } | null {
+  // Shared start/stop/logout parsing keeps validator errors and unknown channel
+  // errors consistent across mutating channel RPC methods.
   const rawParams = params.rawParams;
   if (!assertValidParams(rawParams, params.validate, params.method, params.respond)) {
     return null;
@@ -114,6 +116,8 @@ async function raceWithTimeout<T>(params: {
   timeoutMs: number;
   run: () => Promise<T> | T;
 }): Promise<TimeoutRaceResult<T>> {
+  // Status probes should not pin the event loop or the UI request; unref the
+  // timeout and always clear it after the losing branch settles.
   const timeoutMs = params.timeoutMs;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
@@ -221,6 +225,8 @@ function resolveRuntimeAccountSnapshot(params: {
   channelId: ChannelId;
   accountId: string;
 }): ChannelAccountSnapshot | undefined {
+  // Runtime snapshots may carry per-account state or the older single-channel
+  // slot; prefer the account entry and fall back only when it is the same id.
   const accounts = params.runtime.channelAccounts[params.channelId];
   const direct = accounts?.[params.accountId];
   if (direct) {
@@ -245,6 +251,7 @@ function resolveChannelGatewayAccountId(params: {
   );
 }
 
+/** Logs out a channel account after stopping its runtime watcher. */
 export async function logoutChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -279,6 +286,7 @@ export async function logoutChannelAccount(params: {
   };
 }
 
+/** Starts a channel account runtime and reports whether it is running afterward. */
 export async function startChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -305,6 +313,7 @@ export async function startChannelAccount(params: {
   };
 }
 
+/** Stops a channel account runtime without clearing channel-owned auth/config. */
 export async function stopChannelAccount(params: {
   channelId: ChannelId;
   accountId?: string | null;
@@ -328,6 +337,7 @@ export async function stopChannelAccount(params: {
   };
 }
 
+/** Gateway RPC handlers for channel status, start, stop, and logout operations. */
 export const channelsHandlers: GatewayRequestHandlers = {
   "channels.status": async ({ params, respond, context }) => {
     if (!validateChannelsStatusParams(params)) {
@@ -469,6 +479,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
         channel: channelId as never,
         accountId,
       });
+      // Activity tracking is process-local and may be newer than plugin status
+      // hooks; fill missing timestamps without overriding plugin-provided data.
       if (snapshot.lastInboundAt == null) {
         snapshot.lastInboundAt = activity.inboundAt;
       }
@@ -511,6 +523,8 @@ export const channelsHandlers: GatewayRequestHandlers = {
         ),
         limit: probe ? CHANNEL_STATUS_PROBE_CONCURRENCY : accountIds.length || 1,
       });
+      // Preserve configured account order from the plugin; runTasksWithConcurrency
+      // returns results in task order, not completion order.
       const accounts: ChannelAccountSnapshot[] = [];
       for (const result of results) {
         if (result) {

@@ -122,6 +122,8 @@ export const healthHandlers: GatewayRequestHandlers = {
     const { getHealthCache, refreshHealthSnapshot, logHealth } = context;
     const wantsProbe = params?.probe === true;
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
+    // Sensitive fields are operator-only; health probes can be called from
+    // lower-trust clients, so keep the gate tied to connect-time scopes.
     const includeSensitive = scopes.includes(ADMIN_SCOPE);
     const now = Date.now();
     const cached = getHealthCache();
@@ -159,6 +161,8 @@ export const healthHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      // Explicit probes bypass the cache and may run heavier checks; ordinary
+      // health reads prefer cached data unless cheap runtime facts diverged.
       const snap = await refreshHealthSnapshot({ probe: wantsProbe, includeSensitive });
       respond(true, snap, undefined);
     } catch (err) {

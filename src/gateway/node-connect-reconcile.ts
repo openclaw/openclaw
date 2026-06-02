@@ -27,6 +27,7 @@ export type NodeConnectPairingReconcileResult = {
   pendingPairing?: RequestNodePairingResult;
 };
 
+/** Replays approved node commands through the current runtime allowlist. */
 function resolveApprovedReconnectCommands(params: {
   pairedCommands: readonly string[] | undefined;
   allowlist: Set<string>;
@@ -49,6 +50,7 @@ function normalizePermissionMap(
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+/** Keeps only declared approval surfaces that were already approved for this node. */
 function intersectApprovalSurfaceList(params: {
   approved: readonly string[] | undefined;
   declared: readonly string[];
@@ -65,6 +67,8 @@ function intersectPermissionSurface(params: {
   for (const [key, declaredValue] of Object.entries(params.declared ?? {})) {
     const approvedValue = params.approved?.[key];
     if (!declaredValue) {
+      // False declarations are explicit downgrades; keep them effective even
+      // when the prior approved surface did not mention the key.
       entries.push([key, false]);
       continue;
     }
@@ -79,6 +83,7 @@ function intersectPermissionSurface(params: {
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+/** Builds the pending approval payload from the normalized connect surfaces. */
 function buildNodePairingRequestInput(params: {
   nodeId: string;
   connectParams: ConnectParams;
@@ -101,6 +106,7 @@ function buildNodePairingRequestInput(params: {
   };
 }
 
+/** Reconciles a node connect declaration with its approved pairing record. */
 export async function reconcileNodePairingOnConnect(params: {
   cfg: OpenClawConfig;
   connectParams: ConnectParams;
@@ -126,6 +132,9 @@ export async function reconcileNodePairingOnConnect(params: {
   const declaredPermissions = normalizePermissionMap(params.connectParams.permissions);
 
   if (!params.pairedNode) {
+    // First connect starts approval with no live capability/command surface.
+    // The node remains connected only with empty effective surfaces until
+    // maintainers approve the pending request.
     const pendingPairing = await params.requestPairing(
       buildNodePairingRequestInput({
         nodeId,
@@ -178,6 +187,8 @@ export async function reconcileNodePairingOnConnect(params: {
   });
 
   if (hasCommandUpgrade || hasCapabilityChange || hasPermissionChange) {
+    // Upgrades/downgrades both create a fresh review item, but the live node
+    // gets only the intersection of declared and already-approved surfaces.
     const pendingPairing = await params.requestPairing(
       buildNodePairingRequestInput({
         nodeId,

@@ -27,6 +27,7 @@ import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers
 import { normalizeTrimmedString } from "./record-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Gateway RPC handlers for APNs test pushes and browser web-push subscriptions. */
 export const pushHandlers: GatewayRequestHandlers = {
   "push.test": async ({ params, respond, context }) => {
     if (!validatePushTestParams(params)) {
@@ -62,6 +63,8 @@ export const pushHandlers: GatewayRequestHandlers = {
       }
 
       const overrideEnvironment = normalizeApnsEnvironment(params.environment);
+      // push.test may override sandbox/production for diagnostics, but the
+      // stored registration keeps its original environment unless APNs rejects it.
       const result =
         registration.transport === "direct"
           ? await (async () => {
@@ -135,6 +138,8 @@ export const pushHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
+      // The public VAPID key is safe to expose to browsers; the private key
+      // stays inside infra/push-web storage/env resolution.
       const vapid = await resolveVapidKeys();
       respond(true, { vapidPublicKey: vapid.publicKey }, undefined);
     });
@@ -151,6 +156,8 @@ export const pushHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
+      // Store only the browser endpoint/key material needed for later broadcast;
+      // callers receive the generated subscription id, not the persisted record.
       const subscription = await registerWebPushSubscription({
         endpoint: params.endpoint,
         keys: params.keys,
@@ -170,6 +177,8 @@ export const pushHandlers: GatewayRequestHandlers = {
     }
 
     await respondUnavailableOnThrow(respond, async () => {
+      // Endpoint is the browser-owned stable identifier, so unsubscribe by
+      // endpoint even if the local generated subscription id is unknown.
       const removed = await clearWebPushSubscriptionByEndpoint(params.endpoint);
       respond(true, { removed }, undefined);
     });
@@ -189,6 +198,8 @@ export const pushHandlers: GatewayRequestHandlers = {
     const body = normalizeTrimmedString(params.body) ?? "Web push test notification";
 
     await respondUnavailableOnThrow(respond, async () => {
+      // Broadcast test intentionally sends to every stored web subscription so
+      // operators can verify fan-out and stale-subscription cleanup behavior.
       const results = await broadcastWebPush({ title, body });
       if (results.length === 0) {
         respond(

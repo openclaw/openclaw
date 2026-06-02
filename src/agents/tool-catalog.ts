@@ -13,11 +13,14 @@ import {
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
 type ToolProfilePolicy = {
+  /** Normalized tool ids or group ids granted by the profile. */
   allow?: string[];
+  /** Normalized tool ids or group ids removed from the profile grant. */
   deny?: string[];
 };
 
 type CoreToolSection = {
+  /** Stable section id used by catalog RPCs and group ids. */
   id: string;
   label: string;
   tools: Array<{
@@ -28,11 +31,15 @@ type CoreToolSection = {
 };
 
 type CoreToolDefinition = {
+  /** Canonical tool id used by policy allow/deny lists. */
   id: string;
   label: string;
   description: string;
+  /** Section id used for UI grouping and group:<section> policy expansion. */
   sectionId: string;
+  /** Built-in profiles that grant this tool directly. */
   profiles: ToolProfileId[];
+  /** Whether group:openclaw should include this core tool. */
   includeInOpenClawGroup?: boolean;
 };
 
@@ -379,14 +386,17 @@ function buildCoreToolGroupMap() {
   const openclawTools = CORE_TOOL_DEFINITIONS.filter((tool) => tool.includeInOpenClawGroup).map(
     (tool) => tool.id,
   );
+  // Section groups mirror the catalog UI sections; group:openclaw is the curated product tool set.
   return {
     "group:openclaw": openclawTools,
     ...Object.fromEntries(sectionToolMap.entries()),
   };
 }
 
+/** Built-in tool groups consumed by allow/deny policy expansion. */
 export const CORE_TOOL_GROUPS = buildCoreToolGroupMap();
 
+/** Ordered profile choices exposed by tools catalog RPCs and UI controls. */
 export const PROFILE_OPTIONS = [
   { id: "minimal", label: "Minimal" },
   { id: "coding", label: "Coding" },
@@ -394,6 +404,7 @@ export const PROFILE_OPTIONS = [
   { id: "full", label: "Full" },
 ] as const;
 
+/** Resolve a built-in tool profile to a defensive-copy policy object. */
 export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   if (!profile) {
     return undefined;
@@ -411,6 +422,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
   };
 }
 
+/** Return UI/RPC catalog sections with core tools in stable product order. */
 export function listCoreToolSections(): CoreToolSection[] {
   return CORE_TOOL_SECTION_ORDER.map((section) => ({
     id: section.id,
@@ -423,6 +435,7 @@ export function listCoreToolSections(): CoreToolSection[] {
   })).filter((section) => section.tools.length > 0);
 }
 
+/** Return built-in profile ids that directly include a core tool. */
 export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
   const tool = CORE_TOOL_BY_ID.get(toolId);
   if (!tool) {
@@ -431,6 +444,7 @@ export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
   return [...tool.profiles];
 }
 
+/** Check whether a tool id is part of the built-in core catalog. */
 export function isKnownCoreToolId(toolId: string): boolean {
   return CORE_TOOL_BY_ID.has(toolId);
 }

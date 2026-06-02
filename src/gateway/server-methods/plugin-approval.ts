@@ -26,6 +26,7 @@ import {
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Creates plugin approval RPC handlers backed by the shared approval manager. */
 export function createPluginApprovalHandlers(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
   opts?: { forwarder?: ExecApprovalForwarder },
@@ -71,6 +72,8 @@ export function createPluginApprovalHandlers(
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;
 
+      // Store only normalized turn-source routing fields; delivery helpers use
+      // these later to target the originating channel without trusting raw input.
       const request: PluginApprovalRequestPayload = {
         pluginId: p.pluginId ?? null,
         title: p.title,
@@ -122,6 +125,8 @@ export function createPluginApprovalHandlers(
         twoPhase,
         approvalKind: "plugin",
         deliverRequest: () => {
+          // Plugin approvals are optional-channel aware: the RPC remains valid
+          // even when no external forwarder is configured for this gateway.
           if (!opts?.forwarder?.handlePluginApprovalRequested) {
             return false;
           }

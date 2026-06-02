@@ -4,6 +4,7 @@ type MockCallSource = {
   mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
 };
 
+/** Assert the standard failed gateway RPC tuple: no payload, protocol error shape. */
 export function expectGatewayErrorResponse(
   respond: MockCallSource,
   expected: { code: string; message: string },

@@ -1,5 +1,10 @@
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
+/**
+ * Decides whether a Codex app-server transport failure can be replayed once.
+ * Recovery is restricted to early stdio failures with no assistant/tool/approval
+ * side effects, so retrying cannot duplicate visible output or external work.
+ */
 export function resolveCodexAppServerRecoveryRetry(params: {
   attempt: EmbeddedRunAttemptResult;
   alreadyRetried: boolean;
@@ -26,12 +31,16 @@ export function resolveCodexAppServerRecoveryRetry(params: {
   if (params.alreadyRetried) {
     return { retry: false, reason: "retry_exhausted" };
   }
+  // Replay safety must agree at the transport-failure layer and at the
+  // attempt metadata layer; either side can observe non-replayable activity.
   if (!failure.replaySafe || !params.attempt.replayMetadata.replaySafe) {
     return { retry: false, reason: failure.replayBlockedReason ?? "replay_unsafe" };
   }
   if (params.attempt.assistantTexts.some((text) => text.trim().length > 0)) {
     return { retry: false, reason: "assistant_output" };
   }
+  // Tool or approval activity may have had external effects, so app-server
+  // recovery cannot silently replay even when the transport failure looks early.
   if (
     params.attempt.toolMetas.length > 0 ||
     params.attempt.clientToolCalls ||
@@ -49,4 +58,5 @@ export function resolveCodexAppServerRecoveryRetry(params: {
   return { retry: true };
 }
 
+/** Backward-compatible alias for the original client-close-only helper name. */
 export const resolveCodexAppServerClientCloseRetry = resolveCodexAppServerRecoveryRetry;

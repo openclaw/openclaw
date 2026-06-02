@@ -1,19 +1,27 @@
 export type EmbeddedRunStageTiming = {
+  /** Stable stage label used in slow-startup logs. */
   name: string;
+  /** Time spent since the previous mark. */
   durationMs: number;
+  /** Time elapsed since tracker creation. */
   elapsedMs: number;
 };
 
 export type EmbeddedRunStageSummary = {
+  /** Total time since tracker creation at snapshot time. */
   totalMs: number;
+  /** Ordered stage marks captured so far. */
   stages: EmbeddedRunStageTiming[];
 };
 
 export type EmbeddedRunStageTracker = {
+  /** Records the next stage boundary using the configured clock. */
   mark: (name: string) => void;
+  /** Returns a copy of current timings without mutating the tracker. */
   snapshot: () => EmbeddedRunStageSummary;
 };
 
+/** First-attempt startup subspans emitted in slow dispatch diagnostics. */
 export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
   workspace: "attempt-workspace",
   prompt: "attempt-prompt",
@@ -24,6 +32,7 @@ export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
 const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
 const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
+/** Creates a monotonic stage tracker for embedded-run startup diagnostics. */
 export function createEmbeddedRunStageTracker(options?: {
   now?: () => number;
 }): EmbeddedRunStageTracker {
@@ -53,6 +62,7 @@ export function createEmbeddedRunStageTracker(options?: {
   };
 }
 
+/** Returns whether a summary crosses the default or caller-provided slow thresholds. */
 export function shouldWarnEmbeddedRunStageSummary(
   summary: EmbeddedRunStageSummary,
   options?: {
@@ -68,6 +78,7 @@ export function shouldWarnEmbeddedRunStageSummary(
   );
 }
 
+/** Formats stage timings as a compact single-line log suffix. */
 export function formatEmbeddedRunStageSummary(
   prefix: string,
   summary: EmbeddedRunStageSummary,

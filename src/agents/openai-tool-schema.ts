@@ -15,6 +15,7 @@ type ToolWithParameters = {
 const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
 let strictOpenAISchemaCache = new WeakMap<object, Array<{ key: string; value: unknown }>>();
 
+/** Convert loose model compat input into the schema-normalizer compat subset. */
 function resolveToolSchemaModelCompat(
   compat: ToolSchemaCompatInput | null | undefined,
 ): ModelCompatConfig | undefined {
@@ -35,6 +36,7 @@ function resolveToolSchemaModelCompat(
   };
 }
 
+/** Cache key includes only compat knobs that affect normalized strict OpenAI schemas. */
 function resolveStrictOpenAISchemaCacheKey(
   modelCompat: ToolSchemaCompatInput | null | undefined,
 ): string {
@@ -61,10 +63,12 @@ function rememberStrictOpenAISchema(schema: object, key: string, value: unknown)
   return value;
 }
 
+/** Reset the schema cache between tests so object-identity reuse cannot leak assertions. */
 export function clearOpenAIToolSchemaCacheForTest(): void {
   strictOpenAISchemaCache = new WeakMap();
 }
 
+/** Normalize a schema into OpenAI strict mode, preserving object identity through a compat-aware cache. */
 export function normalizeStrictOpenAIJsonSchema(
   schema: unknown,
   modelCompat?: ToolSchemaCompatInput | null,
@@ -83,6 +87,7 @@ export function normalizeStrictOpenAIJsonSchema(
   if (cached !== undefined) {
     return cached;
   }
+  // Cache by source schema object and compat key because model-specific keyword stripping can differ.
   return rememberStrictOpenAISchema(
     schemaInput,
     cacheKey,
@@ -129,10 +134,12 @@ function normalizeStrictOpenAIJsonSchemaRecursive(schema: unknown, depth: number
         ? (normalized.properties as Record<string, unknown>)
         : undefined;
     if (properties && Object.keys(properties).length === 0 && !Array.isArray(normalized.required)) {
+      // OpenAI strict schemas require required: [] even for object nodes without properties.
       normalized.required = [];
       changed = true;
     }
     if (depth === 0 && !("additionalProperties" in normalized)) {
+      // Only the root object gets implicit closed-object semantics; nested schemas keep caller intent.
       normalized.additionalProperties = false;
       changed = true;
     }
@@ -153,6 +160,7 @@ export function normalizeOpenAIStrictToolParameters<T>(
   return normalizeStrictOpenAIJsonSchema(schema, toolSchemaCompat) as T;
 }
 
+/** Check whether a schema already satisfies the OpenAI strict tool subset after normalization. */
 export function isStrictOpenAIJsonSchemaCompatible(schema: unknown): boolean {
   return isStrictOpenAIJsonSchemaCompatibleRecursive(normalizeStrictOpenAIJsonSchema(schema));
 }
@@ -163,6 +171,7 @@ type OpenAIStrictToolSchemaDiagnostic = {
   violations: string[];
 };
 
+/** Return per-tool strict-schema violation paths for inventory and provider diagnostics. */
 export function findOpenAIStrictToolSchemaDiagnostics(
   tools: readonly ToolWithParameters[],
 ): OpenAIStrictToolSchemaDiagnostic[] {
@@ -304,5 +313,6 @@ export function resolveOpenAIStrictToolFlagForInventory(
   if (strict !== true) {
     return strict === false ? false : undefined;
   }
+  // Inventory advertises strict only when every declared tool can actually satisfy strict mode.
   return tools.every((tool) => isStrictOpenAIJsonSchemaCompatible(tool.parameters));
 }

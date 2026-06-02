@@ -15,11 +15,13 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
+/** Reset hoisted session-utils mocks between deleted-agent guard tests. */
 export function resetDeletedAgentSessionMocks(): void {
   deletedAgentSessionMocks.loadSessionEntry.mockReset();
   deletedAgentSessionMocks.resolveDeletedAgentIdFromSessionKey.mockReset();
 }
 
+/** Mock a stored session whose agent id is no longer present in runtime config. */
 export function mockDeletedAgentSession(orphanKey = "agent:deleted-agent:main"): string {
   deletedAgentSessionMocks.loadSessionEntry.mockReturnValue({
     cfg: {},

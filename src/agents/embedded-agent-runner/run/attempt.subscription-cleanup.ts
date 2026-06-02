@@ -46,12 +46,14 @@ async function waitForEmbeddedAbortSettle(params: {
   }
 }
 
+/** Pass-through seam for embedded-session subscription params used by tests and callers. */
 export function buildEmbeddedSubscriptionParams(
   params: SubscribeEmbeddedAgentSessionParams,
 ): SubscribeEmbeddedAgentSessionParams {
   return params;
 }
 
+/** Cleans up per-attempt guards, pending tool results, runtimes, and the session lock. */
 export async function cleanupEmbeddedAttemptResources(params: {
   removeToolResultContextGuard?: () => void;
   flushPendingToolResultsAfterIdle: (params: {
@@ -84,6 +86,8 @@ export async function cleanupEmbeddedAttemptResources(params: {
         sessionId: params.sessionId ?? "unknown",
       });
     }
+    // The session lock must be released even when flushing or runtime disposal
+    // fails, so errors before the finally block are intentionally best-effort.
     // PERF: When the run was aborted (user stop / timeout), skip the expensive
     // waitForIdle (up to 30 s) and flush pending tool results synchronously so
     // the session write-lock is released without leaving orphaned tool calls.

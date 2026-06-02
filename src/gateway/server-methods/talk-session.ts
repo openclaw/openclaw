@@ -80,6 +80,7 @@ function normalizeTalkSessionMode(params: { mode?: string; transport?: string })
     : "realtime";
 }
 
+/** Defaults legacy managed-room transport requests to stt-tts while keeping relay realtime first. */
 function normalizeTalkSessionTransport(params: {
   mode: TalkMode;
   transport?: string;
@@ -173,6 +174,8 @@ function respondManagedRoomTurn(params: {
     );
     return;
   }
+  // Turn events are delivered to the active room client only; the handoff
+  // record owns fan-out history for later joins/replacements.
   broadcastTalkRoomEvents(params.context, result.record.room.activeClientId, {
     handoffId: result.record.id,
     roomId: result.record.roomId,
@@ -181,6 +184,7 @@ function respondManagedRoomTurn(params: {
   respondOk(params.respond, { ok: true, turnId: result.turnId, events: result.events });
 }
 
+/** Unified Talk session RPCs for gateway-relay, transcription relay, and managed-room sessions. */
 export const talkSessionHandlers: GatewayRequestHandlers = {
   "talk.session.create": async ({ params, respond, context, client }) => {
     if (
@@ -193,6 +197,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
     const transport = normalizeTalkSessionTransport({ mode, transport: params.transport });
     const brain = normalizeTalkSessionBrain({ mode, brain: params.brain });
 
+    // Browser transports are intentionally split from gateway-managed sessions
+    // so the socket that owns media also owns session lifetime and steering.
     if (transport === "webrtc" || transport === "provider-websocket") {
       respondInvalidRequest(
         respond,
@@ -211,6 +217,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         const spawnedBy = normalizeOptionalString(params.spawnedBy);
+        // Unscoped session keys can bind existing conversations, so browser
+        // callers must either prove spawn ownership or hold gateway admin scope.
         if (
           normalizeOptionalString(params.sessionKey) &&
           !spawnedBy &&
@@ -389,6 +397,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
         );
         return;
       }
+      // Joining can replace another active browser connection; notify both the
+      // displaced client and the newly active client with their tailored event sets.
       broadcastTalkRoomEvents(context, result.replacedClientId, {
         handoffId: result.record.id,
         roomId: result.record.roomId,
@@ -681,6 +691,8 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           return;
         }
         const result = revokeTalkHandoff(session.handoffId);
+        // Closing a managed room revokes the handoff token before forgetting the
+        // unified session, so any late join observes the revoked room state.
         broadcastTalkRoomEvents(context, result.activeClientId, {
           handoffId: session.handoffId,
           roomId: session.roomId,

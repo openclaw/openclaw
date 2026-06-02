@@ -10,6 +10,7 @@ export type GatewayRuntimeServiceLogger = {
   error: (message: string) => void;
 };
 
+/** No-op heartbeat handle for startup/test paths that share the production shutdown shape. */
 export function createNoopHeartbeatRunner(): HeartbeatRunner {
   return {
     stop: () => {},

@@ -8,6 +8,11 @@ import {
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { log } from "../logger.js";
 
+/**
+ * Structured context recorded when an embedded run chooses a failover path.
+ * Raw provider text is accepted here, but createFailoverDecisionLogger owns the
+ * redaction and console-suffix suppression before anything is emitted.
+ */
 export type FailoverDecisionLoggerInput = {
   stage: "prompt" | "assistant";
   decision: "rotate_profile" | "fallback_model" | "surface_error";
@@ -26,8 +31,18 @@ export type FailoverDecisionLoggerInput = {
   status?: number;
 };
 
+/**
+ * Base failover observation captured before the concrete decision is known.
+ * The caller supplies the source model/profile state once, then the returned
+ * logger records whichever rotation/fallback/surface decision was selected.
+ */
 export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
+/**
+ * Fills timeout-derived failure reasons without overriding explicit provider
+ * reasons. Timeout is the fallback classification only when provider/API error
+ * parsing did not produce a stronger reason.
+ */
 export function normalizeFailoverDecisionObservationBase(
   base: FailoverDecisionLoggerBase,
 ): FailoverDecisionLoggerBase {
@@ -38,6 +53,7 @@ export function normalizeFailoverDecisionObservationBase(
   };
 }
 
+/** Creates a redacting logger for one embedded-run failover decision point. */
 export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (
@@ -59,6 +75,8 @@ export function createFailoverDecisionLogger(
   return (decision, extra) => {
     const observedError = buildApiErrorObservationFields(normalizedBase.rawError);
     const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
+    // Structured logs keep the raw preview when useful, but HTML/auth bodies
+    // stay out of the console suffix to avoid noisy credential-provider output.
     const rawErrorConsoleSuffix =
       safeRawErrorPreview &&
       !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)

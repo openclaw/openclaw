@@ -27,6 +27,7 @@ import {
 } from "./talk-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** Browser-owned Talk RPCs for client-created realtime sessions and agent controls. */
 export const talkClientHandlers: GatewayRequestHandlers = {
   "talk.client.create": async ({ params, respond, context }) => {
     if (!validateTalkClientCreateParams(params)) {
@@ -85,6 +86,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       }
       const transport =
         normalizeOptionalLowercaseString(typedParams.transport) ?? realtimeConfig.transport;
+      // Client RPCs own browser media transports; gateway-relay and managed-room
+      // sessions are created through talk.session so ownership and room state stay server-side.
       if (transport === "managed-room") {
         respond(
           false,
@@ -257,6 +260,8 @@ function hasOwnedActiveTalkClientRun(params: {
     return false;
   }
   for (const entry of params.context.chatAbortControllers.values()) {
+    // Browser steering is allowed only for non-agent runs registered by this
+    // socket, preventing another Control UI connection from steering the run.
     if (entry.sessionKey === sessionKey && entry.ownerConnId === connId && entry.kind !== "agent") {
       return true;
     }

@@ -90,6 +90,7 @@ function normalizeCommandSpans(
   return accepted.length > 0 ? accepted : undefined;
 }
 
+/** Creates exec approval RPC handlers, including optional channel and iOS delivery hooks. */
 export function createExecApprovalHandlers(
   manager: ExecApprovalManager,
   opts?: { forwarder?: ExecApprovalForwarder; iosPushDelivery?: ExecApprovalIosPushDelivery },
@@ -255,6 +256,8 @@ export function createExecApprovalHandlers(
       });
       const sanitizedCommandDisplay =
         sanitizeExecApprovalDisplayTextWithStatus(effectiveCommandText);
+      // Approval UIs and push payloads carry command previews through public
+      // channels, so reject oversized display text before storing the request.
       if (sanitizedCommandDisplay.truncated || sanitizedCommandDisplay.oversized) {
         respond(
           false,
@@ -367,6 +370,8 @@ export function createExecApprovalHandlers(
             deliveryTasks.push(
               opts.iosPushDelivery
                 .handleRequested(requestEvent, {
+                  // Push targets must pass the same visibility rules as live
+                  // gateway clients so device-scoped approvals do not leak.
                   isTargetVisible: (target) =>
                     isApprovalRecordVisibleToClient({
                       record,

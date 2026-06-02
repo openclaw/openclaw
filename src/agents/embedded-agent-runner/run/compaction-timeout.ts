@@ -1,11 +1,17 @@
 import type { AgentMessage } from "../../runtime/index.js";
 
+/**
+ * Timeout state sampled when an attempt exits. `isTimeout` is the trigger,
+ * while the compaction flags explain whether the timeout should be reported as
+ * compaction-related instead of a plain model/tool timeout.
+ */
 export type CompactionTimeoutSignal = {
   isTimeout: boolean;
   isCompactionPendingOrRetrying: boolean;
   isCompactionInFlight: boolean;
 };
 
+/** Returns true when a run timeout should be attributed to compaction work. */
 export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): boolean {
   if (!signal.isTimeout) {
     return false;
@@ -13,6 +19,7 @@ export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): bo
   return signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight;
 }
 
+/** Decides whether a run timeout gets one compaction grace window or aborts immediately. */
 export function resolveRunTimeoutDuringCompaction(params: {
   isCompactionPendingOrRetrying: boolean;
   isCompactionInFlight: boolean;
@@ -24,6 +31,7 @@ export function resolveRunTimeoutDuringCompaction(params: {
   return params.graceAlreadyUsed ? "abort" : "extend";
 }
 
+/** Combines the normal run timeout with the one-time compaction grace budget. */
 export function resolveRunTimeoutWithCompactionGraceMs(params: {
   runTimeoutMs: number;
   compactionTimeoutMs: number;
@@ -31,6 +39,11 @@ export function resolveRunTimeoutWithCompactionGraceMs(params: {
   return params.runTimeoutMs + params.compactionTimeoutMs;
 }
 
+/**
+ * Candidate transcript snapshots used when compaction times out mid-rewrite.
+ * The pre-compaction snapshot is preferred because the current transcript may
+ * include a partial summary or assistant tail that is unsafe for retry.
+ */
 export type SnapshotSelectionParams = {
   timedOutDuringCompaction: boolean;
   preCompactionSnapshot: AgentMessage[] | null;
@@ -39,6 +52,7 @@ export type SnapshotSelectionParams = {
   currentSessionId: string;
 };
 
+/** Transcript selected for retry after trimming to a continuable tail. */
 export type SnapshotSelection = {
   messagesSnapshot: AgentMessage[];
   sessionIdUsed: string;
@@ -46,6 +60,8 @@ export type SnapshotSelection = {
 };
 
 function canContinueFromMessage(message: AgentMessage | undefined): boolean {
+  // Continuations must resume from a transcript tail that can accept a new model
+  // turn; dangling assistant/tool-call rows would corrupt retry context.
   switch (message?.role) {
     case "user":
     case "toolResult":
@@ -68,6 +84,7 @@ function trimToContinuableTail(messages: AgentMessage[]): AgentMessage[] | null 
   return end > 0 ? messages.slice(0, end) : null;
 }
 
+/** Chooses the safest transcript snapshot after a timeout interrupts compaction. */
 export function selectCompactionTimeoutSnapshot(
   params: SnapshotSelectionParams,
 ): SnapshotSelection {
@@ -80,6 +97,8 @@ export function selectCompactionTimeoutSnapshot(
   }
 
   if (params.preCompactionSnapshot) {
+    // Prefer the pre-compaction transcript so the retry does not inherit a
+    // partial summary that may have been written by the timed-out compactor.
     const continuablePreCompactionSnapshot = trimToContinuableTail(params.preCompactionSnapshot);
     if (continuablePreCompactionSnapshot) {
       return {

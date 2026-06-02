@@ -2,6 +2,11 @@ import type { AuthProfileFailureReason } from "../../auth-profiles/types.js";
 import type { FailoverReason } from "../../embedded-agent-helpers/types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 
+/**
+ * Maps attempt-local failover signals onto profile-wide auth health reasons.
+ * Only failures that plausibly reflect a reusable credential/provider problem
+ * should escape the attempt and cool down a shared auth profile.
+ */
 export function resolveAuthProfileFailureReason(params: {
   failoverReason: FailoverReason | null;
   providerStarted?: boolean;

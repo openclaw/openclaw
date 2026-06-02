@@ -14,6 +14,7 @@ import type {
 } from "../shared/session-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+/** Agent defaults projected into sessions.list so clients can render current model choices. */
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
@@ -23,15 +24,19 @@ export type GatewaySessionsDefaults = {
   thinkingDefault?: string;
 };
 
+/** Terminal and active run states surfaced for session rows. */
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
 
+/** Child-run state used to distinguish active subagents from retained history. */
 type SubagentRunState = "active" | "interrupted" | "historical";
 
+/** Compact checkpoint metadata exposed without loading full checkpoint payloads. */
 export type SessionCompactionCheckpointPreview = Pick<
   SessionCompactionCheckpoint,
   "checkpointId" | "createdAt" | "reason"
 >;
 
+/** Control UI session row assembled from persisted session metadata and live run state. */
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
@@ -97,26 +102,32 @@ export type GatewaySessionRow = {
   pluginExtensions?: PluginSessionExtensionProjection[];
 };
 
+/** Agent row shape shared with the public session-types package. */
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
+/** One transcript preview message returned by sessions.preview. */
 export type SessionPreviewItem = {
   role: "user" | "assistant" | "tool" | "system" | "other";
   text: string;
 };
 
+/** Preview result for a single requested session key. */
 export type SessionsPreviewEntry = {
   key: string;
   status: "ok" | "empty" | "missing" | "error";
   items: SessionPreviewItem[];
 };
 
+/** Batched transcript preview response with a generation timestamp. */
 export type SessionsPreviewResult = {
   ts: number;
   previews: SessionsPreviewEntry[];
 };
 
+/** sessions.list response with Gateway-specific default and row projections. */
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
+/** sessions.patch response including the updated persisted entry and resolved runtime fields. */
 export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   entry: SessionEntry;
   resolved?: {

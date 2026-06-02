@@ -51,6 +51,7 @@ type RegisteredChatAbortController = {
   cleanup: () => void;
 };
 
+/** Returns true for user text that should stop an active chat run instead of sending a prompt. */
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
 }
@@ -64,6 +65,7 @@ function createChatAbortSignalReason(stopReason: string | undefined): Error | un
   return reason;
 }
 
+/** Computes chat.send abort-entry expiry, bounded so cleanup neither races nor leaks for a day. */
 export function resolveChatRunExpiresAtMs(params: {
   now: number;
   timeoutMs: number;
@@ -93,6 +95,7 @@ export function resolveChatRunExpiresAtMs(params: {
   return Math.min(max, Math.max(min, target));
 }
 
+/** Computes backend agent-run expiry without chat.send's larger minimum retention window. */
 export function resolveAgentRunExpiresAtMs(params: {
   now: number;
   timeoutMs: number;
@@ -108,6 +111,7 @@ export function resolveAgentRunExpiresAtMs(params: {
   });
 }
 
+/** Registers the AbortController and active-run metadata for one cancellable chat/agent run. */
 export function registerChatAbortController(params: {
   chatAbortControllers: Map<string, ChatAbortControllerEntry>;
   runId: string;
@@ -128,11 +132,15 @@ export function registerChatAbortController(params: {
   const cleanup = () => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
+      // Cleanup only removes the controller it registered; a retried/reused run id may already
+      // point at a newer controller that must remain abortable.
       params.chatAbortControllers.delete(params.runId);
     }
   };
 
   if (!params.sessionKey || params.chatAbortControllers.has(params.runId)) {
+    // Return a usable controller even when the registry rejects the run; callers can wire the
+    // same control flow without giving duplicate/malformed runs abort authority.
     return { controller, registered: false, cleanup };
   }
 
@@ -309,6 +317,7 @@ export type TrackedChatRunAbortOps = {
   nodeSendToSession: ChatAbortOps["nodeSendToSession"];
 };
 
+/** Adapts grouped chat-run state into the generic abort helper used by cleanup paths. */
 export function abortTrackedChatRunById(
   ops: TrackedChatRunAbortOps,
   params: Parameters<typeof abortChatRunById>[1],
@@ -396,6 +405,7 @@ function resolveDefaultGlobalAgentId(ops: ChatAbortOps): string | undefined {
   return cfg ? resolveDefaultAgentId(cfg) : undefined;
 }
 
+/** Aborts one active chat run, clears transient state, and broadcasts the terminal event. */
 export function abortChatRunById(
   ops: ChatAbortOps,
   params: {
@@ -448,11 +458,14 @@ export function abortChatRunById(
   });
   ops.agentRunSeq.delete(runId);
   if (removed?.clientRunId) {
+    // Client and server run ids can differ; clear both sequence counters so a later run does not
+    // inherit stale event numbering after an abort.
     ops.agentRunSeq.delete(removed.clientRunId);
   }
   return { aborted: true };
 }
 
+/** Updates provider ownership after the model/auth provider is known for an active run. */
 export function updateChatRunProvider(
   chatAbortControllers: Map<string, ChatAbortControllerEntry>,
   params: {
@@ -470,6 +483,7 @@ export function updateChatRunProvider(
   return true;
 }
 
+/** Aborts all active runs owned by a provider or auth-provider identity. */
 export function abortChatRunsForProvider(
   ops: ChatAbortOps,
   params: {

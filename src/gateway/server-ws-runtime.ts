@@ -11,6 +11,7 @@ type GatewayWsRuntimeParams = Omit<
   context: GatewayRequestContext;
 };
 
+/** Wires WebSocket connection handling to the already-built gateway request context. */
 export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
   attachGatewayWsConnectionHandler({
     wss: params.wss,
@@ -36,6 +37,8 @@ export function attachGatewayWsHandlers(params: GatewayWsRuntimeParams) {
     extraHandlers: params.extraHandlers,
     getMethodRegistry: params.getMethodRegistry,
     broadcast: params.broadcast,
+    // WebSocket messages share one runtime context per gateway start; request-scoped
+    // refresh hooks still live on the context so health/auth snapshots stay current.
     buildRequestContext: () => params.context,
   });
 }

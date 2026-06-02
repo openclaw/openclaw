@@ -282,6 +282,7 @@ function shouldCloseSmartQuotedValueAt(
     return false;
   }
   if (!TOOLCALL_REPAIR_FREEFORM_VALUE_KEYS.has(valueKey)) {
+    // Non-freeform values close before any known successor key or tool-specific option key.
     return (
       TOOLCALL_REPAIR_KNOWN_ARG_KEYS.has(nextKey) ||
       isToolSpecificValueSuccessor({ toolName, valueKey, nextKey })
@@ -698,6 +699,7 @@ function wrapStreamRepairMalformedToolCallArguments(
       }
       const nextPartialJson = (partialJsonByIndex.get(event.contentIndex) ?? "") + event.delta;
       if (nextPartialJson.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
+        // Disable repair for this block after the bounded buffer trips; later deltas may be huge.
         partialJsonByIndex.delete(event.contentIndex);
         repairedArgsByIndex.delete(event.contentIndex);
         disabledIndices.add(event.contentIndex);
@@ -769,6 +771,7 @@ function wrapStreamRepairMalformedToolCallArguments(
   return stream;
 }
 
+/** Wrap a stream so malformed provider tool-call argument JSON is repaired before dispatch. */
 export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     const maybeStream = baseFn(model, context, options);
@@ -781,6 +784,7 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
   };
 }
 
+/** Decide which provider/API combinations emit repairable malformed tool-call args. */
 export function shouldRepairMalformedToolCallArguments(params: {
   provider?: string;
   modelApi?: string | null;
@@ -793,6 +797,7 @@ export function shouldRepairMalformedToolCallArguments(params: {
   );
 }
 
+/** Decode HTML-entity escaped XAI tool-call arguments in stream events and final messages. */
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }

@@ -45,6 +45,7 @@ function runtimePlanToolContext(params: {
   };
 }
 
+/** Copy plugin/channel ownership metadata across provider schema normalization clones. */
 function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source === target) {
     return;
@@ -53,6 +54,7 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   copyChannelAgentToolMeta(source as never, target as never);
 }
 
+/** Restore per-tool metadata only when normalized tools can be matched without name ambiguity. */
 function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TResult = unknown>(
   sourceTools: AgentTool<TSchemaType, TResult>[],
   normalizedTools: AgentTool<TSchemaType, TResult>[],
@@ -81,6 +83,7 @@ function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TRes
   return normalizedTools;
 }
 
+/** Normalize the runtime tool set with a prepared plan when available, preserving tool metadata. */
 export function normalizeAgentRuntimeTools<
   TSchemaType extends TSchema = TSchema,
   TResult = unknown,
@@ -115,6 +118,7 @@ export function normalizeAgentRuntimeTools<
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
 }
 
+/** Log provider/model-specific tool schema diagnostics through the same runtime-plan boundary. */
 export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyParams): void {
   const planContext = runtimePlanToolContext(params);
   if (params.runtimePlan) {

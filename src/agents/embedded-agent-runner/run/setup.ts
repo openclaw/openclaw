@@ -39,6 +39,11 @@ type HookRunnerLike = {
   ): Promise<PluginHookBeforeAgentStartResult | undefined>;
 };
 
+/**
+ * Resolves hook-driven provider/model overrides before runtime model lookup.
+ * before_model_resolve wins over legacy before_agent_start fields so new hooks
+ * can steer provider selection without being overwritten by old integrations.
+ */
 export async function resolveHookModelSelection(params: {
   prompt: string;
   attachments?: PluginHookBeforeModelResolveAttachment[];
@@ -103,6 +108,7 @@ export async function resolveHookModelSelection(params: {
   };
 }
 
+/** Projects detected image attachments into before_model_resolve hook metadata. */
 export function buildBeforeModelResolveAttachments(
   images: readonly { mimeType?: string }[] | undefined,
 ): PluginHookBeforeModelResolveAttachment[] | undefined {
@@ -115,6 +121,10 @@ export function buildBeforeModelResolveAttachments(
   }));
 }
 
+/**
+ * Applies context-window policy to the runtime model and returns the effective
+ * model that downstream session runtime should use for auto-compaction limits.
+ */
 export function resolveEffectiveRuntimeModel(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;

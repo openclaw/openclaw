@@ -319,10 +319,15 @@ export type AgentRuntimeResolvedRef = {
 };
 
 export type AgentRuntimeAuthPlan = {
+  /** Provider id after plugin auth-alias resolution for the requested runtime provider. */
   providerForAuth: string;
+  /** Provider id that owns the selected auth profile after auth-alias resolution. */
   authProfileProviderForAuth: string;
+  /** Harness-owned auth provider used when a wrapper runtime forwards another provider's profile. */
   harnessAuthProvider?: string;
+  /** Session auth profile forwarded only when runtime/harness provider ownership matches. */
   forwardedAuthProfileId?: string;
+  /** Candidate profile ids forwarded with the selected profile for provider-side fallback. */
   forwardedAuthProfileCandidateIds?: string[];
 };
 
@@ -344,12 +349,16 @@ export type AgentRuntimePromptPlan = {
 export type AgentRuntimePreparedMetadataSnapshot = object;
 
 export type PreparedOpenClawToolPlanning = {
+  /** Already materialized plugin metadata snapshot for tool planning callers that prepared it earlier. */
   metadataSnapshot?: AgentRuntimePreparedMetadataSnapshot;
+  /** Lazy snapshot loader so hot paths do not read plugin metadata unless planning needs it. */
   loadMetadataSnapshot?: () => AgentRuntimePreparedMetadataSnapshot;
 };
 
 export type AgentRuntimeToolPlan = {
+  /** Shared planning inputs passed to OpenClaw-owned tools without coupling callers to plugin internals. */
   preparedPlanning?: PreparedOpenClawToolPlanning;
+  /** Normalize tool schemas for the provider/model currently driving the runtime plan. */
   normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
     tools: AgentTool<TSchemaType, TResult>[],
     params?: {
@@ -358,6 +367,7 @@ export type AgentRuntimeToolPlan = {
       model?: AgentRuntimeModel;
     },
   ): AgentTool<TSchemaType, TResult>[];
+  /** Emit provider/model-specific diagnostics for the already selected tool set. */
   logDiagnostics(
     tools: AgentTool[],
     params?: {
@@ -369,12 +379,14 @@ export type AgentRuntimeToolPlan = {
 };
 
 export type AgentRuntimeDeliveryPlan = {
+  /** Detect payloads intentionally used as channel-control silence markers. */
   isSilentPayload(
     payload: Pick<
       AgentRuntimeReplyPayload,
       "text" | "mediaUrl" | "mediaUrls" | "presentation" | "interactive" | "channelData"
     >,
   ): boolean;
+  /** Decide where provider fallback follow-up text should be delivered, if anywhere. */
   resolveFollowupRoute(params: {
     payload: AgentRuntimeReplyPayload;
     originatingChannel?: string;
@@ -385,11 +397,14 @@ export type AgentRuntimeDeliveryPlan = {
 };
 
 export type AgentRuntimeOutcomePlan = {
+  /** Classify provider run results into normalized failover reasons. */
   classifyRunResult: AgentRuntimeOutcomeClassifier;
 };
 
 export type AgentRuntimeTransportPlan = {
+  /** Default transport extra params for the resolved model/provider pair. */
   extraParams: Record<string, unknown>;
+  /** Recompute transport extra params for an override context without rebuilding the whole plan. */
   resolveExtraParams(params?: {
     extraParamsOverride?: Record<string, unknown>;
     thinkingLevel?: AgentRuntimeThinkLevel;
@@ -401,13 +416,17 @@ export type AgentRuntimeTransportPlan = {
 };
 
 export type AgentRuntimePlan = {
+  /** Stable provider/model/harness/transport identity for this runtime plan. */
   resolvedRef: AgentRuntimeResolvedRef;
+  /** Provider plugin handle resolved once and shared by plan subsystems. */
   providerRuntimeHandle?: AgentRuntimeProviderHandle;
   auth: AgentRuntimeAuthPlan;
   prompt: AgentRuntimePromptPlan;
   tools: AgentRuntimeToolPlan;
   transcript: {
+    /** Lazily resolved default transcript policy for the plan's base context. */
     policy: AgentRuntimeTranscriptPolicy;
+    /** Resolve transcript policy for a workspace/model override context. */
     resolvePolicy(params?: {
       workspaceDir?: string;
       modelApi?: string;
@@ -418,6 +437,7 @@ export type AgentRuntimePlan = {
   outcome: AgentRuntimeOutcomePlan;
   transport: AgentRuntimeTransportPlan;
   observability: {
+    /** Compact provider/model ref used in logs and diagnostics. */
     resolvedRef: string;
     provider: string;
     modelId: string;

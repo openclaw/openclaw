@@ -3,6 +3,7 @@ import { listAgentIds, resolveDefaultAgentId } from "../../agents/agent-scope.js
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RespondFn } from "./types.js";
 
+/** Resolves empty agent ids to the default agent while rejecting unknown explicit ids. */
 export function resolveAgentIdOrRespondError(params: {
   rawAgentId: unknown;
   respond: RespondFn;

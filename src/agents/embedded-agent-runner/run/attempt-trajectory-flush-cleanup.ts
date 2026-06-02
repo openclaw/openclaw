@@ -1,10 +1,12 @@
 import { runAgentCleanupStep } from "../../run-cleanup-timeout.js";
 
+/** Minimal recorder surface needed during embedded-attempt cleanup. */
 export type EmbeddedAttemptTrajectoryRecorder = {
   describeFlushState: () => string | undefined;
   flush: () => Promise<void>;
 };
 
+/** Flushes trajectory records without letting a stalled flush block cleanup forever. */
 export async function flushEmbeddedAttemptTrajectoryRecorder(params: {
   runId: string;
   sessionId: string;

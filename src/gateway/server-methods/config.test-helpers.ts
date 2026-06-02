@@ -25,6 +25,7 @@ function createGatewayLog(): GatewayLogMocks {
   };
 }
 
+/** Build the read/write snapshot fixture shape expected by config mutation handlers. */
 export function createConfigWriteSnapshot(config: OpenClawConfig) {
   return {
     snapshot: {
@@ -46,6 +47,7 @@ export function createConfigWriteSnapshot(config: OpenClawConfig) {
   };
 }
 
+/** Create config handler options with captured response/log/shared-auth disconnect mocks. */
 export function createConfigHandlerHarness(args?: {
   method?: string;
   params?: unknown;
@@ -76,6 +78,7 @@ export function createConfigHandlerHarness(args?: {
   };
 }
 
+/** Let deferred config-write side effects, such as shared-auth disconnects, run once. */
 export async function flushConfigHandlerMicrotasks() {
   await new Promise<void>((resolve) => {
     queueMicrotask(resolve);

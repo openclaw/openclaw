@@ -306,6 +306,7 @@ function resolvePinnedClientMetadata(params: {
 }
 
 export type GatewayWsMessageHandlerParams = {
+  /** Raw WebSocket plus upgrade metadata for one gateway connection. */
   socket: WebSocket;
   upgradeReq: IncomingMessage;
   connId: string;
@@ -350,6 +351,7 @@ export type GatewayWsMessageHandlerParams = {
   logWsControl: SubsystemLogger;
 };
 
+/** Wires the full gateway WebSocket frame lifecycle for a single accepted socket. */
 export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
     socket,
@@ -394,6 +396,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     logWsControl,
   } = params;
 
+  // Handshake rejection paths need to flush a JSON-RPC response before closing;
+  // use the callback form so callers can await kernel/socket backpressure.
   const sendFrame = async (obj: unknown): Promise<void> =>
     await new Promise<void>((resolve, reject) => {
       socket.send(JSON.stringify(obj), (err) => {
@@ -473,6 +477,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     if (!client.invalidated) {
       return false;
     }
+    // Device/token repair can invalidate an already-connected client between
+    // frames; close before dispatch so stale auth never reaches method handlers.
     const reason = client.invalidatedReason ?? "invalidated";
     setCloseCause("client-invalidated", {
       reason,
@@ -489,6 +495,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
 
     const preauthPayloadBytes = !getClient() ? getRawDataByteLength(data) : undefined;
     if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
+      // Apply the small pre-auth cap before JSON parsing. Authenticated clients
+      // get the normal WebSocket payload limit after the handshake succeeds.
       logRejectedLargePayload({
         surface: "gateway.ws.preauth",
         bytes: preauthPayloadBytes,
@@ -624,6 +632,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const { minProtocol, maxProtocol } = connectParams;
         const supportsCurrentProtocol =
           maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;
+        // Probe clients may be old enough to predate current protocol support;
+        // keep their restart/health path alive so they can report upgrade state.
         const supportsProbeRestartProtocol =
           connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE &&
           maxProtocol >= MIN_PROBE_PROTOCOL_VERSION &&
@@ -969,6 +979,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
 
         const authDecision = await resolveConnectAuthDecision({
+          // Start from shared-auth state, then allow stronger bootstrap/device
+          // credentials to reclassify the session before pairing decisions run.
           state: {
             authResult,
             authOk,
@@ -1036,6 +1048,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
           ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
           : undefined;
+        // Shared-auth sessions are bound to the current secret/proxy generation.
+        // Device tokens issued from that shared-auth generation inherit the same
+        // rotation boundary so a secret change can evict derived sessions too.
         const sessionUsesSharedGatewayAuth =
           usesSharedGatewayAuth || deviceTokenSharedGatewaySessionGeneration !== undefined;
         const sessionSharedGatewaySessionGeneration =
@@ -1296,7 +1311,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
             } else if (pairing.created) {
               context.broadcast("device.pair.requested", pairing.request, { dropIfSlow: true });
             }
-            // Re-resolve: another connection may have superseded/approved the request since we created it
+            // Re-resolve: another connection may have superseded/approved the
+            // request since we created it, so expose the live request id to the
+            // reconnecting client instead of the stale local request object.
             recoveryRequestId = await resolveLivePendingRequestId();
             if (
               !(
@@ -1483,6 +1500,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                   })
                 : null;
             if (retryBootstrapHandoffProfile) {
+              // Mobile setup may reconnect as node after pairing already
+              // succeeded but before receiving hello-ok. Recreate only the
+              // approved operator handoff token rather than reopening pairing.
               const retryBootstrapOperatorScopes = resolveBootstrapProfileScopesForRole(
                 "operator",
                 retryBootstrapHandoffProfile.scopes,
@@ -1524,6 +1544,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
                 generation: sessionSharedGatewaySessionGeneration,
               }
             : undefined;
+        // Device tokens issued from browser/webchat shared auth remain tied to
+        // that shared-auth generation; plain paired-device reconnect tokens do
+        // not inherit the shared-secret rotation boundary.
         const deviceToken =
           shouldIssueDeviceToken && device && hasServerApprovedDeviceTokenBaseline
             ? await ensureDeviceToken({
@@ -1580,6 +1603,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           }
         }
         if (role === "node") {
+          // Node pairing reconciliation can downgrade declared capabilities to
+          // the approved set. Reflect those effective values on the connect
+          // params before registration so downstream method routing sees policy.
           const reconciliation = await reconcileNodePairingOnConnect({
             cfg: getRuntimeConfig(),
             connectParams,
@@ -1642,6 +1668,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }> = [];
         if (pluginSurfaceBaseUrl) {
           for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
+            // Mint per-client scoped URLs after auth/pairing but before setClient
+            // so plugin callbacks cannot see a surface without a stored grant.
             const capability = mintPluginNodeCapabilityToken();
             const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
             if (expiresAtMs === undefined) {
@@ -1947,6 +1975,9 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         if (!barrier) {
           break;
         }
+        // Token rotation/revocation mutates the same credential store used by
+        // closeInvalidatedClient(); drain earlier mutation requests before
+        // authorizing later frames from this socket.
         await barrier.catch(() => undefined);
         if (isClosed()) {
           return;
@@ -2031,6 +2062,8 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatForLog(err)));
       });
       if (DEVICE_CREDENTIAL_INVALIDATING_METHODS.has(req.method)) {
+        // Later frames on this connection wait for device-token mutations to
+        // finish, preventing a stale in-memory client from racing one more RPC.
         const barrier = dispatch.finally(() => {
           if (deviceCredentialMutationBarrier === barrier) {
             deviceCredentialMutationBarrier = undefined;

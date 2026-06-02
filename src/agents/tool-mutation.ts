@@ -126,6 +126,7 @@ function appendFingerprintAlias(
   return false;
 }
 
+/** Fast name-only mutating-tool hint used when payload details are unavailable. */
 export function isLikelyMutatingToolName(toolName: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(toolName);
   if (!normalized) {
@@ -139,6 +140,7 @@ export function isLikelyMutatingToolName(toolName: string): boolean {
   );
 }
 
+/** Classify a concrete tool call as mutating from its tool name plus structured args. */
 export function isMutatingToolCall(toolName: string, args: unknown): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(toolName);
   const record = asRecord(args);
@@ -184,6 +186,7 @@ export function isMutatingToolCall(toolName: string, args: unknown): boolean {
   }
 }
 
+/** Build a stable mutation identity for matching later successes against prior failures. */
 export function buildToolActionFingerprint(
   toolName: string,
   args: unknown,
@@ -199,6 +202,7 @@ export function buildToolActionFingerprint(
   if (action) {
     parts.push(`action=${action}`);
   }
+  // Prefer explicit target fields so noisy summaries do not split equivalent mutations.
   let hasStableTarget = false;
   hasStableTarget =
     appendFingerprintAlias(parts, record, "path", [
@@ -254,6 +258,7 @@ function readArgFingerprintValue(
   return undefined;
 }
 
+/** Extract the structured same-file target used for edit/write cross-tool recovery. */
 export function extractFileTarget(toolName: string, args: unknown): FileTarget | undefined {
   if (!isFileMutatingToolName(toolName)) {
     return undefined;
@@ -274,6 +279,7 @@ function fileTargetsEqual(a: FileTarget, b: FileTarget): boolean {
   return (a.path ?? "") === (b.path ?? "") && (a.oldpath ?? "") === (b.oldpath ?? "");
 }
 
+/** Build mutation state carried with tool events for display and failure recovery. */
 export function buildToolMutationState(
   toolName: string,
   args: unknown,
@@ -288,6 +294,7 @@ export function buildToolMutationState(
   };
 }
 
+/** Decide whether a later tool action should clear an existing unresolved mutation failure. */
 export function isSameToolMutationAction(existing: ToolActionRef, next: ToolActionRef): boolean {
   if (existing.actionFingerprint != null || next.actionFingerprint != null) {
     // For mutating flows, fail closed: only clear when both fingerprints exist

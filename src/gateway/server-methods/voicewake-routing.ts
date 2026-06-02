@@ -7,6 +7,7 @@ import {
 } from "../../infra/voicewake-routing.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
+/** RPC handlers for voice wake routing preferences shared with connected nodes. */
 export const voicewakeRoutingHandlers: GatewayRequestHandlers = {
   "voicewake.routing.get": async ({ respond }) => {
     try {

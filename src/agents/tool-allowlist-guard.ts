@@ -2,11 +2,15 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { normalizeToolList, normalizeToolName } from "./tool-policy.js";
 
 type ExplicitToolAllowlistSource = {
+  /** User-facing config/runtime source shown in fail-closed diagnostics. */
   label: string;
+  /** Normalized requested tool names from this source. */
   entries: string[];
+  /** Runtime allowlists still fail closed when the run explicitly disables tools. */
   enforceWhenToolsDisabled?: boolean;
 };
 
+/** Collect non-empty explicit allowlists while preserving their diagnostic source labels. */
 export function collectExplicitToolAllowlistSources(
   sources: Array<{ label: string; allow?: string[]; enforceWhenToolsDisabled?: boolean }>,
 ): ExplicitToolAllowlistSource[] {
@@ -25,6 +29,7 @@ export function collectExplicitToolAllowlistSources(
   });
 }
 
+/** Build a fail-closed error when explicit allowlists leave no callable tool. */
 export function buildEmptyExplicitToolAllowlistError(params: {
   sources: ExplicitToolAllowlistSource[];
   callableToolNames: string[];
@@ -33,7 +38,8 @@ export function buildEmptyExplicitToolAllowlistError(params: {
 }): Error | null {
   const sources =
     params.disableTools === true
-      ? params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
+      ? // Inherited config allowlists should not block intentional text-only runs; runtime allowlists should.
+        params.sources.filter((source) => source.enforceWhenToolsDisabled === true)
       : params.sources;
   const callableToolNames = normalizeToolList(params.callableToolNames);
   if (sources.length === 0 || callableToolNames.length > 0) {

@@ -13,6 +13,7 @@ const EMPTY_PROVIDER_AUTH_ALIAS_METADATA = {
   plugins: [],
 } satisfies NonNullable<ProviderAuthAliasLookupParams["metadataSnapshot"]>;
 
+/** Map wrapper runtimes to the provider whose auth profiles they can legally forward. */
 function resolveHarnessAuthProvider(params: {
   harnessId?: string;
   harnessRuntime?: string;
@@ -22,6 +23,7 @@ function resolveHarnessAuthProvider(params: {
   return harnessId === "codex" || runtime === "codex" ? CODEX_HARNESS_AUTH_PROVIDER : undefined;
 }
 
+/** Build the auth-profile forwarding plan after provider aliases and harness ownership are resolved. */
 export function buildAgentRuntimeAuthPlan(params: {
   provider: string;
   authProfileProvider?: string;

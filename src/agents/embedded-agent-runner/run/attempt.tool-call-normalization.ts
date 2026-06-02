@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
 import {
   extractStandalonePlainTextToolCallText,
   normalizePlainTextToolCallStreamEvents,
@@ -8,8 +10,6 @@ import {
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -1105,11 +1105,17 @@ function wrapStreamTrimToolCallNames(
   return stream;
 }
 
+/**
+ * Normalizes tool-call names emitted by a stream and applies the unknown-tool
+ * loop guard across both streaming deltas and the final result.
+ */
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
   guardOptions?: { unknownToolThreshold?: number },
 ): StreamFn {
+  // Keep one guard state per wrapped stream function so repeated retry streams
+  // cannot reset the unknown-tool counter by recreating AssistantStream objects.
   const unknownToolGuardState: UnknownToolLoopGuardState = {
     count: 0,
     countedMessages: new WeakSet<object>(),
@@ -1145,6 +1151,11 @@ export function shouldApplyReplayToolCallIdSanitizer(
   );
 }
 
+/**
+ * Rewrites replayed tool-call ids into the provider-safe id shape while
+ * preserving ids that the target provider requires for signed thinking or
+ * native tool-result pairing.
+ */
 export function sanitizeReplayToolCallIdsForStream(params: {
   messages: AgentMessage[];
   mode: ToolCallIdMode;
@@ -1164,12 +1175,18 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   return sanitizeToolUseResultPairing(sanitized);
 }
 
+/** Normalizes OpenAI Responses replay turns without applying non-Responses id modes. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   return downgradeOpenAIFunctionCallReasoningPairs(
     normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(messages)),
   );
 }
 
+/**
+ * Sanitizes malformed replay inputs before the provider stream starts. This is
+ * the last boundary before model submission, so provider-specific transcript
+ * validation and thinking-block policy are applied together here.
+ */
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,

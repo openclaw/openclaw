@@ -11,13 +11,20 @@ export {
   finalizeHarnessContextEngineTurn as finalizeAttemptContextEngineTurn,
 } from "../../harness/context-engine-lifecycle.js";
 
+/** Context-engine instance used by the embedded attempt runner. */
 export type AttemptContextEngine = ContextEngine;
 
+/** Bootstrap/context files resolved for one attempt before prompt assembly. */
 export type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
   bootstrapFiles: TBootstrapFile[];
   contextFiles: TContextFile[];
 };
 
+/**
+ * Resolves bootstrap/context files and records whether this attempt should mark
+ * the bootstrap turn complete. The skip and record decisions intentionally
+ * share inputs so lightweight or continuation turns cannot poison future runs.
+ */
 export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
   contextInjectionMode: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
@@ -41,6 +48,8 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
     (await params.hasCompletedBootstrapTurn(params.sessionFile));
   const shouldSkipBootstrapInjection =
     params.contextInjectionMode === "never" || isContinuationTurn;
+  // Lightweight/heartbeat/full-mode checks mirror persistence rules so a
+  // skipped or partial bootstrap turn is not recorded as completed.
   const shouldRecordCompletedBootstrapTurn =
     !shouldSkipBootstrapInjection &&
     params.bootstrapContextMode !== "lightweight" &&
@@ -58,6 +67,11 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   };
 }
 
+/**
+ * Builds compact prompt-cache metadata for attempt results and after-turn hooks.
+ * Empty inputs return undefined so callers do not persist placeholder cache
+ * objects in session metadata.
+ */
 export function buildContextEnginePromptCacheInfo(params: {
   retention?: "none" | "short" | "long";
   lastCallUsage?: NormalizedUsage;
@@ -103,6 +117,7 @@ export function buildContextEnginePromptCacheInfo(params: {
   return Object.keys(promptCache).length > 0 ? promptCache : undefined;
 }
 
+/** Finds the newest assistant message produced after the current attempt's prompt boundary. */
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -138,6 +153,8 @@ export function resolvePromptCacheTouchTimestamp(params: {
   if (!hasCacheUsage) {
     return params.fallbackLastCacheTouchAt ?? null;
   }
+  // Only cache read/write usage means the assistant timestamp touched prompt
+  // cache state. Plain token usage carries the previous touch forward.
   return (
     parsePromptCacheTouchTimestamp(params.assistantTimestamp) ??
     params.fallbackLastCacheTouchAt ??
@@ -145,6 +162,7 @@ export function resolvePromptCacheTouchTimestamp(params: {
   );
 }
 
+/** Builds prompt-cache metadata from the assistant produced in this loop. */
 export function buildLoopPromptCacheInfo(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;

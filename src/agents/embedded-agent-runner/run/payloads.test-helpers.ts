@@ -1,9 +1,11 @@
 import { expect } from "vitest";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 
+/** Parameter shape shared by payload tests and the production payload builder. */
 export type BuildPayloadParams = Parameters<typeof buildEmbeddedRunPayloads>[0];
 type RunPayloads = ReturnType<typeof buildEmbeddedRunPayloads>;
 
+/** Builds embedded-run payloads for tests with stable defaults. */
 export function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {
   return buildEmbeddedRunPayloads({
     assistantTexts: [],
@@ -23,6 +25,7 @@ export function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {
   });
 }
 
+/** Asserts a single text payload with optional error-state verification. */
 export function expectSinglePayloadText(
   payloads: RunPayloads,
   text: string,
@@ -35,6 +38,7 @@ export function expectSinglePayloadText(
   }
 }
 
+/** Asserts the standard single tool-error payload shape used by payload tests. */
 export function expectSingleToolErrorPayload(
   payloads: RunPayloads,
   params: { title: string; detail?: string; absentDetail?: string },

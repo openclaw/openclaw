@@ -6,6 +6,7 @@ import {
   listTasksForOwnerOrRequesterSessionKeyForStatus,
 } from "../../../tasks/task-status-access.js";
 
+/** Tool-result metadata used to discover detached work started by this attempt. */
 export type AsyncStartedToolMeta = {
   toolName?: string;
   asyncStarted?: boolean;
@@ -13,6 +14,11 @@ export type AsyncStartedToolMeta = {
   asyncTaskId?: string;
 };
 
+/**
+ * Summary of completion-required async work observed before the attempt can
+ * finish. `waitedRunIds` records every run id claimed by this wait call so the
+ * outer attempt loop will not rediscover the same unfinished task forever.
+ */
 export type CompletionRequiredAsyncTaskWaitResult = {
   waitedRunIds: string[];
   timedOutRunIds: string[];
@@ -60,6 +66,8 @@ async function sleepWithAbort(
     return;
   }
   throwIfAborted(signal);
+  // The abort listener is removed on every path so repeated polling does not
+  // accumulate listeners during long media-generation waits.
   await new Promise<void>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
@@ -108,6 +116,8 @@ function collectAsyncTaskRunIds(
     if (isTerminalTaskStatus(task.status)) {
       continue;
     }
+    // Registry lookup catches media tasks started by detached runtimes after
+    // the tool meta snapshot, so cron delivery waits for all visible work.
     addRunId(task.runId);
   }
   return runIds;
@@ -121,6 +131,8 @@ function findTerminalTasks(runIds: readonly string[]): {
   const terminalTasks: TaskRecord[] = [];
   for (const runId of runIds) {
     const task = findTaskByRunIdForStatus(runId);
+    // Missing task records stay pending until the deadline; detached runtimes
+    // can register after the tool meta that announced their run id.
     if (task && isTerminalTaskStatus(task.status)) {
       terminalTasks.push(task);
       continue;
@@ -130,6 +142,11 @@ function findTerminalTasks(runIds: readonly string[]): {
   return { pendingRunIds, terminalTasks };
 }
 
+/**
+ * Returns whether this cron attempt has media work that must finish first.
+ * Non-cron runs can surface async media later, but cron deliveries need the
+ * final payload before the scheduled message is sent.
+ */
 export function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -153,6 +170,11 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   );
 }
 
+/**
+ * Waits for cron-owned media tasks that must finish before final delivery.
+ * Discovery is repeated after each completed batch because one media task can
+ * enqueue another completion-required task from a detached runtime.
+ */
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
@@ -180,10 +202,14 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       };
     }
 
+    // Mark run ids as waited before polling so a task that never appears again
+    // cannot be rediscovered forever across outer-loop iterations.
     for (const runId of runIds) {
       waitedRunIds.add(runId);
     }
 
+    // A completed tool can enqueue a second completion-required task, so the
+    // outer loop re-reads tool metas and registry state after each batch.
     let pendingRunIds = runIds;
     while (pendingRunIds.length > 0) {
       throwIfAborted(params.abortSignal);

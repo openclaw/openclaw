@@ -104,6 +104,10 @@ const REPLAY_UNSAFE_FALLBACK_METADATA: EmbeddedRunAttemptResult["replayMetadata"
   replaySafe: false,
 };
 
+/**
+ * Decide whether the last assistant row is terminal in storage but incomplete
+ * for user-visible delivery because it stopped while waiting for tool results.
+ */
 export function isIncompleteTerminalAssistantTurn(params: {
   hasAssistantVisibleText: boolean;
   lastAssistant?: { stopReason?: string } | null;
@@ -166,7 +170,9 @@ const DEFAULT_PLANNING_ONLY_RETRY_LIMIT = 1;
 const STRICT_AGENTIC_PLANNING_ONLY_RETRY_LIMIT = 2;
 // Allow one immediate continuation plus one follow-up continuation before
 // surfacing the existing incomplete-turn error path.
+/** Default continuation cap for replay-safe reasoning-only assistant turns. */
 export const DEFAULT_REASONING_ONLY_RETRY_LIMIT = 2;
+/** Default continuation cap for replay-safe empty assistant turns. */
 export const DEFAULT_EMPTY_RESPONSE_RETRY_LIMIT = 1;
 const ACK_EXECUTION_NORMALIZED_SET = new Set([
   "ok",
@@ -214,22 +220,32 @@ const ACTIONABLE_PROMPT_DIRECTIVE_RE =
 const ACTIONABLE_PROMPT_REQUEST_RE =
   /\b(?:can|could|would|will)\s+you\b|\b(?:please|pls)\b|\b(?:help|explain|summari(?:s|z)e|analy(?:s|z)e|review|investigate|debug|fix|check|look(?:\s+into|\s+at)?|read|write|edit|update|run|search|find|implement|add|remove|refactor|show|tell me|walk me through)\b/i;
 
+/** Retry steering inserted when a supported model only narrates a plan. */
 export const PLANNING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn only described the plan. Do not restate the plan. Act now: take the first concrete tool action you can. If a real blocker prevents action, reply with the exact blocker in one sentence.";
+/** Retry steering inserted when provider output has reasoning but no visible answer. */
 export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
+/** Retry steering inserted when a supported model produced no visible content. */
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+/** Fast-path steering for short user approvals after the agent already proposed work. */
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
+/** Final blocked text after strict-agentic plan-only retries are exhausted. */
 export const STRICT_AGENTIC_BLOCKED_TEXT =
   "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
 
+/** Structured details extracted from visible plan-only prose for retry diagnostics. */
 export type PlanningOnlyPlanDetails = {
   explanation: string;
   steps: string[];
 };
 
+/**
+ * Summarize whether replaying an attempt is safe after an incomplete turn.
+ * Any mutating, async, delivery, spawn, or cron side effect makes replay unsafe.
+ */
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
@@ -247,12 +263,17 @@ export function buildAttemptReplayMetadata(
   };
 }
 
+/**
+ * Resolve stored replay metadata, defaulting to unsafe when older attempts lack
+ * explicit metadata.
+ */
 export function resolveAttemptReplayMetadata(attempt: {
   replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
 }): EmbeddedRunAttemptResult["replayMetadata"] {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+/** Build the user-visible incomplete-turn warning, or null when the turn is deliverable. */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -321,6 +342,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
+/**
+ * Decide whether a no-assistant attempt can be retried immediately instead of
+ * surfacing an incomplete-turn warning.
+ */
 export function shouldRetryMissingAssistantTurn(params: {
   payloadCount: number;
   aborted: boolean;
@@ -437,6 +462,10 @@ function hasTrailingSilentToolResult(messages: readonly AgentMessage[]): boolean
   return false;
 }
 
+/**
+ * Preserve cron silent-reply semantics when the final observable work is a
+ * silent tool result and no user-facing assistant payload was generated.
+ */
 export function resolveSilentToolResultReplyPayload(params: {
   isCronTrigger: boolean;
   payloadCount: number;
@@ -464,6 +493,7 @@ export function resolveSilentToolResultReplyPayload(params: {
     : null;
 }
 
+/** Mark transcript replay invalid when retrying could duplicate unsafe work. */
 export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
@@ -476,6 +506,7 @@ export function resolveReplayInvalidFlag(params: {
   );
 }
 
+/** Convert incomplete-turn and timeout state into the persisted run liveness bucket. */
 export function resolveRunLivenessState(params: {
   payloadCount: number;
   aborted: boolean;
@@ -588,6 +619,10 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
+/**
+ * Allow callers that opted into silent empty replies to suppress non-visible
+ * assistant turns when no side effect or committed delivery needs warning text.
+ */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -607,6 +642,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   });
 }
 
+/**
+ * Return retry steering for supported reasoning-only turns that are replay-safe
+ * and have no visible assistant text.
+ */
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -645,6 +684,10 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
+/**
+ * Return retry steering for replay-safe empty turns on supported providers or
+ * provider-neutral zero-usage stop signals.
+ */
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -762,6 +805,7 @@ function normalizeAckPrompt(text: string): string {
   return normalizeLowercaseStringOrEmpty(normalized);
 }
 
+/** Classify short multilingual approvals that should continue prior proposed work. */
 export function isLikelyExecutionAckPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 80 || trimmed.includes("\n") || trimmed.includes("?")) {
@@ -781,6 +825,10 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
 }
 
+/**
+ * Return fast-path steering for supported models when the latest user turn is
+ * just an approval to execute the already-proposed work.
+ */
 export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -820,6 +868,7 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
   return (hasPlanningHeading && hasPlanningCueLine) || (bulletLineCount >= 2 && hasPlanningCueLine);
 }
 
+/** Extract compact retry diagnostics from visible plan-only assistant prose. */
 export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDetails | null {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -889,6 +938,7 @@ function isSingleActionThenNarrativePattern(params: {
   );
 }
 
+/** Resolve the allowed plan-only retry count for the execution contract. */
 export function resolvePlanningOnlyRetryLimit(
   executionContract?: EmbeddedAgentExecutionContract,
 ): number {
@@ -897,6 +947,10 @@ export function resolvePlanningOnlyRetryLimit(
     : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
 }
 
+/**
+ * Return retry steering when a supported model narrates future work instead of
+ * taking a concrete action.
+ */
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;

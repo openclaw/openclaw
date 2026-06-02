@@ -32,6 +32,7 @@ type AssistantFailoverOutcome =
       error: FailoverError;
     };
 
+/** Resolves assistant-stage failover, profile rotation, retry, or surfaced error handling. */
 export async function handleAssistantFailover(params: {
   initialDecision: AssistantFailoverDecision;
   aborted: boolean;
@@ -155,6 +156,8 @@ export async function handleAssistantFailover(params: {
 
     const rotated = await params.advanceAuthProfile();
     const markFailedProfilePromise = markFailedProfile();
+    // Start rotation before waiting on profile-failure persistence so auth
+    // failover stays responsive even if the profile store is slow.
     if (timeoutFailure && !params.isProbeSession && failedProfileId) {
       const timeoutLabel = params.idleTimedOut ? "idle timeout (model silent)" : "timed out";
       params.warn(`Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`);
@@ -183,6 +186,8 @@ export async function handleAssistantFailover(params: {
       return sameModelIdleTimeoutRetry();
     }
 
+    // No profile was available. Recompute the decision with profileRotated=true
+    // so fallback/surface handling can distinguish exhausted rotation attempts.
     decision = resolveRunFailoverDecision({
       stage: "assistant",
       allowFormatRetry: params.cloudCodeAssistFormatError,

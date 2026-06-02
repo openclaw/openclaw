@@ -36,6 +36,7 @@ function normalizeStringListForAuthCompare(items: readonly string[] | undefined)
   return [...(items ?? [])].toSorted();
 }
 
+/** Normalizes trusted-proxy auth fields before comparing restart/disconnect impact. */
 function normalizeTrustedProxyAuthForCompare(auth: ReturnType<typeof resolveGatewayAuth>): {
   userHeader: string | undefined;
   requiredHeaders: string[];
@@ -117,6 +118,7 @@ function queueSharedGatewayAuthDisconnect(
   });
 }
 
+/** Refreshes auth generations after the write so new clients bind to the new config. */
 function queueSharedGatewayAuthGenerationRefresh(
   shouldRefresh: boolean,
   nextConfig: OpenClawConfig,

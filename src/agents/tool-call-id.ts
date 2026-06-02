@@ -83,12 +83,14 @@ export function extractToolCallsFromAssistant(
   return toolCalls;
 }
 
+/** Return the first tool-result id while preserving provider-specific fallback fields. */
 export function extractToolResultId(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
 ): string | null {
   return extractToolResultIds(msg)[0] ?? null;
 }
 
+/** Extract every unique tool-result id spelling accepted by provider adapters. */
 export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolResult" }>): string[] {
   const ids: string[] = [];
   const record = msg as {
@@ -136,6 +138,7 @@ function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
 function toolCallNeedsReplayMutation(block: ReplaySafeToolCallBlock): boolean {
   const rawName = typeof block.name === "string" ? block.name : undefined;
   const trimmedName = rawName?.trim();
+  // Preserved signed turns must replay byte-equivalent tool names; trimming would alter signatures.
   return Boolean(rawName) && rawName !== trimmedName;
 }
 
@@ -174,6 +177,7 @@ function isReplaySafeThinkingAssistantMessage(
     ) {
       return false;
     }
+    // Signed thinking replay can preserve ids only when each tool call is complete and unique.
     seenToolCallIds.add(toolCallId);
   }
   return sawThinking && sawToolCall;
@@ -238,6 +242,7 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
       return candidate;
     }
 
+    // Strict9 has no room for readable suffixes, so collision recovery is hash-only.
     for (let i = 0; i < 1000; i += 1) {
       const hashed = shortHash(`${params.id}:${i}`, STRICT9_LEN);
       if (!params.used.has(hashed)) {
@@ -256,7 +261,7 @@ function makeUniqueToolId(params: { id: string; used: Set<string>; mode: ToolCal
   }
 
   const hash = shortHash(params.id);
-  // Use separator based on mode: none for strict, underscore for non-strict variants
+  // Strict mode must remain alphanumeric, so suffixes cannot use separators.
   const separator = params.mode === "strict" ? "" : "_";
   const maxBaseLen = MAX_LEN - separator.length - hash.length;
   const clippedBase = base.length > maxBaseLen ? base.slice(0, maxBaseLen) : base;
@@ -318,6 +323,7 @@ function createOccurrenceAwareResolver(
     assistantOccurrences.set(id, occurrence);
     const next = allocatePreservingNativeAnthropicId(id, occurrence);
     const pending = pendingByRawId.get(id);
+    // Tool results consume rewritten assistant ids in encounter order for duplicate raw ids.
     if (pending) {
       pending.push(next);
     } else {
@@ -353,6 +359,7 @@ function createOccurrenceAwareResolver(
   const preserveAssistantId = (id: string): string => {
     used.add(id);
     const pending = pendingByRawId.get(id);
+    // Preserved signed turns still reserve ids so later unsanitized duplicates are rewritten.
     if (pending) {
       pending.push(id);
     } else {
@@ -456,6 +463,7 @@ export function sanitizeToolCallIdsForCloudCodeAssist(
   const allowedToolNames = normalizeAllowedToolNames(options?.allowedToolNames);
   const preserveReplaySafeThinkingToolCallIds =
     options?.preserveReplaySafeThinkingToolCallIds === true;
+  // Reserve replay-safe signed-thinking ids before rewriting so later turns cannot collide with them.
   const replaySafeThinking = preserveReplaySafeThinkingToolCallIds
     ? collectReplaySafeThinkingToolIds(messages, allowedToolNames)
     : undefined;

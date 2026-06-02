@@ -109,7 +109,7 @@ function isOllamaCloudModel(model: { id?: string; provider?: string } | undefine
 }
 
 /**
- * Resolves the LLM idle timeout from configuration.
+ * Resolves the chunk-level LLM idle watchdog from run, agent, and provider config.
  * @returns Idle timeout in milliseconds, or 0 to disable
  */
 export function resolveLlmIdleTimeoutMs(params?: {
@@ -200,8 +200,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
 }
 
 /**
- * Wraps a stream function with idle timeout detection.
- * If no token is received within the specified timeout, the request is aborted.
+ * Wraps a stream function with chunk-level idle timeout detection.
  *
  * @param baseFn - The base stream function to wrap
  * @param timeoutMs - Idle timeout in milliseconds
@@ -243,6 +242,8 @@ export function streamWithIdleTimeout(
       (model as { requestTimeoutMs?: number }).requestTimeoutMs! > 0
         ? Math.floor((model as { requestTimeoutMs?: number }).requestTimeoutMs!)
         : timeoutMs;
+    // Keep provider-level requestTimeoutMs no longer than the stream watchdog,
+    // so transport timeouts and our idle timeout converge on the same failure.
     const wrappedModel =
       typeof model === "object" && model !== null
         ? ({

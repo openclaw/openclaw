@@ -4,6 +4,7 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
+/** WeakMap cache scoped to one prompt/guard pass; message objects are mutated in place sometimes. */
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
 function isTextBlock(block: unknown): block is { type: "text"; text: string } {
@@ -32,10 +33,12 @@ function estimateUnknownChars(value: unknown): number {
     const serialized = JSON.stringify(value);
     return typeof serialized === "string" ? serialized.length : 0;
   } catch {
+    // Cyclic or hostile blocks still need a bounded estimate so guards can keep moving.
     return 256;
   }
 }
 
+/** Accept both current and legacy tool-result shapes before provider conversion. */
 export function isToolResultMessage(msg: AgentMessage): boolean {
   const role = (msg as { role?: unknown }).role;
   const type = (msg as { type?: unknown }).type;
@@ -67,6 +70,7 @@ function estimateContentBlockChars(content: unknown[]): number {
   return chars;
 }
 
+/** Extract only model-visible text from tool results, skipping malformed legacy blocks. */
 export function getToolResultText(msg: AgentMessage): string {
   const content = getToolResultContent(msg);
   const chunks: string[] = [];
@@ -143,6 +147,7 @@ export function createMessageCharEstimateCache(): MessageCharEstimateCache {
   return new WeakMap<AgentMessage, number>();
 }
 
+/** Estimate message size with object-identity caching for repeated guard passes. */
 export function estimateMessageCharsCached(
   msg: AgentMessage,
   cache: MessageCharEstimateCache,
@@ -163,6 +168,7 @@ export function estimateContextChars(
   return messages.reduce((sum, msg) => sum + estimateMessageCharsCached(msg, cache), 0);
 }
 
+/** Drop a cached estimate after a guard mutates the message object in place. */
 export function invalidateMessageCharsCacheEntry(
   cache: MessageCharEstimateCache,
   msg: AgentMessage,

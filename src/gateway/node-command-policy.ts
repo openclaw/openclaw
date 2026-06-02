@@ -234,6 +234,7 @@ export function listDangerousPluginNodeCommands(): string[] {
   return normalizeUniqueStringEntries(commands);
 }
 
+/** Lists non-dangerous plugin node commands that default on for this platform. */
 function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   const registry = getActiveRuntimePluginRegistry();
   if (!registry) {
@@ -249,6 +250,7 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   return normalizeUniqueStringEntries(commands);
 }
 
+/** Checks whether a plugin command is unsafe to invoke while iOS is backgrounded. */
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {
   const registry = getActiveRuntimePluginRegistry();
   if (!registry) {
@@ -282,6 +284,8 @@ function filterDesktopHostCommandDefaults(params: {
   if (params.includeDesktopHostCommands === true || !isDesktopPlatformId(params.platformId)) {
     return [...params.commands];
   }
+  // Desktop host commands require explicit approval/configuration at runtime;
+  // defaults can appear during pairing review but not as live reconnect grants.
   return params.commands.filter((command) => !DESKTOP_HOST_COMMANDS.has(command));
 }
 
@@ -292,6 +296,8 @@ function filterApprovedRuntimeCommands(params: {
   if (!isDesktopPlatformId(params.platformId)) {
     return [];
   }
+  // Existing approvals only keep commands that are still host-command defaults.
+  // Non-default commands must also remain in gateway.nodes.allowCommands.
   return params.commands.filter((command) => DESKTOP_HOST_COMMANDS.has(command.trim()));
 }
 
@@ -343,6 +349,8 @@ function resolveNodeCommandAllowlistInternal(
       .map((cmd) => cmd.trim())
       .filter((cmd) => cmd && !dangerousPluginCommands.has(cmd)),
   );
+  // Operator config is explicit authority: it can opt into dangerous plugin
+  // commands that default/plugin policy intentionally kept out of auto grants.
   for (const cmd of extra) {
     const trimmed = cmd.trim();
     if (trimmed) {
@@ -358,6 +366,7 @@ function resolveNodeCommandAllowlistInternal(
   return allow;
 }
 
+/** Resolves the live node command allowlist used for node.invoke authorization. */
 export function resolveNodeCommandAllowlist(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
@@ -365,6 +374,7 @@ export function resolveNodeCommandAllowlist(
   return resolveNodeCommandAllowlistInternal(cfg, node);
 }
 
+/** Resolves the broader pairing-review allowlist, including desktop host defaults. */
 export function resolveNodePairingCommandAllowlist(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
@@ -374,6 +384,7 @@ export function resolveNodePairingCommandAllowlist(
   });
 }
 
+/** Normalizes node-declared commands while preserving first-seen order. */
 function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
   if (!Array.isArray(commands)) {
     return [];
@@ -391,6 +402,7 @@ function normalizeDeclaredCommands(commands?: readonly string[]): string[] {
   return normalized;
 }
 
+/** Filters node-declared commands to those currently allowed by policy. */
 export function normalizeDeclaredNodeCommands(params: {
   declaredCommands?: readonly string[];
   allowlist: Set<string>;
@@ -400,6 +412,7 @@ export function normalizeDeclaredNodeCommands(params: {
   );
 }
 
+/** Validates one node.invoke command against policy and the node's declaration. */
 export function isNodeCommandAllowed(params: {
   command: string;
   declaredCommands?: string[];

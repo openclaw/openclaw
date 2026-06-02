@@ -89,6 +89,11 @@ function isKnownLocalCodingToolName(normalized: string): boolean {
   );
 }
 
+/**
+ * Apply the final runtime tool allowlist to already-constructed tools.
+ * Construction may be broader than delivery so plugin groups can expand with
+ * live plugin metadata before the actual model-facing list is filtered.
+ */
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
@@ -114,6 +119,10 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
+/**
+ * Add the message tool to an explicit allowlist when the caller requires
+ * deterministic channel delivery while preserving wildcard/default semantics.
+ */
 export function mergeForcedEmbeddedAttemptToolsAllow(
   toolsAllow: string[] | undefined,
   params: { forceMessageTool?: boolean },
@@ -154,6 +163,8 @@ function resolveCodingToolConstructionPlanForAllowlist(
   const includePluginTools = normalized.some(
     (name) =>
       name === "group:plugins" ||
+      // Unknown names are treated as plugin/channel candidates so narrow
+      // allowlists can still materialize tools registered outside local factories.
       (!isBundleMcpAllowlistName(name) && !isKnownLocalCodingToolName(name)),
   );
   const includeChannelTools = includePluginTools;
@@ -167,6 +178,10 @@ function resolveCodingToolConstructionPlanForAllowlist(
   };
 }
 
+/**
+ * Resolve which tool families need construction before the attempt builds the
+ * runtime model-facing tool list.
+ */
 export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   disableTools?: boolean;
   isRawModelRun?: boolean;
@@ -206,10 +221,15 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
+/** Convenience predicate for call sites that only need local core construction. */
 export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
   return resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }).includeCoreTools;
 }
 
+/**
+ * Decide whether bundled MCP runtime startup is needed for this attempt's
+ * allowlist without forcing broader local tool construction.
+ */
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
@@ -233,6 +253,10 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   });
 }
 
+/**
+ * Decide whether bundled LSP runtime startup is needed for explicit LSP tool
+ * names while honoring global tool disablement.
+ */
 export function shouldCreateBundleLspRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;

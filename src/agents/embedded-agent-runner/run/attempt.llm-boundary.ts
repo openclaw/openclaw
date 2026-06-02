@@ -6,6 +6,7 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
+/** Normalizes replay history before it crosses from OpenClaw state to provider input. */
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripUnsafeBlockedRunMetadata(
     stripToolResultDetails(normalizeAssistantReplayContent(messages)),
@@ -15,6 +16,7 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
 }
 
+/** Normalizes existing history while preserving the current prompt outside replay. */
 export function normalizeMessagesForCurrentPromptBoundary(params: {
   messages: AgentMessage[];
   prompt: string;
@@ -27,6 +29,7 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
   return normalizeMessagesForLlmBoundary([...params.messages, promptMessage]).slice(0, -1);
 }
 
+/** Installs a prompt-local runtime-context message and keeps it across retry rebuilds. */
 export function installRuntimeContextMessageForPrompt(params: {
   session: {
     messages: AgentMessage[];
@@ -86,6 +89,7 @@ function appendRuntimeContextMessageForPrompt(params: {
   return [...params.messages, params.message];
 }
 
+/** Inserts runtime context immediately before the active user prompt when possible. */
 export function insertRuntimeContextMessageForPrompt(params: {
   message: RuntimeContextCustomMessage;
   messages: AgentMessage[];
@@ -204,6 +208,8 @@ export function installModelPromptTransform(params: {
       transcriptText: params.transcriptPrompt,
       shouldCapture: (message) => {
         const timestamp = (message as { timestamp?: unknown }).timestamp;
+        // Capture by timestamp after the first armed transform so retries only
+        // rewrite the same prompt, not later user messages appended meanwhile.
         if (targetPromptTimestamp !== undefined) {
           return timestamp === targetPromptTimestamp;
         }
@@ -303,6 +309,8 @@ function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[]
     if (typeof blocked.blockedAt === "number") {
       safeBlocked.blockedAt = blocked.blockedAt;
     }
+    // Keep only routing-safe provenance. The original blocked prompt/reason
+    // may contain the exact sensitive text that the hook refused to send.
     const nextOpenClaw = {
       ...(openclaw as Record<string, unknown>),
       beforeAgentRunBlocked: safeBlocked,

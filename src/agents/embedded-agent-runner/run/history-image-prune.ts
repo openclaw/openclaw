@@ -1,6 +1,8 @@
 import type { AgentMessage } from "../../runtime/index.js";
 
+/** Stable replacement text for pruned binary image blocks in replayed history. */
 export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+/** Stable replacement text for historical attachment markers that would be reloaded as new images. */
 export const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
   "[media reference removed - already processed by model]";
 
@@ -27,6 +29,8 @@ function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
   let currentTurnStart = -1;
   let currentTurnHasAssistantReply = false;
 
+  // A turn is complete only after an assistant reply; current or tool-only
+  // turns keep their original media so retries and follow-ups see the same input.
   for (let i = 0; i < messages.length; i++) {
     const role = messages[i]?.role;
     if (role === "user") {
@@ -86,6 +90,8 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
     return null;
   }
 
+  // Preserve object identity when no media was pruned; callers use null as the
+  // cheap signal that context bytes can remain untouched.
   let prunedMessages: AgentMessage[] | null = null;
   for (let i = 0; i < pruneBeforeIndex; i++) {
     const message = messages[i];
@@ -148,6 +154,10 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
   return prunedMessages;
 }
 
+/**
+ * Wrap an agent context transform with historical image pruning and return a
+ * disposer that restores the original transform for test/runtime teardown.
+ */
 export function installHistoryImagePruneContextTransform(agent: PrunableContextAgent): () => void {
   const originalTransformContext = agent.transformContext;
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {

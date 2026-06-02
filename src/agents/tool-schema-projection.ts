@@ -9,18 +9,24 @@ export type RuntimeToolInputSchemaJson =
   | { [key: string]: RuntimeToolInputSchemaJson };
 
 export type RuntimeToolInputSchemaProjection = {
+  /** JSON-safe schema clone passed on to runtime/provider compatibility checks. */
   readonly schema: RuntimeToolInputSchemaJson;
+  /** Human-readable paths explaining why the original schema cannot be used as-is. */
   readonly violations: readonly string[];
 };
 
 export type RuntimeToolSchemaDiagnostic = {
+  /** Tool name when readable, otherwise a stable tool[index] fallback. */
   readonly toolName: string;
   readonly toolIndex: number;
+  /** Schema or descriptor paths rejected by this inspection pass. */
   readonly violations: readonly string[];
 };
 
 export type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "parameters">> = {
+  /** Tools whose descriptors and input schemas are safe for the selected inspection mode. */
   readonly tools: readonly TTool[];
+  /** Rejected tools with enough path detail for logs and user-facing diagnostics. */
   readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
 };
 
@@ -62,6 +68,7 @@ function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "param
   const entries: RuntimeToolEntryRead<TTool>[] = [];
   for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
     try {
+      // Tool arrays can be proxy-backed; isolate unreadable entries instead of rejecting all tools.
       entries.push({ ok: true, tool: tools[toolIndex], toolIndex });
     } catch {
       entries.push(unreadableRuntimeToolEntry(toolIndex) as RuntimeToolEntryRead<TTool>);
@@ -161,6 +168,7 @@ function findDynamicSchemaKeywordViolations(
     }
     if (schemaMapKeywords.has(key) && isJsonObject(value)) {
       for (const [schemaName, childSchema] of Object.entries(value)) {
+        // JSON Schema map keywords name child schemas, so include the map key in diagnostic paths.
         violations.push(
           ...findDynamicSchemaKeywordViolations(childSchema, `${path}.${key}.${schemaName}`),
         );
@@ -181,6 +189,7 @@ const schemaMapKeywords = new Set([
   "properties",
 ]);
 
+/** Serialize and validate a tool input schema into the runtime's JSON-object schema contract. */
 export function projectRuntimeToolInputSchema(
   schema: unknown,
   path = "parameters",
@@ -230,6 +239,7 @@ function inspectToolSchema(
     mode === "runtime"
       ? projection.violations
       : projection.violations.filter(
+          // Provider normalizers can strip dynamic keywords, but runtime execution cannot accept them.
           (violation) =>
             violation !== `${schemaPath}.$dynamicRef` &&
             violation !== `${schemaPath}.$dynamicAnchor` &&
@@ -261,18 +271,21 @@ function inspectToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameter
   return { tools: compatibleTools, diagnostics };
 }
 
+/** Return diagnostics for tools that cannot be used directly by the runtime. */
 export function inspectRuntimeToolInputSchemas(
   tools: readonly Pick<AnyAgentTool, "name" | "parameters">[],
 ): RuntimeToolSchemaDiagnostic[] {
   return [...inspectToolEntries(readRuntimeToolEntries(tools), "runtime").diagnostics];
 }
 
+/** Keep only tools whose descriptors and schemas are immediately safe for runtime execution. */
 export function filterRuntimeCompatibleTools<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 >(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {
   return inspectToolEntries(readRuntimeToolEntries(tools), "runtime");
 }
 
+/** Keep tools that provider-specific schema normalization can still repair before submission. */
 export function filterProviderNormalizableTools<
   TTool extends Pick<AnyAgentTool, "name" | "parameters">,
 >(tools: readonly TTool[]): RuntimeToolSchemaInspection<TTool> {

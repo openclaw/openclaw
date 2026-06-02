@@ -45,6 +45,12 @@ type LogLike = {
   warn(message: string): void;
 };
 
+/**
+ * Builds the auth/profile controller used by an embedded run attempt loop. The
+ * controller owns profile rotation, runtime credential preparation, and refresh
+ * timers; callers provide state accessors so retries can keep one canonical
+ * auth view across attempts.
+ */
 export function createEmbeddedRunAuthController(params: {
   config: RunEmbeddedAgentParams["config"];
   agentDir: string;
@@ -199,6 +205,8 @@ export function createEmbeddedRunAuthController(params: {
         activeRuntimeAuthState.profileId !== refreshProfileId ||
         activeRuntimeAuthState.sourceApiKey.trim() !== sourceApiKey
       ) {
+        // Auth may rotate while a scheduled refresh is in flight; stale refresh
+        // results must not overwrite the newer profile's runtime credentials.
         params.log.debug(
           `Ignoring stale runtime auth refresh for ${runtimeModel.provider}; auth state advanced before ${reason} refresh completed.`,
         );
@@ -281,6 +289,8 @@ export function createEmbeddedRunAuthController(params: {
           }, RUNTIME_AUTH_REFRESH_RETRY_MS);
           const activeRuntimeAuthState = params.getRuntimeAuthState();
           if (activeRuntimeAuthState) {
+            // Store retry timers on the mutable runtime auth state so later
+            // rotation/cancellation can clear whichever timer is active.
             activeRuntimeAuthState.refreshTimer = retryTimer;
           }
           if (params.getRuntimeAuthRefreshCancelled() && activeRuntimeAuthState) {
@@ -440,6 +450,8 @@ export function createEmbeddedRunAuthController(params: {
     if (preparedAuth?.apiKey) {
       clearRuntimeAuthRefreshTimer();
       params.authStorage.setRuntimeApiKey(runtimeModel.provider, preparedAuth.apiKey);
+      // Keep the source credential, not the runtime credential, so scheduled
+      // refresh can mint another short-lived token before expiry.
       params.setRuntimeAuthState({
         generation: nextRuntimeAuthGeneration(),
         sourceApiKey: apiKeyInfo.apiKey,

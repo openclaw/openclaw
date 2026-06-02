@@ -50,6 +50,7 @@ function invalidSecretsResolveField(
   return "targetIds";
 }
 
+/** Creates secrets RPC handlers with injected reload/resolve dependencies for the live gateway. */
 export function createSecretsHandlers(params: {
   reloadSecrets: () => Promise<{ warningCount: number }>;
   resolveSecrets: (params: {
@@ -78,6 +79,8 @@ export function createSecretsHandlers(params: {
   return {
     "secrets.reload": async ({ respond }) => {
       try {
+        // Reload returns only warning count so callers know whether diagnostics
+        // changed without receiving secret material or raw warning text.
         const result = await params.reloadSecrets();
         respond(true, { ok: true, warningCount: result.warningCount });
       } catch (error) {
@@ -144,6 +147,8 @@ export function createSecretsHandlers(params: {
       }
 
       try {
+        // resolveSecrets owns the actual secret lookup; this handler only
+        // normalizes policy inputs and validates the outbound assignment shape.
         const result = await params.resolveSecrets({
           commandName,
           targetIds,

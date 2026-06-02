@@ -56,6 +56,8 @@ function serializeFrameField(name: "payload" | "stateVersion", value: unknown): 
   const fieldJSON = JSON.stringify({ [name]: value });
   const keyJSON = JSON.stringify(name);
   const prefix = `{${keyJSON}:`;
+  // Reuse JSON.stringify's escaping while splicing fields into a hand-built frame; this avoids
+  // stringifying payload/stateVersion once per client on broad fan-out.
   return fieldJSON.startsWith(prefix) ? `,${keyJSON}:${fieldJSON.slice(prefix.length, -1)}` : "";
 }
 
@@ -92,6 +94,7 @@ function hasEventScope(client: GatewayWsClient, event: string): boolean {
   return required.some((scope) => scopes.includes(scope));
 }
 
+/** Creates scoped WebSocket event broadcasters for one gateway runtime's live client set. */
 export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient> }) {
   const clientSeq = new WeakMap<GatewayWsClient, number>();
   const reportedSlowPayloadClients = new WeakSet<GatewayWsClient>();
@@ -163,6 +166,8 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
       }
       if (slow && opts?.dropIfSlow) {
         if (!isTargeted) {
+          // Broad ephemeral events still advance per-client sequence so the next delivered frame
+          // makes the dropped event observable as a sequence gap.
           clientSeq.set(c, nextSeq);
         }
         continue;
@@ -180,6 +185,8 @@ export function createGatewayBroadcaster(params: { clients: Set<GatewayWsClient>
         if (!isTargeted) {
           clientSeq.set(c, nextSeq);
         }
+        // Targeted sends intentionally omit seq: a connection-specific event should not disturb
+        // the broad event stream clients use for missed-frame detection.
         const base = getFrameBase();
         const seqFragment = eventSeq === undefined ? "" : `,"seq":${eventSeq}`;
         const frame = `{"type":"event","event":${base.eventJSON}${base.payloadFragment}${seqFragment}${base.stateVersionFragment}}`;

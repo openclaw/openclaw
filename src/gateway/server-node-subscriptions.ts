@@ -36,6 +36,8 @@ export function createNodeSubscriptionManager(): NodeSubscriptionManager {
   const nodeSubscriptions = new Map<string, Set<string>>();
   const sessionSubscribers = new Map<string, Set<string>>();
 
+  // Keep node->session and session->node indexes in sync so disconnect cleanup
+  // and session fan-out do not need to scan every known subscription.
   const toPayloadJSON = (payload: unknown) => serializeEventPayload(payload);
 
   const subscribe = (nodeId: string, sessionKey: string) => {

@@ -141,6 +141,8 @@ function isPersistentBrowserProxyMutation(method: string, path: string): boolean
 }
 
 function isForbiddenBrowserProxyMutation(params: unknown): boolean {
+  // node.invoke may proxy browser reads/ephemeral actions, but persistent profile
+  // mutation must stay behind the dedicated browser/profile APIs.
   if (!params || typeof params !== "object") {
     return false;
   }
@@ -166,6 +168,8 @@ function respondRefreshedPluginSurface(params: {
   client: GatewayClient | null;
   respond: RespondFn;
 }) {
+  // Refresh uses the client's current scoped capability record so returned URLs
+  // inherit the same grant expiry and storage key as the original surface.
   const refreshed = params.client
     ? refreshClientPluginNodeCapability({
         client: params.client,
@@ -220,6 +224,8 @@ async function clearStaleApnsRegistrationIfNeeded(
   nodeId: string,
   params: { status: number; reason?: string },
 ) {
+  // Invalid APNs responses retire only the exact registration that was used,
+  // avoiding races with a newer registration from a reconnecting node.
   if (
     !shouldClearStoredApnsRegistration({
       registration,
@@ -273,6 +279,8 @@ function shouldQueueAsPendingForegroundAction(params: {
 }
 
 function prunePendingNodeActions(nodeId: string, nowMs: number): PendingNodeAction[] {
+  // Foreground-action queues are short-lived hints for iOS wake/reopen flows, not
+  // durable command storage; expired empty queues are removed immediately.
   const queue = pendingNodeActionsById.get(nodeId) ?? [];
   const minTimestampMs = nowMs - NODE_PENDING_ACTION_TTL_MS;
   const live = queue.filter((entry) => entry.enqueuedAtMs >= minTimestampMs);
@@ -325,6 +333,8 @@ function refreshConnectedNodeSurfaceCaches(params: {
 }) {
   const cfg = params.cfg ?? params.context.getRuntimeConfig();
   const { nodeSession } = params;
+  // Remote command shims mirror the effective approved surface, so approval
+  // changes update both cached metadata and generated bins.
   recordRemoteNodeInfo({
     nodeId: nodeSession.nodeId,
     displayName: nodeSession.displayName,
@@ -476,6 +486,8 @@ export async function maybeWakeNodeWithApns(
   nodeId: string,
   opts?: { force?: boolean; wakeReason?: string; cfg?: OpenClawConfig },
 ): Promise<NodeWakeAttempt> {
+  // Coalesce concurrent wake attempts per node; callers waiting on the same
+  // reconnect path should observe one APNs send and one result.
   const state = nodeWakeById.get(nodeId) ?? { lastWakeAtMs: 0 };
   nodeWakeById.set(nodeId, state);
 
@@ -592,6 +604,8 @@ export async function maybeSendNodeWakeNudge(
   nodeId: string,
   opts?: { cfg?: OpenClawConfig },
 ): Promise<NodeWakeNudgeAttempt> {
+  // Nudges are user-visible alerts after background wakes fail, so throttle them
+  // separately from silent wake pushes.
   const startedAtMs = Date.now();
   const withDuration = (
     attempt: Omit<NodeWakeNudgeAttempt, "durationMs">,
@@ -681,6 +695,8 @@ export async function waitForNodeReconnect(params: {
   timeoutMs?: number;
   pollMs?: number;
 }): Promise<boolean> {
+  // Poll the live registry instead of sleeping once; reconnect timing varies
+  // across APNs direct, relay, and already-throttled wake paths.
   const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, NODE_WAKE_RECONNECT_WAIT_MS, 250);
   const pollMs = resolveTimerTimeoutMs(params.pollMs, NODE_WAKE_RECONNECT_POLL_MS, 50);
   const deadline = Date.now() + timeoutMs;
@@ -1115,6 +1131,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       const cfg = context.getRuntimeConfig();
       let nodeSession = context.nodeRegistry.get(nodeId);
       if (!nodeSession) {
+        // Offline invokes get a silent wake, bounded reconnect wait, forced retry,
+        // then a visible nudge before returning NOT_CONNECTED.
         const wakeReqId = req.id;
         const wakeFlowStartedAtMs = Date.now();
         context.logGateway.info(
@@ -1374,6 +1392,8 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     const p = params as { event: string; payload?: unknown; payloadJSON?: string | null };
+    // Normalize node.event to payloadJSON before lazy-loading the event router,
+    // keeping the heavy event handler out of startup unless a node emits events.
     const payloadJSON =
       typeof p.payloadJSON === "string"
         ? p.payloadJSON

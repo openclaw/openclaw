@@ -1,5 +1,10 @@
 import { log } from "../logger.js";
 
+/**
+ * Minimal active-session surface needed to steer queued user text and observe
+ * transcript commit. Tests use this shape to avoid depending on the full
+ * AgentSession runtime while still exercising queue cancellation behavior.
+ */
 export type EmbeddedAgentActiveSessionSteerTarget = {
   agent?: unknown;
   getSteeringMessages?(): readonly string[];
@@ -7,6 +12,11 @@ export type EmbeddedAgentActiveSessionSteerTarget = {
   subscribe(listener: (event: unknown) => void): () => void;
 };
 
+/**
+ * Default wait for a queued steering message to appear in transcript events.
+ * Long enough for slow auto-retry/compaction handoff, but still bounded so
+ * delivery-sensitive source replies do not wait forever.
+ */
 export const DEFAULT_QUEUE_TRANSCRIPT_COMMIT_TIMEOUT_MS = 120_000;
 
 function extractQueuedUserMessageText(message: unknown): string | undefined {
@@ -76,6 +86,10 @@ function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
   return Array.isArray(messages) ? messages : undefined;
 }
 
+/**
+ * Removes one queued steering message from both the runtime queue and UI mirror
+ * after delivery wait cancellation.
+ */
 export async function cancelQueuedSteeringMessage(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -84,8 +98,8 @@ export async function cancelQueuedSteeringMessage(
   if (!queuedMessages) {
     return false;
   }
-  // The session runtime exposes only all-queue clears publicly; mutate the exact pending message
-  // so unrelated queued messages keep their full payloads.
+  // The session runtime exposes only all-queue clears publicly; mutate the
+  // exact pending message so unrelated queued messages keep their payloads.
   const queueIndex = queuedMessages.findIndex(
     (message) => extractQueuedUserMessageText(message) === text,
   );
@@ -103,6 +117,10 @@ export async function cancelQueuedSteeringMessage(
   return true;
 }
 
+/**
+ * Steers a message and resolves only after the matching user message_end is
+ * observed, so delivery-sensitive callers know the transcript owns the text.
+ */
 export async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -147,6 +165,8 @@ export async function steerAndWaitForTranscriptCommit(
       if (terminalTimer) {
         return;
       }
+      // Give same-tick auto-retry/compaction continuation events a chance to
+      // arrive before treating agent_end as final and cancelling the queued text.
       terminalTimer = setTimeout(() => {
         terminalTimer = undefined;
         rejectAfterCancellation(
@@ -166,6 +186,8 @@ export async function steerAndWaitForTranscriptCommit(
     timer.unref?.();
     const unsubscribe: (() => void) | undefined = activeSession.subscribe((event) => {
       if (isAutoRetryStartEvent(event) || isCompactionStartEvent(event)) {
+        // Auto-retry/compaction reuses the same queued steering message after
+        // agent_end, so cancel only if no continuation event arrives first.
         if (terminalTimer) {
           clearTimeout(terminalTimer);
           terminalTimer = undefined;
@@ -189,6 +211,7 @@ export async function steerAndWaitForTranscriptCommit(
   });
 }
 
+/** Steers immediately or waits for transcript commit when delivery confirmation is requested. */
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,

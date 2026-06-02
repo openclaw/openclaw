@@ -1,6 +1,10 @@
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { hasConfiguredModelFallbacks } from "../../agent-scope.js";
 
+/**
+ * Resolves whether the embedded run can fall back to another model, with an
+ * explicit attempt override taking precedence over agent/session config.
+ */
 export function hasEmbeddedRunConfiguredModelFallbacks(params: {
   cfg: OpenClawConfig | undefined;
   agentId?: string | null;

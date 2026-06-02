@@ -18,6 +18,7 @@ type UsageSnapshot = {
 
 export type RuntimeAuthState = {
   generation: number;
+  /** Original credential used to mint short-lived runtime credentials. */
   sourceApiKey: string;
   authMode: string;
   profileId?: string;
@@ -34,14 +35,17 @@ const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
 const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
 const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 
+/** Resolves the backoff delay after an overload-triggered auth/profile rotation. */
 export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
   return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
 }
 
+/** Resolves how many profile rotations an overload can consume in one run. */
 export function resolveOverloadProfileRotationLimit(cfg?: OpenClawConfig): number {
   return cfg?.auth?.cooldowns?.overloadedProfileRotations ?? DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
 }
 
+/** Resolves how many profile rotations a rate-limit failure can consume in one run. */
 export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): number {
   return (
     cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS
@@ -51,7 +55,7 @@ export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): numb
 const ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL = "ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL";
 const ANTHROPIC_MAGIC_STRING_REPLACEMENT = "ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)";
 
-// Avoid Anthropic's refusal test token poisoning session transcripts.
+/** Removes Anthropic's refusal-test token before it can poison persisted transcripts. */
 export function scrubAnthropicRefusalMagic(prompt: string): string {
   if (!prompt.includes(ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL)) {
     return prompt;
@@ -62,6 +66,7 @@ export function scrubAnthropicRefusalMagic(prompt: string): string {
   );
 }
 
+/** Creates a compact diagnostic id for context-overflow/compaction log correlation. */
 export function createCompactionDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
@@ -71,7 +76,7 @@ const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
 const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
 
-// Defensive guard for the outer run loop across all retry branches.
+/** Resolves the defensive retry-loop cap across all embedded-run retry branches. */
 export function resolveMaxRunRetryIterations(
   profileCandidateCount: number,
   cfg?: OpenClawConfig,
@@ -87,6 +92,8 @@ export function resolveMaxRunRetryIterations(
   const maxLimit = Math.max(minLimit, configRetries?.max ?? MAX_RUN_RETRY_ITERATIONS);
 
   const scaled = base + Math.max(1, profileCandidateCount) * perProfile;
+  // Scale with profile candidates so real failover has space, but keep a hard
+  // upper bound so pathological retry mixes cannot spin forever.
   return Math.min(maxLimit, Math.max(minLimit, scaled));
 }
 
@@ -101,6 +108,10 @@ export function resolveActiveErrorContext(params: {
   return resolveReportedModelRef(params);
 }
 
+/**
+ * Returns whether an assistant response belongs to the reported provider/model
+ * after applying embedded-harness normalization.
+ */
 export function isAssistantForModelRef(
   assistant: { provider?: string; model?: string } | undefined,
   ref: { provider: string; model: string },
@@ -119,6 +130,11 @@ function isEmbeddedHarnessProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "openclaw";
 }
 
+/**
+ * Resolves the provider/model pair shown in diagnostics and user-visible error
+ * metadata. Embedded OpenClaw harness responses are transport shims, so they
+ * report the underlying runtime provider/model instead.
+ */
 export function resolveReportedModelRef(params: {
   provider: string;
   model: string;
@@ -136,6 +152,8 @@ export function resolveReportedModelRef(params: {
     };
   }
   if (isEmbeddedHarnessProvider(assistantProvider)) {
+    // The embedded harness provider is a transport shim; user-facing metadata
+    // should report the underlying provider/model that actually served tokens.
     return {
       provider: params.provider,
       model: params.model,
@@ -147,6 +165,7 @@ export function resolveReportedModelRef(params: {
   };
 }
 
+/** Builds usage-related agent meta fields from accumulated and last-call usage. */
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   lastAssistantUsage?: UsageSnapshot | null;
@@ -190,6 +209,8 @@ export function buildErrorAgentMeta(params: {
     lastRunPromptUsage: params.lastRunPromptUsage,
     lastTurnTotal: params.lastTurnTotal,
   });
+  // Error paths still update usage/prompt metadata so session totals do not
+  // remain stuck on the previous successful turn after a failed large prompt.
   return {
     sessionId: params.sessionId,
     ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
@@ -202,6 +223,7 @@ export function buildErrorAgentMeta(params: {
   };
 }
 
+/** Extracts final assistant text visible to users from the last assistant message. */
 export function resolveFinalAssistantVisibleText(
   lastAssistant: AssistantMessage | undefined,
 ): string | undefined {
@@ -212,6 +234,7 @@ export function resolveFinalAssistantVisibleText(
   return visibleText || undefined;
 }
 
+/** Extracts final assistant text for raw persistence/fallback handling. */
 export function resolveFinalAssistantRawText(
   lastAssistant: AssistantMessage | undefined,
 ): string | undefined {

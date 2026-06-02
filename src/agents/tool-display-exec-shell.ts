@@ -5,6 +5,7 @@ type PreambleResult = {
   chdirPath?: string;
 };
 
+/** Remove one balanced quote pair used by shell snippets before display parsing. */
 export function stripOuterQuotes(value: string | undefined): string | undefined {
   if (!value) {
     return value;
@@ -20,6 +21,7 @@ export function stripOuterQuotes(value: string | undefined): string | undefined 
   return trimmed;
 }
 
+/** Split a shell-like command into display tokens without executing or fully parsing shell syntax. */
 export function splitShellWords(input: string | undefined, maxWords = 48): string[] {
   if (!input) {
     return [];
@@ -61,6 +63,7 @@ export function splitShellWords(input: string | undefined, maxWords = 48): strin
       }
       words.push(current);
       if (words.length >= maxWords) {
+        // Display parsing is bounded; later words are rarely needed for intent summaries.
         return words;
       }
       current = "";
@@ -76,6 +79,7 @@ export function splitShellWords(input: string | undefined, maxWords = 48): strin
   return words;
 }
 
+/** Normalize a command token to the lowercase executable name used by display heuristics. */
 export function binaryName(token: string | undefined): string | undefined {
   if (!token) {
     return undefined;
@@ -85,6 +89,7 @@ export function binaryName(token: string | undefined): string | undefined {
   return normalizeLowercaseStringOrEmpty(segment);
 }
 
+/** Read a simple option value from tokenized command words, including --name=value forms. */
 export function optionValue(words: string[], names: string[]): string | undefined {
   const lookup = new Set(names);
 
@@ -112,6 +117,7 @@ export function optionValue(words: string[], names: string[]): string | undefine
   return undefined;
 }
 
+/** Return non-option command arguments while skipping known option payloads. */
 export function positionalArgs(
   words: string[],
   from = 1,
@@ -159,6 +165,7 @@ export function positionalArgs(
   return args;
 }
 
+/** Return the first non-option command argument after known option payloads are skipped. */
 export function firstPositional(
   words: string[],
   from = 1,
@@ -167,6 +174,7 @@ export function firstPositional(
   return positionalArgs(words, from, optionsWithValue)[0];
 }
 
+/** Drop leading env assignments/wrappers so command summaries describe the real executable. */
 export function trimLeadingEnv(words: string[]): string[] {
   if (words.length === 0) {
     return words;
@@ -199,6 +207,7 @@ export function trimLeadingEnv(words: string[]): string[] {
   return words.slice(index);
 }
 
+/** Extract the command passed through sh/bash/zsh/fish -c style wrappers for display. */
 export function unwrapShellWrapper(command: string): string {
   const words = splitShellWords(command, 10);
   if (words.length < 3) {
@@ -261,6 +270,7 @@ function scanTopLevelChars(
   }
 }
 
+/** Split commands on top-level sequencing operators while preserving quoted operators. */
 export function splitTopLevelStages(command: string): string[] {
   const parts: string[] = [];
   let start = 0;
@@ -283,6 +293,7 @@ export function splitTopLevelStages(command: string): string[] {
   return parts.map((part) => part.trim()).filter((part) => part.length > 0);
 }
 
+/** Split pipelines on top-level single pipes while preserving quoted pipes and || stages. */
 export function splitTopLevelPipes(command: string): string[] {
   const parts: string[] = [];
   let start = 0;
@@ -317,6 +328,7 @@ function isPopdCommand(head: string): boolean {
   return binaryName(splitShellWords(head, 2)[0]) === "popd";
 }
 
+/** Strip safe shell setup prefixes and return the command plus inferred cwd for display. */
 export function stripShellPreamble(command: string): PreambleResult {
   let rest = command.trim();
   let chdirPath: string | undefined;
@@ -349,6 +361,7 @@ export function stripShellPreamble(command: string): PreambleResult {
 
     if (isChdir) {
       if (isPopdCommand(head)) {
+        // popd cancels a previously inferred cwd; later summaries should not inherit stale paths.
         chdirPath = undefined;
       } else {
         chdirPath = parseChdirTarget(head) ?? chdirPath;

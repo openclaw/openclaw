@@ -13,6 +13,7 @@ type ValidatorFn = ((value: unknown) => boolean) & {
   errors?: ValidationError[] | null;
 };
 
+/** Converts gateway-protocol validator errors into a uniform JSON-RPC error response. */
 export function respondInvalidParams(params: {
   respond: RespondFn;
   method: string;
@@ -28,6 +29,7 @@ export function respondInvalidParams(params: {
   );
 }
 
+/** Runs a handler body and reports thrown runtime failures as UNAVAILABLE. */
 export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Promise<void>) {
   try {
     await fn();
@@ -36,6 +38,7 @@ export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Pr
   }
 }
 
+/** Bridges node invoke result objects into gateway UNAVAILABLE responses. */
 export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; error?: unknown }>(
   respond: RespondFn,
   res: T,
@@ -50,6 +53,8 @@ export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; err
   const nodeCode = normalizeOptionalString(nodeError?.code) ?? "";
   const nodeMessage = normalizeOptionalString(nodeError?.message) ?? "node invoke failed";
   const message = nodeCode ? `${nodeCode}: ${nodeMessage}` : nodeMessage;
+  // Keep the public error message compact, but preserve the raw node error in
+  // details so operator tooling can inspect provider-specific failure payloads.
   respond(
     false,
     undefined,

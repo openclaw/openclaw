@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 const TOOL_CALL_NAME_MAX_CHARS = 64;
 const TOOL_CALL_NAME_RE = /^[A-Za-z0-9_:.-]+$/;
 
+/** Normalize an optional provider/tool allowlist into lowercase lookup keys. */
 export function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): Set<string> | null {
   if (!allowedToolNames) {
     return null;
@@ -21,6 +22,7 @@ export function normalizeAllowedToolNames(allowedToolNames?: Iterable<string>): 
   return normalized.size > 0 ? normalized : null;
 }
 
+/** Validate a replayed tool-call name against provider-safe syntax and an optional allowlist. */
 export function isAllowedToolCallName(
   name: unknown,
   allowedToolNames: Set<string> | null,
@@ -32,6 +34,7 @@ export function isAllowedToolCallName(
   if (!trimmed) {
     return false;
   }
+  // Reject unexpected names before allowlist lookup so replay preservation cannot widen tool access.
   if (trimmed.length > TOOL_CALL_NAME_MAX_CHARS || !TOOL_CALL_NAME_RE.test(trimmed)) {
     return false;
   }

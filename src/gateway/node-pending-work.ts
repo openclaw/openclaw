@@ -51,6 +51,7 @@ const PRIORITY_RANK: Record<NodePendingWorkPriority, number> = {
 
 const stateByNodeId = new Map<string, NodePendingWorkState>();
 
+/** Returns the mutable in-memory queue state for a node, creating it on first enqueue. */
 function getOrCreateState(nodeId: string): NodePendingWorkState {
   let state = stateByNodeId.get(nodeId);
   if (!state) {
@@ -63,6 +64,7 @@ function getOrCreateState(nodeId: string): NodePendingWorkState {
   return state;
 }
 
+/** Removes expired explicit items and bumps the revision only when the queue changed. */
 function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
   const validNowMs = asDateTimestampMs(nowMs);
   if (validNowMs === undefined) {
@@ -84,12 +86,14 @@ function pruneExpired(state: NodePendingWorkState, nowMs: number): boolean {
   return changed;
 }
 
+/** Drops empty node queues so baseline-only drains do not accumulate state. */
 function pruneStateIfEmpty(nodeId: string, state: NodePendingWorkState) {
   if (state.itemsById.size === 0) {
     stateByNodeId.delete(nodeId);
   }
 }
 
+/** Orders explicit work before drain, with high-priority work first and stable ties. */
 function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
   return [...state.itemsById.values()].toSorted((a, b) => {
     const priorityDelta = PRIORITY_RANK[b.priority] - PRIORITY_RANK[a.priority];
@@ -103,6 +107,7 @@ function sortedItems(state: NodePendingWorkState): NodePendingWorkItem[] {
   });
 }
 
+/** Synthesizes the always-available status refresh item without storing it. */
 function makeBaselineStatusItem(nowMs: number): NodePendingWorkItem {
   return {
     id: DEFAULT_STATUS_ITEM_ID,
@@ -113,6 +118,7 @@ function makeBaselineStatusItem(nowMs: number): NodePendingWorkItem {
   };
 }
 
+/** Converts optional relative expiry into a bounded absolute timestamp. */
 function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): number | null {
   if (typeof expiresInMs !== "number" || !Number.isFinite(expiresInMs)) {
     return null;
@@ -120,6 +126,7 @@ function resolvePendingWorkExpiresAtMs(expiresInMs: unknown, nowMs: number): num
   return resolveExpiresAtMsFromDurationMs(Math.max(1_000, Math.trunc(expiresInMs)), { nowMs }) ?? 0;
 }
 
+/** Queues one pending work item per node/type and returns the queue revision. */
 export function enqueueNodePendingWork(params: {
   nodeId: string;
   type: NodePendingWorkType;
@@ -137,6 +144,8 @@ export function enqueueNodePendingWork(params: {
   pruneExpired(state, nowMs);
   const existing = [...state.itemsById.values()].find((item) => item.type === params.type);
   if (existing) {
+    // Work is type-deduped so repeated wake requests do not create unbounded
+    // queues while the node is offline.
     return { revision: state.revision, item: existing, deduped: true };
   }
   const item: NodePendingWorkItem = {
@@ -152,6 +161,7 @@ export function enqueueNodePendingWork(params: {
   return { revision: state.revision, item, deduped: false };
 }
 
+/** Drains explicit work plus an optional synthetic baseline status item. */
 export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): DrainResult {
   const normalizedNodeId = nodeId.trim();
   if (!normalizedNodeId) {
@@ -170,6 +180,8 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   const hasExplicitStatus = explicitItems.some((item) => item.type === "status.request");
   const includeBaseline = opts.includeDefaultStatus !== false && !hasExplicitStatus;
   if (includeBaseline && items.length < maxItems) {
+    // Baseline status keeps reconnecting nodes polling their current state even
+    // when no explicit queued work exists.
     items.push(makeBaselineStatusItem(nowMs));
   }
   const explicitReturnedCount = items.filter((item) => item.id !== DEFAULT_STATUS_ITEM_ID).length;
@@ -181,6 +193,7 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
   };
 }
 
+/** Acknowledges explicit queue items; the synthetic baseline item is never removed. */
 export function acknowledgeNodePendingWork(params: { nodeId: string; itemIds: string[] }): {
   revision: number;
   removedItemIds: string[];

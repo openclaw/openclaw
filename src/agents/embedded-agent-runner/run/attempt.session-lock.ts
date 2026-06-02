@@ -283,6 +283,9 @@ async function sessionFenceRewriteIsBenign(params: {
   if (currentLines.length <= previousLines.length) {
     return false;
   }
+  // Delivery mirrors may upgrade legacy linear transcript rows by adding
+  // parentId/version metadata while appending only transcript-only OpenClaw
+  // assistant rows. Any other rewrite still counts as a takeover.
   let expectedParentId: string | null = null;
   for (let index = 0; index < previousLines.length; index += 1) {
     const lineMatch = lineMatchesLinearTranscriptMigration({
@@ -350,11 +353,13 @@ const sessionFileOwnerState = resolveGlobalSingleton(
   }),
 );
 
+/** Process-local owner token for serializing embedded attempts by session file. */
 export type EmbeddedAttemptSessionFileOwner = {
   sessionFileKey: string;
   release(): void;
 };
 
+/** Thrown when another embedded attempt owns the same session file too long. */
 export class EmbeddedAttemptSessionFileOwnerTimeoutError extends Error {
   constructor(sessionFile: string, timeoutMs: number) {
     super(`timed out waiting for embedded session file owner after ${timeoutMs}ms: ${sessionFile}`);
@@ -428,6 +433,7 @@ function waitForSessionFileOwnerRelease(params: {
   });
 }
 
+/** Acquires the process-local owner token before session-file lock setup. */
 export async function acquireEmbeddedAttemptSessionFileOwner(params: {
   sessionFile: string;
   timeoutMs?: number;
@@ -453,6 +459,8 @@ export async function acquireEmbeddedAttemptSessionFileOwner(params: {
             return;
           }
           sessionFileOwnerState.owners.delete(sessionFileKey);
+          // Resolve every waiter synchronously after deleting ownership so the
+          // next loop iteration can claim the file without observing a stale owner.
           for (const waiter of current.waiters) {
             waiter.resolve();
           }
@@ -468,6 +476,7 @@ export async function acquireEmbeddedAttemptSessionFileOwner(params: {
   }
 }
 
+/** Clears process-local owner state between tests. */
 export function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
   for (const entry of sessionFileOwnerState.owners.values()) {
     for (const waiter of entry.waiters) {
@@ -568,6 +577,7 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
   }
 }
 
+/** Coordinates transcript write locking across provider streaming phases. */
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
@@ -583,6 +593,7 @@ export type EmbeddedAttemptSessionLockController = {
   dispose(): Promise<void>;
 };
 
+/** Creates the lock controller that fences external edits during model I/O. */
 export async function createEmbeddedAttemptSessionLockController(params: {
   acquireSessionWriteLock: AcquireSessionWriteLock;
   lockOptions: LockOptions;
@@ -716,6 +727,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       ownedWrite.generation > fenceGeneration &&
       sameSessionFileFingerprint(ownedWrite.fingerprint, current)
     ) {
+      // Same-process controllers publish locked writes with generations. A
+      // newer matching generation is trusted; older states are stale.
       fenceFingerprint = current;
       fenceSnapshot = { fingerprint: current };
       fenceGeneration = ownedWrite.generation;
@@ -757,6 +770,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     if (!isTrustedSessionFileState(sessionFileFenceKey, beforeWrite)) {
       return null;
     }
+    // Only publish transitions from a trusted pre-write state. Otherwise an
+    // external edit could be laundered as an owned in-process write.
     const generation = recordOwnedSessionFileWrite(sessionFileFenceKey, fingerprint);
     return { fingerprint, generation };
   }
@@ -931,6 +946,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         if (options?.publishOwnedWrite !== true) {
           return await run();
         }
+        // Nested publishers need their own before/after fingerprint so broad
+        // owned-write scopes do not hide unrelated interleaved edits.
         const beforeWrite = await readSessionFileFingerprint(params.lockOptions.sessionFile);
         try {
           return await run();

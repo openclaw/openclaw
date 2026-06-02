@@ -7,6 +7,8 @@ import { respondInvalidParams } from "./nodes.helpers.js";
 import type { GatewayRequestHandler } from "./types.js";
 
 function normalizeNodeInvokeResultParams(params: unknown): unknown {
+  // Older node clients sometimes send null payloadJSON/error fields; normalize
+  // them before schema validation so the registry sees one canonical shape.
   if (!params || typeof params !== "object") {
     return params;
   }
@@ -26,6 +28,7 @@ function normalizeNodeInvokeResultParams(params: unknown): unknown {
   return normalized;
 }
 
+/** Handles node.invoke.result frames and completes the matching in-flight registry request. */
 export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   params,
   respond,

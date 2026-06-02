@@ -51,6 +51,8 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Drain is bound to the connected node identity; callers cannot pass an
+    // arbitrary nodeId and read another node's offline work.
     const p = params as { maxItems?: number };
     const drained = drainNodePendingWork(nodeId, {
       maxItems: p.maxItems,
@@ -83,6 +85,8 @@ export const nodePendingHandlers: GatewayRequestHandlers = {
       });
       let wakeTriggered = false;
       if (p.wake !== false && !queued.deduped && !context.nodeRegistry.get(p.nodeId)) {
+        // Wake only for newly queued work. Deduped work means an earlier request
+        // already owns the wake/reconnect attempt for this node/type.
         const wakeReqId = queued.item.id;
         context.logGateway.info(
           `node pending wake start node=${p.nodeId} req=${wakeReqId} type=${queued.item.type}`,

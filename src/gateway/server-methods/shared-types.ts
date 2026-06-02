@@ -24,6 +24,7 @@ import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 
+/** Runtime metadata attached to a connected gateway caller while dispatching server methods. */
 export type GatewayClient = {
   connect: ConnectParams;
   connId?: string;
@@ -40,6 +41,7 @@ export type GatewayClient = {
   };
 };
 
+/** Callback contract used by gateway server methods to return one protocol response frame. */
 export type RespondFn = (
   ok: boolean,
   payload?: unknown,
@@ -47,6 +49,7 @@ export type RespondFn = (
   meta?: Record<string, unknown>,
 ) => void;
 
+/** Shared runtime services and mutable gateway state available to server-method handlers. */
 export type GatewayRequestContext = {
   deps: CliDeps;
   cron: CronServiceContract;
@@ -143,6 +146,7 @@ export type GatewayRequestContext = {
   unavailableGatewayMethods?: ReadonlySet<string>;
 };
 
+/** Full dispatch input before a method-specific params record has been normalized. */
 export type GatewayRequestOptions = {
   req: RequestFrame;
   client: GatewayClient | null;
@@ -152,6 +156,7 @@ export type GatewayRequestOptions = {
   methodRegistry?: GatewayMethodRegistryView;
 };
 
+/** Method handler input after registry dispatch has selected the params payload. */
 export type GatewayRequestHandlerOptions = {
   req: RequestFrame;
   params: Record<string, unknown>;
@@ -161,6 +166,8 @@ export type GatewayRequestHandlerOptions = {
   context: GatewayRequestContext;
 };
 
+/** Async or sync implementation for one gateway protocol method. */
 export type GatewayRequestHandler = (opts: GatewayRequestHandlerOptions) => Promise<void> | void;
 
+/** Method-name keyed handler map exported by each server-method module. */
 export type GatewayRequestHandlers = Record<string, GatewayRequestHandler>;

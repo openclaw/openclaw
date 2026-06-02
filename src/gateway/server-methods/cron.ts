@@ -207,6 +207,8 @@ function respondMissingCronJobId(respond: RespondFn, method: string): void {
 }
 
 function cronRunLogPageFilters(params: CronRunsRequestParams) {
+  // Keep pagination/filter fields identical for per-job and all-job run log
+  // readers so UI tabs can switch scopes without reshaping request state.
   return {
     limit: params.limit,
     offset: params.offset,
@@ -221,6 +223,8 @@ function cronRunLogPageFilters(params: CronRunsRequestParams) {
 }
 
 function isCronInvalidRequestError(err: unknown): boolean {
+  // Cron service validation throws typed and string-shaped errors from several
+  // ownership layers; map only known user-spec failures to INVALID_REQUEST.
   const message = formatErrorMessage(err);
   return (
     message.startsWith("unknown cron job id:") ||
@@ -239,6 +243,7 @@ function isCronInvalidRequestError(err: unknown): boolean {
   );
 }
 
+/** Gateway RPC handlers for cron wake, job management, manual runs, and run logs. */
 export const cronHandlers: GatewayRequestHandlers = {
   wake: ({ params, respond, context }) => {
     if (!validateWakeParams(params)) {
@@ -311,6 +316,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir: p.sortDir,
       agentId: p.agentId,
     });
+    // Delivery previews are resolved at list time because they depend on current
+    // gateway config and default-agent routing, not just the stored job shape.
     const deliveryPreviews = await resolveCronDeliveryPreviews({
       cfg: context.getRuntimeConfig(),
       defaultAgentId: context.cron.getDefaultAgentId(),
@@ -626,6 +633,8 @@ export const cronHandlers: GatewayRequestHandlers = {
     }
     if (scope === "all") {
       const jobs = await context.cron.list({ includeDisabled: true });
+      // All-job run logs include job names for display; disabled jobs are still
+      // included because historical runs remain visible after disabling.
       const jobNameById = Object.fromEntries(
         jobs
           .filter((job) => typeof job.id === "string" && typeof job.name === "string")

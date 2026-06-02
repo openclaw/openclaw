@@ -22,6 +22,7 @@ type LoopDetectionResult =
   | { stuck: false }
   | {
       stuck: true;
+      /** Warning lets the model self-correct; critical blocks execution. */
       level: "warning" | "critical";
       detector: LoopDetectorKind;
       count: number;
@@ -72,6 +73,7 @@ function selectHistoryForScope(
   scope?: ToolLoopDetectionScope,
 ): ToolCallRecord[] {
   const runId = normalizeRunId(scope?.runId);
+  // Empty and missing run ids share a scope; concrete run ids stay isolated from prior attempts.
   return history.filter((record) => normalizeRunId(record.runId) === runId);
 }
 
@@ -198,6 +200,7 @@ function hashExecToolOutcome(details: Record<string, unknown>, text: string): st
   }
 
   if (status === "running") {
+    // Running exec output can grow; tail-only hashes prevent progress checks from pinning huge logs.
     return digestStable({
       status,
       tail: stringField(details.tail) ?? "",
@@ -328,6 +331,7 @@ function getNoProgressStreak(
     if (!record || record.toolName !== toolName || record.argsHash !== argsHash) {
       continue;
     }
+    // Pending calls cannot prove no-progress, but they also should not reset older outcome proof.
     if (typeof record.resultHash !== "string" || !record.resultHash) {
       continue;
     }
@@ -399,6 +403,7 @@ function getPingPongStreak(
     return { count: 0, noProgressEvidence: false };
   }
 
+  // Alternation is enough for a warning; critical ping-pong requires stable outcomes on both sides.
   const tailStart = Math.max(0, history.length - alternatingTailCount);
   let firstHashA: string | undefined;
   let firstHashB: string | undefined;
@@ -451,10 +456,7 @@ function canonicalPairKey(signatureA: string, signatureB: string): string {
   return [signatureA, signatureB].toSorted().join("|");
 }
 
-/**
- * Detect if an agent is stuck in a repetitive tool call loop.
- * Checks if the same tool+params combination has been called excessively.
- */
+/** Detect repetitive tool-call patterns before executing the next tool call. */
 export function detectToolCallLoop(
   state: SessionState,
   toolName: string,
@@ -474,6 +476,7 @@ export function detectToolCallLoop(
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
 
+  // Missing tools are critical because retrying the same unavailable tool cannot make progress.
   if (unknownToolStreak.count >= resolvedConfig.unknownToolThreshold) {
     return {
       stuck: true,
@@ -610,10 +613,7 @@ export function detectToolCallLoop(
   return { stuck: false };
 }
 
-/**
- * Record a tool call in the session's history for loop detection.
- * Maintains sliding window of last N calls.
- */
+/** Record a pending tool call and maintain the configured per-session sliding history window. */
 export function recordToolCall(
   state: SessionState,
   toolName: string,
@@ -688,6 +688,7 @@ export function recordToolCallOutcome(
     if (call.resultHash !== undefined) {
       continue;
     }
+    // Attach outcomes to the newest matching pending call to preserve order and run scoping.
     call.resultHash = resultHash;
     call.unknownToolName = outcome.unknownToolName;
     matched = true;
@@ -715,9 +716,7 @@ export function recordToolCallOutcome(
   return recordedOutcome;
 }
 
-/**
- * Get current tool call statistics for a session (for debugging/monitoring).
- */
+/** Summarize current tool-call history for diagnostics and monitoring. */
 export function getToolCallStats(state: SessionState): {
   totalCalls: number;
   uniquePatterns: number;

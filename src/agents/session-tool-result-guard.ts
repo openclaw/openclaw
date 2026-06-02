@@ -72,6 +72,7 @@ function resolveEntryTranscriptSeq(
   if (cached !== undefined) {
     return cached;
   }
+  // Sequence lookup walks the branch once, then memoizes every visited entry for later appends.
   let seq = 0;
   for (const entry of sessionManager.getBranch(entryId)) {
     if (entry.type === "message" || entry.type === "compaction") {
@@ -136,6 +137,7 @@ function redactPersistedDetailString(
     return redactToolPayloadTextWithConfig(value, redactionConfig);
   }
 
+  // Redaction gets a lookahead window so secrets crossing the truncation boundary are removed.
   const scan = `${value.slice(0, maxChars)}${PERSISTED_DETAIL_REDACTION_BOUNDARY}${value.slice(
     maxChars,
     maxChars + MAX_PERSISTED_DETAIL_REDACTION_LOOKAHEAD_CHARS,
@@ -151,6 +153,7 @@ function redactPersistedDetailString(
     maxChars - Math.min(maxChars, MAX_PERSISTED_DETAIL_BOUNDARY_OVERLAP_CHARS),
   );
   const initialPersistedPrefix = redactedPrefix.slice(0, safePrefixChars);
+  // Never persist a prefix that still looks like the start of a secret-bearing field.
   const persistedPrefix =
     PARTIAL_STRUCTURED_SECRET_VALUE_RE.test(initialPersistedPrefix) ||
     PARTIAL_PRIVATE_KEY_BLOCK_RE.test(initialPersistedPrefix)
@@ -204,6 +207,7 @@ function redactPersistedDetailValue(
     return value;
   }
   if (depth >= 8) {
+    // Tool details can be plugin-provided; cap recursion before hostile structures dominate JSONL.
     return "[OpenClaw persisted detail redacted: max depth exceeded]";
   }
   if (Array.isArray(value)) {
@@ -327,6 +331,7 @@ function enforcePersistedDetailsByteCap(
   if (sanitizedBytes <= MAX_PERSISTED_TOOL_RESULT_DETAILS_BYTES) {
     return value;
   }
+  // Prefer a structured summary over dropping details entirely when sanitized output is too large.
   const fallback = buildPersistedDetailsFallback(
     src,
     originalSize,
@@ -426,6 +431,7 @@ function sanitizeToolResultDetailsForPersistence(
   ]) {
     const field = src[key];
     if (field !== undefined) {
+      // Only stable summary fields survive oversized details; raw diagnostics stay out of JSONL.
       out[key] = redactPersistedSummaryField(
         key,
         field,
@@ -496,6 +502,7 @@ function normalizePersistedToolResultName(
 
   const normalizedFallback = normalizeOptionalString(fallbackName);
   if (normalizedFallback) {
+    // Some providers omit toolResult.toolName, so backfill from the matching pending tool call.
     return { ...toolResult, toolName: normalizedFallback };
   }
 
@@ -516,6 +523,7 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: AgentMessage): boolea
 
 export { getRawSessionAppendMessage };
 
+/** Install guarded transcript persistence that repairs strict tool-call/tool-result ordering. */
 export function installSessionToolResultGuard(
   sessionManager: SessionManager,
   opts?: {
@@ -645,6 +653,7 @@ export function installSessionToolResultGuard(
     }
     if (allowSyntheticToolResults) {
       for (const [id, name] of pendingState.entries()) {
+        // Synthetic results satisfy strict providers when a run exits before real results arrive.
         const synthetic = makeMissingToolResult({
           toolCallId: id,
           toolName: name,
@@ -767,6 +776,7 @@ export function installSessionToolResultGuard(
       toolCalls.length === 0 &&
       opts?.suppressTranscriptOnlyAssistantPersistence === true
     ) {
+      // Delivery-mirror/gateway-injected assistant notes are UI transcript events, not replay input.
       return undefined;
     }
     if (

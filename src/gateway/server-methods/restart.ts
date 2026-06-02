@@ -16,8 +16,11 @@ function normalizeSkipDeferral(value: unknown): boolean {
   return value === true;
 }
 
+/** Gateway RPC handlers for safe restart scheduling and preflight checks. */
 export const restartHandlers: GatewayRequestHandlers = {
   "gateway.restart.request": async ({ respond, params }) => {
+    // Restart requests always go through the coordinator so active work can
+    // defer or coalesce the process signal consistently.
     const result = requestSafeGatewayRestart({
       reason: normalizeReason(params.reason),
       delayMs: 0,
@@ -26,6 +29,8 @@ export const restartHandlers: GatewayRequestHandlers = {
     respond(true, result);
   },
   "gateway.restart.preflight": async ({ respond }) => {
+    // Preflight is read-only; clients use it to explain blockers before asking
+    // for an actual restart request.
     respond(true, createSafeGatewayRestartPreflight());
   },
 };

@@ -14,6 +14,8 @@ function collectTrackedActiveSessionRuns(
     return runs;
   }
   for (const active of context.chatAbortControllers.values()) {
+    // Only project runs that should be visible in Control UI session lists;
+    // hidden/internal or already-terminal runs stay abortable but not "active".
     if (
       active.projectSessionActive !== false &&
       active.controlUiVisible !== false &&
@@ -41,6 +43,8 @@ function isTrackedActiveSessionRunForKey(
   if (key !== "global") {
     return true;
   }
+  // Global store rows are shared, so use the requested/default agent to avoid
+  // showing one agent's active run on another agent's dashboard view.
   const requestedAgentId = agentId ?? defaultAgentId;
   if (!requestedAgentId) {
     return true;
@@ -51,6 +55,7 @@ function isTrackedActiveSessionRunForKey(
     : false;
 }
 
+/** Checks whether a sessions.list row should show an active run indicator. */
 export function hasTrackedActiveSessionRun(params: {
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>;
   requestedKey: string;

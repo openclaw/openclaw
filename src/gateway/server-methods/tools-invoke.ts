@@ -29,6 +29,7 @@ function resolveRpcErrorCode(params: {
   return "internal_error";
 }
 
+/** Gateway RPC entry point for invoking exposed tools without throwing transport-level failures. */
 export const toolsInvokeHandlers: GatewayRequestHandlers = {
   "tools.invoke": async ({ params, respond, context }) => {
     if (!validateToolsInvokeParams(params)) {
@@ -56,6 +57,8 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       cfg: context.getRuntimeConfig(),
       input: params,
       toolCallIdPrefix: "rpc",
+      // RPC callers receive approval-required as structured tool output; the
+      // boolean confirm flag only decides whether the backend may request it.
       approvalMode: params.confirm === true ? "request" : "report",
     });
 
@@ -74,6 +77,8 @@ export const toolsInvokeHandlers: GatewayRequestHandlers = {
       ok: false,
       toolName: outcome.toolName || requestedToolName,
       ...(outcome.error.requiresApproval ? { requiresApproval: true } : {}),
+      // tools.invoke reports tool failures in-band so clients can show the
+      // failed tool call beside successful invocations without retrying the RPC.
       error: {
         code: resolveRpcErrorCode(outcome.error),
         message: outcome.error.message,

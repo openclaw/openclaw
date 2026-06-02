@@ -17,9 +17,12 @@ function capLiveAssistantBuffer(text: string): string {
   if (text.length <= MAX_LIVE_CHAT_BUFFER_CHARS) {
     return text;
   }
+  // Keep the newest text because live chat recovery is for the visible tail, not transcript
+  // archival; persisted history remains the source of truth for the full response.
   return text.slice(-MAX_LIVE_CHAT_BUFFER_CHARS);
 }
 
+/** Merges assistant snapshots and deltas into one bounded live-chat buffer. */
 export function resolveMergedAssistantText(params: {
   previousText: string;
   nextText: string;
@@ -31,6 +34,8 @@ export function resolveMergedAssistantText(params: {
       return capLiveAssistantBuffer(nextText);
     }
     if (previousText.startsWith(nextText) && !nextDelta) {
+      // Providers can resend a shorter snapshot after a fuller one; without a delta, keep the
+      // longer buffer so live UI does not flicker backward.
       return capLiveAssistantBuffer(previousText);
     }
   }
@@ -43,6 +48,7 @@ export function resolveMergedAssistantText(params: {
   return capLiveAssistantBuffer(previousText);
 }
 
+/** Removes runtime-only metadata and directive tags from assistant event text/deltas. */
 export function normalizeLiveAssistantEventText(params: { text: string; delta?: unknown }): {
   text: string;
   delta: string;
@@ -56,6 +62,7 @@ export function normalizeLiveAssistantEventText(params: { text: string; delta?: 
   };
 }
 
+/** Projects buffered assistant text into the user-visible live chat form. */
 export function projectLiveAssistantBufferedText(
   rawText: string,
   options?: { suppressLeadFragments?: boolean },
@@ -71,6 +78,8 @@ export function projectLiveAssistantBufferedText(
     return { text: "", suppress: true, pendingLeadFragment: false };
   }
   if (options?.suppressLeadFragments !== false && isSuppressedControlReplyLeadFragment(rawText)) {
+    // Hold partial control-reply prefixes until enough text arrives to prove whether they should
+    // be hidden entirely or rendered as ordinary assistant output.
     return { text: rawText, suppress: true, pendingLeadFragment: true };
   }
   const text = startsWithSilentToken(rawText, SILENT_REPLY_TOKEN)
@@ -85,6 +94,7 @@ export function projectLiveAssistantBufferedText(
   return { text, suppress: false, pendingLeadFragment: false };
 }
 
+/** Filters assistant commentary events out of live chat while allowing final transcript storage. */
 export function shouldSuppressAssistantEventForLiveChat(data: unknown): boolean {
   return resolveAssistantEventPhase(data) === "commentary";
 }

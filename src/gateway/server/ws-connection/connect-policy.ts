@@ -2,6 +2,7 @@ import type { ConnectParams } from "../../../../packages/gateway-protocol/src/in
 import type { GatewayRole } from "../../role-policy.js";
 import { roleCanSkipDeviceIdentity } from "../../role-policy.js";
 
+/** Normalized Control UI auth/device policy used before pairing decisions. */
 export type ControlUiAuthPolicy = {
   isControlUi: boolean;
   allowInsecureAuthConfigured: boolean;
@@ -10,6 +11,7 @@ export type ControlUiAuthPolicy = {
   device: ConnectParams["device"] | null | undefined;
 };
 
+/** Collapses raw Control UI config into the fields the handshake policy needs. */
 export function resolveControlUiAuthPolicy(params: {
   isControlUi: boolean;
   controlUiConfig:
@@ -34,6 +36,7 @@ export function resolveControlUiAuthPolicy(params: {
   };
 }
 
+/** Decides whether an operator Control UI session can skip the pairing prompt. */
 export function shouldSkipControlUiPairing(
   policy: ControlUiAuthPolicy,
   role: GatewayRole,
@@ -60,6 +63,7 @@ export function shouldSkipControlUiPairing(
   return role === "operator" && policy.allowBypass;
 }
 
+/** Detects the trusted-proxy Control UI case that replaces per-device proof. */
 export function isTrustedProxyControlUiOperatorAuth(params: {
   isControlUi: boolean;
   role: GatewayRole;
@@ -76,12 +80,14 @@ export function isTrustedProxyControlUiOperatorAuth(params: {
   );
 }
 
+/** Outcome for a connect request that did not include device identity proof. */
 export type MissingDeviceIdentityDecision =
   | { kind: "allow" }
   | { kind: "reject-control-ui-insecure-auth" }
   | { kind: "reject-unauthorized" }
   | { kind: "reject-device-required" };
 
+/** Decides whether shared scopes must be stripped when device identity is missing. */
 export function shouldClearUnboundScopesForMissingDeviceIdentity(params: {
   decision: MissingDeviceIdentityDecision;
   controlUiAuthPolicy: ControlUiAuthPolicy;
@@ -99,6 +105,7 @@ export function shouldClearUnboundScopesForMissingDeviceIdentity(params: {
   );
 }
 
+/** Evaluates the missing-device branch shared by Control UI, nodes, and operators. */
 export function evaluateMissingDeviceIdentity(params: {
   hasDeviceIdentity: boolean;
   role: GatewayRole;
@@ -142,6 +149,8 @@ export function evaluateMissingDeviceIdentity(params: {
     return { kind: "allow" };
   }
   if (!params.authOk && params.hasSharedAuth) {
+    // Preserve unauthorized as the visible failure when credentials were sent
+    // but failed, instead of reporting the secondary missing-device condition.
     return { kind: "reject-unauthorized" };
   }
   return { kind: "reject-device-required" };

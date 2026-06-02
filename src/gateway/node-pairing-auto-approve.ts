@@ -12,6 +12,7 @@ type NodePairingAutoApproveClientIpSource =
   | "loopback-trusted-proxy"
   | "none";
 
+/** Classifies whether the reported node IP came directly or through a trusted proxy. */
 export function resolveNodePairingClientIpSource(params: {
   reportedClientIp?: string;
   hasProxyHeaders: boolean;
@@ -27,6 +28,7 @@ export function resolveNodePairingClientIpSource(params: {
   return params.remoteIsLoopback ? "loopback-trusted-proxy" : "trusted-proxy";
 }
 
+/** Allows first-time node pairing only for narrow trusted-CIDR, non-browser connects. */
 export function shouldAutoApproveNodePairingFromTrustedCidrs(params: {
   existingPairedDevice: boolean;
   role: string;
@@ -58,6 +60,8 @@ export function shouldAutoApproveNodePairingFromTrustedCidrs(params: {
     params.reportedClientIpSource === "none" ||
     params.reportedClientIpSource === "loopback-trusted-proxy"
   ) {
+    // Loopback trusted-proxy reports are not enough proof of remote node origin;
+    // require a direct or non-loopback trusted proxy source before CIDR matching.
     return false;
   }
   if (!params.reportedClientIp) {

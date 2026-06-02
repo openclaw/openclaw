@@ -199,6 +199,12 @@ function resolveToolErrorWarningPolicy(params: {
   };
 }
 
+/**
+ * Builds user-facing reply payloads from assistant text, tool state, and run
+ * metadata. This is the final projection point before channel delivery, so it
+ * applies directive parsing, source-reply mirrors, tool warnings, and error
+ * shaping in one place.
+ */
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
@@ -276,6 +282,8 @@ export function buildEmbeddedRunPayloads(params: {
       ...(payload.interactive ? { interactive: payload.interactive } : {}),
       ...(payload.channelData ? { channelData: payload.channelData } : {}),
       sourceReplyMirror: {
+        // Source-reply mirrors need deterministic ids so retries do not emit
+        // duplicate channel replies when the message tool already delivered.
         idempotencyKey:
           payload.idempotencyKey ??
           (params.runId ? `${params.runId}:internal-source-reply:${index}` : undefined),

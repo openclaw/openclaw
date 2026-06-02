@@ -25,6 +25,7 @@ export type PreauthConnectionBudget = {
   release(clientIp: string | undefined): void;
 };
 
+/** Creates a per-client-IP cap for sockets that have not completed gateway auth yet. */
 export function createPreauthConnectionBudget(
   limit = getMaxPreauthConnectionsPerIpFromEnv(),
 ): PreauthConnectionBudget {
@@ -45,6 +46,7 @@ export function createPreauthConnectionBudget(
       const ip = normalizeBudgetKey(clientIp);
       const next = (counts.get(ip) ?? 0) + 1;
       if (next > maxConnectionsPerIp) {
+        // Do not record rejected upgrades; only accepted pre-auth sockets need a matching release.
         return false;
       }
       counts.set(ip, next);
@@ -57,6 +59,7 @@ export function createPreauthConnectionBudget(
         return;
       }
       if (current <= 1) {
+        // Delete empty buckets so rotating client IPs cannot leave unbounded zero-count entries.
         counts.delete(ip);
         return;
       }

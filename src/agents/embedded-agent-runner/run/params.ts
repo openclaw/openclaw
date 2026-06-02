@@ -29,16 +29,22 @@ import type { EmbeddedAgentExecutionPhase } from "../execution-phase.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 export type { ClientToolDefinition } from "../../command/shared-types.js";
 
+/** Run origin used for prompt policy, timeout, and heartbeat/memory behavior. */
 export type EmbeddedRunTrigger = "cron" | "heartbeat" | "manual" | "memory" | "overflow" | "user";
 
+/** Current inbound message context that can be prepended without entering persisted transcript. */
 export type CurrentInboundPromptContext = {
   text: string;
+  /** Shorter version used when replaying or retrying a prompt with bounded context. */
   resumableText?: string;
+  /** Separator used when joining current inbound context with the submitted prompt. */
   promptJoiner?: "\n\n" | "\n" | " ";
 };
 
+/** Public run-level API for launching an embedded agent turn. */
 export type RunEmbeddedAgentParams = {
   sessionId: string;
+  /** Logical session key for transcript/policy grouping; may differ from sessionId. */
   sessionKey?: string;
   /** Provider prompt-cache affinity key; distinct from transcript/session identity. */
   promptCacheKey?: string;
@@ -71,8 +77,11 @@ export type RunEmbeddedAgentParams = {
   /** Whether workspaceDir points at the canonical agent workspace for bootstrap purposes. */
   isCanonicalWorkspace?: boolean;
   senderId?: string | null;
+  /** Human display name from the inbound channel, used for prompt and transcript context. */
   senderName?: string | null;
+  /** Channel username/handle from the inbound sender, when distinct from display name. */
   senderUsername?: string | null;
+  /** E.164 sender phone number for owner/contact checks; never log raw values. */
   senderE164?: string | null;
   /** Trusted sender identity bit for command/channel-action auth. */
   senderIsOwner?: boolean;
@@ -115,8 +124,11 @@ export type RunEmbeddedAgentParams = {
   /** User-visible prompt body to submit and persist; runtime context travels separately. */
   transcriptPrompt?: string;
   currentInboundEventKind?: InboundEventKind;
+  /** Ephemeral inbound context shown to the model without mutating the durable user prompt. */
   currentInboundContext?: CurrentInboundPromptContext;
+  /** Images already attached to the current prompt before text reference detection. */
   images?: ImageContent[];
+  /** Ordering metadata that preserves inline/offloaded image attachment order. */
   imageOrder?: PromptImageOrderEntry[];
   /** Optional client-provided tools (OpenResponses hosted tools). */
   clientTools?: ClientToolDefinition[];
@@ -131,8 +143,10 @@ export type RunEmbeddedAgentParams = {
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
   agentHarnessRuntimeOverride?: string;
   authProfileId?: string;
+  /** Whether authProfileId came from user selection or automatic routing. */
   authProfileIdSource?: "auto" | "user";
   thinkLevel?: ThinkLevel;
+  /** Low-latency hint that can reduce reasoning/context work when supported. */
   fastMode?: boolean;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
@@ -167,8 +181,11 @@ export type RunEmbeddedAgentParams = {
    */
   runTimeoutOverrideMs?: number;
   runId: string;
+  /** Caller abort signal for user-visible cancellation, distinct from internal timeout aborts. */
   abortSignal?: AbortSignal;
+  /** Fired once the embedded run has crossed from queued/setup into execution. */
   onExecutionStarted?: () => void;
+  /** Fine-grained phase callback used by UI/lifecycle diagnostics. */
   onExecutionPhase?: (info: {
     phase: EmbeddedAgentExecutionPhase;
     provider?: string;
@@ -180,6 +197,7 @@ export type RunEmbeddedAgentParams = {
     itemId?: string;
     firstModelCallStarted?: boolean;
   }) => void;
+  /** Coarse progress callback used for provider/model failover and long-running stages. */
   onRunProgress?: (info: {
     reason: string;
     provider?: string;
@@ -187,21 +205,31 @@ export type RunEmbeddedAgentParams = {
     backend?: string;
   }) => void;
   replyOperation?: ReplyOperation;
+  /** Gate for emitting tool result reply payloads after caller state changes. */
   shouldEmitToolResult?: () => boolean;
+  /** Gate for streaming raw tool output after caller state changes. */
   shouldEmitToolOutput?: () => boolean;
+  /** Streaming partial reply callback; may perform async channel delivery. */
   onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
+  /** Called when assistant text emission starts for this turn. */
   onAssistantMessageStart?: () => void | Promise<void>;
+  /** Block-based reply callback for transports that need chunked assistant payloads. */
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
+  /** Flush callback for pending block replies after stream boundaries. */
   onBlockReplyFlush?: () => void | Promise<void>;
   blockReplyBreak?: "text_end" | "message_end";
   blockReplyChunking?: BlockReplyChunking;
+  /** Reasoning stream callback for providers that expose separate reasoning text/media. */
   onReasoningStream?: (payload: {
     text?: string;
     mediaUrls?: string[];
     isReasoningSnapshot?: boolean;
   }) => void | Promise<void>;
+  /** Called after a provider-specific reasoning stream closes. */
   onReasoningEnd?: () => void | Promise<void>;
+  /** Tool-result reply callback after formatting and policy filtering. */
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  /** Raw agent event callback for gateway/session subscribers. */
   onAgentEvent?: (evt: {
     stream: string;
     data: Record<string, unknown>;
@@ -214,14 +242,21 @@ export type RunEmbeddedAgentParams = {
   deferTerminalLifecycleEnd?: boolean;
   lane?: string;
   enqueue?: CommandQueueEnqueueFn;
+  /** Additional system prompt text appended by trusted callers for this run only. */
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
+  /** Internal events already associated with the run before model execution. */
   internalEvents?: AgentInternalEvent[];
+  /** Provenance for the user input that created this run. */
   inputProvenance?: InputProvenance;
+  /** Provider stream options forwarded after runtime normalization. */
   streamParams?: AgentStreamParams;
+  /** Owner phone numbers used for channel auth decisions; keep out of diagnostics. */
   ownerNumbers?: string[];
+  /** Enforce final-answer tag behavior for prompt profiles that require it. */
   enforceFinalTag?: boolean;
+  /** Caller expects no visible reply unless the model explicitly has one. */
   silentExpected?: boolean;
   /**
    * Treat a clean empty assistant stop as an intentional silent reply.
@@ -239,10 +274,15 @@ export type RunEmbeddedAgentParams = {
    */
   allowTransientCooldownProbe?: boolean;
   suppressNextUserMessagePersistence?: boolean;
+  /** Avoid persisting assistant-only transcript rows created for internal repair. */
   suppressTranscriptOnlyAssistantPersistence?: boolean;
+  /** Avoid persisting assistant error rows when the caller owns error reporting. */
   suppressAssistantErrorPersistence?: boolean;
+  /** Recorder for durable user-turn transcript writes before model execution. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
+  /** Hook after durable user message persistence, used to link session-side state. */
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
+  /** Hook after assistant error persistence, used for recovery metadata updates. */
   onAssistantErrorMessagePersisted?: (
     message: Extract<AgentMessage, { role: "assistant" }>,
   ) => void;

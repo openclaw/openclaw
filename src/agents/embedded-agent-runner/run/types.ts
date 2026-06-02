@@ -32,12 +32,14 @@ type EmbeddedRunAttemptBase = Omit<
   "provider" | "model" | "authProfileId" | "authProfileIdSource" | "thinkLevel" | "lane" | "enqueue"
 >;
 
+/** Resolved context-window budget and provenance used by prompt assembly and diagnostics. */
 export type EmbeddedRunContextWindowInfo = {
   tokens: number;
   referenceTokens?: number;
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";
 };
 
+/** Fully resolved inputs for one embedded model attempt after run-level normalization. */
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
@@ -73,11 +75,15 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
+  /** Hook result captured before attempt creation so retries reuse the same startup decisions. */
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  /** Number of finalize-hook revisions already consumed for this run. */
   beforeAgentFinalizeRevisionAttempts?: number;
+  /** Maximum finalize-hook revision attempts allowed before returning the model result. */
   maxBeforeAgentFinalizeRevisions?: number;
 };
 
+/** Complete attempt outcome consumed by fallback, persistence, lifecycle, and harness callers. */
 export type EmbeddedRunAttemptResult = {
   aborted: boolean;
   /** True when the abort originated from the caller-provided abortSignal. */
@@ -114,10 +120,14 @@ export type EmbeddedRunAttemptResult = {
         handled?: false;
       };
   sessionIdUsed: string;
+  /** Transcript file used for this attempt after session routing and lock acquisition. */
   sessionFileUsed?: string;
+  /** Trace context propagated into model and tool diagnostics for this attempt. */
   diagnosticTrace?: DiagnosticTraceContext;
   agentHarnessId?: string;
+  /** Classification returned to harness selection for retry/fallback decisions. */
   agentHarnessResultClassification?: "empty" | "reasoning-only" | "planning-only";
+  /** Timeout recovery payload surfaced to the outer run loop and session lifecycle. */
   promptTimeoutOutcome?: {
     message?: string;
     replayInvalid?: boolean;
@@ -125,6 +135,7 @@ export type EmbeddedRunAttemptResult = {
     timeoutPhase?: AgentRunTimeoutPhase;
     providerStarted?: boolean;
   };
+  /** App-server transport failure metadata used to decide whether retry is replay-safe. */
   codexAppServerFailure?: {
     kind: "client_closed_before_turn_completed" | "turn_completion_idle_timeout";
     turnWatchTimeoutKind?: "progress" | "completion" | "terminal";
@@ -138,13 +149,18 @@ export type EmbeddedRunAttemptResult = {
       | "potential_side_effect"
       | "active_item";
   };
+  /** Once-mode bootstrap truncation warnings already surfaced in this session. */
   bootstrapPromptWarningSignaturesSeen?: string[];
+  /** Last bootstrap truncation warning signature persisted for UI/session state. */
   bootstrapPromptWarningSignature?: string;
   systemPromptReport?: SessionSystemPromptReport;
+  /** Rendered prompt text captured for diagnostics; may be omitted for compact attempts. */
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
+  /** Finalize-hook reason that caused a revised assistant turn. */
   beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
+  /** Tool metadata collected during the attempt before persistence/liveness decisions. */
   toolMetas: Array<{
     toolName: string;
     meta?: string;
@@ -152,19 +168,28 @@ export type EmbeddedRunAttemptResult = {
     asyncTaskRunId?: string;
     asyncTaskId?: string;
   }>;
+  /** Accepted child sessions spawned by this attempt; used as replay side-effect evidence. */
   acceptedSessionSpawns?: AcceptedSessionSpawn[];
   lastAssistant: AssistantMessage | undefined;
+  /** Assistant message emitted by this attempt before fallback may inspect prior attempts. */
   currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
+  /** Texts delivered through messaging tools, tracked separately from assistant prose. */
   messagingToolSentTexts: string[];
+  /** Media URLs delivered through messaging tools for replay and incomplete-turn checks. */
   messagingToolSentMediaUrls: string[];
+  /** Full messaging send records, including target identity for committed delivery checks. */
   messagingToolSentTargets: MessagingToolSend[];
+  /** Source-reply payloads emitted by tools for channel-specific response handling. */
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
   heartbeatToolResponse?: HeartbeatToolResponse;
+  /** Media URLs produced by tools and forwarded into reply payloads. */
   toolMediaUrls?: string[];
+  /** Whether tool audio should be delivered through voice-capable reply paths. */
   toolAudioAsVoice?: boolean;
+  /** Whether produced media came from trusted local paths rather than untrusted remote fetches. */
   toolTrustedLocalMedia?: boolean;
   successfulCronAdds?: number;
   cloudCodeAssistFormatError: boolean;
@@ -184,11 +209,13 @@ export type EmbeddedRunAttemptResult = {
   /** True when sessions_yield tool was called during this attempt. */
   yieldDetected?: boolean;
   replayMetadata: EmbeddedRunReplayMetadata;
+  /** Provider item lifecycle counters used to avoid replaying while work is still active. */
   itemLifecycle: {
     startedCount: number;
     completedCount: number;
     activeCount: number;
   };
+  /** Late lifecycle metadata setter; outer callers wire this to durable run state. */
   setTerminalLifecycleMeta?: (meta: {
     replayInvalid?: boolean;
     livenessState?: EmbeddedRunLivenessState;

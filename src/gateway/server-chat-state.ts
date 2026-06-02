@@ -20,6 +20,7 @@ export type ChatRunRegistry = {
   clear: () => void;
 };
 
+/** Tracks queued client run ids per session so streaming completions adopt the right request. */
 export function createChatRunRegistry(): ChatRunRegistry {
   const chatRunSessions = new Map<string, ChatRunEntry[]>();
 
@@ -58,6 +59,8 @@ export function createChatRunRegistry(): ChatRunRegistry {
     if (idx < 0) {
       return undefined;
     }
+    // Runs can finish or abort out of FIFO order; remove by run id while preserving
+    // the remaining queue so the next streamed completion still adopts correctly.
     const [entry] = queue.splice(idx, 1);
     if (!queue.length) {
       chatRunSessions.delete(sessionId);
@@ -89,6 +92,7 @@ export type ChatRunState = {
   clear: () => void;
 };
 
+/** Owns all per-run streaming buffers and broadcast dedupe state for one gateway runtime. */
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const rawBuffers = new Map<string, string>();
@@ -102,6 +106,8 @@ export function createChatRunState(): ChatRunState {
   const abortedRuns = new Map<string, number>();
 
   const clearRun = (runId: string) => {
+    // One runtime run can buffer assistant text plus role-specific agent events; clearing by
+    // all derived keys prevents stale thinking/tool events from leaking into a reused run id.
     rawBuffers.delete(runId);
     buffers.delete(runId);
     bufferUpdatedAt.delete(runId);
@@ -173,6 +179,7 @@ type ToolRecipientEntry = {
 const TOOL_EVENT_RECIPIENT_TTL_MS = 10 * 60 * 1000;
 const TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS = 30 * 1000;
 
+/** Tracks clients interested in all session-list/event changes. */
 export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRegistry {
   const connIds = new Set<string>();
   const empty = new Set<string>();
@@ -199,6 +206,7 @@ export function createSessionEventSubscriberRegistry(): SessionEventSubscriberRe
   };
 }
 
+/** Tracks per-session message subscribers with reverse indexes for disconnect cleanup. */
 export function createSessionMessageSubscriberRegistry(): SessionMessageSubscriberRegistry {
   const sessionToConnIds = new Map<string, Set<string>>();
   const connToSessionKeys = new Map<string, Set<string>>();
@@ -251,6 +259,8 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
       if (!sessionKeys) {
         return;
       }
+      // Keep both indexes in sync on connection teardown; otherwise a dead socket would keep
+      // receiving targeted session.message broadcasts through the session-to-conn map.
       for (const sessionKey of sessionKeys) {
         const connIds = sessionToConnIds.get(sessionKey);
         if (!connIds) {
@@ -277,6 +287,7 @@ export function createSessionMessageSubscriberRegistry(): SessionMessageSubscrib
   };
 }
 
+/** Tracks targeted tool-event recipients long enough for late final tool events to land. */
 export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
   const recipients = new Map<string, ToolRecipientEntry>();
 
@@ -290,6 +301,8 @@ export function createToolEventRecipientRegistry(): ToolEventRecipientRegistry {
         ? entry.finalizedAt + TOOL_EVENT_RECIPIENT_FINAL_GRACE_MS
         : entry.updatedAt + TOOL_EVENT_RECIPIENT_TTL_MS;
       if (now >= cutoff) {
+        // Finalized runs keep a short grace period for trailing transport events; non-final
+        // runs age out by activity so abandoned runs do not retain connection ids forever.
         recipients.delete(runId);
       }
     }

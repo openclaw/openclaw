@@ -18,6 +18,7 @@ function toGatewayCredentialOptions(
   };
 }
 
+/** Resolves gateway auth for connection setup, including secret-input indirection. */
 export async function resolveGatewayConnectionAuth(
   params: GatewayConnectionAuthOptions,
 ): Promise<{ token?: string; password?: string }> {
@@ -27,6 +28,7 @@ export async function resolveGatewayConnectionAuth(
   });
 }
 
+/** Resolves gateway auth from already-materialized config/env values only. */
 export function resolveGatewayConnectionAuthFromConfig(params: GatewayCredentialConfigOptions): {
   token?: string;
   password?: string;

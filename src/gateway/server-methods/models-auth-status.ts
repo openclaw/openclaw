@@ -62,7 +62,9 @@ export type ModelAuthExpiry = {
 };
 
 export type ModelAuthStatusProfile = {
+  /** Stable profile id from the auth-profile store; UI uses it only as a row key. */
   profileId: string;
+  /** Credential family, not the configured provider auth mode. */
   type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
   reasonCode?: AuthCredentialReasonCode;
@@ -70,8 +72,10 @@ export type ModelAuthStatusProfile = {
 };
 
 export type ModelAuthStatusProvider = {
+  /** Normalized provider id used by model routing and auth-profile ownership. */
   provider: string;
   displayName: string;
+  /** OAuth-focused rollup for dashboard health; individual profiles stay below. */
   status: AuthProviderHealthStatus;
   expiry?: ModelAuthExpiry;
   profiles: ModelAuthStatusProfile[];
@@ -89,8 +93,11 @@ export type ModelAuthStatusResult = {
 };
 
 export type ModelAuthLogoutResult = {
+  /** Provider requested by the client, after auth alias normalization. */
   provider: string;
+  /** Profile ids removed from every owning auth-profile store. */
   removedProfiles: string[];
+  /** Active gateway run ids aborted because their provider auth was revoked. */
   abortedRunIds: string[];
 };
 

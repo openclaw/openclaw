@@ -230,6 +230,7 @@ function artifactId(parts: {
 }
 
 function resolveMessageSeq(message: Record<string, unknown>, fallback: number): number {
+  // Persisted transcript metadata wins so artifact ids survive partial scans and file rewrites.
   const meta = asOptionalRecord(message["__openclaw"]);
   const seq = meta?.seq;
   return typeof seq === "number" && Number.isInteger(seq) && seq > 0 ? seq : fallback;
@@ -260,6 +261,8 @@ function resolveBlockDownload(
   mimeType?: string;
   sizeBytes?: number;
 } {
+  // Prefer inline bytes when available; URLs are returned only if they are safe
+  // handoff targets for clients rather than data URLs or protocol-relative paths.
   const data = asNonEmptyString(block.data);
   const content = asNonEmptyString(block.content);
   const url = asNonEmptyString(block.url) ?? asNonEmptyString(block.openUrl);
@@ -317,6 +320,7 @@ function isArtifactBlock(block: Record<string, unknown>): boolean {
   );
 }
 
+/** Extracts deterministic artifact records from transcript messages without reading session files. */
 export function collectArtifactsFromMessages(params: {
   messages: unknown[];
   sessionKey: string;
@@ -380,6 +384,8 @@ function collectArtifactsFromMessage(params: {
     const includeData = params.downloadArtifactId
       ? params.downloadArtifactId === id
       : params.includeDownloadData !== false;
+    // For download requests only the requested artifact carries bytes; list/get
+    // scans keep payloads out of summaries while preserving the same id search.
     const download = resolveBlockDownload(block, { includeData });
     const summary: ArtifactRecord = {
       id,
@@ -404,6 +410,8 @@ function resolveQuerySession(
   query: ArtifactQuery,
   cfg?: OpenClawConfig,
 ): ResolvedArtifactSession | undefined {
+  // Resolve every query form to one transcript store key before scanning so
+  // run/task lookups cannot cross agent-scoped session stores.
   if (query.sessionKey) {
     const sessionKey = resolveScopedArtifactSessionKey(query.sessionKey, query.agentId, cfg);
     if (!sessionKey) {
@@ -522,6 +530,8 @@ async function findArtifact(
 }
 
 function toSummary(artifact: ArtifactRecord): ArtifactSummary {
+  // Summaries intentionally strip transfer fields; artifacts.download is the
+  // only method that returns bytes or handoff URLs.
   const { data: _dataValue, url: _url, ...summary } = artifact;
   return summary;
 }

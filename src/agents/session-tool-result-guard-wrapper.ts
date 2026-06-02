@@ -50,6 +50,7 @@ export function guardSessionManager(
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
+    // Reused session managers can pass through multiple runtime attempts; avoid stacking patches.
     return sessionManager as GuardedSessionManager;
   }
 
@@ -73,6 +74,7 @@ export function guardSessionManager(
     }
     const redacted = redactTranscriptMessage(message, opts?.config);
     if (redacted !== message) {
+      // Redaction happens after hooks so plugin rewrites cannot reintroduce unredacted payloads.
       message = redacted;
       changed = true;
     }
@@ -113,6 +115,7 @@ export function guardSessionManager(
         ...(prepared ? { preparedMessage: prepared } : {}),
       });
       if (merged !== withProvenance) {
+        // Prepared turn metadata is single-use; later user messages must persist runtime content.
         pendingPreparedUserTurnMessage = undefined;
       }
       return merged;

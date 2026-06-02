@@ -14,6 +14,8 @@ import {
 } from "./tool-display-exec-shell.js";
 import { asRecord } from "./tool-display-record.js";
 
+// This table is intentionally heuristic: display text should explain common commands without
+// pretending to be a shell executor or changing approval/security semantics.
 function summarizeKnownExec(words: string[]): string {
   if (words.length === 0) {
     return "run command";
@@ -284,6 +286,7 @@ function summarizeKnownExec(words: string[]): string {
 function summarizePipeline(stage: string): string {
   const pipeline = splitTopLevelPipes(stage);
   if (pipeline.length > 1) {
+    // Pipelines can be long/noisy; first and last commands usually carry the display intent.
     const first = summarizeKnownExec(trimLeadingEnv(splitShellWords(pipeline[0])));
     const last = summarizeKnownExec(trimLeadingEnv(splitShellWords(pipeline[pipeline.length - 1])));
     const extra = pipeline.length > 2 ? ` (+${pipeline.length - 2} steps)` : "";
@@ -344,6 +347,7 @@ function classifyWorkspacePath(
 function formatCwdSuffix(cwd: string): string | undefined {
   const workspace = classifyWorkspacePath(cwd);
   if (workspace === "sandbox") {
+    // Sandbox paths are implementation noise; the command itself is a better user-facing summary.
     return undefined;
   }
   return workspace ? `(${workspace})` : `(in ${cwd})`;
@@ -436,12 +440,15 @@ function compactRawCommand(raw: string, maxLength = 120): string {
   if (oneLine.length <= maxLength) {
     return oneLine;
   }
+  // Preserve command prefix and target suffix; both are useful when commands contain long paths.
   const half = Math.floor((maxLength - 1) / 2);
   return `${oneLine.slice(0, half)}…${oneLine.slice(-(maxLength - 1 - half))}`;
 }
 
+/** Controls whether exec summaries include the compact raw command alongside the explanation. */
 export type ToolDetailMode = "explain" | "raw";
 
+/** Resolve compact, redacted exec/bash command detail for tool progress displays. */
 export function resolveExecDetail(
   args: unknown,
   options?: { detailMode?: ToolDetailMode },
@@ -478,6 +485,7 @@ export function resolveExecDetail(
   const nodeFragment = nodeName ? ` · node: ${nodeName}` : "";
 
   if (result?.allGeneric !== false && isGenericSummary(summary)) {
+    // Unknown commands use compact raw text so summaries do not invent intent.
     const base = cwdSuffix ? `${compact} ${cwdSuffix}` : compact;
     return `${base}${nodeFragment}`;
   }

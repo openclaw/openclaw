@@ -1,5 +1,9 @@
 import { expect } from "vitest";
 
+/**
+ * Assert the shared subagent-followup reactivation contract:
+ * replace the completed run, then broadcast the child session as running.
+ */
 export function expectSubagentFollowupReactivation(params: {
   replaceSubagentRunAfterSteerMock: unknown;
   broadcastToConnIds: unknown;

@@ -126,6 +126,8 @@ export async function applyPluginNodeInvokePolicy(params: {
   if (!entry) {
     const dangerousCommand = findDangerousPluginNodeCommand(registry, params.command);
     if (dangerousCommand) {
+      // Dangerous plugin-hosted commands must be owned by a plugin policy before
+      // transport invoke; the generic node allowlist is not enough for them.
       return {
         ok: false,
         code: "PLUGIN_POLICY_MISSING",
@@ -138,6 +140,8 @@ export async function applyPluginNodeInvokePolicy(params: {
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
+    // Policies may override transport params for the final invoke, while omitted
+    // fields inherit the original gateway request so idempotency and timeout stay bound.
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       command: params.command,

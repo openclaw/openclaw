@@ -24,6 +24,7 @@ type HandshakeConnectAuth = {
 
 export type DeviceTokenCandidateSource = "explicit-device-token" | "shared-token-fallback";
 
+/** Captures the first-pass shared-auth result plus deferred device/bootstrap candidates. */
 export type ConnectAuthState = {
   authResult: GatewayAuthResult;
   authOk: boolean;
@@ -47,6 +48,7 @@ type VerifyDeviceTokenResult = {
 };
 type VerifyBootstrapTokenResult = { ok: boolean; reason?: string };
 
+/** Final handshake auth verdict after bootstrap and device-token fallbacks are considered. */
 export type ConnectAuthDecision = {
   authResult: GatewayAuthResult;
   authOk: boolean;
@@ -118,9 +120,13 @@ function resolveDeviceTokenCandidate(connectAuth: HandshakeConnectAuth | null | 
   if (!fallbackToken) {
     return {};
   }
+  // Old clients sent device tokens through `auth.token`; keep the candidate
+  // source so failures preserve the shared-token reason unless the device check
+  // proves a stricter scope mismatch.
   return { token: fallbackToken, source: "shared-token-fallback" };
 }
 
+/** Resolves the immediate shared-auth path and records deferred stronger credentials. */
 export async function resolveConnectAuthState(params: {
   resolvedAuth: ResolvedGatewayAuth;
   connectAuth: HandshakeConnectAuth | null | undefined;
@@ -183,6 +189,7 @@ export async function resolveConnectAuthState(params: {
   };
 }
 
+/** Applies bootstrap-token and device-token fallback checks to a connect auth state. */
 export async function resolveConnectAuthDecision(
   params: ResolveConnectAuthDecisionParams,
 ): Promise<ConnectAuthDecision> {
@@ -196,6 +203,9 @@ export async function resolveConnectAuthDecision(
   if (!shouldSerializeBootstrapAttempt) {
     return await resolveConnectAuthDecisionCore(params);
   }
+  // Bootstrap verification touches the pairing store under a mutex; serialize
+  // by IP before the rate-limit check so a burst cannot all pass the bucket
+  // before earlier failures are recorded.
   return await withSerializedRateLimitAttempt({
     ip: params.clientIp,
     scope: AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN,
@@ -213,6 +223,8 @@ async function resolveConnectAuthDecisionCore(
   let pendingBootstrapFailure = false;
 
   function finish(): ConnectAuthDecision {
+    // Count bootstrap failures only when no later credential succeeded. A valid
+    // device token can rescue the handshake after an expired QR token.
     if (pendingBootstrapFailure && !authOk) {
       params.rateLimiter?.recordFailure(params.clientIp, AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN);
     }
@@ -279,6 +291,9 @@ async function resolveConnectAuthDecisionCore(
     return finish();
   }
 
+  // Device-token fallback is intentionally independent from shared-secret rate
+  // limiting; a locked shared-secret bucket should not block the bound device
+  // credential that can prove the same client.
   let deviceTokenRateLimited = false;
   if (params.rateLimiter) {
     const deviceRateCheck = params.rateLimiter.check(

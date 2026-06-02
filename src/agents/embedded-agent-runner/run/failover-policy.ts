@@ -70,6 +70,7 @@ export type RunFailoverDecisionParams =
   | PromptDecisionParams
   | AssistantDecisionParams;
 
+/** Returns true when hitting the retry ceiling should leave the current model path. */
 function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
   return Boolean(
     reason &&
@@ -85,6 +86,8 @@ function isTerminalFormatFailure(params: {
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
 }): boolean {
+  // Format retries are opt-in because some providers report transcript/request
+  // shape errors deterministically; rotating profiles would only burn attempts.
   return (
     params.failoverFailure && params.failoverReason === "format" && params.allowFormatRetry !== true
   );
@@ -118,6 +121,8 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   const timeoutFailure = isAssistantTimeoutFailure(params);
   const harnessOwnedTimeout =
     params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
+  // Harness-owned transport handles its own timeout recovery. Only a concrete
+  // provider/model failure should make the shared auth/profile layer rotate.
   if (harnessOwnedTimeout && !isConcreteNonTimeoutAssistantFailure(params)) {
     return false;
   }
@@ -137,6 +142,8 @@ export function mergeRetryFailoverReason(params: {
   failoverReason: FailoverReason | null;
   timedOut?: boolean;
 }): FailoverReason | null {
+  // Keep the most specific fresh signal. A synthetic timeout beats stale state,
+  // but an explicit current failover reason wins over both.
   return params.failoverReason ?? (params.timedOut ? "timeout" : null) ?? params.previous;
 }
 
@@ -147,6 +154,7 @@ export function resolveRunFailoverDecision(params: PromptDecisionParams): Prompt
 export function resolveRunFailoverDecision(
   params: AssistantDecisionParams,
 ): AssistantFailoverDecision;
+/** Decides whether a failed run attempt should rotate auth, fall back, or surface the error. */
 export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): RunFailoverDecision {
   if (params.stage === "retry_limit") {
     if (params.fallbackConfigured && shouldEscalateRetryLimit(params.failoverReason)) {

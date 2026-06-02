@@ -25,11 +25,13 @@ import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { TalkHandoffTurnResult } from "../talk-handoff.js";
 import { asRecord } from "./record-shared.js";
 
+/** Return whether a caller can bypass the agent handoff and use Talk direct tools. */
 export function canUseTalkDirectTools(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   return scopes.includes(ADMIN_SCOPE);
 }
 
+/** Fan out Talk room events to the active browser client without blocking slow sockets. */
 export function broadcastTalkRoomEvents(
   context: {
     broadcastToConnIds: (
@@ -57,6 +59,7 @@ export function broadcastTalkRoomEvents(
 
 type TalkHandoffFailureReason = Extract<TalkHandoffTurnResult, { ok: false }>["reason"];
 
+/** Map Talk handoff failure reasons onto the gateway protocol error families clients expect. */
 export function talkHandoffErrorCode(reason: TalkHandoffFailureReason) {
   return reason === "invalid_token" || reason === "no_active_turn" || reason === "stale_turn"
     ? ErrorCodes.INVALID_REQUEST
@@ -107,6 +110,7 @@ function getVoiceCallRealtimeConfig(config: OpenClawConfig): {
   return getVoiceCallProviderConfig(config, "realtime");
 }
 
+/** Read legacy voice-call streaming config used as the Talk transcription fallback. */
 export function getVoiceCallStreamingConfig(config: OpenClawConfig): {
   provider?: string;
   providers?: Record<string, RealtimeTranscriptionProviderConfig>;
@@ -157,6 +161,7 @@ function resolveConfiguredVoiceModelDefaultRef<TConfig extends Record<string, un
   return undefined;
 }
 
+/** Merge Talk realtime config with legacy voice-call defaults and derived voice-model defaults. */
 export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvider?: string) {
   const voiceCallRealtime = getVoiceCallRealtimeConfig(config);
   const talkRealtime = getRecord(config.talk?.realtime);
@@ -201,6 +206,7 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
   };
 }
 
+/** Resolve Talk transcription config from legacy streaming config plus voice-model defaults. */
 export function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedProvider?: string) {
   const streamingConfig = getVoiceCallStreamingConfig(config);
   const provider = normalizeOptionalString(requestedProvider) ?? streamingConfig.provider;
@@ -218,6 +224,7 @@ export function buildTalkTranscriptionConfig(config: OpenClawConfig, requestedPr
   };
 }
 
+/** Treat provider config probes as false when a provider rejects malformed or incomplete config. */
 export function configuredOrFalse(callback: () => boolean): boolean {
   try {
     return callback();
@@ -226,6 +233,7 @@ export function configuredOrFalse(callback: () => boolean): boolean {
   }
 }
 
+/** Pick the configured realtime transcription provider or the first configured auto-select provider. */
 export function resolveConfiguredRealtimeTranscriptionProvider(params: {
   config: OpenClawConfig;
   configuredProviderId?: string;
@@ -279,6 +287,7 @@ const DEFAULT_REALTIME_INSTRUCTIONS = [
   "For greetings and casual chatter while OpenClaw is working, answer naturally and do not redirect the active work.",
 ].join(" ");
 
+/** Build realtime session instructions while preserving the required Talk tool-control contract. */
 export function buildRealtimeInstructions(configuredInstructions?: string): string {
   const extra = normalizeOptionalString(configuredInstructions);
   if (!extra) {
@@ -307,6 +316,7 @@ type RealtimeVoiceLaunchOptionInput = {
   reasoningEffort?: unknown;
 };
 
+/** Combine config defaults with validated per-request browser launch options. */
 export function buildRealtimeVoiceLaunchOptions(params: {
   requested: RealtimeVoiceLaunchOptionInput;
   defaults: RealtimeVoiceLaunchOptions;
@@ -320,6 +330,7 @@ export function buildRealtimeVoiceLaunchOptions(params: {
   };
 }
 
+/** Apply validated browser launch overrides to provider config without carrying unknown fields. */
 export function withRealtimeBrowserOverrides(
   providerConfig: RealtimeVoiceProviderConfig,
   params: RealtimeVoiceLaunchOptionInput,
@@ -377,6 +388,7 @@ function pickRealtimeVoiceLaunchOptions(
   return options;
 }
 
+/** Identify provider sessions that are typed as browser sessions but unsupported by this Talk flow. */
 export function isUnsupportedBrowserWebRtcSession(session: RealtimeVoiceBrowserSession): boolean {
   const provider = normalizeLowercaseStringOrEmpty(session.provider);
   const transport = (session as { transport?: string }).transport ?? "webrtc";

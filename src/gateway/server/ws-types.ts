@@ -2,6 +2,7 @@ import type { WebSocket } from "ws";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { PluginNodeCapabilityClient } from "../plugin-node-capability.js";
 
+/** Server-side connection state tracked for each authenticated Gateway WebSocket client. */
 export type GatewayWsClient = PluginNodeCapabilityClient & {
   socket: WebSocket;
   connect: ConnectParams;

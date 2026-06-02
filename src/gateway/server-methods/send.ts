@@ -69,6 +69,7 @@ const getInflightMap = (context: GatewayRequestContext) => {
   return inflight;
 };
 
+/** Resolves idempotent send/action/poll state before starting new outbound work. */
 function resolveGatewayInflightMap(params: { context: GatewayRequestContext; dedupeKey: string }):
   | {
       kind: "cached";
@@ -127,6 +128,8 @@ function resolveGatewayInflightRequest(params: {
     return {
       kind: "handled",
       done: inflight.inflight.then((result) => {
+        // Joining callers get cached-style metadata even though the result came
+        // from process-local in-flight work, not the durable dedupe store.
         const meta = result.meta ? { ...result.meta, cached: true } : { cached: true };
         params.respond(result.ok, result.payload, result.error, meta);
       }),
@@ -287,6 +290,8 @@ function buildGatewayDeliveryPayload(params: {
   channel: string;
   result: Record<string, unknown>;
 }): Record<string, unknown> {
+  // Keep the public response to stable delivery identifiers; channel-specific
+  // result objects can carry internal fields that should not become RPC API.
   const payload: Record<string, unknown> = {
     runId: params.runId,
     messageId: params.result.messageId,
@@ -315,6 +320,8 @@ function cacheGatewayDedupeSuccess(params: {
   dedupeKey: string;
   payload: unknown;
 }) {
+  // Persist successful idempotency results so retried gateway requests don't
+  // redeliver messages after the process-local in-flight map has cleared.
   params.context.dedupe.set(params.dedupeKey, {
     ts: Date.now(),
     ok: true,
@@ -378,6 +385,8 @@ function createGatewayInflightUnavailableFailure(params: {
   err: unknown;
 }): InflightResult {
   const error = errorShape(ErrorCodes.UNAVAILABLE, String(params.err));
+  // Cache transport/runtime failures too: a retry with the same idempotency key
+  // must observe the first attempt result instead of issuing a second delivery.
   cacheGatewayDedupeFailure({
     context: params.context,
     dedupeKey: params.dedupeKey,

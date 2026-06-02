@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
+/** Captures the callback-style gateway response tuple for handler tests. */
 export type CapturedGatewayResponse = {
   ok: boolean | null;
   response: unknown;
@@ -8,12 +9,14 @@ export type CapturedGatewayResponse = {
 };
 
 function makeGatewayHandlerTestContext(): GatewayRequestContext {
+  // Skill handler tests exercise method dispatch only, so keep the context to the fields they read.
   return {
     getRuntimeConfig: () => ({}),
     logGateway: vi.fn(),
   } as unknown as GatewayRequestContext;
 }
 
+/** Invoke a server-method handler through the real request shape and capture respond() output. */
 export async function callGatewayHandler(
   handlers: GatewayRequestHandlers,
   method: string,
