@@ -8,7 +8,7 @@ import {
 
 export type MusicGenerationTaskHandle = MediaGenerationTaskHandle;
 
-const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
+export const musicGenerationTaskLifecycle = createMediaGenerationTaskLifecycle({
   toolName: "music_generate",
   taskKind: MUSIC_GENERATION_TASK_KIND,
   label: "Music generation",
@@ -46,5 +46,5 @@ export async function wakeMusicGenerationTaskCompletion(params: {
   mediaUrls?: string[];
   statsLine?: string;
 }) {
-  await musicGenerationTaskLifecycle.wakeTaskCompletion(params);
+  return await musicGenerationTaskLifecycle.wakeTaskCompletion(params);
 }

@@ -18,6 +18,7 @@ export function normalizeReplyPayloadDirectives(params: {
   trimLeadingWhitespace?: boolean;
   parseMode?: ReplyDirectiveParseMode;
   extractMarkdownImages?: boolean;
+  extractMediaDirectives?: boolean;
 }): { payload: ReplyPayload; isSilent: boolean } {
   const parseMode = params.parseMode ?? "always";
   const silentToken = params.silentToken ?? SILENT_REPLY_TOKEN;
@@ -27,7 +28,7 @@ export function normalizeReplyPayloadDirectives(params: {
     parseMode === "always" ||
     (parseMode === "auto" &&
       (sourceText.includes("[[") ||
-        /media:/i.test(sourceText) ||
+        (params.extractMediaDirectives !== false && /media:/i.test(sourceText)) ||
         (params.extractMarkdownImages === true && /!\[[^\]]*]\(/.test(sourceText)) ||
         sourceText.includes(silentToken)));
 
@@ -36,6 +37,7 @@ export function normalizeReplyPayloadDirectives(params: {
         currentMessageId: params.currentMessageId,
         silentToken,
         extractMarkdownImages: params.extractMarkdownImages,
+        extractMediaDirectives: params.extractMediaDirectives,
       })
     : undefined;
 
@@ -120,11 +122,15 @@ export function createBlockReplyDeliveryHandler(params: {
       silentToken: SILENT_REPLY_TOKEN,
       trimLeadingWhitespace: true,
       parseMode: "auto",
+      extractMediaDirectives: false,
     });
 
     const mediaNormalizedPayload = params.normalizeMediaPaths
       ? await params.normalizeMediaPaths(normalized.payload)
       : normalized.payload;
+    if (normalized.isSilent) {
+      mediaNormalizedPayload.text = undefined;
+    }
     const blockPayload = copyReplyPayloadMetadata(
       payload,
       params.applyReplyToMode(mediaNormalizedPayload),
@@ -140,7 +146,7 @@ export function createBlockReplyDeliveryHandler(params: {
     }
 
     if (blockPayload.text) {
-      void params.typingSignals.signalTextDelta(blockPayload.text).catch((err) => {
+      void params.typingSignals.signalTextDelta(blockPayload.text).catch((err: unknown) => {
         logVerbose(`block reply typing signal failed: ${String(err)}`);
       });
     }

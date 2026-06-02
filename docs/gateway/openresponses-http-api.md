@@ -23,6 +23,7 @@ Operational behavior matches [OpenAI Chat Completions](/gateway/openai-http-api)
 - use the matching Gateway HTTP auth path:
   - shared-secret auth (`gateway.auth.mode="token"` or `"password"`): `Authorization: Bearer <token-or-password>`
   - trusted-proxy auth (`gateway.auth.mode="trusted-proxy"`): identity-aware proxy headers from a configured trusted proxy source; same-host loopback proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`
+  - trusted-proxy local direct fallback: same-host callers with no `Forwarded`, `X-Forwarded-*`, or `X-Real-IP` headers can use `gateway.auth.password` / `OPENCLAW_GATEWAY_PASSWORD`
   - private-ingress open auth (`gateway.auth.mode="none"`): no auth header
 - treat the endpoint as full operator access for the gateway instance
 - for shared-secret auth modes (`token` and `password`), ignore narrower bearer-declared `x-openclaw-scopes` values and restore the normal full operator defaults
@@ -71,7 +72,7 @@ The request follows the OpenResponses API with item-based input. Current support
 - `input`: string or array of item objects.
 - `instructions`: merged into the system prompt.
 - `tools`: client tool definitions (function tools).
-- `tool_choice`: filter or require client tools.
+- `tool_choice`: `"auto"`, `"none"`, `"required"`, or `{ "type": "function", "name": "..." }` to filter or require client tools.
 - `stream`: enables SSE streaming.
 - `max_output_tokens`: best-effort output limit (provider dependent).
 - `temperature`: best-effort sampling temperature forwarded to the provider. Ignored by the ChatGPT-based Codex Responses backend, which uses fixed server-side sampling.
@@ -118,10 +119,12 @@ Accepted for schema compatibility but ignored when building the prompt.
 
 ## Tools (client-side function tools)
 
-Provide tools with `tools: [{ type: "function", function: { name, description?, parameters? } }]`.
+Provide tools with `tools: [{ type: "function", name, description?, parameters? }]`.
 
 If the agent decides to call a tool, the response returns a `function_call` output item.
 You then send a follow-up request with `function_call_output` to continue the turn.
+
+For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and rejects the turn if it does not include a matching structured client-tool call. This contract applies to the caller-supplied HTTP `tools` list, not every internal OpenClaw agent tool. Non-streaming requests return `502` with an `api_error`; streaming requests emit a `response.failed` event. This matches the `/v1/chat/completions` contract.
 
 ## Images (`input_image`)
 
@@ -174,9 +177,9 @@ Current behavior:
   rasterized into images and passed to the model, and the injected file block uses
   the placeholder `[PDF content rendered to images]`.
 
-PDF parsing is provided by the bundled `document-extract` plugin, which uses the
-Node-friendly `pdfjs-dist` legacy build (no worker). The modern PDF.js build
-expects browser workers/DOM globals, so it is not used in the Gateway.
+PDF parsing is provided by the bundled `document-extract` plugin, which uses
+`clawpdf` and its packaged PDFium WebAssembly runtime for text extraction and
+page rendering.
 
 URL fetch defaults:
 
@@ -260,7 +263,7 @@ Defaults when omitted:
 - `images.maxBytes`: 10MB
 - `images.maxRedirects`: 3
 - `images.timeoutMs`: 10s
-- HEIC/HEIF `input_image` sources are accepted and normalized to JPEG before provider delivery.
+- HEIC/HEIF `input_image` sources are accepted when a system converter is available and are normalized to JPEG before provider delivery. Supported converters are macOS `sips`, ImageMagick, GraphicsMagick, or ffmpeg.
 
 Security note:
 

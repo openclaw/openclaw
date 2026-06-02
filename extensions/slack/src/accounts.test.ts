@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
+  listEnabledSlackAccounts,
+  listSlackAccountIds,
+  resolveDefaultSlackAccountId,
   resolveSlackAccount,
   resolveSlackAccountAllowFrom,
   resolveSlackAccountDmPolicy,
@@ -29,6 +32,49 @@ describe("resolveSlackAccount allowFrom precedence", () => {
     expect(resolved.name).toBe("Work");
     expect(resolved.botToken).toBe("xoxb-work");
     expect(resolved.appToken).toBe("xapp-work");
+  });
+
+  it("keeps the implicit default account when named accounts are added to top-level credentials", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: "xoxb-default",
+          appToken: "xapp-default",
+          accounts: {
+            work: {
+              enabled: false,
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultSlackAccountId(cfg)).toBe("default");
+    expect(listEnabledSlackAccounts(cfg).map((account) => account.accountId)).toEqual(["default"]);
+  });
+
+  it("does not synthesize a default account from only shared optional tokens", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          appToken: "xapp-shared",
+          userToken: "xoxp-shared",
+          accounts: {
+            work: {
+              botToken: "xoxb-work",
+              appToken: "xapp-work",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(listSlackAccountIds(cfg)).toEqual(["work"]);
+    expect(resolveDefaultSlackAccountId(cfg)).toBe("work");
+    expect(listEnabledSlackAccounts(cfg).map((account) => account.accountId)).toEqual(["work"]);
   });
 
   it("prefers accounts.default.allowFrom over top-level for default account", () => {
@@ -146,6 +192,65 @@ describe("resolveSlackAccount allowFrom precedence", () => {
       windowSeconds: 120,
       cooldownSeconds: 240,
     });
+  });
+
+  it("merges canonical account streaming over top-level defaults field-by-field", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            streaming: {
+              mode: "progress",
+              nativeTransport: true,
+              preview: { toolProgress: true, commandText: "raw" },
+              progress: { label: "Shelling", commandText: "status" },
+              block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 250 } },
+            },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                streaming: {
+                  progress: { nativeTaskCards: true },
+                  block: { coalesce: { idleMs: 500 } },
+                },
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved.config.streaming).toEqual({
+      mode: "progress",
+      nativeTransport: true,
+      preview: { toolProgress: true, commandText: "raw" },
+      progress: { label: "Shelling", commandText: "status", nativeTaskCards: true },
+      block: { enabled: true, coalesce: { minChars: 40, maxChars: 80, idleMs: 500 } },
+    });
+  });
+
+  it("preserves account legacy scalar streaming overrides", () => {
+    const resolved = resolveSlackAccount({
+      cfg: {
+        channels: {
+          slack: {
+            streaming: { mode: "progress", progress: { label: "Shelling" } },
+            accounts: {
+              work: {
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                streaming: "off",
+              },
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      accountId: "work",
+    });
+
+    expect(resolved.config.streaming).toBe("off");
   });
 
   it("does not inherit default account allowFrom for named account when top-level is absent", () => {

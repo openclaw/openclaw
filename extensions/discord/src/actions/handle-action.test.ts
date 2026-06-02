@@ -6,6 +6,8 @@ const handleDiscordActionMock = vi
   .spyOn(runtimeModule, "handleDiscordAction")
   .mockResolvedValue({ content: [], details: { ok: true } });
 const { handleDiscordMessageAction } = await import("./handle-action.js");
+const { beginDiscordInboundEventDeliveryCorrelation } =
+  await import("../inbound-event-delivery.js");
 
 function discordConfig(actions?: Record<string, boolean>): OpenClawConfig {
   return {
@@ -72,6 +74,70 @@ describe("handleDiscordMessageAction", () => {
         reason: undefined,
         deleteMessageDays: undefined,
         senderUserId: "trusted-sender-id",
+      },
+      cfg,
+    });
+  });
+
+  it("rejects fractional moderation durations before invoking Discord runtime", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "timeout",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+          durationMin: 5.5,
+        },
+        cfg,
+        requesterSenderId: "trusted-sender-id",
+        toolContext: { currentChannelProvider: "discord" },
+      }),
+    ).rejects.toThrow("durationMin must be a non-negative integer");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("uses Discord requesterSenderId for guild admin actions and ignores params senderUserId", async () => {
+    const cfg = discordConfig({ channels: true });
+    await handleDiscordMessageAction({
+      action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+        senderUserId: "spoofed-admin-id",
+      },
+      cfg,
+      requesterSenderId: "trusted-sender-id",
+      toolContext: { currentChannelProvider: "discord" },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
+        senderUserId: "trusted-sender-id",
+      },
+      cfg,
+    });
+  });
+
+  it("does not treat non-Discord requester ids as Discord guild admin sender ids", async () => {
+    const cfg = discordConfig({ channels: true });
+    await handleDiscordMessageAction({
+      action: "channel-delete",
+      params: {
+        channelId: "channel-1",
+      },
+      cfg,
+      requesterSenderId: "telegram-user-id",
+      toolContext: { currentChannelProvider: "telegram" },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "channelDelete",
+        accountId: undefined,
+        channelId: "channel-1",
       },
       cfg,
     });
@@ -199,6 +265,68 @@ describe("handleDiscordMessageAction", () => {
       cfg,
       options: defaultActionOptions(),
     });
+  });
+
+  it("notifies inbound event delivery after message sends", async () => {
+    const markDelivered = vi.fn();
+    const end = beginDiscordInboundEventDeliveryCorrelation(
+      "agent:main:discord:channel:c1",
+      {
+        outboundTo: "channel:c1",
+        outboundAccountId: "default",
+        markInboundEventDelivered: markDelivered,
+      },
+      { inboundEventKind: "room_event" },
+    );
+
+    try {
+      await handleDiscordMessageAction({
+        action: "send",
+        params: {
+          to: "channel:c1",
+          message: "hello",
+        },
+        cfg: discordConfig(),
+        accountId: "default",
+        sessionKey: "agent:main:discord:channel:c1",
+        inboundEventKind: "room_event",
+      });
+    } finally {
+      end();
+    }
+
+    expect(markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("notifies inbound event delivery after visible message actions", async () => {
+    const markDelivered = vi.fn();
+    const end = beginDiscordInboundEventDeliveryCorrelation(
+      "agent:main:discord:channel:c1",
+      {
+        outboundTo: "channel:c1",
+        outboundAccountId: "default",
+        markInboundEventDelivered: markDelivered,
+      },
+      { inboundEventKind: "room_event" },
+    );
+
+    try {
+      await handleDiscordMessageAction({
+        action: "upload-file",
+        params: {
+          to: "channel:c1",
+          filePath: "/tmp/image.png",
+        },
+        cfg: discordConfig(),
+        accountId: "default",
+        sessionKey: "agent:main:discord:channel:c1",
+        inboundEventKind: "room_event",
+      });
+    } finally {
+      end();
+    }
+
+    expect(markDelivered).toHaveBeenCalledTimes(1);
   });
 
   it("maps upload-file to Discord sendMessage with media read context", async () => {

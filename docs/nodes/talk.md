@@ -10,6 +10,7 @@ Talk mode has two runtime shapes:
 
 - Native macOS/iOS/Android Talk uses local speech recognition, Gateway chat, and `talk.speak` TTS. Nodes advertise the `talk` capability and declare the `talk.*` commands they support.
 - Browser Talk uses `talk.client.create` for client-owned `webrtc` and `provider-websocket` sessions, or `talk.session.create` for Gateway-owned `gateway-relay` sessions. `managed-room` is reserved for Gateway handoff and walkie-talkie rooms.
+- Android Talk can opt into Gateway-owned realtime relay sessions with `talk.realtime.mode: "realtime"` and `talk.realtime.transport: "gateway-relay"`. Otherwise it stays on native speech recognition, Gateway chat, and `talk.speak`.
 - Transcription-only clients use `talk.session.create({ mode: "transcription", transport: "gateway-relay", brain: "none" })`, then `talk.session.appendAudio`, `talk.session.cancelTurn`, and `talk.session.close` when they need captions or dictation without an assistant voice response.
 
 Native Talk is a continuous voice conversation loop:
@@ -20,6 +21,11 @@ Native Talk is a continuous voice conversation loop:
 4. Speak it via the configured Talk provider (`talk.speak`)
 
 Browser realtime Talk forwards provider tool calls through `talk.client.toolCall`; browser clients do not call `chat.send` directly for realtime consults.
+While a realtime consult is active, Talk clients can use `talk.client.steer` or
+`talk.session.steer` to classify spoken input as `status`, `steer`, `cancel`, or
+`followup`. Accepted steering is queued into the active embedded run; rejected
+steering returns a structured reason such as `no_active_run`, `not_streaming`,
+or `compacting`.
 
 Transcription-only Talk emits the same common Talk event envelope as realtime and STT/TTS sessions, but uses `mode: "transcription"` and `brain: "none"`. It is for captions, dictation, and observe-only speech capture; one-shot uploaded voice notes still use the media/audio path.
 
@@ -108,7 +114,9 @@ Defaults:
 - `realtime.provider`: selects the active browser/server realtime voice provider. Use `openai` for WebRTC, `google` for provider WebSocket, or a bridge-only provider through Gateway relay.
 - `realtime.providers.<provider>` stores provider-owned realtime config. The browser receives only ephemeral or constrained session credentials, never a standard API key.
 - `realtime.providers.openai.voice`: built-in OpenAI Realtime voice id. Current `gpt-realtime-2` voices are `alloy`, `ash`, `ballad`, `coral`, `echo`, `sage`, `shimmer`, `verse`, `marin`, and `cedar`; `marin` and `cedar` are recommended for best quality.
-- `realtime.brain`: `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is owner-only compatibility behavior; `none` is for transcription or external orchestration.
+- `realtime.transport`: `webrtc` and `provider-websocket` are browser realtime transports. Android uses realtime relay only when this is `gateway-relay`; otherwise Android Talk uses its native STT/TTS loop.
+- `realtime.brain`: `agent-consult` routes realtime tool calls through Gateway policy; `direct-tools` is legacy direct-tool compatibility behavior; `none` is for transcription or external orchestration.
+- `realtime.consultRouting`: `provider-direct` preserves the provider's direct reply when it skips `openclaw_agent_consult`; `force-agent-consult` makes Gateway relay route finalized user transcripts through OpenClaw instead.
 - `realtime.instructions`: appends provider-facing system instructions to OpenClaw's built-in realtime prompt. Use it for voice style and tone; OpenClaw keeps the default `openclaw_agent_consult` guidance.
 - `talk.catalog` exposes each provider's valid modes, transports, brain strategies, realtime audio formats, and capability flags so first-party Talk clients can avoid unsupported combinations.
 - Streaming transcription providers are discovered through `talk.catalog.transcription`. The current Gateway relay uses the Voice Call streaming provider config until the dedicated Talk transcription config surface is added.

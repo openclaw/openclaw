@@ -7,6 +7,7 @@ import {
   setReplyPayloadMetadata,
 } from "../reply-payload.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
 
 const baseParams = {
   isHeartbeat: false,
@@ -186,7 +187,7 @@ describe("buildReplyPayloads media filter integration", () => {
 
     expect(replyPayloads).toHaveLength(2);
     expectFields(replyPayloads[0], {
-      text: "keep text",
+      text: "keep text\n⚠️ Media failed.",
       mediaUrl: undefined,
       mediaUrls: undefined,
       audioAsVoice: false,
@@ -562,6 +563,32 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("drops final caption and media already sent as one coalesced block payload", async () => {
+    const pipeline = createBlockReplyPipeline({
+      onBlockReply: async () => {},
+      timeoutMs: 5000,
+      coalescing: {
+        minChars: 1,
+        maxChars: 200,
+        idleMs: 0,
+        joiner: " ",
+      },
+    });
+    pipeline.enqueue({ text: "Preview" });
+    pipeline.enqueue({ text: "below" });
+    pipeline.enqueue({ mediaUrls: ["file:///photo.png"] });
+    await pipeline.flush({ force: true });
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      blockStreamingEnabled: true,
+      blockReplyPipeline: pipeline,
+      payloads: [{ text: "Preview below", mediaUrls: ["file:///photo.png"] }],
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("preserves post-stream error payloads when block pipeline streamed successfully", async () => {
     const pipeline: Parameters<typeof buildReplyPayloads>[0]["blockReplyPipeline"] = {
       didStream: () => true,
@@ -656,6 +683,26 @@ describe("buildReplyPayloads media filter integration", () => {
     });
 
     expect(replyPayloads).toHaveLength(0);
+  });
+
+  it("surfaces a warning when non-silent media payloads fail normalization", async () => {
+    const normalizeMediaPaths = async () => {
+      throw new Error("file not found");
+    };
+
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "MEDIA: ./missing.png" }],
+      normalizeMediaPaths,
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expectFields(replyPayloads[0], {
+      text: "⚠️ Media failed.",
+      mediaUrl: undefined,
+      mediaUrls: undefined,
+      audioAsVoice: false,
+    });
   });
 
   it("extracts markdown image replies into final payload media urls", async () => {

@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { createExecTool } from "../../agents/bash-tools.js";
 import type { ExecToolDetails } from "../../agents/bash-tools.js";
@@ -5,17 +6,16 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
-import type { InteractiveReply } from "../../interactive/payload.js";
+import type { InteractiveReply, MessagePresentationAction } from "../../interactive/payload.js";
 import { executePluginCommand, matchPluginCommand } from "../../plugins/commands.js";
 import type { PluginCommandDiagnosticsSession, PluginCommandResult } from "../../plugins/types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
-import { rejectNonOwnerCommand } from "./command-gates.js";
 import { buildCurrentOpenClawCliCommand } from "./commands-openclaw-cli.js";
 import {
   deliverPrivateCommandReply,
   readCommandDeliveryTarget,
   readCommandMessageThreadId,
+  resolvePrivateCommandApprovalRouteExpiresAtMs,
   resolvePrivateCommandRouteTargets,
   type PrivateCommandRouteTarget,
 } from "./commands-private-route.js";
@@ -55,7 +55,7 @@ type CodexDiagnosticsApprovalIntegration = {
 const defaultDiagnosticsCommandDeps: DiagnosticsCommandDeps = {
   createExecTool,
   resolvePrivateDiagnosticsTargets: resolvePrivateDiagnosticsTargetsForCommand,
-  deliverPrivateDiagnosticsReply: deliverPrivateDiagnosticsReply,
+  deliverPrivateDiagnosticsReply,
 };
 
 export function createDiagnosticsCommandHandler(
@@ -89,11 +89,6 @@ async function handleDiagnosticsCommandWithDeps(
     );
     return { shouldContinue: false };
   }
-  const ownerGate = rejectNonOwnerCommand(params, DIAGNOSTICS_COMMAND);
-  if (ownerGate) {
-    return ownerGate;
-  }
-
   if (isCodexDiagnosticsConfirmationAction(args)) {
     const codexResult = await executeCodexDiagnosticsAddon(params, args);
     const reply = codexResult
@@ -262,7 +257,7 @@ function buildDiagnosticsApprovalRequest(params: HandleCommandsParams): ExecAppr
       turnSourceThreadId: readCommandMessageThreadId(params) ?? null,
     },
     createdAtMs: now,
-    expiresAtMs: now + 5 * 60_000,
+    expiresAtMs: resolvePrivateCommandApprovalRouteExpiresAtMs(now),
   };
 }
 
@@ -456,9 +451,11 @@ async function executeCodexDiagnosticsAddon(
     isAuthorizedSender: params.command.isAuthorizedSender,
     senderIsOwner: params.command.senderIsOwner,
     gatewayClientScopes: params.ctx.GatewayClientScopes,
+    agentId: params.agentId,
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
     sessionFile: targetSessionEntry?.sessionFile,
+    authProfileId: targetSessionEntry?.authProfileOverride,
     commandBody,
     config: params.cfg,
     from: params.command.from,
@@ -607,6 +604,7 @@ function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
           ...block,
           buttons: block.buttons.map((button) => ({
             ...button,
+            ...(button.action ? { action: rewritePresentationAction(button.action) } : {}),
             ...(button.value ? { value: rewriteCodexDiagnosticsCommandPrefix(button.value) } : {}),
           })),
         };
@@ -616,12 +614,26 @@ function rewriteInteractive(interactive: InteractiveReply): InteractiveReply {
           ...block,
           options: block.options.map((option) => ({
             ...option,
-            value: rewriteCodexDiagnosticsCommandPrefix(option.value),
+            ...(option.action ? { action: rewritePresentationAction(option.action) } : {}),
+            ...(option.value ? { value: rewriteCodexDiagnosticsCommandPrefix(option.value) } : {}),
           })),
         };
       }
       return block;
     }),
+  };
+}
+
+function rewritePresentationAction(action: MessagePresentationAction): MessagePresentationAction {
+  if (action.type === "command") {
+    return {
+      type: "command",
+      command: rewriteCodexDiagnosticsCommandPrefix(action.command),
+    };
+  }
+  return {
+    type: "callback",
+    value: rewriteCodexDiagnosticsCommandPrefix(action.value),
   };
 }
 

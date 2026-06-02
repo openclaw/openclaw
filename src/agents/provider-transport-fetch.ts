@@ -1,13 +1,26 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+import {
+  isCloudMetadataIpAddress,
+  isLinkLocalIpAddress,
+  parseCanonicalIpAddress,
+} from "@openclaw/net-policy/ip";
+import {
+  asFiniteNumberInRange,
+  clampTimerTimeoutMs,
+  parseStrictFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
 } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import {
+  mergeSsrFPolicies,
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import type { Model } from "../llm/types.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
@@ -25,6 +38,17 @@ import {
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
 const log = createSubsystemLogger("provider-transport-fetch");
+const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
+const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
+const RETRY_AFTER_HTTP_DATE_RE =
+  /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
+const HTTP_DATE_MONTH_INDEX = new Map(
+  ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].map(
+    (month, index) => [month, index],
+  ),
+);
+const OBSOLETE_ASCTIME_HTTP_DATE_RE =
+  /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) ([ \d]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/;
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -184,7 +208,7 @@ function sanitizeOpenAISdkSseResponse(
   });
 }
 
-function shouldSanitizeOpenAISdkSseResponse(model: Model<Api>): boolean {
+function shouldSanitizeOpenAISdkSseResponse(model: Model): boolean {
   if (model.provider !== "openai") {
     return true;
   }
@@ -226,9 +250,13 @@ async function requestBodyHasStreamTrue(
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
   const retryAfterMs = headers.get("retry-after-ms");
   if (retryAfterMs) {
-    const milliseconds = Number.parseFloat(retryAfterMs);
-    if (Number.isFinite(milliseconds) && milliseconds >= 0) {
-      return milliseconds / 1000;
+    const trimmedRetryAfterMs = retryAfterMs.trim();
+    if (/^\d+(?:\.\d+)?$/.test(trimmedRetryAfterMs)) {
+      const milliseconds = asFiniteNumberInRange(parseStrictFiniteNumber(trimmedRetryAfterMs), {
+        min: 0,
+        max: Number.MAX_SAFE_INTEGER,
+      });
+      return milliseconds === undefined ? Number.POSITIVE_INFINITY : milliseconds / 1000;
     }
   }
 
@@ -237,17 +265,63 @@ function parseRetryAfterSeconds(headers: Headers): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(retryAfter);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return seconds;
+  const trimmedRetryAfterSeconds = retryAfter.trim();
+  if (/^\d+$/.test(trimmedRetryAfterSeconds)) {
+    return parseStrictNonNegativeInteger(trimmedRetryAfterSeconds) ?? Number.POSITIVE_INFINITY;
   }
 
-  const retryAt = Date.parse(retryAfter);
+  const trimmedRetryAfter = trimmedRetryAfterSeconds;
+  if (!RETRY_AFTER_HTTP_DATE_RE.test(trimmedRetryAfter)) {
+    return undefined;
+  }
+
+  const retryAt = parseRetryAfterHttpDateMs(trimmedRetryAfter);
   if (Number.isNaN(retryAt)) {
     return undefined;
   }
 
   return Math.max(0, (retryAt - Date.now()) / 1000);
+}
+
+function parseRetryAfterHttpDateMs(value: string): number {
+  const match = OBSOLETE_ASCTIME_HTTP_DATE_RE.exec(value);
+  if (match) {
+    const month = HTTP_DATE_MONTH_INDEX.get(match[1] ?? "");
+    if (month === undefined) {
+      return Number.NaN;
+    }
+    const year = Number.parseInt(match[6] ?? "", 10);
+    const day = Number.parseInt((match[2] ?? "").trim(), 10);
+    const hours = Number.parseInt(match[3] ?? "", 10);
+    const minutes = Number.parseInt(match[4] ?? "", 10);
+    const seconds = Number.parseInt(match[5] ?? "", 10);
+    if (
+      day < 1 ||
+      day > 31 ||
+      hours > 23 ||
+      minutes > 59 ||
+      seconds > 59 ||
+      [year, day, hours, minutes, seconds].some((component) => !Number.isFinite(component))
+    ) {
+      return Number.NaN;
+    }
+    const timestamp = Date.UTC(year, month, day, hours, minutes, seconds);
+    const parsedDate = new Date(timestamp);
+    return parsedDate.getUTCFullYear() === year &&
+      parsedDate.getUTCMonth() === month &&
+      parsedDate.getUTCDate() === day &&
+      parsedDate.getUTCHours() === hours &&
+      parsedDate.getUTCMinutes() === minutes &&
+      parsedDate.getUTCSeconds() === seconds
+      ? timestamp
+      : Number.NaN;
+  }
+
+  const parsed = Date.parse(value);
+  if (!Number.isNaN(parsed)) {
+    return parsed;
+  }
+  return Number.NaN;
 }
 
 function resolveMaxSdkRetryWaitSeconds(): number | undefined {
@@ -260,8 +334,16 @@ function resolveMaxSdkRetryWaitSeconds(): number | undefined {
     return undefined;
   }
 
-  const seconds = Number.parseFloat(raw);
-  if (Number.isFinite(seconds) && seconds > 0) {
+  if (!PLAIN_DECIMAL_NUMBER_RE.test(raw)) {
+    return DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS;
+  }
+
+  const seconds = asFiniteNumberInRange(parseStrictFiniteNumber(raw), {
+    min: 0,
+    minExclusive: true,
+    max: Number.MAX_SAFE_INTEGER,
+  });
+  if (seconds !== undefined) {
     return seconds;
   }
 
@@ -288,6 +370,12 @@ function shouldBypassLongSdkRetry(response: Response): boolean {
   return status === 429;
 }
 
+const managedStreamCleanupRegistry = new FinalizationRegistry<{ finalize: () => Promise<void> }>(
+  (held) => {
+    void held.finalize();
+  },
+);
+
 function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
@@ -304,12 +392,15 @@ function buildManagedResponse(
   const source = response.body;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let released = false;
+  const cleanupRegistrationToken = {};
   const finalize = async () => {
     if (released) {
       return;
     }
     released = true;
+    managedStreamCleanupRegistry.unregister(cleanupRegistrationToken);
     try {
+      await reader?.cancel().catch(() => undefined);
       await release().catch(() => undefined);
     } finally {
       finalizeLocalServiceLease();
@@ -342,6 +433,9 @@ function buildManagedResponse(
       }
     },
   });
+  // Stream consumers should cancel deterministically; this catches abandoned
+  // wrapper bodies so guarded dispatchers and local-service leases do not leak.
+  managedStreamCleanupRegistry.register(wrappedBody, { finalize }, cleanupRegistrationToken);
   return new Response(wrappedBody, {
     status: response.status,
     statusText: response.statusText,
@@ -349,7 +443,7 @@ function buildManagedResponse(
   });
 }
 
-function resolveModelRequestPolicy(model: Model<Api>) {
+function resolveModelRequestPolicy(model: Model) {
   const debugProxy = resolveDebugProxySettings();
   let explicitDebugProxyUrl: string | undefined;
   if (debugProxy.enabled && debugProxy.proxyUrl) {
@@ -380,19 +474,35 @@ function resolveModelRequestPolicy(model: Model<Api>) {
 }
 
 export function resolveModelRequestTimeoutMs(
-  model: Model<Api>,
+  model: Model,
   timeoutMs: number | undefined,
 ): number | undefined {
   if (timeoutMs !== undefined) {
-    return timeoutMs;
+    return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+      ? clampTimerTimeoutMs(timeoutMs)
+      : undefined;
   }
   const modelTimeoutMs = (model as { requestTimeoutMs?: unknown }).requestTimeoutMs;
   return typeof modelTimeoutMs === "number" && Number.isFinite(modelTimeoutMs) && modelTimeoutMs > 0
-    ? Math.floor(modelTimeoutMs)
+    ? clampTimerTimeoutMs(modelTimeoutMs)
     : undefined;
 }
 
-function resolveHttpHostname(value: unknown): string | undefined {
+function buildModelRequestSignal(
+  baseSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined,
+): AbortSignal | undefined {
+  if (timeoutMs === undefined) {
+    return baseSignal;
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  if (!baseSignal) {
+    return timeoutSignal;
+  }
+  return AbortSignal.any([baseSignal, timeoutSignal]);
+}
+
+function resolveHttpOrigin(value: unknown): string | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
@@ -401,37 +511,91 @@ function resolveHttpHostname(value: unknown): string | undefined {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
-    return parsed.hostname.toLowerCase();
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
+    return parsed.origin.toLowerCase();
   } catch {
     return undefined;
   }
 }
 
+function normalizeProviderOriginHostname(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) {
+    return undefined;
+  }
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return undefined;
+    }
+    const normalized = parsed.hostname.trim().toLowerCase().replace(/\.+$/, "");
+    return normalized || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is string {
+  const hostname = normalizeProviderOriginHostname(value);
+  if (!hostname) {
+    return false;
+  }
+  const labels = hostname.split(".").filter(Boolean);
+  return (
+    !labels.some(
+      (label) =>
+        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
+    ) &&
+    !isLinkLocalIpAddress(hostname) &&
+    !isCloudMetadataIpAddress(hostname)
+  );
+}
+
+function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
+  const hostname = normalizeProviderOriginHostname(value);
+  if (!hostname) {
+    return false;
+  }
+  const labels = hostname.split(".").filter(Boolean);
+  return (
+    !labels.some(
+      (label) =>
+        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
+    ) && !parseCanonicalIpAddress(hostname)
+  );
+}
+
 function resolveModelTransportSsrFPolicy(params: {
-  model: Model<Api>;
+  model: Model;
   url: string;
   allowPrivateNetwork?: boolean;
+  trustConfiguredBaseUrlOrigin?: boolean;
 }): SsrFPolicy | undefined {
   const baseUrl = (params.model as { baseUrl?: unknown }).baseUrl;
-  const baseHostname = resolveHttpHostname(baseUrl);
-  const requestHostname = resolveHttpHostname(params.url);
+  const baseOrigin = resolveHttpOrigin(baseUrl);
+  const requestOrigin = resolveHttpOrigin(params.url);
+  const requestMatchesBaseOrigin =
+    typeof baseUrl === "string" && Boolean(baseOrigin) && requestOrigin === baseOrigin;
+  const baseUrlOriginPolicy =
+    requestMatchesBaseOrigin &&
+    params.trustConfiguredBaseUrlOrigin &&
+    canImplicitlyTrustConfiguredBaseUrlOrigin(baseUrl)
+      ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
+      : undefined;
+  // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
+  // It is for DNS hostnames only and does not allow literal private IPs by itself.
   const fakeIpPolicy =
-    typeof baseUrl === "string" && baseHostname && requestHostname === baseHostname
+    requestMatchesBaseOrigin && canApplyFakeIpHostnamePolicy(baseUrl)
       ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
       : undefined;
-
-  if (fakeIpPolicy) {
-    return {
-      ...fakeIpPolicy,
-      ...(params.allowPrivateNetwork ? { allowPrivateNetwork: true } : {}),
-    };
-  }
-
-  return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+  return mergeSsrFPolicies(
+    baseUrlOriginPolicy,
+    fakeIpPolicy,
+    params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+  );
 }
 
 export function buildGuardedModelFetch(
-  model: Model<Api>,
+  model: Model,
   timeoutMs?: number,
   options?: { sanitizeSse?: boolean },
 ): typeof fetch {
@@ -472,6 +636,12 @@ export function buildGuardedModelFetch(
       model,
       url,
       allowPrivateNetwork: requestConfig.allowPrivateNetwork,
+      // Only operator-configured custom/local endpoints get exact-origin trust;
+      // known public/native providers keep the default rebinding checks.
+      trustConfiguredBaseUrlOrigin:
+        !requestConfig.privateNetworkExplicitlyDenied &&
+        (requestConfig.policy?.endpointClass === "custom" ||
+          requestConfig.policy?.endpointClass === "local"),
     });
     const requestInit =
       request &&
@@ -483,10 +653,13 @@ export function buildGuardedModelFetch(
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
-    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, requestInit ?? init);
+    const baseInit = requestInit ?? init;
+    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, baseInit);
+    const baseSignal = baseInit?.signal ?? undefined;
+    const localServiceSignal = buildModelRequestSignal(baseSignal, requestTimeoutMs);
     const guardedFetchOptions = {
       url,
-      init: requestInit ?? init,
+      init: baseInit,
       capture: {
         meta: {
           provider: model.provider,
@@ -496,6 +669,7 @@ export function buildGuardedModelFetch(
       },
       dispatcherPolicy,
       timeoutMs: requestTimeoutMs,
+      ...(baseSignal ? { signal: baseSignal } : {}),
       // Provider transport intentionally keeps the secure default and never
       // replays unsafe request bodies across cross-origin redirects.
       allowCrossOriginUnsafeRedirectReplay: false,
@@ -507,15 +681,15 @@ export function buildGuardedModelFetch(
     emitModelTransportDebug(
       log,
       `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
-        `method=${(requestInit ?? init)?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
+        `method=${baseInit?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
         `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
         `policy=${policy ? "custom" : "default"}`,
     );
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
-        (requestInit ?? init)?.headers,
-        (requestInit ?? init)?.signal,
+        baseInit?.headers,
+        localServiceSignal,
       );
       result = await fetchWithSsrFGuard(
         useEnvProxy

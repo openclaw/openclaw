@@ -1,3 +1,8 @@
+import type {
+  ConnectParams,
+  ErrorShape,
+  RequestFrame,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { HealthSummary } from "../../commands/health.types.js";
@@ -8,9 +13,9 @@ import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { WizardSession } from "../../wizard/session.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
+import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
-import type { ConnectParams, ErrorShape, RequestFrame } from "../protocol/index.js";
 import type { GatewayBroadcastFn, GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import type { BufferedAgentEvent } from "../server-chat-state.js";
@@ -31,6 +36,7 @@ export type GatewayClient = {
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
     pluginRuntimeOwnerId?: string;
+    agentRunTracking?: "plugin_subagent";
   };
 };
 
@@ -73,6 +79,10 @@ export type GatewayRequestContext = {
     record?: ExecApprovalRecord<TPayload>;
   }) => ReadonlySet<string>;
   disconnectClientsForDevice?: (deviceId: string, opts?: { role?: string }) => void;
+  invalidateClientsForDevice?: (
+    deviceId: string,
+    opts?: { role?: string; reason?: string },
+  ) => void;
   disconnectClientsUsingSharedGatewayAuth?: () => void;
   enforceSharedGatewayAuthGenerationForConfigWrite?: (nextConfig: OpenClawConfig) => void;
   nodeRegistry: NodeRegistry;
@@ -85,12 +95,16 @@ export type GatewayRequestContext = {
   chatDeltaLastBroadcastText: Map<string, string>;
   agentDeltaSentAt: Map<string, number>;
   bufferedAgentEvents: Map<string, BufferedAgentEvent>;
-  addChatRun: (sessionId: string, entry: { sessionKey: string; clientRunId: string }) => void;
+  clearChatRunState: (runId: string) => void;
+  addChatRun: (
+    sessionId: string,
+    entry: { sessionKey: string; agentId?: string; clientRunId: string },
+  ) => void;
   removeChatRun: (
     sessionId: string,
     clientRunId: string,
     sessionKey?: string,
-  ) => { sessionKey: string; clientRunId: string } | undefined;
+  ) => { sessionKey: string; agentId?: string; clientRunId: string } | undefined;
   subscribeSessionEvents: (connId: string) => void;
   unsubscribeSessionEvents: (connId: string) => void;
   subscribeSessionMessageEvents: (connId: string, sessionKey: string) => void;
@@ -135,6 +149,7 @@ export type GatewayRequestOptions = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   respond: RespondFn;
   context: GatewayRequestContext;
+  methodRegistry?: GatewayMethodRegistryView;
 };
 
 export type GatewayRequestHandlerOptions = {

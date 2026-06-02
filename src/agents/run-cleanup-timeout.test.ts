@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENT_CLEANUP_STEP_TIMEOUT_MS,
+  CLEANUP_TIMEOUT_DETAILS_MAX_CHARS,
   resolveAgentCleanupStepTimeoutMs,
   runAgentCleanupStep,
 } from "./run-cleanup-timeout.js";
@@ -45,7 +46,7 @@ describe("agent cleanup timeout", () => {
     const result = runAgentCleanupStep({
       runId: "run-trajectory",
       sessionId: "session-trajectory",
-      step: "pi-trajectory-flush",
+      step: "openclaw-trajectory-flush",
       cleanup,
       log,
       env: {
@@ -61,7 +62,108 @@ describe("agent cleanup timeout", () => {
 
     expect(cleanup).toHaveBeenCalledTimes(1);
     expect(log.warn).toHaveBeenCalledWith(
-      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=pi-trajectory-flush timeoutMs=25000",
+      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=openclaw-trajectory-flush timeoutMs=25000",
+    );
+  });
+
+  it("includes cleanup timeout details when the cleanup step exposes them", async () => {
+    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
+
+    const result = runAgentCleanupStep({
+      runId: "run-trajectory",
+      sessionId: "session-trajectory",
+      step: "openclaw-trajectory-flush",
+      cleanup,
+      log,
+      timeoutMs: 5,
+      getTimeoutDetails: () => "pendingWrites=2 queuedBytes=128 activeOperation=file-append",
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(result).resolves.toBeUndefined();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=openclaw-trajectory-flush timeoutMs=5 details=pendingWrites=2 queuedBytes=128 activeOperation=file-append",
+    );
+  });
+
+  it("bounds cleanup timeout details before logging", async () => {
+    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
+    const oversizedDetails = `queuedBytes=${"9".repeat(CLEANUP_TIMEOUT_DETAILS_MAX_CHARS * 2)}`;
+
+    const result = runAgentCleanupStep({
+      runId: "run-trajectory",
+      sessionId: "session-trajectory",
+      step: "agent-trajectory-flush",
+      cleanup,
+      log,
+      timeoutMs: 5,
+      getTimeoutDetails: () => oversizedDetails,
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(result).resolves.toBeUndefined();
+
+    const message = String(log.warn.mock.calls.at(-1)?.[0] ?? "");
+    expect(message).toContain(" details=queuedBytes=");
+    expect(message).toContain("...[truncated]");
+    expect(message.length).toBeLessThan(
+      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=agent-trajectory-flush timeoutMs=5 details="
+        .length +
+        CLEANUP_TIMEOUT_DETAILS_MAX_CHARS +
+        1,
+    );
+  });
+
+  it("does not fail cleanup when timeout details throw", async () => {
+    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
+
+    const result = runAgentCleanupStep({
+      runId: "run-trajectory",
+      sessionId: "session-trajectory",
+      step: "openclaw-trajectory-flush",
+      cleanup,
+      log,
+      timeoutMs: 5,
+      getTimeoutDetails: () => {
+        throw new Error("details unavailable");
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(result).resolves.toBeUndefined();
+
+    expect(log.warn).toHaveBeenCalledWith(
+      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=openclaw-trajectory-flush timeoutMs=5 detailsError=details unavailable",
+    );
+  });
+
+  it("bounds cleanup timeout detail errors before logging", async () => {
+    const cleanup = vi.fn(async () => new Promise<never>(() => {}));
+
+    const result = runAgentCleanupStep({
+      runId: "run-trajectory",
+      sessionId: "session-trajectory",
+      step: "agent-trajectory-flush",
+      cleanup,
+      log,
+      timeoutMs: 5,
+      getTimeoutDetails: () => {
+        throw new Error("details unavailable ".repeat(CLEANUP_TIMEOUT_DETAILS_MAX_CHARS));
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(5);
+    await expect(result).resolves.toBeUndefined();
+
+    const message = String(log.warn.mock.calls.at(-1)?.[0] ?? "");
+    expect(message).toContain(" detailsError=details unavailable");
+    expect(message).toContain("...[truncated]");
+    expect(message.length).toBeLessThan(
+      "agent cleanup timed out: runId=run-trajectory sessionId=session-trajectory step=agent-trajectory-flush timeoutMs=5 detailsError="
+        .length +
+        CLEANUP_TIMEOUT_DETAILS_MAX_CHARS +
+        1,
     );
   });
 
@@ -90,7 +192,7 @@ describe("agent cleanup timeout", () => {
   it("prefers explicit cleanup timeout values over environment overrides", () => {
     expect(
       resolveAgentCleanupStepTimeoutMs({
-        step: "pi-trajectory-flush",
+        step: "openclaw-trajectory-flush",
         timeoutMs: 2_000,
         env: {
           OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "25000",
@@ -103,7 +205,7 @@ describe("agent cleanup timeout", () => {
   it("keeps explicit zero cleanup timeouts as a one millisecond timeout", () => {
     expect(
       resolveAgentCleanupStepTimeoutMs({
-        step: "pi-trajectory-flush",
+        step: "openclaw-trajectory-flush",
         timeoutMs: 0,
         env: {
           OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "25000",
@@ -115,10 +217,19 @@ describe("agent cleanup timeout", () => {
   it("ignores invalid cleanup timeout environment values", () => {
     expect(
       resolveAgentCleanupStepTimeoutMs({
-        step: "pi-trajectory-flush",
+        step: "openclaw-trajectory-flush",
         env: {
           OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "0",
           OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "not-a-number",
+        },
+      }),
+    ).toBe(AGENT_CLEANUP_STEP_TIMEOUT_MS);
+    expect(
+      resolveAgentCleanupStepTimeoutMs({
+        step: "openclaw-trajectory-flush",
+        env: {
+          OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS: "1e3",
+          OPENCLAW_AGENT_CLEANUP_TIMEOUT_MS: "0x10",
         },
       }),
     ).toBe(AGENT_CLEANUP_STEP_TIMEOUT_MS);

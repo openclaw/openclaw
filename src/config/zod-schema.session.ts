@@ -1,7 +1,7 @@
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { normalizeStringifiedOptionalString } from "../shared/string-coerce.js";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
@@ -59,6 +59,8 @@ export const SessionSchema = z
     writeLock: z
       .object({
         acquireTimeoutMs: z.number().int().positive().optional(),
+        staleMs: z.number().int().positive().optional(),
+        maxHoldMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),

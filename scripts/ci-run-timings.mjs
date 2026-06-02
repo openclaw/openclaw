@@ -2,6 +2,53 @@
 
 import { execFileSync } from "node:child_process";
 
+const DEFAULT_GITHUB_REPOSITORY = "openclaw/openclaw";
+const RUN_JOBS_PAGE_SIZE = 20;
+const RUN_JOBS_MAX_PAGES = 25;
+const GH_JSON_RETRY_DELAYS_MS = [1_000, 3_000, 6_000];
+
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function parseJsonCommand(command, args, options = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= GH_JSON_RETRY_DELAYS_MS.length; attempt += 1) {
+    try {
+      return JSON.parse(
+        execFileSync(command, args, {
+          encoding: "utf8",
+          ...options,
+        }),
+      );
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      const retryable = /HTTP 5\d\d|Server Error|ETIMEDOUT|ECONNRESET|EAI_AGAIN/u.test(message);
+      if (!retryable || attempt === GH_JSON_RETRY_DELAYS_MS.length) {
+        throw error;
+      }
+      sleepSync(GH_JSON_RETRY_DELAYS_MS[attempt]);
+    }
+  }
+  throw lastError;
+}
+
+function normalizeRunJob(job) {
+  return {
+    completedAt: job.completedAt ?? job.completed_at ?? null,
+    conclusion: job.conclusion ?? "",
+    databaseId: job.databaseId ?? job.id,
+    name: job.name,
+    startedAt: job.startedAt ?? job.started_at ?? null,
+    status: job.status ?? "",
+  };
+}
+
+export function collectRunJobsFromPages(pages) {
+  return pages.flatMap((page) => (Array.isArray(page.jobs) ? page.jobs.map(normalizeRunJob) : []));
+}
+
 function parseTime(value) {
   if (!value || value === "0001-01-01T00:00:00Z") {
     return null;
@@ -18,9 +65,34 @@ function formatSeconds(value) {
   return value === null ? "" : `${value}s`;
 }
 
+function percentile(values, percentileValue) {
+  if (values.length === 0) {
+    return null;
+  }
+  const sorted = [...values].toSorted((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * percentileValue) - 1);
+  return sorted[index];
+}
+
 function parseRunList(raw) {
   const parsed = JSON.parse(raw);
   return Array.isArray(parsed) ? parsed : [];
+}
+
+function isPnpmStoreWarmupGatedJobName(name) {
+  return (
+    name === "build-artifacts" ||
+    name === "check-docs" ||
+    name === "check-guards" ||
+    name === "check-shrinkwrap" ||
+    name === "check-prod-types" ||
+    name === "check-lint" ||
+    name === "check-dependencies" ||
+    name === "check-test-types" ||
+    name.startsWith("check-additional-") ||
+    name.startsWith("checks-fast-") ||
+    (name.startsWith("checks-node-") && !name.startsWith("checks-node-compat-"))
+  );
 }
 
 function collectRunTimingContext(run) {
@@ -66,6 +138,46 @@ export function summarizeRunTimings(run, limit = 15) {
     status: run.status ?? "",
     wallSeconds: secondsBetween(created, updated),
     badJobs,
+  };
+}
+
+export function summarizePnpmStoreWarmupBarrier(run, windowSeconds = 5) {
+  const { jobs } = collectRunTimingContext(run);
+  const preflight = jobs.find((job) => job.name === "preflight");
+  const warmup = jobs.find((job) => job.name === "pnpm-store-warmup");
+  if (!warmup?.started || !warmup?.completed) {
+    return null;
+  }
+
+  const postWarmupJobs = jobs.filter(
+    (job) =>
+      job.name !== "preflight" &&
+      job.name !== "security-fast" &&
+      job.name !== "pnpm-store-warmup" &&
+      isPnpmStoreWarmupGatedJobName(job.name) &&
+      job.status === "completed" &&
+      job.conclusion !== "skipped" &&
+      job.started !== null &&
+      job.started >= warmup.completed &&
+      (job.durationSeconds ?? 0) > 5,
+  );
+  const startDelays = postWarmupJobs
+    .map((job) => secondsBetween(warmup.completed, job.started))
+    .filter((delay) => delay !== null);
+
+  return {
+    activePostWarmupJobCount: postWarmupJobs.length,
+    firstPostWarmupStartDelaySeconds: startDelays.length === 0 ? null : Math.min(...startDelays),
+    postWarmupP95StartDelaySeconds: percentile(startDelays, 0.95),
+    postWarmupStartedWithinWindow: startDelays.filter((delay) => delay <= windowSeconds).length,
+    preflightToWarmupCompleteSeconds: secondsBetween(
+      preflight?.completed ?? null,
+      warmup.completed,
+    ),
+    preflightToWarmupStartSeconds: secondsBetween(preflight?.completed ?? null, warmup.started),
+    warmupDurationSeconds: secondsBetween(warmup.started, warmup.completed),
+    warmupResult: `${warmup.status}/${warmup.conclusion}`,
+    windowSeconds,
   };
 }
 
@@ -151,15 +263,37 @@ function listRecentSuccessfulCiRuns(limit) {
 }
 
 function loadRun(runId) {
-  return JSON.parse(
-    execFileSync(
-      "gh",
-      ["run", "view", runId, "--json", "status,conclusion,createdAt,updatedAt,jobs"],
-      {
-        encoding: "utf8",
-      },
-    ),
-  );
+  const run = parseJsonCommand("gh", [
+    "run",
+    "view",
+    runId,
+    "--json",
+    "status,conclusion,createdAt,updatedAt",
+  ]);
+  const repository = process.env.GITHUB_REPOSITORY || DEFAULT_GITHUB_REPOSITORY;
+  const pages = [];
+  let totalCount = null;
+  for (let page = 1; page <= RUN_JOBS_MAX_PAGES; page += 1) {
+    const payload = parseJsonCommand("gh", [
+      "api",
+      "-X",
+      "GET",
+      `repos/${repository}/actions/runs/${runId}/jobs?per_page=${RUN_JOBS_PAGE_SIZE}&page=${page}`,
+    ]);
+    pages.push(payload);
+    const jobs = Array.isArray(payload.jobs) ? payload.jobs : [];
+    totalCount = typeof payload.total_count === "number" ? payload.total_count : totalCount;
+    if (
+      jobs.length === 0 ||
+      (totalCount !== null && collectRunJobsFromPages(pages).length >= totalCount)
+    ) {
+      break;
+    }
+  }
+  return {
+    ...run,
+    jobs: collectRunJobsFromPages(pages),
+  };
 }
 
 function summarizeJobs(run) {
@@ -191,15 +325,6 @@ function summarizeJobs(run) {
     p95DurationSeconds: percentile(successfulDurations, 0.95),
     wallSeconds: secondsBetween(created, updated),
   };
-}
-
-function percentile(values, percentileValue) {
-  if (values.length === 0) {
-    return null;
-  }
-  const sorted = [...values].toSorted((left, right) => left - right);
-  const index = Math.min(sorted.length - 1, Math.ceil(sorted.length * percentileValue) - 1);
-  return sorted[index];
 }
 
 function printSection(title, jobs, metric) {
@@ -265,11 +390,32 @@ async function main() {
     return;
   }
   const runId = explicitRunId ?? (useLatestMain ? getLatestMainPushCiRunId() : getLatestCiRunId());
-  const summary = summarizeRunTimings(loadRun(runId), limit);
+  const run = loadRun(runId);
+  const summary = summarizeRunTimings(run, limit);
+  const warmupBarrier = summarizePnpmStoreWarmupBarrier(run);
 
   console.log(
     `CI run ${runId}: ${summary.status}/${summary.conclusion} wall=${formatSeconds(summary.wallSeconds)}`,
   );
+  if (warmupBarrier) {
+    console.log("\npnpm-store-warmup barrier");
+    console.log(
+      [
+        `result=${warmupBarrier.warmupResult}`,
+        `preflight->start=${formatSeconds(warmupBarrier.preflightToWarmupStartSeconds)}`,
+        `duration=${formatSeconds(warmupBarrier.warmupDurationSeconds)}`,
+        `preflight->complete=${formatSeconds(warmupBarrier.preflightToWarmupCompleteSeconds)}`,
+      ].join("  "),
+    );
+    console.log(
+      [
+        `active-post-warmup-jobs=${warmupBarrier.activePostWarmupJobCount}`,
+        `first-start-delay=${formatSeconds(warmupBarrier.firstPostWarmupStartDelaySeconds)}`,
+        `p95-start-delay=${formatSeconds(warmupBarrier.postWarmupP95StartDelaySeconds)}`,
+        `started-within-${warmupBarrier.windowSeconds}s=${warmupBarrier.postWarmupStartedWithinWindow}`,
+      ].join("  "),
+    );
+  }
   printSection("\nSlowest jobs", summary.byDuration, "durationSeconds");
   printSection("\nLongest queues", summary.byQueue, "queueSeconds");
   if (summary.badJobs.length > 0) {

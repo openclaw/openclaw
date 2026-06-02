@@ -2,7 +2,7 @@ import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
   postTranscriptionRequest,
-  readProviderJsonResponse,
+  readProviderJsonObjectResponse,
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "./shared.js";
@@ -23,15 +23,20 @@ export async function transcribeOpenAiCompatibleAudio(
   params: OpenAiCompatibleAudioParams,
 ): Promise<AudioTranscriptionResult> {
   const fetchFn = params.fetchFn ?? fetch;
+  const apiKey = params.auth?.kind === "api-key" ? params.auth.apiKey : params.apiKey;
+  const defaultHeaders =
+    params.auth?.kind === "none" || !apiKey
+      ? undefined
+      : {
+          authorization: `Bearer ${apiKey}`,
+        };
   const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
     resolveProviderHttpRequestConfig({
       baseUrl: params.baseUrl,
       defaultBaseUrl: params.defaultBaseUrl,
       headers: params.headers,
       request: params.request,
-      defaultHeaders: {
-        authorization: `Bearer ${params.apiKey}`,
-      },
+      defaultHeaders,
       provider: params.provider,
       api: "openai-audio-transcriptions",
       capability: "audio",
@@ -65,12 +70,9 @@ export async function transcribeOpenAiCompatibleAudio(
   try {
     await assertOkOrThrowHttpError(res, "Audio transcription failed");
 
-    const payload = await readProviderJsonResponse<{ text?: string }>(
-      res,
-      "Audio transcription failed",
-    );
+    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed");
     const text = requireTranscriptionText(
-      payload.text,
+      typeof payload.text === "string" ? payload.text : undefined,
       "Audio transcription response missing text",
     );
     return { text, model };

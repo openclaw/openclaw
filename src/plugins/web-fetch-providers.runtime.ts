@@ -1,6 +1,6 @@
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { type PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebFetchProviderEntry } from "./types.js";
 import {
   resolveBundledWebFetchResolutionConfig,
@@ -49,7 +49,6 @@ export function resolvePluginWebFetchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
   activate?: boolean;
   cache?: boolean;
@@ -68,7 +67,6 @@ export function resolveRuntimeWebFetchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
 }): PluginWebFetchProviderEntry[] {

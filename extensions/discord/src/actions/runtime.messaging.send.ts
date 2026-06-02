@@ -3,7 +3,7 @@ import {
   assertMediaNotDataUrl,
   jsonResult,
   readBooleanParam,
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
   resolvePollMaxSelections,
@@ -119,7 +119,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         label: "answers",
       });
       const allowMultiselect = readBooleanParam(ctx.params, "allowMultiselect");
-      const durationHours = readNumberParam(ctx.params, "durationHours");
+      const durationHours = readPositiveIntegerParam(ctx.params, "durationHours");
       const maxSelections = resolvePollMaxSelections(answers.length, allowMultiselect);
       await discordMessagingActionRuntime.sendPollDiscord(
         to,
@@ -135,6 +135,8 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const to = readStringParam(ctx.params, "to", { required: true });
       const asVoice = ctx.params.asVoice === true;
       const silent = ctx.params.silent === true;
+      const suppressEmbeds =
+        ctx.params.suppressEmbeds === undefined ? undefined : ctx.params.suppressEmbeds === true;
       const rawComponents = ctx.params.components;
       const componentSpec = hasDiscordComponentObjectKeys(rawComponents)
         ? discordMessagingActionRuntime.readDiscordComponentSpec(rawComponents)
@@ -186,6 +188,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
             mediaAccess: ctx.options?.mediaAccess,
             mediaLocalRoots: ctx.options?.mediaLocalRoots,
             mediaReadFile: ctx.options?.mediaReadFile,
+            ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
           },
         );
         return jsonResult(
@@ -234,6 +237,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         components,
         embeds,
         silent,
+        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
       });
       return jsonResult(
         await appendDiscordThreadRenameResult(ctx, {
@@ -251,7 +255,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const name = readStringParam(ctx.params, "name", { required: true });
       const messageId = readStringParam(ctx.params, "messageId");
       const content = readStringParam(ctx.params, "content");
-      const autoArchiveMinutes = readNumberParam(ctx.params, "autoArchiveMinutes");
+      const autoArchiveMinutes = readPositiveIntegerParam(ctx.params, "autoArchiveMinutes");
       const appliedTags = readStringArrayParam(ctx.params, "appliedTags");
       const payload = {
         name,
@@ -290,7 +294,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
       const channelId = readStringParam(ctx.params, "channelId");
       const includeArchived = readBooleanParam(ctx.params, "includeArchived");
       const before = readStringParam(ctx.params, "before");
-      const limit = readNumberParam(ctx.params, "limit");
+      const limit = readPositiveIntegerParam(ctx.params, "limit");
       const threads = await discordMessagingActionRuntime.listThreadsDiscord(
         {
           guildId,

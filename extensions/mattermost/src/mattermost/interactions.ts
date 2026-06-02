@@ -461,7 +461,7 @@ export function createMattermostInteractionHandler(params: {
     }
 
     // Verify HMAC token
-    const token = context._token;
+    const token = context["_token"];
     if (typeof token !== "string") {
       log?.("mattermost interaction: missing _token in context");
       res.statusCode = 403;
@@ -503,8 +503,8 @@ export function createMattermostInteractionHandler(params: {
     }
 
     const userName = payload.user_name ?? payload.user_id;
-    let originalMessage = "";
-    let originalPost: MattermostPost | null = null;
+    let originalMessage;
+    let originalPost: MattermostPost | null;
     let clickedButtonName: string | null = null;
     try {
       originalPost = await client.request<MattermostPost>(`/posts/${payload.post_id}`);

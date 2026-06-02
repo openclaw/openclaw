@@ -185,7 +185,12 @@ function isDisabledByEnv() {
 
 function normalizeBasePath(rawPath: string | undefined) {
   const trimmed = (rawPath ?? CANVAS_HOST_PATH).trim();
-  const normalized = normalizeUrlPath(trimmed || CANVAS_HOST_PATH);
+  let normalized: string;
+  try {
+    normalized = normalizeUrlPath(trimmed || CANVAS_HOST_PATH);
+  } catch {
+    normalized = normalizeUrlPath(CANVAS_HOST_PATH);
+  }
   if (normalized === "/") {
     return "/";
   }
@@ -438,7 +443,9 @@ export async function createCanvasHostHandler(
         }
       }
       if (wss) {
-        await new Promise<void>((resolve) => wss.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
       }
     },
   };
@@ -480,7 +487,7 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
       res.statusCode = 404;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
       res.end("Not Found");
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       opts.runtime.error(`Canvas host request failed: ${String(err)}`);
       res.statusCode = 500;
       res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -523,9 +530,9 @@ export async function startCanvasHost(opts: CanvasHostServerOpts): Promise<Canva
       if (ownsHandler) {
         await handler.close();
       }
-      await new Promise<void>((resolve, reject) =>
-        server.close((err) => (err ? reject(err) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((err) => (err ? reject(err) : resolve()));
+      });
     },
   };
 }

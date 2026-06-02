@@ -1,7 +1,11 @@
+import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { hasErrnoCode } from "./errors.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
@@ -52,13 +56,7 @@ type ManagedNpmRootLogger = {
 
 type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
+type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-active-host";
 
 function readDependencyRecord(value: unknown): Record<string, string> {
   if (!isRecord(value)) {
@@ -385,6 +383,10 @@ function readLockPackageName(location: string, value: unknown): string | undefin
   return undefined;
 }
 
+function isTopLevelLockPackageLocation(location: string): boolean {
+  return location.split("/").filter((part) => part === "node_modules").length === 1;
+}
+
 function findLockPackageVersion(params: {
   lockfile: ManagedNpmRootLockfile;
   packageName: string;
@@ -438,6 +440,9 @@ function collectNpmLockPeerDependencyPins(params: {
       }
       const version = findLockPackageVersion({ lockfile: params.lockfile, packageName: peerName });
       if (!version && isOptionalPeerDependency(value, peerName)) {
+        continue;
+      }
+      if (!version && !isTopLevelLockPackageLocation(location)) {
         continue;
       }
       pins.set(peerName, version ?? peerRange);
@@ -596,6 +601,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: false,
+        npmConfigCwd: tempRoot,
         packageLock: true,
         quiet: true,
       }),
@@ -611,6 +617,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
           ...npmPlanOptions,
           env: createSafeNpmInstallEnv(process.env, {
             legacyPeerDeps: true,
+            npmConfigCwd: tempRoot,
             packageLock: true,
             quiet: true,
           }),
@@ -758,12 +765,11 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
 }): Promise<boolean> {
   await fs.mkdir(params.npmRoot, { recursive: true });
 
-  if (
-    await managedNpmRootOpenClawPackageIsActiveHost({
-      npmRoot: params.npmRoot,
-      packageRoot: params.packageRoot,
-    })
-  ) {
+  const activeHostState = await readManagedNpmRootOpenClawHostState({
+    npmRoot: params.npmRoot,
+    packageRoot: params.packageRoot,
+  });
+  if (activeHostState === "managed-active-host") {
     return false;
   }
 
@@ -773,8 +779,17 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   const hasManifestDependency = "openclaw" in dependencies;
   const hasLockDependency = await managedNpmRootLockfileHasOpenClawPeer(params.npmRoot);
   const hasPackageDir = await pathExists(path.join(params.npmRoot, "node_modules", "openclaw"));
-  if (!hasManifestDependency && !hasLockDependency && !hasPackageDir) {
+  const preserveActiveHostLink = activeHostState === "linked-active-host";
+  if (!hasManifestDependency && !hasLockDependency && (!hasPackageDir || preserveActiveHostLink)) {
     return false;
+  }
+
+  if (preserveActiveHostLink) {
+    await scrubManagedNpmRootOpenClawPeer({
+      npmRoot: params.npmRoot,
+      preservePackageDir: true,
+    });
+    return true;
   }
 
   const command = params.runCommand ?? runCommandWithTimeout;
@@ -804,6 +819,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
       timeoutMs: Math.max(params.timeoutMs ?? 300_000, 300_000),
       env: createSafeNpmInstallEnv(process.env, {
         legacyPeerDeps: true,
+        npmConfigCwd: params.npmRoot,
         packageLock: true,
         quiet: true,
       }),
@@ -823,10 +839,10 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   return true;
 }
 
-async function managedNpmRootOpenClawPackageIsActiveHost(params: {
+async function readManagedNpmRootOpenClawHostState(params: {
   npmRoot: string;
   packageRoot?: string | null;
-}): Promise<boolean> {
+}): Promise<ManagedNpmRootOpenClawHostState> {
   const packageRoot =
     params.packageRoot === undefined
       ? resolveOpenClawPackageRootSync({
@@ -836,15 +852,19 @@ async function managedNpmRootOpenClawPackageIsActiveHost(params: {
         })
       : params.packageRoot;
   if (!packageRoot) {
-    return false;
+    return "none";
   }
 
   const managedOpenClawPackageDir = path.join(params.npmRoot, "node_modules", "openclaw");
-  const [hostPackageRoot, managedPackageRoot] = await Promise.all([
+  const [hostPackageRoot, managedPackageRoot, managedPackageStat] = await Promise.all([
     realpathIfExists(packageRoot),
     realpathIfExists(managedOpenClawPackageDir),
+    lstatIfExists(managedOpenClawPackageDir),
   ]);
-  return hostPackageRoot !== null && hostPackageRoot === managedPackageRoot;
+  if (hostPackageRoot === null || hostPackageRoot !== managedPackageRoot) {
+    return "none";
+  }
+  return managedPackageStat?.isSymbolicLink() ? "linked-active-host" : "managed-active-host";
 }
 
 async function managedNpmRootLockfileHasOpenClawPeer(npmRoot: string): Promise<boolean> {
@@ -884,19 +904,33 @@ async function realpathIfExists(filePath: string): Promise<string | null> {
   }
 }
 
+async function lstatIfExists(filePath: string): Promise<Stats | null> {
+  try {
+    return await fs.lstat(filePath);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return null;
+    }
+    throw err;
+  }
+}
+
 async function pathExists(filePath: string): Promise<boolean> {
   return await fs
     .lstat(filePath)
     .then(() => true)
-    .catch((err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT") {
+    .catch((err: unknown) => {
+      if (hasErrnoCode(err, "ENOENT")) {
         return false;
       }
       throw err;
     });
 }
 
-async function scrubManagedNpmRootOpenClawPeer(params: { npmRoot: string }): Promise<void> {
+async function scrubManagedNpmRootOpenClawPeer(params: {
+  npmRoot: string;
+  preservePackageDir?: boolean;
+}): Promise<void> {
   const manifestPath = path.join(params.npmRoot, "package.json");
   const manifest = await readManagedNpmRootManifest(manifestPath);
   const dependencies = readDependencyRecord(manifest.dependencies);
@@ -916,10 +950,10 @@ async function scrubManagedNpmRootOpenClawPeer(params: { npmRoot: string }): Pro
     if (isRecord(parsed.packages)) {
       const rootPackage = parsed.packages[""];
       if (isRecord(rootPackage) && isRecord(rootPackage.dependencies)) {
-        const dependencies = { ...rootPackage.dependencies };
-        if ("openclaw" in dependencies) {
-          delete dependencies.openclaw;
-          parsed.packages[""] = { ...rootPackage, dependencies };
+        const dependenciesValue = { ...rootPackage.dependencies };
+        if ("openclaw" in dependenciesValue) {
+          delete dependenciesValue.openclaw;
+          parsed.packages[""] = { ...rootPackage, dependencies: dependenciesValue };
           lockChanged = true;
         }
       }
@@ -929,9 +963,9 @@ async function scrubManagedNpmRootOpenClawPeer(params: { npmRoot: string }): Pro
       }
     }
     if (isRecord(parsed.dependencies) && "openclaw" in parsed.dependencies) {
-      const dependencies = { ...parsed.dependencies };
-      delete dependencies.openclaw;
-      parsed.dependencies = dependencies;
+      const dependenciesLocal = { ...parsed.dependencies };
+      delete dependenciesLocal.openclaw;
+      parsed.dependencies = dependenciesLocal;
       lockChanged = true;
     }
     if (lockChanged) {
@@ -944,7 +978,7 @@ async function scrubManagedNpmRootOpenClawPeer(params: { npmRoot: string }): Pro
   }
 
   const openclawPackageDir = path.join(params.npmRoot, "node_modules", "openclaw");
-  if (await pathExists(openclawPackageDir)) {
+  if (!params.preservePackageDir && (await pathExists(openclawPackageDir))) {
     await fs.rm(openclawPackageDir, { recursive: true, force: true });
   }
   const binDir = path.join(params.npmRoot, "node_modules", ".bin");

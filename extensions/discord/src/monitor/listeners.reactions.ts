@@ -501,7 +501,6 @@ async function handleDiscordReactionEvent(
       enqueueSystemEvent(text, {
         sessionKey: route.sessionKey,
         contextKey,
-        trusted: false,
       });
     };
     const shouldNotifyReaction = (options: {

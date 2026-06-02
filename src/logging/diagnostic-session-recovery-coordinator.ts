@@ -1,16 +1,25 @@
-import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  emitInternalDiagnosticEvent as emitDiagnosticEvent,
+  getInternalDiagnosticEventSequence,
+} from "../infra/diagnostic-events.js";
+import {
+  clearDiagnosticEmbeddedRunActivityForSession,
+  getDiagnosticEmbeddedRunActivitySequence,
+} from "./diagnostic-run-activity.js";
 import { markDiagnosticActivity as markActivity } from "./diagnostic-runtime.js";
 import type { SessionAttentionClassification } from "./diagnostic-session-attention.js";
 import {
   recoveryOutcomeClearsQueuedSessionState,
   recoveryOutcomeMutatesSessionState,
   recoveryOutcomeReleasedCount,
+  resolveStuckSessionRecoveryRef,
   type StuckSessionRecoveryOutcome,
   type StuckSessionRecoveryRequest,
 } from "./diagnostic-session-recovery.js";
 import {
   getDiagnosticSessionState,
   isDiagnosticSessionStateCurrent,
+  peekDiagnosticSessionState,
 } from "./diagnostic-session-state.js";
 
 export type RecoverStuckSession = (
@@ -27,7 +36,7 @@ function emitSessionRecoveryRequested(params: {
     type: "session.recovery.requested",
     sessionId: params.request.sessionId,
     sessionKey: params.request.sessionKey,
-    state: "processing",
+    state: params.request.expectedState ?? "processing",
     stateGeneration: params.request.stateGeneration,
     ageMs: params.request.ageMs,
     queueDepth: params.request.queueDepth,
@@ -46,7 +55,7 @@ function emitSessionRecoveryCompleted(params: {
     type: "session.recovery.completed",
     sessionId: params.request.sessionId,
     sessionKey: params.request.sessionKey,
-    state: "processing",
+    state: params.request.expectedState ?? "processing",
     stateGeneration: params.request.stateGeneration,
     ageMs: params.request.ageMs,
     queueDepth: params.request.queueDepth,
@@ -60,11 +69,7 @@ function emitSessionRecoveryCompleted(params: {
 }
 
 function recoveryRequestKey(request: StuckSessionRecoveryRequest): string | undefined {
-  const ref = request.sessionKey?.trim() || request.sessionId?.trim();
-  if (!ref) {
-    return undefined;
-  }
-  return `${ref}:${request.stateGeneration ?? "unknown"}`;
+  return resolveStuckSessionRecoveryRef(request);
 }
 
 function isRecoveryPromiseLike(
@@ -75,9 +80,15 @@ function isRecoveryPromiseLike(
   );
 }
 
+function recoveryOutcomeHasQueuedLaneWork(outcome: StuckSessionRecoveryOutcome): boolean {
+  return outcome.status === "aborted" && (outcome.queuedCount ?? 0) > 0;
+}
+
 function applyRecoveryOutcomeToDiagnosticState(params: {
   request: StuckSessionRecoveryRequest;
   outcome: StuckSessionRecoveryOutcome | undefined;
+  recoveryStartedAfterEmbeddedRunSequence?: number;
+  recoveryStartedAfterDiagnosticEventSequence?: number;
 }): void {
   if (!params.outcome) {
     return;
@@ -86,14 +97,23 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     emitSessionRecoveryCompleted({ request: params.request, outcome: params.outcome });
     return;
   }
-  if (
-    !isDiagnosticSessionStateCurrent({
-      sessionId: params.request.sessionId,
-      sessionKey: params.request.sessionKey,
-      generation: params.request.stateGeneration,
-      state: "processing",
-    })
-  ) {
+  const expectedState = params.request.expectedState ?? "processing";
+  const currentState = peekDiagnosticSessionState(params.request);
+  const currentGeneration = currentState?.generation ?? 0;
+  const requestGeneration = params.request.stateGeneration ?? 0;
+  const stateIsCurrent =
+    expectedState === "idle" &&
+    params.request.stateGeneration !== undefined &&
+    params.outcome.action === "abort_embedded_run"
+      ? currentState?.state === "idle" &&
+        (currentGeneration === requestGeneration || currentGeneration === requestGeneration + 1)
+      : isDiagnosticSessionStateCurrent({
+          sessionId: params.request.sessionId,
+          sessionKey: params.request.sessionKey,
+          generation: params.request.stateGeneration,
+          state: expectedState,
+        });
+  if (!stateIsCurrent) {
     emitSessionRecoveryCompleted({
       request: params.request,
       outcome: params.outcome,
@@ -102,15 +122,37 @@ function applyRecoveryOutcomeToDiagnosticState(params: {
     return;
   }
   const state = getDiagnosticSessionState(params.request);
+  // The idle declaration is authoritative for the recovered owner only. If a
+  // different embedded owner appeared under the same session key while recovery
+  // awaited abort/drain, keep the lane active instead of erasing fresh work.
+  const activityClear = clearDiagnosticEmbeddedRunActivityForSession({
+    sessionId: state.sessionId,
+    sessionKey: state.sessionKey,
+    activeSessionId: params.outcome.activeSessionId,
+    recoveryStartedAfterEmbeddedRunSequence: params.recoveryStartedAfterEmbeddedRunSequence,
+    recoveryStartedAfterDiagnosticEventSequence: params.recoveryStartedAfterDiagnosticEventSequence,
+  });
+  if (activityClear.blockedByActiveEmbeddedRun) {
+    emitSessionRecoveryCompleted({
+      request: params.request,
+      outcome: params.outcome,
+      stale: true,
+    });
+    return;
+  }
   const prevState = state.state;
   state.state = "idle";
   state.lastActivity = Date.now();
   state.generation = (state.generation ?? 0) + 1;
   state.lastStuckWarnAgeMs = undefined;
   state.lastLongRunningWarnAgeMs = undefined;
+  const preserveQueuedIdleWork =
+    params.request.expectedState === "idle" && recoveryOutcomeHasQueuedLaneWork(params.outcome);
   state.queueDepth = recoveryOutcomeClearsQueuedSessionState(params.outcome)
     ? 0
-    : Math.max(0, state.queueDepth - 1);
+    : preserveQueuedIdleWork
+      ? Math.max(state.queueDepth, params.request.queueDepth ?? 0)
+      : Math.max(0, state.queueDepth - 1);
   emitDiagnosticEvent({
     type: "session.state",
     sessionId: state.sessionId,
@@ -151,6 +193,8 @@ export function requestStuckSessionRecovery(params: {
     request: params.request,
     classification: params.classification,
   });
+  const recoveryStartedAfterEmbeddedRunSequence = getDiagnosticEmbeddedRunActivitySequence();
+  const recoveryStartedAfterDiagnosticEventSequence = getInternalDiagnosticEventSequence();
   const clearInFlight = () => {
     if (inFlightKey) {
       recoveryRequestsInFlight.delete(inFlightKey);
@@ -167,6 +211,8 @@ export function requestStuckSessionRecovery(params: {
         sessionKey: params.request.sessionKey,
         error: String(err),
       },
+      recoveryStartedAfterEmbeddedRunSequence,
+      recoveryStartedAfterDiagnosticEventSequence,
     });
   };
   try {
@@ -177,6 +223,8 @@ export function requestStuckSessionRecovery(params: {
           applyRecoveryOutcomeToDiagnosticState({
             request: params.request,
             outcome: outcome ?? undefined,
+            recoveryStartedAfterEmbeddedRunSequence,
+            recoveryStartedAfterDiagnosticEventSequence,
           });
         })
         .catch(failRecovery)
@@ -186,6 +234,8 @@ export function requestStuckSessionRecovery(params: {
     applyRecoveryOutcomeToDiagnosticState({
       request: params.request,
       outcome: result ?? undefined,
+      recoveryStartedAfterEmbeddedRunSequence,
+      recoveryStartedAfterDiagnosticEventSequence,
     });
     clearInFlight();
   } catch (err) {

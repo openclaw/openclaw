@@ -35,8 +35,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "openrouter": ["OPENROUTER_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "openrouter",
+        "envVars": ["OPENROUTER_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -47,6 +52,7 @@
       "groupId": "openrouter",
       "groupLabel": "OpenRouter",
       "groupHint": "API key",
+      "onboardingScopes": ["text-inference", "music-generation"],
       "optionKey": "openrouterApiKey",
       "cliFlag": "--openrouter-api-key",
       "cliOption": "--openrouter-api-key <key>",
@@ -56,6 +62,7 @@
   "contracts": {
     "mediaUnderstandingProviders": ["openrouter"],
     "imageGenerationProviders": ["openrouter"],
+    "musicGenerationProviders": ["openrouter"],
     "videoGenerationProviders": ["openrouter"],
     "speechProviders": ["openrouter"]
   },

@@ -143,6 +143,97 @@ describe("OpenClaw SDK", () => {
     expect(result.error?.message).toBe("aborted by operator");
   });
 
+  it("maps provider-started rpc timeout wait snapshots to timed_out", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_hard_timeout",
+        stopReason: "rpc",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "provider request timed out",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_hard_timeout");
+
+    expect(result.runId).toBe("run_hard_timeout");
+    expect(result.status).toBe("timed_out");
+    expect(result.error?.message).toBe("provider request timed out");
+  });
+
+  it("maps provider timeout wait errors to timed_out", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "error",
+        runId: "run_timeout_error",
+        timeoutPhase: "provider",
+        providerStarted: true,
+        error: "provider request timed out",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_timeout_error");
+
+    expect(result.runId).toBe("run_timeout_error");
+    expect(result.status).toBe("timed_out");
+    expect(result.error?.message).toBe("provider request timed out");
+  });
+
+  it("does not map provider-started wait errors to timed_out without timeout attribution", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "error",
+        runId: "run_provider_error",
+        providerStarted: true,
+        error: "provider authentication failed",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_provider_error");
+
+    expect(result.runId).toBe("run_provider_error");
+    expect(result.status).toBe("failed");
+    expect(result.error?.message).toBe("provider authentication failed");
+  });
+
+  it("does not treat successful provider-started wait snapshots as timed_out", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "ok",
+        runId: "run_provider_started_ok",
+        providerStarted: true,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_provider_started_ok");
+
+    expect(result.runId).toBe("run_provider_started_ok");
+    expect(result.status).toBe("completed");
+  });
+
+  it("maps auth-revoked wait snapshots to cancelled", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_auth_revoked",
+        stopReason: "auth-revoked",
+        error: "provider auth was removed",
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_auth_revoked");
+
+    expect(result.runId).toBe("run_auth_revoked");
+    expect(result.status).toBe("cancelled");
+    expect(result.error?.message).toBe("provider auth was removed");
+  });
+
   it("keeps wait-only deadlines non-terminal", async () => {
     const transport = new FakeTransport({
       "agent.wait": { status: "timeout", runId: "run_still_active" },
@@ -154,6 +245,44 @@ describe("OpenClaw SDK", () => {
     expect(result.runId).toBe("run_still_active");
     expect(result.status).toBe("accepted");
     expect(result.error).toBeUndefined();
+  });
+
+  it("keeps pending-error wait deadlines non-terminal", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_pending_error",
+        error: "429 RESOURCE_EXHAUSTED",
+        pendingError: true,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_pending_error");
+
+    expect(result.runId).toBe("run_pending_error");
+    expect(result.status).toBe("accepted");
+    expect(result.error?.message).toBe("429 RESOURCE_EXHAUSTED");
+  });
+
+  it("keeps provider-attributed pending-error wait deadlines non-terminal", async () => {
+    const transport = new FakeTransport({
+      "agent.wait": {
+        status: "timeout",
+        runId: "run_pending_provider_error",
+        error: "provider request timed out",
+        pendingError: true,
+        timeoutPhase: "provider",
+        providerStarted: true,
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const result = await oc.runs.wait("run_pending_provider_error");
+
+    expect(result.runId).toBe("run_pending_provider_error");
+    expect(result.status).toBe("accepted");
+    expect(result.error?.message).toBe("provider request timed out");
   });
 
   it("maps terminal runtime timeout snapshots to timed_out", async () => {
@@ -863,7 +992,7 @@ describe("OpenClaw SDK", () => {
       await oc.connect();
       const observedLast = (async () => {
         for await (const event of oc.events(
-          (event) => event.raw?.event === "chat" && event.raw.seq === 501,
+          (eventLocal) => eventLocal.raw?.event === "chat" && eventLocal.raw.seq === 501,
         )) {
           return event;
         }
@@ -989,9 +1118,141 @@ describe("OpenClaw SDK", () => {
     expect(cancelled.runId).toBe("run_1");
     expect(cancelled.data).toEqual({ phase: "end", aborted: true, stopReason: "rpc" });
 
-    const timedOut = normalizeGatewayEvent({
+    const hardTimeout = normalizeGatewayEvent({
       event: "agent",
       seq: 6,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "end",
+          aborted: true,
+          stopReason: "rpc",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(hardTimeout.type).toBe("run.timed_out");
+    expect(hardTimeout.runId).toBe("run_1");
+    expect(hardTimeout.data).toEqual({
+      phase: "end",
+      aborted: true,
+      stopReason: "rpc",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const hardTimeoutError = normalizeGatewayEvent({
+      event: "agent",
+      seq: 7,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "error",
+          error: "provider request timed out",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(hardTimeoutError.type).toBe("run.timed_out");
+    expect(hardTimeoutError.runId).toBe("run_1");
+    expect(hardTimeoutError.data).toEqual({
+      phase: "error",
+      error: "provider request timed out",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const providerStartedError = normalizeGatewayEvent({
+      event: "agent",
+      seq: 8,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "error",
+          error: "provider authentication failed",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(providerStartedError.type).toBe("run.failed");
+    expect(providerStartedError.runId).toBe("run_1");
+    expect(providerStartedError.data).toEqual({
+      phase: "error",
+      error: "provider authentication failed",
+      providerStarted: true,
+    });
+
+    const hardTimeoutEnd = normalizeGatewayEvent({
+      event: "agent",
+      seq: 9,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "end",
+          timeoutPhase: "provider",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(hardTimeoutEnd.type).toBe("run.timed_out");
+    expect(hardTimeoutEnd.runId).toBe("run_1");
+    expect(hardTimeoutEnd.data).toEqual({
+      phase: "end",
+      timeoutPhase: "provider",
+      providerStarted: true,
+    });
+
+    const providerStartedEnd = normalizeGatewayEvent({
+      event: "agent",
+      seq: 10,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: {
+          phase: "end",
+          providerStarted: true,
+        },
+      },
+    });
+    expect(providerStartedEnd.type).toBe("run.completed");
+    expect(providerStartedEnd.runId).toBe("run_1");
+    expect(providerStartedEnd.data).toEqual({
+      phase: "end",
+      providerStarted: true,
+    });
+
+    const authRevoked = normalizeGatewayEvent({
+      event: "agent",
+      seq: 10,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: { phase: "end", aborted: true, stopReason: "auth-revoked" },
+      },
+    });
+    expect(authRevoked.type).toBe("run.cancelled");
+    expect(authRevoked.runId).toBe("run_1");
+    expect(authRevoked.data).toEqual({
+      phase: "end",
+      aborted: true,
+      stopReason: "auth-revoked",
+    });
+
+    const timedOut = normalizeGatewayEvent({
+      event: "agent",
+      seq: 11,
       payload: {
         runId: "run_1",
         stream: "lifecycle",

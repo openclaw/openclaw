@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveAgentDir,
   resolveDefaultAgentDir,
@@ -25,6 +26,45 @@ type StaleOAuthProfileShadow = {
   authPath: string;
   profileId: string;
 };
+
+const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
+const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
+
+function isLegacyOAuthRef(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.source === LEGACY_OAUTH_REF_SOURCE &&
+    value.provider === LEGACY_OAUTH_REF_PROVIDER &&
+    typeof value.id === "string" &&
+    /^[a-f0-9]{32}$/.test(value.id)
+  );
+}
+
+async function loadRawAuthProfileStore(authPath: string): Promise<Record<string, unknown> | null> {
+  try {
+    const raw = JSON.parse(await fs.readFile(authPath, "utf8")) as unknown;
+    return isRecord(raw) ? raw : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasLegacyOAuthSidecarRef(raw: Record<string, unknown> | null, profileId: string): boolean {
+  if (!raw || !isRecord(raw.profiles)) {
+    return false;
+  }
+  const profile = raw.profiles[profileId];
+  if (!isRecord(profile)) {
+    return false;
+  }
+  // Removal-only guard for #79006 sidecar OAuth profiles. Do not add OS-level
+  // keychain integrations; doctor must migrate these profiles, not delete them.
+  return (
+    profile.type === "oauth" &&
+    profile.provider === LEGACY_OAUTH_REF_PROVIDER &&
+    isLegacyOAuthRef(profile.oauthRef)
+  );
+}
 
 async function pathExists(targetPath: string): Promise<boolean> {
   try {
@@ -105,12 +145,16 @@ export async function scanStaleOAuthProfileShadows(params: {
     if (authPath === mainAuthPath || !(await pathExists(authPath))) {
       continue;
     }
+    const rawLocalStore = await loadRawAuthProfileStore(authPath);
     const localStore = loadPersistedAuthProfileStore(agentDir);
     if (!localStore) {
       continue;
     }
     for (const [profileId, local] of Object.entries(localStore.profiles)) {
       if (local.type !== "oauth") {
+        continue;
+      }
+      if (hasLegacyOAuthSidecarRef(rawLocalStore, profileId)) {
         continue;
       }
       const main = mainStore.profiles[profileId];
@@ -188,16 +232,27 @@ async function repairStaleOAuthProfilesForAgent(params: {
       if (!store) {
         return { status: "missing" };
       }
+      const rawStore = await loadRawAuthProfileStore(resolveAuthStorePath(params.agentDir));
+      const profileIds = new Set(
+        [...params.profileIds].filter(
+          (profileId) => !hasLegacyOAuthSidecarRef(rawStore, profileId),
+        ),
+      );
+      if (profileIds.size === 0) {
+        return { status: "unchanged" };
+      }
       const result = removeStaleProfilesFromStore({
         store,
         mainStore: params.mainStore,
-        profileIds: params.profileIds,
+        profileIds,
         now: params.now,
       });
       if (result.removedProfileIds.length === 0) {
         return { status: "unchanged" };
       }
-      saveAuthProfileStore(result.store, params.agentDir);
+      saveAuthProfileStore(result.store, params.agentDir, {
+        pruneOrderProfileIds: result.removedProfileIds,
+      });
       return {
         status: "changed",
         removedProfileIds: result.removedProfileIds,
@@ -263,8 +318,9 @@ export async function repairStaleOAuthProfileShadows(params: {
   return { changes, warnings };
 }
 
-export const __testing = {
+export const testing = {
   removeStaleProfilesFromStore,
   repairStaleOAuthProfilesForAgent,
   shouldRemoveLocalOAuthShadow,
 };
+export { testing as __testing };

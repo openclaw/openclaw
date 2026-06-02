@@ -12,8 +12,10 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.delay
 
-internal const val PAIRING_AUTO_RETRY_MS = 6_000L
+internal const val PAIRING_INITIAL_AUTO_RETRY_MS = 1_500L
+internal const val PAIRING_AUTO_RETRY_MS = 4_000L
 
+/** Retries pairing-only gateway refreshes while the screen is visible and started. */
 @Composable
 internal fun PairingAutoRetryEffect(
   enabled: Boolean,
@@ -40,9 +42,12 @@ internal fun PairingAutoRetryEffect(
     if (!enabled || !lifecycleStarted) {
       return@LaunchedEffect
     }
+    // Give the gateway a short settling window before the first retry so an
+    // approval response is not immediately chased by a redundant reconnect.
+    delay(PAIRING_INITIAL_AUTO_RETRY_MS)
     while (true) {
-      delay(PAIRING_AUTO_RETRY_MS)
       onRetry()
+      delay(PAIRING_AUTO_RETRY_MS)
     }
   }
 }

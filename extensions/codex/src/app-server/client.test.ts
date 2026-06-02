@@ -3,7 +3,7 @@ import { PassThrough } from "node:stream";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   CodexAppServerClient,
   MIN_CODEX_APP_SERVER_VERSION,
   isCodexAppServerApprovalRequest,
@@ -29,8 +29,8 @@ describe("CodexAppServerClient", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     for (const client of clients) {
       client.close();
     }
@@ -107,7 +107,7 @@ describe("CodexAppServerClient", () => {
 
   it("redacts prefixed env credential names from app-server previews", () => {
     expect(
-      __testing.redactCodexAppServerLinePreview(
+      testing.redactCodexAppServerLinePreview(
         "fatal OPENAI_API_KEY=sk-live ANTHROPIC_API_KEY='anthropic-secret' OTHER=value",
       ),
     ).toBe("fatal OPENAI_API_KEY=<redacted> ANTHROPIC_API_KEY='<redacted>' OTHER=value");
@@ -333,7 +333,7 @@ describe("CodexAppServerClient", () => {
       unref: vi.fn(),
     });
 
-    __testing.closeCodexAppServerTransport(process, { forceKillDelayMs: 25 });
+    testing.closeCodexAppServerTransport(process, { forceKillDelayMs: 25 });
 
     expect(process.stdin.end).toHaveBeenCalledTimes(1);
     expect(process.kill).not.toHaveBeenCalled();
@@ -359,7 +359,7 @@ describe("CodexAppServerClient", () => {
       unref: vi.fn(),
     });
 
-    const closed = __testing.closeCodexAppServerTransportAndWait(process, {
+    const closed = testing.closeCodexAppServerTransportAndWait(process, {
       exitTimeoutMs: 100,
       forceKillDelayMs: 25,
     });
@@ -391,7 +391,7 @@ describe("CodexAppServerClient", () => {
       unref: vi.fn(),
     });
 
-    const closed = __testing.closeCodexAppServerTransportAndWait(process, {
+    const closed = testing.closeCodexAppServerTransportAndWait(process, {
       exitTimeoutMs: 100,
       forceKillDelayMs: 25,
     });
@@ -486,13 +486,13 @@ describe("CodexAppServerClient", () => {
     clients.push(harness.client);
     harness.client.addRequestHandler((request) => {
       if (request.method === "item/tool/call") {
-        return new Promise<never>(() => undefined);
+        return new Promise<never>(() => {});
       }
       return undefined;
     });
 
     harness.send({ id: "srv-timeout", method: "item/tool/call", params: { tool: "message" } });
-    await vi.advanceTimersByTimeAsync(__testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+    await vi.advanceTimersByTimeAsync(testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
     await vi.waitFor(() => expect(harness.writes.length).toBe(1));
 
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
@@ -502,7 +502,7 @@ describe("CodexAppServerClient", () => {
         contentItems: [
           {
             type: "inputText",
-            text: `OpenClaw dynamic tool call timed out after ${__testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
+            text: `OpenClaw dynamic tool call timed out after ${testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
           },
         ],
       },
@@ -510,7 +510,7 @@ describe("CodexAppServerClient", () => {
     expect(warn).toHaveBeenCalledWith("codex app-server server request timed out", {
       id: "srv-timeout",
       method: "item/tool/call",
-      timeoutMs: __testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+      timeoutMs: testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
     });
   });
 

@@ -3,13 +3,14 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import * as os from "node:os";
 import * as path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, test, vi } from "vitest";
+import type { RequestFrame } from "../../packages/gateway-protocol/src/index.js";
 import {
   onDiagnosticEvent,
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import {
-  _resetActiveManagedProxyStateForTests,
+  resetActiveManagedProxyStateForTests,
   registerActiveManagedProxyUrl,
   stopActiveManagedProxyRegistration,
 } from "../infra/net/proxy/active-proxy-state.js";
@@ -20,7 +21,6 @@ import {
   resolveNodeCommandAllowlist,
 } from "./node-command-policy.js";
 import type { SerializedEventPayload } from "./node-registry.js";
-import type { RequestFrame } from "./protocol/index.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createChatRunRegistry } from "./server-chat.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
@@ -58,22 +58,12 @@ vi.mock("ws", () => ({
     send = vi.fn();
 
     constructor(url: unknown, opts: unknown) {
-      const agent = (global as Record<string, unknown>)["GLOBAL_AGENT"];
       wsMockState.last = {
         url,
         opts,
-        noProxyDuringConstruction:
-          typeof agent === "object" && agent !== null
-            ? (agent as Record<string, unknown>)["NO_PROXY"]
-            : undefined,
-        httpProxyDuringConstruction:
-          typeof agent === "object" && agent !== null
-            ? (agent as Record<string, unknown>)["HTTP_PROXY"]
-            : undefined,
-        httpsProxyDuringConstruction:
-          typeof agent === "object" && agent !== null
-            ? (agent as Record<string, unknown>)["HTTPS_PROXY"]
-            : undefined,
+        noProxyDuringConstruction: process.env["NO_PROXY"],
+        httpProxyDuringConstruction: process.env["HTTP_PROXY"],
+        httpsProxyDuringConstruction: process.env["HTTPS_PROXY"],
       };
     }
   },
@@ -88,8 +78,11 @@ describe("GatewayClient", () => {
 
   beforeEach(() => {
     wsMockState.last = null;
-    _resetActiveManagedProxyStateForTests();
-    delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
+    resetActiveManagedProxyStateForTests();
+    delete process.env["NO_PROXY"];
+    delete process.env["no_proxy"];
+    delete process.env["HTTP_PROXY"];
+    delete process.env["HTTPS_PROXY"];
   });
 
   async function withControlUiRoot(
@@ -106,6 +99,22 @@ describe("GatewayClient", () => {
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
+  }
+
+  async function expectControlUiStatus(
+    tmp: string,
+    params: { url: string; method?: string; statusCode: number },
+  ) {
+    const { res } = makeControlUiResponse();
+    const handled = await handleControlUiHttpRequest(
+      { url: params.url, method: params.method ?? "GET" } as IncomingMessage,
+      res,
+      { root: { kind: "resolved", path: tmp } },
+    );
+    expect(handled).toBe(true);
+    expect(res.statusCode, `expected ${params.statusCode} for ${params.url}`).toBe(
+      params.statusCode,
+    );
   }
 
   test("uses a large maxPayload for node snapshots", () => {
@@ -153,9 +162,9 @@ describe("GatewayClient", () => {
     expect(last?.opts.agent).toBeUndefined();
   });
 
-  test("scopes Gateway loopback NO_PROXY to WebSocket construction", () => {
-    const agent = { NO_PROXY: "corp.example.com" };
-    (global as Record<string, unknown>)["GLOBAL_AGENT"] = agent;
+  test("scopes Gateway loopback bypass to WebSocket connection setup without mutating NO_PROXY", () => {
+    process.env["NO_PROXY"] = "corp.example.com";
+    process.env["no_proxy"] = "corp.example.com";
     const registration = registerActiveManagedProxyUrl(
       new URL("http://127.0.0.1:3128"),
       "gateway-only",
@@ -166,21 +175,19 @@ describe("GatewayClient", () => {
       client.start();
       const last = wsMockState.last as { noProxyDuringConstruction: unknown } | null;
 
-      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,127.0.0.1:18789");
-      expect(agent.NO_PROXY).toBe("corp.example.com");
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
+      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
+      expect(process.env["no_proxy"]).toBe("corp.example.com");
     } finally {
       stopActiveManagedProxyRegistration(registration);
-      delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
     }
   });
 
-  test("uses a scoped direct construction path for IPv6 loopback in Gateway-only proxy mode", () => {
-    const agent = {
-      NO_PROXY: "corp.example.com",
-      HTTP_PROXY: "http://127.0.0.1:3128",
-      HTTPS_PROXY: "http://127.0.0.1:3128",
-    };
-    (global as Record<string, unknown>)["GLOBAL_AGENT"] = agent;
+  test("scopes IPv6 loopback bypass during Gateway-only proxy mode connection setup", () => {
+    process.env["NO_PROXY"] = "corp.example.com";
+    process.env["no_proxy"] = "corp.example.com";
+    process.env["HTTP_PROXY"] = "http://127.0.0.1:3128";
+    process.env["HTTPS_PROXY"] = "http://127.0.0.1:3128";
     const registration = registerActiveManagedProxyUrl(
       new URL("http://127.0.0.1:3128"),
       "gateway-only",
@@ -195,95 +202,57 @@ describe("GatewayClient", () => {
         httpsProxyDuringConstruction: unknown;
       } | null;
 
-      expect(last?.noProxyDuringConstruction).toBe("corp.example.com,[::1]:18789");
-      expect(last?.httpProxyDuringConstruction).toBeNull();
-      expect(last?.httpsProxyDuringConstruction).toBeNull();
-      expect(agent.NO_PROXY).toBe("corp.example.com");
-      expect(agent.HTTP_PROXY).toBe("http://127.0.0.1:3128");
-      expect(agent.HTTPS_PROXY).toBe("http://127.0.0.1:3128");
+      expect(last?.noProxyDuringConstruction).toBe("corp.example.com");
+      expect(last?.httpProxyDuringConstruction).toBe("http://127.0.0.1:3128");
+      expect(last?.httpsProxyDuringConstruction).toBe("http://127.0.0.1:3128");
+      expect(process.env["NO_PROXY"]).toBe("corp.example.com");
+      expect(process.env["no_proxy"]).toBe("corp.example.com");
+      expect(process.env["HTTP_PROXY"]).toBe("http://127.0.0.1:3128");
+      expect(process.env["HTTPS_PROXY"]).toBe("http://127.0.0.1:3128");
     } finally {
       stopActiveManagedProxyRegistration(registration);
-      delete (global as Record<string, unknown>)["GLOBAL_AGENT"];
     }
   });
 
   it("returns 404 for missing static asset paths instead of SPA fallback", async () => {
     await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
-      const { res } = makeControlUiResponse();
-      const handled = await handleControlUiHttpRequest(
-        { url: "/webchat/favicon.svg", method: "GET" } as IncomingMessage,
-        res,
-        { root: { kind: "resolved", path: tmp } },
-      );
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(404);
+      await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg", statusCode: 404 });
     });
   });
 
   it("returns 404 for missing static assets with query strings", async () => {
     await withControlUiRoot({}, async (tmp) => {
-      const { res } = makeControlUiResponse();
-      const handled = await handleControlUiHttpRequest(
-        { url: "/webchat/favicon.svg?v=1", method: "GET" } as IncomingMessage,
-        res,
-        { root: { kind: "resolved", path: tmp } },
-      );
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(404);
+      await expectControlUiStatus(tmp, { url: "/webchat/favicon.svg?v=1", statusCode: 404 });
     });
   });
 
   it("still serves SPA fallback for extensionless paths", async () => {
     await withControlUiRoot({}, async (tmp) => {
-      const { res } = makeControlUiResponse();
-      const handled = await handleControlUiHttpRequest(
-        { url: "/webchat/chat", method: "GET" } as IncomingMessage,
-        res,
-        { root: { kind: "resolved", path: tmp } },
-      );
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+      await expectControlUiStatus(tmp, { url: "/webchat/chat", statusCode: 200 });
     });
   });
 
   it("HEAD returns 404 for missing static assets consistent with GET", async () => {
     await withControlUiRoot({}, async (tmp) => {
-      const { res } = makeControlUiResponse();
-      const handled = await handleControlUiHttpRequest(
-        { url: "/webchat/favicon.svg", method: "HEAD" } as IncomingMessage,
-        res,
-        { root: { kind: "resolved", path: tmp } },
-      );
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(404);
+      await expectControlUiStatus(tmp, {
+        url: "/webchat/favicon.svg",
+        method: "HEAD",
+        statusCode: 404,
+      });
     });
   });
 
   it("serves SPA fallback for dotted path segments that are not static assets", async () => {
     await withControlUiRoot({}, async (tmp) => {
       for (const route of ["/webchat/user/jane.doe", "/webchat/v2.0", "/settings/v1.2"]) {
-        const { res } = makeControlUiResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: route, method: "GET" } as IncomingMessage,
-          res,
-          { root: { kind: "resolved", path: tmp } },
-        );
-        expect(handled).toBe(true);
-        expect(res.statusCode, `expected 200 for ${route}`).toBe(200);
+        await expectControlUiStatus(tmp, { url: route, statusCode: 200 });
       }
     });
   });
 
   it("serves SPA fallback for .html paths that do not exist on disk", async () => {
     await withControlUiRoot({}, async (tmp) => {
-      const { res } = makeControlUiResponse();
-      const handled = await handleControlUiHttpRequest(
-        { url: "/webchat/foo.html", method: "GET" } as IncomingMessage,
-        res,
-        { root: { kind: "resolved", path: tmp } },
-      );
-      expect(handled).toBe(true);
-      expect(res.statusCode).toBe(200);
+      await expectControlUiStatus(tmp, { url: "/webchat/foo.html", statusCode: 200 });
     });
   });
 });
@@ -330,6 +299,13 @@ function makeGatewayWsClient(
   };
 }
 
+function makeOperatorWsClient(connId: string, socket: TestSocket, scopes: string[]) {
+  return makeGatewayWsClient(connId, socket, {
+    role: "operator",
+    scopes,
+  } as GatewayWsClient["connect"]);
+}
+
 function makeScopedBroadcastClients() {
   const pairingSocket = makeRecordingSocket();
   const nodeSocket = makeRecordingSocket();
@@ -337,26 +313,14 @@ function makeScopedBroadcastClients() {
   const writeSocket = makeRecordingSocket();
   const adminSocket = makeRecordingSocket();
   const clients = new Set<GatewayWsClient>([
-    makeGatewayWsClient("c-pairing", pairingSocket, {
-      role: "operator",
-      scopes: ["operator.pairing"],
-    } as GatewayWsClient["connect"]),
+    makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
     makeGatewayWsClient("c-node", nodeSocket, {
       role: "node",
       scopes: ["operator.read"],
     } as GatewayWsClient["connect"]),
-    makeGatewayWsClient("c-read", readSocket, {
-      role: "operator",
-      scopes: ["operator.read"],
-    } as GatewayWsClient["connect"]),
-    makeGatewayWsClient("c-write", writeSocket, {
-      role: "operator",
-      scopes: ["operator.write"],
-    } as GatewayWsClient["connect"]),
-    makeGatewayWsClient("c-admin", adminSocket, {
-      role: "operator",
-      scopes: ["operator.admin"],
-    } as GatewayWsClient["connect"]),
+    makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
+    makeOperatorWsClient("c-write", writeSocket, ["operator.write"]),
+    makeOperatorWsClient("c-admin", adminSocket, ["operator.admin"]),
   ]);
 
   return { pairingSocket, nodeSocket, readSocket, writeSocket, adminSocket, clients };
@@ -381,18 +345,9 @@ describe("gateway broadcaster", () => {
     };
 
     const clients = new Set<GatewayWsClient>([
-      makeGatewayWsClient("c-approvals", approvalsSocket, {
-        role: "operator",
-        scopes: ["operator.approvals"],
-      } as GatewayWsClient["connect"]),
-      makeGatewayWsClient("c-pairing", pairingSocket, {
-        role: "operator",
-        scopes: ["operator.pairing"],
-      } as GatewayWsClient["connect"]),
-      makeGatewayWsClient("c-read", readSocket, {
-        role: "operator",
-        scopes: ["operator.read"],
-      } as GatewayWsClient["connect"]),
+      makeOperatorWsClient("c-approvals", approvalsSocket, ["operator.approvals"]),
+      makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
+      makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
     ]);
 
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
@@ -545,14 +500,8 @@ describe("gateway broadcaster", () => {
     const readSocket = makeRecordingSocket();
 
     const clients = new Set<GatewayWsClient>([
-      makeGatewayWsClient("c-pairing", pairingSocket, {
-        role: "operator",
-        scopes: ["operator.pairing"],
-      } as GatewayWsClient["connect"]),
-      makeGatewayWsClient("c-read", readSocket, {
-        role: "operator",
-        scopes: ["operator.read"],
-      } as GatewayWsClient["connect"]),
+      makeOperatorWsClient("c-pairing", pairingSocket, ["operator.pairing"]),
+      makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
     ]);
 
     const { broadcast } = createGatewayBroadcaster({ clients });
@@ -579,18 +528,9 @@ describe("gateway broadcaster", () => {
     const secondSocket = makeRecordingSocket();
     const thirdSocket = makeRecordingSocket();
     const clients = new Set<GatewayWsClient>([
-      makeGatewayWsClient("c-1", firstSocket, {
-        role: "operator",
-        scopes: ["operator.read"],
-      } as GatewayWsClient["connect"]),
-      makeGatewayWsClient("c-2", secondSocket, {
-        role: "operator",
-        scopes: ["operator.write"],
-      } as GatewayWsClient["connect"]),
-      makeGatewayWsClient("c-3", thirdSocket, {
-        role: "operator",
-        scopes: ["operator.admin"],
-      } as GatewayWsClient["connect"]),
+      makeOperatorWsClient("c-1", firstSocket, ["operator.read"]),
+      makeOperatorWsClient("c-2", secondSocket, ["operator.write"]),
+      makeOperatorWsClient("c-3", thirdSocket, ["operator.admin"]),
     ]);
     const payloadKeys: string[] = [];
     const payload = {
@@ -621,14 +561,8 @@ describe("gateway broadcaster", () => {
     const readSocket = makeRecordingSocket();
 
     const clients = new Set<GatewayWsClient>([
-      makeGatewayWsClient("c-slow-read", slowReadSocket, {
-        role: "operator",
-        scopes: ["operator.read"],
-      } as GatewayWsClient["connect"]),
-      makeGatewayWsClient("c-read", readSocket, {
-        role: "operator",
-        scopes: ["operator.read"],
-      } as GatewayWsClient["connect"]),
+      makeOperatorWsClient("c-slow-read", slowReadSocket, ["operator.read"]),
+      makeOperatorWsClient("c-read", readSocket, ["operator.read"]),
     ]);
 
     const { broadcast } = createGatewayBroadcaster({ clients });
@@ -654,10 +588,7 @@ describe("gateway broadcaster", () => {
       const slowReadSocket = makeRecordingSocket();
       slowReadSocket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
       const clients = new Set<GatewayWsClient>([
-        makeGatewayWsClient("c-slow-read", slowReadSocket, {
-          role: "operator",
-          scopes: ["operator.read"],
-        } as GatewayWsClient["connect"]),
+        makeOperatorWsClient("c-slow-read", slowReadSocket, ["operator.read"]),
       ]);
 
       const { broadcast } = createGatewayBroadcaster({ clients });

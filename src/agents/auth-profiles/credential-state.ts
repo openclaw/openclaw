@@ -1,5 +1,6 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { coerceSecretRef, normalizeSecretInputString } from "../../config/types.secrets.js";
-import type { AuthProfileCredential, OAuthCredential, OAuthCredentialRef } from "./types.js";
+import type { AuthProfileCredential, OAuthCredential } from "./types.js";
 
 export type AuthCredentialReasonCode =
   | "ok"
@@ -25,7 +26,7 @@ export function resolveTokenExpiryState(
   if (typeof expires !== "number") {
     return "invalid_expires";
   }
-  if (!Number.isFinite(expires) || expires <= 0) {
+  if (!Number.isFinite(expires) || expires <= 0 || expires > MAX_DATE_TIMESTAMP_MS) {
     return "invalid_expires";
   }
   const remainingMs = expires - now;
@@ -69,15 +70,6 @@ function hasConfiguredSecretString(value: unknown): boolean {
   return normalizeSecretInputString(value) !== undefined;
 }
 
-function hasConfiguredOAuthRef(value: OAuthCredentialRef | undefined): boolean {
-  return (
-    value?.source === "openclaw-credentials" &&
-    value.provider === "openai-codex" &&
-    typeof value.id === "string" &&
-    /^[a-f0-9]{32}$/.test(value.id)
-  );
-}
-
 export function evaluateStoredCredentialEligibility(params: {
   credential: AuthProfileCredential;
   now?: number;
@@ -113,8 +105,7 @@ export function evaluateStoredCredentialEligibility(params: {
 
   if (
     normalizeSecretInputString(credential.access) === undefined &&
-    normalizeSecretInputString(credential.refresh) === undefined &&
-    !hasConfiguredOAuthRef(credential.oauthRef)
+    normalizeSecretInputString(credential.refresh) === undefined
   ) {
     return { eligible: false, reasonCode: "missing_credential" };
   }

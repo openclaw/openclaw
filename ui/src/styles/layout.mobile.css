@@ -33,18 +33,28 @@
   }
 
   .chat-controls__session-row {
-    grid-template-columns:
-      minmax(96px, 5fr) minmax(112px, 7fr) minmax(116px, 5fr)
-      minmax(112px, 4fr);
-    grid-template-areas: "agent session model thinking";
+    grid-template-columns: minmax(96px, 5fr) minmax(112px, 7fr) minmax(164px, 8fr);
+    grid-template-areas: "agent session model";
     align-items: center;
     gap: 8px;
     width: 100%;
   }
 
   .chat-controls__session-row--single-agent {
-    grid-template-columns: minmax(112px, 7fr) minmax(116px, 5fr) minmax(112px, 4fr);
-    grid-template-areas: "session model thinking";
+    grid-template-columns: minmax(112px, 7fr) minmax(164px, 8fr);
+    grid-template-areas: "session model";
+  }
+
+  .chat-controls__session-row--has-quota {
+    grid-template-columns:
+      minmax(96px, 5fr) minmax(112px, 7fr) minmax(164px, 8fr)
+      minmax(96px, auto);
+    grid-template-areas: "agent session model quota";
+  }
+
+  .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+    grid-template-columns: minmax(112px, 7fr) minmax(164px, 8fr) minmax(96px, auto);
+    grid-template-areas: "session model quota";
   }
 
   .chat-controls__agent {
@@ -59,22 +69,21 @@
     grid-area: model;
   }
 
-  .chat-controls__thinking-select {
-    grid-area: thinking;
+  .chat-controls__quota {
+    grid-area: quota;
+    min-width: 96px;
   }
 
   .chat-controls__session,
   .chat-controls__agent,
-  .chat-controls__model,
-  .chat-controls__thinking-select {
+  .chat-controls__model {
     min-width: 0;
     max-width: none;
   }
 
   .chat-controls__session select,
   .chat-controls__agent select,
-  .chat-controls__model select,
-  .chat-controls__thinking-select select {
+  .chat-controls__inline-select-trigger {
     width: 100%;
     max-width: none;
   }
@@ -89,10 +98,6 @@
     grid-template-areas:
       "topbar"
       "content";
-  }
-
-  .shell--chat-focus {
-    grid-template-rows: var(--shell-topbar-height) minmax(0, 1fr);
   }
 
   .shell-nav,
@@ -448,16 +453,32 @@
     grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
     grid-template-areas:
       "agent session"
-      "model thinking";
+      "model model";
     gap: 8px;
     width: 100%;
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--single-agent {
-    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    grid-template-columns: minmax(0, 1fr);
     grid-template-areas:
-      "session thinking"
-      "model model";
+      "session"
+      "model";
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-row--has-quota {
+    grid-template-areas:
+      "agent session"
+      "model model"
+      "quota quota";
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+    grid-template-areas:
+      "session"
+      "model"
+      "quota";
   }
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session {
@@ -477,24 +498,62 @@
     grid-area: session;
   }
 
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
+    min-height: 44px;
+    padding: 10px 12px;
+    font-size: 14px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker {
+    position: static;
+    width: 100%;
+    max-height: min(52vh, 420px);
+    margin-top: 8px;
+    box-shadow: none;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-session-picker__search input {
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  .chat-mobile-controls-wrapper
+    .chat-controls-dropdown
+    .chat-session-picker
+    .chat-session-picker__icon-button.btn--icon {
+    flex: 0 0 44px;
+    width: 44px;
+    min-width: 44px;
+    height: 44px;
+    padding: 0;
+  }
+
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__model {
     grid-area: model;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select {
-    grid-area: thinking;
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__quota {
+    width: 100%;
     min-width: 0;
+    min-height: 40px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-trigger {
+    display: flex;
+    width: 100%;
     max-width: none;
+    min-height: 44px;
+    font-size: 14px;
+  }
+
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__inline-select-menu {
+    bottom: auto;
+    top: calc(100% + 6px);
     width: 100%;
   }
 
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking-select-full {
-    display: block;
-    width: 100%;
-    max-width: none;
-  }
-
-  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select {
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session select,
+  .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__session-trigger {
     width: 100%;
     font-size: 14px;
     min-height: 44px;
@@ -510,7 +569,7 @@
 
   .chat-mobile-controls-wrapper .chat-controls-dropdown .chat-controls__thinking {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     align-items: center;
     justify-content: stretch;
     gap: 8px;
@@ -671,6 +730,33 @@
   .log-stream {
     border-radius: var(--radius-md);
     max-height: 380px;
+  }
+
+  /* Reset the desktop fill-height chain on mobile — single page scroll is
+     more usable on small viewports than a tiny pinned log panel.
+     Selectors are intentionally double-classed so they outrank the
+     desktop rules in components.css / config-quick.css, which are
+     imported AFTER this file (see ui/src/styles.css). */
+  .card--fill-height.card--fill-height .log-stream {
+    flex: none;
+    min-height: 200px;
+    max-height: 380px;
+  }
+
+  .content.content--logs {
+    display: block;
+    overflow-y: auto;
+  }
+
+  .content.content--logs .settings-workspace {
+    display: block;
+    height: auto;
+    flex: initial;
+  }
+
+  .content.content--logs .settings-workspace__body {
+    display: block;
+    flex: initial;
   }
 
   .log-row {
@@ -954,6 +1040,17 @@
     max-width: 72px;
     gap: 5px;
     padding: 2px 6px;
+  }
+
+  .sessions-table .session-goal-chip {
+    grid-template-columns: minmax(0, 1fr);
+    max-width: 72px;
+    gap: 0;
+    padding: 2px 6px;
+  }
+
+  .sessions-table .session-goal-chip__objective {
+    display: none;
   }
 
   .sessions-table .session-compaction-col {

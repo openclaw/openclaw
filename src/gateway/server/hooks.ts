@@ -1,4 +1,9 @@
 import { randomUUID } from "node:crypto";
+import {
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeInboundSystemTags } from "../../auto-reply/reply/inbound-text.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -13,8 +18,7 @@ import type { CronJob } from "../../cron/types.js";
 import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { type HookAgentDispatchPayload, type HooksConfigResolved } from "../hooks.js";
+import type { HookAgentDispatchPayload, HooksConfigResolved } from "../hooks.js";
 import { createHooksRequestHandler, type HookClientIpConfig } from "./hooks-request-handler.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
@@ -92,7 +96,9 @@ export function createGatewayHooksRequestHandler(params: {
 
   const dispatchWakeHook = (value: { text: string; mode: "now" | "next-heartbeat" }) => {
     const sessionKey = resolveMainSessionKeyFromConfig();
-    enqueueSystemEvent(value.text, { sessionKey, trusted: false });
+    enqueueSystemEvent(value.text, {
+      sessionKey,
+    });
     if (value.mode === "now") {
       requestHeartbeat({ source: "hook", intent: "immediate", reason: "hook:wake" });
     }
@@ -103,7 +109,7 @@ export function createGatewayHooksRequestHandler(params: {
     const safeName = sanitizeInboundSystemTags(value.name);
     const jobId = randomUUID();
     const runId = randomUUID();
-    const now = Date.now();
+    const nowMs = resolveDateTimestampMs(Date.now());
     const delivery = value.deliver
       ? {
           mode: "announce" as const,
@@ -116,9 +122,9 @@ export function createGatewayHooksRequestHandler(params: {
       agentId: value.agentId,
       name: safeName,
       enabled: true,
-      createdAtMs: now,
-      updatedAtMs: now,
-      schedule: { kind: "at", at: new Date(now).toISOString() },
+      createdAtMs: nowMs,
+      updatedAtMs: nowMs,
+      schedule: { kind: "at", at: resolveTimestampMsToIsoString(nowMs) },
       sessionTarget: "isolated",
       wakeMode: value.wakeMode,
       payload: {
@@ -131,7 +137,7 @@ export function createGatewayHooksRequestHandler(params: {
         externalContentSource: value.externalContentSource,
       },
       delivery,
-      state: { nextRunAtMs: now },
+      state: { nextRunAtMs: nowMs },
     };
 
     let hookEventSessionKey: string | undefined;
@@ -177,7 +183,6 @@ export function createGatewayHooksRequestHandler(params: {
           const eventSessionKey = hookEventSessionKey ?? resolveMainSessionKeyFromConfig();
           enqueueSystemEvent(`${prefix}: ${summary}`.trim(), {
             sessionKey: eventSessionKey,
-            trusted: false,
           });
           if (value.wakeMode === "now") {
             requestHeartbeat({ source: "hook", intent: "immediate", reason: `hook:${jobId}` });
@@ -197,7 +202,6 @@ export function createGatewayHooksRequestHandler(params: {
         logHooks.warn(`hook agent failed: ${String(err)}`);
         enqueueSystemEvent(`Hook ${safeName} (error): ${String(err)}`, {
           sessionKey: hookEventSessionKey ?? resolveMainSessionKeyFromConfig(),
-          trusted: false,
         });
         if (value.wakeMode === "now") {
           requestHeartbeat({

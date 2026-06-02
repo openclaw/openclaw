@@ -1,21 +1,20 @@
-import { normalizeProviderId } from "../agents/provider-id.js";
-import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-id-normalize.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeGooglePreviewModelId,
+  normalizeTogetherModelId,
+} from "@openclaw/model-catalog-core/provider-model-id-normalize";
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
-} from "../shared/string-coerce.js";
-import type { AgentModelConfig } from "./types.agents-shared.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
-  timeoutMs?: number;
 };
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
 
 function modelKeyForConfig(provider: string, model: string): string {
   const providerId = provider.trim();
@@ -33,18 +32,20 @@ function modelKeyForConfig(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
-export function resolveAgentModelPrimaryValue(model?: AgentModelConfig): string | undefined {
+type AgentModelInput = AgentModelConfig | AgentToolModelConfig;
+
+export function resolveAgentModelPrimaryValue(model?: AgentModelInput): string | undefined {
   return resolvePrimaryStringValue(model);
 }
 
-export function resolveAgentModelFallbackValues(model?: AgentModelConfig): string[] {
+export function resolveAgentModelFallbackValues(model?: AgentModelInput): string[] {
   if (!model || typeof model !== "object") {
     return [];
   }
   return Array.isArray(model.fallbacks) ? model.fallbacks : [];
 }
 
-export function resolveAgentModelTimeoutMsValue(model?: AgentModelConfig): number | undefined {
+export function resolveAgentModelTimeoutMsValue(model?: AgentToolModelConfig): number | undefined {
   if (!model || typeof model !== "object") {
     return undefined;
   }
@@ -66,6 +67,8 @@ export function toAgentModelListLike(model?: AgentModelConfig): AgentModelListLi
   return model;
 }
 
+const GOOGLE_PROVIDER_IDS = new Set(["google", "google-gemini-cli", "google-vertex"]);
+
 export function normalizeAgentModelRefForConfig(model: string): string {
   const trimmed = model.trim();
   const slash = trimmed.indexOf("/");
@@ -74,7 +77,13 @@ export function normalizeAgentModelRefForConfig(model: string): string {
   }
 
   const provider = normalizeProviderId(trimmed.slice(0, slash));
-  const normalizedModel = normalizeGooglePreviewModelId(trimmed.slice(slash + 1));
+  const modelSuffix = trimmed.slice(slash + 1);
+  const normalizedModel =
+    GOOGLE_PROVIDER_IDS.has(provider) || modelSuffix.startsWith("google/")
+      ? normalizeGooglePreviewModelId(modelSuffix)
+      : provider === "together"
+        ? normalizeTogetherModelId(modelSuffix)
+        : modelSuffix;
   return modelKeyForConfig(provider, normalizedModel);
 }
 
@@ -99,7 +108,7 @@ export function normalizeAgentModelMapForConfig<T extends Record<string, unknown
   const next: Record<string, unknown> = {};
   for (const [key, entry] of Object.entries(models)) {
     const normalizedKey = normalizeAgentModelRefForConfig(key);
-    if (normalizedKey !== key || Object.prototype.hasOwnProperty.call(next, normalizedKey)) {
+    if (normalizedKey !== key || Object.hasOwn(next, normalizedKey)) {
       mutated = true;
     }
     next[normalizedKey] = mergeAgentModelEntryForConfig(next[normalizedKey], entry);

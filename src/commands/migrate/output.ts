@@ -1,9 +1,9 @@
 import { log } from "@clack/prompts";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { redactMigrationPlan } from "../../plugin-sdk/migration.js";
 import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import { writeRuntimeJson } from "../../runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { theme } from "../../terminal/theme.js";
 import type { MigrateApplyOptions } from "./types.js";
 
 function formatCount(value: number, label: string): string {
@@ -16,13 +16,11 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
     lines.push(`Target: ${plan.target}`);
   }
   const visible = plan.items.filter((item) => !HIDDEN_KINDS.has(item.kind));
-  const visibleConflicts = visible.filter((item) => item.status === "conflict").length;
-  const visibleSensitive = visible.filter((item) => item.sensitive === true).length;
   lines.push(
     [
       formatCount(visible.length, "item"),
-      formatCount(visibleConflicts, "conflict"),
-      formatCount(visibleSensitive, "sensitive item"),
+      formatCount(plan.summary.conflicts, "conflict"),
+      formatCount(plan.summary.sensitive, "sensitive item"),
     ].join(", "),
   );
   return lines;
@@ -34,6 +32,7 @@ type ItemGroup = {
 };
 
 const ITEM_GROUPS: ItemGroup[] = [
+  { kind: "auth", heading: "Auth credentials:" },
   { kind: "skill", heading: "Skills:" },
   { kind: "plugin", heading: "Plugins:" },
   { kind: "memory", heading: "Memory:" },

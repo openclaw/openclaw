@@ -1,6 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
@@ -25,10 +29,6 @@ import { saveJsonFile } from "../infra/json-file.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
@@ -87,12 +87,7 @@ async function copyPortableAuthProfiles(params: {
     return { copied: 0, skipped: portable.skippedProfileIds.length };
   }
   await fs.mkdir(path.dirname(params.destAuthPath), { recursive: true });
-  saveJsonFile(
-    params.destAuthPath,
-    buildPersistedAuthProfileSecretsStore(portable.store, undefined, {
-      agentDir: path.dirname(params.destAuthPath),
-    }),
-  );
+  saveJsonFile(params.destAuthPath, buildPersistedAuthProfileSecretsStore(portable.store));
   return {
     copied: portable.copiedProfileIds.length,
     skipped: portable.skippedProfileIds.length,
@@ -353,10 +348,7 @@ export async function agentsAddCommand(
           });
           if (shouldCopy) {
             await fs.mkdir(path.dirname(destAuthPath), { recursive: true });
-            saveJsonFile(
-              destAuthPath,
-              buildPersistedAuthProfileSecretsStore(portable.store, undefined, { agentDir }),
-            );
+            saveJsonFile(destAuthPath, buildPersistedAuthProfileSecretsStore(portable.store));
             const skippedText =
               portable.skippedProfileIds.length > 0
                 ? ` ${formatSkippedOAuthProfilesMessage({
@@ -423,6 +415,7 @@ export async function agentsAddCommand(
     await warnIfModelConfigLooksOff(nextConfig, prompter, {
       agentId,
       agentDir,
+      validateCatalog: false,
     });
 
     let selection: ChannelChoice[] = [];
@@ -506,7 +499,8 @@ export async function agentsAddCommand(
   }
 }
 
-export const __testing = {
+export const testing = {
   copyPortableAuthProfiles,
   formatSkippedOAuthProfilesMessage,
 };
+export { testing as __testing };

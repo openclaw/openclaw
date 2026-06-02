@@ -115,7 +115,7 @@ describe("music generate background helpers", () => {
     expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
-  it("warns channel completion agents that normal final replies are private", async () => {
+  it("tells channel completion agents to follow the visible-reply contract", async () => {
     announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
       delivered: true,
       path: "direct",
@@ -135,8 +135,36 @@ describe("music generate background helpers", () => {
       },
     });
 
-    expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
-    expectReplyInstructionContains("the media must be sent as message-tool attachments");
+    expectReplyInstructionContains("visible-reply contract");
+    expectReplyInstructionContains("final-reply MEDIA lines");
+  });
+
+  it("delivers failure completion notices directly", async () => {
+    announceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValue({
+      delivered: false,
+      path: "direct",
+      reason: "generated_media_missing",
+      error: "completion agent did not deliver generated media",
+    });
+    const completion = createMediaCompletionFixture({
+      runId: "tool:music_generate:abc",
+      taskLabel: "night-drive synthwave",
+      result: "provider failed",
+    });
+
+    await wakeMusicGenerationTaskCompletion({
+      ...completion,
+      status: "error",
+      statusLabel: "failed",
+    });
+
+    expect(taskDeliveryRuntimeMocks.sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: "Music generation failed: provider failed",
+        idempotencyKey: "music_generate:task-123:error:direct",
+      }),
+    );
+    expect(announceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
   it.each(["agent:main:discord:guild-123:channel-456", "agent:main:whatsapp:123@g.us"])(
@@ -161,8 +189,8 @@ describe("music generate background helpers", () => {
         },
       });
 
-      expectReplyInstructionContains("the user will NOT see your normal assistant final reply");
-      expectReplyInstructionContains("the media must be sent as message-tool attachments");
+      expectReplyInstructionContains("visible-reply contract");
+      expectReplyInstructionContains("final-reply MEDIA lines");
     },
   );
 

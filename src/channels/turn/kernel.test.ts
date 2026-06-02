@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -7,7 +8,7 @@ import type { RecordInboundSession } from "../session.types.js";
 import type { ChannelTurnResult, DispatchedChannelTurnResult } from "./kernel.js";
 import {
   clearChannelBotPairLoopGuardForTests,
-  createNoopChannelTurnDeliveryAdapter,
+  createNoopChannelEventDeliveryAdapter,
   dispatchAssembledChannelTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
@@ -400,6 +401,78 @@ describe("channel turn kernel", () => {
     expect(deliver).not.toHaveBeenCalled();
   });
 
+  it("preserves durable partial-send visibility when generic delivery throws", async () => {
+    const error = new Error("second chunk failed");
+    sendDurableMessageBatch.mockResolvedValueOnce({
+      status: "partial_failed",
+      results: [{ channel: "telegram", messageId: "tg-1" }],
+      receipt: {
+        primaryPlatformMessageId: "tg-1",
+        platformMessageIds: ["tg-1"],
+        parts: [{ platformMessageId: "tg-1", kind: "text", index: 0 }],
+        sentAt: 1,
+      },
+      error,
+      sentBeforeError: true,
+    });
+    const deliver = vi.fn(async () => ({ messageIds: ["legacy-1"], visibleReplySent: true }));
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "telegram",
+        accountId: "acct",
+        agentId: "main",
+        routeSessionKey: "agent:main:telegram:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: { deliver, durable: { replyToMode: "first" } },
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+
+    expect(deliver).not.toHaveBeenCalled();
+  });
+
+  it("preserves visible delivery when post-delivery observers throw", async () => {
+    const error = new Error("observer failed");
+    const deliver = vi.fn(async () => ({ messageIds: ["local-1"], visibleReplySent: true }));
+    const dispatchReplyWithBufferedBlockDispatcher = createDispatch();
+
+    await expect(
+      dispatchAssembledChannelTurn({
+        cfg,
+        channel: "telegram",
+        accountId: "acct",
+        agentId: "main",
+        routeSessionKey: "agent:main:telegram:peer",
+        storePath: "/tmp/sessions.json",
+        ctxPayload: createCtx({ To: "123", OriginatingTo: "123" }),
+        recordInboundSession: createRecordInboundSession(),
+        dispatchReplyWithBufferedBlockDispatcher,
+        delivery: {
+          deliver,
+          durable: false,
+          onDelivered: () => {
+            throw error;
+          },
+        },
+      }),
+    ).rejects.toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+    expect(error).toMatchObject({
+      sentBeforeError: true,
+      visibleReplySent: true,
+    });
+  });
+
   it("returns custom delivery result to the buffered dispatcher", async () => {
     let deliveredResult: unknown;
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(
@@ -596,6 +669,9 @@ describe("channel turn kernel", () => {
   it("drops direct prepared turns with bot-loop protection before record and dispatch", async () => {
     const events: string[] = [];
     const log = vi.fn();
+    const historyMap = new Map<string, HistoryEntry[]>([
+      ["room", [{ sender: "User", body: "queued before suppression" }]],
+    ]);
     const recordInboundSession = createRecordInboundSession(events);
     const runDispatch = vi.fn(async () => {
       events.push("dispatch");
@@ -632,6 +708,12 @@ describe("channel turn kernel", () => {
       log,
       messageId: "msg-loop",
       botLoopProtection: { ...botLoopProtection, nowMs: 1_001 },
+      history: {
+        isGroup: true,
+        historyKey: "room",
+        historyMap,
+        limit: 50,
+      },
     });
 
     expect(first.dispatched).toBe(true);
@@ -643,6 +725,7 @@ describe("channel turn kernel", () => {
     expect(events).toEqual(["record", "dispatch"]);
     expect(recordInboundSession).toHaveBeenCalledTimes(1);
     expect(runDispatch).toHaveBeenCalledTimes(1);
+    expect(historyMap.get("room")).toStrictEqual([]);
     expect(loggedEvents(log)).toEqual([
       { stage: "authorize", event: "drop", messageId: "msg-loop" },
     ]);
@@ -822,6 +905,60 @@ describe("channel turn kernel", () => {
     });
     expect(result.dispatched).toBe(false);
     expect(resolveTurn).not.toHaveBeenCalled();
+  });
+
+  it("records preflight drop history through the turn kernel", async () => {
+    const historyMap = new Map<string, HistoryEntry[]>();
+    const resolveTurn = vi.fn();
+
+    const result = await runChannelTurn({
+      channel: "test",
+      raw: {},
+      adapter: {
+        ingest: () => ({
+          id: "msg-1",
+          timestamp: 1_700_000_000_000,
+          rawText: "<media:image>",
+        }),
+        preflight: () => ({
+          admission: { kind: "drop", reason: "missing-mention", recordHistory: true },
+          message: {
+            bodyForAgent: "<media:image>",
+            senderLabel: "Alice",
+          },
+          history: {
+            key: "room-1",
+            historyMap,
+            limit: 5,
+            mediaLimit: 2,
+          },
+          media: async () => [
+            { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
+            { path: "https://example.com/b.png", contentType: "image/png", kind: "image" },
+          ],
+        }),
+        resolveTurn,
+      },
+    });
+
+    expect(result.admission).toEqual({
+      kind: "drop",
+      reason: "missing-mention",
+      recordHistory: true,
+    });
+    expect(result.dispatched).toBe(false);
+    expect(resolveTurn).not.toHaveBeenCalled();
+    expect(historyMap.get("room-1")).toEqual([
+      {
+        sender: "Alice",
+        body: "<media:image>",
+        timestamp: 1_700_000_000_000,
+        messageId: "msg-1",
+        media: [
+          { path: "/tmp/a.png", contentType: "image/png", kind: "image", messageId: "msg-1" },
+        ],
+      },
+    ]);
   });
 
   it("drops repeated bot-pair turns in the core turn kernel before record and dispatch", async () => {
@@ -1029,7 +1166,7 @@ describe("channel turn kernel", () => {
             ctxPayload: createCtx(),
             recordInboundSession: createRecordInboundSession(),
             dispatchReplyWithBufferedBlockDispatcher,
-            delivery: createNoopChannelTurnDeliveryAdapter(),
+            delivery: createNoopChannelEventDeliveryAdapter(),
             record: {
               onRecordError: vi.fn(),
             },

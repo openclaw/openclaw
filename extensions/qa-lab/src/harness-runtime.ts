@@ -84,6 +84,42 @@ export function createQaRunnerRuntime(): PluginRuntime {
           });
         },
       },
+      inbound: {
+        async dispatchReply(
+          params: Parameters<PluginRuntime["channel"]["inbound"]["dispatchReply"]>[0],
+        ) {
+          const sessionKey =
+            typeof params.ctxPayload.SessionKey === "string"
+              ? params.ctxPayload.SessionKey
+              : params.routeSessionKey;
+          await params.recordInboundSession({
+            storePath: params.storePath,
+            sessionKey,
+            ctx: params.ctxPayload,
+            onRecordError: params.record?.onRecordError ?? (() => undefined),
+          });
+          const dispatchResult = await params.dispatchReplyWithBufferedBlockDispatcher({
+            ctx: params.ctxPayload,
+            cfg: params.cfg,
+            dispatcherOptions: {
+              ...params.dispatcherOptions,
+              deliver: async (payload, info) => {
+                await params.delivery.deliver(payload, info);
+              },
+              onError: params.delivery.onError,
+            },
+            replyOptions: params.replyOptions,
+            replyResolver: params.replyResolver,
+          });
+          return {
+            admission: params.admission ?? { kind: "dispatch" },
+            dispatched: true,
+            ctxPayload: params.ctxPayload,
+            routeSessionKey: params.routeSessionKey,
+            dispatchResult,
+          };
+        },
+      },
     },
   } as unknown as PluginRuntime;
 }

@@ -15,9 +15,29 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
       },
     } as OpenClawConfig;
 
-    expect(collectConfiguredAgentHarnessRuntimes(config, {}, { includeEnvRuntime: false })).toEqual(
-      ["codex"],
-    );
+    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
+  });
+
+  it("can ignore implicit OpenAI Codex runtime preferences", () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: {
+            "openai/gpt-5.4": {},
+            "anthropic/claude-opus-4-7": {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      collectConfiguredAgentHarnessRuntimes(config, {
+        includeImplicitRuntimePreferences: false,
+      }),
+    ).toEqual(["codex"]);
   });
 
   it("requires Codex for selectable per-agent OpenAI models", () => {
@@ -37,26 +57,22 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
       },
     } as OpenClawConfig;
 
-    expect(collectConfiguredAgentHarnessRuntimes(config, {}, { includeEnvRuntime: false })).toEqual(
-      ["codex"],
-    );
+    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["codex"]);
   });
 
-  it("respects explicit Pi runtime policy on selectable OpenAI agent models", () => {
+  it("respects explicit OpenClaw runtime policy on selectable OpenAI agent models", () => {
     const config = {
       agents: {
         defaults: {
           model: { primary: "anthropic/claude-sonnet-4-6" },
           models: {
-            "openai/gpt-5.5": { agentRuntime: { id: "pi" } },
+            "openai/gpt-5.5": { agentRuntime: { id: "openclaw" } },
           },
         },
       },
     } as OpenClawConfig;
 
-    expect(collectConfiguredAgentHarnessRuntimes(config, {}, { includeEnvRuntime: false })).toEqual(
-      [],
-    );
+    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual([]);
   });
 
   it("does not infer Codex for custom OpenAI-compatible base URLs", () => {
@@ -78,9 +94,7 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
       },
     } as OpenClawConfig;
 
-    expect(collectConfiguredAgentHarnessRuntimes(config, {}, { includeEnvRuntime: false })).toEqual(
-      [],
-    );
+    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual([]);
   });
 
   it("ignores malformed agents.list while scanning best-effort config", () => {
@@ -102,8 +116,6 @@ describe("collectConfiguredAgentHarnessRuntimes", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectConfiguredAgentHarnessRuntimes(config, {}, { includeEnvRuntime: false })).toEqual(
-      ["claude"],
-    );
+    expect(collectConfiguredAgentHarnessRuntimes(config)).toEqual(["claude"]);
   });
 });
