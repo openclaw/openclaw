@@ -10,7 +10,7 @@ import {
   resolveOAuthTokenExpiresAt,
   resolveOAuthTokenLifetimeMs,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveCodexAuthIdentity } from "./openai-chatgpt-auth-identity.js";
 import {
   createOAuthLoginCancelledError,
@@ -29,6 +29,12 @@ import { generatePKCE } from "./openai-chatgpt-pkce.runtime.js";
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann";
 const AUTHORIZE_URL = "https://auth.openai.com/oauth/authorize";
 const TOKEN_URL = "https://auth.openai.com/oauth/token";
+const TOKEN_HOSTNAME = new URL(TOKEN_URL).hostname;
+const TOKEN_SSRF_POLICY = {
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+  hostnameAllowlist: [TOKEN_HOSTNAME],
+} satisfies SsrFPolicy;
 const CALLBACK_PORT = 1455;
 const CALLBACK_PATH = "/auth/callback";
 const DEFAULT_CALLBACK_HOST = "localhost";
@@ -167,11 +173,10 @@ async function readTokenResponseJson(
 ): Promise<ParsedTokenResponse> {
   try {
     return { type: "parsed", json: (await response.json()) as TokenResponseJson };
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
+  } catch {
     return {
       type: "failed",
-      message: `OpenAI Codex token ${operation} response was not valid JSON: ${detail}`,
+      message: `OpenAI Codex token ${operation} response was not valid JSON`,
     };
   }
 }
@@ -189,6 +194,9 @@ async function postTokenForm(
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body,
     },
+    // Transparent proxy stacks can resolve public OpenAI hosts into fake-IP ranges.
+    // Keep that exemption scoped to auth.openai.com so literal private token URLs stay blocked.
+    policy: TOKEN_SSRF_POLICY,
     timeoutMs,
     signal: options.signal,
     auditContext: "openai-chatgpt-oauth-token",

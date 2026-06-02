@@ -11,6 +11,12 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
 
 import { openaiCodexOAuthProvider, testing } from "./openai-chatgpt-oauth-flow.runtime.js";
 
+const EXPECTED_TOKEN_SSRF_POLICY = {
+  allowRfc2544BenchmarkRange: true,
+  allowIpv6UniqueLocalRange: true,
+  hostnameAllowlist: ["auth.openai.com"],
+};
+
 function timeoutError(): Error {
   return new DOMException("timed out", "TimeoutError");
 }
@@ -30,22 +36,6 @@ function mockTokenResponse(body: unknown, status = 200): void {
 function mockTokenResponseText(body: string, status = 200): void {
   ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
     response: new Response(body, {
-      status,
-      headers: { "Content-Type": "application/json" },
-    }),
-    release: vi.fn(async () => undefined),
-  });
-}
-
-function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
-  const body = new ArrayBuffer(bytes.byteLength);
-  new Uint8Array(body).set(bytes);
-  return body;
-}
-
-function mockTokenResponseBytes(bytes: Uint8Array, status = 200): void {
-  ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: new Response(arrayBufferFromBytes(bytes), {
       status,
       headers: { "Content-Type": "application/json" },
     }),
@@ -122,6 +112,7 @@ describe("OpenAI Codex OAuth flow", () => {
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({
         auditContext: "openai-chatgpt-oauth-token",
+        policy: EXPECTED_TOKEN_SSRF_POLICY,
         timeoutMs: 5,
       }),
     );
@@ -168,7 +159,8 @@ describe("OpenAI Codex OAuth flow", () => {
   });
 
   it("reports malformed token exchange JSON without throwing parser errors", async () => {
-    mockTokenResponseBytes(new Uint8Array([0x1f, 0x8b, 0x08, 0x00]));
+    const responseBody = "secret-token-fragment";
+    mockTokenResponseText(responseBody);
 
     const result = await testing.exchangeAuthorizationCode(
       "code",
@@ -179,8 +171,12 @@ describe("OpenAI Codex OAuth flow", () => {
 
     expect(result).toMatchObject({
       type: "failed",
-      message: expect.stringMatching(/^OpenAI Codex token exchange response was not valid JSON:/u),
+      message: "OpenAI Codex token exchange response was not valid JSON",
     });
+    if (result.type !== "failed") {
+      throw new Error("expected failed token exchange result");
+    }
+    expect(result.message).not.toContain(responseBody);
   });
 
   it("times out token refresh requests", async () => {
@@ -200,6 +196,25 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
+  it("uses host-scoped fake-IP policy for token refresh requests", async () => {
+    mockTokenResponse({
+      access_token: "access-token",
+      refresh_token: "refresh-token",
+      expires_in: 3600,
+    });
+
+    const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
+
+    expect(result.type).toBe("success");
+    expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
+      expect.objectContaining({
+        auditContext: "openai-chatgpt-oauth-token",
+        policy: EXPECTED_TOKEN_SSRF_POLICY,
+        timeoutMs: 5,
+      }),
+    );
+  });
+
   it("rejects non-positive token refresh lifetimes", async () => {
     mockTokenResponse({
       access_token: "access-token",
@@ -216,14 +231,19 @@ describe("OpenAI Codex OAuth flow", () => {
   });
 
   it("reports malformed token refresh JSON without throwing parser errors", async () => {
-    mockTokenResponseBytes(new Uint8Array([0x1f, 0x8b, 0x08, 0x00]));
+    const responseBody = "secret-token-fragment";
+    mockTokenResponseText(responseBody);
 
     const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
 
     expect(result).toMatchObject({
       type: "failed",
-      message: expect.stringMatching(/^OpenAI Codex token refresh response was not valid JSON:/u),
+      message: "OpenAI Codex token refresh response was not valid JSON",
     });
+    if (result.type !== "failed") {
+      throw new Error("expected failed token refresh result");
+    }
+    expect(result.message).not.toContain(responseBody);
   });
 
   it("marks callback responses as connection-closing", async () => {
