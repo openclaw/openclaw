@@ -215,6 +215,11 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
+/**
+ * Determines whether the default agent's heartbeat run should include the
+ * heartbeat prompt contribution. Non-default agents and non-heartbeat triggers
+ * keep their normal prompt shape.
+ */
 export function shouldInjectHeartbeatPrompt(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -235,6 +240,7 @@ export function shouldInjectHeartbeatPrompt(params: {
   );
 }
 
+/** User-visible runs warn when transcript repair had to merge an orphaned user turn. */
 export function shouldWarnOnOrphanedUserRepair(
   trigger: EmbeddedRunAttemptParams["trigger"],
 ): boolean {
@@ -243,6 +249,11 @@ export function shouldWarnOnOrphanedUserRepair(
 
 export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
 
+/**
+ * Distinguishes a truly empty prompt/history from a blank follow-up in a visible
+ * conversation. This lets callers skip model submission while reporting the
+ * reason accurately.
+ */
 export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
@@ -463,6 +474,11 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+/**
+ * Merges a trailing user message that was queued in transcript history but not
+ * present in the active prompt. The leaf is removed whether merged or already
+ * present so the transcript cannot submit the same user turn twice.
+ */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
