@@ -104,13 +104,12 @@ type PersistedRunFields = Pick<
   | "traceAuthorized"
   | "sessionFile"
   | "workspaceDir"
+  | "cwd"
   | "provider"
   | "model"
-  | "hasOneTurnModelOverride"
   | "hasSessionModelOverride"
   | "modelOverrideSource"
   | "hasAutoFallbackProvenance"
-  | "imageModelFallbacksOverride"
   | "autoFallbackPrimaryProbe"
   | "authProfileId"
   | "authProfileIdSource"
@@ -187,13 +186,12 @@ const PERSISTED_RUN_FIELDS = [
   "traceAuthorized",
   "sessionFile",
   "workspaceDir",
+  "cwd",
   "provider",
   "model",
-  "hasOneTurnModelOverride",
   "hasSessionModelOverride",
   "modelOverrideSource",
   "hasAutoFallbackProvenance",
-  "imageModelFallbacksOverride",
   "autoFallbackPrimaryProbe",
   "authProfileId",
   "authProfileIdSource",
