@@ -1428,7 +1428,13 @@ export async function dispatchReplyFromConfig(
     if (
       admission.status === "skipped" &&
       admission.reason === "active-run" &&
-      isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status)
+      isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status) &&
+      // Only clear the proven stale leftover from the failed lifecycle. A
+      // sibling recovery turn that already cleared the leftover and admitted a
+      // fresh operation marks it `terminalRecovery`; force-failing that op would
+      // drop the very recovery turn this path exists to protect (concurrent
+      // visible turns can read the same terminal snapshot before it clears).
+      !admission.activeOperation?.terminalRecovery
     ) {
       const cleared = forceClearReplyRunBySessionId(
         admission.activeOperation?.sessionId ?? operationSessionId,
@@ -1447,6 +1453,9 @@ export async function dispatchReplyFromConfig(
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
         });
+        if (admission.status === "owned") {
+          admission.operation.markTerminalRecovery();
+        }
       }
     }
     if (admission.status === "skipped") {
