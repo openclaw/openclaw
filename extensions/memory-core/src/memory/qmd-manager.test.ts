@@ -4269,8 +4269,8 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    expect(args).not.toContain("--config");
     const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(args).not.toContain("--config");
     expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
     expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
     expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
@@ -4292,7 +4292,7 @@ describe("QmdMemoryManager", () => {
     await manager.close();
   });
 
-  it("uses the original mcporter config for configured stdio servers without env", async () => {
+  it("generates agent-scoped config for configured stdio servers without original env", async () => {
     cfg = {
       ...cfg,
       memory: {
@@ -4315,8 +4315,8 @@ describe("QmdMemoryManager", () => {
           JSON.stringify({
             name: "custom-qmd",
             source: "user",
-            command: "node",
-            args: ["/opt/qmd-wrapper.js", "mcp"],
+            command: "qmd",
+            args: ["mcp"],
           }),
         );
         return child;
@@ -4336,15 +4336,25 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    expect(args).not.toContain("--config");
-    await expect(
-      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
-    ).rejects.toThrow();
+    expect(args).toContain("--config");
+    const configPath = requireValue(args[args.indexOf("--config") + 1], "config path missing");
+    const config = JSON.parse(await fs.readFile(configPath, "utf8")) as {
+      mcpServers?: Record<
+        string,
+        { command?: string; args?: string[]; env?: Record<string, string> }
+      >;
+    };
+    const generatedServer = config.mcpServers?.["custom-qmd"];
+    expect(generatedServer?.command).toBe("qmd");
+    expect(generatedServer?.args).toEqual(["mcp"]);
+    expect(generatedServer?.env?.QMD_CONFIG_DIR?.replace(/\\/g, "/")).toContain(
+      "/agents/main/qmd/xdg-config/qmd",
+    );
 
     await manager.close();
   });
 
-  it("uses the original mcporter config for configured stdio daemon servers", async () => {
+  it("starts configured stdio daemons with generated agent-scoped config", async () => {
     const userXdgConfigHome = path.join(tmpRoot, "stdio-user-xdg-config");
     const userXdgCacheHome = path.join(tmpRoot, "stdio-user-xdg-cache");
     const userQmdConfigDir = path.join(tmpRoot, "stdio-user-qmd-config");
@@ -4376,8 +4386,8 @@ describe("QmdMemoryManager", () => {
           JSON.stringify({
             name: "custom-qmd",
             source: "user",
-            command: "node",
-            args: ["/opt/qmd-wrapper.js", "mcp"],
+            command: "qmd",
+            args: ["mcp"],
           }),
         );
         return child;
@@ -4401,19 +4411,150 @@ describe("QmdMemoryManager", () => {
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
     );
     const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
-    expect(args).not.toContain("--config");
-    await expect(
-      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
-    ).rejects.toThrow();
+    expect(args).toContain("--config");
 
     const daemonStart = spawnMock.mock.calls.find(
       (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "daemon",
     );
+    const daemonArgs = (requireValue(daemonStart, "mcporter daemon start missing")[1] ?? []) as
+      | string[]
+      | undefined;
+    expect(daemonArgs).toContain("--config");
     const daemonOpts = daemonStart?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
-    expect(daemonOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
-    expect(daemonOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
+    expect(daemonOpts?.env?.XDG_CONFIG_HOME).toBeUndefined();
+    expect(daemonOpts?.env?.MCPORTER_CONFIG).toBeUndefined();
     expect(daemonOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
     expect(daemonOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+
+    await manager.close();
+  });
+
+  it("uses the original mcporter config for configured stdio servers with relative paths", async () => {
+    const userXdgConfigHome = path.join(tmpRoot, "stdio-relative-user-xdg-config");
+    const userXdgCacheHome = path.join(tmpRoot, "stdio-relative-user-xdg-cache");
+    const userQmdConfigDir = path.join(tmpRoot, "stdio-relative-user-qmd-config");
+    const userMcporterConfig = path.join(tmpRoot, "stdio-relative-user-mcporter.json");
+    process.env.XDG_CONFIG_HOME = userXdgConfigHome;
+    process.env.XDG_CACHE_HOME = userXdgCacheHome;
+    process.env.QMD_CONFIG_DIR = userQmdConfigDir;
+    process.env.MCPORTER_CONFIG = userMcporterConfig;
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "custom-qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            name: "custom-qmd",
+            source: "user",
+            command: "node",
+            args: ["./mcp.js"],
+            cwd: "packages/qmd",
+          }),
+        );
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    expect(args).not.toContain("--config");
+    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
+    await expect(
+      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+
+    await manager.close();
+  });
+
+  it("uses the original mcporter config for configured stdio servers with auth-like args", async () => {
+    const userXdgConfigHome = path.join(tmpRoot, "stdio-auth-user-xdg-config");
+    const userXdgCacheHome = path.join(tmpRoot, "stdio-auth-user-xdg-cache");
+    const userQmdConfigDir = path.join(tmpRoot, "stdio-auth-user-qmd-config");
+    const userMcporterConfig = path.join(tmpRoot, "stdio-auth-user-mcporter.json");
+    process.env.XDG_CONFIG_HOME = userXdgConfigHome;
+    process.env.XDG_CACHE_HOME = userXdgCacheHome;
+    process.env.QMD_CONFIG_DIR = userQmdConfigDir;
+    process.env.MCPORTER_CONFIG = userMcporterConfig;
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "custom-qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            name: "custom-qmd",
+            source: "user",
+            command: "qmd",
+            args: ["--password", "secret", "mcp"],
+          }),
+        );
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    expect(args).not.toContain("--config");
+    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
+    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
+    expect(callOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    await expect(
+      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
+    ).rejects.toThrow();
 
     await manager.close();
   });
@@ -4480,6 +4621,74 @@ describe("QmdMemoryManager", () => {
     expect(remote?.baseUrl).toBe("https://qmd.example.invalid/mcp");
     expect(remote?.headers).toEqual({ accept: "application/json, text/event-stream" });
     expect(remote?.env).toBeUndefined();
+
+    await manager.close();
+  });
+
+  it("uses the original mcporter config for remote servers with env material", async () => {
+    const userXdgConfigHome = path.join(tmpRoot, "remote-env-user-xdg-config");
+    const userXdgCacheHome = path.join(tmpRoot, "remote-env-user-xdg-cache");
+    const userQmdConfigDir = path.join(tmpRoot, "remote-env-user-qmd-config");
+    const userMcporterConfig = path.join(tmpRoot, "remote-env-user-mcporter.json");
+    process.env.XDG_CONFIG_HOME = userXdgConfigHome;
+    process.env.XDG_CACHE_HOME = userXdgCacheHome;
+    process.env.QMD_CONFIG_DIR = userQmdConfigDir;
+    process.env.MCPORTER_CONFIG = userMcporterConfig;
+
+    cfg = {
+      ...cfg,
+      memory: {
+        backend: "qmd",
+        qmd: {
+          includeDefaultMemory: false,
+          update: { interval: "0s", debounceMs: 60_000, onBoot: false },
+          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
+          mcporter: { enabled: true, serverName: "remote-qmd", startDaemon: false },
+        },
+      },
+    } as OpenClawConfig;
+
+    spawnMock.mockImplementation((cmd: string, args: string[]) => {
+      const child = createMockChild({ autoClose: false });
+      if (isMcporterCommand(cmd) && args[0] === "config") {
+        emitAndClose(
+          child,
+          "stdout",
+          JSON.stringify({
+            name: "remote-qmd",
+            source: "user",
+            transport: "http",
+            baseUrl: "https://qmd.example.invalid/mcp",
+            headers: { accept: "application/json, text/event-stream" },
+            env: { REMOTE_TOKEN: "secret" },
+          }),
+        );
+        return child;
+      }
+      if (isMcporterCommand(cmd) && args[0] === "call") {
+        emitAndClose(child, "stdout", JSON.stringify({ results: [] }));
+        return child;
+      }
+      emitAndClose(child, "stdout", "[]");
+      return child;
+    });
+
+    const { manager } = await createManager();
+    await manager.search("hello", { sessionKey: "agent:main:slack:dm:u123" });
+
+    const mcporterCall = spawnMock.mock.calls.find(
+      (call: unknown[]) => isMcporterCommand(call[0]) && (call[1] as string[])[0] === "call",
+    );
+    const args = (requireValue(mcporterCall, "mcporter search call missing")[1] ?? []) as string[];
+    expect(args).not.toContain("--config");
+    const callOpts = mcporterCall?.[2] as { env?: NodeJS.ProcessEnv } | undefined;
+    expect(callOpts?.env?.XDG_CONFIG_HOME).toBe(userXdgConfigHome);
+    expect(callOpts?.env?.MCPORTER_CONFIG).toBe(userMcporterConfig);
+    expect(callOpts?.env?.QMD_CONFIG_DIR).toBeUndefined();
+    expect(callOpts?.env?.XDG_CACHE_HOME).toBeUndefined();
+    await expect(
+      fs.stat(path.join(stateDir, "agents", "main", "qmd", "mcporter", "mcporter.json")),
+    ).rejects.toThrow();
 
     await manager.close();
   });

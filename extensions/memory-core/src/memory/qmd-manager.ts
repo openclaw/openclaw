@@ -249,11 +249,46 @@ function hasMcporterRemoteAuthMaterial(server: Record<string, unknown>): boolean
     return true;
   }
   return Object.entries(server).some(([key, value]) => {
+    if (normalizeMcporterConfigKey(key) === "env") {
+      return true;
+    }
     if (normalizeMcporterConfigKey(key) === "headers") {
       return hasMcporterHeaderAuthMaterial(value);
     }
     return isMcporterAuthLikeKey(key);
   });
+}
+
+function hasMcporterStdioUserOwnedMaterial(server: Record<string, unknown>): boolean {
+  return Object.entries(server).some(([key, value]) => {
+    const normalizedKey = normalizeMcporterConfigKey(key);
+    if (normalizedKey === "env") {
+      return true;
+    }
+    if (normalizedKey === "command") {
+      return hasMcporterAuthLikeText(value);
+    }
+    if (normalizedKey === "args") {
+      return hasMcporterAuthLikeArgs(value);
+    }
+    return isMcporterAuthLikeKey(key);
+  });
+}
+
+function isGeneratedMcporterQmdStdioServer(server: Record<string, unknown>): boolean {
+  if (normalizeMcporterConfigKey(String(server.command)) !== "qmd") {
+    return false;
+  }
+  const args = server.args;
+  return Array.isArray(args) && args.length === 1 && args[0] === "mcp";
+}
+
+function hasMcporterAuthLikeArgs(value: unknown): boolean {
+  return Array.isArray(value) && value.some((entry) => hasMcporterAuthLikeText(entry));
+}
+
+function hasMcporterAuthLikeText(value: unknown): boolean {
+  return typeof value === "string" && isMcporterAuthLikeKey(value);
 }
 
 function hasMcporterRemoteUrlCredentials(server: Record<string, unknown>): boolean {
@@ -2598,7 +2633,10 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     if (typeof server.command === "string" && server.command.length > 0) {
-      return { mode: "external" };
+      if (!isGeneratedMcporterQmdStdioServer(server) || hasMcporterStdioUserOwnedMaterial(server)) {
+        return { mode: "external" };
+      }
+      return { mode: "generated", server: this.toGeneratedMcporterStdioServer(server) };
     }
 
     const hasRemoteEndpoint =
@@ -2616,6 +2654,13 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
 
     return null;
+  }
+
+  private toGeneratedMcporterStdioServer(server: Record<string, unknown>): Record<string, unknown> {
+    return {
+      ...server,
+      env: this.buildMcporterQmdEnv(),
+    };
   }
 
   private buildMcporterQmdEnv(): Record<string, string> {
