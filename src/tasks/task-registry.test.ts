@@ -131,7 +131,7 @@ vi.mock("../agents/subagent-control.js", () => ({
 
 vi.mock("../utils/message-channel.js", () => ({
   isDeliverableMessageChannel: (channel: string) =>
-    channel === "notifychat" || channel === "guildchat",
+    channel === "notifychat" || channel === "guildchat" || channel === "discord",
 }));
 
 function configureTaskRegistryMaintenanceRuntimeForTest(params: {
@@ -1336,6 +1336,148 @@ describe("task-registry", () => {
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
+
+  it("delivers delegated ACP completion directly to an explicitly bound Discord thread", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      const runId = "run-bound-discord-thread-terminal";
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "discord",
+        to: "channel:parent-channel",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "discord",
+          to: "channel:parent-channel",
+          threadId: "thread-84022",
+        },
+        childSessionKey: "agent:main:acp:child",
+        runId,
+        task: "Investigate thread-bound ACP delivery",
+        status: "running",
+        deliveryStatus: "pending",
+        terminalSummary: "ACP final answer",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() => {
+        const task = findTaskByRunId(runId);
+        if (!task) {
+          throw new Error(`Expected task for run ${runId}`);
+        }
+        expect(task.status).toBe("succeeded");
+        expect(task.deliveryStatus).toBe("delivered");
+      });
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
+      const message = sentMessageCall();
+      expectRecordFields(message, {
+        channel: "discord",
+        to: "channel:parent-channel",
+        threadId: "thread-84022",
+      });
+      expect(String(message.content)).toContain(
+        "Background task ready for review: ACP background task",
+      );
+      expect(String(message.content)).toContain("ACP final answer");
+      expect(String(message.content)).toContain(
+        "Next: parent will review/verify before calling it done.",
+      );
+      expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toStrictEqual(
+        [],
+      );
+    });
+  });
+
+  it.each([
+    {
+      id: "missing-thread",
+      requesterOrigin: {
+        channel: "discord",
+        to: "channel:parent-channel",
+      },
+    },
+    {
+      id: "non-channel-target",
+      requesterOrigin: {
+        channel: "discord",
+        to: "user:U123",
+        threadId: "thread-84022",
+      },
+    },
+    {
+      id: "non-discord-channel",
+      requesterOrigin: {
+        channel: "guildchat",
+        to: "guildchat:channel:parent-channel",
+        threadId: "thread-84022",
+      },
+    },
+  ])(
+    "keeps delegated ACP completion queued without an explicit bound Discord thread ($id)",
+    async ({ requesterOrigin }) => {
+      await withTaskRegistryTempDir(async (root) => {
+        process.env.OPENCLAW_STATE_DIR = root;
+        resetTaskRegistryForTests();
+        const runId = `run-non-bound-discord-thread-terminal-${requesterOrigin.channel}-${requesterOrigin.to}`;
+        hoisted.sendMessageMock.mockResolvedValue({
+          channel: requesterOrigin.channel,
+          to: requesterOrigin.to,
+          via: "direct",
+        });
+
+        createTaskRecord({
+          runtime: "acp",
+          ownerKey: "agent:main:discord:guild-123:channel-parent-channel",
+          scopeKind: "session",
+          requesterOrigin,
+          childSessionKey: "agent:main:acp:child",
+          runId,
+          task: "Investigate thread-bound ACP delivery",
+          status: "running",
+          deliveryStatus: "pending",
+          terminalSummary: "ACP final answer",
+          startedAt: 100,
+        });
+
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          data: {
+            phase: "end",
+            endedAt: 250,
+          },
+        });
+
+        await waitForAssertion(() => {
+          const task = findTaskByRunId(runId);
+          if (!task) {
+            throw new Error(`Expected task for run ${runId}`);
+          }
+          expect(task.status).toBe("succeeded");
+          expect(task.deliveryStatus).toBe("session_queued");
+        });
+        expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+        expect(peekSystemEvents("agent:main:discord:guild-123:channel-parent-channel")).toEqual([
+          expect.stringContaining("Background task ready for review: ACP background task"),
+        ]);
+      });
+    },
+  );
 
   it.each([
     {
