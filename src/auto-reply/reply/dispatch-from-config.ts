@@ -785,7 +785,7 @@ export function getDispatcherFinalOutcomeCounts(dispatcher: DispatcherOutcomeCou
 } {
   return {
     cancelled: dispatcher.getCancelledCounts?.().final ?? 0,
-    failed: dispatcher.getFailedCounts?.().final ?? 0,
+    failed: readDispatcherFailedCounts(dispatcher).final,
   };
 }
 
