@@ -193,22 +193,25 @@ describe("scripts/ui windows spawn behavior", () => {
     expect(output).toContain("vite");
   });
 
-  it.runIf(process.platform !== "win32")(
-    "terminates the pnpm child on wrapper SIGTERM",
-    async () => {
+  it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP"] as const)(
+    "terminates the pnpm child on wrapper %s",
+    async (signal) => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ui-wrapper-signals-"));
       const runnerPath = path.join(tempDir, "pnpm.mjs");
       const readyFile = path.join(tempDir, "ready");
       const signaledFile = path.join(tempDir, "signaled");
+      const handlerLines = ["SIGTERM", "SIGHUP"].flatMap((handledSignal) => [
+        `process.on('${handledSignal}', () => {`,
+        `  fs.writeFileSync(process.env.SIGNALED_FILE, '${handledSignal}');`,
+        "  setTimeout(() => process.exit(0), 25);",
+        "});",
+      ]);
 
       fs.writeFileSync(
         runnerPath,
         [
           "import fs from 'node:fs';",
-          "process.on('SIGTERM', () => {",
-          "  fs.writeFileSync(process.env.SIGNALED_FILE, 'SIGTERM');",
-          "  setTimeout(() => process.exit(0), 25);",
-          "});",
+          ...handlerLines,
           "fs.writeFileSync(process.env.READY_FILE, process.argv.slice(2).join(' '));",
           "setInterval(() => {}, 1000);",
         ].join("\n"),
@@ -228,11 +231,11 @@ describe("scripts/ui windows spawn behavior", () => {
       try {
         await waitFor(() => fs.existsSync(readyFile), "UI runner readiness");
         expect(fs.readFileSync(readyFile, "utf8")).toBe("install");
-        wrapper.kill("SIGTERM");
+        wrapper.kill(signal);
 
         const exit = await waitForExit(wrapper);
-        expect(exit).toEqual({ code: null, signal: "SIGTERM" });
-        expect(fs.readFileSync(signaledFile, "utf8")).toBe("SIGTERM");
+        expect(exit).toEqual({ code: null, signal });
+        expect(fs.readFileSync(signaledFile, "utf8")).toBe(signal);
       } finally {
         wrapper.kill("SIGKILL");
         fs.rmSync(tempDir, { force: true, recursive: true });

@@ -114,18 +114,21 @@ describe("run-with-env", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
-    "forwards parent termination to the wrapped command",
-    async () => {
+  it.runIf(process.platform !== "win32").each(["SIGTERM", "SIGHUP"] as const)(
+    "forwards parent %s to the wrapped command",
+    async (signal) => {
       const tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-run-with-env-signals-"));
       const readyFile = path.join(tempDir, "ready");
       const signaledFile = path.join(tempDir, "signaled");
-      const childScript = [
-        "const fs = require('node:fs');",
-        "process.on('SIGTERM', () => {",
-        "  fs.writeFileSync(process.env.SIGNALED_FILE, 'SIGTERM');",
+      const handlerLines = ["SIGTERM", "SIGHUP"].flatMap((handledSignal) => [
+        `process.on('${handledSignal}', () => {`,
+        `  fs.writeFileSync(process.env.SIGNALED_FILE, '${handledSignal}');`,
         "  setTimeout(() => process.exit(0), 25);",
         "});",
+      ]);
+      const childScript = [
+        "const fs = require('node:fs');",
+        ...handlerLines,
         "fs.writeFileSync(process.env.READY_FILE, 'ready');",
         "setInterval(() => {}, 1000);",
       ].join("\n");
@@ -146,11 +149,11 @@ describe("run-with-env", () => {
 
       try {
         await waitFor(() => existsSync(readyFile), "wrapped command readiness");
-        wrapper.kill("SIGTERM");
+        wrapper.kill(signal);
 
         const exit = await waitForExit(wrapper);
-        expect(exit).toEqual({ code: null, signal: "SIGTERM" });
-        expect(readFileSync(signaledFile, "utf8")).toBe("SIGTERM");
+        expect(exit).toEqual({ code: null, signal });
+        expect(readFileSync(signaledFile, "utf8")).toBe(signal);
       } finally {
         wrapper.kill("SIGKILL");
         rmSync(tempDir, { force: true, recursive: true });
