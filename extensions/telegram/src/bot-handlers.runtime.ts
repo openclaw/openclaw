@@ -1605,6 +1605,7 @@ export const registerTelegramHandlers = ({
           logVerbose(
             `telegram: approval reaction failed id=${approvalReaction.approvalId} sender=${senderId || "unknown"}: ${String(resolveErr)}`,
           );
+          throw resolveErr;
         }
       }
 

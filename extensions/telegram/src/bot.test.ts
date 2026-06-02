@@ -3647,6 +3647,58 @@ describe("createTelegramBot", () => {
     );
   });
 
+  it("rethrows bound approval reaction resolver failures so Telegram can retry the update", async () => {
+    onSpy.mockClear();
+    enqueueSystemEventSpy.mockClear();
+    resolveExecApprovalSpy.mockClear();
+    resolveExecApprovalSpy.mockRejectedValueOnce(new Error("gateway secret detail"));
+
+    registerTelegramApprovalReactionTarget({
+      accountId: "default",
+      chatId: 1234,
+      messageId: 42,
+      approvalId: "138e9b8c",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    loadConfig.mockReturnValue({
+      channels: {
+        telegram: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          reactionNotifications: "all",
+          execApprovals: {
+            enabled: true,
+            approvers: ["9"],
+            target: "dm",
+          },
+        },
+      },
+    });
+
+    createTelegramBot({ token: "tok" });
+    const handler = getOnHandler("message_reaction") as (
+      ctx: Record<string, unknown>,
+    ) => Promise<void>;
+
+    await expect(
+      handler({
+        update: { update_id: 515 },
+        messageReaction: {
+          chat: { id: 1234, type: "private" },
+          message_id: 42,
+          user: { id: 9, first_name: "Ada", username: "ada_bot" },
+          date: 1736380800,
+          old_reaction: [],
+          new_reaction: [{ type: "emoji", emoji: THUMBS_UP_EMOJI }],
+        },
+      }),
+    ).rejects.toThrow("gateway secret detail");
+
+    expect(resolveExecApprovalSpy).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventSpy).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "blocks reaction when dmPolicy is disabled",
