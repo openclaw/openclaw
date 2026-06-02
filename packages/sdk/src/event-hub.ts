@@ -44,7 +44,10 @@ export class EventHub<T> {
     // still surfaces instead of being swallowed by idempotency. Normalize to
     // an Error so consumers always reject with a throwable cause.
     if (error !== undefined && this.closeError === undefined) {
-      this.closeError = error instanceof Error ? error : new Error(String(error));
+      this.closeError =
+        error instanceof Error
+          ? error
+          : new Error(typeof error === "string" ? error : "EventHub closed with a non-Error cause");
       this.wakeAllWaiters();
     }
     if (this.closed) {

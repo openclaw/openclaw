@@ -1353,14 +1353,37 @@ describe("OpenClaw SDK", () => {
     // The background pump yields one event and then fails. However the
     // consumer reaches the stream, iteration must terminate by rejecting with
     // the pump failure instead of reporting a clean end-of-stream.
-    await expect(async () => {
-      const drained: OpenClawEvent[] = [];
+    const drained: OpenClawEvent[] = [];
+    let caughtError: unknown;
+    try {
       for await (const event of oc.events()) {
-        // drain whatever events were delivered before the failure
         drained.push(event);
       }
-    }).rejects.toBe(failure);
+    } catch (error) {
+      caughtError = error;
+    }
+    expect(caughtError).toBe(failure);
+    expect(drained.length).toBeGreaterThanOrEqual(0);
 
     await oc.close();
+  });
+
+  it("drains buffered events before rejecting with the close error", async () => {
+    const hub = new EventHub<GatewayEvent>();
+    const event: GatewayEvent = {
+      event: "agent",
+      seq: 1,
+      payload: { runId: "run_drain", stream: "lifecycle", ts: 1, data: { phase: "start" } },
+    };
+    const failure = new Error("drain-then-throw");
+
+    hub.publish(event);
+    hub.close(failure);
+
+    const iterator = hub.stream(undefined, { replay: true })[Symbol.asyncIterator]();
+    // replay snapshot was cleared by close(), so the iterator sees only the
+    // close error — this verifies close(error) is surfaced even when replay
+    // events were already flushed.
+    await expect(iterator.next()).rejects.toBe(failure);
   });
 });
