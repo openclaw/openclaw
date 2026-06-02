@@ -96,10 +96,10 @@ export async function mergeDiscordSlashCommandDeployHashes(params: {
   }
   const key = buildDiscordSlashCommandDeployStoreKey(params);
   try {
-    await openSlashCommandDeployStore(params.env).update(key, (current) => {
-      const prior = sanitizeStoredEntry(current)?.hashes ?? {};
-      return { version: 1, hashes: { ...prior, ...snapshot } };
-    });
+    const store = openSlashCommandDeployStore(params.env);
+    const current = await store.lookup(key);
+    const prior = sanitizeStoredEntry(current)?.hashes ?? {};
+    await store.register(key, { version: 1, hashes: { ...prior, ...snapshot } });
   } catch {
     // Fingerprint cache is best-effort; deploy should never fail because persistence did.
   }
