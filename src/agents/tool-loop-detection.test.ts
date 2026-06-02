@@ -1,8 +1,18 @@
 // Tool loop detection tests cover repeated-call hashing, ping-pong detection,
 // unknown-tool thresholds, and circuit-breaker escalation.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
+
+// Recognize a provider-docked send tool by name (only "telegram" here) so the
+// volatility strip applies to it without pulling in the channel-plugin registry; the
+// real detector is covered by embedded-agent-messaging's own tests.
+const isMessagingToolSendActionMock = vi.hoisted(() =>
+  vi.fn((toolName: string): boolean => toolName === "telegram"),
+);
+vi.mock("./embedded-agent-messaging.js", () => ({
+  isMessagingToolSendAction: isMessagingToolSendActionMock,
+}));
 import {
   CRITICAL_THRESHOLD,
   GLOBAL_CIRCUIT_BREAKER_THRESHOLD,
@@ -1007,6 +1017,19 @@ describe("tool-loop-detection", () => {
         params,
         enabledLoopDetectionConfig,
       );
+      expect(loopResult.stuck).toBe(true);
+      if (loopResult.stuck) {
+        expect(loopResult.level).toBe("critical");
+      }
+    });
+
+    it("escalates provider-docked send-tool loops (e.g. telegram) whose result carries fresh ids", () => {
+      const state = createState();
+      const params = { to: "telegram:123", text: "ping" };
+      for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+        recordSend(state, "telegram", params, sendPayload(i), i);
+      }
+      const loopResult = detectToolCallLoop(state, "telegram", params, enabledLoopDetectionConfig);
       expect(loopResult.stuck).toBe(true);
       if (loopResult.stuck) {
         expect(loopResult.level).toBe("critical");

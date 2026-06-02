@@ -12,6 +12,7 @@ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
+import { isMessagingToolSendAction } from "./embedded-agent-messaging.js";
 import { stableStringify } from "./stable-stringify.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
@@ -245,10 +246,15 @@ const SEND_LIKE_MESSAGE_ACTIONS = new Set([
   "sticker",
   "poll",
 ]);
+// Denylist of per-call volatile delivery ids/timestamps stripped before hashing. Must
+// cover the id/timestamp fields a channel's delivery result can carry; a new channel
+// emitting a volatile field name outside this set silently regresses its loop blocking.
 const VOLATILE_SEND_RESULT_KEYS = new Set([
   "messageId",
   "message_id",
   "messageIds",
+  "platformMessageId",
+  "platformMessageIds",
   "fileId",
   "file_id",
   "fileKey",
@@ -299,10 +305,14 @@ function isVolatileSendResult(toolName: string, params: unknown): boolean {
   if (toolName === "sessions_send") {
     return true;
   }
-  if (toolName !== "message" || !isPlainObject(params)) {
-    return false;
+  const args = isPlainObject(params) ? params : {};
+  if (toolName === "message") {
+    return typeof args.action === "string" && SEND_LIKE_MESSAGE_ACTIONS.has(args.action);
   }
-  return typeof params.action === "string" && SEND_LIKE_MESSAGE_ACTIONS.has(params.action);
+  // Provider-docked send tools (telegram/discord/...) return the same volatile-id shape.
+  // SEND_LIKE_MESSAGE_ACTIONS stays broader than the terminal-send set on purpose:
+  // broadcast/reply/sticker/poll carry volatile ids but are not terminal sends.
+  return isMessagingToolSendAction(toolName, args);
 }
 
 // Only the loop detector's own veto must not reset the streak; other blocked results
