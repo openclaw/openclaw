@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
+import { buildDeclaredToolAllowlistContext } from "./tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -208,6 +209,70 @@ describe("tool-policy-pipeline", () => {
 
     expect(warnings).toEqual([
       "tools: tools.allow allowlist contains unknown entries (papreless__*). These entries won't match any tool unless the plugin is enabled.",
+    ]);
+  });
+
+  test("declared context excludes disabled plugin tools", () => {
+    const declared = buildDeclaredToolAllowlistContext({
+      config: { plugins: { entries: { browser: { enabled: false } } } },
+      workspaceDir: process.cwd(),
+    });
+
+    expect(Array.from(declared?.pluginToolNames ?? [])).not.toContain("browser");
+  });
+
+  test("declared context excludes denied plugin tools", () => {
+    const declared = buildDeclaredToolAllowlistContext({
+      config: { plugins: { entries: { browser: { enabled: true } } } },
+      workspaceDir: process.cwd(),
+      toolDenylist: ["browser"],
+    });
+
+    expect(Array.from(declared?.pluginToolNames ?? [])).not.toContain("browser");
+  });
+
+  test("declared context excludes disabled MCP servers", () => {
+    const declared = buildDeclaredToolAllowlistContext({
+      config: {
+        mcp: {
+          servers: {
+            paperless: { command: "paperless-mcp" },
+            disabled: { command: "disabled-mcp", enabled: false },
+          },
+        },
+      },
+      workspaceDir: process.cwd(),
+    });
+
+    expect(Array.from(declared?.mcpServerNames ?? [])).toContain("paperless");
+    expect(Array.from(declared?.mcpServerNames ?? [])).not.toContain("disabled");
+  });
+
+  test("warns when disabled MCP server namespace is allowlisted", () => {
+    const warnings: string[] = [];
+    const declared = buildDeclaredToolAllowlistContext({
+      config: {
+        mcp: { servers: { disabled: { command: "disabled-mcp", enabled: false } } },
+      },
+      workspaceDir: process.cwd(),
+    });
+
+    applyToolPolicyPipeline({
+      tools: [{ name: "exec" }] as any,
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      declaredToolAllowlist: declared,
+      steps: [
+        {
+          policy: { allow: ["disabled__*"] },
+          label: "tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (disabled__*). These entries won't match any tool unless the plugin is enabled.",
     ]);
   });
 
