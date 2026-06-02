@@ -202,6 +202,38 @@ function resolveRuntimeOutboundPluginFromRuntimeRegistries(
   return resolveValueFromRuntimeRegistries(channel, resolveRuntimeOutboundPlugin);
 }
 
+// Delivery gating: only plugins that can actually emit a message qualify for the
+// hot send path, so setup-only/non-send shells are skipped before delivery.
+function channelPluginCanSend(plugin: ChannelPlugin | undefined): boolean {
+  const outbound = plugin?.outbound;
+  // Gateway-delivered channels send through callMessageGateway and carry no
+  // local send adapter, so gateway delivery alone makes them deliverable.
+  if (outbound?.deliveryMode === "gateway") {
+    return true;
+  }
+  const messageSend = plugin?.message?.send;
+  return Boolean(
+    outbound?.sendText ??
+    outbound?.sendMedia ??
+    outbound?.sendPayload ??
+    outbound?.sendPoll ??
+    outbound?.sendFormattedText ??
+    outbound?.sendFormattedMedia ??
+    messageSend?.text ??
+    messageSend?.media ??
+    messageSend?.payload ??
+    messageSend?.poll,
+  );
+}
+
+function resolveSendCapablePluginFromRuntimeRegistries(
+  channel: string,
+): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistries(channel, (plugin) =>
+    channelPluginCanSend(plugin) ? plugin : undefined,
+  );
+}
+
 function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime {
   return {
     id: plugin.id,
@@ -293,6 +325,53 @@ export function resolveOutboundChannelPlugin(params: {
     setupFallback: resolveDirectFromRuntimeRegistries(normalized),
     bundled: resolve(),
   });
+}
+
+/** Resolves a deliverable outbound channel plugin that has send capability. */
+export function resolveOutboundChannelPluginForDelivery(params: {
+  channel: string;
+  cfg?: OpenClawConfig;
+  allowBootstrap?: boolean;
+}): ChannelPlugin | undefined {
+  const normalized = normalizeDeliverableOutboundChannel(params.channel);
+  if (!normalized) {
+    return undefined;
+  }
+
+  const resolveLoaded = () => getLoadedChannelPlugin(normalized);
+  const resolve = () => getChannelPlugin(normalized);
+  const current = resolveLoaded();
+  if (channelPluginCanSend(current)) {
+    return current;
+  }
+  const runtimeCurrent = resolveSendCapablePluginFromRuntimeRegistries(normalized);
+  if (runtimeCurrent) {
+    return runtimeCurrent;
+  }
+
+  const bundledCurrent = resolve();
+  if (channelPluginCanSend(bundledCurrent)) {
+    return bundledCurrent;
+  }
+
+  if (params.allowBootstrap !== true) {
+    return undefined;
+  }
+
+  maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+  const bootstrappedLoaded = resolveLoaded();
+  if (channelPluginCanSend(bootstrappedLoaded)) {
+    return bootstrappedLoaded;
+  }
+  const bootstrappedRuntime = resolveSendCapablePluginFromRuntimeRegistries(normalized);
+  if (bootstrappedRuntime) {
+    return bootstrappedRuntime;
+  }
+  const bootstrappedBundled = resolve();
+  if (channelPluginCanSend(bootstrappedBundled)) {
+    return bootstrappedBundled;
+  }
+  return undefined;
 }
 
 /** Resolves the message adapter for a deliverable outbound channel. */

@@ -7,7 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
-import { resolveOutboundChannelPlugin } from "./channel-resolution.js";
+import { resolveOutboundChannelPluginForDelivery } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
@@ -179,7 +179,7 @@ async function resolveRequiredChannel(params: {
 }
 
 function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
-  const plugin = resolveOutboundChannelPlugin({ channel, cfg });
+  const plugin = resolveOutboundChannelPluginForDelivery({ channel, cfg });
   if (!plugin) {
     throw new Error(`Unknown channel: ${channel}`);
   }
