@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { collectDurableServiceEnvVarSources } from "../config/state-dir-dotenv.js";
@@ -43,7 +44,6 @@ import {
 import { collectPluginConfigAssignments } from "../secrets/runtime-config-collectors-plugins.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
