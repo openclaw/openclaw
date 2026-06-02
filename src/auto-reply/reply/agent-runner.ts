@@ -1685,6 +1685,9 @@ export async function runReplyAgent(params: {
           `Memory flush exhausted. Rotating bloated session ${sessionKey} -> ${nextSessionId}.`,
         cleanupTranscripts: true,
       });
+      if (activeSessionEntry?.sessionId) {
+        replyOperation.updateSessionId(activeSessionEntry.sessionId);
+      }
     }
 
     runFollowupTurn = createFollowupRunner({
