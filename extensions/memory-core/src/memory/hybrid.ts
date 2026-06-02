@@ -1,5 +1,4 @@
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
 import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
@@ -54,8 +53,6 @@ export async function mergeHybridResults(params: {
   vectorWeight: number;
   textWeight: number;
   workspaceDir?: string;
-  /** MMR configuration for diversity-aware re-ranking */
-  mmr?: Partial<MMRConfig>;
   /** Temporal decay configuration for recency-aware scoring */
   temporalDecay?: Partial<TemporalDecayConfig>;
   /** Test hook for deterministic time-dependent behavior */
@@ -134,8 +131,8 @@ export async function mergeHybridResults(params: {
     };
   });
 
-  // Keep component scores as raw retrieval diagnostics; temporal decay and MMR
-  // only adjust or reorder the combined ranking score.
+  // Keep component scores as raw retrieval diagnostics; temporal decay adjusts
+  // the combined score before sorting. MMR is applied by the manager call site.
   const temporalDecayConfig = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };
   const decayed = await applyTemporalDecayToHybridResults({
     results: merged,
@@ -143,13 +140,5 @@ export async function mergeHybridResults(params: {
     workspaceDir: params.workspaceDir,
     nowMs: params.nowMs,
   });
-  const sorted = decayed.toSorted((a, b) => b.score - a.score);
-
-  // Apply MMR re-ranking if enabled
-  const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
-  if (mmrConfig.enabled) {
-    return applyMMRToHybridResults(sorted, mmrConfig);
-  }
-
-  return sorted;
+  return decayed.toSorted((a, b) => b.score - a.score);
 }

@@ -60,6 +60,7 @@ import {
   runMemorySyncWithReadonlyRecovery,
   type MemoryReadonlyRecoveryState,
 } from "./manager-sync-control.js";
+import { applyMMRToHybridResults } from "./mmr.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 const SNIPPET_MAX_CHARS = 700;
 const VECTOR_TABLE = "chunks_vec";
@@ -655,10 +656,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       keyword: keywordResults,
       vectorWeight: hybrid.vectorWeight,
       textWeight: hybrid.textWeight,
-      mmr: hybrid.mmr,
       temporalDecay: hybrid.temporalDecay,
     });
-    const strict = merged.filter((entry) => entry.score >= minScore);
+    const ranked = applyMMRToHybridResults(merged, hybrid.mmr);
+    const strict = ranked.filter((entry) => entry.score >= minScore);
     if (strict.length > 0 || keywordResults.length === 0) {
       return strict.slice(0, maxResults);
     }
@@ -673,7 +674,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ),
     );
     return this.selectScoredResults(
-      merged.filter((entry) =>
+      ranked.filter((entry) =>
         keywordKeys.has(`${entry.source}:${entry.path}:${entry.startLine}:${entry.endLine}`),
       ),
       maxResults,
@@ -775,7 +776,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
     vectorWeight: number;
     textWeight: number;
-    mmr?: { enabled: boolean; lambda: number };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
   }): Promise<MemorySearchResult[]> {
     return mergeHybridResults({
@@ -799,7 +799,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
-      mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));

@@ -67,6 +67,40 @@ describe("memory hybrid helpers", () => {
     expect(b?.textScore).toBeCloseTo(1);
   });
 
+  it("returns score-sorted order without applying MMR (MMR moved to manager)", async () => {
+    const vector = [
+      {
+        id: "1",
+        path: "a.md",
+        startLine: 1,
+        endLine: 2,
+        source: "memory",
+        snippet: "dup one",
+        vectorScore: 0.9,
+      },
+      {
+        id: "2",
+        path: "b.md",
+        startLine: 1,
+        endLine: 2,
+        source: "memory",
+        snippet: "dup one too",
+        vectorScore: 0.85,
+      },
+      {
+        id: "3",
+        path: "c.md",
+        startLine: 1,
+        endLine: 2,
+        source: "memory",
+        snippet: "different",
+        vectorScore: 0.4,
+      },
+    ];
+    const out = await mergeHybridResults({ vector, keyword: [], vectorWeight: 1, textWeight: 0 });
+    expect(out.map((r) => r.path)).toEqual(["a.md", "b.md", "c.md"]);
+  });
+
   it("mergeHybridResults prefers keyword snippet when ids overlap", async () => {
     const merged = await mergeHybridResults({
       vectorWeight: 0.5,
