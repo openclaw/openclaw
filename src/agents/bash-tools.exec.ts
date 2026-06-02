@@ -100,7 +100,14 @@ type ExecToolArgs = Record<string, unknown> & {
   node?: string;
 };
 const RESOLVE_EXEC_ENV_PREPARED = Symbol("openclaw.resolveExecEnvPrepared");
-type PreparedExecToolArgs = ExecToolArgs & { [RESOLVE_EXEC_ENV_PREPARED]?: true };
+type ResolvedExecEnvPreparedState = {
+  host?: ExecHost;
+  pluginEnv?: Record<string, string>;
+  previousEnv?: Record<string, string | undefined>;
+};
+type PreparedExecToolArgs = ExecToolArgs & {
+  [RESOLVE_EXEC_ENV_PREPARED]?: ResolvedExecEnvPreparedState;
+};
 
 const XML_ARG_VALUE_EXEC_PARAM_KEYS = [
   "command",
@@ -132,17 +139,55 @@ function filterPluginExecEnv(rawEnv: Record<string, string>): Record<string, str
   return Object.keys(env).length > 0 ? env : undefined;
 }
 
-function markResolveExecEnvPrepared<T extends ExecToolArgs>(params: T): T {
+function markResolveExecEnvPrepared<T extends ExecToolArgs>(
+  params: T,
+  state: ResolvedExecEnvPreparedState = {},
+): T {
   Object.defineProperty(params, RESOLVE_EXEC_ENV_PREPARED, {
-    value: true,
+    value: state,
     enumerable: true,
     configurable: true,
   });
   return params;
 }
 
+function getResolvedExecEnvPreparedState(
+  params: ExecToolArgs,
+): ResolvedExecEnvPreparedState | undefined {
+  return (params as PreparedExecToolArgs)[RESOLVE_EXEC_ENV_PREPARED];
+}
+
 function isResolveExecEnvPrepared(params: ExecToolArgs): boolean {
-  return (params as PreparedExecToolArgs)[RESOLVE_EXEC_ENV_PREPARED] === true;
+  return Boolean(getResolvedExecEnvPreparedState(params));
+}
+
+function removeResolvedPluginEnv(
+  params: ExecToolArgs,
+  state: ResolvedExecEnvPreparedState,
+): ExecToolArgs {
+  if (!params.env || !state.pluginEnv) {
+    const next = { ...params };
+    delete (next as PreparedExecToolArgs)[RESOLVE_EXEC_ENV_PREPARED];
+    return next;
+  }
+  const env = { ...params.env };
+  for (const [key, value] of Object.entries(state.pluginEnv)) {
+    if (env[key] !== value) {
+      continue;
+    }
+    const previous = state.previousEnv?.[key];
+    if (typeof previous === "string") {
+      env[key] = previous;
+    } else {
+      delete env[key];
+    }
+  }
+  const next = {
+    ...params,
+    ...(Object.keys(env).length > 0 ? { env } : { env: undefined }),
+  };
+  delete (next as PreparedExecToolArgs)[RESOLVE_EXEC_ENV_PREPARED];
+  return next;
 }
 
 function buildExecForegroundResult(params: {
@@ -1418,8 +1463,12 @@ export function createExecTool(
       },
     );
     const pluginEnv = filterPluginExecEnv(rawPluginEnv);
+    const previousEnv = pluginEnv
+      ? Object.fromEntries(Object.keys(pluginEnv).map((key) => [key, params.env?.[key]]))
+      : undefined;
     return markResolveExecEnvPrepared(
       pluginEnv ? { ...params, env: { ...params.env, ...pluginEnv } } : params,
+      { host, ...(pluginEnv ? { pluginEnv, previousEnv } : {}) },
     );
   };
   const autoReviewer =
@@ -1443,9 +1492,17 @@ export function createExecTool(
         hookContext: context.hookContext as HookContext | undefined,
       }),
     finalizeBeforeToolCallParams: (params, preparedParams) =>
-      isResolveExecEnvPrepared(preparedParams as ExecToolArgs)
-        ? markResolveExecEnvPrepared(params as ExecToolArgs)
-        : params,
+      (() => {
+        const state = getResolvedExecEnvPreparedState(preparedParams as ExecToolArgs);
+        if (!state) {
+          return params;
+        }
+        const execParams = params as ExecToolArgs;
+        if (state.host && execParams.command && resolveHostForParams(execParams) !== state.host) {
+          return removeResolvedPluginEnv(execParams, state);
+        }
+        return markResolveExecEnvPrepared(execParams, state);
+      })(),
     execute: async (_toolCallId, args, signal, onUpdate) => {
       const params = isResolveExecEnvPrepared(args as ExecToolArgs)
         ? stripMalformedXmlArgValueSuffixFromKeys(

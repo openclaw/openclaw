@@ -183,6 +183,10 @@ function createLazyExecTool(defaults?: ExecToolDefaults): AnyAgentTool {
       });
     },
     parameters: execSchema,
+    prepareBeforeToolCallParams: async (...args) =>
+      (await loadTool()).prepareBeforeToolCallParams?.(...args) ?? args[0],
+    finalizeBeforeToolCallParams: (params, preparedParams) =>
+      loadedTool?.finalizeBeforeToolCallParams?.(params, preparedParams) ?? params,
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
       (await loadTool()).execute(...args),
   } as AnyAgentTool;
