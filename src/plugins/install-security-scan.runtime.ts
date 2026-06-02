@@ -12,6 +12,7 @@ import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import {
   runInstallPolicy,
+  type InstallPolicyFinding,
   type InstallPolicyOrigin,
   type InstallPolicyRequestKind,
   type InstallPolicySource,
@@ -37,6 +38,13 @@ type InstallScanLogger = {
 const FULL_GIT_COMMIT_PATTERN = /^[0-9a-f]{40}$/i;
 
 type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install">;
+
+function formatInstallPolicyWarning(finding: InstallPolicyFinding): string {
+  const location = finding.file
+    ? ` (${finding.file}${finding.line ? `:${finding.line}` : ""})`
+    : "";
+  return `Install policy: ${finding.message}${location}`;
+}
 
 type InstallScanFinding = {
   ruleId: string;
@@ -1214,9 +1222,7 @@ async function runOperatorInstallPolicy(params: {
   if (!result?.blocked) {
     for (const finding of result?.findings ?? []) {
       if (finding.severity === "critical" || finding.severity === "warn") {
-        params.logger.warn?.(
-          `Install policy: ${finding.message} (${finding.file}:${finding.line})`,
-        );
+        params.logger.warn?.(formatInstallPolicyWarning(finding));
       }
     }
     return undefined;

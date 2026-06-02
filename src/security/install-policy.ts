@@ -69,9 +69,9 @@ export type InstallPolicySource = {
 export type InstallPolicyFinding = {
   ruleId: string;
   severity: "info" | "warn" | "critical";
-  file: string;
-  line: number;
   message: string;
+  file?: string;
+  line?: number;
   evidence?: string;
 };
 
@@ -636,14 +636,13 @@ function normalizeFinding(value: unknown): InstallPolicyFinding | null {
   const ruleId = typeof record.ruleId === "string" ? record.ruleId.trim() : "";
   const severity = record.severity;
   const file = typeof record.file === "string" ? record.file.trim() : "";
-  const line =
+  const lineNumber =
     typeof record.line === "number" && Number.isFinite(record.line)
       ? Math.max(1, Math.floor(record.line))
-      : 1;
+      : undefined;
   const message = typeof record.message === "string" ? record.message.trim() : "";
   if (
     !ruleId ||
-    !file ||
     !message ||
     (severity !== "info" && severity !== "warn" && severity !== "critical")
   ) {
@@ -653,9 +652,9 @@ function normalizeFinding(value: unknown): InstallPolicyFinding | null {
   return {
     ruleId: truncateText(ruleId, MAX_FINDING_TEXT_CHARS),
     severity,
-    file: truncateText(file, MAX_FINDING_TEXT_CHARS),
-    line,
     message: truncateText(message, MAX_FINDING_TEXT_CHARS),
+    ...(file ? { file: truncateText(file, MAX_FINDING_TEXT_CHARS) } : {}),
+    ...(lineNumber ? { line: lineNumber } : {}),
     ...(evidence ? { evidence: truncateText(evidence, MAX_FINDING_TEXT_CHARS) } : {}),
   };
 }

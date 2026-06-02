@@ -137,12 +137,14 @@ function setupNativePluginInstallFixture() {
 }
 
 async function installFromFileWithWarnings(params: {
+  config?: OpenClawConfig;
   extensionsDir: string;
   filePath: string;
   dangerouslyForceUnsafeInstall?: boolean;
 }) {
   const warnings: string[] = [];
   const result = await installPluginFromFile({
+    config: params.config,
     dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
     filePath: params.filePath,
     extensionsDir: params.extensionsDir,
@@ -322,6 +324,40 @@ describe("installPluginFromPath", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain("blocked by install policy: blocked file plugin");
     }
+  });
+
+  it("logs locationless install policy warnings without undefined locations", async () => {
+    const baseDir = suiteTempRootTracker.makeTempDir();
+    const extensionsDir = path.join(baseDir, "extensions");
+    fs.mkdirSync(extensionsDir, { recursive: true });
+
+    const sourcePath = path.join(baseDir, "payload.js");
+    fs.writeFileSync(sourcePath, "console.log('SAFE');\n", "utf-8");
+    const config = {
+      security: {
+        installPolicy: {
+          enabled: true,
+          exec: {
+            source: "exec",
+            command: process.execPath,
+            args: [
+              "-e",
+              'process.stdin.resume();process.stdin.on("end",()=>{process.stdout.write(JSON.stringify({protocolVersion:1,decision:"allow",findings:[{ruleId:"registry-review",severity:"warn",message:"Registry requires review."}]}));});',
+            ],
+            allowInsecurePath: true,
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const { result, warnings } = await installFromFileWithWarnings({
+      config,
+      filePath: sourcePath,
+      extensionsDir,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(warnings).toEqual(["Install policy: Registry requires review."]);
   });
 
   it("allows plain file installs with dangerous code patterns when forced unsafe install is set", async () => {

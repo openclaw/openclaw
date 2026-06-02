@@ -281,6 +281,69 @@ describe("runInstallPolicy", () => {
     expect(warnings.join("\n")).toContain("blocked by install policy");
   });
 
+  it("preserves allow findings without file or line", async () => {
+    const result = await runInstallPolicy({
+      config: configWithPolicy(scriptPath, {
+        POLICY_RESPONSE: JSON.stringify({
+          protocolVersion: 1,
+          decision: "allow",
+          findings: [
+            {
+              ruleId: "registry-review",
+              severity: "warn",
+              message: "Registry requires review.",
+            },
+          ],
+        }),
+      }),
+      request: baseRequest(sourceDir),
+    });
+
+    expect(result).toEqual({
+      findings: [
+        {
+          ruleId: "registry-review",
+          severity: "warn",
+          message: "Registry requires review.",
+        },
+      ],
+    });
+  });
+
+  it("preserves block findings without file or line", async () => {
+    const result = await runInstallPolicy({
+      config: configWithPolicy(scriptPath, {
+        POLICY_RESPONSE: JSON.stringify({
+          protocolVersion: 1,
+          decision: "block",
+          reason: "unapproved registry",
+          findings: [
+            {
+              ruleId: "registry-review",
+              severity: "critical",
+              message: "Registry is not approved.",
+            },
+          ],
+        }),
+      }),
+      request: baseRequest(sourceDir),
+    });
+
+    expect(result).toEqual({
+      blocked: {
+        code: "security_scan_blocked",
+        reason: "blocked by install policy: unapproved registry",
+      },
+      findings: [
+        {
+          ruleId: "registry-review",
+          severity: "critical",
+          message: "Registry is not approved.",
+        },
+      ],
+    });
+  });
+
   it("fails closed on malformed policy output", async () => {
     const warnings: string[] = [];
     const result = await runInstallPolicy({
