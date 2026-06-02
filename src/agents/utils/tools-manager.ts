@@ -162,6 +162,9 @@ async function downloadFile(url: string, dest: string): Promise<void> {
 
     const fileStream = createWriteStream(dest);
     await pipeline(Readable.fromWeb(response.body as NodeReadableStream<Uint8Array>), fileStream);
+  } catch (err) {
+    rmSync(dest, { force: true });
+    throw err;
   } finally {
     await guarded.release();
   }
