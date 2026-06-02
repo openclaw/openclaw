@@ -117,6 +117,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   noOutputPollMs?: number;
   maxRelayLifetimeMs?: number;
   emitStartNotice?: boolean;
+  assistantCommentary?: boolean;
 }): AcpSpawnParentRelayHandle {
   const runId = normalizeOptionalString(params.runId) ?? "";
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey) ?? "";
@@ -209,6 +210,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     });
   };
   const shouldSurfaceUpdates = params.surfaceUpdates !== false;
+  const shouldRelayAssistantCommentary = params.assistantCommentary === true;
   const eventRouting = params.eventRouting ?? {
     mainKey: params.mainKey,
     sessionScope: params.sessionScope,
@@ -398,7 +400,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         ...(assistantPhase ? { phase: assistantPhase } : {}),
       });
 
-      if (assistantPhase === "commentary") {
+      if (assistantPhase === "commentary" && !shouldRelayAssistantCommentary) {
         lastProgressAt = Date.now();
         return;
       }

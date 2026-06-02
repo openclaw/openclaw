@@ -560,6 +560,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "acp.stream.hiddenBoundarySeparator": "ACP Stream Hidden Boundary Separator",
   "acp.stream.maxOutputChars": "ACP Stream Max Output Chars",
   "acp.stream.maxSessionUpdateChars": "ACP Stream Max Session Update Chars",
+  "acp.stream.assistantCommentary": "ACP Stream Assistant Commentary",
   "acp.stream.tagVisibility": "ACP Stream Tag Visibility",
   "acp.runtime.ttlMinutes": "ACP Runtime TTL (minutes)",
   "acp.runtime.installCommand": "ACP Runtime Install Command",

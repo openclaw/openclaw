@@ -21,6 +21,8 @@ export type AcpStreamConfig = {
   maxOutputChars?: number;
   /** Maximum visible characters for projected session/update lines. */
   maxSessionUpdateChars?: number;
+  /** Relay assistant commentary/progress text into ACP parent stream updates. */
+  assistantCommentary?: boolean;
   /**
    * Per-sessionUpdate visibility overrides.
    * Keys not listed here fall back to OpenClaw defaults.
