@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  adminRolloutPollUrl,
   adminRolloutUrl,
   expectedAcknowledgedRolloutOptions,
   hasScopedRolloutOptions,
@@ -90,7 +91,32 @@ describe("scripts/runtime-rollout", () => {
     });
 
     expect(url).toBe(
-      "https://api.rockielab.com/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha&tenant_id=t-demo&canary_count=1&canary_wait_sec=30&wave_delay_sec=45&wave_size=2",
+      "https://api.rockielab.com/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha&tenant_id=t-demo&canary_count=1&canary_wait_sec=30&wave_delay_sec=45&wave_size=2&async=true",
+    );
+  });
+
+  it("opts out of async mode when asyncMode=false is passed", () => {
+    // Back-compat hatch for any caller that wants the legacy
+    // synchronous POST shape (small fleets, one-off curl from a
+    // laptop). The default is async=true since #1061.
+    const url = adminRolloutUrl("https://api.rockielab.com", "ghcr.io/img:sha", {
+      asyncMode: false,
+    });
+    expect(url).toBe(
+      "https://api.rockielab.com/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha",
+    );
+  });
+
+  it("builds the async rollout poll URL with URL-safe encoding", () => {
+    // CI uses this to GET the status of an in-flight rollout job.
+    // The rollout_id is a uuid hex (no special chars) but we
+    // encodeURIComponent defensively in case the upstream format
+    // ever changes.
+    expect(adminRolloutPollUrl("https://api.rockielab.com", "abc123def456")).toBe(
+      "https://api.rockielab.com/api/admin/tenants/rollout/abc123def456",
+    );
+    expect(adminRolloutPollUrl("https://api.rockielab.com", "id with/slash")).toBe(
+      "https://api.rockielab.com/api/admin/tenants/rollout/id%20with%2Fslash",
     );
   });
 

@@ -198,11 +198,93 @@ export function adminRolloutUrl(base, image, options = {}) {
   if (options.waveSize) {
     params.set("wave_size", options.waveSize);
   }
+  if (options.asyncMode !== false) {
+    // Default to async mode (#1061). The admin endpoint's sync path
+    // blocks for canary_wait_sec + wave_delay_sec inside the request,
+    // which exceeds Cloudflare's ~100s proxy window for any fleet of
+    // more than 2 tenants. Async mode returns 202 with a rollout_id
+    // immediately; this script polls until terminal.
+    params.set("async", "true");
+  }
   return `${base}/api/admin/tenants/rollout?${params.toString()}`;
+}
+
+export function adminRolloutPollUrl(base, rolloutId) {
+  return `${base}/api/admin/tenants/rollout/${encodeURIComponent(rolloutId)}`;
 }
 
 function tenantImageUrl(base, tenantId) {
   return `${base}/api/tenants/${encodeURIComponent(tenantId)}/image`;
+}
+
+/**
+ * Poll the async rollout status endpoint until the job is terminal.
+ *
+ * Returns `{code, body, json}` matching the shape of the original
+ * curlPost response so the caller can reuse the same response-handling
+ * branch. On terminal `state === "done"` the `json.result` carries the
+ * same per-tenant outcome the legacy synchronous endpoint returned.
+ *
+ * Cloudflare-safe: each poll request is a short GET, so the proxy
+ * window is never exceeded. The synchronous path it replaces would
+ * 524 for any non-trivial fleet (#1061).
+ */
+async function pollAsyncRollout({
+  base,
+  rolloutId,
+  adminToken,
+  apiPassword,
+  attempts,
+  pollIntervalMs = 5000,
+  maxPolls = 360, // 30 minutes / 5s = 360 polls
+}) {
+  const url = adminRolloutPollUrl(base, rolloutId);
+  for (let i = 0; i < maxPolls; i += 1) {
+    const response = await request("GET", url, {
+      timeoutMs: ROLLOUT_CURL_MAX_TIME * 1000,
+      headers: {
+        "X-Admin-Token": adminToken,
+        Authorization: `Bearer ${apiPassword}`,
+        Accept: "application/json",
+      },
+    });
+    const body = response.body || response.error || "";
+    const json = parseJson(body);
+    await appendAttempt(attempts, {
+      attempt: `poll-${i + 1}`,
+      response_code: response.code,
+      response_body: body,
+      retryable: response.code === "200" && json?.state === "running",
+    });
+    if (response.code === "404") {
+      // Fast-fail: a 404 is non-transient. Either the API restarted
+      // and lost its in-memory registry, or the rollout_id aged out.
+      // No point retrying for 30 minutes — surface immediately.
+      // Phase 5 reviewers A + C, #1061.
+      return { code: response.code, body, json };
+    }
+    if (response.code !== "200") {
+      // Transient poll failure — keep trying until maxPolls.
+      if (i < maxPolls - 1) {
+        await sleep(pollIntervalMs);
+        continue;
+      }
+      return { code: response.code, body, json };
+    }
+    if (json?.state === "done" || json?.state === "errored") {
+      return { code: response.code, body, json };
+    }
+    await sleep(pollIntervalMs);
+  }
+  return {
+    code: "timeout",
+    body: `async rollout did not reach terminal state in ${maxPolls} polls`,
+    json: { state: "running", rollout_id: rolloutId },
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function listTenantIdsFromFly({ flyToken, flyOrgSlug, flyApiBase, timeoutMs }) {
@@ -528,6 +610,48 @@ export async function runRollout() {
     console.log(`admin rollout attempt ${attempt} response code: ${response.code}`);
 
     if (response.code === "200") {
+      // Async mode (#1061): the immediate 200 carries
+      // {state: "running", rollout_id, ...} — poll until terminal,
+      // then drain the final result from the poll response. Skip
+      // option-acknowledgement validation against the running
+      // envelope (the acknowledged options live in the terminal
+      // poll body, same shape as the legacy sync result).
+      if (finalJson?.state === "running" && finalJson?.rollout_id) {
+        const asyncRolloutId = finalJson.rollout_id;
+        const polled = await pollAsyncRollout({
+          base,
+          rolloutId: asyncRolloutId,
+          adminToken,
+          apiPassword,
+          attempts,
+        });
+        finalCode = polled.code;
+        finalBody = polled.body;
+        finalJson = polled.json;
+        responseCodes.push(polled.code);
+        if (polled.code !== "200" || polled.json?.state !== "done") {
+          finalResult = "failed-async-poll";
+          if (polled.json?.error) {
+            errorDetails = {
+              async_rollout_id: asyncRolloutId,
+              async_error: polled.json.error,
+            };
+          } else {
+            // Surface the rollout_id even on transport-level failures
+            // (404 from aged-out registry, poll timeout) so the
+            // operator can grep server logs. Phase 5 reviewer C.
+            errorDetails = { async_rollout_id: asyncRolloutId };
+          }
+          break;
+        }
+        finalJson = polled.json.result || {};
+        // Preserve the async rollout_id in the result so the rollout
+        // summary artifact records it for forensic lookups in the
+        // API logs (Phase 5 reviewer C, #1061). Underscore-prefixed
+        // so it can't collide with a future server-side field.
+        finalJson.async_rollout_id = asyncRolloutId;
+        finalBody = JSON.stringify(finalJson);
+      }
       const acknowledgementMismatches = scopedRollout
         ? validateAcknowledgedRolloutOptions(rolloutOptions, finalJson)
         : [];
