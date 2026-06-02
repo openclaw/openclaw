@@ -6,6 +6,12 @@ import { getCredentialBackupFile, getLegacyCredentialBackupFile } from "./data-p
 
 const createdStateDirs: string[] = [];
 
+function createTempDir(prefix: string): string {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  createdStateDirs.push(dir);
+  return dir;
+}
+
 describe("qqbot credential backup paths", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
@@ -15,8 +21,7 @@ describe("qqbot credential backup paths", () => {
   });
 
   it("scopes credential backups to the active OPENCLAW_STATE_DIR", () => {
-    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-state-"));
-    createdStateDirs.push(stateDir);
+    const stateDir = createTempDir("qqbot-state-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 
     expect(getCredentialBackupFile("default")).toBe(
@@ -28,9 +33,8 @@ describe("qqbot credential backup paths", () => {
   });
 
   it("keeps same account IDs isolated across different state directories", () => {
-    const stateDirA = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-state-a-"));
-    const stateDirB = fs.mkdtempSync(path.join(os.tmpdir(), "qqbot-state-b-"));
-    createdStateDirs.push(stateDirA, stateDirB);
+    const stateDirA = createTempDir("qqbot-state-a-");
+    const stateDirB = createTempDir("qqbot-state-b-");
 
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDirA);
     const gatewayAPath = getCredentialBackupFile("default");
@@ -45,5 +49,26 @@ describe("qqbot credential backup paths", () => {
       path.join(stateDirB, "qqbot", "data", "credential-backup-default.json"),
     );
     expect(gatewayBPath).not.toBe(gatewayAPath);
+  });
+
+  it("uses OPENCLAW_HOME for default credential backup state", () => {
+    const homeDir = createTempDir("qqbot-openclaw-home-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "");
+    vi.stubEnv("OPENCLAW_HOME", homeDir);
+
+    expect(getCredentialBackupFile("default")).toBe(
+      path.join(homeDir, ".openclaw", "qqbot", "data", "credential-backup-default.json"),
+    );
+  });
+
+  it("expands tilde state-dir overrides through the canonical state resolver", () => {
+    const homeDir = createTempDir("qqbot-home-");
+    vi.stubEnv("HOME", homeDir);
+    vi.stubEnv("OPENCLAW_HOME", "");
+    vi.stubEnv("OPENCLAW_STATE_DIR", "~/gateway-a");
+
+    expect(getCredentialBackupFile("default")).toBe(
+      path.join(homeDir, "gateway-a", "qqbot", "data", "credential-backup-default.json"),
+    );
   });
 });

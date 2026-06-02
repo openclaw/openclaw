@@ -11,7 +11,7 @@
  */
 
 import path from "node:path";
-import { getQQBotDataPath, normalizePath } from "./platform.js";
+import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 
 /**
  * Normalise an identifier so it is safe to embed in a filename.
@@ -22,12 +22,7 @@ function safeName(id: string): string {
 }
 
 function getCredentialBackupRoot(): string {
-  const stateDir =
-    process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim();
-  if (stateDir) {
-    return path.join(normalizePath(stateDir), "qqbot", "data");
-  }
-  return getQQBotDataPath("data");
+  return path.join(resolveStateDir(process.env), "qqbot", "data");
 }
 
 // ---- credential backup ----
