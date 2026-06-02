@@ -258,6 +258,12 @@ function resolveEntrypointFromPackageJson(
       }
       const entryPath = path.resolve(packageDir, entryRel);
       if (isFilePath(entryPath)) {
+        if (packageName === "@tobilu/qmd") {
+          const qmdNodeEntrypoint = path.join(packageDir, "dist", "cli", "qmd.js");
+          if (isFilePath(qmdNodeEntrypoint)) {
+            return qmdNodeEntrypoint;
+          }
+        }
         return entryPath;
       }
     } catch {

@@ -103,6 +103,39 @@ describe("resolveCliSpawnInvocation", () => {
     expect(invocation.windowsHide).toBe(true);
   });
 
+  it("unwraps scoped qmd shell bin entries to the direct node cli on Windows", async () => {
+    const binDir = path.join(tempDir, "node_modules", ".bin");
+    const packageDir = path.join(tempDir, "node_modules", "@tobilu", "qmd");
+    const shellBinPath = path.join(packageDir, "bin", "qmd");
+    const scriptPath = path.join(packageDir, "dist", "cli", "qmd.js");
+    await fs.mkdir(path.dirname(shellBinPath), { recursive: true });
+    await fs.mkdir(path.dirname(scriptPath), { recursive: true });
+    await fs.mkdir(binDir, { recursive: true });
+    await fs.writeFile(path.join(binDir, "qmd.cmd"), "@echo off\r\n", "utf8");
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "@tobilu/qmd", version: "2.1.0", bin: { qmd: "bin/qmd" } }),
+      "utf8",
+    );
+    await fs.writeFile(shellBinPath, '#!/bin/sh\nexec node "$DIR/dist/cli/qmd.js" "$@"\n', "utf8");
+    await fs.writeFile(scriptPath, "module.exports = {};\n", "utf8");
+
+    process.env.PATH = `${binDir};${originalPath ?? ""}`;
+    process.env.PATHEXT = ".CMD;.EXE";
+
+    const invocation = resolveCliSpawnInvocation({
+      command: "qmd",
+      args: ["query", "hello"],
+      env: process.env,
+      packageName: "@tobilu/qmd",
+    });
+
+    expect(invocation.command).toBe(process.execPath);
+    expect(invocation.argv).toEqual([scriptPath, "query", "hello"]);
+    expect(invocation.shell).not.toBe(true);
+    expect(invocation.windowsHide).toBe(true);
+  });
+
   it("fails closed when a Windows cmd shim cannot be resolved without shell execution", async () => {
     const binDir = path.join(tempDir, "bad-bin");
     await fs.mkdir(binDir, { recursive: true });
@@ -122,7 +155,7 @@ describe("resolveCliSpawnInvocation", () => {
   });
 
   it("keeps bare commands bare when no Windows wrapper exists on PATH", () => {
-    process.env.PATH = originalPath ?? "";
+    process.env.PATH = tempDir;
     process.env.PATHEXT = ".CMD;.EXE";
 
     const invocation = resolveCliSpawnInvocation({
