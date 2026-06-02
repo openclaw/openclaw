@@ -78,3 +78,40 @@ fun resolveSessionChoices(
 
   return result
 }
+
+/** Builds the compact top-of-chat session switcher without dropping main or the active session. */
+fun resolveCompactSessionChoices(
+  currentSessionKey: String,
+  sessions: List<ChatSessionEntry>,
+  mainSessionKey: String,
+  nowMs: Long = System.currentTimeMillis(),
+  maxOptions: Int = 5,
+): List<ChatSessionEntry> {
+  val allChoices =
+    resolveSessionChoices(
+      currentSessionKey = currentSessionKey,
+      sessions = sessions,
+      mainSessionKey = mainSessionKey,
+      nowMs = nowMs,
+    )
+  if (allChoices.size <= maxOptions) return allChoices
+
+  val mainKey = mainSessionKey.trim().ifEmpty { "main" }
+  val current = currentSessionKey.trim().let { if (it == "main" && mainKey != "main") mainKey else it }
+  val pinnedKeys = listOf(mainKey, current).filter { it.isNotBlank() }
+  val result = mutableListOf<ChatSessionEntry>()
+  val seen = mutableSetOf<String>()
+
+  pinnedKeys.forEach { key ->
+    allChoices.firstOrNull { it.key == key }?.let { entry ->
+      if (seen.add(entry.key)) result.add(entry)
+    }
+  }
+
+  allChoices.forEach { entry ->
+    if (result.size >= maxOptions) return@forEach
+    if (seen.add(entry.key)) result.add(entry)
+  }
+
+  return result
+}
