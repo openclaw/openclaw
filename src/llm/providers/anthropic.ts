@@ -1184,30 +1184,54 @@ function convertMessages(
     }
   }
 
-  // Add cache_control to the last user message to cache conversation history
+  // Prefer the latest real user content over trailing tool-result carriers so
+  // tool loops do not move the conversation cache marker on every request.
   if (cacheControl && params.length > 0) {
-    const lastMessage = params[params.length - 1];
-    if (lastMessage.role === "user") {
-      if (Array.isArray(lastMessage.content)) {
-        const lastBlock = lastMessage.content[lastMessage.content.length - 1];
-        if (
-          lastBlock &&
-          (lastBlock.type === "text" ||
-            lastBlock.type === "image" ||
-            lastBlock.type === "tool_result")
-        ) {
-          (lastBlock as typeof lastBlock & { cache_control?: typeof cacheControl }).cache_control =
-            cacheControl;
+    let fallbackToolResult: ContentBlockParam | undefined;
+    let applied = false;
+
+    for (let i = params.length - 1; i >= 0 && !applied; i--) {
+      const message = params[i];
+      if (message.role !== "user") {
+        continue;
+      }
+
+      if (Array.isArray(message.content)) {
+        for (let j = message.content.length - 1; j >= 0; j--) {
+          const block = message.content[j];
+          if (block.type === "text" || block.type === "image") {
+            (block as typeof block & { cache_control?: typeof cacheControl }).cache_control =
+              cacheControl;
+            fallbackToolResult = undefined;
+            applied = true;
+            break;
+          }
+          if (block.type === "tool_result" && fallbackToolResult === undefined) {
+            fallbackToolResult = block;
+          }
         }
-      } else if (typeof lastMessage.content === "string") {
-        lastMessage.content = [
+        continue;
+      }
+
+      if (typeof message.content === "string") {
+        message.content = [
           {
             type: "text",
-            text: lastMessage.content,
+            text: message.content,
             cache_control: cacheControl,
           },
         ] as ContentBlockParam[];
+        fallbackToolResult = undefined;
+        break;
       }
+    }
+
+    if (fallbackToolResult) {
+      (
+        fallbackToolResult as typeof fallbackToolResult & {
+          cache_control?: typeof cacheControl;
+        }
+      ).cache_control = cacheControl;
     }
   }
 

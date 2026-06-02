@@ -141,41 +141,54 @@ function applyAnthropicCacheControlToMessages(
     return;
   }
 
-  const lastMessage = messages[messages.length - 1];
-  if (!lastMessage || typeof lastMessage !== "object") {
-    return;
-  }
+  let fallbackToolResult: Record<string, unknown> | undefined;
 
-  const record = lastMessage as Record<string, unknown>;
-  if (record.role !== "user") {
-    return;
-  }
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (!message || typeof message !== "object") {
+      continue;
+    }
 
-  const content = record.content;
-  if (Array.isArray(content)) {
-    const lastBlock = content[content.length - 1];
-    if (!lastBlock || typeof lastBlock !== "object") {
+    const record = message as Record<string, unknown>;
+    if (record.role !== "user") {
+      continue;
+    }
+
+    const content = record.content;
+    if (typeof content === "string") {
+      record.content = [
+        {
+          type: "text",
+          text: content,
+          cache_control: cacheControl,
+        },
+      ];
       return;
     }
-    const lastBlockRecord = lastBlock as Record<string, unknown>;
-    if (
-      lastBlockRecord.type === "text" ||
-      lastBlockRecord.type === "image" ||
-      lastBlockRecord.type === "tool_result"
-    ) {
-      lastBlockRecord.cache_control = cacheControl;
+
+    if (!Array.isArray(content)) {
+      continue;
     }
-    return;
+
+    for (let j = content.length - 1; j >= 0; j--) {
+      const block = content[j];
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+
+      const blockRecord = block as Record<string, unknown>;
+      if (blockRecord.type === "text" || blockRecord.type === "image") {
+        blockRecord.cache_control = cacheControl;
+        return;
+      }
+      if (blockRecord.type === "tool_result" && fallbackToolResult === undefined) {
+        fallbackToolResult = blockRecord;
+      }
+    }
   }
 
-  if (typeof content === "string") {
-    record.content = [
-      {
-        type: "text",
-        text: content,
-        cache_control: cacheControl,
-      },
-    ];
+  if (fallbackToolResult) {
+    fallbackToolResult.cache_control = cacheControl;
   }
 }
 
