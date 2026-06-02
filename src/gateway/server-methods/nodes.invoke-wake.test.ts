@@ -8,6 +8,7 @@ import {
   nodeHandlers,
   waitForNodeReconnect,
 } from "./nodes.js";
+import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
 
 type MockNodeCommandPolicyParams = {
   command: string;
@@ -93,27 +94,6 @@ type TestNodeSession = {
   commands: string[];
   platform?: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} must be an object`).toBe(true);
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(
-  value: unknown,
-  label: string,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
-  }
-  return record;
-}
 
 function requireString(value: unknown, label: string): string {
   expect(typeof value, `${label} must be a string`).toBe("string");

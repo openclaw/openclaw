@@ -8,6 +8,7 @@ import {
   sendTalkTranscriptionRelayAudio,
   stopTalkTranscriptionRelaySession,
 } from "./talk-transcription-relay.js";
+import { expectRecordFields, isRecord, requireRecord } from "./test-helpers.assertions.js";
 
 type BroadcastEvent = { event: string; payload: unknown; connIds: string[] };
 
@@ -61,27 +62,6 @@ async function createStartedRelaySession(
   });
   await Promise.resolve();
   return { provider, events, session };
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(isRecord(value), `${label} must be an object`).toBe(true);
-  return value as Record<string, unknown>;
-}
-
-function expectRecordFields(
-  value: unknown,
-  label: string,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  const record = requireRecord(value, label);
-  for (const [key, expectedValue] of Object.entries(expected)) {
-    expect(record[key], `${label}.${key}`).toEqual(expectedValue);
-  }
-  return record;
 }
 
 function findPayloadByType(events: BroadcastEvent[], type: string): Record<string, unknown> {
