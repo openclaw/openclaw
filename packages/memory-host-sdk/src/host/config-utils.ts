@@ -75,6 +75,18 @@ export type MemoryQmdConfig = {
   searchMode?: MemoryQmdSearchMode;
   searchTool?: string;
   includeDefaultMemory?: boolean;
+  channelScopes?: {
+    enabled?: boolean;
+    includeGlobal?: boolean;
+    includeAgentPrivate?: boolean;
+    requireOverrideReason?: boolean;
+    collections?: {
+      global?: string;
+      agentPrivatePrefix?: string;
+      slackChannelPrefix?: string;
+      slackDmPrefix?: string;
+    };
+  };
   paths?: MemoryQmdIndexPath[];
   sessions?: MemoryQmdSessionConfig;
   update?: MemoryQmdUpdateConfig;

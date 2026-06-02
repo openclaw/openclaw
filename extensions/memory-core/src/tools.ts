@@ -18,6 +18,10 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
+import {
+  resolveChannelMemoryQmdCollections,
+  type MemoryScopeOverride,
+} from "./channel-memory-scope.js";
 import { filterMemorySearchHitsBySessionVisibility } from "./session-search-visibility.js";
 import { recordShortTermRecalls } from "./short-term-promotion.js";
 import {
@@ -41,6 +45,10 @@ import {
 type MemorySearchToolResult =
   | (MemorySearchResult & { corpus: MemorySource })
   | MemoryCorpusSearchResult;
+
+type QmdCollectionScopeOptions =
+  | { qmdCollectionNames?: string[]; error?: undefined }
+  | { error: string; qmdCollectionNames?: undefined };
 
 function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
   return results.toSorted((left, right) => {
@@ -264,6 +272,7 @@ export function createMemorySearchTool(options: {
           | "all"
           | "sessions"
           | undefined;
+        const scopeOverride = readScopeOverrideParam(rawParams.scopeOverride);
         const { resolveMemoryBackendConfig } = await loadMemoryToolRuntime();
         const shouldQueryMemory = requestedCorpus !== "wiki";
         const shouldQuerySupplements = requestedCorpus === "wiki" || requestedCorpus === "all";
@@ -316,11 +325,25 @@ export function createMemorySearchTool(options: {
                 : requestedCorpus === "memory"
                   ? (["memory"] as MemorySource[])
                   : undefined;
+            const qmdCollectionScopeOptions = resolveQmdCollectionScopeOptions({
+              cfg,
+              agentId,
+              sessionKey: options.agentSessionKey,
+              scopeOverride,
+            });
+            if (qmdCollectionScopeOptions.error) {
+              return jsonResult({
+                results: [],
+                denied: true,
+                error: qmdCollectionScopeOptions.error,
+              });
+            }
             const searchOptions = {
               maxResults,
               minScore,
               sessionKey: options.agentSessionKey,
               qmdSearchModeOverride,
+              ...qmdCollectionScopeOptions,
               onDebug: (debug: MemorySearchRuntimeDebug) => {
                 runtimeDebug.push(debug);
               },
@@ -424,6 +447,40 @@ export function createMemorySearchTool(options: {
         }
       },
   });
+}
+
+function readScopeOverrideParam(raw: unknown): MemoryScopeOverride | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const record = raw as { includeScopes?: unknown; reason?: unknown };
+  return {
+    includeScopes: Array.isArray(record.includeScopes)
+      ? record.includeScopes.filter((value): value is string => typeof value === "string")
+      : undefined,
+    reason: typeof record.reason === "string" ? record.reason : undefined,
+  };
+}
+
+function resolveQmdCollectionScopeOptions(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey?: string;
+  scopeOverride?: MemoryScopeOverride;
+}): QmdCollectionScopeOptions {
+  const scoped = resolveChannelMemoryQmdCollections({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    override: params.scopeOverride,
+  });
+  if (!scoped.enabled) {
+    return {};
+  }
+  if (scoped.error) {
+    return { error: scoped.error };
+  }
+  return scoped.collectionNames ? { qmdCollectionNames: scoped.collectionNames } : {};
 }
 
 export function createMemoryGetTool(options: {

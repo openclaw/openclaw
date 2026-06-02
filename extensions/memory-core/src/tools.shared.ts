@@ -33,6 +33,12 @@ export const MemorySearchSchema = Type.Object({
   maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
   minScore: optionalFiniteNumberSchema(),
   corpus: Type.Optional(stringEnum(["memory", "wiki", "all", "sessions"])),
+  scopeOverride: Type.Optional(
+    Type.Object({
+      includeScopes: Type.Optional(Type.Array(Type.String())),
+      reason: Type.Optional(Type.String()),
+    }),
+  ),
 });
 
 export const MemoryGetSchema = Type.Object({

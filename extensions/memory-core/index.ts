@@ -65,6 +65,14 @@ const MemorySearchSchema = {
     maxResults: { type: "integer", minimum: 1 },
     minScore: { type: "number" },
     corpus: { type: "string", enum: ["memory", "wiki", "all", "sessions"] },
+    scopeOverride: {
+      type: "object",
+      properties: {
+        includeScopes: { type: "array", items: { type: "string" } },
+        reason: { type: "string" },
+      },
+      additionalProperties: false,
+    },
   },
   required: ["query"],
   additionalProperties: false,

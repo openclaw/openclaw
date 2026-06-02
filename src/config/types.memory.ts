@@ -17,11 +17,33 @@ export type MemoryQmdConfig = {
   searchMode?: MemoryQmdSearchMode;
   searchTool?: string;
   includeDefaultMemory?: boolean;
+  channelScopes?: MemoryQmdChannelScopesConfig;
   paths?: MemoryQmdIndexPath[];
   sessions?: MemoryQmdSessionConfig;
   update?: MemoryQmdUpdateConfig;
   limits?: MemoryQmdLimitsConfig;
   scope?: SessionSendPolicyConfig;
+};
+
+export type MemoryQmdChannelScopesConfig = {
+  /** Experimental: restrict QMD memory_search collections from the current agent/channel/DM route. */
+  enabled?: boolean;
+  /** Include the configured global memory collection in route-scoped searches (default: true). */
+  includeGlobal?: boolean;
+  /** Include the current agent's private memory collection in route-scoped searches (default: true). */
+  includeAgentPrivate?: boolean;
+  /** Require a non-empty reason when memory_search asks for cross-scope collections (default: true). */
+  requireOverrideReason?: boolean;
+  collections?: {
+    /** Collection name for global memory (default: memory-global-main). */
+    global?: string;
+    /** Prefix for agent-private collections (default: memory-private-). */
+    agentPrivatePrefix?: string;
+    /** Prefix for Slack channel collections (default: memory-slack-). */
+    slackChannelPrefix?: string;
+    /** Prefix for Slack DM collections (default: memory-dm-). */
+    slackDmPrefix?: string;
+  };
 };
 
 export type MemoryQmdMcporterConfig = {

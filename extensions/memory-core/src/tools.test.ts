@@ -392,3 +392,97 @@ describe("memory_search corpus labels", () => {
     ]);
   });
 });
+
+describe("memory_search channel-scoped QMD collections", () => {
+  beforeEach(() => {
+    resetMemoryToolMockState({ searchImpl: async () => [] });
+  });
+
+  it("passes route-derived QMD collection names into memory search", async () => {
+    let capturedCollections: string[] | undefined;
+    setMemorySearchImpl(async (opts) => {
+      capturedCollections = opts?.qmdCollectionNames;
+      return [];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: channelScopedQmdConfig(),
+      agentSessionKey: "agent:main:slack:channel:C0AHZFCAS1K",
+    });
+
+    await tool.execute("scoped", { query: "project decision" });
+
+    expect(capturedCollections).toEqual([
+      "memory-global-main",
+      "memory-private-main",
+      "memory-slack-c0ahzfcas1k",
+    ]);
+  });
+
+  it("passes manual override QMD scopes when a reason is provided", async () => {
+    let capturedCollections: string[] | undefined;
+    setMemorySearchImpl(async (opts) => {
+      capturedCollections = opts?.qmdCollectionNames;
+      return [];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: channelScopedQmdConfig(),
+      agentSessionKey: "agent:main:slack:channel:C1",
+    });
+
+    await tool.execute("override", {
+      query: "linked context",
+      scopeOverride: {
+        includeScopes: ["slack_channel:C2"],
+        reason: "answering a linked thread",
+      },
+    });
+
+    expect(capturedCollections).toEqual([
+      "memory-global-main",
+      "memory-private-main",
+      "memory-slack-c1",
+      "memory-slack-c2",
+    ]);
+  });
+
+  it("denies manual override scopes without a reason before searching", async () => {
+    setMemorySearchImpl(async () => {
+      throw new Error("search should not run");
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: channelScopedQmdConfig(),
+      agentSessionKey: "agent:main:slack:channel:C1",
+    });
+
+    const result = await tool.execute("override-denied", {
+      query: "linked context",
+      scopeOverride: {
+        includeScopes: ["slack_channel:C2"],
+      },
+    });
+
+    expect(result.details).toEqual({
+      results: [],
+      denied: true,
+      error: "memory scope override requires a reason",
+    });
+    expect(getMemorySearchManagerMockCalls()).toBe(1);
+  });
+});
+
+function channelScopedQmdConfig() {
+  return asOpenClawConfig({
+    agents: { list: [{ id: "main", default: true }] },
+    memory: {
+      backend: "qmd",
+      qmd: {
+        channelScopes: {
+          enabled: true,
+        },
+      },
+    },
+  });
+}

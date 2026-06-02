@@ -6,6 +6,7 @@ type SearchImpl = (opts?: {
   minScore?: number;
   sessionKey?: string;
   qmdSearchModeOverride?: "query" | "search" | "vsearch";
+  qmdCollectionNames?: string[];
   onDebug?: (debug: MemorySearchRuntimeDebug) => void;
 }) => Promise<unknown[]>;
 export type MemoryReadParams = { relPath: string; from?: number; lines?: number };

@@ -90,6 +90,7 @@ export interface MemorySearchManager {
       minScore?: number;
       sessionKey?: string;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      qmdCollectionNames?: string[];
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
     },

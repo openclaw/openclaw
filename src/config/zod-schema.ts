@@ -173,6 +173,24 @@ const MemoryQmdMcporterSchema = z
   })
   .strict();
 
+const MemoryQmdChannelScopesSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    includeGlobal: z.boolean().optional(),
+    includeAgentPrivate: z.boolean().optional(),
+    requireOverrideReason: z.boolean().optional(),
+    collections: z
+      .object({
+        global: z.string().optional(),
+        agentPrivatePrefix: z.string().optional(),
+        slackChannelPrefix: z.string().optional(),
+        slackDmPrefix: z.string().optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict();
+
 const LoggingLevelSchema = z.union([
   z.literal("silent"),
   z.literal("fatal"),
@@ -190,6 +208,7 @@ const MemoryQmdSchema = z
     searchMode: z.union([z.literal("query"), z.literal("search"), z.literal("vsearch")]).optional(),
     searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
+    channelScopes: MemoryQmdChannelScopesSchema.optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
     sessions: MemoryQmdSessionSchema.optional(),
     update: MemoryQmdUpdateSchema.optional(),

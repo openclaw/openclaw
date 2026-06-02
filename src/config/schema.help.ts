@@ -1272,6 +1272,26 @@ export const FIELD_HELP: Record<string, string> = {
     "Overrides the exact mcporter tool name used for QMD searches while preserving `searchMode` as the semantic retrieval mode. Use this only when your QMD MCP server exposes a custom tool such as `hybrid_search` and keep it unset for the normal built-in tool mapping.",
   "memory.qmd.includeDefaultMemory":
     "Automatically indexes default memory files (MEMORY.md and memory/**/*.md) into QMD collections. Keep enabled unless you want indexing controlled only through explicit custom paths.",
+  "memory.qmd.channelScopes":
+    "Experimental route-scoped QMD recall. When enabled, memory_search derives allowed QMD collections from the current agent plus Slack channel/DM route before querying.",
+  "memory.qmd.channelScopes.enabled":
+    "Enables experimental channel/DM-scoped QMD collection filtering for memory_search. Keep disabled until matching QMD collections are registered.",
+  "memory.qmd.channelScopes.includeGlobal":
+    "Includes the configured global QMD memory collection in every route-scoped recall (default: true). Disable for strictly per-channel experiments.",
+  "memory.qmd.channelScopes.includeAgentPrivate":
+    "Includes the current agent's private QMD memory collection in route-scoped recall (default: true). Other agents' private collections remain denied.",
+  "memory.qmd.channelScopes.requireOverrideReason":
+    "Requires memory_search scopeOverride requests to include a non-empty reason before extra collections are considered (default: true).",
+  "memory.qmd.channelScopes.collections":
+    "Collection names and prefixes used to map memory scopes into QMD collection filters.",
+  "memory.qmd.channelScopes.collections.global":
+    "QMD collection name for shared global memory (default: memory-global-main).",
+  "memory.qmd.channelScopes.collections.agentPrivatePrefix":
+    "QMD collection prefix for per-agent private memory (default: memory-private-).",
+  "memory.qmd.channelScopes.collections.slackChannelPrefix":
+    "QMD collection prefix for Slack channel memory (default: memory-slack-).",
+  "memory.qmd.channelScopes.collections.slackDmPrefix":
+    "QMD collection prefix for Slack DM memory (default: memory-dm-).",
   "memory.qmd.paths":
     "Adds custom directories or files to include in QMD indexing, each with an optional name and glob pattern. Use this for project-specific knowledge locations that are outside default memory paths.",
   "memory.qmd.paths.path":

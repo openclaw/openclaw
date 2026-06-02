@@ -1108,6 +1108,7 @@ export class QmdMemoryManager implements MemorySearchManager {
       minScore?: number;
       sessionKey?: string;
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      qmdCollectionNames?: string[];
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
     },
@@ -1128,7 +1129,10 @@ export class QmdMemoryManager implements MemorySearchManager {
       opts?.maxResults ?? this.qmd.limits.maxResults,
     );
     const requestedSources = opts?.sources?.length ? uniqueValues(opts.sources) : undefined;
-    const collectionNames = this.listManagedCollectionNames(requestedSources);
+    const collectionNames = this.filterManagedCollectionNames(
+      this.listManagedCollectionNames(requestedSources),
+      opts?.qmdCollectionNames,
+    );
     const limit = resultLimit;
     if (collectionNames.length === 0) {
       log.warn("qmd query skipped: no managed collections configured");
@@ -1292,6 +1296,14 @@ export class QmdMemoryManager implements MemorySearchManager {
       ranked = results.filter((r) => allow.has(r.source));
     }
     return this.clampResultsByInjectedChars(this.diversifyResultsBySource(ranked, resultLimit));
+  }
+
+  private filterManagedCollectionNames(allNames: string[], requestedNames?: string[]): string[] {
+    if (!requestedNames?.length) {
+      return allNames;
+    }
+    const allowed = new Set(allNames);
+    return uniqueValues(requestedNames).filter((name) => allowed.has(name));
   }
 
   async sync(params?: {

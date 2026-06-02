@@ -112,6 +112,30 @@ describe("config schema regressions", () => {
     expect(res.ok).toBe(true);
   });
 
+  it("accepts memory.qmd.channelScopes", () => {
+    const res = validateConfigObject({
+      memory: {
+        backend: "qmd",
+        qmd: {
+          channelScopes: {
+            enabled: true,
+            includeGlobal: true,
+            includeAgentPrivate: true,
+            requireOverrideReason: true,
+            collections: {
+              global: "memory-global-main",
+              agentPrivatePrefix: "memory-private-",
+              slackChannelPrefix: "memory-slack-",
+              slackDmPrefix: "memory-dm-",
+            },
+          },
+        },
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
+
   it("accepts agents.defaults.startupContext overrides", () => {
     const res = validateConfigObject({
       agents: {
