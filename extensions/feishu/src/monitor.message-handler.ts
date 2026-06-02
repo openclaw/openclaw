@@ -46,11 +46,13 @@ type FeishuMessageReceiveHandlerContext = {
   getBotOpenId?: (accountId: string) => string | undefined;
   getBotName?: (accountId: string) => string | undefined;
   resolveSequentialKey?: (params: {
+    cfg: ClawdbotConfig;
     accountId: string;
     event: FeishuMessageEvent;
     botOpenId?: string;
     botName?: string;
-  }) => string;
+    runtime?: RuntimeEnv;
+  }) => string | Promise<string>;
 };
 
 function normalizeFeishuChatType(value: unknown): FeishuChatType | undefined {
@@ -184,11 +186,13 @@ export function createFeishuMessageReceiveHandler({
   });
 
   const dispatchFeishuMessage = async (event: FeishuMessageEvent) => {
-    const sequentialKey = resolveSequentialKey({
+    const sequentialKey = await resolveSequentialKey({
+      cfg,
       accountId,
       event,
       botOpenId: getBotOpenId(accountId),
       botName: getBotName(accountId),
+      runtime,
     });
     const task = () =>
       handleMessage({

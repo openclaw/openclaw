@@ -110,7 +110,7 @@ function shouldSendNoVisibleReplyFallback(dispatchResult: {
   );
 }
 
-function resolveConfiguredFeishuGroupSessionScope(params: {
+export function resolveConfiguredFeishuGroupSessionScope(params: {
   groupConfig?: {
     groupSessionScope?: FeishuGroupSessionScope;
     topicSessionMode?: "enabled" | "disabled";
@@ -129,7 +129,7 @@ function resolveConfiguredFeishuGroupSessionScope(params: {
   );
 }
 
-function isFeishuTopicSessionScope(scope: FeishuGroupSessionScope): boolean {
+export function isFeishuTopicSessionScope(scope: FeishuGroupSessionScope): boolean {
   return scope === "group_topic" || scope === "group_topic_sender";
 }
 
