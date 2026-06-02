@@ -396,6 +396,7 @@ type VisibleAssistantStreamPart = {
   replacementText: string;
   source: "segment" | "current";
   timestamp: number;
+  toolCallId?: string;
 };
 
 function visibleAssistantStreamParts(
@@ -405,11 +406,17 @@ function visibleAssistantStreamParts(
   const streamHost = state as ChatState & {
     chatStreamSegments?: Array<{ text?: unknown; ts?: unknown }>;
   };
+  const liveToolIds = currentLiveToolCallIds(state);
   const parts: VisibleAssistantStreamPart[] = [];
   let previousText: string | null = null;
-  for (const segment of Array.isArray(streamHost.chatStreamSegments)
+  const segments = Array.isArray(streamHost.chatStreamSegments)
     ? streamHost.chatStreamSegments
-    : []) {
+    : [];
+  for (let segmentIndex = 0; segmentIndex < segments.length; segmentIndex++) {
+    const segment = segments[segmentIndex];
+    if (!segment) {
+      continue;
+    }
     if (typeof segment.text !== "string") {
       continue;
     }
@@ -423,6 +430,7 @@ function visibleAssistantStreamParts(
         source: "segment",
         timestamp:
           typeof segment.ts === "number" && Number.isFinite(segment.ts) ? segment.ts : Date.now(),
+        toolCallId: liveToolIds[segmentIndex],
       });
     }
     if (segment.text.trim()) {
@@ -455,8 +463,12 @@ function hasAssistantStreamPartReplacement(
   );
 }
 
-function firstCurrentToolStreamMessageIndex(messages: unknown[], state: ChatState): number {
-  const liveToolIds = new Set(currentLiveToolCallIds(state));
+function currentToolStreamMessageIndex(
+  messages: unknown[],
+  state: ChatState,
+  toolCallId?: string,
+): number {
+  const liveToolIds = toolCallId ? new Set([toolCallId]) : new Set(currentLiveToolCallIds(state));
   if (liveToolIds.size === 0) {
     return -1;
   }
@@ -494,7 +506,9 @@ function appendVisibleStreamStateMessages(
       part.timestamp,
     );
     const toolIndex =
-      part.source === "segment" ? firstCurrentToolStreamMessageIndex(nextMessages, state) : -1;
+      part.source === "segment"
+        ? currentToolStreamMessageIndex(nextMessages, state, part.toolCallId)
+        : -1;
     nextMessages =
       toolIndex >= 0
         ? insertMessageAtIndex(nextMessages, streamMessage, toolIndex)
