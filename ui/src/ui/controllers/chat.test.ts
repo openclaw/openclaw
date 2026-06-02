@@ -2420,6 +2420,121 @@ describe("loadChatHistory retry handling", () => {
     expect(state.toolStreamOrder).toEqual([]);
   });
 
+  it("uses segment tool ids when a tool starts before any stream text", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const firstToolResult = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "shell",
+      content: [{ type: "text", text: "first output" }],
+      timestamp: 2,
+      __openclaw: { seq: 2 },
+    };
+    const secondToolResult = {
+      role: "toolResult",
+      toolCallId: "call_2",
+      toolName: "shell",
+      content: [{ type: "text", text: "second output" }],
+      timestamp: 4,
+      __openclaw: { seq: 3 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, firstToolResult, secondToolResult],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser],
+      chatRunId: "run-1",
+      chatStream: "Still answering.",
+      chatStreamStartedAt: 100,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; toolCallId?: string }>;
+      chatToolMessages: Record<string, unknown>[];
+      toolStreamById: Map<string, unknown>;
+      toolStreamOrder: string[];
+      toolStreamSyncTimer: number | null;
+    };
+    state.chatStreamSegments = [{ text: "before second tool", ts: 3, toolCallId: "call_2" }];
+    state.chatToolMessages = [firstToolResult, secondToolResult];
+    state.toolStreamById = new Map([
+      ["call_1", { message: firstToolResult }],
+      ["call_2", { message: secondToolResult }],
+    ]);
+    state.toolStreamOrder = ["call_1", "call_2"];
+    state.toolStreamSyncTimer = null;
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(4);
+    expect(state.chatMessages[0]).toEqual(persistedUser);
+    expect(state.chatMessages[1]).toEqual(firstToolResult);
+    expectTextChatMessage(state.chatMessages[2], "assistant", "before second tool");
+    expect(state.chatMessages[3]).toEqual(secondToolResult);
+    expect(requireRecord(state.chatMessages[2]).timestamp).toBe(3);
+    expect(state.chatToolMessages).toEqual([]);
+    expect(state.chatStreamSegments).toEqual([]);
+    expect(state.toolStreamById.size).toBe(0);
+    expect(state.toolStreamOrder).toEqual([]);
+  });
+
+  it("trims accumulated current stream after materializing caught-up tool segments", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const persistedToolResult = {
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "shell",
+      content: [{ type: "text", text: "tool output" }],
+      timestamp: 2,
+      __openclaw: { seq: 2 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, persistedToolResult],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser],
+      chatRunId: "run-1",
+      chatStream: "before tool\nafter tool",
+      chatStreamStartedAt: 100,
+    }) as ChatState & {
+      chatStreamSegments: Array<{ text: string; ts: number; toolCallId?: string }>;
+      chatToolMessages: Record<string, unknown>[];
+      toolStreamById: Map<string, unknown>;
+      toolStreamOrder: string[];
+      toolStreamSyncTimer: number | null;
+    };
+    state.chatStreamSegments = [{ text: "before tool", ts: 1, toolCallId: "call_1" }];
+    state.chatToolMessages = [persistedToolResult];
+    state.toolStreamById = new Map([["call_1", { message: persistedToolResult }]]);
+    state.toolStreamOrder = ["call_1"];
+    state.toolStreamSyncTimer = null;
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages[0]).toEqual(persistedUser);
+    expectTextChatMessage(state.chatMessages[1], "assistant", "before tool");
+    expect(state.chatMessages[2]).toEqual(persistedToolResult);
+    expect(state.chatStream).toBe("after tool");
+    expect(state.chatStreamStartedAt).toBe(100);
+    expect(state.chatToolMessages).toEqual([]);
+    expect(state.chatStreamSegments).toEqual([]);
+    expect(state.toolStreamById.size).toBe(0);
+    expect(state.toolStreamOrder).toEqual([]);
+  });
+
   it("keeps live tool cards when only older history has a persisted tool result", async () => {
     const olderUser = {
       role: "user",
@@ -2593,7 +2708,7 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatMessages[2]).toEqual(persistedToolResult);
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatStream).toBeNull();
-    expect(state.chatStreamStartedAt).toBe(100);
+    expect(state.chatStreamStartedAt).toBeNull();
     expect(state.chatToolMessages).toEqual([]);
     expect(state.chatStreamSegments).toEqual([]);
     expect(state.toolStreamById.size).toBe(0);

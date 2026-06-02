@@ -404,7 +404,7 @@ function visibleAssistantStreamParts(
   opts?: { includeCurrent?: boolean },
 ): VisibleAssistantStreamPart[] {
   const streamHost = state as ChatState & {
-    chatStreamSegments?: Array<{ text?: unknown; ts?: unknown }>;
+    chatStreamSegments?: Array<{ text?: unknown; ts?: unknown; toolCallId?: unknown }>;
   };
   const liveToolIds = currentLiveToolCallIds(state);
   const parts: VisibleAssistantStreamPart[] = [];
@@ -430,7 +430,10 @@ function visibleAssistantStreamParts(
         source: "segment",
         timestamp:
           typeof segment.ts === "number" && Number.isFinite(segment.ts) ? segment.ts : Date.now(),
-        toolCallId: liveToolIds[segmentIndex],
+        toolCallId:
+          typeof segment.toolCallId === "string" && segment.toolCallId.trim()
+            ? segment.toolCallId.trim()
+            : liveToolIds[segmentIndex],
       });
     }
     if (segment.text.trim()) {
@@ -451,6 +454,27 @@ function visibleAssistantStreamParts(
     }
   }
   return parts;
+}
+
+function visibleCurrentAssistantStreamTail(state: ChatState): string | null {
+  if (typeof state.chatStream !== "string") {
+    return null;
+  }
+  const streamHost = state as ChatState & {
+    chatStreamSegments?: Array<{ text?: unknown }>;
+  };
+  const segments = Array.isArray(streamHost.chatStreamSegments)
+    ? streamHost.chatStreamSegments
+    : [];
+  let previousText: string | null = null;
+  for (const segment of segments) {
+    if (typeof segment.text === "string" && segment.text.trim()) {
+      previousText = segment.text;
+    }
+  }
+  return visibleAssistantStreamText(
+    trimAccumulatedVisibleStreamText(state.chatStream, previousText),
+  );
 }
 
 function hasAssistantStreamPartReplacement(
@@ -1080,6 +1104,10 @@ async function loadChatHistoryUncached(
         state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state, [], {
           includeCurrent: false,
         });
+        state.chatStream = visibleCurrentAssistantStreamTail(state);
+        if (state.chatStream === null) {
+          state.chatStreamStartedAt = null;
+        }
         maybeResetToolStream(state);
       }
     }
