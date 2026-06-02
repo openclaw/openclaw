@@ -201,7 +201,7 @@ export async function collectChannelSecurityFindings(params: {
     provider: ChannelId;
     accountId: string;
     dmPolicy: string;
-    allowFrom?: Array<string | number> | null;
+    allowFrom?: readonly unknown[] | null;
     policyPath?: string;
     allowFromPath: string;
     normalizeEntry?: (raw: string) => string;

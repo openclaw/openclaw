@@ -1,7 +1,10 @@
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveGroupAllowFromSources } from "../channels/allow-from.js";
 import { resolveControlCommandGate } from "../channels/command-gating.js";
-import { resolveDmAllowAuditState } from "../channels/message-access/dm-allow-state.js";
+import {
+  normalizeDmAllowAuditEntries,
+  resolveDmAllowAuditState,
+} from "../channels/message-access/dm-allow-state.js";
 import {
   readChannelIngressStoreAllowFromForDmPolicy,
   resolveChannelIngressEffectiveAllowFromLists,
@@ -12,20 +15,20 @@ import { evaluateMatchedGroupAccessForPolicy } from "../plugin-sdk/group-access.
 
 export function resolvePinnedMainDmOwnerFromAllowlist(params: {
   dmScope?: string | null;
-  allowFrom?: Array<string | number> | null;
+  allowFrom?: readonly unknown[] | null;
   normalizeEntry: (entry: string) => string | undefined;
 }): string | null {
   if ((params.dmScope ?? "main") !== "main") {
     return null;
   }
-  const rawAllowFrom = Array.isArray(params.allowFrom) ? params.allowFrom : [];
-  if (rawAllowFrom.some((entry) => String(entry).trim() === "*")) {
+  const rawAllowFrom = normalizeDmAllowAuditEntries(params.allowFrom);
+  if (rawAllowFrom.includes("*")) {
     return null;
   }
   const normalizedOwners = Array.from(
     new Set(
       rawAllowFrom
-        .map((entry) => params.normalizeEntry(String(entry)))
+        .map((entry) => params.normalizeEntry(entry))
         .filter((entry): entry is string => Boolean(entry)),
     ),
   );
@@ -315,7 +318,7 @@ export function resolveDmGroupAccessWithCommandGate(
 export async function resolveDmAllowState(params: {
   provider: ChannelId;
   accountId: string;
-  allowFrom?: Array<string | number> | null;
+  allowFrom?: readonly unknown[] | null;
   dmPolicy?: string | null;
   normalizeEntry?: (raw: string) => string;
   readStore?: (provider: ChannelId, accountId: string) => Promise<string[]>;

@@ -67,6 +67,52 @@ describe("security audit channel dm policy", () => {
     );
   });
 
+  it("treats grouped wildcard allowFrom entries as multi-user DM scope", async () => {
+    const cfg: OpenClawConfig = {
+      session: { dmScope: "main" },
+      channels: { whatsapp: { enabled: true } },
+    };
+    const plugins: ChannelPlugin[] = [
+      {
+        id: "whatsapp",
+        meta: {
+          id: "whatsapp",
+          label: "WhatsApp",
+          selectionLabel: "WhatsApp",
+          docsPath: "/channels/whatsapp",
+          blurb: "Test",
+        },
+        capabilities: { chatTypes: ["direct"] },
+        config: {
+          listAccountIds: () => ["default"],
+          inspectAccount: () => ({ enabled: true, configured: true }),
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: () => true,
+        },
+        security: {
+          resolveDmPolicy: () => ({
+            policy: "allowlist",
+            allowFrom: [{ number: "*", group: "friends" }] as never,
+            policyPath: "channels.whatsapp.dmPolicy",
+            allowFromPath: "channels.whatsapp.",
+            approveHint: "approve",
+          }),
+        },
+      },
+    ];
+
+    const findings = await collectChannelSecurityFindings({
+      cfg,
+      plugins,
+    });
+
+    const sharedScopeFinding = requireFinding(
+      findings,
+      "channels.whatsapp.dm.scope_main_multiuser",
+    );
+    expect(sharedScopeFinding.severity).toBe("warn");
+  });
   it("flags public DMs and shared main-session scope together", async () => {
     const cfg: OpenClawConfig = {
       session: { dmScope: "main" },
