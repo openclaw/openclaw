@@ -439,6 +439,29 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
   });
 
+  it("does not duplicate streamed text when final payload has no role", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Live reply",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: {
+        text: "Live reply",
+      },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatMessages).toEqual([payload.message]);
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+  });
+
   it("reconciles cached run and indicator state on terminal events", () => {
     vi.useFakeTimers();
     try {

@@ -289,7 +289,10 @@ function hasAssistantStreamReplacement(messages: unknown[], stream: string): boo
       return false;
     }
     const role = normalizeLowercaseStringOrEmpty((message as { role?: unknown }).role);
-    if (role !== "assistant" || shouldHideAssistantChatMessage(message)) {
+    if (role && role !== "assistant") {
+      return false;
+    }
+    if (role === "assistant" && shouldHideAssistantChatMessage(message)) {
       return false;
     }
     const text = extractText(message)?.trim();
