@@ -13,6 +13,7 @@ export type DraftStreamLoop = {
   resetPending: () => void;
   resetThrottleWindow: () => void;
   waitForInFlight: () => Promise<void>;
+  takePending?: () => string;
 };
 
 /** Creates a single-flight draft stream loop that preserves the newest pending text. */
@@ -132,6 +133,15 @@ export function createDraftStreamLoop(params: {
       if (inFlightPromise) {
         await inFlightPromise;
       }
+    },
+    takePending: () => {
+      const text = pendingText;
+      pendingText = "";
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      return text;
     },
   };
 }

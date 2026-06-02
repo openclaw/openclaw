@@ -333,14 +333,14 @@ final answer, except for the label if one is configured.
 
 Each channel uses the cleanest transport it supports:
 
-| Channel         | Progress transport                     | Notes                                                                 |
-| --------------- | -------------------------------------- | --------------------------------------------------------------------- |
-| Discord         | Send one message, then edit it.        | Final text edits in place when it fits one safe preview message.      |
-| Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.         |
-| Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery.               |
-| Slack           | Native stream or editable draft post.  | Thread availability affects whether native streaming can be used.     |
-| Telegram        | Send one message, then edit it.        | Older visible drafts may be replaced so final timestamps stay useful. |
-| Mattermost      | Editable draft post.                   | Tool activity is folded into the same draft-style post.               |
+| Channel         | Progress transport                     | Notes                                                                                                           |
+| --------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Discord         | Send one message, then edit it.        | Final text edits in place when it fits one safe preview message.                                                |
+| Matrix          | Send one event, then edit it.          | Account-level streaming config controls account-level drafts.                                                   |
+| Microsoft Teams | Native Teams stream in personal chats. | `streaming.mode: "block"` maps to Teams block delivery.                                                         |
+| Slack           | Native stream or editable draft post.  | Thread availability affects whether native streaming can be used.                                               |
+| Telegram        | Send one message, then edit it.        | Older visible drafts may be replaced so final timestamps stay useful.                                           |
+| Mattermost      | Editable draft post.                   | `block` mode rotates a fresh post per completed text/tool block; other modes fold activity into one draft post. |
 
 Channels without safe edit support usually fall back to typing indicators or
 final-only delivery.

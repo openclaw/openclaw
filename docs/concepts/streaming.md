@@ -132,7 +132,10 @@ such as Discord and Telegram. It does not enable channel block delivery there.
 Use `streaming.block.enabled` or the legacy `blockStreaming` channel key when
 you want normal block replies. Microsoft Teams is the exception: it has no
 draft-preview block transport, so `streaming.mode: "block"` maps to Teams block
-delivery instead of native partial/progress streaming.
+delivery instead of native partial/progress streaming. Mattermost also differs:
+in `block` mode it rotates the preview to a fresh post at each completed text or
+tool block, so earlier blocks stay visible as separate posts instead of being
+overwritten in one editable draft.
 
 ### Channel mapping
 

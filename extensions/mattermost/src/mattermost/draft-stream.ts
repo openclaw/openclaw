@@ -19,7 +19,7 @@ type MattermostDraftStream = {
   discardPending: () => Promise<void>;
   seal: () => Promise<void>;
   stop: () => Promise<void>;
-  forceNewMessage: () => void;
+  forceNewMessage: () => Promise<void>;
 };
 
 function normalizeMattermostDraftText(text: string, maxChars: number): string {
@@ -31,6 +31,33 @@ function normalizeMattermostDraftText(text: string, maxChars: number): string {
     return trimmed;
   }
   return `${sliceUtf16Safe(trimmed, 0, Math.max(0, maxChars - 3)).trimEnd()}...`;
+}
+
+export type MattermostDraftPreviewBoundaryController = {
+  noteUpdate: () => void;
+  noteBoundary: () => Promise<void>;
+};
+
+export function createMattermostDraftPreviewBoundaryController(params: {
+  enabled: boolean;
+  forceNewMessage: () => void | Promise<void>;
+}): MattermostDraftPreviewBoundaryController {
+  let hasStreamedContent = false;
+  return {
+    noteUpdate() {
+      hasStreamedContent = true;
+    },
+    async noteBoundary() {
+      if (!params.enabled) {
+        return;
+      }
+      if (!hasStreamedContent) {
+        return;
+      }
+      hasStreamedContent = false;
+      await params.forceNewMessage();
+    },
+  };
 }
 
 export function createMattermostDraftStream(params: {
@@ -51,6 +78,8 @@ export function createMattermostDraftStream(params: {
   const streamState = { stopped: false, final: false };
   let streamPostId: string | undefined;
   let lastSentText = "";
+  let postGeneration = 0;
+  const createdPostIdsByGeneration = new Map<number, string>();
 
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     if (streamState.stopped && !streamState.final) {
@@ -64,6 +93,7 @@ export function createMattermostDraftStream(params: {
     if (normalized === lastSentText) {
       return true;
     }
+    const gen = postGeneration;
     try {
       if (streamPostId) {
         await updateMattermostPost(params.client, streamPostId, {
@@ -81,9 +111,14 @@ export function createMattermostDraftStream(params: {
           params.warn?.("mattermost stream preview stopped (missing post id from create)");
           return false;
         }
-        streamPostId = postId;
+        createdPostIdsByGeneration.set(gen, postId);
+        if (gen === postGeneration) {
+          streamPostId = postId;
+        }
       }
-      lastSentText = normalized;
+      if (gen === postGeneration) {
+        lastSentText = normalized;
+      }
       return true;
     } catch (err) {
       streamState.stopped = true;
@@ -101,6 +136,7 @@ export function createMattermostDraftStream(params: {
     readMessageId: () => streamPostId,
     clearMessageId: () => {
       streamPostId = undefined;
+      createdPostIdsByGeneration.clear();
     },
     isValidMessageId: (value): value is string => typeof value === "string" && value.length > 0,
     deleteMessage: async (postId) => {
@@ -110,11 +146,41 @@ export function createMattermostDraftStream(params: {
     warnPrefix: "mattermost stream preview cleanup failed",
   });
 
-  const forceNewMessage = () => {
+  const forceNewMessage = async () => {
+    const sealText = loop.takePending?.() ?? "";
+    const sealedGeneration = postGeneration;
+    const sealedPostIdAtEntry = streamPostId;
+    const sealedLastSent = lastSentText;
+    postGeneration += 1;
     streamPostId = undefined;
     lastSentText = "";
-    loop.resetPending();
     loop.resetThrottleWindow();
+    await loop.waitForInFlight();
+    const sealedPostId = sealedPostIdAtEntry ?? createdPostIdsByGeneration.get(sealedGeneration);
+    createdPostIdsByGeneration.delete(sealedGeneration);
+    if (!sealText.trim() || (streamState.stopped && !streamState.final)) {
+      return;
+    }
+    const rendered = params.renderText?.(sealText) ?? sealText;
+    const normalized = normalizeMattermostDraftText(rendered, maxChars);
+    if (!normalized || normalized === sealedLastSent) {
+      return;
+    }
+    try {
+      if (sealedPostId) {
+        await updateMattermostPost(params.client, sealedPostId, { message: normalized });
+      } else {
+        await createMattermostPost(params.client, {
+          channelId: params.channelId,
+          message: normalized,
+          rootId: params.rootId,
+        });
+      }
+    } catch (err) {
+      params.warn?.(
+        `mattermost stream preview boundary flush failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   };
 
   params.log?.(`mattermost stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);

@@ -266,7 +266,7 @@ Notes:
 
 ## Preview streaming
 
-Mattermost streams thinking, tool activity, and partial reply text into a single **draft preview post** that finalizes in place when the final answer is safe to send. The preview updates on the same post id instead of spamming the channel with per-chunk messages. Media/error finals cancel pending preview edits and use normal delivery instead of flushing a throwaway preview post.
+Mattermost streams thinking, tool activity, and partial reply text into a **draft preview post** that finalizes in place when the final answer is safe to send. In `partial` mode the preview updates on the same post id instead of spamming the channel with per-chunk messages. In `block` mode the preview rotates to a fresh post at each completed text or tool block, so earlier blocks stay visible as their own posts instead of being overwritten by the next one. Media/error finals cancel pending preview edits and use normal delivery instead of flushing a throwaway preview post.
 
 Enable via `channels.mattermost.streaming`:
 
@@ -283,9 +283,9 @@ Enable via `channels.mattermost.streaming`:
 <AccordionGroup>
   <Accordion title="Streaming modes">
     - `partial` is the usual choice: one preview post that is edited as the reply grows, then finalized with the complete answer.
-    - `block` uses append-style draft chunks inside the preview post.
+    - `block` rotates the preview to a fresh post at each completed text or tool block boundary, so each block stays visible as its own post instead of being overwritten in place. Repeated progress updates within the same tool keep editing that tool's current post.
     - `progress` shows a status preview while generating and only posts the final answer at completion.
-    - `off` disables preview streaming.
+    - `off` disables preview streaming. With `blockStreaming: true`, completed assistant blocks are still delivered as normal block replies (separate posts) rather than a single coalesced final post.
 
   </Accordion>
   <Accordion title="Streaming behavior notes">
