@@ -1104,6 +1104,50 @@ describe("startGatewayConfigReloader", () => {
     await harness.reloader.stop();
   });
 
+  it("logs an error with remediation when hot mode drops a restart-required reload", async () => {
+    // Regression: when the gateway runs in hot reload mode and a config write
+    // touches any restart-required path, the reload plan was dropped behind a
+    // single log.warn that operators routinely missed in aggregator UIs. The
+    // failure mode is silent staleness: the disk config is correct but every
+    // in-process consumer keeps using the old snapshot until the gateway is
+    // restarted by hand. Promote to log.error and include the remediation
+    // command verbatim so log aggregators with level=ERROR alerts catch it.
+    const hotModeRestartRequiredSnapshot = makeSnapshot({
+      sourceConfig: {
+        gateway: { port: 99999, reload: { mode: "hot", debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      runtimeConfig: {
+        gateway: { port: 99999, reload: { mode: "hot", debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      config: {
+        gateway: { port: 99999, reload: { mode: "hot", debounceMs: 0 } },
+        hooks: { enabled: true },
+      },
+      hash: "hot-mode-restart-required",
+    });
+    const readSnapshot = vi
+      .fn<() => Promise<ConfigFileSnapshot>>()
+      .mockResolvedValueOnce(hotModeRestartRequiredSnapshot);
+    const harness = createReloaderHarness(readSnapshot);
+
+    harness.watcher.emit("change");
+    await vi.runOnlyPendingTimersAsync();
+
+    expect(harness.onHotReload).not.toHaveBeenCalled();
+    expect(harness.onRestart).not.toHaveBeenCalled();
+    expect(harness.log.warn).not.toHaveBeenCalled();
+    expect(harness.log.error).toHaveBeenCalledTimes(1);
+    const errorMessage = harness.log.error.mock.calls[0]?.[0] as string;
+    expect(errorMessage).toContain("config reload requires gateway restart");
+    expect(errorMessage).toContain("hot mode ignoring");
+    expect(errorMessage).toContain("gateway.port");
+    expect(errorMessage).toContain("openclaw gateway restart");
+
+    await harness.reloader.stop();
+  });
+
   it("plans in-process reloads from source config and ignores runtime materialized paths", async () => {
     const baseInstall = {
       source: "npm" as const,

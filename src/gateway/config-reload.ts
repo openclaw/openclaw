@@ -274,10 +274,15 @@ export function startGatewayConfigReloader(opts: {
     }
     if (plan.restartGateway) {
       if (settings.mode === "hot") {
-        opts.log.warn(
+        // Promoted to error so log aggregators / level=ERROR alert rules catch
+        // it. In hot mode the entire reload plan is dropped when any path is
+        // restart-required, so a missed warn here can leave the runtime
+        // serving from a stale config indefinitely. Include the remediation
+        // verbatim so the operator does not have to look it up.
+        opts.log.error(
           `config reload requires gateway restart; hot mode ignoring (${plan.restartReasons.join(
             ", ",
-          )})`,
+          )}). Run \`openclaw gateway restart\` to apply these changes.`,
         );
         return;
       }
