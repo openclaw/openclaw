@@ -360,7 +360,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
         cfg,
         log,
         channelRuntime: ctx.channelRuntime as GatewayContext["channelRuntime"],
-        onReady: async () => {
+        onReady: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway ready`);
           ctx.setStatus({
             ...ctx.getStatus(),
@@ -371,9 +371,11 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
           // Snapshot credentials so we can recover from the next hot
           // upgrade that might wipe openclaw.json mid-flight.
           persistAccountCredentialSnapshot(account);
-          await drainReconnectPendingDeliveries();
+          // Fire-and-forget: the drain helper owns its try/catch, so a
+          // failed reconnect drain never rejects into the void callback.
+          void drainReconnectPendingDeliveries();
         },
-        onResumed: async () => {
+        onResumed: () => {
           log?.info(`[qqbot:${account.accountId}] Gateway resumed`);
           ctx.setStatus({
             ...ctx.getStatus(),
@@ -382,7 +384,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
             lastConnectedAt: Date.now(),
           });
           persistAccountCredentialSnapshot(account);
-          await drainReconnectPendingDeliveries();
+          void drainReconnectPendingDeliveries();
         },
         onError: (error) => {
           log?.error(`[qqbot:${account.accountId}] Gateway error: ${error.message}`);

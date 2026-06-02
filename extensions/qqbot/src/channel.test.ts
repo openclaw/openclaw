@@ -25,14 +25,21 @@ vi.mock("./engine/config/credential-backup.js", () => ({
 }));
 
 type GatewayStartOptions = {
-  onReady?: () => Promise<void>;
-  onResumed?: () => Promise<void>;
+  onReady?: () => void;
+  onResumed?: () => void;
 };
 
 type PendingDeliveryEntry = {
   channel: string;
   accountId?: string | null;
   lastError?: string | null;
+};
+
+type ReconnectDrainOptions = {
+  drainKey: string;
+  logLabel: string;
+  cfg: OpenClawConfig;
+  selectEntry: (entry: PendingDeliveryEntry) => unknown;
 };
 
 const cfg = {
@@ -69,15 +76,15 @@ async function startAccountAndGetGatewayOptions(): Promise<GatewayStartOptions> 
     }),
   );
   expect(mocks.startGateway).toHaveBeenCalledOnce();
-  return mocks.startGateway.mock.calls[0]?.[0] as GatewayStartOptions;
+  return mocks.startGateway.mock.calls[0]?.[0] as unknown as GatewayStartOptions;
 }
 
-function latestDrainOptions() {
+function latestDrainOptions(): ReconnectDrainOptions {
   const call = mocks.drainPendingDeliveries.mock.calls.at(-1);
   if (!call) {
     throw new Error("expected drainPendingDeliveries call");
   }
-  return call[0];
+  return call[0] as unknown as ReconnectDrainOptions;
 }
 
 function expectReconnectDrainSelection(selectEntry: (entry: PendingDeliveryEntry) => unknown) {
