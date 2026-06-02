@@ -906,6 +906,20 @@ describe("chat composer workbench", () => {
 
     expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
   });
+
+  it("keeps the secondary New session and Export controls suppressed in the composer", () => {
+    const container = renderChatView({
+      messages: [{ role: "assistant", content: "ready" }],
+    });
+
+    const toolbarRight = container.querySelector(".agent-chat__toolbar-right");
+    expect(toolbarRight).not.toBeNull();
+    const labels = Array.from(toolbarRight?.querySelectorAll("button") ?? []).map((button) =>
+      button.getAttribute("aria-label"),
+    );
+    expect(labels).not.toContain(t("chat.runControls.newSession"));
+    expect(labels).not.toContain(t("chat.runControls.exportChat"));
+  });
 });
 
 afterEach(() => {

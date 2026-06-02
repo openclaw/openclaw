@@ -2181,6 +2181,7 @@ export function renderChat(props: ChatProps) {
             onNewSession: props.onNewSession,
             onSend: handleSend,
             onStoreDraft: () => {},
+            showSecondary: false,
           })}
         </div>
       </div>
