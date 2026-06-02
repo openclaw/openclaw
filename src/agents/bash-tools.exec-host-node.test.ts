@@ -93,7 +93,7 @@ const hasNodeCommandAllowAlwaysMarkerMock = vi.hoisted(() =>
   ),
 );
 const resolveAllowAlwaysPatternCoverageMock = vi.hoisted(() =>
-  vi.fn((): unknown => ({
+  vi.fn((_raw: unknown): unknown => ({
     complete: true,
     patterns: [{ pattern: "/trusted/bin/tool" }],
   })),
