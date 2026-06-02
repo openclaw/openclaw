@@ -405,6 +405,7 @@ const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
   "anthropic",
   "anthropic-vertex",
   "arcee",
+  "atomicchat",
   "byteplus",
   "byteplus-plan",
   "cerebras",
