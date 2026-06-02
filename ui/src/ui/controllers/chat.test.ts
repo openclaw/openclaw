@@ -997,6 +997,70 @@ describe("handleChatEvent", () => {
     expect(state.lastError).toBe('No API key found for provider "openai".');
   });
 
+  it("keeps streamed assistant text visible when an error ends the run", () => {
+    const existingMessage = {
+      role: "user",
+      content: [{ type: "text", text: "Ping" }],
+      timestamp: 1,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatMessages: [existingMessage],
+      chatStream: "Partial answer before gateway error.",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "gateway disconnected",
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatRunId).toBe(null);
+    expect(state.chatStream).toBe(null);
+    expect(state.chatStreamStartedAt).toBe(null);
+    expect(state.chatMessages).toHaveLength(3);
+    expect(state.chatMessages[0]).toEqual(existingMessage);
+    expectTextChatMessage(
+      state.chatMessages[1],
+      "assistant",
+      "Partial answer before gateway error.",
+    );
+    expectTextChatMessage(state.chatMessages[2], "assistant", "Error: gateway disconnected");
+    expect(state.lastError).toBe("gateway disconnected");
+  });
+
+  it("does not duplicate streamed text when the error payload already carries it", () => {
+    const message = {
+      role: "assistant",
+      content: [{ type: "text", text: "Partial answer before gateway error." }],
+      timestamp: 101,
+    };
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Partial answer before gateway error.",
+      chatStreamStartedAt: 100,
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "error",
+      errorMessage: "gateway disconnected",
+      message,
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("error");
+    expect(state.chatMessages).toHaveLength(1);
+    expectTextChatMessage(
+      state.chatMessages[0],
+      "assistant",
+      "Partial answer before gateway error.",
+    );
+  });
+
   it("prefers server-provided assistant error messages", () => {
     const state = createState({
       sessionKey: "main",
@@ -1980,6 +2044,101 @@ describe("loadChatHistory retry handling", () => {
 
     expect(state.chatMessages).toEqual([persistedUser, optimisticUser, optimisticAssistant]);
     expect(state.chatStream).toBeNull();
+  });
+
+  it("keeps active streamed assistant text when history reload returns a stale snapshot", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      timestamp: 10,
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser, optimisticUser],
+      chatRunId: "run-1",
+      chatStream: "First visible stream text.",
+      chatStreamStartedAt: 100,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, optimisticUser]);
+    expect(state.chatRunId).toBe("run-1");
+    expect(state.chatStream).toBe("First visible stream text.");
+    expect(state.chatStreamStartedAt).toBe(100);
+  });
+
+  it("materializes orphaned streamed assistant text when history reload is stale", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser],
+      chatRunId: null,
+      chatStream: "Partial answer before history catch-up.",
+      chatStreamStartedAt: 100,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages[0]).toEqual(persistedUser);
+    expectTextChatMessage(
+      state.chatMessages[1],
+      "assistant",
+      "Partial answer before history catch-up.",
+    );
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+  });
+
+  it("clears streamed assistant text when history already contains the replacement", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const historyAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "First visible stream text. More final text." }],
+      __openclaw: { seq: 2 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser, historyAssistant],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser],
+      chatRunId: "run-1",
+      chatStream: "First visible stream text.",
+      chatStreamStartedAt: 100,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([persistedUser, historyAssistant]);
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
   });
 
   it("keeps local optimistic messages when history reload returns empty", async () => {
