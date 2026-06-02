@@ -602,6 +602,12 @@ function applyConfiguredProviderOverrides(params: {
       readModelParams(discoveredModel.params),
       defaultModelParams,
     );
+    const agentRequest = resolveAgentProviderRequest(params.cfg, params.agentId, params.provider);
+    const mergedRequest = mergeModelProviderRequestOverrides(
+      undefined,
+      agentRequest,
+      params.jobProviderRequest,
+    );
     const discoveredHeaders = sanitizeModelHeaders(discoveredModel.headers, {
       stripSecretRefMarkers: true,
     });
@@ -610,15 +616,19 @@ function applyConfiguredProviderOverrides(params: {
       api: discoveredModel.api,
       baseUrl: discoveredModel.baseUrl,
       discoveredHeaders,
+      request: mergedRequest,
       capability: "llm",
       transport: "stream",
     });
-    return {
-      ...discoveredModel,
-      ...(resolvedParams ? { params: resolvedParams } : {}),
-      // Discovered models originate from models.json and may contain persistence markers.
-      headers: requestConfig.headers,
-    };
+    return attachModelProviderRequestTransport(
+      {
+        ...discoveredModel,
+        ...(resolvedParams ? { params: resolvedParams } : {}),
+        // Discovered models originate from models.json and may contain persistence markers.
+        headers: requestConfig.headers,
+      },
+      mergedRequest,
+    );
   }
   const configuredModel =
     findConfiguredProviderModel(providerConfig, params.provider, modelId) ??
