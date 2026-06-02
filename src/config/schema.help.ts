@@ -31,7 +31,7 @@ export const FIELD_HELP: Record<string, string> = {
   "diagnostics.memoryPressureSnapshot":
     "Whether critical memory pressure automatically captures a redacted stability snapshot. Default: false. Enable only when this host can tolerate the extra file-system scan and snapshot write during critical memory pressure.",
   "diagnostics.memoryPressureThresholds":
-    "Memory pressure threshold overrides for gateway health diagnostics. Use these to tune pressure alerts to your host's actual memory capacity.",
+    "Memory pressure threshold overrides for gateway health diagnostics. Use these to tune pressure alerts to your host's actual memory capacity. Partial overrides are validated against defaults, so each warning threshold must remain below the effective critical threshold.",
   "diagnostics.memoryPressureThresholds.rssWarningBytes":
     "RSS warning threshold in bytes (default 1610612736 = 1.5 GB). A warning-level pressure event is emitted when the process RSS exceeds this value.",
   "diagnostics.memoryPressureThresholds.rssCriticalBytes":

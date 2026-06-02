@@ -75,6 +75,12 @@ const TailscaleServiceNameSchema = z.string().regex(/^svc:[a-z0-9](?:[a-z0-9-]{0
     'Tailscale serviceName must use the "svc:<dns-label>" format, for example "svc:openclaw"',
 });
 
+const MB = 1024 * 1024;
+const DEFAULT_RSS_WARNING_BYTES = 1536 * MB;
+const DEFAULT_RSS_CRITICAL_BYTES = 3072 * MB;
+const DEFAULT_HEAP_WARNING_BYTES = 1024 * MB;
+const DEFAULT_HEAP_CRITICAL_BYTES = 2048 * MB;
+
 const LegacyCanvasHostSchema = z
   .object({
     enabled: z.boolean().optional(),
@@ -516,16 +522,14 @@ export const OpenClawSchema = z
           .strict()
           .refine(
             (v) =>
-              v.rssWarningBytes == null ||
-              v.rssCriticalBytes == null ||
-              v.rssWarningBytes < v.rssCriticalBytes,
+              (v.rssWarningBytes ?? DEFAULT_RSS_WARNING_BYTES) <
+              (v.rssCriticalBytes ?? DEFAULT_RSS_CRITICAL_BYTES),
             { message: "rssWarningBytes must be less than rssCriticalBytes" },
           )
           .refine(
             (v) =>
-              v.heapUsedWarningBytes == null ||
-              v.heapUsedCriticalBytes == null ||
-              v.heapUsedWarningBytes < v.heapUsedCriticalBytes,
+              (v.heapUsedWarningBytes ?? DEFAULT_HEAP_WARNING_BYTES) <
+              (v.heapUsedCriticalBytes ?? DEFAULT_HEAP_CRITICAL_BYTES),
             { message: "heapUsedWarningBytes must be less than heapUsedCriticalBytes" },
           )
           .optional(),

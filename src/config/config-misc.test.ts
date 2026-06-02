@@ -58,6 +58,55 @@ describe("boolean config validation", () => {
   });
 });
 
+describe("diagnostics memory pressure threshold validation", () => {
+  it("accepts partial threshold overrides that remain ordered against defaults", () => {
+    const result = OpenClawSchema.safeParse({
+      diagnostics: {
+        memoryPressureThresholds: {
+          rssWarningBytes: 1024,
+          heapUsedWarningBytes: 1024,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it.each([
+    {
+      name: "rss warning above default critical",
+      thresholds: { rssWarningBytes: 4 * 1024 * 1024 * 1024 },
+      message: "rssWarningBytes must be less than rssCriticalBytes",
+    },
+    {
+      name: "rss critical below default warning",
+      thresholds: { rssCriticalBytes: 1024 },
+      message: "rssWarningBytes must be less than rssCriticalBytes",
+    },
+    {
+      name: "heap warning above default critical",
+      thresholds: { heapUsedWarningBytes: 3 * 1024 * 1024 * 1024 },
+      message: "heapUsedWarningBytes must be less than heapUsedCriticalBytes",
+    },
+    {
+      name: "heap critical below default warning",
+      thresholds: { heapUsedCriticalBytes: 1024 },
+      message: "heapUsedWarningBytes must be less than heapUsedCriticalBytes",
+    },
+  ])("rejects partial threshold overrides that invert $name", ({ thresholds, message }) => {
+    const result = OpenClawSchema.safeParse({
+      diagnostics: {
+        memoryPressureThresholds: thresholds,
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(issueMessages(result.error.issues)).toContain(message);
+    }
+  });
+});
+
 describe("model provider localService config", () => {
   it("accepts standalone timeout overlays for bundled model providers", () => {
     const result = OpenClawSchema.safeParse({
