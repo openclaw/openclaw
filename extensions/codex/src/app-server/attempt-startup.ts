@@ -61,7 +61,7 @@ import {
 } from "./thread-lifecycle.js";
 
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
-const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_HEAD_START_MS = 50;
+const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_HEAD_START_MS = 150;
 
 type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
 
@@ -200,10 +200,6 @@ export async function startCodexAttemptThread(params: {
           let startupAttemptError: unknown;
           let startupAttemptSucceeded = false;
           try {
-            const initializeTimeoutMs = Math.max(
-              1,
-              startupDeadlineMs - Date.now() - CODEX_APP_SERVER_INITIALIZE_TIMEOUT_HEAD_START_MS,
-            );
             startupClient = await params.attemptClientFactory(
               params.appServer.start,
               params.startupAuthProfileId,
@@ -219,7 +215,8 @@ export async function startCodexAttemptThread(params: {
                   }
                 },
                 abandonSignal: startupAbandonController.signal,
-                timeoutMs: initializeTimeoutMs,
+                initializeTimeoutDeadlineMs:
+                  startupDeadlineMs - CODEX_APP_SERVER_INITIALIZE_TIMEOUT_HEAD_START_MS,
               },
             );
             const activeStartupClient = startupClient;

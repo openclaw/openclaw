@@ -106,6 +106,7 @@ function readLegacySharedCodexAppServerClientState(
 type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
+  initializeTimeoutDeadlineMs?: number;
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
@@ -119,6 +120,15 @@ type ResolvedCodexAppServerClientStartContext = {
   authProfileId: string | undefined;
   startOptions: CodexAppServerStartOptions;
 };
+
+function resolveCodexAppServerInitializeTimeoutMs(
+  options: CodexAppServerClientOptions | undefined,
+): number {
+  const deadlineMs = options?.initializeTimeoutDeadlineMs;
+  return typeof deadlineMs === "number" && Number.isFinite(deadlineMs)
+    ? Math.max(1, deadlineMs - Date.now())
+    : (options?.timeoutMs ?? 0);
+}
 
 async function resolveCodexAppServerClientStartContext(
   options?: CodexAppServerClientOptions,
@@ -230,7 +240,11 @@ async function acquireSharedCodexAppServerClient(
       client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
       client.addCloseHandler((closedClient) => clearSharedClientEntryIfCurrent(key, closedClient));
       try {
-        await client.initialize();
+        await withTimeout(
+          client.initialize(),
+          resolveCodexAppServerInitializeTimeoutMs(options),
+          "codex app-server initialize timed out",
+        );
         await applyCodexAppServerAuthProfile({
           client,
           agentDir,
@@ -247,11 +261,14 @@ async function acquireSharedCodexAppServerClient(
       }
     })());
   try {
-    const client = await withTimeout(
-      sharedPromise,
-      options?.timeoutMs ?? 0,
-      "codex app-server initialize timed out",
-    );
+    const client =
+      options?.initializeTimeoutDeadlineMs === undefined
+        ? await withTimeout(
+            sharedPromise,
+            options?.timeoutMs ?? 0,
+            "codex app-server initialize timed out",
+          )
+        : await sharedPromise;
     client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
     return release ? { client, release } : { client };
@@ -276,7 +293,11 @@ export async function createIsolatedCodexAppServerClient(
   const client = CodexAppServerClient.start(startOptions);
   const initialize = client.initialize();
   try {
-    await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
+    await withTimeout(
+      initialize,
+      resolveCodexAppServerInitializeTimeoutMs(options),
+      "codex app-server initialize timed out",
+    );
     await applyCodexAppServerAuthProfile({
       client,
       agentDir,
