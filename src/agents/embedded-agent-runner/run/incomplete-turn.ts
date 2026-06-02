@@ -470,6 +470,11 @@ export function resolveSilentToolResultReplyPayload(params: {
     : null;
 }
 
+/**
+ * Marks replay invalid whenever the recorded attempt might not be safe to
+ * replay or the current run ended in a compaction/incomplete-turn state that
+ * needs a fresh prompt boundary.
+ */
 export function resolveReplayInvalidFlag(params: {
   attempt: RunLivenessAttempt;
   incompleteTurnText?: string | null;
@@ -482,6 +487,7 @@ export function resolveReplayInvalidFlag(params: {
   );
 }
 
+/** Classifies the persisted run state used by session recovery and resume logic. */
 export function resolveRunLivenessState(params: {
   payloadCount: number;
   aborted: boolean;
