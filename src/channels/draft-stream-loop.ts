@@ -7,6 +7,7 @@ export type DraftStreamLoop = {
   resetPending: () => void;
   resetThrottleWindow: () => void;
   waitForInFlight: () => Promise<void>;
+  takePending?: () => string;
 };
 
 export function createDraftStreamLoop(params: {
@@ -125,6 +126,15 @@ export function createDraftStreamLoop(params: {
       if (inFlightPromise) {
         await inFlightPromise;
       }
+    },
+    takePending: () => {
+      const text = pendingText;
+      pendingText = "";
+      if (timer) {
+        clearTimeout(timer);
+        timer = undefined;
+      }
+      return text;
     },
   };
 }
