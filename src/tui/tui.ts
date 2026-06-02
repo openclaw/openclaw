@@ -373,16 +373,25 @@ export function canSubmitTuiChatMessage(params: {
   pendingChatRunId?: string | null;
   pendingOptimisticUserMessage?: boolean;
   message?: string;
+  queueMode?: "steer" | "followup" | "collect" | "interrupt";
 }): boolean {
   const stopText = params.message ? isChatStopCommandText(params.message) : false;
   if (stopText && (params.activeChatRunId || params.pendingChatRunId)) {
     return true;
   }
-  const pending = Boolean(params.pendingChatRunId) || params.pendingOptimisticUserMessage === true;
-  if (!params.local && params.activeChatRunId) {
+  if (params.pendingOptimisticUserMessage === true) {
     return false;
   }
-  return !pending;
+  const isSteer = (params.queueMode ?? "steer") === "steer";
+  if (isSteer) {
+    if (Boolean(params.pendingChatRunId)) {
+      return false;
+    }
+    if (!params.local && params.activeChatRunId) {
+      return false;
+    }
+  }
+  return true;
 }
 
 const TUI_BUSY_ACTIVITY_STATUSES = new Set([
@@ -1373,9 +1382,15 @@ export async function runTui(opts: RunTuiOptions): Promise<TuiResult> {
       pendingChatRunId: state.pendingChatRunId,
       pendingOptimisticUserMessage: state.pendingOptimisticUserMessage,
       message,
+      queueMode: sessionInfo.queueMode,
     });
   const notifyBlockedChatSubmit = () => {
-    chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
+    const qm = sessionInfo.queueMode ?? "steer";
+    chatLog.addSystem(
+      qm === "steer"
+        ? "agent is busy — press Esc to abort before sending a new message"
+        : "agent is busy — message could not be sent, please try again",
+    );
     tui.requestRender();
   };
   const submitHandler = createEditorSubmitHandler({

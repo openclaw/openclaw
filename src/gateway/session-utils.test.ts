@@ -372,6 +372,43 @@ describe("gateway session utils", () => {
     expect(row.thinkingDefault).toBe("medium");
   });
 
+  test("session rows expose entry queueMode when set", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "s1", updatedAt: 1, queueMode: "followup" },
+    });
+    expect(row.queueMode).toBe("followup");
+  });
+
+  test("session rows resolve queueMode from global config when entry has none", () => {
+    const cfg = {
+      ...createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      messages: { queue: { mode: "collect" } },
+    } as OpenClawConfig;
+    const row = buildGatewaySessionRow({
+      cfg,
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "s1", updatedAt: 1 },
+    });
+    expect(row.queueMode).toBe("collect");
+  });
+
+  test("session rows default queueMode to steer when no config is set", () => {
+    const row = buildGatewaySessionRow({
+      cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+      storePath: "",
+      store: {},
+      key: "agent:main:main",
+      entry: { sessionId: "s1", updatedAt: 1 },
+    });
+    expect(row.queueMode).toBe("steer");
+  });
+
   test("session rows ignore malformed compaction checkpoints", () => {
     const row = buildGatewaySessionRow({
       cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),

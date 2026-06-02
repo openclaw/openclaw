@@ -148,6 +148,64 @@ describe("canSubmitTuiChatMessage", () => {
       }),
     ).toBe(false);
   });
+
+  it("allows gateway submit in followup mode while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        queueMode: "followup",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows gateway submit in collect mode while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        queueMode: "collect",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows gateway submit in interrupt mode while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        queueMode: "interrupt",
+      }),
+    ).toBe(true);
+  });
+
+  it("allows submit with pending chat run id in followup mode", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingChatRunId: "run-pending",
+        queueMode: "followup",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks pending optimistic state even in non-steer modes", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        pendingOptimisticUserMessage: true,
+        queueMode: "followup",
+      }),
+    ).toBe(false);
+  });
+
+  it("blocks gateway submit in explicit steer mode while a run is active", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        queueMode: "steer",
+      }),
+    ).toBe(false);
+  });
 });
 
 describe("isTuiBusyActivityStatus", () => {

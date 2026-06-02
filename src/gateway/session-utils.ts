@@ -50,6 +50,7 @@ import {
   RECENT_ENDED_SUBAGENT_CHILD_SESSION_MS,
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
+import { resolveQueueSettings } from "../auto-reply/reply/queue/settings.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
@@ -2202,7 +2203,7 @@ export function buildGatewaySessionRow(params: {
     compactionCheckpointCount,
     latestCompactionCheckpoint,
     pluginExtensions: pluginExtensions.length > 0 ? pluginExtensions : undefined,
-    queueMode: entry?.queueMode,
+    queueMode: resolveQueueSettings({ cfg, channel, sessionEntry: entry }).mode,
   };
 }
 
