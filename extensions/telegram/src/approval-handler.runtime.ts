@@ -106,6 +106,7 @@ export const telegramApprovalNativeRuntime = createChannelApprovalNativeRuntimeA
   TelegramPendingDelivery,
   { chatId: string; messageThreadId?: number },
   PendingMessage,
+  boolean,
   never
 >({
   eventKinds: ["exec", "plugin"],
