@@ -815,10 +815,20 @@ export async function performGatewaySessionReset(params: {
     ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
   });
   const parsedRequestedKey = parseAgentSessionKey(params.key);
+  const parsedRequestedAgentId = normalizeOptionalString(parsedRequestedKey?.agentId)
+    ? normalizeAgentId(parsedRequestedKey?.agentId)
+    : undefined;
+  const resolvedTargetAgentId =
+    target.canonicalKey === "global"
+      ? target.agentId
+      : normalizeAgentId(resolveSessionStoreAgentId(cfg, target.canonicalKey));
   const requestedUnknownAgentId =
-    parsedRequestedKey?.agentId &&
-    !listAgentIds(cfg).includes(normalizeAgentId(parsedRequestedKey.agentId))
-      ? normalizeAgentId(parsedRequestedKey.agentId)
+    parsedRequestedAgentId &&
+    !listAgentIds(cfg).includes(parsedRequestedAgentId) &&
+    (!resolvedTargetAgentId ||
+      !listAgentIds(cfg).includes(resolvedTargetAgentId) ||
+      resolvedTargetAgentId === parsedRequestedAgentId)
+      ? parsedRequestedAgentId
       : undefined;
   if (requestedUnknownAgentId) {
     const { entry } = loadSessionEntry(params.key, {
