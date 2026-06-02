@@ -621,9 +621,13 @@ terminal summary, and sanitized error text.
     deprecated, accepted only for protocol compatibility, and ignored. Use
     `security.installPolicy` for operator-owned install decisions.
   - `allowSetupHooks` defaults to `false`. When set to `true`, the trusted admin
-    request may run `metadata.openclaw.setup.script` after the install payload is
-    staged and before publishing the new skill directory; hook failures fail the
-    install.
+    request may run `metadata.openclaw.setup.script`. ClawHub and upload installs
+    run setup after the install payload is staged and before publishing the new
+    skill directory; hook failures fail the install.
+  - Gateway installer mode runs setup against the already installed skill
+    directory after the declared `metadata.openclaw.install` action completes.
+    This mode does not provide staged publish or rollback semantics; hook
+    failures fail the installer request.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode updates one tracked slug or all tracked ClawHub installs in
     the default agent workspace. `allowSetupHooks: true` runs setup hooks for
