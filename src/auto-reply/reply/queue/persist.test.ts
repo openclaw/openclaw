@@ -12,6 +12,10 @@ import {
   loadFollowupQueueEntries,
   replaceFollowupQueueEntries,
 } from "../../../infra/followup-queue-sqlite.js";
+import {
+  detectLegacyStateMigrations,
+  runLegacyStateMigrations,
+} from "../../../infra/state-migrations.js";
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import {
   clearFollowupQueuesRestoredFlagForTest,
@@ -401,6 +405,63 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     clearFollowupQueuesRestoredFlagForTest();
     restoreFollowupQueues();
     expect(FOLLOWUP_QUEUES.get(TEST_KEY)!.items[0].run.config).toBe(newConfig);
+  });
+
+  it("doctor migration imports legacy JSON sidecar then restore repopulates the queue", async () => {
+    const legacyPath = path.join(tmpDir, STATE_FILE);
+    await fs.writeFileSync(
+      legacyPath,
+      JSON.stringify({
+        version: 1,
+        updatedAt: 200,
+        entries: [
+          [
+            TEST_KEY,
+            {
+              items: [
+                {
+                  prompt: "legacy sidecar item",
+                  enqueuedAt: 200,
+                  originatingChannel: "telegram",
+                  originatingTo: "legacy-to",
+                  run: {
+                    agentId: "main",
+                    sessionId: "sess-legacy",
+                    sessionKey: TEST_KEY,
+                    provider: "anthropic",
+                    model: "claude",
+                    timeoutMs: 30000,
+                    blockReplyBreak: "message_end",
+                  },
+                },
+              ],
+              mode: "steer",
+              lastEnqueuedAt: 200,
+              droppedCount: 0,
+              summaryLines: [],
+            },
+          ],
+        ],
+      }),
+      "utf8",
+    );
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: { agents: { list: [{ id: "main", default: true }] } } as never,
+      env: process.env,
+      homedir: () => tmpDir,
+    });
+    const migration = await runLegacyStateMigrations({ detected });
+    expect(migration.changes).toContain("Migrated 1 followup queue entry → shared SQLite state");
+    expect(fs.existsSync(legacyPath)).toBe(false);
+
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    clearFollowupQueuesRestoredFlagForTest();
+    restoreFollowupQueues();
+
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY);
+    expect(restored?.items[0]?.prompt).toBe("legacy sidecar item");
+    expect(restored?.items[0]?.originatingTo).toBe("legacy-to");
   });
 
   it("skips entries with missing or invalid items array", () => {
