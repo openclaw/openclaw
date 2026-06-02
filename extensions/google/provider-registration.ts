@@ -1,6 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ProviderPlugin,
+  ProviderReasoningOutputModeContext,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { normalizeGoogleModelId } from "./model-id.js";
 import { GOOGLE_GEMINI_DEFAULT_MODEL, applyGoogleGeminiModelDefault } from "./onboard.js";
 import {
@@ -17,6 +20,17 @@ import {
   createGoogleGenerativeAiTransportStreamFn,
   createGoogleVertexTransportStreamFn,
 } from "./transport-stream.js";
+
+function resolveGoogleReasoningOutputMode(
+  ctx: ProviderReasoningOutputModeContext,
+): "native" | "tagged" {
+  if (ctx.provider === "google" || ctx.provider === "google-vertex") {
+    return ctx.modelApi === "google-generative-ai" || ctx.modelApi === "google-vertex"
+      ? "native"
+      : "tagged";
+  }
+  return "tagged";
+}
 
 export function buildGoogleProvider(): ProviderPlugin {
   return {
@@ -80,7 +94,7 @@ export function buildGoogleProvider(): ProviderPlugin {
     // Tagged mode simultaneously injects <think>/<final> which the model opens before a tool
     // call, never closes, leaving the post-tool turn empty (payloads=0). The CLI backend keeps
     // tagged mode because it emits JSON text, not native thought parts.
-    resolveReasoningOutputMode: () => "native" as const,
+    resolveReasoningOutputMode: resolveGoogleReasoningOutputMode,
     isModernModelRef: ({ modelId }) => isModernGoogleModel(modelId),
   };
 }

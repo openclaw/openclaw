@@ -118,6 +118,38 @@ describe("google provider plugin hooks", () => {
     ).toBe("tagged");
   });
 
+  it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-antigravity");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-antigravity",
+        modelApi: "openai-completions",
+        modelId: "gemini-3-pro-low",
+      } as never),
+    ).toBe("tagged");
+  });
+
+  it("keeps google-vertex hook aliases on native reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
+        modelApi: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+  });
+
   it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
