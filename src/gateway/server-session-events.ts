@@ -23,6 +23,11 @@ import {
 type SessionEventSubscribers = Pick<SessionEventSubscriberRegistry, "getAll">;
 type SessionMessageSubscribers = Pick<SessionMessageSubscriberRegistry, "get">;
 
+/**
+ * Expands a session key into the message-subscription channels that should
+ * receive transcript events. Global sessions include an agent-scoped key so
+ * per-agent clients do not accidentally receive cross-agent fanout.
+ */
 function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string): string[] {
   const normalizedAgentId = normalizeOptionalString(agentId);
   if (sessionKey === "global") {
@@ -38,6 +43,11 @@ function resolveSessionMessageBroadcastKeys(sessionKey: string, agentId?: string
   return [sessionKey];
 }
 
+/**
+ * Projects the current Gateway session row into event payload fields. The
+ * unscoped `global` payload hides goal state so agent-specific goals are only
+ * exposed on the matching scoped session channel.
+ */
 function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
@@ -111,6 +121,11 @@ function buildGatewaySessionSnapshot(params: {
   };
 }
 
+/**
+ * Creates the transcript update handler registered with the transcript event
+ * bus. Updates are serialized so message sequence fallback reads observe store
+ * state in the same order transcript mutations were emitted.
+ */
 export function createTranscriptUpdateBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
@@ -124,6 +139,11 @@ export function createTranscriptUpdateBroadcastHandler(params: {
   };
 }
 
+/**
+ * Broadcasts a transcript update to session-message subscribers and the broader
+ * session-event subscribers. Non-displayable transcript records still emit a
+ * `sessions.changed` message-phase event so session lists refresh.
+ */
 async function handleTranscriptUpdateBroadcast(
   params: {
     broadcastToConnIds: GatewayBroadcastToConnIdsFn;
@@ -158,6 +178,8 @@ async function handleTranscriptUpdateBroadcast(
   }
   let messageSeq = asPositiveSafeInteger(update.messageSeq);
   if (messageSeq === undefined) {
+    // Transcript writers usually know the sequence number. Archive/import paths
+    // may not, so fall back to the indexed count before broadcasting.
     const { entry, storePath } = loadSessionEntry(sessionKey, { agentId: visibleAgentId });
     messageSeq = entry?.sessionId
       ? asPositiveSafeInteger(
@@ -215,6 +237,11 @@ async function handleTranscriptUpdateBroadcast(
   );
 }
 
+/**
+ * Creates the lifecycle event handler registered with the session lifecycle
+ * event bus. Lifecycle events only fan out through `sessions.changed`, because
+ * they update session rows rather than append transcript messages.
+ */
 export function createLifecycleEventBroadcastHandler(params: {
   broadcastToConnIds: GatewayBroadcastToConnIdsFn;
   sessionEventSubscribers: SessionEventSubscribers;
