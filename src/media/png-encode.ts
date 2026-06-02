@@ -32,7 +32,10 @@ function pngChunk(type: string, data: Buffer): Buffer {
   return Buffer.concat([len, typeBuf, data, crcBuf]);
 }
 
-/** Write a pixel to an RGBA buffer. Ignores out-of-bounds writes. */
+/**
+ * Writes one RGBA pixel into a width-strided buffer.
+ * Out-of-bounds coordinates are ignored so fixture drawing code can clip shapes cheaply.
+ */
 export function fillPixel(
   buf: Buffer,
   x: number,
@@ -85,12 +88,12 @@ function encodePng(buffer: Buffer, width: number, height: number, channels: 3 | 
   ]);
 }
 
-/** Encode an RGB buffer as a PNG image. */
+/** Encodes tightly packed RGB bytes (`width * height * 3`) as a PNG image. */
 export function encodePngRgb(buffer: Buffer, width: number, height: number): Buffer {
   return encodePng(buffer, width, height, 3);
 }
 
-/** Encode an RGBA buffer as a PNG image. */
+/** Encodes tightly packed RGBA bytes (`width * height * 4`) as a PNG image. */
 export function encodePngRgba(buffer: Buffer, width: number, height: number): Buffer {
   return encodePng(buffer, width, height, 4);
 }
