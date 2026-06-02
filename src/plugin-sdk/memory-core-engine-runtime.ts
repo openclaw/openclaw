@@ -90,6 +90,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
   removedOverflowEntries?: number;
+  removedStaleTempFiles?: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };

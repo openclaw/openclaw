@@ -135,6 +135,7 @@ function formatRepairSummary(repair: {
   rewroteStore: boolean;
   removedInvalidEntries: number;
   removedOverflowEntries?: number;
+  removedStaleTempFiles?: number;
   removedStaleLock: boolean;
 }): string {
   const actions: string[] = [];
@@ -150,6 +151,12 @@ function formatRepairSummary(repair: {
   }
   if (repair.removedStaleLock) {
     actions.push("removed stale promotion lock");
+  }
+  const removedStaleTempFiles = repair.removedStaleTempFiles ?? 0;
+  if (removedStaleTempFiles > 0) {
+    actions.push(
+      `removed ${removedStaleTempFiles} stale temp file${removedStaleTempFiles === 1 ? "" : "s"}`,
+    );
   }
   return actions.join(", ");
 }

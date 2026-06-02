@@ -2969,6 +2969,66 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("removes stale private store temp files for recall and phase signals", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const artifactsDir = path.join(workspaceDir, "memory", ".dreams");
+      const tempNames = [
+        ".short-term-recall.json.abcdef123456.tmp",
+        ".phase-signals.json.abcdef123456.tmp",
+        ".short-term-recall.json.00000000-0000-4000-8000-000000000000.fallback.tmp",
+      ];
+      const staleMtime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      for (const tempName of tempNames) {
+        const tempPath = path.join(artifactsDir, tempName);
+        await fs.writeFile(tempPath, "{}", "utf-8");
+        await fs.utimes(tempPath, staleMtime, staleMtime);
+      }
+
+      const auditBefore = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(auditBefore.issues.map((issue) => issue.code)).toContain("recall-temp-stale");
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(true);
+      expect(repair.removedStaleTempFiles).toBe(3);
+      for (const tempName of tempNames) {
+        await expect(fs.stat(path.join(artifactsDir, tempName))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+      }
+      const auditAfter = await auditShortTermPromotionArtifacts({ workspaceDir });
+      expect(auditAfter.issues.map((issue) => issue.code)).not.toContain("recall-temp-stale");
+    });
+  });
+
+  it("preserves fresh and unrelated temp files during repair", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const artifactsDir = path.join(workspaceDir, "memory", ".dreams");
+      const preservedNames = [
+        ".short-term-recall.json.abcdef123456.tmp",
+        ".other.json.abcdef123456.tmp",
+        ".fs-safe-replace.123.uuid.tmp",
+        "random.tmp",
+      ];
+      const staleMtime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      for (const tempName of preservedNames) {
+        const tempPath = path.join(artifactsDir, tempName);
+        await fs.writeFile(tempPath, "{}", "utf-8");
+        if (tempName !== ".short-term-recall.json.abcdef123456.tmp") {
+          await fs.utimes(tempPath, staleMtime, staleMtime);
+        }
+      }
+
+      const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
+
+      expect(repair.changed).toBe(false);
+      expect(repair.removedStaleTempFiles).toBe(0);
+      for (const tempName of preservedNames) {
+        await expect(fs.stat(path.join(artifactsDir, tempName))).resolves.toBeDefined();
+      }
+    });
+  });
+
   it("uses score tie-breakers when capping stores with invalid timestamps", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const maxEntries = testing.SHORT_TERM_RECALL_MAX_ENTRIES;

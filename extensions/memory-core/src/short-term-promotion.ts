@@ -44,6 +44,7 @@ const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "ph
 const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
 const SHORT_TERM_LOCK_WAIT_TIMEOUT_MS = 10_000;
 const SHORT_TERM_LOCK_STALE_MS = 60_000;
+const SHORT_TERM_TEMP_STALE_MS = 60 * 60 * 1000;
 const SHORT_TERM_LOCK_RETRY_DELAY_MS = 40;
 // Repeated dreaming revisits should be able to clear the default promotion gate
 // without requiring separate organic recall traffic for the same snippet.
@@ -163,6 +164,7 @@ type ShortTermAuditIssue = {
     | "recall-store-over-limit"
     | "recall-lock-stale"
     | "recall-lock-unreadable"
+    | "recall-temp-stale"
     | "qmd-index-missing"
     | "qmd-index-empty"
     | "qmd-collections-empty";
@@ -195,6 +197,7 @@ export type RepairShortTermPromotionArtifactsResult = {
   changed: boolean;
   removedInvalidEntries: number;
   removedOverflowEntries: number;
+  removedStaleTempFiles: number;
   rewroteStore: boolean;
   removedStaleLock: boolean;
 };
@@ -743,6 +746,61 @@ function resolveLockPath(workspaceDir: string): string {
 
 function resolveShortTermArtifactsDir(workspaceDir: string): string {
   return path.dirname(resolveLockPath(workspaceDir));
+}
+
+function isShortTermStoreTempFileName(fileName: string): boolean {
+  const storeNames = [
+    path.basename(SHORT_TERM_STORE_RELATIVE_PATH),
+    path.basename(SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH),
+  ];
+  return storeNames.some((storeName) => {
+    if (!fileName.startsWith(`.${storeName}.`)) {
+      return false;
+    }
+    return (
+      /^[a-f0-9]{12}\.tmp$/i.test(fileName.slice(storeName.length + 2)) ||
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.fallback\.tmp$/i.test(
+        fileName.slice(storeName.length + 2),
+      )
+    );
+  });
+}
+
+async function countStaleShortTermStoreTempFiles(workspaceDir: string): Promise<number> {
+  return await removeStaleShortTermStoreTempFiles(workspaceDir, { dryRun: true });
+}
+
+async function removeStaleShortTermStoreTempFiles(
+  workspaceDir: string,
+  opts: { dryRun?: boolean } = {},
+): Promise<number> {
+  const artifactsDir = resolveShortTermArtifactsDir(workspaceDir);
+  let removed = 0;
+  const nowMs = Date.now();
+  for (const dirent of await fs.readdir(artifactsDir, { withFileTypes: true }).catch((err) => {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return [];
+    }
+    throw err;
+  })) {
+    if (!dirent.isFile() || !isShortTermStoreTempFileName(dirent.name)) {
+      continue;
+    }
+    const tempPath = path.join(artifactsDir, dirent.name);
+    const stat = await fs.stat(tempPath);
+    if (nowMs - stat.mtimeMs <= SHORT_TERM_TEMP_STALE_MS) {
+      continue;
+    }
+    if (!opts.dryRun) {
+      await fs.unlink(tempPath).catch((err) => {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+          throw err;
+        }
+      });
+    }
+    removed += 1;
+  }
+  return removed;
 }
 
 async function ensureShortTermArtifactsDir(workspaceDir: string): Promise<void> {
@@ -2272,6 +2330,16 @@ export async function auditShortTermPromotionArtifacts(params: {
     }
   }
 
+  const staleTempFileCount = await countStaleShortTermStoreTempFiles(workspaceDir);
+  if (staleTempFileCount > 0) {
+    issues.push({
+      severity: "warn",
+      code: "recall-temp-stale",
+      message: `${staleTempFileCount} stale short-term store temp file${staleTempFileCount === 1 ? "" : "s"} found.`,
+      fixable: true,
+    });
+  }
+
   let qmd: ShortTermAuditSummary["qmd"];
   if (params.qmd) {
     qmd = {
@@ -2340,6 +2408,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   let removedInvalidEntries = 0;
   let removedOverflowEntries = 0;
   let removedStaleLock = false;
+  let removedStaleTempFiles = 0;
 
   try {
     const lockPath = resolveLockPath(workspaceDir);
@@ -2356,6 +2425,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   }
 
   await withShortTermLock(workspaceDir, async () => {
+    removedStaleTempFiles = await removeStaleShortTermStoreTempFiles(workspaceDir);
     const storePath = resolveStorePath(workspaceDir);
     try {
       const raw = await fs.readFile(storePath, "utf-8");
@@ -2408,9 +2478,10 @@ export async function repairShortTermPromotionArtifacts(params: {
   });
 
   return {
-    changed: rewroteStore || removedStaleLock,
+    changed: rewroteStore || removedStaleLock || removedStaleTempFiles > 0,
     removedInvalidEntries,
     removedOverflowEntries,
+    removedStaleTempFiles,
     rewroteStore,
     removedStaleLock,
   };
