@@ -204,6 +204,22 @@ describe("buildSandboxCreateArgs", () => {
     expectFlagValues(args, "--gpus", ["device=GPU-123"]);
   });
 
+  it("emits Docker --cap-add entries as separate arguments", () => {
+    const cfg = createSandboxConfig({
+      capAdd: ["NET_ADMIN", "SYS_PTRACE"],
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-cap-add",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expectFlagValues(args, "--cap-add", ["NET_ADMIN", "SYS_PTRACE"]);
+    expect(valuesForFlag(args, "--cap-add")).toEqual(["NET_ADMIN", "SYS_PTRACE"]);
+  });
+
   it("emits -v flags for safe custom binds", () => {
     const cfg: SandboxDockerConfig = {
       image: "openclaw-sandbox:bookworm-slim",

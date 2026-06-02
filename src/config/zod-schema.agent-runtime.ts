@@ -183,6 +183,7 @@ const SandboxDockerSchema = z
     memory: z.union([z.string(), z.number()]).optional(),
     memorySwap: z.union([z.string(), z.number()]).optional(),
     cpus: z.number().positive().optional(),
+    capAdd: z.array(z.string().min(1)).optional(),
     gpus: z.string().min(1).optional(),
     ulimits: z
       .record(

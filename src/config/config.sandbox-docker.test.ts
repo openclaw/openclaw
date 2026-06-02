@@ -131,6 +131,42 @@ describe("sandbox docker config", () => {
     expect(res.ok).toBe(false);
   });
 
+  it("accepts Docker --cap-add list in sandbox.docker config", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              capAdd: ["NET_ADMIN", "SYS_PTRACE"],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.config.agents?.defaults?.sandbox?.docker?.capAdd).toEqual([
+        "NET_ADMIN",
+        "SYS_PTRACE",
+      ]);
+    }
+  });
+
+  it("rejects Docker --cap-add list containing an empty string entry", () => {
+    const res = validateConfigObject({
+      agents: {
+        defaults: {
+          sandbox: {
+            docker: {
+              capAdd: ["NET_ADMIN", ""],
+            },
+          },
+        },
+      },
+    });
+    expect(res.ok).toBe(false);
+  });
+
   it("rejects network host mode via Zod schema validation", () => {
     const res = validateConfigObject({
       agents: {

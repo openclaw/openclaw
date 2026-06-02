@@ -29,6 +29,8 @@ export type SandboxDockerSettings = {
   memorySwap?: string | number;
   /** Limit container CPU shares (e.g. 0.5, 1, 2). */
   cpus?: number;
+  /** Linux capabilities to grant via Docker --cap-add (e.g. ["NET_ADMIN"]). */
+  capAdd?: string[];
   /** GPU devices to expose via Docker --gpus (e.g. "all", "device=GPU-uuid"). */
   gpus?: string;
   /**
