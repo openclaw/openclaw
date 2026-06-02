@@ -816,7 +816,7 @@ describe("installPluginFromNpmSpec e2e", () => {
     ).resolves.toBeTruthy();
   });
 
-  it("rolls back managed peer dependencies added before a failed install scan", async () => {
+  it("rolls back managed peer dependencies added before failed dependency validation", async () => {
     const rootDir = await makeTempDir("npm-plugin-peer-rollback-e2e");
     const npmRoot = path.join(rootDir, "managed-npm");
     const blockedPlugin = `blocked-plugin-${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
@@ -827,11 +827,23 @@ describe("installPluginFromNpmSpec e2e", () => {
         latest: "1.0.0",
         versions: [
           await packPlugin({
-            indexJs: "eval('1');\n",
+            dependencies: { "plain-crypto-js": "1.0.0" },
             packageName: blockedPlugin,
             peerDependencies: { [runtimePeer]: "^1.0.0" },
             peerDependenciesMeta: {},
             pluginId: blockedPlugin,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: "plain-crypto-js",
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: "plain-crypto-js",
+            pluginId: "plain-crypto-js",
             version: "1.0.0",
             rootDir,
           }),
@@ -954,7 +966,7 @@ describe("installPluginFromNpmSpec e2e", () => {
         latest: "1.0.0",
         versions: [
           await packPlugin({
-            indexJs: "eval('1');\n",
+            dependencies: { "plain-crypto-js": "1.0.0" },
             packageName: blockedPlugin,
             peerDependencies: {
               [existingRootDependency]: "^1.0.0",
@@ -962,6 +974,18 @@ describe("installPluginFromNpmSpec e2e", () => {
             },
             peerDependenciesMeta: {},
             pluginId: blockedPlugin,
+            version: "1.0.0",
+            rootDir,
+          }),
+        ],
+      },
+      {
+        packageName: "plain-crypto-js",
+        latest: "1.0.0",
+        versions: [
+          await packPlugin({
+            packageName: "plain-crypto-js",
+            pluginId: "plain-crypto-js",
             version: "1.0.0",
             rootDir,
           }),
