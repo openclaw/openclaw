@@ -19,6 +19,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { saveMediaBuffer, saveMediaStream, type SavedMedia } from "./store.js";
 
+/** Default remote media fetch cap shared by buffer reads and store writes. */
 export const DEFAULT_FETCH_MEDIA_MAX_BYTES = MAX_DOCUMENT_BYTES;
 
 /** Remote media bytes plus metadata before they are persisted to the media store. */
@@ -33,8 +34,10 @@ export type SavedRemoteMedia = SavedMedia & {
   fileName?: string;
 };
 
+/** Closed error classes callers can use for retry and diagnostic policy. */
 export type MediaFetchErrorCode = "max_bytes" | "http_error" | "fetch_failed";
 
+/** Retry policy applied around the complete guarded fetch and body read/save operation. */
 export type MediaFetchRetryOptions = RetryOptions;
 
 /** Structured fetch error used for retry decisions and caller-facing diagnostics. */
@@ -54,6 +57,7 @@ export class MediaFetchError extends Error {
   }
 }
 
+/** Fetch-compatible injection point used by tests and guarded network callers. */
 export type FetchLike = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 /** Alternate dispatcher/lookup pair tried inside a single guarded fetch attempt. */
@@ -378,6 +382,8 @@ function resolveResponseContentType(params: {
   }
   const headerContentType = params.headerContentType?.split(";")[0]?.trim().toLowerCase();
   const fallbackContentType = params.fallbackContentType.split(";")[0]?.trim().toLowerCase();
+  // Some platforms mislabel audio/video container uploads by top-level type.
+  // Preserve the caller hint when only that top-level prefix differs.
   if (
     headerContentType?.startsWith("video/") &&
     fallbackContentType?.startsWith("audio/") &&
