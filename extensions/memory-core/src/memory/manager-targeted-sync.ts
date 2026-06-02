@@ -22,6 +22,18 @@ export function clearMemorySyncedSessionFiles(params: {
   return params.sessionsDirtyFiles.size > 0;
 }
 
+export function markMemoryTargetSessionFilesDirty(params: {
+  sessionsDirtyFiles: Set<string>;
+  targetSessionFiles?: Iterable<string> | null;
+}): boolean {
+  if (params.targetSessionFiles) {
+    for (const targetSessionFile of params.targetSessionFiles) {
+      params.sessionsDirtyFiles.add(targetSessionFile);
+    }
+  }
+  return params.sessionsDirtyFiles.size > 0;
+}
+
 export async function runMemoryTargetedSessionSync(params: {
   hasSessionSource: boolean;
   targetSessionFiles: Set<string> | null;
@@ -63,12 +75,12 @@ export async function runMemoryTargetedSessionSync(params: {
     if (!activated) {
       throw err;
     }
-    for (const targetSessionFile of params.targetSessionFiles) {
-      params.sessionsDirtyFiles.add(targetSessionFile);
-    }
     return {
       handled: true,
-      sessionsDirty: true,
+      sessionsDirty: markMemoryTargetSessionFilesDirty({
+        sessionsDirtyFiles: params.sessionsDirtyFiles,
+        targetSessionFiles: params.targetSessionFiles,
+      }),
     };
   }
 }

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   clearMemorySyncedSessionFiles,
+  markMemoryTargetSessionFilesDirty,
   runMemoryTargetedSessionSync,
 } from "./manager-targeted-sync.js";
 
@@ -16,6 +17,20 @@ describe("memory targeted session sync", () => {
 
     expect(sessionsDirtyFiles.has(secondSessionPath)).toBe(true);
     expect(sessionsDirty).toBe(true);
+  });
+
+  it("marks target sessions dirty while identity sync is paused", () => {
+    const targetSessionPath = "/tmp/paused-target.jsonl";
+    const sessionsDirtyFiles = new Set(["/tmp/other-dirty.jsonl"]);
+
+    const sessionsDirty = markMemoryTargetSessionFilesDirty({
+      sessionsDirtyFiles,
+      targetSessionFiles: [targetSessionPath],
+    });
+
+    expect(sessionsDirty).toBe(true);
+    expect(sessionsDirtyFiles.has(targetSessionPath)).toBe(true);
+    expect(sessionsDirtyFiles.has("/tmp/other-dirty.jsonl")).toBe(true);
   });
 
   it("leaves targeted sessions dirty after fallback activates during targeted sync", async () => {

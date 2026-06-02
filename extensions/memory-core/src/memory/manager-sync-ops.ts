@@ -69,7 +69,10 @@ import {
   loadMemorySourceFileState,
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
-import { runMemoryTargetedSessionSync } from "./manager-targeted-sync.js";
+import {
+  markMemoryTargetSessionFilesDirty,
+  runMemoryTargetedSessionSync,
+} from "./manager-targeted-sync.js";
 import {
   recordMemoryWatchEventPath,
   settleMemoryWatchEventPaths,
@@ -1788,7 +1791,11 @@ export abstract class MemoryManagerSyncOps {
       needsExplicitIdentityReindex;
     if (indexIdentity.status !== "valid" && !needsFullReindex) {
       this.dirty = true;
-      if (hasTargetSessionFiles || this.sessionsDirtyFiles.size > 0) {
+      const sessionsDirty = markMemoryTargetSessionFilesDirty({
+        sessionsDirtyFiles: this.sessionsDirtyFiles,
+        targetSessionFiles,
+      });
+      if (sessionsDirty) {
         this.sessionsDirty = true;
       }
       return;
