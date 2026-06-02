@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   GITHUB_ERROR_BODY_MAX_BYTES,
   canAutoscrubPullRequest,
@@ -34,6 +34,10 @@ const headSha = "a".repeat(40);
 const staleSha = "b".repeat(40);
 
 describe("dependency guard script", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("detects dependency guard file surfaces", () => {
     expect(isDependencyFile("pnpm-lock.yaml")).toBe(true);
     expect(isDependencyFile("package.json")).toBe(false);
@@ -662,5 +666,66 @@ describe("dependency guard script", () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+
+  it("aborts stalled GitHub API fetches at the request timeout", async () => {
+    let signal: AbortSignal | undefined;
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+
+    vi.useFakeTimers();
+    const request = githubApi("token", {
+      timeoutMs: 5,
+      fetchImpl: ((_url, init) => {
+        signal = init?.signal ?? undefined;
+        markFetchStarted();
+        return new Promise(() => {});
+      }) as typeof fetch,
+    }).request("/repos/openclaw/openclaw");
+    const rejection = expect(request).rejects.toThrow(
+      /GitHub API GET \/repos\/openclaw\/openclaw exceeded timeout 5ms/u,
+    );
+
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
+    expect(signal?.aborted).toBe(true);
+  });
+
+  it("keeps the GitHub API timeout active while reading response bodies", async () => {
+    let signal: AbortSignal | undefined;
+    let markFetchStarted!: () => void;
+    const fetchStarted = new Promise<void>((resolve) => {
+      markFetchStarted = resolve;
+    });
+
+    vi.useFakeTimers();
+    const request = githubApi("token", {
+      timeoutMs: 5,
+      fetchImpl: ((_url, init) => {
+        signal = init?.signal ?? undefined;
+        markFetchStarted();
+        return Promise.resolve(
+          new Response(
+            new ReadableStream({
+              start() {},
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+        );
+      }) as typeof fetch,
+    }).request("/repos/openclaw/openclaw");
+    const rejection = expect(request).rejects.toThrow(
+      /GitHub API GET \/repos\/openclaw\/openclaw exceeded timeout 5ms/u,
+    );
+
+    await fetchStarted;
+    await vi.advanceTimersByTimeAsync(5);
+
+    await rejection;
+    expect(signal?.aborted).toBe(true);
   });
 });

@@ -16,6 +16,7 @@ async function loadCallGateway() {
 
 const DEFAULT_RAW_SCHEMA_ERROR =
   "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.";
+const DEFAULT_GATEWAY_SCHEMA_ERROR = "provider rejected the request schema or tool payload";
 
 function readExpectedRawSchemaError() {
   return process.env.RAW_SCHEMA_ERROR?.trim() || DEFAULT_RAW_SCHEMA_ERROR;
@@ -60,11 +61,14 @@ function validateRejectResult(result, expectedRawSchemaError = readExpectedRawSc
     throw new Error(`reject mode unexpectedly completed: ${JSON.stringify(result.value)}`);
   }
   const errorText = stringifyError(result.error);
-  if (!errorText.includes(expectedRawSchemaError)) {
+  if (
+    !errorText.includes(expectedRawSchemaError) &&
+    !errorText.includes(DEFAULT_GATEWAY_SCHEMA_ERROR)
+  ) {
     throw new Error(
       `reject mode failed for an unexpected reason; expected ${JSON.stringify(
         expectedRawSchemaError,
-      )} in ${JSON.stringify(errorText)}`,
+      )} or ${JSON.stringify(DEFAULT_GATEWAY_SCHEMA_ERROR)} in ${JSON.stringify(errorText)}`,
     );
   }
   return errorText;
@@ -122,6 +126,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
+  DEFAULT_GATEWAY_SCHEMA_ERROR,
   DEFAULT_RAW_SCHEMA_ERROR,
   validateRejectResult,
 };

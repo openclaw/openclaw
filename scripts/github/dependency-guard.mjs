@@ -8,6 +8,7 @@ export const dependencyGraphGuardMarker = "<!-- openclaw:dependency-graph-guard 
 export const dependencyChangedLabel = "dependencies-changed";
 export const allowDependenciesCommand = "/allow-dependencies-change";
 export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
+export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
 
 const maxListedFiles = 25;
 const autoscrubCommitMessage = "chore: remove dependency lockfile change";
@@ -491,33 +492,69 @@ export async function readBoundedGitHubErrorText(response, maxBytes = GITHUB_ERR
   });
 }
 
-export function githubApi(token) {
+function timeoutError(path, method, timeoutMs) {
+  return new Error(`GitHub API ${method} ${path} exceeded timeout ${timeoutMs}ms`);
+}
+
+function combineAbortSignals(signals) {
+  const activeSignals = signals.filter(Boolean);
+  if (activeSignals.length === 0) {
+    return undefined;
+  }
+  if (activeSignals.length === 1) {
+    return activeSignals[0];
+  }
+  return AbortSignal.any(activeSignals);
+}
+
+export function githubApi(token, options = {}) {
+  const fetchImpl = options.fetchImpl ?? fetch;
+  const timeoutMs = options.timeoutMs ?? GITHUB_API_REQUEST_TIMEOUT_MS;
   const baseHeaders = {
     accept: "application/vnd.github+json",
     authorization: `Bearer ${token}`,
     "user-agent": "openclaw-dependency-guard",
     "x-github-api-version": "2022-11-28",
   };
-  const request = async (path, options = {}) => {
-    const response = await fetch(`https://api.github.com${path}`, {
-      ...options,
-      headers: { ...baseHeaders, ...options.headers },
+  const request = async (path, requestOptions = {}) => {
+    const method = requestOptions.method ?? "GET";
+    const timeoutController = new AbortController();
+    let timeout;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeout = setTimeout(() => {
+        timeoutController.abort();
+        reject(timeoutError(path, method, timeoutMs));
+      }, timeoutMs);
+      timeout.unref?.();
     });
-    if (response.status === 204) {
-      return null;
-    }
-    if (!response.ok) {
-      let errorText;
-      try {
-        errorText = await readBoundedGitHubErrorText(response);
-      } catch (bodyError) {
-        errorText = bodyError instanceof Error ? bodyError.message : String(bodyError);
+    const operationPromise = (async () => {
+      const response = await fetchImpl(`https://api.github.com${path}`, {
+        ...requestOptions,
+        signal: combineAbortSignals([requestOptions.signal, timeoutController.signal]),
+        headers: { ...baseHeaders, ...requestOptions.headers },
+      });
+      if (response.status === 204) {
+        return null;
       }
-      const error = new Error(`${response.status} ${response.statusText}: ${errorText}`);
-      error.status = response.status;
-      throw error;
+      if (!response.ok) {
+        let errorText;
+        try {
+          errorText = await readBoundedGitHubErrorText(response);
+        } catch (bodyError) {
+          errorText = bodyError instanceof Error ? bodyError.message : String(bodyError);
+        }
+        const error = new Error(`${response.status} ${response.statusText}: ${errorText}`);
+        error.status = response.status;
+        throw error;
+      }
+      return response.json();
+    })();
+    operationPromise.catch(() => {});
+    try {
+      return await Promise.race([operationPromise, timeoutPromise]);
+    } finally {
+      clearTimeout(timeout);
     }
-    return response.json();
   };
   return {
     request,

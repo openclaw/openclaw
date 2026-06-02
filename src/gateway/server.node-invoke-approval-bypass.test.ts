@@ -24,20 +24,22 @@ installGatewayTestHooks({ scope: "suite" });
 const NODE_CONNECT_TIMEOUT_MS = 10_000;
 const CONNECT_REQ_TIMEOUT_MS = 2_000;
 
-function createDeviceIdentity(): DeviceIdentity {
+function createDeviceKeyMaterial(label: string): DeviceIdentity & { publicKeyRaw: string } {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
   const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
-  const deviceId = deriveDeviceIdFromPublicKey(publicKeyRaw);
-  if (!deviceId) {
-    throw new Error("failed to create test device identity");
-  }
+  const deviceId = requireNonEmptyString(deriveDeviceIdFromPublicKey(publicKeyRaw), label);
   return {
     deviceId,
     publicKeyPem,
     privateKeyPem,
+    publicKeyRaw,
   };
+}
+
+function createDeviceIdentity(): DeviceIdentity {
+  return createDeviceKeyMaterial("test device id");
 }
 
 async function expectNoForwardedInvoke(hasInvoke: () => boolean): Promise<void> {
@@ -81,6 +83,16 @@ function createInvokeParamCapture() {
       return requireRecord(lastInvokeParams, "forwarded invoke params");
     },
   };
+}
+
+async function expectForwardedApprovedParams(params: {
+  invokeCapture: ReturnType<typeof createInvokeParamCapture>;
+  absentKey: string;
+}): Promise<void> {
+  const forwardedParams = await params.invokeCapture.waitForParams();
+  expect(forwardedParams["approved"]).toBe(true);
+  expect(forwardedParams["approvalDecision"]).toBe("allow-once");
+  expect(forwardedParams[params.absentKey]).toBeUndefined();
 }
 
 function requireNonEmptyString(value: string | null | undefined, label: string): string {
@@ -370,14 +382,7 @@ describe("node.invoke approval bypass", () => {
   };
 
   const connectOperatorWithNewDevice = async (scopes: string[]) => {
-    const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
-    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" });
-    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" });
-    const publicKeyRaw = publicKeyRawBase64UrlFromPem(publicKeyPem);
-    const deviceId = requireNonEmptyString(
-      deriveDeviceIdFromPublicKey(publicKeyRaw),
-      "operator device id",
-    );
+    const { deviceId, publicKeyRaw, privateKeyPem } = createDeviceKeyMaterial("operator device id");
     return await connectOperatorWithRetry(scopes, (nonce) => {
       const signedAtMs = Date.now();
       const payload = buildDeviceAuthPayload({
@@ -595,10 +600,7 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      const forwardedParams = await invokeCapture.waitForParams();
-      expect(forwardedParams["approved"]).toBe(true);
-      expect(forwardedParams["approvalDecision"]).toBe("allow-once");
-      expect(forwardedParams["injected"]).toBeUndefined();
+      await expectForwardedApprovedParams({ invokeCapture, absentKey: "injected" });
 
       const replayApprovalId = await requestAllowOnceApproval(wsApprover, "echo hi", nodeId);
       const invokeCountBeforeReplay = invokeCapture.count();
@@ -650,10 +652,7 @@ describe("node.invoke approval bypass", () => {
         idempotencyKey: crypto.randomUUID(),
       });
       expect(invoke.ok).toBe(true);
-      const forwardedParams = await invokeCapture.waitForParams();
-      expect(forwardedParams["approved"]).toBe(true);
-      expect(forwardedParams["approvalDecision"]).toBe("allow-once");
-      expect(forwardedParams["turnSourceTo"]).toBeUndefined();
+      await expectForwardedApprovedParams({ invokeCapture, absentKey: "turnSourceTo" });
 
       const mismatchApprovalId = await requestChatAllowOnceApproval({
         ws: wsRequest,
