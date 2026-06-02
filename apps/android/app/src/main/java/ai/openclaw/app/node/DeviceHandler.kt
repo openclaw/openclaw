@@ -27,6 +27,11 @@ import java.util.Locale
 
 private const val DEFAULT_DEVICE_APPS_LIMIT = 100
 private const val MAX_DEVICE_APPS_LIMIT = 200
+private const val DEVICE_APPS_SYSTEM_FLAGS =
+  ApplicationInfo.FLAG_SYSTEM or ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+
+internal fun isSystemDeviceApp(appInfo: ApplicationInfo): Boolean =
+  (appInfo.flags and DEVICE_APPS_SYSTEM_FLAGS) != 0
 
 internal data class DeviceAppEntry(
   val label: String,
@@ -77,7 +82,7 @@ private class AndroidDeviceAppSource(
             DeviceAppEntry(
               label = label.ifEmpty { packageName },
               packageName = packageName,
-              system = (appInfo.flags and ApplicationInfo.FLAG_SYSTEM) != 0,
+              system = isSystemDeviceApp(appInfo),
               enabled = appInfo.enabled,
               launchable = packageName in launchablePackages,
             )
@@ -175,7 +180,6 @@ class DeviceHandler private constructor(
   /** Returns coarse device health for memory, power, thermal, battery, and security patch state. */
   fun handleDeviceHealth(_paramsJson: String?): GatewaySession.InvokeResult = GatewaySession.InvokeResult.ok(healthPayloadJson())
 
-  /** Returns apps visible to the Android node without requesting broad package visibility. */
   fun handleDeviceApps(paramsJson: String?): GatewaySession.InvokeResult {
     val request = parseDeviceAppsRequest(paramsJson)
     val matchingApps =

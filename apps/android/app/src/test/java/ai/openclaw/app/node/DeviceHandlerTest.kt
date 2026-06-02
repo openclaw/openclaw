@@ -1,6 +1,7 @@
 package ai.openclaw.app.node
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
@@ -410,6 +411,16 @@ class DeviceHandlerTest {
     assertTrue(app.getValue("system").jsonPrimitive.boolean)
     assertTrue(!app.getValue("launchable").jsonPrimitive.boolean)
     assertTrue(source.includeNonLaunchableRequests.single())
+  }
+
+  @Test
+  fun isSystemDeviceApp_treatsUpdatedBuiltInsAsSystemApps() {
+    val appInfo =
+      ApplicationInfo().apply {
+        flags = ApplicationInfo.FLAG_UPDATED_SYSTEM_APP
+      }
+
+    assertTrue(isSystemDeviceApp(appInfo))
   }
 
   private fun appContext(): Context = RuntimeEnvironment.getApplication()
