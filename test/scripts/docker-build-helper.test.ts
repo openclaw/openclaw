@@ -1202,6 +1202,61 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
     );
   });
 
+  it("keeps append-only mock E2E state under per-run scratch roots", () => {
+    const scripts = [
+      {
+        path: "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
+        scratch:
+          'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-typed-onboarding.XXXXXX")"',
+        requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"',
+        removed: ["/tmp/openclaw-release-typed-onboarding-openai.jsonl"],
+      },
+      {
+        path: "scripts/e2e/lib/release-user-journey/scenario.sh",
+        scratch:
+          'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-user-journey.XXXXXX")"',
+        requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"',
+        extraState: 'CLICKCLACK_STATE="$scenario_tmp/clickclack.json"',
+        removed: [
+          "/tmp/openclaw-release-user-journey-openai.jsonl",
+          "/tmp/openclaw-release-user-journey-clickclack.json",
+        ],
+      },
+      {
+        path: RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH,
+        scratch:
+          'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-upgrade-user-journey.XXXXXX")"',
+        requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"',
+        extraState: 'CLICKCLACK_STATE="$scenario_tmp/clickclack.json"',
+        removed: [
+          "/tmp/openclaw-release-upgrade-user-journey-openai.jsonl",
+          "/tmp/openclaw-release-upgrade-user-journey-clickclack.json",
+        ],
+      },
+      {
+        path: NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
+        scratch:
+          'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-npm-onboard-channel-agent.XXXXXX")"',
+        requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/mock-openai-requests.jsonl"',
+        removed: ["/tmp/openclaw-mock-openai-requests.jsonl"],
+      },
+    ];
+
+    for (const { path, scratch, requestLog, extraState, removed } of scripts) {
+      const script = readFileSync(path, "utf8");
+
+      expect(script, path).toContain(scratch);
+      expect(script, path).toContain(requestLog);
+      expect(script, path).toContain('rm -rf "$scenario_tmp"');
+      if (extraState) {
+        expect(script, path).toContain(extraState);
+      }
+      for (const stalePath of removed) {
+        expect(script, path).not.toContain(stalePath);
+      }
+    }
+  });
+
   it("kills timed Docker scenario runners after the grace period", () => {
     const multiNode = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
     const upgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
@@ -1821,6 +1876,23 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(scenario).not.toContain('kill "$gateway_pid"');
     expect(scenario).not.toContain('kill "$mock_pid"');
     expect(scenario).not.toContain('node "$entry" gateway --port "$PORT"');
+  });
+
+  it("keeps OpenAI web search smoke logs isolated per run", () => {
+    const scenario = readFileSync(OPENAI_WEB_SEARCH_MINIMAL_SCENARIO_PATH, "utf8");
+
+    expect(scenario).toContain(
+      'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-openai-web-search-minimal.XXXXXX")"',
+    );
+    expect(scenario).toContain('MOCK_REQUEST_LOG="$scenario_tmp/requests.jsonl"');
+    expect(scenario).toContain('GATEWAY_LOG="$scenario_tmp/gateway.log"');
+    expect(scenario).toContain('MOCK_LOG="$scenario_tmp/mock.log"');
+    expect(scenario).toContain('CLIENT_SUCCESS_LOG="$scenario_tmp/client-success.log"');
+    expect(scenario).toContain('CLIENT_REJECT_LOG="$scenario_tmp/client-reject.log"');
+    expect(scenario).toContain('rm -rf "$scenario_tmp"');
+    expect(scenario).not.toContain("/tmp/openclaw-openai-web-search-minimal-requests.jsonl");
+    expect(scenario).not.toContain("/tmp/openclaw-openai-web-search-minimal-client-success.log");
+    expect(scenario).not.toContain("/tmp/openclaw-openai-web-search-minimal-client-reject.log");
   });
 
   it("keeps ClawHub plugin Docker smoke hermetic by default", () => {

@@ -1904,6 +1904,66 @@ describe("scripts/test-projects full-suite sharding", () => {
     ).toBe(3);
   });
 
+  it("rejects malformed parallel full-suite overrides", () => {
+    expect(() =>
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "3x",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toThrow("OPENCLAW_TEST_PROJECTS_PARALLEL must be a positive integer; got: 3x");
+
+    expect(() =>
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_TEST_PROJECTS_PARALLEL: "0",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toThrow("OPENCLAW_TEST_PROJECTS_PARALLEL must be a positive integer; got: 0");
+  });
+
+  it("rejects malformed conservative worker budget values", () => {
+    expect(() =>
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: "1e0",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toThrow("OPENCLAW_VITEST_MAX_WORKERS must be a positive integer; got: 1e0");
+
+    expect(() =>
+      resolveParallelFullSuiteConcurrency(
+        61,
+        {
+          OPENCLAW_TEST_WORKERS: "1 worker",
+        },
+        {
+          cpuCount: 14,
+          loadAverage1m: 0,
+          totalMemoryBytes: 48 * 1024 ** 3,
+        },
+      ),
+    ).toThrow("OPENCLAW_TEST_WORKERS must be a positive integer; got: 1 worker");
+  });
+
   it("keeps serial untargeted runs on aggregate shards", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     const previousSerial = process.env.OPENCLAW_TEST_PROJECTS_SERIAL;
@@ -2251,6 +2311,29 @@ describe("scripts/test-projects full-suite sharding", () => {
 
       expect(configs).toContain("test/vitest/vitest.extension-telegram.config.ts");
       expect(configs).not.toContain("test/vitest/vitest.full-extensions.config.ts");
+    } finally {
+      if (previousLeafShards === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeafShards;
+      }
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+    }
+  });
+
+  it("rejects malformed full-suite expansion parallel overrides", () => {
+    const previousLeafShards = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = "6x";
+    try {
+      expect(() => buildFullSuiteVitestRunPlans([], process.cwd())).toThrow(
+        "OPENCLAW_TEST_PROJECTS_PARALLEL must be a positive integer; got: 6x",
+      );
     } finally {
       if (previousLeafShards === undefined) {
         delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;

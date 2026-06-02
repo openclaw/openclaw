@@ -10,6 +10,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statfsSync,
   statSync,
   utimesSync,
   writeFileSync,
@@ -1937,8 +1938,60 @@ function fullCheckoutSyncRoot() {
   return root;
 }
 
+function parsePositiveIntegerEnv(name, fallback) {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${name} must be a non-negative integer byte count, got ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number.parseInt(raw, 10);
+  return parsed;
+}
+
+function formatByteCount(bytes) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+}
+
+function assertFullCheckoutSyncDisk(root) {
+  const requiredBytes = parsePositiveIntegerEnv(
+    "OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES",
+    1024 * 1024 * 1024,
+  );
+  if (requiredBytes === 0) {
+    return;
+  }
+  const stats = statfsSync(root);
+  const freeBytes = stats.bavail * stats.bsize;
+  if (freeBytes >= requiredBytes) {
+    return;
+  }
+  throw new Error(
+    [
+      "insufficient free disk for Crabbox sparse-sync full checkout",
+      `root=${root}`,
+      `free=${formatByteCount(freeBytes)}`,
+      `required=${formatByteCount(requiredBytes)}`,
+      "set OPENCLAW_CRABBOX_SYNC_TMPDIR to a roomier filesystem or lower OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES if you know this checkout fits",
+    ].join("; "),
+  );
+}
+
 function prepareFullCheckoutForSync(options = {}) {
-  const dir = mkdtempSync(resolve(fullCheckoutSyncRoot(), "openclaw-crabbox-sync-"));
+  const syncRoot = fullCheckoutSyncRoot();
+  assertFullCheckoutSyncDisk(syncRoot);
+  const dir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-sync-"));
   let active = false;
 
   function create() {

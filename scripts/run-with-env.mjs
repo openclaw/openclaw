@@ -76,9 +76,9 @@ function main(argv = process.argv.slice(2)) {
   let forwardedSignal = null;
   let forceKillTimer = null;
   // Keep the child in the foreground process group so TTY signals such as
-  // Ctrl-C, Ctrl-Z, and window resizes stay native. SIGTERM is the direct
-  // wrapper-kill path CI and launchers use, so forward only that case.
-  const forwardedSignals = ["SIGTERM"];
+  // Ctrl-C, Ctrl-Z, and window resizes stay native. Forward direct wrapper
+  // shutdown signals that would otherwise only kill this small parent process.
+  const forwardedSignals = ["SIGTERM", "SIGHUP"];
 
   const cleanupSignalHandlers = () => {
     for (const signal of forwardedSignals) {

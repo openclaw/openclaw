@@ -1591,7 +1591,6 @@
     "mac:open": "open dist/OpenClaw.app",
     "mac:package": "bash scripts/package-mac-app.sh",
     "mac:restart": "bash scripts/restart-mac.sh",
-    "moltbot:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "openclaw": "node scripts/run-node.mjs",
     "openclaw:rpc": "node scripts/run-node.mjs agent --mode rpc --json",
     "perf:issue-78851": "node --import tsx scripts/perf/issue-78851-model-resolution.ts",
