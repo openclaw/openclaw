@@ -1,3 +1,4 @@
+/** Host callback used to read an already-authorized outbound media file. */
 export type OutboundMediaReadFile = (filePath: string) => Promise<Buffer>;
 
 /** Host-provided file access used when a runtime can read outbound media from local disk. */

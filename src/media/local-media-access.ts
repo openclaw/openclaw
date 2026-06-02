@@ -6,6 +6,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import { getDefaultMediaLocalRoots } from "./local-roots.js";
 import { resolveInboundMediaReference } from "./media-reference.js";
 
+/** Machine-readable reasons local media path validation can fail. */
 export type LocalMediaAccessErrorCode =
   | "path-not-allowed"
   | "invalid-root"

@@ -23,11 +23,14 @@ const WINDOWS_DRIVE_RE = /^[A-Za-z]:[\\/]/;
 
 function resolveCachedPreferredTmpDir(): string {
   if (!cachedPreferredTmpDir) {
+    // Temp-root discovery can hit platform/env state; keep one process-local
+    // snapshot so media root lists stay stable during a run.
     cachedPreferredTmpDir = resolvePreferredOpenClawTmpDir();
   }
   return cachedPreferredTmpDir;
 }
 
+/** Builds the baseline local media root allowlist from state/config directories. */
 export function buildMediaLocalRoots(
   stateDir: string,
   configDir: string,
