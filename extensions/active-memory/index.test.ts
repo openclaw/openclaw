@@ -2522,6 +2522,27 @@ describe("active-memory plugin", () => {
     expectLinesNotToContain(lines, "timeout_partial");
   });
 
+  it("normalizes assistant chitchat boilerplate to no-recall instead of injecting it (#84034)", () => {
+    const chitchat = [
+      "您好！请问有什么可以帮助您的吗？如果您有任何问题或需要帮助，请随时告诉我。",
+      "It seems like your message got cut off. Could you please provide more details about what you need?",
+      "Hello! It looks like your message didn't come through. Could you try again?",
+      "当前日期和时间是 2026-06-02。如果您需要任何帮助，请告诉我。",
+      "您好！看起来您可能没有说出您的问题或请求。",
+      "您好！看起来您的消息可能没有包含具体问题或请求。",
+    ];
+    for (const text of chitchat) {
+      expect(testing.normalizeActiveSummary(text)).toBeNull();
+    }
+    // Genuine factual summaries must be preserved unchanged.
+    expect(testing.normalizeActiveSummary("User prefers TypeScript; deadline 2026-06-15.")).toBe(
+      "User prefers TypeScript; deadline 2026-06-15.",
+    );
+    expect(
+      testing.normalizeActiveSummary("用户在开发 active-memory 插件，关注 recall 质量。"),
+    ).toBe("用户在开发 active-memory 插件，关注 recall 质量。");
+  });
+
   it("does not inject embedded timeout boilerplate from partial transcripts", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);

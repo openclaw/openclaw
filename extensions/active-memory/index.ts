@@ -119,6 +119,30 @@ const TIMEOUT_BOILERPLATE_PATTERNS = [
   /^(?:error:\s*)?active-memory timeout after \d+ms\b/i,
 ];
 
+// Assistant-style chitchat / clarification boilerplate the recall subagent sometimes
+// emits when it has nothing useful to recall — greetings, "message got cut off" /
+// "didn't come through" clarifications, date-time announcements, and help-offers. A
+// factual memory summary never opens this way, so treat these like a no-recall result
+// instead of injecting them into <active_memory_plugin>. Patterns are anchored/specific
+// to avoid dropping genuine summaries (fail-closed only). #84034
+const CHITCHAT_BOILERPLATE_PATTERNS = [
+  // Greeting openers.
+  /^(?:您好|你好|哈喽|哈囉)[\s!！,，。.…]/,
+  /^(?:hello|hi|hey|greetings)\b[\s!.,]/i,
+  // "It seems/looks like ..." clarification openers.
+  /^it\s+(?:seems|looks|appears)\s+(?:like|that)\b/i,
+  // "your message got cut off / didn't come through" clarifications.
+  /\b(?:your\s+)?message\s+(?:got\s+cut\s+off|didn'?t\s+come\s+through|seems\s+to\s+have\s+been\s+cut)/i,
+  /(?:您的)?消息(?:可能)?(?:没有|未)(?:发送过来|发送|包含|送达)/,
+  /看起来您(?:的消息)?(?:可能)?(?:没有(?:说出|包含)|未包含)/,
+  // Date/time announcement openers.
+  /^当前(?:的)?(?:日期|时间|日期和时间)/,
+  // Help-offer boilerplate.
+  /有(?:什么|啥|哪些)(?:可以|能)(?:帮助|帮)(?:到)?您/,
+  /如果您(?:有(?:任何)?(?:问题|疑问)|需要(?:任何)?帮助)/,
+  /请(?:随时|尽管)(?:告诉|联系)我/,
+];
+
 const RECALLED_CONTEXT_LINE_PATTERNS = [
   /^🧩\s*active memory:/i,
   /^🔎\s*active memory debug:/i,
@@ -2050,6 +2074,10 @@ function isTimeoutBoilerplateSummary(value: string): boolean {
   return TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+function isChitchatBoilerplateSummary(value: string): boolean {
+  return CHITCHAT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
+}
+
 function normalizeActiveSummary(rawReply: string): string | null {
   const trimmed = rawReply.trim();
   if (normalizeNoRecallValue(trimmed)) {
@@ -2059,7 +2087,8 @@ function normalizeActiveSummary(rawReply: string): string | null {
   if (
     !singleLine ||
     normalizeNoRecallValue(singleLine) ||
-    isTimeoutBoilerplateSummary(singleLine)
+    isTimeoutBoilerplateSummary(singleLine) ||
+    isChitchatBoilerplateSummary(singleLine)
   ) {
     return null;
   }
@@ -3121,6 +3150,7 @@ const testing = {
   getCachedResult,
   isCircuitBreakerOpen,
   isMissingRegisteredMemoryToolsError,
+  normalizeActiveSummary,
   normalizePluginConfig,
   readActiveMemorySearchDebug,
   readPartialAssistantText,
