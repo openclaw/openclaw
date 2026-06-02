@@ -1098,4 +1098,55 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(coordinator.getRoutedCounts().block).toBe(0);
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
+
+  it("delivers media blocks with text stripped when suppressBlockUserDelivery is set", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      suppressBlockUserDelivery: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver("block", {
+      text: "caption text",
+      mediaUrls: ["https://example.com/image.png"],
+    }, { skipTts: true });
+
+    expect(delivered).toBe(true);
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+    const routedPayload = deliveryMocks.routeReply.mock.calls[0][0];
+    expect(routedPayload.mediaUrls).toEqual(["https://example.com/image.png"]);
+    expect(routedPayload.text).toBeUndefined();
+  });
+
+  it("suppresses text-only blocks when suppressBlockUserDelivery is set", async () => {
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      suppressBlockUserDelivery: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver("block", { text: "text only" }, { skipTts: true });
+
+    expect(delivered).toBe(false);
+    expect(deliveryMocks.routeReply).not.toHaveBeenCalled();
+  });
 });

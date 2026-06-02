@@ -442,9 +442,18 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       return false;
     }
     if (kind === "block" && params.suppressBlockUserDelivery) {
-      // Captioned final TTS still needs block text accumulation, but live
-      // block delivery would duplicate the final voice-note caption.
-      return false;
+      const hasNonTextContent =
+        visiblePayload.mediaUrl ||
+        (visiblePayload.mediaUrls && visiblePayload.mediaUrls.length > 0) ||
+        visiblePayload.presentation ||
+        visiblePayload.interactive ||
+        visiblePayload.channelData;
+      if (!hasNonTextContent) {
+        // Text-only block: suppress delivery, text accumulates for the caption
+        return false;
+      }
+      // Strip text from media blocks — caption goes on the final TTS voice note
+      visiblePayload = { ...visiblePayload, text: undefined };
     }
 
     const ttsPayload = await maybeApplyAcpTts({

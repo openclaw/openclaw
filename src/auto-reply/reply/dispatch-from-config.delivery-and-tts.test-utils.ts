@@ -2058,5 +2058,70 @@ describe("dispatchReplyFromConfig", () => {
     expect(partialCallback).not.toHaveBeenCalled();
   });
 
+
+  it("delivers media blocks with text stripped when captioned final TTS is active", async () => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "always",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({
+        text: "caption text",
+        mediaUrls: ["https://example.com/image.png"],
+      });
+      return { text: "final" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
+    const delivered = dispatcher.sendBlockReply.mock.calls[0][0];
+    expect(delivered.mediaUrls).toEqual(["https://example.com/image.png"]);
+    expect(delivered.text).toBeUndefined();
+  });
+
+  it("suppresses text-only blocks when captioned final TTS is active", async () => {
+    setNoAbort();
+    ttsMocks.state.statusSnapshot = {
+      autoMode: "always",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    };
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "text only block" });
+      return { text: "final" };
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+    });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

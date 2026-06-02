@@ -2703,9 +2703,17 @@ async function dispatchReplyFromConfigInner(
                         blockCount++;
                       }
                       if (willUseCaptionedFinalTts) {
-                        return;
+                        const hasNonTextContent =
+                          payload.mediaUrl ||
+                          (payload.mediaUrls && payload.mediaUrls.length > 0) ||
+                          payload.presentation ||
+                          payload.interactive ||
+                          payload.channelData;
+                        if (!hasNonTextContent) {
+                          return;
+                        }
                       }
-                      const visiblePayload =
+                      let visiblePayload =
                         payload.text &&
                         cleanBlockTtsDirectiveText &&
                         !isStatusNotice &&
@@ -2719,6 +2727,10 @@ async function dispatchReplyFromConfigInner(
                               });
                             })()
                           : payload;
+                      if (willUseCaptionedFinalTts) {
+                        // Strip text from media blocks — caption goes on the final TTS voice note
+                        visiblePayload = { ...visiblePayload, text: undefined };
+                      }
                       if (!hasOutboundReplyContent(visiblePayload, { trimText: true })) {
                         return;
                       }

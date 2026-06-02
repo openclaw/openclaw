@@ -1032,6 +1032,39 @@ prefer the generic channel/setup/reply/runtime subpaths from the common SDK
 surface unless you are maintaining that bundled plugin family directly.
 </Note>
 
+## Captioned final text (TTS voice notes)
+
+Channels whose voice-note send path supports captions (e.g. Telegram's
+`sendVoice` API) can opt in to **captioned final text** delivery by declaring
+the capability on `capabilities.tts.voice`:
+
+```ts
+capabilities: {
+  tts: {
+    voice: {
+      synthesisTarget: "voice-note",
+      captionedFinalText: true,
+    },
+  },
+}
+```
+
+When a channel declares `captionedFinalText: true`, core changes final-mode
+auto-TTS delivery:
+
+- **Text-only blocks** are suppressed during streaming. The text is
+  accumulated internally and bundled as a caption on the final voice note.
+- **Media blocks** (images, files, rich content) are still delivered
+  immediately with their text stripped to avoid duplicating the caption.
+- **Fallback**: if TTS synthesis fails, accumulated text is delivered as a
+  plain text reply so the user still sees the response.
+- **Tagged mode**: in `auto: "tagged"` mode, partial reply previews are also
+  suppressed on caption-capable channels to prevent raw `[[tts:text]]`
+  directives from leaking through the draft preview lane.
+
+Channels that cannot attach text to voice messages, or where clients do not
+render voice-note captions, should **not** enable this capability.
+
 ## Next steps
 
 - [Provider Plugins](/plugins/sdk-provider-plugins) - if your plugin also provides models
