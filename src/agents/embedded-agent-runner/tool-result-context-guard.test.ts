@@ -578,6 +578,27 @@ describe("installContextEngineLoopHook", () => {
     return { initial, withNew, transformed };
   }
 
+  it("forwards isHeartbeat to afterTurn in the loop hook", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      isHeartbeat: true,
+      getPrePromptMessageCount: () => 0,
+    });
+
+    const messages = [makeUser("ping")];
+    await callTransform(agent, messages);
+
+    expect(engine.afterTurn).toHaveBeenCalledWith(expect.objectContaining({ isHeartbeat: true }));
+  });
+
   it("returns early when the current messages match the pre-prompt baseline", async () => {
     const agent = makeGuardableAgent();
     const engine = makeMockEngine();
