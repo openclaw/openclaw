@@ -385,6 +385,47 @@ describe("stuck session recovery", () => {
     ]);
   });
 
+  it("releases queued lane work after a successful active abort", async () => {
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedAgentRunActive.mockReturnValue(true);
+    mocks.isEmbeddedAgentRunHandleActive.mockReturnValue(false);
+    mocks.abortEmbeddedAgentRun.mockReturnValue(true);
+    mocks.waitForEmbeddedAgentRunEnd.mockResolvedValue(true);
+    mocks.resetCommandLane.mockReturnValue(1);
+    mocks.getCommandLaneSnapshot.mockReturnValue({
+      lane: "session:agent:main:main",
+      queuedCount: 1,
+      activeCount: 1,
+      maxConcurrent: 1,
+      draining: false,
+      generation: 0,
+    });
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "queued-reply-session",
+      sessionKey: "agent:main:main",
+      ageMs: 720_000,
+      queueDepth: 1,
+      allowActiveAbort: true,
+    });
+
+    expect(mocks.abortEmbeddedAgentRun).toHaveBeenCalledWith("queued-reply-session");
+    expect(mocks.waitForEmbeddedAgentRunEnd).toHaveBeenCalledWith("queued-reply-session", 15_000);
+    expect(mocks.forceClearEmbeddedAgentRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
+    expect(outcome).toMatchObject({
+      status: "aborted",
+      action: "abort_embedded_run",
+      released: 1,
+      queuedCount: 1,
+    });
+    expect(warnLogMessages()).toEqual([
+      "stuck session recovery: sessionId=queued-reply-session sessionKey=agent:main:main age=720s action=abort_embedded_run aborted=true drained=true released=1",
+      "stuck session recovery outcome: status=aborted action=abort_embedded_run sessionId=queued-reply-session sessionKey=agent:main:main activeSessionId=queued-reply-session activeWorkKind=embedded_run lane=session:agent:main:main aborted=true drained=true forceCleared=false released=1 queuedCount=1",
+    ]);
+  });
+
   it("reports queued lane work when aborting active work releases a lane", async () => {
     mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("queued-reply-session");
     mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
