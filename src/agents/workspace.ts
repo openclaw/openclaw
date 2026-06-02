@@ -76,7 +76,6 @@ const EXTRA_BOOTSTRAP_IGNORED_DIR_NAMES = new Set([
 ]);
 const EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL = 256;
 const EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT = 20_000;
-const EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT = 128;
 
 // File content cache keyed by stable file identity to avoid stale reads.
 const workspaceFileCache = new Map<string, { content: string; identity: string }>();
@@ -227,7 +226,7 @@ export type ExtraBootstrapLoadDiagnosticCode =
   | "missing"
   | "security"
   | "io"
-  | "glob-match-limit";
+  | "glob-traversal-limit";
 
 export type ExtraBootstrapLoadDiagnostic = {
   path: string;
@@ -1135,10 +1134,12 @@ type GlobResolution = { matches: string[]; truncated: boolean };
 // Always resolve globs with the traversal-counted walker. fs.glob would be
 // faster for simple patterns, but it only exposes matched paths — Node
 // traverses the directory tree internally, so a sparse pattern like
-// `**/AGENTS.md` across a huge workspace can block the event loop long before
-// any match-count limit fires. walkWorkspaceFiles counts every readdir entry it
-// visits (visitedEntries), yields periodically, and bounds total traversal, so
-// the active path can never stall regardless of how late matches appear.
+// `**/AGENTS.md` across a huge workspace can block the event loop. The walker
+// counts every readdir entry it visits (visitedEntries), yields periodically,
+// and bounds total traversal at EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT, so the active
+// path can never stall. There is no match-count cap: every file matched within
+// the traversal bound is returned, and the downstream bootstrap character
+// budget handles content limiting.
 async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
@@ -1155,10 +1156,6 @@ async function resolveExtraBootstrapPatternPaths(
     resolveGlobWalkRoot(normalizedPattern),
     walkSignal,
   )) {
-    if (matches.length >= EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT) {
-      walkSignal.truncated = true;
-      break;
-    }
     if (path.matchesGlob(candidate, normalizedPattern)) {
       matches.push(candidate);
     }
@@ -1190,8 +1187,8 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
       if (truncated) {
         diagnostics.push({
           path: pattern,
-          reason: "glob-match-limit",
-          detail: `bootstrap glob "${pattern}" hit the traversal/match limit (>${EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT} matches or >${EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT} scanned entries); results were truncated and some configured context was dropped. Narrow the glob scope or split it into more specific patterns.`,
+          reason: "glob-traversal-limit",
+          detail: `bootstrap glob "${pattern}" stopped after scanning ${EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT} filesystem entries; matches found before the limit were kept, but files beyond it were not scanned and may be missing. Narrow the glob scope or split it into more specific patterns.`,
         });
       }
     } else {
