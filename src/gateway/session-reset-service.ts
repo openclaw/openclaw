@@ -814,16 +814,24 @@ export async function performGatewaySessionReset(params: {
     key: params.key,
     ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
   });
-  if (
-    target.canonicalKey === "global" &&
-    target.agentId &&
-    !listAgentIds(cfg).includes(target.agentId)
-  ) {
-    const { entry } = loadSessionEntry(params.key, { agentId: target.agentId, cfg });
+  const parsedRequestedKey = parseAgentSessionKey(params.key);
+  const requestedUnknownAgentId =
+    parsedRequestedKey?.agentId &&
+    !listAgentIds(cfg).includes(normalizeAgentId(parsedRequestedKey.agentId))
+      ? normalizeAgentId(parsedRequestedKey.agentId)
+      : undefined;
+  if (requestedUnknownAgentId) {
+    const { entry } = loadSessionEntry(params.key, {
+      cfg,
+      ...(target.canonicalKey === "global" && target.agentId ? { agentId: target.agentId } : {}),
+    });
     if (!entry) {
       return {
         ok: false,
-        error: errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id: ${target.agentId}`),
+        error: errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `Unknown agent id: ${requestedUnknownAgentId}`,
+        ),
       };
     }
   }
