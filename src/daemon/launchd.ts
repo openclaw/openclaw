@@ -16,14 +16,12 @@ import {
   resolveLegacyGatewayLaunchAgentLabels,
 } from "./constants.js";
 import { execFileUtf8 } from "./exec-file.js";
+import { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import {
   buildLaunchAgentPlist as buildLaunchAgentPlistImpl,
   readLaunchAgentProgramArgumentsFromFile,
 } from "./launchd-plist.js";
-import {
-  isCurrentProcessLaunchdServiceLabel,
-  scheduleDetachedLaunchdRestartHandoff,
-} from "./launchd-restart-handoff.js";
+import { scheduleDetachedLaunchdRestartHandoff } from "./launchd-restart-handoff.js";
 import { formatLine, toPosixPath, writeFormattedLines } from "./output.js";
 import { resolveGatewayStateDir, resolveHomeDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
@@ -79,22 +77,6 @@ function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): bo
   }
   const configuredLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
   return Boolean(configuredLabel && label === configuredLabel);
-}
-
-function isCurrentProcessLaunchdServiceStopTarget(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  for (const launchdLabel of [env.LAUNCH_JOB_LABEL, env.LAUNCH_JOB_NAME, env.XPC_SERVICE_NAME]) {
-    if (launchdLabel?.trim() === label) {
-      return true;
-    }
-  }
-  return (
-    env.OPENCLAW_SERVICE_MARKER?.trim() === GATEWAY_SERVICE_MARKER &&
-    Boolean(env.OPENCLAW_SERVICE_KIND?.trim()) &&
-    env.OPENCLAW_LAUNCHD_LABEL?.trim() === label
-  );
 }
 
 export function isOpenClawUpdateLaunchdLabel(label: unknown): label is string {
@@ -806,7 +788,9 @@ export async function stopLaunchAgent({
   const label = resolveLaunchAgentLabel({ env: serviceEnv });
   const serviceTarget = `${domain}/${label}`;
 
-  if (isCurrentProcessLaunchdServiceStopTarget(label)) {
+  if (
+    isCurrentProcessLaunchdServiceLabel(label, process.env, { allowConfiguredLabelFallback: false })
+  ) {
     throw new Error(
       `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
     );

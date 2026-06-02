@@ -56,7 +56,6 @@ const state = vi.hoisted(() => ({
   fileWrites: [] as Array<{ path: string; data: string }>,
 }));
 const launchdRestartHandoffState = vi.hoisted(() => ({
-  isCurrentProcessLaunchdServiceLabel: vi.fn<(label: string) => boolean>(() => false),
   scheduleDetachedLaunchdRestartHandoff: vi.fn<
     (_params: unknown) => { ok: boolean; pid?: number; detail?: string }
   >(() => ({ ok: true, pid: 7331 })),
@@ -251,8 +250,6 @@ vi.mock("./exec-file.js", () => ({
 }));
 
 vi.mock("./launchd-restart-handoff.js", () => ({
-  isCurrentProcessLaunchdServiceLabel: (label: string) =>
-    launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel(label),
   scheduleDetachedLaunchdRestartHandoff: (params: unknown) =>
     launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff(params),
 }));
@@ -360,8 +357,6 @@ beforeEach(() => {
   inspectPortUsage.mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
   formatPortDiagnostics.mockReset();
   formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
-  launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReset();
-  launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(false);
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
     ok: true,
@@ -1699,12 +1694,13 @@ describe("launchd install", () => {
 
   it("hands restart off to a detached helper when invoked from the current LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
-    launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(true);
 
-    const result = await restartLaunchAgent({
-      env,
-      stdout: new PassThrough(),
-    });
+    const result = await withProcessEnv({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+      restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      }),
+    );
 
     expect(result).toEqual({ outcome: "scheduled" });
     expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).toHaveBeenCalledWith({
@@ -1718,7 +1714,6 @@ describe("launchd install", () => {
   it("hands plist reload off when current LaunchAgent needs rewritten paths", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
-    launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(true);
     state.files.set(
       plistPath,
       [
@@ -1739,10 +1734,12 @@ describe("launchd install", () => {
       ].join("\n"),
     );
 
-    const result = await restartLaunchAgent({
-      env,
-      stdout: new PassThrough(),
-    });
+    const result = await withProcessEnv({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+      restartLaunchAgent({
+        env,
+        stdout: new PassThrough(),
+      }),
+    );
 
     expect(result).toEqual({ outcome: "scheduled" });
     expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).toHaveBeenCalledWith({
@@ -1756,18 +1753,70 @@ describe("launchd install", () => {
 
   it("surfaces detached handoff failures", async () => {
     const env = createDefaultLaunchdEnv();
-    launchdRestartHandoffState.isCurrentProcessLaunchdServiceLabel.mockReturnValue(true);
     launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReturnValue({
       ok: false,
       detail: "spawn failed",
     });
 
     await expect(
-      restartLaunchAgent({
-        env,
-        stdout: new PassThrough(),
-      }),
+      withProcessEnv({ LAUNCH_JOB_LABEL: "ai.openclaw.gateway" }, async () =>
+        restartLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+        }),
+      ),
     ).rejects.toThrow("launchd restart handoff failed: spawn failed");
+  });
+
+  it("hands restart off when XPC_SERVICE_NAME is inherited", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    const result = await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: "0",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+      },
+      async () =>
+        restartLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+        }),
+    );
+
+    expect(result).toEqual({ outcome: "scheduled" });
+    expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).toHaveBeenCalledWith({
+      env,
+      mode: "kickstart",
+      waitForPid: process.pid,
+    });
+    expect(state.launchctlCalls).toStrictEqual([]);
+  });
+
+  it("does not hand restart off for unrelated inherited XPC service names", async () => {
+    const env = createDefaultLaunchdEnv();
+
+    await withProcessEnv(
+      {
+        LAUNCH_JOB_LABEL: undefined,
+        LAUNCH_JOB_NAME: undefined,
+        XPC_SERVICE_NAME: "0",
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+      },
+      async () =>
+        restartLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+        }),
+    );
+
+    expect(launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff).not.toHaveBeenCalled();
+    expect(launchctlCommandNames()).toContain("kickstart");
   });
 
   it("shows actionable guidance when launchctl gui domain does not support bootstrap", async () => {
