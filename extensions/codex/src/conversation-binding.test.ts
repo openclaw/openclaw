@@ -1284,6 +1284,101 @@ describe("codex conversation binding", () => {
     ]);
   });
 
+  it("prefers native proposed plan text over a later assistant summary", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+        model: "gpt-5.4-mini",
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method !== "turn/start") {
+          throw new Error(`unexpected method: ${method}`);
+        }
+        setImmediate(() =>
+          notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: {
+                id: "turn-1",
+                status: "completed",
+                items: [
+                  {
+                    id: "plan-1",
+                    type: "plan",
+                    text: "<proposed_plan>Run the focused tests.</proposed_plan>",
+                  },
+                  {
+                    id: "assistant-1",
+                    type: "agentMessage",
+                    text: "I returned the improved version inside the proposed_plan block above.",
+                  },
+                ],
+              },
+            },
+          }),
+        );
+        return { turn: { id: "turn-1" } };
+      }),
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "make a plan",
+        bodyForAgent: "make a plan",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        threadId: "chat-1",
+        sessionKey: "session-key",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        sessionKey: "session-key",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel:1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(result?.reply?.text).toBe("<proposed_plan>Run the focused tests.</proposed_plan>");
+    expect(result?.reply?.text).not.toContain("block above");
+    expect(readReplyButtons(result?.reply ?? {}).map((button) => button.label)).toEqual([
+      "Approve and execute",
+      "Approve and execute with clean context",
+      "Stay in plan mode",
+    ]);
+  });
+
   it("returns approve and stay buttons for plain Markdown plan text in plan mode", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(

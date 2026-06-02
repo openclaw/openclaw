@@ -739,12 +739,13 @@ async function runBoundTurn(params: {
       .finally(activeCleanup);
     const replyText = completion.replyText.trim();
     const planText = completion.planText.trim();
-    const planReplyText =
-      binding.collaborationMode === "plan"
-        ? hasCodexProposedPlan(replyText)
-          ? replyText
-          : planText
-        : "";
+    const planReplyText = hasCodexProposedPlan(replyText)
+      ? replyText
+      : hasCodexProposedPlan(planText)
+        ? planText
+        : binding.collaborationMode === "plan"
+          ? planText
+          : "";
     if (planReplyText) {
       return {
         reply: buildCodexPlanDecisionReply({
