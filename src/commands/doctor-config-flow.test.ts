@@ -1698,6 +1698,33 @@ describe("doctor config flow", () => {
     expect(warning).toContain("move custom transforms there or remove hooks.transformsDir");
   });
 
+  it("warns when internal hook entries include unsupported loader keys", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      hooks: {
+        internal: {
+          entries: {
+            "custom-hook": {
+              enabled: true,
+              handler: "./hooks/custom.ts",
+              extraDirs: ["./hooks"],
+              env: { OPENCLAW_CUSTOM_HOOK: "1" },
+            },
+            "valid-hook": {
+              enabled: true,
+              paths: ["./tracked"],
+            },
+          },
+        },
+      },
+    });
+
+    const warning = doctorWarnings.join("\n");
+    expect(warning).toContain("hooks.internal.entries.custom-hook:");
+    expect(warning).toContain("unsupported loader keys handler, extraDirs will not load hook modules");
+    expect(warning).toContain("hooks.internal.load.extraDirs for extra roots");
+    expect(warning).not.toContain("hooks.internal.entries.valid-hook");
+  });
+
   it("does not warn about sender-based group allowlist for googlechat", async () => {
     const doctorWarnings = await collectDoctorWarnings({
       channels: {
