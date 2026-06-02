@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -671,9 +674,41 @@ export const handleSessionCommand: CommandHandler = async (params, allowTextComm
         action === SESSION_ACTION_IDLE
           ? `✅ Idle timeout set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (next auto-unfocus at ${expiryLabel}).`
           : `✅ Max age set to ${formatThreadBindingDurationLabel(durationMs)} for ${updatedBindings.length} binding${updatedBindings.length === 1 ? "" : "s"} (hard auto-unfocus at ${expiryLabel}).`,
-    },
-  };
-};
+
+/**
+ * Read the version of the currently running openclaw process from the
+ * package.json next to the launcher entry point (process.argv[1]).
+ */
+function getRunningOpenClawVersion(): string | null {
+  try {
+    const entry = process.argv[1]?.trim();
+    if (!entry) return null;
+    const pkgPath = join(dirname(entry), "package.json");
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf8"));
+    return typeof pkg?.version === "string" ? pkg.version : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Query the globally installed npm version for a package.
+ * Uses `npm list -g <pkg> --json` so it respects the current prefix.
+ */
+function getGlobalNpmVersion(packageName: string): string | null {
+  try {
+    const result = spawnSync("npm", ["list", "-g", packageName, "--json"], {
+      encoding: "utf8",
+      timeout: 3000,
+    });
+    if (result.status !== 0) return null;
+    const parsed = JSON.parse(result.stdout);
+    return parsed.dependencies?.[packageName]?.version ?? null;
+  } catch {
+    return null;
+  }
+}
+
 export const handleRestartCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -699,9 +734,24 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+
+  /* ---- version-mismatch guard: if npm updated globally, SIGUSR1 won't reload
+     node_modules, so force a full restart instead. ---- */
+  const runningVersion = getRunningOpenClawVersion();
+  const globalVersion = getGlobalNpmVersion("openclaw");
+  const versionMismatch =
+    runningVersion !== null &&
+    globalVersion !== null &&
+    runningVersion !== globalVersion;
+
+  if (versionMismatch) {
+    logVerbose(`restart: version mismatch detected (running ${runningVersion} vs npm ${globalVersion}); forcing full restart`);
+  }
+
   const hasSigusr1Listener = process.listenerCount("SIGUSR1") > 0;
   const sentinelPayload = buildRestartCommandSentinel(params);
-  if (hasSigusr1Listener) {
+
+  if (hasSigusr1Listener && !versionMismatch) {
     let sentinelPath: string | null = null;
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
@@ -723,11 +773,11 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
       },
     };
   }
+
+  /* eslint-disable-next-line no-lonely-if */
   let sentinelPath: string | null = null;
   try {
-    if (sentinelPayload) {
-      sentinelPath = await writeRestartSentinel(sentinelPayload);
-    }
+    if (sentinelPayload) sentinelPath = await writeRestartSentinel(sentinelPayload);
   } catch (err) {
     logVerbose(`failed to write /restart sentinel: ${String(err)}`);
     return {
@@ -741,19 +791,19 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
   if (!restartMethod.ok) {
     await removeRestartSentinelFile(sentinelPath);
     const detail = restartMethod.detail ? ` Details: ${restartMethod.detail}` : "";
-    return {
-      shouldContinue: false,
-      reply: {
-        text: `⚠️ Restart failed (${restartMethod.method}).${detail}`,
-      },
-    };
+    return { shouldContinue: false, reply: { text: `⚠️ Restart failed (${restartMethod.method}).${detail}` } };
   }
+  const versionNote =
+    versionMismatch && runningVersion && globalVersion
+      ? ` (npm package ${runningVersion} → ${globalVersion})`
+      : "";
   return {
     shouldContinue: false,
     reply: {
-      text: `⚙️ Restarting OpenClaw via ${restartMethod.method}; give me a few seconds to come back online.`,
+      text: `⚙️ Restarting OpenClaw via ${restartMethod.method}${versionNote}; give me a few seconds to come back online.`,
     },
   };
+};
 };
 
 export { handleAbortTrigger, handleStopCommand };
