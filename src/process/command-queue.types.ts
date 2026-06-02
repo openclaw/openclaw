@@ -6,6 +6,12 @@ export type CommandQueueEnqueueOptions = {
   priority?: "foreground" | "normal" | "background";
 };
 
+export type CommandQueueRuntimeConfig = {
+  diagnostics?: {
+    laneWaitWarnMs?: number;
+  };
+};
+
 export type CommandQueueEnqueueFn = <T>(
   task: () => Promise<T>,
   opts?: CommandQueueEnqueueOptions,

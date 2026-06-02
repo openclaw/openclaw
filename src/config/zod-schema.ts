@@ -503,6 +503,7 @@ export const OpenClawSchema = z
       .object({
         enabled: z.boolean().optional(),
         flags: z.array(z.string()).optional(),
+        laneWaitWarnMs: z.number().int().positive().optional(),
         stuckSessionWarnMs: z.number().int().positive().optional(),
         stuckSessionAbortMs: z.number().int().positive().optional(),
         memoryPressureSnapshot: z.boolean().optional(),

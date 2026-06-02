@@ -131,6 +131,22 @@ when the last bridge progress looked terminal, such as a raw response item or
 response completion event, but the Gateway still considers the embedded run
 active.
 
+The lane scheduler logs `[diagnostic] lane wait exceeded` when queued work waits
+too long before starting. The default threshold is 2000 ms. If your Gateway has
+legitimate long-running background work, raise the threshold:
+
+```json5
+{
+  diagnostics: {
+    laneWaitWarnMs: 120000,
+  },
+}
+```
+
+Use a positive integer in milliseconds. The new value applies to work enqueued
+after the config reload; already queued entries keep the threshold they had
+when they entered the lane.
+
 Inspect the live recorder:
 
 ```bash

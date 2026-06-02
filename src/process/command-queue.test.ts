@@ -1,5 +1,6 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { OpenClawSchema } from "../config/zod-schema.js";
 import { CommandLane } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
@@ -12,10 +13,18 @@ const diagnosticMocks = vi.hoisted(() => ({
   },
 }));
 
+const runtimeConfigMock = vi.hoisted(() => ({
+  config: null as { diagnostics?: { laneWaitWarnMs?: number } } | null,
+}));
+
 vi.mock("../logging/diagnostic-runtime.js", () => ({
   logLaneEnqueue: diagnosticMocks.logLaneEnqueue,
   logLaneDequeue: diagnosticMocks.logLaneDequeue,
   diagnosticLogger: diagnosticMocks.diag,
+}));
+
+vi.mock("../config/runtime-snapshot.js", () => ({
+  getRuntimeConfigSnapshot: () => runtimeConfigMock.config,
 }));
 
 type CommandQueueModule = typeof import("./command-queue.js");
@@ -90,6 +99,15 @@ function diagnosticDebugMessages(): string[] {
     .filter((message): message is string => typeof message === "string");
 }
 
+function laneWaitWarningMessages(): string[] {
+  return diagnosticMocks.diag.warn.mock.calls
+    .map(([message]) => message)
+    .filter(
+      (message): message is string =>
+        typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
+    );
+}
+
 describe("command queue", () => {
   beforeAll(async () => {
     ({
@@ -114,6 +132,7 @@ describe("command queue", () => {
 
   beforeEach(() => {
     vi.useRealTimers();
+    runtimeConfigMock.config = null;
     resetCommandQueueStateForTest();
     // Queue state is global across module instances, so reset main lane
     // concurrency explicitly to avoid cross-file leakage.
@@ -308,6 +327,99 @@ describe("command queue", () => {
           typeof message === "string" && message.includes("lane wait exceeded: lane=main"),
       );
       expect(waitWarning?.[0]).toContain("queueAhead=0 activeAhead=1");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the 2000ms default lane wait warning threshold when config is unset", async () => {
+    vi.useFakeTimers();
+    try {
+      const blocker = createDeferred();
+      const first = enqueueCommand(async () => {
+        await blocker.promise;
+      });
+
+      const second = enqueueCommand(async () => {});
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      blocker.resolve();
+      await Promise.all([first, second]);
+
+      expect(laneWaitWarningMessages()[0]).toContain("warnAfterMs=2000");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses configured lane wait warning threshold for new queued entries", async () => {
+    runtimeConfigMock.config = { diagnostics: { laneWaitWarnMs: 120_000 } };
+
+    vi.useFakeTimers();
+    try {
+      const blocker = createDeferred();
+      const first = enqueueCommand(async () => {
+        await blocker.promise;
+      });
+
+      const second = enqueueCommand(async () => {});
+
+      await vi.advanceTimersByTimeAsync(119_999);
+      blocker.resolve();
+      await Promise.all([first, second]);
+
+      expect(laneWaitWarningMessages()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("logs lane wait warning after the configured threshold", async () => {
+    runtimeConfigMock.config = { diagnostics: { laneWaitWarnMs: 120_000 } };
+
+    vi.useFakeTimers();
+    try {
+      const blocker = createDeferred();
+      const first = enqueueCommand(async () => {
+        await blocker.promise;
+      });
+
+      const second = enqueueCommand(async () => {});
+
+      await vi.advanceTimersByTimeAsync(120_000);
+      blocker.resolve();
+      await Promise.all([first, second]);
+
+      const [warning] = laneWaitWarningMessages();
+      expect(warning).toContain("waitedMs=120000");
+      expect(warning).toContain("warnAfterMs=120000");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("captures the configured threshold when each entry is enqueued", async () => {
+    vi.useFakeTimers();
+    try {
+      const blocker = createDeferred();
+      const first = enqueueCommand(async () => {
+        await blocker.promise;
+      });
+
+      runtimeConfigMock.config = { diagnostics: { laneWaitWarnMs: 120_000 } };
+      const second = enqueueCommand(async () => "old-threshold");
+
+      runtimeConfigMock.config = { diagnostics: { laneWaitWarnMs: 5 } };
+      const third = enqueueCommand(async () => "new-threshold");
+
+      await vi.advanceTimersByTimeAsync(6);
+      blocker.resolve();
+      await expect(first).resolves.toBeUndefined();
+      await expect(second).resolves.toBe("old-threshold");
+      await expect(third).resolves.toBe("new-threshold");
+
+      expect(laneWaitWarningMessages()).toHaveLength(1);
+      expect(laneWaitWarningMessages()[0]).toContain("warnAfterMs=5");
     } finally {
       vi.useRealTimers();
     }
@@ -872,5 +984,49 @@ describe("command queue", () => {
       blocker.resolve();
       commandQueueA.resetAllLanes();
     }
+  });
+});
+
+describe("diagnostics.laneWaitWarnMs schema", () => {
+  it("accepts a positive integer millisecond threshold", () => {
+    const result = OpenClawSchema.safeParse({
+      diagnostics: {
+        laneWaitWarnMs: 120_000,
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("rejects zero and negative thresholds", () => {
+    for (const laneWaitWarnMs of [0, -1]) {
+      const result = OpenClawSchema.safeParse({
+        diagnostics: {
+          laneWaitWarnMs,
+        },
+      });
+
+      expect(result.success).toBe(false);
+      if (result.success) {
+        continue;
+      }
+      expect(result.error.issues[0]?.path).toEqual(["diagnostics", "laneWaitWarnMs"]);
+      expect(result.error.issues[0]?.message).toMatch(/greater than 0|positive/i);
+    }
+  });
+
+  it("rejects non-integer thresholds", () => {
+    const result = OpenClawSchema.safeParse({
+      diagnostics: {
+        laneWaitWarnMs: "fast",
+      },
+    });
+
+    expect(result.success).toBe(false);
+    if (result.success) {
+      return;
+    }
+    expect(result.error.issues[0]?.path).toEqual(["diagnostics", "laneWaitWarnMs"]);
+    expect(result.error.issues[0]?.message).toMatch(/number/i);
   });
 });
