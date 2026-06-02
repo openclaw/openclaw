@@ -300,11 +300,12 @@ function visibleAssistantStreamText(stream: string | null): string | null {
 function buildAssistantStreamMessage(
   stream: string,
   replacementText = stream,
+  timestamp = Date.now(),
 ): Record<string, unknown> {
   return {
     role: "assistant",
     content: [{ type: "text", text: stream }],
-    timestamp: Date.now(),
+    timestamp,
     openclawStreamFallback: {
       replacementText,
     },
@@ -394,6 +395,7 @@ type VisibleAssistantStreamPart = {
   text: string;
   replacementText: string;
   source: "segment" | "current";
+  timestamp: number;
 };
 
 function visibleAssistantStreamParts(
@@ -415,7 +417,13 @@ function visibleAssistantStreamParts(
       trimAccumulatedVisibleStreamText(segment.text, previousText),
     );
     if (visible) {
-      parts.push({ text: visible, replacementText: segment.text, source: "segment" });
+      parts.push({
+        text: visible,
+        replacementText: segment.text,
+        source: "segment",
+        timestamp:
+          typeof segment.ts === "number" && Number.isFinite(segment.ts) ? segment.ts : Date.now(),
+      });
     }
     if (segment.text.trim()) {
       previousText = segment.text;
@@ -426,7 +434,12 @@ function visibleAssistantStreamParts(
       trimAccumulatedVisibleStreamText(state.chatStream, previousText),
     );
     if (visible) {
-      parts.push({ text: visible, replacementText: state.chatStream, source: "current" });
+      parts.push({
+        text: visible,
+        replacementText: state.chatStream,
+        source: "current",
+        timestamp: state.chatStreamStartedAt ?? Date.now(),
+      });
     }
   }
   return parts;
@@ -475,7 +488,11 @@ function appendVisibleStreamStateMessages(
     if (hasAssistantStreamPartReplacement([...nextMessages, ...replacementMessages], part)) {
       continue;
     }
-    const streamMessage = buildAssistantStreamMessage(part.text, part.replacementText);
+    const streamMessage = buildAssistantStreamMessage(
+      part.text,
+      part.replacementText,
+      part.timestamp,
+    );
     const toolIndex =
       part.source === "segment" ? firstCurrentToolStreamMessageIndex(nextMessages, state) : -1;
     nextMessages =
@@ -791,6 +808,13 @@ function maybeResetToolStream(state: ChatState, opts?: { preserveStreamSegments?
   }
 }
 
+function clearToolStreamSegments(state: ChatState) {
+  const toolHost = state as ChatState & { chatStreamSegments?: unknown };
+  if (Array.isArray(toolHost.chatStreamSegments)) {
+    toolHost.chatStreamSegments = [];
+  }
+}
+
 function resolveDeltaChatStreamText(
   currentStream: string | null,
   payload: ChatEventPayload,
@@ -1014,10 +1038,16 @@ async function loadChatHistoryUncached(
         state.chatMessages,
         state,
       );
+      const liveToolStreamReplaced =
+        currentLiveToolCallIds(state).length === 0 || historyReplacedToolStream;
       if (visibleStreamParts.length === 0 || historyReplacedStream) {
-        // Clear all streaming state — history includes tool results and text
-        // inline, so keeping streaming artifacts would cause duplicates.
-        maybeResetToolStream(state);
+        if (liveToolStreamReplaced) {
+          // Clear all streaming state — history includes tool results and text
+          // inline, so keeping streaming artifacts would cause duplicates.
+          maybeResetToolStream(state);
+        } else {
+          clearToolStreamSegments(state);
+        }
         state.chatStream = null;
         state.chatStreamStartedAt = null;
         recordChatHistoryTiming(state, "stream-reset", startedAtMs, {
