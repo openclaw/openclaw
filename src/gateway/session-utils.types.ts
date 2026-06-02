@@ -14,6 +14,7 @@ import type {
 } from "../shared/session-types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+/** Default session model/thinking values returned with Gateway session lists. */
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
@@ -27,11 +28,13 @@ export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeo
 
 type SubagentRunState = "active" | "interrupted" | "historical";
 
+/** Lightweight checkpoint metadata shown in session rows without transcript payloads. */
 export type SessionCompactionCheckpointPreview = Pick<
   SessionCompactionCheckpoint,
   "checkpointId" | "createdAt" | "reason"
 >;
 
+/** Normalized session row shape returned by Gateway session list/info APIs. */
 export type GatewaySessionRow = {
   key: string;
   spawnedBy?: string;
@@ -99,17 +102,20 @@ export type GatewaySessionRow = {
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
 
+/** Redacted single-message preview item for session preview responses. */
 export type SessionPreviewItem = {
   role: "user" | "assistant" | "tool" | "system" | "other";
   text: string;
 };
 
+/** Preview status and items for one requested session key. */
 export type SessionsPreviewEntry = {
   key: string;
   status: "ok" | "empty" | "missing" | "error";
   items: SessionPreviewItem[];
 };
 
+/** Batched preview payload returned by Gateway sessions.preview. */
 export type SessionsPreviewResult = {
   ts: number;
   previews: SessionsPreviewEntry[];
@@ -117,6 +123,7 @@ export type SessionsPreviewResult = {
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
 
+/** Result shape for sessions.patch, including resolved runtime model fields. */
 export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   entry: SessionEntry;
   resolved?: {
