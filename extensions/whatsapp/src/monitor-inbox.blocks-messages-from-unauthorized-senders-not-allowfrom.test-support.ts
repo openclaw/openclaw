@@ -238,6 +238,47 @@ describe("web monitor inbox", () => {
     }
   });
 
+  it("does not emit pre-auth for unmapped LID DMs when dmPolicy is disabled", async () => {
+    const config = {
+      channels: {
+        whatsapp: {
+          dmPolicy: "disabled",
+          allowFrom: ["+111"],
+        },
+      },
+      messages: DEFAULT_MESSAGES_CFG,
+    };
+    const preAuthHandler = vi.fn();
+    clearInternalHooks();
+    setInternalHooksEnabled(true);
+    registerInternalHook("message:pre-auth", preAuthHandler);
+
+    const { onMessage, listener, sock } = await startWebInboxMonitor({
+      config,
+    });
+
+    try {
+      sock.ev.emit(
+        "messages.upsert",
+        createNotifyUpsert(
+          createDmMessage({
+            id: "unmapped-lid-disabled",
+            remoteJid: "999@lid",
+            conversation: "Let me in",
+          }),
+        ),
+      );
+      await settleInboundWork();
+
+      expect(preAuthHandler).not.toHaveBeenCalled();
+      expect(onMessage).not.toHaveBeenCalled();
+      expect(sock.sendMessage).not.toHaveBeenCalled();
+      expect(sock.readMessages).not.toHaveBeenCalled();
+    } finally {
+      clearInternalHooks();
+      await listener.close();
+    }
+  });
   it("skips read receipts in self-chat mode", async () => {
     const config = {
       channels: {
