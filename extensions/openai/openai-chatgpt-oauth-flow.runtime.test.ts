@@ -15,6 +15,14 @@ function timeoutError(): Error {
   return new DOMException("timed out", "TimeoutError");
 }
 
+function fakeJwt(payload: unknown): string {
+  return [
+    Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url"),
+    Buffer.from(JSON.stringify(payload)).toString("base64url"),
+    "signature",
+  ].join(".");
+}
+
 function mockTokenResponse(body: unknown, status = 200): void {
   mockTokenResponseText(JSON.stringify(body), status);
 }
@@ -29,9 +37,15 @@ function mockTokenResponseText(body: string, status = 200): void {
   });
 }
 
+function arrayBufferFromBytes(bytes: Uint8Array): ArrayBuffer {
+  const body = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(body).set(bytes);
+  return body;
+}
+
 function mockTokenResponseBytes(bytes: Uint8Array, status = 200): void {
   ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: new Response(bytes, {
+    response: new Response(arrayBufferFromBytes(bytes), {
       status,
       headers: { "Content-Type": "application/json" },
     }),
@@ -225,5 +239,48 @@ describe("OpenAI Codex OAuth flow", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("completes browser callback login through the local callback server", async () => {
+    const accessToken = fakeJwt({
+      "https://api.openai.com/auth": {
+        chatgpt_account_id: "acct-test",
+      },
+    });
+    mockTokenResponse({
+      access_token: accessToken,
+      refresh_token: "refresh-token",
+      expires_in: 3600,
+    });
+    let callbackResponsePromise: Promise<Response> | undefined;
+
+    const credentials = await testing.loginOpenAICodex({
+      onAuth: ({ url }) => {
+        const authUrl = new URL(url);
+        const redirectUri = authUrl.searchParams.get("redirect_uri");
+        const state = authUrl.searchParams.get("state");
+        expect(redirectUri).toBeTruthy();
+        expect(state).toBeTruthy();
+        callbackResponsePromise = fetch(`${redirectUri}?state=${state}&code=callback-code`).then(
+          async (response) => {
+            await response.text();
+            return response;
+          },
+        );
+      },
+      onPrompt: vi.fn(async () => "unused-code"),
+      originator: "openclaw-test",
+    });
+
+    expect(credentials).toMatchObject({
+      access: accessToken,
+      refresh: "refresh-token",
+      accountId: "acct-test",
+    });
+    if (!callbackResponsePromise) {
+      throw new Error("OAuth callback request was not started");
+    }
+    const callbackResponse = await callbackResponsePromise;
+    expect(callbackResponse.headers.get("connection")).toBe("close");
   });
 });
