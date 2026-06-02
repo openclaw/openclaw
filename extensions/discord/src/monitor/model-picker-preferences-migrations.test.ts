@@ -213,6 +213,49 @@ describe("Discord model picker preference migration", () => {
     ]);
   });
 
+  it("plans legacy slash command deploy fingerprint JSON import into plugin state", async () => {
+    const stateDir = await makeStateDir();
+    const sourcePath = path.join(stateDir, "discord", "slash-command-deploy-hashes.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const hash = "a".repeat(64);
+    await fs.writeFile(
+      sourcePath,
+      JSON.stringify({
+        version: 1,
+        entries: {
+          "1471498116237885474:default": {
+            "global:reconcile": hash,
+            bad: "not-a-hash",
+          },
+        },
+      }),
+    );
+
+    const plans = await Promise.resolve(
+      detectDiscordLegacyStateMigrations({
+        cfg: {},
+        env: {},
+        oauthDir: path.join(stateDir, "credentials"),
+        stateDir,
+      }),
+    );
+
+    expect(plans).toHaveLength(1);
+    const plan = plans?.[0];
+    expect(plan?.kind).toBe("plugin-state-import");
+    if (plan?.kind !== "plugin-state-import") {
+      throw new Error("expected plugin-state import plan");
+    }
+    expect(plan.pluginId).toBe("discord");
+    expect(plan.namespace).toBe("slash-command-deploy-hashes");
+    expect(plan.readEntries()).toEqual([
+      {
+        key: "1471498116237885474:default",
+        value: { version: 1, hashes: { "global:reconcile": hash } },
+      },
+    ]);
+  });
+
   it("detects model picker and thread binding legacy JSON together", async () => {
     const stateDir = await makeStateDir();
     const discordDir = path.join(stateDir, "discord");
