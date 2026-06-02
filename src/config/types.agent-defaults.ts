@@ -450,7 +450,7 @@ export type AgentDefaultsConfig = {
     maxChildrenPerAgent?: number;
     /** Auto-archive sub-agent sessions after N minutes (default: 60, set 0 to disable). */
     archiveAfterMinutes?: number;
-    /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */
+    /** Default model selection for spawned sub-agents (string, "inherit", or {primary,fallbacks}). */
     model?: AgentModelConfig;
     /** Default thinking level for spawned sub-agents (e.g. "off", "low", "medium", "high"). */
     thinking?: string;

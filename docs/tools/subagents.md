@@ -23,13 +23,16 @@ Primary goals:
 
 <Note>
 **Cost note:** each sub-agent has its own context and token usage by
-default. For heavy or repetitive tasks, set a cheaper model for sub-agents
-and keep your main agent on a higher-quality model. Configure via
-`agents.defaults.subagents.model` or per-agent overrides. When a child
-    genuinely needs the requester's current transcript, the agent can request
-    `context: "fork"` on that one spawn. Thread-bound subagent sessions default
-    to `context: "fork"` because they branch the current conversation into a
-    follow-up thread.
+default. For heavy or repetitive tasks, set a cheaper model for native
+sub-agents and keep your main agent on a higher-quality model. Configure via
+`agents.defaults.subagents.model` or per-agent overrides; set either to
+`"inherit"` when native children should follow each requester's active session model.
+Model aliases are resolved first, so an existing alias named `"inherit"` still
+selects that concrete model.
+When a child genuinely needs the requester's current transcript, the agent can
+request `context: "fork"` on that one spawn. Thread-bound subagent sessions
+default to `context: "fork"` because they branch the current conversation into a
+follow-up thread.
 </Note>
 
 ## Slash command
@@ -100,7 +103,8 @@ whether a user-facing update is needed.
 
   </Accordion>
   <Accordion title="Modes and ACP runtime">
-    - `--model` and `--thinking` override defaults for that specific run.
+    - `--model` and `--thinking` override defaults for that specific run. For native sub-agent spawns, use `model: "inherit"` to follow the requester session's active model.
+    - `runtime: "acp"` does not resolve OpenClaw native model inheritance; ACP harnesses receive `model` as a backend-specific override, so pass an actual ACP-supported model id.
     - Use `info`/`log` to inspect details and output after completion.
     - For persistent thread-bound sessions, use `sessions_spawn` with `thread: true` and `mode: "session"`.
     - If the requester channel does not support thread bindings, use `mode: "run"` instead of retrying impossible thread-bound combinations.
@@ -139,9 +143,22 @@ session to confirm the effective tool list.
 
 **Defaults:**
 
-- **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.list[].subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
-- **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
-- **Run timeout:** OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout). `sessions_spawn` does not accept per-call timeout overrides.
+- **Model:** explicit `sessions_spawn.model` wins. Without an override,
+  OpenClaw checks `agents.list[].subagents.model`, then
+  `agents.defaults.subagents.model`, then the target-agent/global model
+  defaults. Native spawns can use `"inherit"` in the tool override or
+  sub-agent model config to follow the requester session's active model, unless
+  a model alias named `"inherit"` is configured; aliases keep their
+  concrete-model meaning. ACP runtime spawns use the same configured concrete
+  subagent model when present; otherwise the ACP harness keeps its own default.
+- **Thinking:** native sub-agents inherit the caller unless you set
+  `agents.defaults.subagents.thinking` (or per-agent
+  `agents.list[].subagents.thinking`). ACP runtime spawns also apply
+  `agents.defaults.models["provider/model"].params.thinking` for the selected
+  model. An explicit `sessions_spawn.thinking` still wins.
+- **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw
+  uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it
+  falls back to `0` (no timeout).
 - **Task delivery:** native sub-agents receive the delegated task in their first visible `[Subagent Task]` message. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
 
 Accepted native sub-agent spawns include the resolved child model metadata in
@@ -203,7 +220,7 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
   ACP-only. Streams ACP run output to the parent session when `runtime: "acp"`; omit for native sub-agent spawns.
 </ParamField>
 <ParamField path="model" type="string">
-  Override the sub-agent model. Invalid values are skipped and the sub-agent runs on the default model with a warning in the tool result.
+  Override the child run model. For native sub-agent spawns, use `"inherit"` to follow the requester session's active model unless `"inherit"` is a configured model alias. For `runtime: "acp"`, pass a model id supported by the ACP backend; OpenClaw does not interpret `"inherit"` for ACP. Invalid native sub-agent values are skipped and the sub-agent runs on the default model with a warning in the tool result.
 </ParamField>
 <ParamField path="thinking" type="string">
   Override thinking level for the sub-agent run.

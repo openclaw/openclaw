@@ -44,6 +44,7 @@ import {
   normalizeStoredOverrideModel,
   resolveDefaultModelForAgent,
   resolvePersistedSelectedModelRef,
+  shouldResolveInheritedSubagentModel,
 } from "./model-selection.js";
 import { resolveThinkingDefault } from "./model-thinking-default.js";
 import {
@@ -134,6 +135,7 @@ type SubagentSpawnDeps = {
   ensureContextEnginesInitialized: typeof ensureContextEnginesInitialized;
   resolveContextEngine: typeof resolveContextEngine;
   resolveParentForkDecision: typeof resolveParentForkDecision;
+  loadSessionStore: typeof loadSessionStore;
   updateSessionStore: typeof updateSessionStore;
 };
 
@@ -145,6 +147,7 @@ const defaultSubagentSpawnDeps: SubagentSpawnDeps = {
   ensureContextEnginesInitialized,
   resolveContextEngine,
   resolveParentForkDecision,
+  loadSessionStore,
   updateSessionStore,
 };
 
@@ -191,6 +194,10 @@ export type SpawnSubagentContext = {
   agentGroupSpace?: string | null;
   agentMemberRoleIds?: string[];
   requesterAgentIdOverride?: string;
+  /** Active model provider for requester-session model inheritance. */
+  modelProvider?: string;
+  /** Active model id for requester-session model inheritance. */
+  modelId?: string;
   /** Explicit workspace directory for subagent to inherit (optional). */
   workspaceDir?: string;
   inheritedToolAllowlist?: string[];
@@ -328,6 +335,48 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
 
 function loadSubagentConfig() {
   return subagentSpawnDeps.getRuntimeConfig();
+}
+
+function resolveContextModelRef(ctx: SpawnSubagentContext): string | undefined {
+  const model = normalizeOptionalString(ctx.modelId);
+  if (!model) {
+    return undefined;
+  }
+  const provider = normalizeOptionalString(ctx.modelProvider);
+  return provider ? `${provider}/${model}` : model;
+}
+
+function resolvePersistedRequesterModelRef(params: {
+  cfg: OpenClawConfig;
+  requesterInternalKey: string;
+  requesterAgentId: string;
+}): string | undefined {
+  try {
+    const target = resolveGatewaySessionStoreTarget({
+      cfg: params.cfg,
+      key: params.requesterInternalKey,
+    });
+    const store = subagentSpawnDeps.loadSessionStore(target.storePath);
+    const entryKeys = [target.canonicalKey, ...target.storeKeys];
+    const entry = entryKeys.map((key) => store[key]).find(Boolean);
+    if (!entry) {
+      return undefined;
+    }
+    const requesterDefault = resolveDefaultModelForAgent({
+      cfg: params.cfg,
+      agentId: params.requesterAgentId,
+    });
+    const ref = resolvePersistedSelectedModelRef({
+      defaultProvider: requesterDefault.provider,
+      runtimeProvider: entry.modelProvider,
+      runtimeModel: entry.model,
+      overrideProvider: entry.providerOverride,
+      overrideModel: entry.modelOverride,
+    });
+    return ref ? `${ref.provider}/${ref.model}` : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 async function persistInitialChildSessionRuntimeModel(params: {
@@ -1258,12 +1307,26 @@ export async function spawnSubagentDirect(
     requesterInternalKey,
     requesterAgentId,
   });
+  const inheritedModel =
+    resolveContextModelRef(ctx) ??
+    (shouldResolveInheritedSubagentModel({
+      cfg,
+      agentId: targetAgentId,
+      modelOverride,
+    })
+      ? resolvePersistedRequesterModelRef({
+          cfg,
+          requesterInternalKey,
+          requesterAgentId,
+        })
+      : undefined);
   const plan = resolveSubagentModelAndThinkingPlan({
     cfg,
     targetAgentId,
     requesterAgentConfig,
     targetAgentConfig,
     modelOverride,
+    inheritedModel,
     thinkingOverrideRaw,
     callerThinkingRaw,
   });
