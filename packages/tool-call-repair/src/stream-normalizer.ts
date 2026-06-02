@@ -11,21 +11,27 @@ import {
 } from "./grammar.js";
 
 export type PlainTextToolCallNameMatcher = {
+  /** True when a complete model-emitted tool name is currently supported. */
   hasExactName(name: string): boolean;
+  /** True while a streamed prefix could still become a supported tool name. */
   hasNamePrefix(prefix: string): boolean;
 };
 
 export type PlainTextToolCallMessageNormalization =
-  | { kind: "promoted" | "scrubbed"; message: Record<string, unknown> }
-  | undefined;
+  /** Normalized terminal message replacing escaped text with structured tool-call events. */
+  { kind: "promoted" | "scrubbed"; message: Record<string, unknown> } | undefined;
 
 export type PlainTextToolCallStreamNormalizerOptions = {
+  /** Builds provider-native events for a terminal message promoted into structured tool calls. */
   createPromotedToolCallEvents(message: Record<string, unknown>): Iterable<unknown>;
+  /** Tool-name matcher used while buffering partial plaintext tool-call prefixes. */
   matcher: PlainTextToolCallNameMatcher;
+  /** Gives provider-specific terminal messages a chance to promote or scrub escaped tool text. */
   normalizeDoneMessage(params: {
     message: unknown;
     reason: unknown;
   }): PlainTextToolCallMessageNormalization;
+  /** Stop yielding after a normalized done message when the upstream protocol is terminal. */
   stopAfterDone?: boolean;
 };
 
@@ -343,6 +349,8 @@ function getPlainTextToolCallBufferState(
   if (text.length <= TEXT_TOOL_CALL_BUFFER_MAX_CHARS) {
     return "possible";
   }
+  // Over-cap buffers are kept only when they still look like serialized tool calls; visible text
+  // after a complete serialized prefix flips the state to impossible so it can be released.
   const textAfterCompleteToolBlocks = stripSerializedToolCallPrefixes(trimmed, matcher);
   return textAfterCompleteToolBlocks !== null && textAfterCompleteToolBlocks.trim()
     ? "impossible"
@@ -942,8 +950,11 @@ function scrubReclassifiedMixedTextFromError(
 }
 
 export function scrubOverCapPlainTextToolCallMessage(params: {
+  /** Text candidate accumulated from streaming deltas before the terminal message arrived. */
   candidateText: string | undefined;
+  /** Tool-name matcher for deciding whether the candidate is still a suppressed tool call. */
   matcher: PlainTextToolCallNameMatcher;
+  /** Provider terminal message whose visible content may need escaped tool text removed. */
   message: unknown;
 }): Record<string, unknown> | undefined {
   const record = asRecord(params.message);
@@ -1039,6 +1050,7 @@ function isBufferedTextEvent(bufferedEvent: unknown): boolean {
   );
 }
 
+/** Converts streamed escaped plaintext tool-call text into structured tool-call events. */
 export async function* normalizePlainTextToolCallStreamEvents(
   source: AsyncIterable<unknown>,
   options: PlainTextToolCallStreamNormalizerOptions,

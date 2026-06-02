@@ -11,15 +11,22 @@ import {
 } from "./grammar.js";
 
 export type PlainTextToolCallBlock = {
+  /** Parsed JSON object or XML parameter map to pass to structured tool execution. */
   arguments: Record<string, unknown>;
+  /** Exclusive source offset after the consumed standalone block. */
   end: number;
+  /** Tool name recovered from bracketed, Harmony, or XML-style syntax. */
   name: string;
+  /** Exact source span consumed for diagnostics and replay-safe stripping. */
   raw: string;
+  /** Inclusive source offset where the standalone block starts. */
   start: number;
 };
 
 export type PlainTextToolCallParseOptions = {
+  /** Optional exact-name allowlist; candidates outside it are ignored instead of parsed. */
   allowedToolNames?: Iterable<string>;
+  /** Maximum serialized payload accepted before a candidate is treated as non-tool text. */
   maxPayloadBytes?: number;
 };
 
@@ -257,6 +264,8 @@ function extractXmlishParameterValue(text: string, start: number, end: number): 
   let payloadEnd = end;
   const afterOpeningLineBreak = consumeLineBreak(text, payloadStart);
   if (afterOpeningLineBreak !== null) {
+    // Serialized XML parameters use wrapper-line indentation; trim only wrapper-adjacent line
+    // breaks so caller payload whitespace inside the parameter remains byte-for-byte meaningful.
     payloadStart = afterOpeningLineBreak;
     if (payloadEnd > payloadStart && text[payloadEnd - 1] === "\n") {
       payloadEnd -= 1;
@@ -370,6 +379,7 @@ function parseXmlishPlainTextToolCallBlockAt(
   };
 }
 
+/** Parses text that consists only of one or more standalone escaped tool-call blocks. */
 export function parseStandalonePlainTextToolCallBlocks(
   text: string,
   options?: PlainTextToolCallParseOptions,
@@ -389,6 +399,7 @@ export function parseStandalonePlainTextToolCallBlocks(
   return blocks.length > 0 ? blocks : null;
 }
 
+/** Removes line-start standalone tool-call blocks while preserving surrounding visible text. */
 export function stripPlainTextToolCallBlocks(text: string): string {
   if (
     !text ||
