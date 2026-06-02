@@ -95,6 +95,46 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
+function isPersistedToolHistoryMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(entry.role);
+  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
+    return true;
+  }
+  if (
+    typeof entry.toolCallId === "string" ||
+    typeof entry.tool_call_id === "string" ||
+    typeof entry.toolName === "string" ||
+    typeof entry.tool_name === "string"
+  ) {
+    return true;
+  }
+  return (
+    Array.isArray(entry.content) &&
+    entry.content.some((block) => {
+      if (!block || typeof block !== "object") {
+        return false;
+      }
+      const type = normalizeLowercaseStringOrEmpty((block as Record<string, unknown>).type);
+      return (
+        type === "toolresult" ||
+        type === "tool_result" ||
+        type === "toolcall" ||
+        type === "tool_call" ||
+        type === "tooluse" ||
+        type === "tool_use"
+      );
+    })
+  );
+}
+
+function hasPersistedToolHistoryMessages(messages: unknown[]): boolean {
+  return messages.some(isPersistedToolHistoryMessage);
+}
+
 function isTextOnlyContent(content: unknown): boolean {
   if (typeof content === "string") {
     return true;
@@ -780,6 +820,10 @@ async function loadChatHistoryUncached(
       const visibleStream = visibleAssistantStreamText(state.chatStream);
       const historyReplacedStream =
         visibleStream !== null && hasAssistantStreamReplacement(state.chatMessages, visibleStream);
+      const historyReplacedToolStream = hasPersistedToolHistoryMessages(state.chatMessages);
+      if (historyReplacedToolStream) {
+        maybeResetToolStream(state);
+      }
       if (!visibleStream || historyReplacedStream) {
         // Clear all streaming state — history includes tool results and text
         // inline, so keeping streaming artifacts would cause duplicates.
