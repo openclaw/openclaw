@@ -229,7 +229,14 @@ describe("outbound policy helpers", () => {
     expectCrossContextPolicyResult(params);
   });
 
-  it.each(["edit", "delete", "pin", "unpin", "poll-vote"] satisfies ChannelMessageActionName[])(
+  it.each([
+    "edit",
+    "delete",
+    "unsend",
+    "pin",
+    "unpin",
+    "poll-vote",
+  ] satisfies ChannelMessageActionName[])(
     "blocks cross-provider %s actions by default",
     (action) => {
       expectCrossContextPolicyResult({
@@ -244,7 +251,7 @@ describe("outbound policy helpers", () => {
     },
   );
 
-  it.each(["edit", "delete", "pin", "unpin"] satisfies ChannelMessageActionName[])(
+  it.each(["edit", "delete", "unsend", "pin", "unpin"] satisfies ChannelMessageActionName[])(
     "allows cross-provider %s actions when explicitly enabled",
     (action) => {
       expectCrossContextPolicyResult({
@@ -264,7 +271,7 @@ describe("outbound policy helpers", () => {
     },
   );
 
-  it.each(["edit", "delete", "pin", "unpin"] satisfies ChannelMessageActionName[])(
+  it.each(["edit", "delete", "unsend", "pin", "unpin"] satisfies ChannelMessageActionName[])(
     "allows current-context %s actions without cross-provider opt-in",
     (action) => {
       expectCrossContextPolicyResult({

@@ -475,4 +475,29 @@ describe("web monitor inbox", () => {
 
     await listener.close();
   });
+
+  it("exposes edit and unsend through the active send API listener", async () => {
+    const { listener, sock } = await startInboxMonitor(vi.fn());
+
+    await listener.editMessage("+1555", "msg123", "updated");
+    await listener.unsendMessage("+1555", "msg123");
+
+    expect(sock.sendMessage).toHaveBeenNthCalledWith(1, "1555@s.whatsapp.net", {
+      text: "updated",
+      edit: {
+        remoteJid: "1555@s.whatsapp.net",
+        id: "msg123",
+        fromMe: true,
+      },
+    });
+    expect(sock.sendMessage).toHaveBeenNthCalledWith(2, "1555@s.whatsapp.net", {
+      delete: {
+        remoteJid: "1555@s.whatsapp.net",
+        id: "msg123",
+        fromMe: true,
+      },
+    });
+
+    await listener.close();
+  });
 });

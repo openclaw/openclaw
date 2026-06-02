@@ -1812,9 +1812,11 @@ export async function attachWebInboxToSocket(
     },
     assertSendReady: assertCanSendTo,
     sendComposingTo: sendApi.sendComposingTo,
+    editMessage: sendApi.editMessage,
     sendMessage: sendApi.sendMessage,
     sendPoll: sendApi.sendPoll,
     sendReaction: sendApi.sendReaction,
+    unsendMessage: sendApi.unsendMessage,
   } as const;
 }
 

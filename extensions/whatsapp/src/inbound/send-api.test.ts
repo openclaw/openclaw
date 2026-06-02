@@ -547,6 +547,46 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("edits only own messages", async () => {
+    const res = await api.editMessage("+1555", "msg-2", "updated");
+    expect(res.messageId).toBe("msg-2");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        text: "updated",
+        edit: {
+          remoteJid: "1555@s.whatsapp.net",
+          id: "msg-2",
+          fromMe: true,
+        },
+      }),
+    );
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "main",
+      direction: "outbound",
+    });
+  });
+
+  it("unsends only own messages", async () => {
+    await api.unsendMessage("12345@g.us", "msg-2");
+    expect(sendMessage).toHaveBeenCalledWith(
+      "12345@g.us",
+      expect.objectContaining({
+        delete: {
+          remoteJid: "12345@g.us",
+          id: "msg-2",
+          fromMe: true,
+        },
+      }),
+    );
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "main",
+      direction: "outbound",
+    });
+  });
+
   it("sends composing presence updates to the recipient JID", async () => {
     await api.sendComposingTo("+1555");
     expect(sendPresenceUpdate).toHaveBeenCalledWith("composing", "1555@s.whatsapp.net");
@@ -683,6 +723,49 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       fromMe: true,
     });
     expect(requireRecord(react.key, "reaction key").participant).toBeUndefined();
+  });
+
+  it("resolves PN to LID for editMessage", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+
+    await api.editMessage("+15555550000", "msg-2", "updated");
+
+    expect(requireMockArg(sendMessage, 0, 0, "edit message")).toBe("987654@lid");
+    const payload = requireRecord(
+      requireMockArg(sendMessage, 0, 1, "edit message"),
+      "edit payload",
+    );
+    expect(payload.text).toBe("updated");
+    expect(requireRecord(payload.edit, "edit key")).toMatchObject({
+      remoteJid: "987654@lid",
+      id: "msg-2",
+      fromMe: true,
+    });
+  });
+
+  it("resolves PN to LID for unsendMessage", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+
+    await api.unsendMessage("+15555550000", "msg-2");
+
+    expect(requireMockArg(sendMessage, 0, 0, "unsend message")).toBe("987654@lid");
+    const payload = requireRecord(
+      requireMockArg(sendMessage, 0, 1, "unsend message"),
+      "unsend payload",
+    );
+    expect(requireRecord(payload.delete, "delete key")).toMatchObject({
+      remoteJid: "987654@lid",
+      id: "msg-2",
+      fromMe: true,
+    });
   });
 
   it("resolves PN to LID for sendComposingTo presence", async () => {

@@ -52,6 +52,12 @@ const loadWhatsAppChannelReactAction = createLazyRuntimeModule(
   () => import("./channel-react-action.js"),
 );
 
+const WHATSAPP_GATEWAY_ACTIONS = ["react", "edit", "delete", "unsend", "upload-file"] as const;
+
+function isWhatsAppGatewayAction(action: string): boolean {
+  return WHATSAPP_GATEWAY_ACTIONS.includes(action as (typeof WHATSAPP_GATEWAY_ACTIONS)[number]);
+}
+
 function resolveWhatsAppTargetInfo(raw: string) {
   const normalized = normalizeWhatsAppTarget(raw);
   if (!normalized) {
@@ -164,9 +170,9 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       actions: {
         describeMessageTool: ({ cfg, accountId }) =>
           describeWhatsAppMessageActions({ cfg, accountId }),
-        supportsAction: ({ action }) => action === "react" || action === "upload-file",
+        supportsAction: ({ action }) => isWhatsAppGatewayAction(action),
         resolveExecutionMode: ({ action }) =>
-          action === "react" || action === "upload-file" ? "gateway" : "local",
+          isWhatsAppGatewayAction(action) ? "gateway" : "local",
         handleAction: async ({
           action,
           params,

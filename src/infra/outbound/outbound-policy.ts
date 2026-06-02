@@ -37,6 +37,7 @@ const CONTEXT_GUARDED_ACTIONS = new Set<ChannelMessageActionName>([
   "upload-file",
   "edit",
   "delete",
+  "unsend",
   "pin",
   "unpin",
   "thread-create",
