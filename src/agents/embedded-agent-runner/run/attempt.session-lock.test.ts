@@ -24,6 +24,7 @@ import {
   acquireEmbeddedAttemptSessionFileOwner,
   createEmbeddedAttemptSessionLockController,
   EmbeddedAttemptSessionTakeoverError,
+  installEmbeddedPromptRetryDefault,
   installPromptSubmissionLockRelease,
   resetEmbeddedAttemptSessionFileOwnersForTest,
 } from "./attempt.session-lock.js";
@@ -1898,6 +1899,29 @@ describe("embedded attempt session lock lifecycle", () => {
       "drain",
       "reacquire",
     ]);
+  });
+
+  it("defaults embedded prompt streamFn to maxRetries:0 when caller sets nothing", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session);
+    await session.agent.streamFn("model", "context");
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", { maxRetries: 0 });
+  });
+
+  it("preserves an explicit maxRetries over the embedded prompt default", async () => {
+    const streamFn = vi.fn(async (..._args: unknown[]) => {});
+    const session = { agent: { streamFn } };
+
+    installEmbeddedPromptRetryDefault(session);
+    await session.agent.streamFn("model", "context", { maxRetries: 3, temperature: 0.2 });
+
+    expect(streamFn).toHaveBeenCalledWith("model", "context", {
+      maxRetries: 3,
+      temperature: 0.2,
+    });
   });
 
   it("treats transcript appends during prompt streaming as owned session writes", async () => {

@@ -1223,6 +1223,20 @@ export function installPromptSubmissionLockRelease(params: {
   agent.streamFn = wrappedStreamFn;
 }
 
+// Default to disabling SDK-level retries inside the embedded prompt lock window:
+// model-fallback owns retries, and SDK retries here race with session takeover.
+// This is a default only — an explicit settings.retry.provider.maxRetries (surfaced
+// via options.maxRetries) still wins, so the caller-provided options spread last.
+export function installEmbeddedPromptRetryDefault(session: unknown): void {
+  const agent = (session as SessionWithAgentPrompt).agent;
+  if (typeof agent?.streamFn !== "function") {
+    return;
+  }
+  const innerStreamFn = agent.streamFn;
+  agent.streamFn = (model: unknown, context: unknown, options?: { maxRetries?: number }) =>
+    innerStreamFn(model, context, { maxRetries: 0, ...options });
+}
+
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
