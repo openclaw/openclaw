@@ -29,6 +29,16 @@ function mockTokenResponseText(body: string, status = 200): void {
   });
 }
 
+function mockTokenResponseBytes(bytes: Uint8Array, status = 200): void {
+  ssrfMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    response: new Response(bytes, {
+      status,
+      headers: { "Content-Type": "application/json" },
+    }),
+    release: vi.fn(async () => undefined),
+  });
+}
+
 afterEach(() => {
   ssrfMocks.fetchWithSsrFGuard.mockReset();
 });
@@ -143,6 +153,22 @@ describe("OpenAI Codex OAuth flow", () => {
     });
   });
 
+  it("reports malformed token exchange JSON without throwing parser errors", async () => {
+    mockTokenResponseBytes(new Uint8Array([0x1f, 0x8b, 0x08, 0x00]));
+
+    const result = await testing.exchangeAuthorizationCode(
+      "code",
+      "verifier",
+      testing.resolveRedirectUri("localhost"),
+      { timeoutMs: 5 },
+    );
+
+    expect(result).toMatchObject({
+      type: "failed",
+      message: expect.stringMatching(/^OpenAI Codex token exchange response was not valid JSON:/u),
+    });
+  });
+
   it("times out token refresh requests", async () => {
     ssrfMocks.fetchWithSsrFGuard.mockRejectedValueOnce(timeoutError());
 
@@ -173,5 +199,31 @@ describe("OpenAI Codex OAuth flow", () => {
       type: "failed",
       message: "OpenAI Codex token refresh response missing fields: expires_in",
     });
+  });
+
+  it("reports malformed token refresh JSON without throwing parser errors", async () => {
+    mockTokenResponseBytes(new Uint8Array([0x1f, 0x8b, 0x08, 0x00]));
+
+    const result = await testing.refreshAccessToken("old-refresh-token", { timeoutMs: 5 });
+
+    expect(result).toMatchObject({
+      type: "failed",
+      message: expect.stringMatching(/^OpenAI Codex token refresh response was not valid JSON:/u),
+    });
+  });
+
+  it("marks callback responses as connection-closing", async () => {
+    const server = await testing.startLocalOAuthServer("test-state");
+    try {
+      const response = await fetch(
+        `${testing.resolveRedirectUri("localhost")}?state=test-state&code=test-code`,
+      );
+      await response.text();
+
+      expect(response.headers.get("connection")).toBe("close");
+      await expect(server.waitForCode()).resolves.toEqual({ code: "test-code" });
+    } finally {
+      server.close();
+    }
   });
 });
