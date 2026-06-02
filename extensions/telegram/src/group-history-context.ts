@@ -1,9 +1,9 @@
-import type {
-  OpenClawConfig,
-  TelegramAccountConfig,
-  TelegramGroupHistoryContextMode,
-} from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { mergeTelegramAccountConfig } from "./account-config.js";
+
+export type TelegramGroupHistoryContextMode = NonNullable<
+  TelegramAccountConfig["includeGroupHistoryContext"]
+>;
 
 export const DEFAULT_TELEGRAM_GROUP_HISTORY_CONTEXT_MODE: TelegramGroupHistoryContextMode =
   "mention-only";
