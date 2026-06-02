@@ -93,6 +93,7 @@ async function startMockWsServer(handle: CdpReplyHandler) {
       handle(msg, socket);
       if (
         msg.method === "Page.enable" ||
+        msg.method === "Page.bringToFront" ||
         msg.method === "Runtime.enable" ||
         msg.method === "Network.enable" ||
         msg.method === "DOM.enable" ||
@@ -338,6 +339,53 @@ describe("cdp internal", () => {
       await expect(captureScreenshot({ wsUrl: server.wsUrl })).rejects.toThrow(
         /Screenshot failed: missing data/,
       );
+    });
+
+    it("brings the tab to the foreground before capturing", async () => {
+      const events: string[] = [];
+      const server = await startMockWsServer((msg, socket) => {
+        events.push(msg.method ?? "");
+        if (msg.method === "Page.captureScreenshot") {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: { data: Buffer.from("FG").toString("base64") },
+            }),
+          );
+        }
+      });
+      wss = server.wss;
+      const buf = await captureScreenshot({ wsUrl: server.wsUrl });
+      expect(buf.toString("utf8")).toBe("FG");
+      // Activation must precede capture so a backgrounded tab commits a frame.
+      expect(events).toContain("Page.bringToFront");
+      expect(events.indexOf("Page.bringToFront")).toBeLessThan(
+        events.indexOf("Page.captureScreenshot"),
+      );
+    });
+
+    it("still captures when Page.bringToFront fails", async () => {
+      const server = await startMockWsServer((msg, socket) => {
+        if (msg.method === "Page.bringToFront") {
+          // Reject activation; the capture path swallows the failure so
+          // already-working single-tab/foregrounded captures never regress.
+          socket.send(
+            JSON.stringify({ id: msg.id, error: { message: "bringToFront unsupported" } }),
+          );
+          return;
+        }
+        if (msg.method === "Page.captureScreenshot") {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: { data: Buffer.from("SWALLOW").toString("base64") },
+            }),
+          );
+        }
+      });
+      wss = server.wss;
+      const buf = await captureScreenshot({ wsUrl: server.wsUrl });
+      expect(buf.toString("utf8")).toBe("SWALLOW");
     });
   });
 
