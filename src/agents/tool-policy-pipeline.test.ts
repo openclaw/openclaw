@@ -154,6 +154,65 @@ describe("tool-policy-pipeline", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  test("does not warn for declared plugin tools that are not materialized yet", () => {
+    const warnings: string[] = [];
+    applyToolPolicyPipeline({
+      tools: [{ name: "exec" }] as any,
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      declaredToolAllowlist: { pluginToolNames: ["llm-task"] },
+      steps: [
+        {
+          policy: { allow: ["llm-task"] },
+          label: "tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  test("does not warn for declared MCP server namespace globs", () => {
+    const warnings: string[] = [];
+    applyToolPolicyPipeline({
+      tools: [{ name: "exec" }] as any,
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      declaredToolAllowlist: { mcpServerNames: ["paperless", "Home Assistant"] },
+      steps: [
+        {
+          policy: { allow: ["paperless__*", "home-assistant__search"] },
+          label: "tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  test("still warns for undeclared MCP namespace globs", () => {
+    const warnings: string[] = [];
+    applyToolPolicyPipeline({
+      tools: [{ name: "exec" }] as any,
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      declaredToolAllowlist: { mcpServerNames: ["paperless"] },
+      steps: [
+        {
+          policy: { allow: ["papreless__*"] },
+          label: "tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (papreless__*). These entries won't match any tool unless the plugin is enabled.",
+    ]);
+  });
+
   test("dedupes identical unknown-allowlist warnings across repeated runs", () => {
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];
