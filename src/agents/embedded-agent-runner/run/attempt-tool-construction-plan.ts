@@ -70,6 +70,7 @@ function cloneCodingToolConstructionPlan(
 }
 
 function isBundleMcpAllowlistName(normalized: string): boolean {
+  // Bundle MCP tools use the synthetic bundle name or `bundle__tool` separator form.
   return normalized === "bundle-mcp" || normalized.includes(TOOL_NAME_SEPARATOR);
 }
 
@@ -82,6 +83,8 @@ function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
 }
 
 function isKnownLocalCodingToolName(normalized: string): boolean {
+  // Unknown non-bundle names are treated as plugin tools so installed plugin
+  // catalog entries still materialize under narrow allowlists.
   return (
     BASE_CODING_TOOL_FACTORY_NAMES.has(normalized) ||
     SHELL_CODING_TOOL_FACTORY_NAMES.has(normalized) ||
@@ -164,8 +167,10 @@ function resolveCodingToolConstructionPlanForAllowlist(
   const includePluginTools = normalized.some(
     (name) =>
       name === "group:plugins" ||
+      // Plugin ids/tool names are not known to this local factory list at build time.
       (!isBundleMcpAllowlistName(name) && !isKnownLocalCodingToolName(name)),
   );
+  // Channel delivery tools are constructed through plugin-capable runtime setup.
   const includeChannelTools = includePluginTools;
 
   return {
