@@ -2,6 +2,7 @@
 import { formatCliCommand } from "../../cli/command-format.js";
 import { DEFAULT_MODEL_ALIASES } from "../../config/defaults.js";
 import { logConfigUpdated } from "../../config/logging.js";
+import { normalizeAgentModelMapForConfig } from "../../config/model-input.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { normalizeAlias } from "./alias-name.js";
 import { loadModelsConfig } from "./load-config.js";
@@ -104,11 +105,17 @@ export async function modelsAliasesRemoveCommand(aliasRaw: string, runtime: Runt
       // entry exists in the user's source config without an explicit alias set. In that
       // case the user sees the alias in `models aliases list` but it cannot be removed
       // because it isn't actually stored in the config file.
+      //
+      // applyModelDefaults materializes those aliases against the *normalized* model map
+      // (provider ids and retired Google preview keys are canonicalized first), so an
+      // entry whose only matching key is un-normalized still surfaces the alias in `list`.
+      // Match that contract here so `remove` recognizes the same built-in aliases.
       const builtinTarget = DEFAULT_MODEL_ALIASES[alias];
+      const normalizedModels = normalizeAgentModelMapForConfig(nextModels);
       if (
         builtinTarget &&
-        nextModels[builtinTarget] &&
-        nextModels[builtinTarget]?.alias === undefined
+        normalizedModels[builtinTarget] &&
+        normalizedModels[builtinTarget]?.alias === undefined
       ) {
         throw new Error(
           `Cannot remove "${alias}": it is a built-in alias for "${builtinTarget}" provided automatically by OpenClaw and is not stored in your config file. To shadow it with a different target, run ${formatCliCommand(`openclaw models aliases add ${alias} <model>`)}.`,
