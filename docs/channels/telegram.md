@@ -130,10 +130,7 @@ After a successful startup, OpenClaw caches the bot identity in the state direct
   "channels": {
     "telegram": {
       "dmPolicy": "allowlist",
-      "allowFrom": [
-        "123456789",
-        { "number": "987654321", "group": "friends" }
-      ]
+      "allowFrom": ["123456789", { "number": "987654321", "group": "friends" }]
     }
   }
 }
