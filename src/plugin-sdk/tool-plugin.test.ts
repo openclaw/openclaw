@@ -210,4 +210,80 @@ describe("defineToolPlugin", () => {
       tools: [{ name: "metadata_tool", description: "Static tool." }],
     });
   });
+
+  it("skips malformed static tool descriptors without dropping valid siblings", () => {
+    const entry = defineToolPlugin({
+      id: "static-tool-fuzz",
+      name: "Static Tool Fuzz",
+      description: "Malformed static tool descriptors.",
+      tools: (tool) => [
+        tool({
+          get name(): string {
+            throw new Error("tool name getter exploded");
+          },
+          description: "Poisoned descriptor.",
+          parameters: Type.Object({}),
+          execute: () => "poisoned",
+        } as never),
+        tool({
+          name: "missing_static_execute",
+          description: "Missing executable entrypoint.",
+          parameters: Type.Object({}),
+        } as never),
+        tool({
+          name: "poisoned_optional",
+          description: "Poisoned optional metadata.",
+          parameters: Type.Object({}),
+          get optional(): boolean {
+            throw new Error("tool optional getter exploded");
+          },
+          execute: () => "poisoned",
+        } as never),
+        tool({
+          name: "good_static_echo",
+          get label(): string {
+            throw new Error("tool label getter exploded");
+          },
+          description: "Good static echo.",
+          parameters: Type.Object({ input: Type.String() }),
+          execute: ({ input }) => input,
+        }),
+      ],
+    });
+    const captured = createCapturedPluginRegistration({ id: "static-tool-fuzz" });
+    const warn = vi.fn();
+    captured.api.logger.warn = warn;
+
+    entry.register(captured.api);
+
+    expect(captured.tools.map((tool) => tool.name)).toEqual(["good_static_echo"]);
+    expect(captured.tools[0]).toMatchObject({
+      label: "good_static_echo",
+      description: "Good static echo.",
+    });
+    expect(warn).toHaveBeenCalledTimes(3);
+    expect(warn).toHaveBeenCalledWith(
+      "tool plugin skipped malformed static tool: tool name must be a non-empty string",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "tool plugin skipped malformed static tool missing_static_execute: execute or factory must be a function",
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "tool plugin skipped malformed static tool poisoned_optional: optional metadata must be readable",
+    );
+    expect(getToolPluginMetadata(entry)).toMatchObject({
+      tools: [{ name: "good_static_echo", label: "good_static_echo" }],
+      diagnostics: [
+        { message: "tool name must be a non-empty string" },
+        {
+          toolName: "missing_static_execute",
+          message: "execute or factory must be a function",
+        },
+        {
+          toolName: "poisoned_optional",
+          message: "optional metadata must be readable",
+        },
+      ],
+    });
+  });
 });

@@ -55,6 +55,18 @@ function jsStringLiteral(value: string): string {
   return JSON.stringify(value);
 }
 
+function formatToolPluginDiagnostic(
+  diagnostic: NonNullable<ToolPluginMetadata["diagnostics"]>[number],
+): string {
+  return `defineToolPlugin skipped malformed static tool${
+    diagnostic.toolName ? ` ${diagnostic.toolName}` : ""
+  }: ${diagnostic.message}`;
+}
+
+function collectToolPluginDiagnosticErrors(metadata: ToolPluginMetadata): string[] {
+  return (metadata.diagnostics ?? []).map(formatToolPluginDiagnostic);
+}
+
 function normalizeRelativePath(rootDir: string, targetPath: string): string {
   const relative = path
     .relative(rootDir, path.resolve(rootDir, targetPath))
@@ -214,7 +226,7 @@ export function validateToolPluginProject(params: {
   packageManifest: JsonObject;
   entry: string;
 }): string[] {
-  const errors: string[] = [];
+  const errors = collectToolPluginDiagnosticErrors(params.metadata);
   const expectedManifest = buildToolPluginManifest({
     metadata: params.metadata,
     packageManifest: params.packageManifest,
@@ -268,6 +280,13 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   const packagePath = path.join(rootDir, "package.json");
   const packageManifest = readPackageManifest(rootDir);
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
+  const diagnosticErrors = collectToolPluginDiagnosticErrors(metadata);
+  if (diagnosticErrors.length > 0) {
+    for (const error of diagnosticErrors) {
+      defaultRuntime.error(error);
+    }
+    return defaultRuntime.exit(1);
+  }
   const manifestPath = path.join(rootDir, PLUGIN_MANIFEST_FILENAME);
   const currentManifest = fs.existsSync(manifestPath) ? readJsonFile(manifestPath) : undefined;
   const manifest = buildToolPluginManifest({

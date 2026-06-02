@@ -44,6 +44,9 @@ export const pluginSdkDocMetadata = {
   "plugin-entry": {
     category: "core",
   },
+  "tool-plugin": {
+    category: "core",
+  },
   "access-groups": {
     category: "channel",
   },

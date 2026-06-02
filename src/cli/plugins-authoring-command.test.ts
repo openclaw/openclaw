@@ -265,6 +265,45 @@ describe("plugin authoring commands", () => {
     ).toEqual([]);
   });
 
+  it("reports malformed defineToolPlugin static tool descriptors", () => {
+    const entry = defineToolPlugin({
+      id: "malformed-tools",
+      name: "Malformed Tools",
+      description: "Malformed static tool descriptors.",
+      tools: (tool) => [
+        tool({
+          name: "broken_echo",
+          description: "Broken echo.",
+          parameters: Type.Object({}),
+        } as never),
+        tool({
+          name: "good_echo",
+          description: "Good echo.",
+          parameters: Type.Object({}),
+          execute: () => ({ ok: true }),
+        }),
+      ],
+    });
+    const metadata = getToolPluginMetadata(entry);
+    if (!metadata) {
+      throw new Error("missing metadata");
+    }
+
+    expect(
+      validateToolPluginProject({
+        metadata,
+        entry: "./src/index.ts",
+        manifest: buildToolPluginManifest({
+          metadata,
+          packageManifest: { openclaw: { extensions: ["./src/index.ts"] } },
+        }),
+        packageManifest: { openclaw: { extensions: ["./src/index.ts"] } },
+      }),
+    ).toContain(
+      "defineToolPlugin skipped malformed static tool broken_echo: execute or factory must be a function",
+    );
+  });
+
   it("reports stale manifest contracts", () => {
     const metadata = createDemoMetadata();
 

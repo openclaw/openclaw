@@ -28,6 +28,10 @@ type ToolPluginConfig<TConfigSchema extends TSchema | undefined> = TConfigSchema
 
 type ToolPluginToolFactory<TConfig> = <TParamsSchema extends TSchema>(
   definition: ToolPluginToolDefinition<TConfig, TParamsSchema>,
+) => DefinedToolPluginValidTool;
+
+type InternalToolPluginToolFactory<TConfig> = <TParamsSchema extends TSchema>(
+  definition: ToolPluginToolDefinition<TConfig, TParamsSchema>,
 ) => DefinedToolPluginTool;
 
 export type ToolPluginFactoryContext<TConfig> = {
@@ -65,7 +69,7 @@ export type ToolPluginToolDefinition<
       }
   );
 
-type DefinedToolPluginTool = {
+type DefinedToolPluginValidTool = {
   name: string;
   label: string;
   description: string;
@@ -77,12 +81,24 @@ type DefinedToolPluginTool = {
   ) => AnyAgentTool | AnyAgentTool[] | null | undefined;
 };
 
+type DefinedToolPluginMalformedTool = {
+  name?: string;
+  malformedReason: string;
+};
+
+type DefinedToolPluginTool = DefinedToolPluginValidTool | DefinedToolPluginMalformedTool;
+
 export type ToolPluginStaticToolMetadata = {
   name: string;
   label: string;
   description: string;
   parameters: JsonSchemaObject;
   optional?: boolean;
+};
+
+export type ToolPluginStaticToolDiagnostic = {
+  toolName?: string;
+  message: string;
 };
 
 export type ToolPluginMetadata = {
@@ -92,6 +108,7 @@ export type ToolPluginMetadata = {
   activation: PluginManifestActivation;
   configSchema: JsonSchemaObject;
   tools: ToolPluginStaticToolMetadata[];
+  diagnostics?: ToolPluginStaticToolDiagnostic[];
 };
 
 export type DefineToolPluginOptions<TConfigSchema extends TSchema | undefined = undefined> = {
@@ -116,16 +133,113 @@ function wrapToolPluginResult(result: unknown): AgentToolResult<unknown> {
   return jsonResult(result);
 }
 
-function createToolPluginToolFactory<TConfig>(): ToolPluginToolFactory<TConfig> {
-  return ((definition: ToolPluginToolDefinition<TConfig, TSchema>) => ({
-    name: definition.name,
-    label: definition.label ?? definition.name,
-    description: definition.description,
-    parameters: definition.parameters,
-    optional: definition.optional === true,
-    execute: definition.execute as DefinedToolPluginTool["execute"],
-    factory: definition.factory as DefinedToolPluginTool["factory"],
-  })) as ToolPluginToolFactory<TConfig>;
+function isValidToolPluginTool(tool: DefinedToolPluginTool): tool is DefinedToolPluginValidTool {
+  return !("malformedReason" in tool);
+}
+
+function isMalformedToolPluginTool(
+  tool: DefinedToolPluginTool,
+): tool is DefinedToolPluginMalformedTool {
+  return "malformedReason" in tool;
+}
+
+function isObjectSchema(value: unknown): value is TSchema {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+type ToolDefinitionRead = { ok: true; value: unknown } | { ok: false };
+
+function readToolDefinitionValue(
+  definition: ToolPluginToolDefinition<unknown, TSchema>,
+  key: string,
+): ToolDefinitionRead {
+  try {
+    return { ok: true, value: (definition as Record<string, unknown>)[key] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function malformedTool(name: string | undefined, message: string): DefinedToolPluginMalformedTool {
+  return name ? { name, malformedReason: message } : { malformedReason: message };
+}
+
+function staticToolDiagnostic(
+  tool: DefinedToolPluginMalformedTool,
+): ToolPluginStaticToolDiagnostic {
+  return tool.name
+    ? { toolName: tool.name, message: tool.malformedReason }
+    : { message: tool.malformedReason };
+}
+
+function staticToolMetadata(tool: DefinedToolPluginValidTool): ToolPluginStaticToolMetadata {
+  const metadata: ToolPluginStaticToolMetadata = {
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
+    parameters: tool.parameters as JsonSchemaObject,
+  };
+  if (tool.optional) {
+    metadata.optional = true;
+  }
+  return metadata;
+}
+
+function malformedToolMessage(tool: DefinedToolPluginMalformedTool): string {
+  return `tool plugin skipped malformed static tool${
+    tool.name ? ` ${tool.name}` : ""
+  }: ${tool.malformedReason}`;
+}
+
+function createToolPluginToolFactory<TConfig>(): InternalToolPluginToolFactory<TConfig> {
+  return ((definition: ToolPluginToolDefinition<TConfig, TSchema>) => {
+    const unknownDefinition = definition as ToolPluginToolDefinition<unknown, TSchema>;
+    const rawName = readToolDefinitionValue(unknownDefinition, "name");
+    const name = rawName.ok && typeof rawName.value === "string" ? rawName.value : "";
+    if (!name.trim()) {
+      return malformedTool(undefined, "tool name must be a non-empty string");
+    }
+
+    const description = readToolDefinitionValue(unknownDefinition, "description");
+    if (!description.ok || typeof description.value !== "string") {
+      return malformedTool(name, "description must be a string");
+    }
+
+    const parameters = readToolDefinitionValue(unknownDefinition, "parameters");
+    if (!parameters.ok || !isObjectSchema(parameters.value)) {
+      return malformedTool(name, "parameters must be a schema object");
+    }
+
+    const execute = readToolDefinitionValue(unknownDefinition, "execute");
+    const factory = readToolDefinitionValue(unknownDefinition, "factory");
+    if (!execute.ok || !factory.ok) {
+      return malformedTool(name, "execute and factory metadata must be readable");
+    }
+    const hasExecute = typeof execute.value === "function";
+    const hasFactory = typeof factory.value === "function";
+    if (!hasExecute && !hasFactory) {
+      return malformedTool(name, "execute or factory must be a function");
+    }
+    if (hasExecute && hasFactory) {
+      return malformedTool(name, "define either execute or factory, not both");
+    }
+
+    const label = readToolDefinitionValue(unknownDefinition, "label");
+    const optional = readToolDefinitionValue(unknownDefinition, "optional");
+    if (!optional.ok) {
+      return malformedTool(name, "optional metadata must be readable");
+    }
+    return {
+      name,
+      label: label.ok && typeof label.value === "string" && label.value ? label.value : name,
+      description: description.value,
+      parameters: parameters.value,
+      optional: optional.value === true,
+      ...(hasExecute
+        ? { execute: execute.value as DefinedToolPluginValidTool["execute"] }
+        : { factory: factory.value as DefinedToolPluginValidTool["factory"] }),
+    };
+  }) as InternalToolPluginToolFactory<TConfig>;
 }
 
 export function defineToolPlugin<TConfigSchema extends TSchema | undefined = undefined>(
@@ -135,9 +249,12 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
     EMPTY_TOOL_PLUGIN_CONFIG_SCHEMA) as JsonSchemaObject;
   const pluginConfigSchema = buildJsonPluginConfigSchema(configSchema);
   const normalizedConfigSchema = pluginConfigSchema.jsonSchema ?? configSchema;
+  const toolFactory = createToolPluginToolFactory<ToolPluginConfig<TConfigSchema>>();
   const tools = [
-    ...definition.tools(createToolPluginToolFactory<ToolPluginConfig<TConfigSchema>>()),
-  ];
+    ...definition.tools(toolFactory as ToolPluginToolFactory<ToolPluginConfig<TConfigSchema>>),
+  ] as DefinedToolPluginTool[];
+  const validTools = tools.filter(isValidToolPluginTool);
+  const diagnostics = tools.filter(isMalformedToolPluginTool).map(staticToolDiagnostic);
   const activation = definition.activation ?? { onStartup: true };
   const metadata: ToolPluginMetadata = {
     id: definition.id,
@@ -145,13 +262,8 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
     description: definition.description,
     activation,
     configSchema: normalizedConfigSchema,
-    tools: tools.map((tool) => ({
-      name: tool.name,
-      label: tool.label,
-      description: tool.description,
-      parameters: tool.parameters as JsonSchemaObject,
-      ...(tool.optional ? { optional: true } : {}),
-    })),
+    tools: validTools.map(staticToolMetadata),
+    ...(diagnostics.length > 0 ? { diagnostics } : {}),
   };
 
   const entry = definePluginEntry({
@@ -162,6 +274,10 @@ export function defineToolPlugin<TConfigSchema extends TSchema | undefined = und
     register(api) {
       const config = (api.pluginConfig ?? {}) as ToolPluginConfig<TConfigSchema>;
       for (const tool of tools) {
+        if (!isValidToolPluginTool(tool)) {
+          api.logger.warn?.(malformedToolMessage(tool));
+          continue;
+        }
         const opts = {
           name: tool.name,
           ...(tool.optional ? { optional: true } : {}),
