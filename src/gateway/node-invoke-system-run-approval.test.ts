@@ -58,6 +58,18 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     };
   }
 
+  function systemRunApprovalBinding(
+    argv: string[],
+    overrides: { cwd?: string | null; agentId?: string | null; sessionKey?: string | null } = {},
+  ) {
+    return buildSystemRunApprovalBinding({
+      argv,
+      cwd: overrides.cwd ?? null,
+      agentId: overrides.agentId ?? null,
+      sessionKey: overrides.sessionKey ?? null,
+    }).binding;
+  }
+
   function sanitizeApprovedRun(opts: {
     rawParams: ApprovedRunParamOverrides;
     record?: ExecApprovalRecord;
@@ -90,12 +102,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         nodeId: "node-1",
         command,
         commandArgv,
-        systemRunBinding: buildSystemRunApprovalBinding({
-          argv: effectiveBindingArgv,
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-        }).binding,
+        systemRunBinding: systemRunApprovalBinding(effectiveBindingArgv),
         cwd: null,
         agentId: null,
         sessionKey: null,
@@ -137,6 +144,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const params = result.params as Record<string, unknown>;
     expect(params.approved).toBe(true);
     expect(params.approvalDecision).toBe("allow-once");
+    return params;
   }
 
   function expectRejectedForwardingResult(
@@ -178,12 +186,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         agentId,
         sessionKey,
       },
-      systemRunBinding: buildSystemRunApprovalBinding({
-        argv: echoSafeArgv,
-        cwd: null,
-        agentId,
-        sessionKey,
-      }).binding,
+      systemRunBinding: systemRunApprovalBinding(echoSafeArgv, { agentId, sessionKey }),
       ...overrides,
     };
     return record;
@@ -216,6 +219,22 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       rawCommand: echoSafeCommand,
       ...defaultChatContext,
       ...overrides,
+    });
+  }
+
+  function sanitizeApprovedChatReplay(
+    opts: {
+      rawParams?: Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
+      record?: ExecApprovalRecord;
+      client?: SanitizerOptions["client"];
+    } = {},
+  ) {
+    return sanitizeSystemRunParamsForForwarding({
+      rawParams: approvedChatReplayParams(opts.rawParams),
+      nodeId: "node-1",
+      client: opts.client ?? trustedBackendClient,
+      execApprovalManager: manager(opts.record ?? makeChatRecord()),
+      nowMs: now,
     });
   }
 
@@ -345,11 +364,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
       },
       record,
     });
-    expectAllowOnceForwardingResult(result);
-    if (!result.ok) {
-      throw new Error("unreachable");
-    }
-    const forwarded = result.params as Record<string, unknown>;
+    const forwarded = expectAllowOnceForwardingResult(result);
     expect(forwarded.command).toEqual(["/usr/bin/echo", "SAFE"]);
     expect(forwarded.rawCommand).toBe("/usr/bin/echo SAFE");
     const systemRunPlan = forwarded.systemRunPlan as
@@ -412,12 +427,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
         nodeId: "node-1",
         command: echoSafeCommand,
         commandArgv: echoSafeArgv,
-        systemRunBinding: buildSystemRunApprovalBinding({
-          argv: echoSafeArgv,
-          cwd: null,
-          agentId: null,
-          sessionKey: null,
-        }).binding,
+        systemRunBinding: systemRunApprovalBinding(echoSafeArgv),
         cwd: null,
         agentId: null,
         sessionKey: null,
@@ -538,21 +548,7 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
   });
 
   test("accepts trusted backend chat replay when stable requester metadata matches", () => {
-    const record = makeChatRecord();
-
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedChatReplayParams(),
-      nodeId: "node-1",
-      client: trustedBackendClient,
-      execApprovalManager: manager(record),
-      nowMs: now,
-    });
-
-    expectAllowOnceForwardingResult(result);
-    if (!result.ok) {
-      throw new Error("unreachable");
-    }
-    const forwarded = result.params as Record<string, unknown>;
+    const forwarded = expectAllowOnceForwardingResult(sanitizeApprovedChatReplay());
     expect(forwarded).not.toHaveProperty("turnSourceChannel");
     expect(forwarded).not.toHaveProperty("turnSourceTo");
     expect(forwarded).not.toHaveProperty("turnSourceAccountId");
@@ -563,131 +559,60 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
     const record = makeChatRecord();
     record.requestedByClientId = "chat-agent";
 
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedChatReplayParams(),
-      nodeId: "node-1",
-      client: trustedBackendClient,
-      execApprovalManager: manager(record),
-      nowMs: now,
-    });
-
-    expectAllowOnceForwardingResult(result);
+    expectAllowOnceForwardingResult(sanitizeApprovedChatReplay({ record }));
   });
 
   test("accepts trusted backend WeCom replay when the approved chat agent connection changes", () => {
-    const sessionKey = "agent:main:wecom:conversation:corp-42";
-    const record = makeChatRecord({
-      sessionKey,
+    const wecomContext = {
+      sessionKey: "agent:main:wecom:conversation:corp-42",
       turnSourceChannel: "wecom",
       turnSourceTo: "wecom:corp-42:conversation-7",
       turnSourceAccountId: "corp-42",
       turnSourceThreadId: "conversation-7",
-    });
-
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedChatReplayParams({
-        sessionKey,
-        turnSourceChannel: "wecom",
-        turnSourceTo: "wecom:corp-42:conversation-7",
-        turnSourceAccountId: "corp-42",
-        turnSourceThreadId: "conversation-7",
-      }),
-      nodeId: "node-1",
-      client: trustedBackendClient,
-      execApprovalManager: manager(record),
-      nowMs: now,
+    } satisfies Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
+    const result = sanitizeApprovedChatReplay({
+      record: makeChatRecord(wecomContext),
+      rawParams: wecomContext,
     });
 
     expectAllowOnceForwardingResult(result);
   });
 
   test("accepts trusted backend webchat replay when turnSourceTo is null on both sides (regression #82132)", () => {
-    const sessionKey = "agent:main:main";
-    const record = makeChatRecord({
-      sessionKey,
+    const webchatContext = {
+      sessionKey: "agent:main:main",
       turnSourceChannel: "webchat",
       turnSourceTo: null,
       turnSourceAccountId: null,
       turnSourceThreadId: null,
-    });
-
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedChatReplayParams({
-        sessionKey,
-        turnSourceChannel: "webchat",
-        turnSourceTo: null,
-        turnSourceAccountId: null,
-        turnSourceThreadId: null,
-      }),
-      nodeId: "node-1",
-      client: trustedBackendClient,
-      execApprovalManager: manager(record),
-      nowMs: now,
+    } satisfies Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">;
+    const result = sanitizeApprovedChatReplay({
+      record: makeChatRecord(webchatContext),
+      rawParams: webchatContext,
     });
 
     expectAllowOnceForwardingResult(result);
   });
 
-  test("rejects trusted backend chat replay when session binding changes", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedChatReplayParams({
-        sessionKey: "agent:main:telegram:direct:99999",
-      }),
-      nodeId: "node-1",
-      client: trustedBackendClient,
-      execApprovalManager: manager(makeChatRecord()),
-      nowMs: now,
-    });
-
-    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
-  });
-
-  test("rejects trusted backend chat replay when session binding casing changes", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedChatReplayParams({
-        sessionKey: "agent:MAIN:telegram:direct:12345",
-      }),
-      nodeId: "node-1",
-      client: trustedBackendClient,
-      execApprovalManager: manager(makeChatRecord()),
-      nowMs: now,
-    });
-
-    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
-  });
-
-  test("rejects trusted backend chat replay when agent binding casing changes", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedChatReplayParams({
-        agentId: "Main",
-      }),
-      nodeId: "node-1",
-      client: trustedBackendClient,
-      execApprovalManager: manager(makeChatRecord()),
-      nowMs: now,
-    });
-
-    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
-  });
-
-  test("rejects trusted backend chat replay when channel target changes", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedChatReplayParams({
-        turnSourceTo: "telegram:67890",
-      }),
-      nodeId: "node-1",
-      client: trustedBackendClient,
-      execApprovalManager: manager(makeChatRecord()),
-      nowMs: now,
-    });
-
-    expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");
-  });
+  test.each([
+    ["session binding changes", { sessionKey: "agent:main:telegram:direct:99999" }],
+    ["session binding casing changes", { sessionKey: "agent:MAIN:telegram:direct:12345" }],
+    ["agent binding casing changes", { agentId: "Main" }],
+    ["channel target changes", { turnSourceTo: "telegram:67890" }],
+  ] satisfies Array<[string, Omit<Partial<ApprovedRunParamOverrides>, "command" | "rawCommand">]>)(
+    "rejects trusted backend chat replay when %s",
+    (_label, rawParams) => {
+      const result = sanitizeApprovedChatReplay({ rawParams });
+      expectRejectedForwardingResult(
+        result,
+        "APPROVAL_CLIENT_MISMATCH",
+        "not valid for this client",
+      );
+    },
+  );
 
   test("rejects trusted backend chat replay without matching approval scope", () => {
-    const result = sanitizeSystemRunParamsForForwarding({
-      rawParams: approvedChatReplayParams(),
-      nodeId: "node-1",
+    const result = sanitizeApprovedChatReplay({
       client: {
         ...trustedBackendClient,
         connect: {
@@ -695,8 +620,6 @@ describe("sanitizeSystemRunParamsForForwarding", () => {
           scopes: ["operator.write"],
         },
       },
-      execApprovalManager: manager(makeChatRecord()),
-      nowMs: now,
     });
 
     expectRejectedForwardingResult(result, "APPROVAL_CLIENT_MISMATCH", "not valid for this client");

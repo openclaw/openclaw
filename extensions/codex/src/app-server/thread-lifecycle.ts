@@ -20,6 +20,7 @@ import {
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
+import { shouldDisableCodexToolSearchForModel } from "./dynamic-tool-profile.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
   isCodexPluginThreadBindingStale,
@@ -112,6 +113,10 @@ export const CODEX_CODE_MODE_DISABLED_THREAD_CONFIG: JsonObject = {
 
 const CODEX_LIGHTWEIGHT_CONTEXT_THREAD_CONFIG: JsonObject = {
   project_doc_max_bytes: 0,
+};
+
+const CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG: JsonObject = {
+  "features.multi_agent": false,
 };
 
 type CodexThreadLifecycleTimingSpan = {
@@ -252,6 +257,9 @@ export async function startOrResumeThread(params: {
   });
   const dynamicToolsFingerprint = lifecycleTiming.measureSync("fingerprint_dynamic_tools", () =>
     fingerprintDynamicTools(params.dynamicTools),
+  );
+  const dynamicToolsContainDeferred = params.dynamicTools.some(
+    (tool) => tool.deferLoading === true,
   );
   const contextEngineBinding = lifecycleTiming.measureSync("context_engine_binding", () =>
     buildContextEngineBinding(params.params, params.contextEngineProjection),
@@ -405,6 +413,23 @@ export async function startOrResumeThread(params: {
     binding = undefined;
   }
   if (binding?.threadId) {
+    if (
+      binding.dynamicToolsFingerprint &&
+      params.dynamicTools.length > 0 &&
+      binding.dynamicToolsContainDeferred !== dynamicToolsContainDeferred &&
+      (binding.dynamicToolsContainDeferred !== undefined || !dynamicToolsContainDeferred)
+    ) {
+      embeddedAgentLog.debug(
+        "codex app-server dynamic tool loading changed; starting a new thread",
+        {
+          threadId: binding.threadId,
+        },
+      );
+      await clearCodexAppServerBinding(params.params.sessionFile);
+      binding = undefined;
+    }
+  }
+  if (binding?.threadId) {
     // `/codex resume <thread>` writes a binding before the next turn can know
     // the dynamic tool catalog, so only invalidate fingerprints we actually have.
     if (
@@ -489,6 +514,7 @@ export async function startOrResumeThread(params: {
               model: params.params.modelId,
               modelProvider: response.modelProvider ?? fallbackModelProvider,
               dynamicToolsFingerprint,
+              dynamicToolsContainDeferred,
               userMcpServersFingerprint,
               mcpServersFingerprint: nextMcpServersFingerprint,
               nativeHookRelayGeneration:
@@ -533,6 +559,7 @@ export async function startOrResumeThread(params: {
           model: params.params.modelId,
           modelProvider: response.modelProvider ?? fallbackModelProvider,
           dynamicToolsFingerprint,
+          dynamicToolsContainDeferred,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           nativeHookRelayGeneration:
@@ -619,6 +646,7 @@ export async function startOrResumeThread(params: {
           model: response.model ?? params.params.modelId,
           modelProvider: response.modelProvider ?? modelProvider,
           dynamicToolsFingerprint,
+          dynamicToolsContainDeferred,
           userMcpServersFingerprint,
           mcpServersFingerprint: nextMcpServersFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -664,6 +692,7 @@ export async function startOrResumeThread(params: {
     model: response.model ?? params.params.modelId,
     modelProvider: response.modelProvider ?? modelProvider,
     dynamicToolsFingerprint,
+    dynamicToolsContainDeferred,
     userMcpServersFingerprint,
     mcpServersFingerprint: nextMcpServersFingerprint,
     nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
@@ -924,7 +953,14 @@ function buildCodexRuntimeThreadConfigForRun(
   config: JsonObject | undefined,
   options: { nativeCodeModeEnabled?: boolean; nativeCodeModeOnlyEnabled?: boolean } = {},
 ): JsonObject {
-  const runtimeConfig = buildCodexRuntimeThreadConfig(config, options);
+  const baseConfig = buildCodexRuntimeThreadConfig(config, options);
+  const runtimeConfig =
+    mergeCodexThreadConfigs(
+      baseConfig,
+      shouldDisableCodexToolSearchForModel(params.modelId)
+        ? CODEX_TOOL_SEARCH_UNSUPPORTED_THREAD_CONFIG
+        : undefined,
+    ) ?? baseConfig;
   if (params.bootstrapContextMode !== "lightweight") {
     return runtimeConfig;
   }
@@ -1114,9 +1150,7 @@ function fingerprintDynamicToolSpec(tool: JsonValue): JsonValue {
   for (const [key, child] of Object.entries(tool).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
-    // Tool-search presentation can change per turn without changing the
-    // durable app-server execution contract for an existing thread.
-    if (key === "description" || key === "deferLoading" || key === "namespace") {
+    if (key === "description") {
       continue;
     }
     stable[key] = stabilizeJsonValue(child);

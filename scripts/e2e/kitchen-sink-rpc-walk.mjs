@@ -404,11 +404,27 @@ function findBalancedJsonObjectEnd(text, startIndex) {
   return -1;
 }
 
-function unwrapRpcPayload(raw) {
+function hasOwnPayloadField(raw, field) {
+  return (
+    ((typeof raw === "object" && raw !== null) || typeof raw === "function") &&
+    Object.hasOwn(raw, field)
+  );
+}
+
+export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
   }
-  return raw?.result ?? raw?.payload ?? raw?.data ?? raw;
+  if (hasOwnPayloadField(raw, "result")) {
+    return raw.result;
+  }
+  if (hasOwnPayloadField(raw, "payload")) {
+    return raw.payload;
+  }
+  if (hasOwnPayloadField(raw, "data")) {
+    return raw.data;
+  }
+  return raw;
 }
 
 async function rpcCall(method, params, options) {

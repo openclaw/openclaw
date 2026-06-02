@@ -15,6 +15,7 @@ import { readStringValue } from "../../dist/normalization-core/string-coerce.js"
 import { readMcpChannelLimits } from "./mcp-channel-limits.ts";
 import { createMcpClientTempState, type McpClientTempState } from "./mcp-client-temp-state.ts";
 import { connectMcpWithTimeout } from "./mcp-connect-timeout.ts";
+import { resolveGatewaySuccessPayload } from "./lib/gateway-frame-payload.mjs";
 import { waitForWebSocketOpen } from "./mcp-websocket-open.ts";
 
 export const ClaudeChannelNotificationSchema = z.object({
@@ -190,7 +191,7 @@ async function connectGatewayOnce(params: {
     }
     pending.delete(typed.id);
     if (typed.ok === true) {
-      match.resolve(typed.payload ?? typed.result);
+      match.resolve(resolveGatewaySuccessPayload(typed));
       return;
     }
     match.reject(

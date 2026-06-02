@@ -1,3 +1,4 @@
+import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
@@ -120,6 +121,63 @@ async function sendRaw(params: {
       ...params.headers,
     },
     body: params.body,
+  });
+}
+
+async function sendChunkedOversizedBody(params: {
+  port: number;
+  token: string;
+}): Promise<{ status: number | undefined; body: string; closed: boolean }> {
+  return await new Promise((resolve, reject) => {
+    let sawResponse = false;
+    let closed = false;
+    const req = request(
+      {
+        hostname: "127.0.0.1",
+        port: params.port,
+        path: "/mcp",
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${params.token}`,
+          "content-type": "application/json",
+          "transfer-encoding": "chunked",
+        },
+      },
+      (res) => {
+        sawResponse = true;
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          const waitForClose = new Promise<void>((closeResolve) => {
+            if (closed) {
+              closeResolve();
+              return;
+            }
+            req.once("close", () => closeResolve());
+            setTimeout(closeResolve, 250).unref();
+          });
+          void waitForClose.then(() => {
+            resolve({ status: res.statusCode, body, closed });
+          });
+        });
+      },
+    );
+    req.on("close", () => {
+      closed = true;
+    });
+    req.on("error", (error) => {
+      if (!sawResponse) {
+        reject(error);
+      }
+    });
+    req.write("x".repeat(524_288));
+    req.write("x".repeat(524_288));
+    setTimeout(() => {
+      req.write("x");
+    }, 10).unref();
   });
 }
 
@@ -756,6 +814,39 @@ describe("mcp loopback server", () => {
       body: "{}",
     });
     expect(response.status).toBe(415);
+  });
+
+  it("returns 413 instead of resetting oversized request bodies", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: "x".repeat(1_048_577),
+    });
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: "payload_too_large" });
+  });
+
+  it("closes slow oversized request uploads after flushing 413", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    if (!runtime) {
+      throw new Error("expected active MCP loopback runtime");
+    }
+
+    const response = await sendChunkedOversizedBody({
+      port: server.port,
+      token: runtime.ownerToken,
+    });
+
+    expect(response).toEqual({
+      status: 413,
+      body: '{"error":"payload_too_large"}',
+      closed: true,
+    });
   });
 
   it("rejects cross-origin browser requests before auth", async () => {
