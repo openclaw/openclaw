@@ -54,7 +54,7 @@ export type TelegramMessageCache = {
     before: number;
     after: number;
   }) => Promise<TelegramCachedMessageNode[]>;
-  latestBeforeMatching: (params: {
+  latestMatchingAtOrBefore: (params: {
     accountId: string;
     chatId: string | number;
     messageId?: string;
@@ -719,7 +719,7 @@ export function createTelegramMessageCache(params?: {
         targetIndex + Math.max(0, after) + 1,
       );
     },
-    latestBeforeMatching: async ({ accountId, chatId, messageId, threadId, matches }) => {
+    latestMatchingAtOrBefore: async ({ accountId, chatId, messageId, threadId, matches }) => {
       if (!messageId) {
         return null;
       }
@@ -744,7 +744,7 @@ export function createTelegramMessageCache(params?: {
           continue;
         }
         const entryId = parseSafeMessageId(entry.messageId);
-        if (entryId === undefined || entryId >= targetId || !matches(entry)) {
+        if (entryId === undefined || entryId > targetId || !matches(entry)) {
           continue;
         }
         if (!latest || compareCachedMessageNodes(entry, latest) > 0) {
@@ -830,23 +830,15 @@ async function resolveSessionBoundaryNode(params: {
   if (!params.messageId) {
     return undefined;
   }
-  const { messageId } = params;
-  const latestBefore = await params.cache.latestBeforeMatching({
-    accountId: params.accountId,
-    chatId: params.chatId,
-    messageId,
-    ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
-    matches: isSessionBoundaryCommandNode,
-  });
-  const current = await params.cache.get({
-    accountId: params.accountId,
-    chatId: params.chatId,
-    messageId,
-  });
-  if (current && isSessionBoundaryCommandNode(current)) {
-    return current;
-  }
-  return latestBefore ?? undefined;
+  return (
+    (await params.cache.latestMatchingAtOrBefore({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      messageId: params.messageId,
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+      matches: isSessionBoundaryCommandNode,
+    })) ?? undefined
+  );
 }
 
 export async function buildTelegramReplyChain(params: {
