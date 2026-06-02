@@ -33,6 +33,7 @@ const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
 const deliverReplies = vi.hoisted(() => vi.fn());
 const deliverInboundReplyWithMessageSendContext = vi.hoisted(() => vi.fn());
 const emitInternalMessageSentHook = vi.hoisted(() => vi.fn());
+const recordTelegramSessionMessageWorkTarget = vi.hoisted(() => vi.fn());
 const recordOutboundMessageForPromptContext = vi.hoisted(() => vi.fn());
 const createForumTopicTelegram = vi.hoisted(() => vi.fn());
 const deleteMessageTelegram = vi.hoisted(() => vi.fn());
@@ -125,11 +126,13 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
   emitInternalMessageSentHook,
+  recordTelegramSessionMessageWorkTarget,
 }));
 
 vi.mock("./bot/delivery.replies.js", () => ({
   deliverReplies,
   emitInternalMessageSentHook,
+  recordTelegramSessionMessageWorkTarget,
 }));
 
 vi.mock("./send.js", () => ({
@@ -220,6 +223,8 @@ const telegramDepsForTest: TelegramBotDeps = {
     deliverInboundReplyWithMessageSendContext as TelegramBotDeps["deliverInboundReplyWithMessageSendContext"],
   emitInternalMessageSentHook:
     emitInternalMessageSentHook as TelegramBotDeps["emitInternalMessageSentHook"],
+  recordTelegramSessionMessageWorkTarget:
+    recordTelegramSessionMessageWorkTarget as TelegramBotDeps["recordTelegramSessionMessageWorkTarget"],
   editMessageTelegram: editMessageTelegram as TelegramBotDeps["editMessageTelegram"],
   recordOutboundMessageForPromptContext:
     recordOutboundMessageForPromptContext as TelegramBotDeps["recordOutboundMessageForPromptContext"],
@@ -243,6 +248,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     deliverReplies.mockReset();
     deliverInboundReplyWithMessageSendContext.mockReset();
     emitInternalMessageSentHook.mockReset();
+    recordTelegramSessionMessageWorkTarget.mockReset();
     recordOutboundMessageForPromptContext.mockReset();
     createForumTopicTelegram.mockReset();
     deleteMessageTelegram.mockReset();
@@ -1440,6 +1446,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "agent:default:telegram:direct:123",
       messageId: "m1",
+    });
+    expectRecordFields(mockCallArg(recordTelegramSessionMessageWorkTarget), {
+      chatId: "123",
+      messageId: 2001,
+      sessionKeyForInternalHooks: "agent:default:telegram:direct:123",
+      success: true,
     });
   });
 

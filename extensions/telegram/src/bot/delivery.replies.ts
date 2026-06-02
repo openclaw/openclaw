@@ -609,7 +609,7 @@ async function maybePinFirstDeliveredMessage(params: {
   }
 }
 
-type EmitMessageSentHookParams = {
+export type TelegramMessageSentHookParams = {
   cfg?: Pick<OpenClawConfig, "session">;
   sessionKeyForInternalHooks?: string;
   chatId: string;
@@ -622,7 +622,7 @@ type EmitMessageSentHookParams = {
   groupId?: string;
 };
 
-function buildTelegramSentHookContext(params: EmitMessageSentHookParams) {
+function buildTelegramSentHookContext(params: TelegramMessageSentHookParams) {
   return buildCanonicalSentMessageHookContext({
     to: params.chatId,
     content: params.content,
@@ -637,7 +637,7 @@ function buildTelegramSentHookContext(params: EmitMessageSentHookParams) {
   });
 }
 
-export function emitInternalMessageSentHook(params: EmitMessageSentHookParams): void {
+export function emitInternalMessageSentHook(params: TelegramMessageSentHookParams): void {
   if (!params.sessionKeyForInternalHooks) {
     return;
   }
@@ -655,8 +655,33 @@ export function emitInternalMessageSentHook(params: EmitMessageSentHookParams): 
   );
 }
 
+export function recordTelegramSessionMessageWorkTarget(
+  params: TelegramMessageSentHookParams,
+): void {
+  if (
+    !params.success ||
+    typeof params.messageId !== "number" ||
+    !params.sessionKeyForInternalHooks
+  ) {
+    return;
+  }
+  fireAndForgetHook(
+    recordSessionMessageWorkTarget({
+      cfg: params.cfg,
+      channel: "telegram",
+      to: params.chatId,
+      messageId: params.messageId,
+      sessionKey: params.sessionKeyForInternalHooks,
+    }),
+    "telegram: record session message target failed",
+    (message) => {
+      silentReplyLogger.warn(message);
+    },
+  );
+}
+
 function emitMessageSentHooks(
-  params: EmitMessageSentHookParams & {
+  params: TelegramMessageSentHookParams & {
     hookRunner: ReturnType<typeof getGlobalHookRunner>;
     enabled: boolean;
   },
@@ -665,21 +690,7 @@ function emitMessageSentHooks(
     return;
   }
   const canonical = buildTelegramSentHookContext(params);
-  if (params.success && params.messageId && params.sessionKeyForInternalHooks) {
-    fireAndForgetHook(
-      recordSessionMessageWorkTarget({
-        cfg: params.cfg,
-        channel: "telegram",
-        to: params.chatId,
-        messageId: params.messageId,
-        sessionKey: params.sessionKeyForInternalHooks,
-      }),
-      "telegram: record session message target failed",
-      (message) => {
-        silentReplyLogger.warn(message);
-      },
-    );
-  }
+  recordTelegramSessionMessageWorkTarget(params);
   if (params.enabled) {
     fireAndForgetHook(
       Promise.resolve(
@@ -694,7 +705,7 @@ function emitMessageSentHooks(
   emitInternalMessageSentHook(params);
 }
 
-export function emitTelegramMessageSentHooks(params: EmitMessageSentHookParams): void {
+export function emitTelegramMessageSentHooks(params: TelegramMessageSentHookParams): void {
   const hookRunner = getGlobalHookRunner();
   emitMessageSentHooks({
     ...params,

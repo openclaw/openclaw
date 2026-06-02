@@ -83,7 +83,11 @@ import {
   resolveSessionStoreEntry,
 } from "./bot-message-dispatch.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
+import {
+  deliverReplies,
+  emitInternalMessageSentHook,
+  recordTelegramSessionMessageWorkTarget,
+} from "./bot/delivery.js";
 import {
   buildTelegramGroupPeerId,
   buildTelegramGroupFrom,
@@ -1500,7 +1504,7 @@ export const dispatchTelegramMessage = async ({
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
         return;
       }
-      (telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)({
+      const sentHookParams = {
         cfg,
         sessionKeyForInternalHooks: deliveryBaseOptions.sessionKeyForInternalHooks,
         chatId: deliveryBaseOptions.chatId,
@@ -1510,7 +1514,12 @@ export const dispatchTelegramMessage = async ({
         messageId: result.delivery.messageId,
         isGroup: deliveryBaseOptions.mirrorIsGroup,
         groupId: deliveryBaseOptions.mirrorGroupId,
-      });
+      };
+      (telegramDeps.emitInternalMessageSentHook ?? emitInternalMessageSentHook)(sentHookParams);
+      (
+        telegramDeps.recordTelegramSessionMessageWorkTarget ??
+        recordTelegramSessionMessageWorkTarget
+      )(sentHookParams);
       try {
         await (
           telegramDeps.recordOutboundMessageForPromptContext ??

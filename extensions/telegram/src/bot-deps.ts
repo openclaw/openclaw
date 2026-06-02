@@ -20,7 +20,11 @@ import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-r
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { syncTelegramMenuCommands } from "./bot-native-command-menu.js";
-import { deliverReplies, emitInternalMessageSentHook } from "./bot/delivery.js";
+import {
+  deliverReplies,
+  emitInternalMessageSentHook,
+  recordTelegramSessionMessageWorkTarget,
+} from "./bot/delivery.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { resolveTelegramExecApproval } from "./exec-approval-resolver.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
@@ -53,6 +57,7 @@ export type TelegramBotDeps = {
   deliverReplies?: typeof deliverReplies;
   deliverInboundReplyWithMessageSendContext?: typeof deliverInboundReplyWithMessageSendContext;
   emitInternalMessageSentHook?: typeof emitInternalMessageSentHook;
+  recordTelegramSessionMessageWorkTarget?: typeof recordTelegramSessionMessageWorkTarget;
   editMessageTelegram?: typeof editMessageTelegram;
   recordOutboundMessageForPromptContext?: typeof recordOutboundMessageForPromptContext;
   createChannelMessageReplyPipeline?: typeof createChannelMessageReplyPipeline;
@@ -130,6 +135,9 @@ export const defaultTelegramBotDeps: TelegramBotDeps = {
   },
   get emitInternalMessageSentHook() {
     return emitInternalMessageSentHook;
+  },
+  get recordTelegramSessionMessageWorkTarget() {
+    return recordTelegramSessionMessageWorkTarget;
   },
   get editMessageTelegram() {
     return editMessageTelegram;
