@@ -89,12 +89,12 @@ async function readFdToString(fd: number, maxBytes: number): Promise<string> {
   let totalRead = 0;
   while (totalRead < capacity) {
     const { bytesRead } = await new Promise<{ bytesRead: number }>((resolve, reject) => {
-      syncFs.read(fd, buffer, totalRead, capacity - totalRead, totalRead, (error, bytesRead) => {
+      syncFs.read(fd, buffer, totalRead, capacity - totalRead, totalRead, (error, readCount) => {
         if (error) {
           reject(error);
           return;
         }
-        resolve({ bytesRead });
+        resolve({ bytesRead: readCount });
       });
     });
     if (bytesRead === 0) {
@@ -1217,7 +1217,9 @@ async function* walkWorkspaceFiles(
         await yieldImmediate();
       }
       if (visitedEntries > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
-        if (signal) signal.truncated = true;
+        if (signal) {
+          signal.truncated = true;
+        }
         return;
       }
       const childRelativePath = currentRelativeDir
@@ -1239,46 +1241,17 @@ async function* walkWorkspaceFiles(
 
 type GlobResolution = { matches: string[]; truncated: boolean };
 
+// Always resolve globs with the traversal-counted walker. fs.glob would be
+// faster for simple patterns, but it only exposes matched paths — Node
+// traverses the directory tree internally, so a sparse pattern like
+// `**/AGENTS.md` across a huge workspace can block the event loop long before
+// any match-count limit fires. walkWorkspaceFiles counts every readdir entry it
+// visits (visitedEntries), yields periodically, and bounds total traversal, so
+// the active path can never stall regardless of how late matches appear.
 async function resolveExtraBootstrapPatternPaths(
   workspaceDir: string,
   pattern: string,
 ): Promise<GlobResolution> {
-  if (typeof fs.glob === "function") {
-    try {
-      const matches: string[] = [];
-      let truncated = false;
-      // fs.glob only yields matching paths — Node traverses directories
-      // internally, so yieldedResults counts matches, not traversed entries.
-      let yieldedResults = 0;
-      for await (const match of fs.glob(pattern, {
-        cwd: workspaceDir,
-        exclude: (candidate) => hasIgnoredExtraBootstrapDir(candidate),
-      })) {
-        yieldedResults += 1;
-        if (yieldedResults % EXTRA_BOOTSTRAP_GLOB_YIELD_INTERVAL === 0) {
-          await yieldImmediate();
-        }
-        if (yieldedResults > EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT) {
-          truncated = true;
-          break;
-        }
-        // Belt-and-suspenders: fs.glob exclude support varies by Node version,
-        // so re-check ignored dirs on each yielded match.
-        if (hasIgnoredExtraBootstrapDir(match)) {
-          continue;
-        }
-        matches.push(match);
-        if (matches.length >= EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT) {
-          truncated = true;
-          break;
-        }
-      }
-      return { matches, truncated };
-    } catch {
-      // Fall through to the local matcher before treating the pattern as literal.
-    }
-  }
-
   if (typeof path.matchesGlob !== "function") {
     return { matches: [pattern], truncated: false };
   }
@@ -1335,7 +1308,7 @@ export async function loadExtraBootstrapFilesWithDiagnostics(
         diagnostics.push({
           path: pattern,
           reason: "glob-match-limit",
-          detail: `glob pattern was truncated; some configured bootstrap context may be missing`,
+          detail: `bootstrap glob "${pattern}" hit the traversal/match limit (>${EXTRA_BOOTSTRAP_GLOB_MATCH_LIMIT} matches or >${EXTRA_BOOTSTRAP_GLOB_VISIT_LIMIT} scanned entries); results were truncated and some configured context was dropped. Narrow the glob scope or split it into more specific patterns.`,
         });
       }
     } else {
