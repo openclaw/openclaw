@@ -211,4 +211,50 @@ describe("harness context engine lifecycle", () => {
     const ingestBatchParams = ingestBatchCalls[0]?.[0] as { messages?: AgentMessage[] } | undefined;
     expect(ingestBatchParams?.messages).toEqual([turnUser, turnAssistant]);
   });
+
+  it.each([
+    { label: "heartbeat run forwards isHeartbeat=true", isHeartbeat: true },
+    { label: "non-heartbeat run forwards isHeartbeat=false", isHeartbeat: false },
+  ])("$label", async ({ isHeartbeat }) => {
+    const userMsg = textMessage("user", "ask", 1);
+    const asstMsg = textMessage("assistant", "answer", 2);
+    const afterTurn = vi.fn(async () => {});
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ afterTurn }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [userMsg, asstMsg],
+      prePromptMessageCount: 1,
+      isHeartbeat,
+      warn: () => {},
+    });
+    const calls = (afterTurn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const callParams = calls[0]?.[0] as { isHeartbeat?: boolean } | undefined;
+    expect(callParams?.isHeartbeat).toBe(isHeartbeat);
+  });
+
+  it("omits isHeartbeat from afterTurn payload when caller does not provide it", async () => {
+    const userMsg = textMessage("user", "ask", 1);
+    const asstMsg = textMessage("assistant", "answer", 2);
+    const afterTurn = vi.fn(async () => {});
+    await finalizeHarnessContextEngineTurn({
+      contextEngine: createContextEngine({ afterTurn }),
+      promptError: false,
+      aborted: false,
+      yieldAborted: false,
+      sessionIdUsed: sessionParams.sessionIdUsed,
+      sessionKey: sessionParams.sessionKey,
+      sessionFile: sessionParams.sessionFile,
+      messagesSnapshot: [userMsg, asstMsg],
+      prePromptMessageCount: 1,
+      warn: () => {},
+    });
+    const calls = (afterTurn as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const callParams = calls[0]?.[0] as Record<string, unknown> | undefined;
+    expect(callParams && "isHeartbeat" in callParams).toBe(false);
+  });
 });

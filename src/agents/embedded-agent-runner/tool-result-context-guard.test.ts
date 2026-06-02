@@ -1029,4 +1029,56 @@ describe("installContextEngineLoopHook", () => {
     expect(retryResult).toBe(compactedView);
     expect(engine.assemble).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    { label: "forwards isHeartbeat=true to loop hook afterTurn", isHeartbeat: true },
+    { label: "forwards isHeartbeat=false to loop hook afterTurn", isHeartbeat: false },
+  ])("$label", async ({ isHeartbeat }) => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const remove = installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      isHeartbeat,
+      getPrePromptMessageCount: () => 1,
+    });
+    await callAfterInitialToolResult(agent);
+    remove();
+    const afterTurnCalls = (engine.afterTurn as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls;
+    expect(afterTurnCalls.length).toBeGreaterThan(0);
+    for (const call of afterTurnCalls) {
+      const callParams = call[0] as { isHeartbeat?: boolean } | undefined;
+      expect(callParams?.isHeartbeat).toBe(isHeartbeat);
+    }
+  });
+
+  it("omits isHeartbeat from loop hook afterTurn when caller does not provide it", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    const remove = installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      getPrePromptMessageCount: () => 1,
+    });
+    await callAfterInitialToolResult(agent);
+    remove();
+    const afterTurnCalls = (engine.afterTurn as unknown as { mock: { calls: unknown[][] } }).mock
+      .calls;
+    expect(afterTurnCalls.length).toBeGreaterThan(0);
+    for (const call of afterTurnCalls) {
+      const callParams = call[0] as Record<string, unknown> | undefined;
+      expect(callParams && "isHeartbeat" in callParams).toBe(false);
+    }
+  });
 });
