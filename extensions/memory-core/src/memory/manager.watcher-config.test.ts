@@ -475,10 +475,17 @@ describe("memory watcher config", () => {
     // Pre-error: chokidar has MEMORY.md only; memoryDir is not in its set.
     const existingChokidar = createdChokidarWatchers[0];
     expect(existingChokidar).toBeDefined();
-    const addSpy = vi.spyOn(
-      existingChokidar as unknown as { add: (path: string) => unknown },
-      "add",
-    );
+    existingChokidar!.watchedEntries = {
+      [workspaceDir]: ["MEMORY.md"],
+    };
+    const addSpy = existingChokidar!.add.mockImplementationOnce(() => {
+      setTimeout(() => {
+        existingChokidar!.watchedEntries = {
+          [memoryDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
+        };
+      }, 0);
+      return existingChokidar!;
+    });
 
     memoryWatcher?.emitError(new Error("watcher error: ENOSPC"));
     await vi.advanceTimersByTimeAsync(50);
@@ -492,6 +499,13 @@ describe("memory watcher config", () => {
     // Coverage must be restored: the affected directory should now be
     // attached to the existing chokidar watcher.
     expect(addSpy).toHaveBeenCalledWith(memoryDir);
+    expect(memoryLoggerWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("Memory file watching is tracking 2002 paths."),
+    );
+    await vi.advanceTimersByTimeAsync(250);
+    expect(memoryLoggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining("Memory file watching is tracking 2002 paths."),
+    );
 
     // Sanity: a subsequent chokidar-style event on the now-fallback path
     // continues to schedule sync.
