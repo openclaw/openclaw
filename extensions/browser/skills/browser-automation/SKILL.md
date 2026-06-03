@@ -34,6 +34,24 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
    - If the page needs login, permission, captcha, 2FA, camera/microphone approval, or another manual step, stop and tell the user exactly what is needed.
    - Do not claim the browser is not logged in just because the current page shows a permission or onboarding dialog. Inspect the visible UI first.
 
+## Secrets From Environment Variables
+
+When you must type a credential (password, API key, account login) into a page,
+do not write the secret literally. Instead reference an environment variable
+with the `{{env:KEY}}` placeholder anywhere you supply a value — the `type`
+text, a `fill` field value, or a `select` value. The browser substitutes the
+real value of `KEY` just before typing, so the secret never appears in your
+context or the transcript; you only ever see `{{env:KEY}}`.
+
+```json
+{ "action": "type", "ref": "e7", "text": "{{env:INVITATIONS_ADMIN_PASSWORD}}" }
+```
+
+Only variables on the SecretRef env allowlist
+(`secrets.providers.<env>.allowlist`) can be referenced; an unknown or unset
+variable fails the action rather than typing the literal placeholder. Values
+typed this way are also scrubbed from later page snapshots.
+
 ## Tab Hygiene
 
 Before creating a tab for a named task, list tabs and reuse an existing matching label or URL when it is still usable.

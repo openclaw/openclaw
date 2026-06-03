@@ -24,6 +24,7 @@ import {
   DEFAULT_BROWSER_ACTION_TIMEOUT_MS,
   DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS,
 } from "./browser/constants.js";
+import { redactKnownSecrets, resolveEnvInActRequest } from "./browser/env-secrets.js";
 
 const browserToolActionDeps = {
   browserAct,
@@ -451,7 +452,9 @@ export async function executeSnapshotAction(params: {
         },
       };
     }
-    const extractedText = snapshot.snapshot ?? "";
+    // Scrub any env secret value that was typed via {{env:KEY}} so a page
+    // snapshot can't echo it back into the model context.
+    const extractedText = redactKnownSecrets(snapshot.snapshot ?? "");
     const wrappedSnapshot = wrapExternalContent(extractedText, {
       source: "browser",
       includeWarning: true,
@@ -557,7 +560,15 @@ export async function executeActAction(params: {
   onTabActivity?: (targetId: string | undefined) => void;
 }): Promise<AgentToolResult<unknown>> {
   const { request, baseUrl, profile, proxyRequest } = params;
-  const effectiveRequest = withConfiguredActTimeout(request, profile);
+  // Resolve any {{env:KEY}} placeholders before dispatch. This runs after the
+  // agent's tool call has already been recorded, so the transcript keeps the
+  // placeholder while only the browser receives the real value. Fails closed:
+  // an unresolved or unallowlisted variable throws before anything is typed.
+  const resolvedRequest = await resolveEnvInActRequest(
+    request,
+    browserToolActionDeps.getRuntimeConfig(),
+  );
+  const effectiveRequest = withConfiguredActTimeout(resolvedRequest, profile);
   try {
     const result = proxyRequest
       ? await proxyRequest({
