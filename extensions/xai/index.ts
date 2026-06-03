@@ -179,14 +179,23 @@ export default defineSingleProviderPluginEntry({
       order: "simple",
       run: async (ctx) => {
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-        const apiKey = auth.apiKey ?? ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
-        if (!apiKey) {
+        if (auth.apiKey) {
+          return {
+            provider: await buildLiveXaiProvider({
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+          };
+        }
+
+        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
+        if (!apiKey.apiKey) {
           return null;
         }
         return {
           provider: await buildLiveXaiProvider({
-            apiKey,
-            discoveryApiKey: auth.discoveryApiKey,
+            apiKey: apiKey.apiKey,
+            discoveryApiKey: apiKey.discoveryApiKey,
           }),
         };
       },

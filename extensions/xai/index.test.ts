@@ -9,7 +9,7 @@ import {
   clearLiveCatalogCacheForTests,
   type LiveModelCatalogFetchGuard,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { buildLiveXaiProvider } from "./provider-catalog.js";
 import setupPlugin from "./setup-api.js";
@@ -70,6 +70,10 @@ describe("xai provider plugin", () => {
     clearLiveCatalogCacheForTests();
   });
 
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   it("exposes OAuth and device-code auth choices", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -104,6 +108,37 @@ describe("xai provider plugin", () => {
     expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
     expect((fetchParams?.init?.headers as Headers).get("Authorization")).toBe("Bearer xai-key");
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("uses fallback API-key credentials consistently for xAI live discovery", async () => {
+    const fetchMock = vi.fn(async () =>
+      Response.json({
+        data: [{ id: "grok-4.3", object: "model" }],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    const result = await provider.catalog?.run({
+      resolveProviderAuth: () => ({
+        apiKey: undefined,
+        discoveryApiKey: "oauth-discovery-token",
+        mode: "oauth",
+        source: "profile",
+      }),
+      resolveProviderApiKey: () => ({
+        apiKey: "env-xai-key",
+        discoveryApiKey: "env-xai-key",
+      }),
+    } as never);
+
+    if (!result || !("provider" in result)) {
+      throw new Error("expected xAI catalog provider result");
+    }
+    expect(result.provider.apiKey).toBe("env-xai-key");
+    const fetchCall = fetchMock.mock.calls[0] as unknown as [string, RequestInit] | undefined;
+    const fetchInit = fetchCall?.[1];
+    expect(new Headers(fetchInit?.headers).get("Authorization")).toBe("Bearer env-xai-key");
   });
 
   it("classifies Grok usage and spending limit errors", async () => {

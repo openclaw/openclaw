@@ -7,6 +7,7 @@ import {
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAILiveProviderConfig, buildOpenAIProvider } from "./openai-provider.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const mocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
@@ -141,6 +142,10 @@ describe("buildOpenAIProvider", () => {
       groupLabel: "OpenAI",
       groupHint: "ChatGPT/Codex sign-in or API key",
     });
+  });
+
+  it("marks the OpenAI manifest catalog as runtime-discovered", () => {
+    expect(manifest.modelCatalog.discovery.openai).toBe("runtime");
   });
 
   it("filters the OpenAI API-key catalog against live model ids", async () => {
