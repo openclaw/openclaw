@@ -1,7 +1,10 @@
 import { formatThinkingLevels } from "../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveSubagentSpawnModelSelection } from "./model-selection.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
+
+const subagentLog = createSubsystemLogger("subagent-spawn");
 
 export function splitModelRef(ref?: string) {
   if (!ref) {
@@ -51,6 +54,10 @@ export function resolveSubagentModelAndThinkingPlan(params: {
     agentId: params.targetAgentId,
     modelOverride: params.modelOverride,
   });
+
+  subagentLog.info(
+    `[SUBAGENT_MODEL] requested=${params.modelOverride?.trim() || resolvedModel} effective=${resolvedModel} endpoint=${resolvedModel.split("/")[0] ?? "unknown"} fallback_state=primary`,
+  );
 
   const thinkingPlan = resolveSubagentThinkingOverride({
     cfg: params.cfg,

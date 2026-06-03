@@ -1134,6 +1134,8 @@ export async function runWithModelFallback<T>(
     agentDir?: string;
     /** Optional explicit fallbacks list; when provided (even empty), replaces agents.defaults.model.fallbacks. */
     fallbacksOverride?: string[];
+    /** Number of attempts per candidate before moving to the next. Default: 1 */
+    maxAttemptsPerCandidate?: number;
     run: ModelFallbackRunFn<T>;
     onError?: ModelFallbackErrorHandler;
     onFallbackStep?: ModelFallbackStepHandler;
@@ -1522,6 +1524,23 @@ export async function runWithModelFallback<T>(
         attempt: i + 1,
         total: candidates.length,
       });
+
+      const candidateAttempts = attempts.filter(
+        (a) => a.provider === candidate.provider && a.model === candidate.model,
+      );
+      const maxAttempts = params.maxAttemptsPerCandidate ?? 1;
+      if (maxAttempts > 1 && candidateAttempts.length < maxAttempts) {
+        i -= 1;
+        continue;
+      }
+
+      if (i < candidates.length - 1) {
+        const nextCan = candidates[i + 1];
+        const lastFail = candidateAttempts[candidateAttempts.length - 1];
+        log.warn(
+          `[FALLBACK_TRIGGERED] from=${sanitizeForLog(candidate.provider)}/${sanitizeForLog(candidate.model)} to=${sanitizeForLog(nextCan.provider)}/${sanitizeForLog(nextCan.model)} reason=${sanitizeForLog(lastFail?.reason ?? "unknown")} failures=${candidateAttempts.length}`,
+        );
+      }
     }
   }
 

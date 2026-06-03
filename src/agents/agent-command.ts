@@ -1357,6 +1357,7 @@ async function agentCommandInternal(
             });
           },
           fallbacksOverride: effectiveFallbacksOverride,
+          maxAttemptsPerCandidate: isSubagentSessionKey(sessionKey ?? sessionId) ? 3 : undefined,
           onFallbackStep: (step) => {
             fallbackTrajectoryRecorder?.recordEvent("model.fallback_step", step);
           },
