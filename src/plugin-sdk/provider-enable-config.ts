@@ -61,6 +61,8 @@ export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier
       },
     },
   } as TConfig;
+  // Provider setup owns plugin registry state only; allowlist updates stay in the
+  // shared helper so deny/allow semantics match the core plugin enable path.
   next = ensurePluginAllowlisted(next, pluginId);
   return { config: next, enabled: true };
 }
