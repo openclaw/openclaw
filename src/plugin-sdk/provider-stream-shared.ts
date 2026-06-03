@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   extractStandalonePlainTextToolCallText,
   normalizePlainTextToolCallStreamEvents,
@@ -11,17 +12,16 @@ import type { StreamFn } from "../agents/runtime/index.js";
 import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
 import { streamSimple } from "../llm/stream.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
-import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
 export type ProviderStreamWrapperFactory =
-  | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
-  | null
-  | undefined
-  | false;
+  /** Wrapper factory that can decorate, replace, or omit a provider stream function. */
+  ((streamFn: StreamFn | undefined) => StreamFn | undefined) | null | undefined | false;
 
 export function composeProviderStreamWrappers(
+  /** Base provider stream function to pass through the wrapper chain. */
   baseStreamFn: StreamFn | undefined,
+  /** Ordered wrapper factories; falsey entries are skipped. */
   ...wrappers: ProviderStreamWrapperFactory[]
 ): StreamFn | undefined {
   return wrappers.reduce(
@@ -204,7 +204,10 @@ function wrapPlainTextToolCallStream(
  * Provider stream wrapper for local/proxy providers that sometimes emit a
  * standalone textual tool-call block even when native tool calling is enabled.
  */
-export function createPlainTextToolCallCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+export function createPlainTextToolCallCompatWrapper(
+  /** Provider stream function to wrap; defaults to the simple stream implementation. */
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const maybeStream = underlying(model, context, options);
@@ -219,6 +222,7 @@ export function createPlainTextToolCallCompatWrapper(baseStreamFn: StreamFn | un
 
 /** @deprecated Bundled provider stream helper; do not use from third-party plugins. */
 export function defaultToolStreamExtraParams(
+  /** Existing provider extra params; explicit tool_stream values are preserved. */
   extraParams?: Record<string, unknown>,
 ): Record<string, unknown> {
   if (extraParams?.tool_stream !== undefined) {
@@ -231,17 +235,25 @@ export function defaultToolStreamExtraParams(
 }
 
 export function createPayloadPatchStreamWrapper(
+  /** Provider stream function whose outbound payload should be patched. */
   baseStreamFn: StreamFn | undefined,
   patchPayload: (params: {
+    /** Mutable provider payload immediately before the underlying stream dispatches it. */
     payload: Record<string, unknown>;
+    /** Model selected for the stream call. */
     model: Parameters<StreamFn>[0];
+    /** Stream context passed by the runtime. */
     context: Parameters<StreamFn>[1];
+    /** Stream options passed by the runtime. */
     options: Parameters<StreamFn>[2];
   }) => void,
   wrapperOptions?: {
     shouldPatch?: (params: {
+      /** Model selected for the stream call. */
       model: Parameters<StreamFn>[0];
+      /** Stream context passed by the runtime. */
       context: Parameters<StreamFn>[1];
+      /** Stream options passed by the runtime. */
       options: Parameters<StreamFn>[2];
     }) => boolean;
   },
