@@ -123,6 +123,8 @@ export function createWebhookInFlightLimiter(options?: {
         return false;
       }
       active.set(key, current + 1);
+      // Keep the limiter bounded even under key-spray attacks; pruning oldest keys may allow
+      // a stale key to reset, but avoids unbounded memory growth on pre-auth webhook paths.
       pruneMapToMaxSize(active, maxTrackedKeys);
       return true;
     },
@@ -233,6 +235,8 @@ export function beginWebhookRequestPipelineOrReject(params: {
   }
 
   let released = false;
+  // Acquire happens after method/rate/content-type guards so rejected requests do not require
+  // cleanup; successful callers must run the returned release hook in a finally block.
   return {
     ok: true,
     release: () => {
