@@ -1,5 +1,6 @@
 import type { ErrorShape } from "./types.js";
 
+/** Gateway JSON-RPC style error codes shared by clients and server handlers. */
 export const ErrorCodes = {
   NOT_LINKED: "NOT_LINKED",
   NOT_PAIRED: "NOT_PAIRED",
@@ -11,6 +12,7 @@ export const ErrorCodes = {
 
 export type ErrorCode = (typeof ErrorCodes)[keyof typeof ErrorCodes];
 
+/** Builds the canonical gateway error payload while preserving optional retry metadata. */
 export function errorShape(
   code: ErrorCode,
   message: string,
