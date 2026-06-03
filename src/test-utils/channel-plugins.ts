@@ -7,6 +7,7 @@ import type {
 } from "../channels/plugins/types.public.js";
 import type { PluginRegistry } from "../plugins/registry.js";
 
+/** Registry entry shape used by channel tests without loading real plugins. */
 export type TestChannelRegistration = {
   pluginId: string;
   plugin: unknown;

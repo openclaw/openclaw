@@ -1,5 +1,6 @@
 import { expect } from "vitest";
 
+/** Returns a mock call with a useful failure when the call is missing. */
 export function mockCall(mock: unknown, index = 0): Array<unknown> {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = calls.at(index);
