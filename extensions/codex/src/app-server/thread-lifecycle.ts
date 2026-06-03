@@ -337,6 +337,7 @@ export async function startOrResumeThread(params: {
       config: params.params.config,
     }),
   );
+  let startModelProvider: string | undefined;
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
@@ -486,6 +487,19 @@ export async function startOrResumeThread(params: {
     }
   }
   if (binding?.threadId) {
+    const bindingAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
+    startModelProvider =
+      resolveCodexAppServerModelProvider({
+        provider: params.params.provider,
+        authProfileId: bindingAuthProfileId,
+        authProfileStore: params.params.authProfileStore,
+        agentDir: params.params.agentDir,
+        config: params.params.config,
+      }) ??
+      resolveCodexBindingModelProviderFallback({
+        currentModel: params.params.modelId,
+        bindingModelProvider: binding.modelProvider,
+      });
     // `/codex resume <thread>` writes a binding before the next turn can know
     // the dynamic tool catalog, so only invalidate fingerprints we actually have.
     if (
@@ -517,7 +531,7 @@ export async function startOrResumeThread(params: {
       }
     } else {
       try {
-        const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+        const authProfileId = bindingAuthProfileId;
         const finalConfigPatch = params.buildFinalConfigPatch?.({
           action: "resume",
           binding,
@@ -530,23 +544,11 @@ export async function startOrResumeThread(params: {
           userMcpServersConfigPatch,
           finalConfigPatch.configPatch,
         );
-        const fallbackModelProvider =
-          resolveCodexAppServerModelProvider({
-            provider: params.params.provider,
-            authProfileId,
-            authProfileStore: params.params.authProfileStore,
-            agentDir: params.params.agentDir,
-            config: params.params.config,
-          }) ??
-          resolveCodexBindingModelProviderFallback({
-            currentModel: params.params.modelId,
-            bindingModelProvider: binding.modelProvider,
-          });
         const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
           buildThreadResumeParams(params.params, {
             threadId: binding.threadId,
             authProfileId,
-            modelProvider: fallbackModelProvider,
+            modelProvider: startModelProvider,
             appServer: params.appServer,
             dynamicTools: params.dynamicTools,
             developerInstructions: params.developerInstructions,
@@ -574,7 +576,7 @@ export async function startOrResumeThread(params: {
               cwd: params.cwd,
               authProfileId: boundAuthProfileId,
               model: params.params.modelId,
-              modelProvider: response.modelProvider ?? fallbackModelProvider,
+              modelProvider: response.modelProvider ?? startModelProvider,
               dynamicToolsFingerprint,
               dynamicToolsContainDeferred,
               userMcpServersFingerprint,
@@ -620,7 +622,7 @@ export async function startOrResumeThread(params: {
           cwd: params.cwd,
           authProfileId: boundAuthProfileId,
           model: params.params.modelId,
-          modelProvider: response.modelProvider ?? fallbackModelProvider,
+          modelProvider: response.modelProvider ?? startModelProvider,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           userMcpServersFingerprint,
@@ -674,6 +676,7 @@ export async function startOrResumeThread(params: {
       nativeCodeModeEnabled: params.nativeCodeModeEnabled,
       nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
       environmentSelection: params.environmentSelection,
+      modelProvider: startModelProvider,
     }),
   );
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
@@ -707,7 +710,7 @@ export async function startOrResumeThread(params: {
           cwd: params.cwd,
           authProfileId: params.params.authProfileId,
           model: response.model ?? params.params.modelId,
-          modelProvider: response.modelProvider ?? modelProvider,
+          modelProvider: response.modelProvider ?? startModelProvider ?? modelProvider,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
           userMcpServersFingerprint,
@@ -754,7 +757,7 @@ export async function startOrResumeThread(params: {
     cwd: params.cwd,
     authProfileId: params.params.authProfileId,
     model: response.model ?? params.params.modelId,
-    modelProvider: response.modelProvider ?? modelProvider,
+    modelProvider: response.modelProvider ?? startModelProvider ?? modelProvider,
     dynamicToolsFingerprint,
     dynamicToolsContainDeferred,
     userMcpServersFingerprint,
@@ -902,15 +905,17 @@ export function buildThreadStartParams(
     nativeCodeModeEnabled?: boolean;
     nativeCodeModeOnlyEnabled?: boolean;
     environmentSelection?: CodexTurnEnvironmentParams[];
+    modelProvider?: string | null;
   },
 ): CodexThreadStartParams {
-  const modelProvider = resolveCodexAppServerModelProvider({
+  const resolvedModelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
     authProfileId: params.authProfileId,
     authProfileStore: params.authProfileStore,
     agentDir: params.agentDir,
     config: params.config,
   });
+  const modelProvider = options.modelProvider ?? resolvedModelProvider;
   return {
     model: params.modelId,
     ...(modelProvider ? { modelProvider } : {}),

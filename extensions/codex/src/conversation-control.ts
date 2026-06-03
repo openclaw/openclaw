@@ -13,6 +13,7 @@ import {
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
+import { resolveCodexBindingModelProviderFallback } from "./app-server/thread-lifecycle.js";
 import {
   getLeasedSharedCodexAppServerClient,
   releaseLeasedSharedCodexAppServerClient,
@@ -156,12 +157,19 @@ export async function setCodexConversationModel(params: {
     modelProvider: reviewerPolicyContext.modelProvider,
     model: reviewerPolicyContext.model,
   });
+  const modelProvider = resolveConversationControlModelProvider({
+    authProfileId: binding.authProfileId,
+    bindingModelProvider: binding.modelProvider,
+    currentModel: model,
+    ...lookup,
+  });
   const response = await resumeThreadWithOverrides({
     runtime,
     threadId: binding.threadId,
     authProfileId: binding.authProfileId,
     ...lookup,
     model,
+    modelProvider,
   });
   await writeCodexAppServerBinding(
     params.sessionFile,
@@ -284,6 +292,7 @@ async function resumeThreadWithOverrides(params: {
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
   model?: string;
+  modelProvider?: string | null;
   approvalPolicy?: CodexAppServerApprovalPolicy;
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
@@ -301,6 +310,7 @@ async function resumeThreadWithOverrides(params: {
       {
         threadId: params.threadId,
         ...(params.model ? { model: params.model } : {}),
+        ...(params.modelProvider ? { modelProvider: params.modelProvider } : {}),
         approvalPolicy: params.approvalPolicy ?? runtime.approvalPolicy,
         sandbox: params.sandbox ?? runtime.sandbox,
         approvalsReviewer: runtime.approvalsReviewer,
@@ -323,6 +333,26 @@ function buildBindingLookup(params: {
     ...(agentDir ? { agentDir } : {}),
     ...(params.config ? { config: params.config } : {}),
   };
+}
+
+function resolveConversationControlModelProvider(params: {
+  authProfileId?: string;
+  bindingModelProvider?: string;
+  currentModel?: string;
+  agentDir?: string;
+  config?: CodexAppServerBindingLookup["config"];
+}): string | undefined {
+  const modelProvider = resolveCodexBindingModelProviderFallback({
+    currentModel: params.currentModel,
+    bindingModelProvider: params.bindingModelProvider,
+  })?.trim();
+  if (!modelProvider || modelProvider.toLowerCase() === "codex") {
+    return undefined;
+  }
+  if (isCodexAppServerNativeAuthProfile(params) && modelProvider.toLowerCase() === "openai") {
+    return undefined;
+  }
+  return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
 }
 
 function permissionsForMode(mode: PermissionsMode): {

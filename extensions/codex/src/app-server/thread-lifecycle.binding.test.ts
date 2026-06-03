@@ -254,6 +254,53 @@ describe("Codex app-server thread lifecycle bindings", () => {
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
   });
 
+  it("keeps the bound local provider when recoverable resume failure starts a fresh thread", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-existing",
+      cwd: workspaceDir,
+      model: "local-model",
+      modelProvider: "lmstudio",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "codex";
+    params.modelId = "local-model-2";
+    const appServer = createThreadLifecycleAppServerOptions();
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/resume") {
+        throw new Error("stale thread");
+      }
+      if (method === "thread/start") {
+        const response = threadStartResult("thread-new");
+        response.model = "local-model-2";
+        response.modelProvider = "lmstudio";
+        response.thread.modelProvider = "lmstudio";
+        return response;
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    const binding = await startOrResumeThread({
+      client: { request } as never,
+      params,
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer,
+    });
+
+    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as
+      | Record<string, unknown>
+      | undefined;
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/resume", "thread/start"]);
+    expect(startParams?.model).toBe("local-model-2");
+    expect(startParams?.modelProvider).toBe("lmstudio");
+    expect(binding.threadId).toBe("thread-new");
+    expect(binding.modelProvider).toBe("lmstudio");
+  });
+
   it("starts a fresh Codex thread when dynamic tools switch from deferred to direct", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

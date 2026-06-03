@@ -138,6 +138,37 @@ describe("codex conversation controls", () => {
     expect(resumeParams?.approvalsReviewer).toBe("auto_review");
   });
 
+  it("keeps the bound local provider when switching to another unqualified model", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "local-model",
+      modelProvider: "lmstudio",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    const request = vi.fn(async () => ({
+      thread: { id: "thread-1", cwd: tempDir },
+      model: "local-model-2",
+      modelProvider: "lmstudio",
+    }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    await expect(
+      setCodexConversationModel({
+        sessionFile,
+        model: "local-model-2",
+        pluginConfig: { appServer: { mode: "guardian" } },
+      }),
+    ).resolves.toBe("Codex model set to local-model-2.");
+
+    const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(resumeParams?.model).toBe("local-model-2");
+    expect(resumeParams?.modelProvider).toBe("lmstudio");
+    expect(resumeParams?.approvalsReviewer).toBe("user");
+  });
+
   it("escapes model names returned from Codex before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
