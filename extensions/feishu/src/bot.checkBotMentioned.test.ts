@@ -263,4 +263,47 @@ describe("parseFeishuMessageEvent – mentionedBot", () => {
     const ctx = parseFeishuMessageEvent(event, "ou_bot_123");
     expect(ctx.content).toBe("[Forwarded message: sc_abc123]");
   });
+
+  it("defaults senderType to 'user' when event omits sender_type", () => {
+    const event = makeEvent("group", []);
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.senderType).toBe("user");
+  });
+
+  it("populates senderType='bot' for webhook events authored by another bot", () => {
+    const event = makeEvent("group", [
+      { key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
+    ]);
+    event.sender.sender_type = "bot";
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.senderType).toBe("bot");
+    // Mention detection must not regress when the sender is a bot.
+    expect(ctx.mentionedBot).toBe(true);
+  });
+
+  it("plumbs mentioned_type onto extracted mention targets", () => {
+    const event: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou_human" }, sender_type: "user" },
+      message: {
+        message_id: "msg_x",
+        chat_id: "oc_chat1",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "@_user_1 @_user_2 hi" }),
+        mentions: [
+          { key: "@_user_1", name: "Bot", id: { open_id: BOT_OPEN_ID } },
+          {
+            key: "@_user_2",
+            name: "Peer Bot",
+            id: { open_id: "ou_peer_bot" },
+            mentioned_type: "bot",
+          },
+        ],
+      },
+    };
+    const ctx = parseFeishuMessageEvent(event, BOT_OPEN_ID);
+    expect(ctx.mentionTargets).toEqual([
+      { key: "@_user_2", name: "Peer Bot", openId: "ou_peer_bot", mentionedType: "bot" },
+    ]);
+  });
 });

@@ -74,6 +74,7 @@ vi.mock("./comment-reaction.js", () => ({
 }));
 
 import { feishuPlugin } from "./channel.js";
+import { recordMention, resetMentionRegistryForTests } from "./mention-registry.js";
 import { feishuOutbound } from "./outbound.js";
 import { createFeishuSendReceipt } from "./send-result.js";
 
@@ -204,6 +205,52 @@ function expectFeishuResult(result: unknown, messageId: string) {
   expect(typedResult?.channel).toBe("feishu");
   expect(typedResult?.messageId).toBe(messageId);
 }
+
+describe("feishuOutbound.sendText mention normalization (message-tool outbound path)", () => {
+  beforeEach(() => {
+    resetOutboundMocks();
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "m" });
+    sendStructuredCardFeishuMock.mockResolvedValue({ messageId: "card_m" });
+  });
+
+  it("normalizes mention tags on the plain-text outbound path", async () => {
+    // The message-tool path goes through this adapter (not the action handler),
+    // so model-authored mention variants must be resolved here. A card-form tag
+    // in a text message is rewritten to the notifying text/post form.
+    await sendText({
+      cfg: emptyConfig,
+      to: "chat:chat-1",
+      text: "<at id=ou_x></at> hi",
+      accountId: "default",
+    });
+    expect(sendMessageCall()?.text).toContain('<at user_id="ou_x"');
+  });
+
+  it("rewrites text-form mentions to card form on the card outbound path", async () => {
+    const cardCfg = { channels: { feishu: { renderMode: "card" } } } as unknown as ClawdbotConfig;
+    await sendText({
+      cfg: cardCfg,
+      to: "chat:chat-1",
+      text: '<at user_id="ou_x">X</at> hi',
+      accountId: "default",
+    });
+    expect(sendStructuredCardCall()?.text).toContain("<at id=ou_x></at>");
+    expect(sendStructuredCardCall()?.text).not.toContain('user_id="ou_x"');
+  });
+
+  it("looks up @Name under the resolved account for a named-default setup", async () => {
+    resetMentionRegistryForTests();
+    // Named default account: the resolved account id is "primary", not "default".
+    const cfg = {
+      channels: { feishu: { defaultAccount: "primary", accounts: { primary: {} } } },
+    } as unknown as ClawdbotConfig;
+    // Registry is keyed by the resolved account ("primary"). With accountId
+    // omitted, a literal "default" lookup would miss this entry.
+    recordMention({ accountId: "primary", chatId: "chat-1", name: "Alice", openId: "ou_alice" });
+    await sendText({ cfg, to: "chat:chat-1", text: "@Alice hi", accountId: undefined });
+    expect(sendMessageCall()?.text).toContain('<at user_id="ou_alice">');
+  });
+});
 
 describe("feishuOutbound.sendText local-image auto-convert", () => {
   beforeEach(() => {

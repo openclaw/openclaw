@@ -205,6 +205,21 @@ const FeishuSharedConfigShape = {
   reactionNotifications: ReactionNotificationModeSchema,
   typingIndicator: z.boolean().optional(),
   resolveSenderNames: z.boolean().optional(),
+  // Whether bot-authored messages may trigger replies. Omitted = accept (current
+  // behavior). `false` ignores bots; `"mentions"` accepts only when the bot is
+  // @mentioned. Bot-to-bot exchanges are guarded by botLoopProtection below.
+  allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+  // Sliding-window guard that suppresses runaway two-bot exchanges. On by
+  // default whenever bot-authored messages can reach dispatch.
+  botLoopProtection: z
+    .object({
+      enabled: z.boolean().optional(),
+      maxEventsPerWindow: z.number().int().positive().optional(),
+      windowSeconds: z.number().int().positive().optional(),
+      cooldownSeconds: z.number().int().positive().optional(),
+    })
+    .strict()
+    .optional(),
   tts: TtsOverrideSchema,
 };
 

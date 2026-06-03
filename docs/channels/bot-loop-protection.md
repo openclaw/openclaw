@@ -86,6 +86,19 @@ Supporting channels layer their own config over the shared default. Precedence i
         },
       },
     },
+    feishu: {
+      allowBots: "mentions",
+      botLoopProtection: {
+        maxEventsPerWindow: 8,
+      },
+      accounts: {
+        primary: {
+          botLoopProtection: {
+            maxEventsPerWindow: 5,
+          },
+        },
+      },
+    },
     slack: {
       allowBots: "mentions",
       botLoopProtection: {
@@ -119,6 +132,7 @@ Supporting channels layer their own config over the shared default. Precedence i
 ## Channel support
 
 - Discord: native `author.bot` facts, keyed by Discord account, channel, and bot pair.
+- Feishu: native webhook `sender_type=bot` facts for accepted bot-authored messages, keyed by Feishu account, chat, and bot pair. Requires the `im:message.group_at_msg.include_bot:readonly` scope.
 - Slack: native `bot_id` facts for accepted bot-authored messages, keyed by Slack account, channel, and bot pair.
 - Matrix: configured Matrix bot accounts, keyed by Matrix account, room, and configured bot pair.
 - Google Chat: native `sender.type=BOT` facts for accepted bot-authored messages, keyed by account, space, and bot pair.
