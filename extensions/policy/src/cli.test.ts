@@ -513,6 +513,35 @@ describe("policy commands", () => {
     expect(parsed.rulesChecked).toBeGreaterThan(10);
   });
 
+  it("accepts exec approval allowlist conformance entries with argPattern", async () => {
+    const policy = {
+      execApprovals: {
+        agents: {
+          allowAutoAllowSkills: false,
+          allowlist: {
+            expected: ["status", { pattern: "calendar-cli", argPattern: "^sync\\b" }],
+          },
+        },
+      },
+    };
+    await fs.writeFile(
+      join(workspaceDir, "baseline.policy.jsonc"),
+      JSON.stringify(policy),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+    });
+
+    expect(exitCode).toBe(0);
+    expect(parsed).toMatchObject({
+      ok: true,
+      findings: [],
+    });
+  });
+
   it("reports missing and weaker policy file conformance rules", async () => {
     await fs.writeFile(
       join(workspaceDir, "baseline.policy.jsonc"),

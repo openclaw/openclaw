@@ -11,6 +11,7 @@ import { POLICY_TOOL_GROUPS } from "./tool-policy-conformance.js";
 
 // Mirrors the sandbox browser config default without importing core internals into the policy plugin.
 const DEFAULT_POLICY_SANDBOX_BROWSER_NETWORK = "openclaw-sandbox-browser";
+const DEFAULT_EXEC_APPROVAL_AGENT_ID = "main";
 const ALLOWLIST_DEFAULT_INGRESS_GROUP_POLICY_CHANNELS = new Set([
   "googlechat",
   "irc",
@@ -52,6 +53,7 @@ export type PolicyEvidence = {
   readonly dataHandling?: readonly PolicyDataHandlingEvidence[];
   readonly secrets?: readonly PolicySecretEvidence[];
   readonly authProfiles?: readonly PolicyAuthProfileEvidence[];
+  readonly execApprovals?: readonly PolicyExecApprovalEvidence[];
 };
 
 export type PolicyChannelEvidence = {
@@ -208,6 +210,21 @@ export type PolicyAuthProfileEvidence = {
   readonly mode?: string;
 };
 
+export type PolicyExecApprovalEvidence = {
+  readonly id: string;
+  readonly kind: "agent" | "allowlist" | "defaults";
+  readonly source: string;
+  readonly agentId?: string;
+  readonly security?: string;
+  readonly securityConfigured?: boolean;
+  readonly ask?: string;
+  readonly askFallback?: string;
+  readonly autoAllowSkills?: boolean;
+  readonly pattern?: string;
+  readonly argPattern?: string;
+  readonly entrySource?: string;
+};
+
 export type PolicyDataHandlingEvidence = {
   readonly id: string;
   readonly kind:
@@ -301,6 +318,8 @@ export function collectPolicyEvidence(
     readonly includeSandboxPosture?: boolean;
     readonly includeSecrets?: boolean;
     readonly includeAuthProfiles?: boolean;
+    readonly execApprovalsRaw?: string | null;
+    readonly includeExecApprovals?: boolean;
   },
 ): PolicyEvidence;
 export function collectPolicyEvidence(
@@ -315,6 +334,8 @@ export function collectPolicyEvidence(
     readonly includeSandboxPosture?: boolean;
     readonly includeSecrets?: boolean;
     readonly includeAuthProfiles?: boolean;
+    readonly execApprovalsRaw?: string | null;
+    readonly includeExecApprovals?: boolean;
   },
 ): Promise<PolicyEvidence>;
 export function collectPolicyEvidence(
@@ -329,6 +350,8 @@ export function collectPolicyEvidence(
     readonly includeSandboxPosture?: boolean;
     readonly includeSecrets?: boolean;
     readonly includeAuthProfiles?: boolean;
+    readonly execApprovalsRaw?: string | null;
+    readonly includeExecApprovals?: boolean;
   } = {},
 ): PolicyEvidence | Promise<PolicyEvidence> {
   const evidence = {
@@ -351,11 +374,213 @@ export function collectPolicyEvidence(
       : { sandboxPosture: scanPolicySandboxPosture(cfg) }),
     ...(options.includeSecrets === false ? {} : { secrets: scanPolicySecrets(cfg) }),
     ...(options.includeAuthProfiles === false ? {} : { authProfiles: scanPolicyAuthProfiles(cfg) }),
+    ...(options.includeExecApprovals === false || options.execApprovalsRaw === undefined
+      ? {}
+      : {
+          execApprovals:
+            options.execApprovalsRaw === null
+              ? []
+              : scanPolicyExecApprovals(options.execApprovalsRaw),
+        }),
   };
   if (options.toolsRaw === undefined) {
     return evidence;
   }
   return scanPolicyTools(options.toolsRaw).then((tools) => ({ ...evidence, tools }));
+}
+
+export function scanPolicyExecApprovals(raw: string): readonly PolicyExecApprovalEvidence[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  if (!isRecord(parsed) || parsed.version !== 1) {
+    return [];
+  }
+  const evidence: PolicyExecApprovalEvidence[] = [];
+  const defaults = isRecord(parsed.defaults) ? parsed.defaults : {};
+  evidence.push(
+    execApprovalPostureEvidence(
+      "defaults",
+      "defaults",
+      defaults,
+      "oc://exec-approvals.json/defaults",
+    ),
+  );
+
+  for (const agent of normalizedExecApprovalAgents(parsed.agents)) {
+    const agentSource = `oc://exec-approvals.json/agents/${ocPathSegment(agent.sourceAgentId)}`;
+    evidence.push(
+      execApprovalPostureEvidence(
+        `agent:${agent.agentId}`,
+        "agent",
+        agent.value,
+        agentSource,
+        agent.agentId,
+      ),
+    );
+    for (const [index, entry] of execApprovalAllowlistEntries(agent.value.allowlist).entries()) {
+      evidence.push({
+        id: `agent:${agent.agentId}:allowlist:${index}`,
+        kind: "allowlist",
+        source: `${agentSource}/allowlist/#${entry.index}`,
+        agentId: agent.agentId,
+        pattern: entry.pattern,
+        ...(entry.argPattern === undefined ? {} : { argPattern: entry.argPattern }),
+        ...(entry.entrySource === undefined ? {} : { entrySource: entry.entrySource }),
+      });
+    }
+  }
+  return evidence;
+}
+
+function execApprovalPostureEvidence(
+  id: string,
+  kind: "agent" | "defaults",
+  value: Record<string, unknown>,
+  source: string,
+  agentId?: string,
+): PolicyExecApprovalEvidence {
+  const security = readExecApprovalSecurity(value.security);
+  const ask = readExecApprovalAsk(value.ask);
+  const askFallback = readExecApprovalSecurity(value.askFallback);
+  const autoAllowSkills = readBoolean(value.autoAllowSkills);
+  return {
+    id,
+    kind,
+    source,
+    ...(agentId === undefined ? {} : { agentId }),
+    ...(value.security == null ? {} : { securityConfigured: true }),
+    ...(security === undefined ? {} : { security }),
+    ...(ask === undefined ? {} : { ask }),
+    ...(askFallback === undefined ? {} : { askFallback }),
+    ...(autoAllowSkills === undefined ? {} : { autoAllowSkills }),
+  };
+}
+
+function readExecApprovalSecurity(value: unknown): string | undefined {
+  const normalized = readString(value);
+  return normalized === "deny" || normalized === "allowlist" || normalized === "full"
+    ? normalized
+    : undefined;
+}
+
+function readExecApprovalAsk(value: unknown): string | undefined {
+  const normalized = readString(value);
+  return normalized === "off" || normalized === "on-miss" || normalized === "always"
+    ? normalized
+    : undefined;
+}
+
+function normalizedExecApprovalAgents(rawAgents: unknown): readonly {
+  readonly agentId: string;
+  readonly sourceAgentId: string;
+  readonly value: Record<string, unknown>;
+}[] {
+  if (!isRecord(rawAgents)) {
+    return [];
+  }
+  const agents = { ...rawAgents };
+  const legacyDefault = isRecord(agents.default) ? agents.default : undefined;
+  if (legacyDefault !== undefined) {
+    const main = isRecord(agents[DEFAULT_EXEC_APPROVAL_AGENT_ID])
+      ? agents[DEFAULT_EXEC_APPROVAL_AGENT_ID]
+      : undefined;
+    agents[DEFAULT_EXEC_APPROVAL_AGENT_ID] =
+      main === undefined ? legacyDefault : mergeLegacyExecApprovalAgent(main, legacyDefault);
+    delete agents.default;
+  }
+  return Object.entries(agents)
+    .filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1]))
+    .toSorted(([a], [b]) => a.localeCompare(b))
+    .map(([agentId, value]) => ({ agentId, sourceAgentId: agentId, value }));
+}
+
+function mergeLegacyExecApprovalAgent(
+  current: Record<string, unknown>,
+  legacy: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    ...legacy,
+    ...current,
+    security: current.security ?? legacy.security,
+    ask: current.ask ?? legacy.ask,
+    askFallback: current.askFallback ?? legacy.askFallback,
+    autoAllowSkills: current.autoAllowSkills ?? legacy.autoAllowSkills,
+    allowlist: mergedExecApprovalAllowlist(current.allowlist, legacy.allowlist),
+  };
+}
+
+function mergedExecApprovalAllowlist(
+  current: unknown,
+  legacy: unknown,
+): readonly unknown[] | undefined {
+  const entries: unknown[] = [];
+  const seen = new Set<string>();
+  for (const entry of [
+    ...execApprovalAllowlistEntries(current),
+    ...execApprovalAllowlistEntries(legacy),
+  ]) {
+    const key = `${entry.pattern.toLowerCase()}\x00${entry.argPattern ?? ""}`;
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    entries.push({
+      pattern: entry.pattern,
+      ...(entry.argPattern === undefined ? {} : { argPattern: entry.argPattern }),
+      ...(entry.entrySource === undefined ? {} : { source: entry.entrySource }),
+    });
+  }
+  return entries.length === 0 ? undefined : entries;
+}
+
+function readExecApprovalAllowlistEntrySource(value: unknown): "allow-always" | undefined {
+  return readString(value) === "allow-always" ? "allow-always" : undefined;
+}
+
+function execApprovalAllowlistEntries(value: unknown): readonly {
+  readonly index: number;
+  readonly pattern: string;
+  readonly argPattern?: string;
+  readonly entrySource?: string;
+}[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const entries: {
+    readonly index: number;
+    readonly pattern: string;
+    readonly argPattern?: string;
+    readonly entrySource?: string;
+  }[] = [];
+  for (const [index, entry] of value.entries()) {
+    if (typeof entry === "string") {
+      const pattern = entry.trim();
+      if (pattern !== "") {
+        entries.push({ index, pattern });
+      }
+      continue;
+    }
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const pattern = readString(entry.pattern);
+    if (pattern === undefined) {
+      continue;
+    }
+    const argPattern = readString(entry.argPattern);
+    const entrySource = readExecApprovalAllowlistEntrySource(entry.source);
+    entries.push({
+      index,
+      pattern,
+      ...(argPattern === undefined ? {} : { argPattern }),
+      ...(entrySource === undefined ? {} : { entrySource }),
+    });
+  }
+  return entries;
 }
 
 export function scanPolicyChannels(cfg: Record<string, unknown>): readonly PolicyChannelEvidence[] {
