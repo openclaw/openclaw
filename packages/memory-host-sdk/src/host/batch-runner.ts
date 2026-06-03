@@ -1,6 +1,6 @@
 // Memory Host SDK module implements batch runner behavior.
 import { resolveSafeTimeoutDelayMs } from "../../../gateway-client/src/timeouts.js";
-import { splitBatchRequests } from "./batch-utils.js";
+import { splitBatchRequestsByLimits } from "./batch-utils.js";
 import { runWithConcurrency } from "./internal.js";
 
 // Shared runner for splitting and executing remote embedding batch groups.
@@ -33,6 +33,7 @@ function resolveEmbeddingBatchPollIntervalMs(params: {
 export async function runEmbeddingBatchGroups<TRequest>(params: {
   requests: TRequest[];
   maxRequests: number;
+  maxJsonlBytes?: number;
   wait: EmbeddingBatchExecutionParams["wait"];
   pollIntervalMs: EmbeddingBatchExecutionParams["pollIntervalMs"];
   timeoutMs: EmbeddingBatchExecutionParams["timeoutMs"];
@@ -51,7 +52,10 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
   if (params.requests.length === 0) {
     return new Map();
   }
-  const groups = splitBatchRequests(params.requests, params.maxRequests);
+  const groups = splitBatchRequestsByLimits(params.requests, {
+    maxRequests: params.maxRequests,
+    maxJsonlBytes: params.maxJsonlBytes,
+  });
   const byCustomId = new Map<string, number[]>();
   const pollIntervalMs = resolveEmbeddingBatchPollIntervalMs(params);
   const tasks = groups.map((group, groupIndex) => async () => {
@@ -68,6 +72,8 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
   params.debug?.(params.debugLabel, {
     requests: params.requests.length,
     groups: groups.length,
+    maxRequests: params.maxRequests,
+    maxJsonlBytes: params.maxJsonlBytes,
     wait: params.wait,
     concurrency: params.concurrency,
     pollIntervalMs,
@@ -81,12 +87,13 @@ export async function runEmbeddingBatchGroups<TRequest>(params: {
 /** Build normalized batch-group options for provider-specific runners. */
 export function buildEmbeddingBatchGroupOptions<TRequest>(
   params: { requests: TRequest[] } & EmbeddingBatchExecutionParams,
-  options: { maxRequests: number; debugLabel: string },
+  options: { maxRequests: number; maxJsonlBytes?: number; debugLabel: string },
 ) {
   const pollIntervalMs = resolveEmbeddingBatchPollIntervalMs(params);
   return {
     requests: params.requests,
     maxRequests: options.maxRequests,
+    maxJsonlBytes: options.maxJsonlBytes,
     wait: params.wait,
     pollIntervalMs,
     timeoutMs: params.timeoutMs,

@@ -51,6 +51,7 @@ type OpenAiBatchOutputLine = ProviderBatchOutputLine;
 export const OPENAI_BATCH_ENDPOINT = EMBEDDING_BATCH_ENDPOINT;
 const OPENAI_BATCH_COMPLETION_WINDOW = "24h";
 const OPENAI_BATCH_MAX_REQUESTS = 50000;
+const OPENAI_BATCH_MAX_JSONL_BYTES = 9 * 1024 * 1024;
 const OPENAI_BATCH_MAX_POLL_BACKOFF_MS = 5 * 60_000;
 
 async function submitOpenAiBatch(params: {
@@ -282,11 +283,13 @@ export async function runOpenAiEmbeddingBatches(
     openAi: OpenAiEmbeddingClient;
     agentId: string;
     requests: OpenAiBatchRequest[];
+    maxJsonlBytes?: number;
   } & EmbeddingBatchExecutionParams,
 ): Promise<Map<string, number[]>> {
   return await runEmbeddingBatchGroups({
     ...buildEmbeddingBatchGroupOptions(params, {
       maxRequests: OPENAI_BATCH_MAX_REQUESTS,
+      maxJsonlBytes: params.maxJsonlBytes ?? OPENAI_BATCH_MAX_JSONL_BYTES,
       debugLabel: "memory embeddings: openai batch submit",
     }),
     runGroup: async ({ group, groupIndex, groups, byCustomId, pollIntervalMs, timeoutMs }) => {
