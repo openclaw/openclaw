@@ -369,7 +369,10 @@ function resolveGoogleVertexBaseOrigin(model: GoogleTransportModel, location: st
       return configured.replace(/\/+$/u, "");
     }
   }
-  if (location === "global") {
+  // Multi-region endpoints (global, eu, us) use the global host without a
+  // location prefix.  Regional endpoints (europe-west1, us-central1, etc.)
+  // use the location-prefixed host.
+  if (location === "global" || location === "eu" || location === "us") {
     return "https://aiplatform.googleapis.com";
   }
   return `https://${location}-aiplatform.googleapis.com`;

@@ -69,8 +69,11 @@ export function buildAnthropicVertexProvider(params?: {
   env?: NodeJS.ProcessEnv;
 }): ModelProviderConfig {
   const region = resolveAnthropicVertexRegion(params?.env);
+  // Multi-region endpoints (global, eu, us) use the global host without a
+  // location prefix.  Regional endpoints use the location-prefixed host.
+  const normalizedRegion = normalizeLowercaseStringOrEmpty(region);
   const baseUrl =
-    normalizeLowercaseStringOrEmpty(region) === "global"
+    normalizedRegion === "global" || normalizedRegion === "eu" || normalizedRegion === "us"
       ? "https://aiplatform.googleapis.com"
       : `https://${region}-aiplatform.googleapis.com`;
 
