@@ -45,7 +45,10 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Discord: match the shipped `libopus-wasm` error shape so corrupt voice packets are treated as decode noise instead of crashing receive recovery.
+- Canvas: restore A2UI Google, X, and legacy Granola compatibility image assets in the bundled host payload.
 - Agents/providers: avoid loading owner plugin runtimes for explicitly configured custom provider models during OpenAI-compatible transport setup.
+- Tooling: fail Codex app-server protocol generation before invoking Cargo when local disk headroom is too low.
 - Release/CI/E2E: fail early when Crabbox sparse-sync full checkouts do not have enough local disk, with guidance for moving the sync root.
 - Release/CI/E2E: reset shared Crabbox pnpm hydrate state before installs so stale `/var/tmp` stores cannot leave `pnpm install` spinning after completion.
 - Release/CI/E2E: print heartbeat progress during centralized Docker builds while keeping successful build logs quiet.
@@ -56,8 +59,11 @@ Docs: https://docs.openclaw.ai
 - Release/CI/E2E: bound RPC RTT gateway readiness probes so a half-open local HTTP response cannot stall cleanup past the readiness deadline.
 - Release/CI/E2E: stop RPC RTT gateway process groups so pnpm wrapper children cannot survive measurement cleanup.
 - Release/CI/E2E: fail the kitchen-sink RPC walk when command RSS sampling captures no process samples.
+- Release/CI/E2E: fail kitchen-sink RPC commands that exit cleanly only after their timeout expires.
 - Release/CI/E2E: force-stop memory/fd repro gateway children that survive listener cleanup.
 - Release/CI/E2E: remove fallback ClawHub skill-install home directories when proof runs fail.
+- Release/CI/E2E: let plugin lifecycle measurement wrappers exit promptly after external shutdown while preserving descendant cleanup.
+- Gateway: cancel client stop fallback termination when the socket closes normally during shutdown.
 - Installers: fail the PowerShell installer when interactive onboarding exits non-zero.
 - Scripts/UI: stop descendant processes from wrapped non-interactive commands when `run-with-env` receives shutdown signals.
 - Release/CI/E2E: write multi-node update Docker artifacts to unique per-run directories by default so parallel runs cannot overwrite evidence.

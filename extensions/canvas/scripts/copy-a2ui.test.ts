@@ -34,6 +34,23 @@ describe("canvas a2ui copy", () => {
     );
   }
 
+  it("ships provider assets and the legacy granola compatibility image", async () => {
+    const srcDir = path.join(process.cwd(), "extensions", "canvas", "src", "host", "a2ui");
+    const requiredAssets = [
+      path.join("assets", "providers", "google.png"),
+      path.join("assets", "providers", "x.png"),
+      "granola.png",
+    ];
+    const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+    for (const asset of requiredAssets) {
+      const bytes = await fs.readFile(path.join(srcDir, asset));
+
+      expect([...bytes.subarray(0, pngSignature.length)]).toEqual(pngSignature);
+      expect(bytes.length).toBeGreaterThan(64);
+    }
+  });
+
   it("throws a helpful error when assets are missing", async () => {
     await withA2uiFixture(async (dir) => {
       await expect(copyA2uiAssets({ srcDir: dir, outDir: path.join(dir, "out") })).rejects.toThrow(
@@ -75,6 +92,32 @@ describe("canvas a2ui copy", () => {
       );
       await expect(fs.readFile(path.join(outDir, "a2ui.bundle.js"), "utf8")).resolves.toBe(
         "console.log(1);",
+      );
+    });
+  });
+
+  it("preserves provider assets and the legacy granola compatibility image", async () => {
+    await withA2uiFixture(async (dir) => {
+      const srcDir = path.join(dir, "src");
+      const outDir = path.join(dir, "dist");
+      const providerAssetDir = path.join(srcDir, "assets", "providers");
+      await fs.mkdir(providerAssetDir, { recursive: true });
+      await fs.writeFile(path.join(srcDir, "index.html"), "<html></html>", "utf8");
+      await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log(1);", "utf8");
+      await fs.writeFile(path.join(providerAssetDir, "google.png"), "google-asset", "utf8");
+      await fs.writeFile(path.join(providerAssetDir, "x.png"), "x-asset", "utf8");
+      await fs.writeFile(path.join(srcDir, "granola.png"), "legacy-granola-asset", "utf8");
+
+      await copyA2uiAssets({ srcDir, outDir });
+
+      await expect(
+        fs.readFile(path.join(outDir, "assets", "providers", "google.png"), "utf8"),
+      ).resolves.toBe("google-asset");
+      await expect(
+        fs.readFile(path.join(outDir, "assets", "providers", "x.png"), "utf8"),
+      ).resolves.toBe("x-asset");
+      await expect(fs.readFile(path.join(outDir, "granola.png"), "utf8")).resolves.toBe(
+        "legacy-granola-asset",
       );
     });
   });

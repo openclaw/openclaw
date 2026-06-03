@@ -109,6 +109,34 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/gu, `'\\''`)}'`;
 }
 
+function runCleanupDefaultPlatform(env: Record<string, string>, hostArch: string): string {
+  const script = readFileSync(CLEANUP_DOCKER_SMOKE_PATH, "utf8");
+  const match = script.match(
+    /(resolve_default_cleanup_platform\(\) \{[\s\S]*?\n\})\n\nPLATFORM=/u,
+  );
+  if (!match) {
+    throw new Error("resolve_default_cleanup_platform was not found");
+  }
+  return execFileSync(
+    "bash",
+    [
+      "--noprofile",
+      "--norc",
+      "-c",
+      `${match[1]}\nuname() { if [[ "\${1:-}" == "-m" ]]; then printf "%s" "$FAKE_UNAME_ARCH"; else command uname "$@"; fi; }\nresolve_default_cleanup_platform`,
+    ],
+    {
+      encoding: "utf8",
+      env: {
+        HOME: "/tmp",
+        PATH: process.env.PATH ?? "",
+        FAKE_UNAME_ARCH: hostArch,
+        ...env,
+      },
+    },
+  );
+}
+
 describe("docker build helper", () => {
   it("forces BuildKit for centralized Docker builds", () => {
     const helper = readFileSync(HELPER_PATH, "utf8");
@@ -154,6 +182,15 @@ describe("docker build helper", () => {
     );
     expect(installE2eSmoke).toContain("docker_e2e_docker_run_cmd run --rm \\");
     expect(installE2eSmoke).not.toContain("docker run --rm \\");
+  });
+
+  it("runs cleanup smoke on the native ARM platform instead of pulling an amd64 tag", () => {
+    expect(runCleanupDefaultPlatform({ CI: "true" }, "aarch64")).toBe("linux/arm64");
+    expect(runCleanupDefaultPlatform({ GITHUB_ACTIONS: "true" }, "x86_64")).toBe("linux/amd64");
+    expect(runCleanupDefaultPlatform({}, "arm64")).toBe("linux/arm64");
+    expect(
+      runCleanupDefaultPlatform({ OPENCLAW_CLEANUP_SMOKE_PLATFORM: "linux/s390x" }, "x86_64"),
+    ).toBe("linux/s390x");
   });
 
   it("lets Testbox fall back to building when a reused Docker image is missing", () => {

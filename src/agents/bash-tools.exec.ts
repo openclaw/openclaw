@@ -1411,7 +1411,10 @@ export function createExecTool(
       return markResolveExecEnvPrepared(params);
     }
     const hookRunner = getGlobalHookRunner();
-    if (!hookRunner?.hasHooks("resolve_exec_env")) {
+    if (
+      !hookRunner?.hasHooks("resolve_exec_env") ||
+      typeof hookRunner.runResolveExecEnv !== "function"
+    ) {
       return markResolveExecEnvPrepared(params);
     }
     let host: ExecHost;

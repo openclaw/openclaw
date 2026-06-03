@@ -399,6 +399,30 @@ setInterval(() => {}, 1000);
     }
   });
 
+  posixIt("rejects timed commands that exit cleanly after SIGTERM", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-zero-"));
+    const scriptPath = path.join(root, "term-zero.mjs");
+    writeFileSync(
+      scriptPath,
+      `
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    try {
+      await expect(
+        runCommand(process.execPath, [scriptPath], {
+          timeoutKillGraceMs: 1000,
+          timeoutMs: 100,
+        }),
+      ).rejects.toThrow("timed out after 100ms");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("records resource samples for command process trees", async () => {
     const samples: Array<{
       aggregateRssMiB?: number;

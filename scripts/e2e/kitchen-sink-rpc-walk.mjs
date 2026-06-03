@@ -274,7 +274,7 @@ export function runCommand(command, args, options = {}) {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
       void stopResourceSampling().then(() => {
-        if (status === 0) {
+        if (!timedOut && status === 0) {
           resolve({
             stdout: stdout.text,
             stderr: stderr.text,
