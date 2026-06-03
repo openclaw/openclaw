@@ -607,17 +607,20 @@ terminal summary, and sanitized error text.
   mode accepts optional `agentId`; omit it to install into the default agent
   workspace, or pass a configured agent id to target that agent workspace.
   Unknown agent ids are rejected.
-  - ClawHub mode: `{ source: "clawhub", agentId?, slug, version?, force? }` installs a
-    skill folder into the selected agent workspace `skills/` directory.
-  - Upload mode: `{ source: "upload", agentId?, uploadId, slug, force?, sha256?, timeoutMs? }`
-    installs a committed upload into the selected agent workspace `skills/<slug>`
-    directory. The slug and force value must match the original
+  - ClawHub mode:
+    `{ source: "clawhub", agentId?, slug, version?, force? }` installs a skill
+    folder into the selected agent workspace `skills/` directory.
+  - Upload mode:
+    `{ source: "upload", agentId?, uploadId, slug, force?, sha256?, timeoutMs? }`
+    installs a committed upload into the selected agent workspace
+    `skills/<slug>` directory. The slug and force value must match the original
     `skills.upload.begin` request. This mode is rejected unless
     `skills.install.allowUploadedArchives` is enabled. The setting does not
     affect ClawHub installs.
-  - Gateway installer mode: `{ agentId?, name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
-    runs a declared `metadata.openclaw.install` action on the gateway host for the
-    selected agent workspace.
+  - Gateway installer mode:
+    `{ agentId?, name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
+    runs a declared `metadata.openclaw.install` action on the gateway host for
+    the selected agent workspace.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode accepts optional `agentId`; omit it to update tracked ClawHub
     installs in the default agent workspace, or pass a configured agent id to

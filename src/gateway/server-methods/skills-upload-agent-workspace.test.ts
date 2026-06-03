@@ -69,6 +69,74 @@ async function makeSkillArchive(): Promise<Buffer> {
   return Buffer.from(await zip.generateAsync({ type: "nodebuffer" }));
 }
 
+async function makeAgentWorkspaceFixture() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-agent-proof-"));
+  tempDirs.push(root);
+  const stateDir = path.join(root, "state");
+  const mainWorkspace = path.join(root, "workspace-main");
+  const writerWorkspace = path.join(root, "workspace-writer");
+  await fs.mkdir(mainWorkspace, { recursive: true });
+  await fs.mkdir(writerWorkspace, { recursive: true });
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  return {
+    mainWorkspace,
+    writerWorkspace,
+    config: {
+      skills: { install: { allowUploadedArchives: true } },
+      agents: {
+        list: [
+          { id: "main", default: true, workspace: mainWorkspace },
+          { id: "writer", workspace: writerWorkspace },
+        ],
+      },
+    },
+  };
+}
+
+async function commitSkillArchive(config: Record<string, unknown>) {
+  const archive = await makeSkillArchive();
+  const digest = sha256(archive);
+
+  const begin = await call(
+    skillsHandlers,
+    "skills.upload.begin",
+    {
+      kind: "skill-archive",
+      slug: "proof-upload",
+      sizeBytes: archive.length,
+      sha256: digest,
+    },
+    config,
+  );
+  expect(begin.ok).toBe(true);
+  const uploadId = (begin.payload as { uploadId: string }).uploadId;
+
+  const chunk = await call(
+    skillsHandlers,
+    "skills.upload.chunk",
+    {
+      uploadId,
+      offset: 0,
+      dataBase64: archive.toString("base64"),
+    },
+    config,
+  );
+  expect(chunk.ok).toBe(true);
+
+  const commit = await call(
+    skillsHandlers,
+    "skills.upload.commit",
+    {
+      uploadId,
+      sha256: digest,
+    },
+    config,
+  );
+  expect(commit.ok).toBe(true);
+
+  return { uploadId, digest };
+}
+
 describe("skill upload gateway handlers with explicit agent workspace", () => {
   beforeEach(() => {
     tempDirs = [];
@@ -84,62 +152,8 @@ describe("skill upload gateway handlers with explicit agent workspace", () => {
   });
 
   it("installs uploaded skill archives into the requested agent workspace", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-agent-proof-"));
-    tempDirs.push(root);
-    const stateDir = path.join(root, "state");
-    const mainWorkspace = path.join(root, "workspace-main");
-    const writerWorkspace = path.join(root, "workspace-writer");
-    await fs.mkdir(mainWorkspace, { recursive: true });
-    await fs.mkdir(writerWorkspace, { recursive: true });
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const config = {
-      skills: { install: { allowUploadedArchives: true } },
-      agents: {
-        list: [
-          { id: "main", default: true, workspace: mainWorkspace },
-          { id: "writer", workspace: writerWorkspace },
-        ],
-      },
-    };
-    const archive = await makeSkillArchive();
-    const digest = sha256(archive);
-
-    const begin = await call(
-      skillsHandlers,
-      "skills.upload.begin",
-      {
-        kind: "skill-archive",
-        slug: "proof-upload",
-        sizeBytes: archive.length,
-        sha256: digest,
-      },
-      config,
-    );
-    expect(begin.ok).toBe(true);
-    const uploadId = (begin.payload as { uploadId: string }).uploadId;
-
-    const chunk = await call(
-      skillsHandlers,
-      "skills.upload.chunk",
-      {
-        uploadId,
-        offset: 0,
-        dataBase64: archive.toString("base64"),
-      },
-      config,
-    );
-    expect(chunk.ok).toBe(true);
-
-    const commit = await call(
-      skillsHandlers,
-      "skills.upload.commit",
-      {
-        uploadId,
-        sha256: digest,
-      },
-      config,
-    );
-    expect(commit.ok).toBe(true);
+    const { config, mainWorkspace, writerWorkspace } = await makeAgentWorkspaceFixture();
+    const { uploadId, digest } = await commitSkillArchive(config);
 
     const install = await call(
       skillsHandlers,
@@ -162,6 +176,38 @@ describe("skill upload gateway handlers with explicit agent workspace", () => {
     ).resolves.toContain("Proof Upload");
     await expect(
       fs.stat(path.join(mainWorkspace, "skills", "proof-upload", "SKILL.md")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("rejects unknown agent ids before uploaded skill archive installs", async () => {
+    const { config, mainWorkspace, writerWorkspace } = await makeAgentWorkspaceFixture();
+    const { uploadId, digest } = await commitSkillArchive(config);
+
+    const install = await call(
+      skillsHandlers,
+      "skills.install",
+      {
+        source: "upload",
+        agentId: "ghost",
+        uploadId,
+        slug: "proof-upload",
+        sha256: digest,
+      },
+      config,
+    );
+
+    expect(install.ok).toBe(false);
+    expect(install.error).toEqual(
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: 'unknown agent id "ghost"',
+      }),
+    );
+    await expect(
+      fs.stat(path.join(mainWorkspace, "skills", "proof-upload", "SKILL.md")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      fs.stat(path.join(writerWorkspace, "skills", "proof-upload", "SKILL.md")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

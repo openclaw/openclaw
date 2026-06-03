@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const loadConfigMock = vi.fn(() => ({}));
-const listAgentIdsMock = vi.fn(() => ["main"]);
+const listAgentIdsMock = vi.fn((_config: unknown) => ["main"]);
 const resolveDefaultAgentIdMock = vi.fn(() => "main");
-const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
+const resolveAgentWorkspaceDirMock = vi.fn(
+  (_config: unknown, _agentId: string) => "/tmp/workspace",
+);
 const buildWorkspaceSkillStatusMock = vi.fn();
 const readLocalSkillCardContentSyncMock = vi.fn();
 const fetchClawHubSkillSecurityVerdictsMock = vi.fn();
@@ -18,10 +20,11 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: (...args: unknown[]) => listAgentIdsMock(...args),
+  listAgentIds: (config: unknown) => listAgentIdsMock(config),
   resolveAgentConfig: vi.fn(() => undefined),
   resolveDefaultAgentId: () => resolveDefaultAgentIdMock(),
-  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
+  resolveAgentWorkspaceDir: (config: unknown, agentId: string) =>
+    resolveAgentWorkspaceDirMock(config, agentId),
   resolveSessionAgentId: vi.fn(() => undefined),
 }));
 
@@ -67,6 +70,15 @@ function expectEmptySecurityVerdicts(response: unknown): void {
     schema: "openclaw.skills.security-verdicts.v1",
     items: [],
   });
+}
+
+function expectUnknownAgentError(error: unknown): void {
+  expect(error).toEqual(
+    expect.objectContaining({
+      code: "INVALID_REQUEST",
+      message: 'unknown agent id "ghost"',
+    }),
+  );
 }
 
 async function expectEmptySecurityVerdictsWithoutFetch(): Promise<void> {
@@ -291,6 +303,19 @@ describe("skills gateway handlers (clawhub)", () => {
     );
   });
 
+  it("rejects unknown agent ids before ClawHub skill installs", async () => {
+    const { ok, error } = await callSkillsHandler("skills.install", {
+      agentId: "ghost",
+      source: "clawhub",
+      slug: "calendar",
+    });
+
+    expect(ok).toBe(false);
+    expectUnknownAgentError(error);
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+    expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
+  });
+
   it("forwards dangerous override for local skill installs", async () => {
     installSkillMock.mockResolvedValue({
       ok: true,
@@ -350,6 +375,19 @@ describe("skills gateway handlers (clawhub)", () => {
         skillName: "calendar",
       }),
     );
+  });
+
+  it("rejects unknown agent ids before local skill installs", async () => {
+    const { ok, error } = await callSkillsHandler("skills.install", {
+      agentId: "ghost",
+      name: "calendar",
+      installId: "deps",
+    });
+
+    expect(ok).toBe(false);
+    expectUnknownAgentError(error);
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+    expect(installSkillMock).not.toHaveBeenCalled();
   });
 
   it("updates ClawHub skills through skills.update", async () => {
@@ -423,6 +461,19 @@ describe("skills gateway handlers (clawhub)", () => {
       workspaceDir: "/tmp/workspace-writer",
       slug: "calendar",
     });
+  });
+
+  it("rejects unknown agent ids before ClawHub skill updates", async () => {
+    const { ok, error } = await callSkillsHandler("skills.update", {
+      agentId: "ghost",
+      source: "clawhub",
+      slug: "calendar",
+    });
+
+    expect(ok).toBe(false);
+    expectUnknownAgentError(error);
+    expect(resolveAgentWorkspaceDirMock).not.toHaveBeenCalled();
+    expect(updateSkillsFromClawHubMock).not.toHaveBeenCalled();
   });
 
   it("rejects ClawHub skills.update requests without slug or all", async () => {
