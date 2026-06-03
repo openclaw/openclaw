@@ -1,9 +1,11 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
 import { updateSessionStoreEntry } from "../../config/sessions/store.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
+import { normalizeThinkLevel } from "../thinking.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
@@ -27,6 +29,56 @@ function isResetAuthorized(params: HandleCommandsParams): boolean {
     cfg: params.cfg,
     commandAuthorized: params.command.isAuthorizedSender || params.ctx.CommandAuthorized === true,
   });
+}
+
+function resolveResetReplySessionEntry(params: HandleCommandsParams) {
+  return params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+}
+
+function formatModelLabel(params: { provider?: string; model?: string }): string {
+  const provider = normalizeOptionalString(params.provider);
+  const model = normalizeOptionalString(params.model) ?? "";
+  return provider ? `${provider}/${model}` : model;
+}
+
+function resolveResetReplyModelLabel(params: HandleCommandsParams): string {
+  const sessionEntry = resolveResetReplySessionEntry(params);
+  const runtimeProvider = normalizeOptionalString(sessionEntry?.modelProvider);
+  const runtimeModel = normalizeOptionalString(sessionEntry?.model);
+  if (runtimeProvider && runtimeModel) {
+    return formatModelLabel({ provider: runtimeProvider, model: runtimeModel });
+  }
+
+  const overrideProvider = normalizeOptionalString(sessionEntry?.providerOverride);
+  const overrideModel = normalizeOptionalString(sessionEntry?.modelOverride);
+  if (overrideProvider && overrideModel) {
+    return formatModelLabel({ provider: overrideProvider, model: overrideModel });
+  }
+
+  return formatModelLabel({ provider: params.provider, model: params.model });
+}
+
+async function resolveResetReplyThinkingLevel(params: HandleCommandsParams) {
+  const sessionEntry = resolveResetReplySessionEntry(params);
+  return (
+    normalizeThinkLevel(sessionEntry?.thinkingLevel) ??
+    params.resolvedThinkLevel ??
+    (await params.resolveDefaultThinkingLevel()) ??
+    "off"
+  );
+}
+
+async function formatResetSuccessReply(
+  params: HandleCommandsParams,
+  commandAction: ResetCommandAction,
+): Promise<string> {
+  const text = commandAction === "reset" ? "✅ Session reset." : "✅ New session started.";
+  if (params.cfg.commands?.showRuntimeStatusOnReset !== true) {
+    return text;
+  }
+  const model = resolveResetReplyModelLabel(params);
+  const thinking = await resolveResetReplyThinkingLevel(params);
+  return `${text}\nModel: ${model}\nThink: ${thinking}`;
 }
 
 export async function maybeHandleResetCommand(
@@ -174,7 +226,7 @@ export async function maybeHandleResetCommand(
         ? {}
         : {
             reply: {
-              text: commandAction === "reset" ? "✅ Session reset." : "✅ New session started.",
+              text: await formatResetSuccessReply(params, commandAction),
             },
           }),
     };

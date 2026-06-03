@@ -138,6 +138,7 @@ import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
+  resolveGatewaySessionThinkingDefault,
   resolveGatewayModelSupportsImages,
   resolveSessionStoreKey,
   resolveSessionModelRef,
@@ -248,7 +249,7 @@ async function runSessionResetFromAgent(params: {
   agentId?: string;
   reason: "new" | "reset";
 }): Promise<
-  | { ok: true; key: string; sessionId?: string }
+  | { ok: true; key: string; sessionId?: string; entry: SessionEntry }
   | { ok: false; error: ReturnType<typeof errorShape> }
 > {
   const result = await performGatewaySessionReset({
@@ -264,16 +265,42 @@ async function runSessionResetFromAgent(params: {
     ok: true,
     key: result.key,
     sessionId: result.entry.sessionId,
+    entry: result.entry,
   };
 }
 
-function sessionResetAckText(reason: "new" | "reset"): string {
-  return reason === "new" ? "✅ New session started." : "✅ Session reset.";
+function sessionResetAckText(params: {
+  cfg: OpenClawConfig;
+  reason: "new" | "reset";
+  sessionEntry?: SessionEntry;
+  agentId?: string;
+}): string {
+  const text = params.reason === "new" ? "✅ New session started." : "✅ Session reset.";
+  if (params.cfg.commands?.showRuntimeStatusOnReset !== true) {
+    return text;
+  }
+  const modelRef = resolveSessionModelRef(params.cfg, params.sessionEntry, params.agentId);
+  const thinking =
+    normalizeOptionalString(params.sessionEntry?.thinkingLevel) ??
+    resolveGatewaySessionThinkingDefault({
+      cfg: params.cfg,
+      provider: modelRef.provider,
+      model: modelRef.model,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+    }) ??
+    "off";
+  return `${text}\nModel: ${modelRef.provider}/${modelRef.model}\nThink: ${thinking}`;
 }
 
-function buildBareSessionResetResult(params: { reason: "new" | "reset"; sessionId?: string }) {
+function buildBareSessionResetResult(params: {
+  cfg: OpenClawConfig;
+  reason: "new" | "reset";
+  sessionId?: string;
+  sessionEntry?: SessionEntry;
+  agentId?: string;
+}) {
   return {
-    payloads: [{ text: sessionResetAckText(params.reason) }],
+    payloads: [{ text: sessionResetAckText(params) }],
     meta: {
       durationMs: 0,
       ...(params.sessionId
@@ -326,15 +353,24 @@ async function deliverBareSessionResetResult(params: {
 }) {
   const { deliverAgentCommandResult } = await import("../../agents/command/delivery.runtime.js");
   const result = buildBareSessionResetResult({
+    cfg: params.cfg,
     reason: params.reason,
     sessionId: params.sessionId,
+    sessionEntry: params.sessionEntry,
+    agentId: params.agentId,
+  });
+  const message = sessionResetAckText({
+    cfg: params.cfg,
+    reason: params.reason,
+    sessionEntry: params.sessionEntry,
+    agentId: params.agentId,
   });
   return await deliverAgentCommandResult({
     cfg: params.cfg,
     deps: params.context.deps,
     runtime: defaultRuntime,
     opts: {
-      message: sessionResetAckText(params.reason),
+      message,
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       sessionKey: params.sessionKey,
@@ -379,8 +415,11 @@ async function resolveBareSessionResetResult(params: {
 }) {
   if (params.request.deliver !== true) {
     return buildBareSessionResetResult({
+      cfg: params.cfg,
       reason: params.reason,
       sessionId: params.sessionId,
+      sessionEntry: params.sessionEntry,
+      agentId: params.agentId,
     });
   }
   const sendPolicy = resolveSendPolicy({
@@ -1557,7 +1596,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               sessionId: resetResult.sessionId,
               sessionKey: resetResult.key,
               agentId: deliverySession?.agentId ?? agentId,
-              sessionEntry: deliverySession?.entry,
+              sessionEntry: deliverySession?.entry ?? resetResult.entry,
               request,
               runId,
             });
