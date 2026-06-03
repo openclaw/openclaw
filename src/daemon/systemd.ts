@@ -1218,7 +1218,7 @@ export async function installSystemdService(
         retiredSystemUnit,
       );
       if (restoreError) {
-        throw new Error(`${formatErrorMessage(error)}; ${restoreError}`);
+        throw new Error(`${formatErrorMessage(error)}; ${restoreError}`, { cause: error });
       }
     }
     throw error;
