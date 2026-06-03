@@ -179,6 +179,37 @@ describe("diagnostic stability bundles", () => {
       isError: true,
       errorCategory: "timeout",
     });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-2",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageId: "msg-2",
+      turnEventType: "delivery.required",
+      status: "required",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-2",
+      sessionKey: "agent:main:telegram:direct:owner",
+      turnEventType: "tool.called",
+      status: "started",
+      toolName: "home_assistant",
+      toolCallId: "call-2",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-2",
+      sessionKey: "agent:main:telegram:direct:owner",
+      turnEventType: "tool.result",
+      status: "completed",
+      toolName: "home_assistant",
+      toolCallId: "call-2",
+      durationMs: 18_000,
+      isError: false,
+    });
     await waitForDiagnosticEventsDrained();
 
     const result = writeDiagnosticStabilityBundleSync({
@@ -195,7 +226,7 @@ describe("diagnostic stability bundles", () => {
       throw new Error(`expected readable bundle, got ${readResult.status}`);
     }
 
-    expect(readResult.bundle.snapshot.events.at(-1)).toMatchObject({
+    expect(readResult.bundle.snapshot.events.at(3)).toMatchObject({
       type: "channel.turn.event",
       channel: "telegram",
       turnId: "telegram:acct:message:msg-1",
@@ -217,7 +248,7 @@ describe("diagnostic stability bundles", () => {
       receivedToTurnStartMs: 12_000,
     });
     expect(readResult.bundle.snapshot.summary.channelTurns).toMatchObject({
-      totalEvents: 4,
+      totalEvents: 7,
       missingVisibleDelivery: 1,
       health: {
         status: "degraded",
@@ -249,16 +280,23 @@ describe("diagnostic stability bundles", () => {
           {
             code: "slow_tool_result",
             level: "warning",
-            count: 1,
+            count: 2,
+          },
+          {
+            code: "slow_tool_before_visible_delivery",
+            level: "warning",
+            count: 2,
           },
         ],
       },
       tools: {
-        called: 1,
-        results: 1,
+        called: 2,
+        results: 2,
         failedResults: 1,
         missingResults: 0,
-        slowResults: 1,
+        slowResults: 2,
+        preDeliveryCalls: 2,
+        slowPreDeliveryResults: 2,
         byTool: {
           exec: {
             called: 1,
@@ -266,9 +304,39 @@ describe("diagnostic stability bundles", () => {
             failedResults: 1,
             missingResults: 0,
             slowResults: 1,
+            preDeliveryCalls: 1,
+            slowPreDeliveryResults: 1,
             maxDurationMs: 15_000,
           },
+          home_assistant: {
+            called: 1,
+            results: 1,
+            failedResults: 0,
+            missingResults: 0,
+            slowResults: 1,
+            preDeliveryCalls: 1,
+            slowPreDeliveryResults: 1,
+            maxDurationMs: 18_000,
+          },
         },
+        recentPreDeliverySlow: [
+          {
+            seq: expect.any(Number),
+            ts: expect.any(Number),
+            channel: "telegram",
+            turnId: "telegram:acct:message:msg-1",
+            toolName: "exec",
+            durationMs: 15_000,
+          },
+          {
+            seq: expect.any(Number),
+            ts: expect.any(Number),
+            channel: "telegram",
+            turnId: "telegram:acct:message:msg-2",
+            toolName: "home_assistant",
+            durationMs: 18_000,
+          },
+        ],
       },
       latency: {
         messageAgeMs: {

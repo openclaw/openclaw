@@ -273,7 +273,9 @@ function formatChannelTurnSlaSummary(
     lines.push(
       `  ${colorize(rich, theme.muted, "Tools:")} called=${tools.called} results=${
         tools.results
-      } failed=${tools.failedResults} missing=${tools.missingResults} slow=${tools.slowResults}`,
+      } failed=${tools.failedResults} missing=${tools.missingResults} slow=${
+        tools.slowResults
+      } preDelivery=${tools.preDeliveryCalls} slowPreDelivery=${tools.slowPreDeliveryResults}`,
     );
     const toolBreakdown = Object.entries(tools.byTool)
       .toSorted((a, b) => {
@@ -293,13 +295,28 @@ function formatChannelTurnSlaSummary(
         ([toolName, counts]) =>
           `${toolName}=called:${counts.called}/results:${counts.results}/failed:${
             counts.failedResults
-          }/missing:${counts.missingResults}/max:${formatChannelTurnLatencyMs(
-            counts.maxDurationMs,
-          )}`,
+          }/missing:${counts.missingResults}/preDelivery:${
+            counts.preDeliveryCalls
+          }/max:${formatChannelTurnLatencyMs(counts.maxDurationMs)}`,
       )
       .join(", ");
     if (toolBreakdown) {
       lines.push(`  ${toolBreakdown}`);
+    }
+  }
+
+  if (tools?.recentPreDeliverySlow.length) {
+    lines.push(`  ${colorize(rich, theme.muted, "Recent slow pre-delivery tools:")}`);
+    for (const slow of tools.recentPreDeliverySlow.slice(-3)) {
+      const parts = [
+        new Date(slow.ts).toISOString(),
+        `#${slow.seq}`,
+        slow.channel ? `channel=${slow.channel}` : "",
+        slow.turnId ? `turn=${slow.turnId}` : "",
+        slow.toolName ? `tool=${slow.toolName}` : "",
+        `duration=${slow.durationMs}ms`,
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")}`);
     }
   }
 

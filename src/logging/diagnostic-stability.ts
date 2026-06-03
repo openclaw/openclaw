@@ -62,6 +62,8 @@ type DiagnosticStabilityChannelTurnToolSummary = {
   failedResults: number;
   missingResults: number;
   slowResults: number;
+  preDeliveryCalls: number;
+  slowPreDeliveryResults: number;
   byTool: Record<
     string,
     {
@@ -70,6 +72,8 @@ type DiagnosticStabilityChannelTurnToolSummary = {
       failedResults: number;
       missingResults: number;
       slowResults: number;
+      preDeliveryCalls: number;
+      slowPreDeliveryResults: number;
       maxDurationMs?: number;
     }
   >;
@@ -89,6 +93,14 @@ type DiagnosticStabilityChannelTurnToolSummary = {
     toolName?: string;
     reason?: string;
   }>;
+  recentPreDeliverySlow: Array<{
+    seq: number;
+    ts: number;
+    channel?: string;
+    turnId?: string;
+    toolName?: string;
+    durationMs: number;
+  }>;
 };
 
 export type DiagnosticStabilityHealthStatus = "ok" | "warning" | "degraded";
@@ -101,7 +113,8 @@ export type DiagnosticStabilityChannelTurnHealthIssue = {
     | "slow_start_to_delivery"
     | "tool_result_failed"
     | "tool_result_missing"
-    | "slow_tool_result";
+    | "slow_tool_result"
+    | "slow_tool_before_visible_delivery";
   level: Exclude<DiagnosticStabilityHealthStatus, "ok">;
   message: string;
   metric?: string;
@@ -799,9 +812,12 @@ function summarizeRecords(
       failedResults: 0,
       missingResults: 0,
       slowResults: 0,
+      preDeliveryCalls: 0,
+      slowPreDeliveryResults: 0,
       byTool: {},
       recentSlow: [],
       recentFailures: [],
+      recentPreDeliverySlow: [],
     },
     health: {
       status: "ok",
@@ -818,6 +834,8 @@ function summarizeRecords(
     startToCompletionMs: [],
   };
   const terminalChannelTurnIds = new Set<string>();
+  const channelTurnsRequiringVisibleDelivery = new Set<string>();
+  const channelTurnsWithVisibleDelivery = new Set<string>();
   const activeChannelTurnTools = new Map<
     string,
     {
@@ -826,6 +844,7 @@ function summarizeRecords(
       channel?: string;
       turnId?: string;
       toolName?: string;
+      preDelivery: boolean;
     }
   >();
 
@@ -942,6 +961,8 @@ function summarizeRecords(
       failedResults: 0,
       missingResults: 0,
       slowResults: 0,
+      preDeliveryCalls: 0,
+      slowPreDeliveryResults: 0,
     };
     return tools.byTool[toolName];
   }
@@ -958,6 +979,14 @@ function summarizeRecords(
     if (record.action === "tool.called") {
       tools.called += 1;
       entry.called += 1;
+      const preDelivery =
+        record.turnId !== undefined &&
+        channelTurnsRequiringVisibleDelivery.has(record.turnId) &&
+        !channelTurnsWithVisibleDelivery.has(record.turnId);
+      if (preDelivery) {
+        tools.preDeliveryCalls += 1;
+        entry.preDeliveryCalls += 1;
+      }
       if (toolCallKey) {
         activeChannelTurnTools.set(toolCallKey, {
           seq: record.seq,
@@ -965,12 +994,14 @@ function summarizeRecords(
           channel: record.channel,
           turnId: record.turnId,
           toolName: record.toolName,
+          preDelivery,
         });
       }
       return;
     }
     tools.results += 1;
     entry.results += 1;
+    const pending = toolCallKey ? activeChannelTurnTools.get(toolCallKey) : undefined;
     if (toolCallKey) {
       activeChannelTurnTools.delete(toolCallKey);
     }
@@ -992,6 +1023,21 @@ function summarizeRecords(
         });
         if (tools.recentSlow.length > 10) {
           tools.recentSlow.shift();
+        }
+      }
+      if (pending?.preDelivery && record.durationMs >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+        tools.slowPreDeliveryResults += 1;
+        entry.slowPreDeliveryResults += 1;
+        tools.recentPreDeliverySlow.push({
+          seq: record.seq,
+          ts: record.ts,
+          channel: record.channel,
+          turnId: record.turnId,
+          toolName: record.toolName,
+          durationMs: record.durationMs,
+        });
+        if (tools.recentPreDeliverySlow.length > 10) {
+          tools.recentPreDeliverySlow.shift();
         }
       }
     }
@@ -1078,9 +1124,15 @@ function summarizeRecords(
       if (record.action === "delivery.required") {
         channelTurns.deliveryRequired += 1;
         channelSummary.deliveryRequired += 1;
+        if (record.turnId) {
+          channelTurnsRequiringVisibleDelivery.add(record.turnId);
+        }
       } else if (record.action === "delivery.sent") {
         channelTurns.deliverySent += 1;
         channelSummary.deliverySent += 1;
+        if (record.turnId) {
+          channelTurnsWithVisibleDelivery.add(record.turnId);
+        }
       } else if (record.action === "delivery.failed") {
         channelTurns.deliveryFailed += 1;
         channelSummary.deliveryFailed += 1;
@@ -1212,6 +1264,16 @@ function summarizeRecords(
       count: channelTurns.tools.slowResults,
       guidance:
         "Move long work to Tasks/TaskFlow and send an early acknowledgement so direct chat remains responsive.",
+    });
+  }
+  if (channelTurns.tools.slowPreDeliveryResults > 0) {
+    pushChannelTurnHealthIssue({
+      code: "slow_tool_before_visible_delivery",
+      level: "warning",
+      message: "A direct channel turn ran slow tool work before visible delivery.",
+      count: channelTurns.tools.slowPreDeliveryResults,
+      guidance:
+        "Send a short visible acknowledgement before long tools, then continue the verified work in the same turn or a TaskFlow.",
     });
   }
 

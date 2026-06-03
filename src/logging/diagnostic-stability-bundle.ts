@@ -975,6 +975,20 @@ function readOptionalChannelTurnToolSummary(
         counts.slowResults,
         `snapshot.summary.channelTurns.tools.byTool.${toolName}.slowResults`,
       ),
+      preDeliveryCalls:
+        counts.preDeliveryCalls === undefined
+          ? 0
+          : readNumber(
+              counts.preDeliveryCalls,
+              `snapshot.summary.channelTurns.tools.byTool.${toolName}.preDeliveryCalls`,
+            ),
+      slowPreDeliveryResults:
+        counts.slowPreDeliveryResults === undefined
+          ? 0
+          : readNumber(
+              counts.slowPreDeliveryResults,
+              `snapshot.summary.channelTurns.tools.byTool.${toolName}.slowPreDeliveryResults`,
+            ),
       ...(counts.maxDurationMs !== undefined
         ? {
             maxDurationMs: readNumber(
@@ -1022,6 +1036,20 @@ function readOptionalChannelTurnToolSummary(
       "snapshot.summary.channelTurns.tools.missingResults",
     ),
     slowResults: readNumber(tools.slowResults, "snapshot.summary.channelTurns.tools.slowResults"),
+    preDeliveryCalls:
+      tools.preDeliveryCalls === undefined
+        ? 0
+        : readNumber(
+            tools.preDeliveryCalls,
+            "snapshot.summary.channelTurns.tools.preDeliveryCalls",
+          ),
+    slowPreDeliveryResults:
+      tools.slowPreDeliveryResults === undefined
+        ? 0
+        : readNumber(
+            tools.slowPreDeliveryResults,
+            "snapshot.summary.channelTurns.tools.slowPreDeliveryResults",
+          ),
     byTool,
     recentSlow: readRecent(
       tools.recentSlow,
@@ -1035,6 +1063,12 @@ function readOptionalChannelTurnToolSummary(
     ) as NonNullable<
       NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"]
     >["recentFailures"],
+    recentPreDeliverySlow: readRecent(
+      tools.recentPreDeliverySlow,
+      "snapshot.summary.channelTurns.tools.recentPreDeliverySlow",
+    ) as NonNullable<
+      NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"]
+    >["recentPreDeliverySlow"],
   };
 }
 

@@ -669,6 +669,8 @@ describe("diagnostic stability recorder", () => {
       failedResults: 1,
       missingResults: 1,
       slowResults: 1,
+      preDeliveryCalls: 0,
+      slowPreDeliveryResults: 0,
       byTool: {
         exec: {
           called: 1,
@@ -676,6 +678,8 @@ describe("diagnostic stability recorder", () => {
           failedResults: 0,
           missingResults: 0,
           slowResults: 1,
+          preDeliveryCalls: 0,
+          slowPreDeliveryResults: 0,
           maxDurationMs: 12_500,
         },
         message: {
@@ -684,6 +688,8 @@ describe("diagnostic stability recorder", () => {
           failedResults: 1,
           missingResults: 0,
           slowResults: 0,
+          preDeliveryCalls: 0,
+          slowPreDeliveryResults: 0,
           maxDurationMs: 250,
         },
         calendar: {
@@ -692,6 +698,8 @@ describe("diagnostic stability recorder", () => {
           failedResults: 0,
           missingResults: 1,
           slowResults: 0,
+          preDeliveryCalls: 0,
+          slowPreDeliveryResults: 0,
         },
       },
     });
@@ -724,6 +732,80 @@ describe("diagnostic stability recorder", () => {
     ]);
     expect(JSON.stringify(snapshot)).not.toContain("payload");
     expect(JSON.stringify(snapshot)).not.toContain("secret");
+  });
+
+  it("flags slow tool work that starts before visible delivery", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-pre-delivery",
+      messageId: "msg-pre-delivery",
+      turnEventType: "delivery.required",
+      status: "required",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-pre-delivery",
+      turnEventType: "tool.called",
+      toolName: "home_assistant",
+      toolCallId: "call-ha",
+      status: "started",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-pre-delivery",
+      turnEventType: "tool.result",
+      toolName: "home_assistant",
+      toolCallId: "call-ha",
+      status: "completed",
+      durationMs: 18_000,
+      isError: false,
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-pre-delivery",
+      messageId: "msg-pre-delivery",
+      turnEventType: "delivery.sent",
+      status: "sent",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.channelTurns?.tools).toMatchObject({
+      called: 1,
+      results: 1,
+      slowResults: 1,
+      preDeliveryCalls: 1,
+      slowPreDeliveryResults: 1,
+      byTool: {
+        home_assistant: {
+          called: 1,
+          results: 1,
+          slowResults: 1,
+          preDeliveryCalls: 1,
+          slowPreDeliveryResults: 1,
+          maxDurationMs: 18_000,
+        },
+      },
+      recentPreDeliverySlow: [
+        expect.objectContaining({
+          channel: "telegram",
+          turnId: "turn-pre-delivery",
+          toolName: "home_assistant",
+          durationMs: 18_000,
+        }),
+      ],
+    });
+    expect(snapshot.summary.channelTurns?.health.issues.map((issue) => issue.code)).toEqual([
+      "slow_tool_result",
+      "slow_tool_before_visible_delivery",
+    ]);
   });
 
   it("computes channel turn latency percentiles across samples", async () => {

@@ -145,6 +145,8 @@ describe("doctor gateway stability", () => {
           failedResults: 1,
           missingResults: 1,
           slowResults: 0,
+          preDeliveryCalls: 1,
+          slowPreDeliveryResults: 0,
           byTool: {
             exec: {
               called: 1,
@@ -152,6 +154,8 @@ describe("doctor gateway stability", () => {
               failedResults: 1,
               missingResults: 0,
               slowResults: 0,
+              preDeliveryCalls: 1,
+              slowPreDeliveryResults: 0,
               maxDurationMs: 500,
             },
             calendar: {
@@ -160,10 +164,13 @@ describe("doctor gateway stability", () => {
               failedResults: 0,
               missingResults: 1,
               slowResults: 0,
+              preDeliveryCalls: 0,
+              slowPreDeliveryResults: 0,
             },
           },
           recentSlow: [],
           recentFailures: [],
+          recentPreDeliverySlow: [],
         },
         health: {
           status: "warning",
@@ -187,10 +194,86 @@ describe("doctor gateway stability", () => {
       }),
     });
 
-    expect(note?.body).toContain("Tools: called=2, results=1, failed=1, missing=1, slow=0.");
-    expect(note?.body).toContain("exec(failed=1, missing=0, max=500ms)");
-    expect(note?.body).toContain("calendar(failed=0, missing=1, max=unknown)");
+    expect(note?.body).toContain(
+      "Tools: called=2, results=1, failed=1, missing=1, slow=0, preDelivery=1, slowPreDelivery=0.",
+    );
+    expect(note?.body).toContain("exec(failed=1, missing=0, preDelivery=1, max=500ms)");
+    expect(note?.body).toContain("calendar(failed=0, missing=1, preDelivery=0, max=unknown)");
     expect(note?.body).not.toContain("payload");
+  });
+
+  it("reports slow pre-delivery tool work", () => {
+    const note = buildGatewayChannelTurnHealthDoctorNote({
+      snapshot: makeSnapshot({
+        totalEvents: 4,
+        deliveryRequired: 1,
+        deliverySent: 1,
+        deliveryFailed: 0,
+        invalidCompletions: 0,
+        missingVisibleDelivery: 0,
+        byChannel: {
+          telegram: {
+            deliveryRequired: 1,
+            deliverySent: 1,
+            deliveryFailed: 0,
+            invalidCompletions: 0,
+            missingVisibleDelivery: 0,
+          },
+        },
+        recentFailures: [],
+        tools: {
+          called: 1,
+          results: 1,
+          failedResults: 0,
+          missingResults: 0,
+          slowResults: 1,
+          preDeliveryCalls: 1,
+          slowPreDeliveryResults: 1,
+          byTool: {
+            home_assistant: {
+              called: 1,
+              results: 1,
+              failedResults: 0,
+              missingResults: 0,
+              slowResults: 1,
+              preDeliveryCalls: 1,
+              slowPreDeliveryResults: 1,
+              maxDurationMs: 18_000,
+            },
+          },
+          recentSlow: [],
+          recentFailures: [],
+          recentPreDeliverySlow: [
+            {
+              seq: 12,
+              ts: 1_717_421_000_000,
+              channel: "telegram",
+              turnId: "turn-ha",
+              toolName: "home_assistant",
+              durationMs: 18_000,
+            },
+          ],
+        },
+        health: {
+          status: "warning",
+          issues: [
+            {
+              code: "slow_tool_before_visible_delivery",
+              level: "warning",
+              count: 1,
+              message: "A direct channel turn ran slow tool work before visible delivery.",
+              guidance: "Send a short visible acknowledgement before long tools.",
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(note?.body).toContain("slow_tool_before_visible_delivery");
+    expect(note?.body).toContain("Recent slow pre-delivery tools:");
+    expect(note?.body).toContain(
+      "- seq=12 channel=telegram tool=home_assistant duration=18000ms turn=turn-ha",
+    );
   });
 
   it("reports slow direct-message latency as a doctor health issue", () => {

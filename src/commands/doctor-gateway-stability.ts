@@ -68,7 +68,7 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
 
   if (channelTurns.tools && (channelTurns.tools.called > 0 || channelTurns.tools.results > 0)) {
     lines.push(
-      `Tools: called=${channelTurns.tools.called}, results=${channelTurns.tools.results}, failed=${channelTurns.tools.failedResults}, missing=${channelTurns.tools.missingResults}, slow=${channelTurns.tools.slowResults}.`,
+      `Tools: called=${channelTurns.tools.called}, results=${channelTurns.tools.results}, failed=${channelTurns.tools.failedResults}, missing=${channelTurns.tools.missingResults}, slow=${channelTurns.tools.slowResults}, preDelivery=${channelTurns.tools.preDeliveryCalls}, slowPreDelivery=${channelTurns.tools.slowPreDeliveryResults}.`,
     );
     const topTools = Object.entries(channelTurns.tools.byTool)
       .toSorted((a, b) => {
@@ -87,10 +87,26 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
             ([toolName, counts]) =>
               `${toolName}(failed=${counts.failedResults}, missing=${
                 counts.missingResults
-              }, max=${formatChannelTurnLatencyMs(counts.maxDurationMs)})`,
+              }, preDelivery=${counts.preDeliveryCalls}, max=${formatChannelTurnLatencyMs(
+                counts.maxDurationMs,
+              )})`,
           )
           .join("; ")}.`,
       );
+    }
+    const recentPreDeliverySlow = channelTurns.tools.recentPreDeliverySlow.slice(-3).reverse();
+    if (recentPreDeliverySlow.length > 0) {
+      lines.push("Recent slow pre-delivery tools:");
+      for (const slow of recentPreDeliverySlow) {
+        const details = [
+          `seq=${slow.seq}`,
+          slow.channel ? `channel=${slow.channel}` : "",
+          slow.toolName ? `tool=${slow.toolName}` : "",
+          `duration=${formatChannelTurnLatencyMs(slow.durationMs)}`,
+          slow.turnId ? `turn=${slow.turnId}` : "",
+        ].filter(Boolean);
+        lines.push(`- ${details.join(" ")}`);
+      }
     }
   }
 
