@@ -12,6 +12,7 @@ let openClawNativeCodexResponsesStreamFnForTest: StreamFn | undefined;
 type EmbeddedStreamOptions = Parameters<StreamFn>[2] & {
   authProfileId?: string;
   promptCacheKey?: string;
+  sessionKey?: string;
 };
 
 export function resolveEmbeddedAgentBaseStreamFn(params: {
@@ -51,6 +52,30 @@ function hasResolvedRuntimeApiKey(apiKey: string | undefined): boolean {
 
 function isOpenAICodexResponsesModel(model: EmbeddedRunAttemptParams["model"]): boolean {
   return model.provider === "openai" && model.api === "openai-chatgpt-responses";
+}
+
+function resolveOpenAITransportSessionKey(params: {
+  model: EmbeddedRunAttemptParams["model"];
+  sessionKey?: string;
+}): string | undefined {
+  const provider = String(params.model.provider).trim().toLowerCase();
+  if (
+    provider !== "openai" &&
+    provider !== "azure-openai" &&
+    provider !== "azure-openai-responses"
+  ) {
+    return undefined;
+  }
+  const api = String(params.model.api).trim();
+  if (
+    api !== "openai-responses" &&
+    api !== "openai-chatgpt-responses" &&
+    api !== "openai-completions" &&
+    api !== "azure-openai-responses"
+  ) {
+    return undefined;
+  }
+  return params.sessionKey?.trim() || undefined;
 }
 
 function resolveOpenClawNativeCodexResponsesStreamFn(params: {
@@ -116,6 +141,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
   currentStreamFn: StreamFn | undefined;
   providerStreamFn?: StreamFn;
   sessionId: string;
+  sessionKey?: string;
   promptCacheKey?: string;
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
@@ -123,6 +149,10 @@ export function resolveEmbeddedAgentStreamFn(params: {
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
 }): StreamFn {
+  const openAITransportSessionKey = resolveOpenAITransportSessionKey({
+    model: params.model,
+    sessionKey: params.sessionKey,
+  });
   if (params.providerStreamFn) {
     return wrapEmbeddedAgentStreamFn(params.providerStreamFn, {
       runSignal: params.signal,
@@ -130,6 +160,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
       authProfileId: params.authProfileId,
       authStorage: params.authStorage,
       providerId: params.model.provider,
+      sessionKey: openAITransportSessionKey,
       promptCacheKey: params.promptCacheKey,
       transformContext: (context) =>
         context.systemPrompt
@@ -158,6 +189,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
       authStorage: params.authStorage,
       providerId: params.model.provider,
       sessionId: params.sessionId,
+      sessionKey: openAITransportSessionKey,
       promptCacheKey: params.promptCacheKey,
       transformContext: (context) =>
         context.systemPrompt
@@ -190,6 +222,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
         authProfileId: params.authProfileId,
         authStorage: params.authStorage,
         providerId: params.model.provider,
+        sessionKey: openAITransportSessionKey,
         promptCacheKey: params.promptCacheKey,
       });
     }
@@ -227,6 +260,7 @@ function wrapEmbeddedAgentStreamFn(
     authStorage: { getApiKey(provider: string): Promise<string | undefined> } | undefined;
     providerId: string;
     sessionId?: string;
+    sessionKey?: string;
     promptCacheKey?: string;
     transformContext?: (context: Parameters<StreamFn>[1]) => Parameters<StreamFn>[1];
   },
@@ -240,6 +274,10 @@ function wrapEmbeddedAgentStreamFn(
       params.sessionId && !embeddedOptions?.sessionId
         ? { ...embeddedOptions, sessionId: params.sessionId }
         : embeddedOptions;
+    const sessionKey = params.sessionKey?.trim();
+    if (sessionKey && !merged?.sessionKey) {
+      merged = { ...merged, sessionKey };
+    }
     const promptCacheKey = params.promptCacheKey?.trim();
     if (promptCacheKey && !merged?.promptCacheKey) {
       merged = { ...merged, promptCacheKey };

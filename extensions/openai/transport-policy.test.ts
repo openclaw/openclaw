@@ -37,6 +37,7 @@ describe("openai transport policy", () => {
       transport: "websocket",
     });
     expect(state?.headers?.["x-client-request-id"]).toBe("session-123");
+    expect(state?.headers?.["x-session-affinity"]).toBe("session-123");
     expect(state?.headers?.["x-openclaw-session-id"]).toBe("session-123");
     expect(state?.headers?.["x-openclaw-turn-id"]).toBe("turn-123");
     expect(state?.headers?.["x-openclaw-turn-attempt"]).toBe("2");
@@ -76,6 +77,7 @@ describe("openai transport policy", () => {
       transport: "stream",
     });
     expect(state?.headers?.["x-client-request-id"]).toBe("session-123");
+    expect(state?.headers?.["x-session-affinity"]).toBe("session-123");
     expect(state?.headers?.["x-openclaw-session-id"]).toBe("session-123");
     expect(state?.headers?.["x-openclaw-turn-id"]).toBe("turn-123");
     expect(state?.headers?.["x-openclaw-turn-attempt"]).toBe("2");
@@ -89,6 +91,7 @@ describe("openai transport policy", () => {
       sessionId: "session-123",
     });
     expect(policy?.headers?.["x-client-request-id"]).toBe("session-123");
+    expect(policy?.headers?.["x-session-affinity"]).toBe("session-123");
     expect(policy?.headers?.["x-openclaw-session-id"]).toBe("session-123");
     expect(policy?.degradeCooldownMs).toBe(60_000);
   });
@@ -105,6 +108,7 @@ describe("openai transport policy", () => {
       sessionId: "session-123",
     });
     expect(policy?.headers?.["x-client-request-id"]).toBe("session-123");
+    expect(policy?.headers?.["x-session-affinity"]).toBe("session-123");
     expect(policy?.headers?.["x-openclaw-session-id"]).toBe("session-123");
     expect(policy?.degradeCooldownMs).toBe(60_000);
   });
@@ -122,6 +126,7 @@ describe("openai transport policy", () => {
       sessionId: "session-123",
     });
     expect(policy?.headers?.["x-client-request-id"]).toBe("session-123");
+    expect(policy?.headers?.["x-session-affinity"]).toBe("session-123");
     expect(policy?.headers?.["x-openclaw-session-id"]).toBe("session-123");
     expect(policy?.degradeCooldownMs).toBe(60_000);
   });

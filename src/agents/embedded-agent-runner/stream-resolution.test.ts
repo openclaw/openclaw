@@ -153,6 +153,7 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     const streamFn = resolveEmbeddedAgentStreamFn({
       currentStreamFn: undefined,
       sessionId: "session-1",
+      sessionKey: "agent:main:codex",
       model: {
         api: "openai-chatgpt-responses",
         provider: "openai",
@@ -172,7 +173,35 @@ describe("resolveEmbeddedAgentStreamFn", () => {
     );
     expect(requireRecord(result.context, "codex native context").systemPrompt).toBe("intro\ntail");
     expect(requireRecord(result.options, "codex native options").apiKey).toBe("oauth-bearer-token");
+    expect(requireRecord(result.options, "codex native options").sessionId).toBe("session-1");
+    expect(requireRecord(result.options, "codex native options").sessionKey).toBe(
+      "agent:main:codex",
+    );
     expect(nativeStreamFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses the session key as the provider session id for OpenAI transports", async () => {
+    const innerStreamFn = vi.fn(async (_model, _context, options) => options);
+    overrideBoundaryAwareStreamFnOnce(innerStreamFn as never);
+
+    const streamFn = resolveEmbeddedAgentStreamFn({
+      currentStreamFn: undefined,
+      sessionId: "run-session",
+      sessionKey: "agent:main:discord:channel:c1",
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+      } as never,
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn({ provider: "openai", id: "gpt-5.4" } as never, {} as never, {}),
+      "openai transport session result",
+    );
+    expect(result.sessionKey).toBe("agent:main:discord:channel:c1");
+    expect(result.sessionId).toBeUndefined();
+    expect(innerStreamFn).toHaveBeenCalledTimes(1);
   });
 
   it("routes GitHub Copilot fallbacks through boundary-aware transports", () => {

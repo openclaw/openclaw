@@ -504,6 +504,7 @@ export async function runBtwSideQuestion(
     currentStreamFn: streamSimple,
     providerStreamFn,
     sessionId,
+    sessionKey: params.sessionKey,
     signal: params.opts?.abortSignal,
     model: runtimeModel,
     resolvedApiKey: apiKey,

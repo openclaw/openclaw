@@ -123,6 +123,7 @@ type BaseStreamOptions = {
   apiKey?: string;
   cacheRetention?: "none" | "short" | "long";
   sessionId?: string;
+  sessionKey?: string;
   promptCacheKey?: string;
   authProfileId?: string;
   onPayload?: (payload: unknown, model: Model) => unknown;
@@ -1828,6 +1829,12 @@ function resolveProviderTransportTurnState(
   });
 }
 
+function resolveTransportSessionId(
+  options: Pick<BaseStreamOptions, "sessionId" | "sessionKey"> | undefined,
+): string | undefined {
+  return options?.sessionKey?.trim() || options?.sessionId;
+}
+
 function resolveOpenAISdkTimeoutMs(model: Model): number | undefined {
   return resolveModelRequestTimeoutMs(model, undefined);
 }
@@ -1894,7 +1901,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
         const turnState = resolveProviderTransportTurnState(model, {
-          sessionId: options?.sessionId,
+          sessionId: resolveTransportSessionId(options),
           turnId: randomUUID(),
           attempt: 1,
           transport: "stream",
@@ -2328,7 +2335,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
         const turnState = resolveProviderTransportTurnState(model, {
-          sessionId: options?.sessionId,
+          sessionId: resolveTransportSessionId(options),
           turnId: randomUUID(),
           attempt: 1,
           transport: "stream",
@@ -4295,6 +4302,7 @@ export const testing = {
   buildOpenAIResponsesReasoningReplayMetadata,
   normalizeResponsesFailedEvent,
   prepareOpenAIResponsesReasoningItemForReplay,
+  resolveTransportSessionId,
   stripResponsesRequestEncryptedContent,
   tagOpenAIResponsesReasoningReplayItem,
   summarizeResponsesFailedNoDetailsObservation,

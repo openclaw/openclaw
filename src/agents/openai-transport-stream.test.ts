@@ -2783,6 +2783,40 @@ describe("openai transport stream", () => {
     expect(params.prompt_cache_key).toBe("cron-cache-key");
   });
 
+  it("uses sessionKey only for transport identity, not prompt-cache affinity", () => {
+    expect(
+      testing.resolveTransportSessionId({
+        sessionId: "run-session",
+        sessionKey: "agent:main:discord:channel:c1",
+      }),
+    ).toBe("agent:main:discord:channel:c1");
+
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        sessionKey: "agent:main:discord:channel:c1",
+      },
+    ) as { prompt_cache_key?: string };
+
+    expect(params.prompt_cache_key).toBeUndefined();
+  });
+
   it("clamps Responses promptCacheKey before sending it upstream", () => {
     const params = buildOpenAIResponsesParams(
       {

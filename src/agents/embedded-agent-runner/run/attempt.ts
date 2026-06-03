@@ -2536,6 +2536,7 @@ export async function runEmbeddedAttempt(
         currentStreamFn: defaultSessionStreamFn,
         providerStreamFn,
         sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
         promptCacheKey: params.promptCacheKey,
         signal: runAbortController.signal,
         model: params.model,

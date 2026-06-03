@@ -56,6 +56,7 @@ function resolveSessionHeaders(params: {
   }
   return {
     "x-client-request-id": sessionId,
+    "x-session-affinity": sessionId,
     "x-openclaw-session-id": sessionId,
   };
 }
