@@ -1,3 +1,5 @@
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { asOptionalRecord as readRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   readCodexNotificationThreadId,
   readCodexNotificationTurnId,
@@ -142,7 +144,7 @@ export function createCodexConversationTurnCollector(threadId: string) {
             reject(new Error("codex app-server bound turn timed out"));
             clearWaitState();
           },
-          Math.max(100, params.timeoutMs),
+          resolveTimerTimeoutMs(params.timeoutMs, 100, 100),
         );
         timeout.unref?.();
       });
@@ -171,12 +173,6 @@ function isNotificationForTurn(
 
 function readNotificationTurnId(params: JsonObject): string | undefined {
   return readCodexNotificationTurnId(params);
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
 }
 
 function readString(record: Record<string, unknown> | JsonObject | undefined, key: string) {

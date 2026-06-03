@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { replaceFileAtomic } from "../infra/replace-file.js";
+import type { AgentMessage } from "./runtime/index.js";
 import { makeMissingToolResult } from "./session-transcript-repair.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-id.js";
@@ -208,8 +208,8 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
   };
   return (
     message.role === "assistant" &&
-    message.api === "openai-codex-responses" &&
-    message.provider === "openai-codex" &&
+    message.api === "openai-chatgpt-responses" &&
+    message.provider === "openai" &&
     message.stopReason !== "error" &&
     message.stopReason !== "aborted"
   );
@@ -320,7 +320,7 @@ export async function repairSessionFileIfNeeded(params: {
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
-  let insertedToolResults = 0;
+  let insertedToolResults;
 
   for (const line of lines) {
     if (!line.trim()) {

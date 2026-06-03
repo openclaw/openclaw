@@ -1,8 +1,8 @@
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/outbound-runtime";
 import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
 import { chunkText } from "../../../auto-reply/chunk.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { OutboundSendDeps } from "../../../infra/outbound/deliver.js";
+import { sanitizeForPlainText } from "../../../infra/outbound/sanitize-text.js";
 import type { OutboundMediaAccess } from "../../../media/load-options.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.adapters.js";
@@ -26,6 +26,18 @@ type DirectSendFn<TOpts extends Record<string, unknown>, TResult extends DirectS
   text: string,
   opts: TOpts,
 ) => Promise<TResult>;
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value != null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readNumberField(record: Record<string, unknown> | undefined, key: string) {
+  const value = record?.[key];
+  return typeof value === "number" ? value : undefined;
+}
+
 export {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequence,
@@ -51,9 +63,14 @@ export function createScopedChannelMediaMaxBytesResolver(channel: string) {
     resolveScopedChannelMediaMaxBytes({
       cfg: params.cfg,
       accountId: params.accountId,
-      resolveChannelLimitMb: ({ cfg, accountId }) =>
-        (cfg.channels?.[channel]?.accounts?.[accountId] as { mediaMaxMb?: number } | undefined)
-          ?.mediaMaxMb ?? cfg.channels?.[channel]?.mediaMaxMb,
+      resolveChannelLimitMb: ({ cfg, accountId }) => {
+        const channelConfig = asRecord(cfg.channels?.[channel]);
+        const accountConfig = asRecord(asRecord(channelConfig?.accounts)?.[accountId]);
+        return (
+          readNumberField(accountConfig, "mediaMaxMb") ??
+          readNumberField(channelConfig, "mediaMaxMb")
+        );
+      },
     });
 }
 

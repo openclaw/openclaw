@@ -28,13 +28,13 @@ dump_debug_logs() {
     /tmp/openclaw-release-plugin-marketplace-update.log \
     /tmp/openclaw-release-plugin-marketplace-cli-v2.log \
     /tmp/openclaw-release-plugin-marketplace-uninstall.log \
-    /tmp/openclaw-release-plugin-marketplace-cli-after-uninstall.log \
-    "$HOME/.openclaw/plugins/installs.json"
+    /tmp/openclaw-release-plugin-marketplace-cli-after-uninstall.log
 }
 trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
 
 openclaw_e2e_install_package /tmp/openclaw-release-plugin-marketplace-install.log
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 openclaw onboard \
   --non-interactive \

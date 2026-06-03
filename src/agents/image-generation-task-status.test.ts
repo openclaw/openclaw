@@ -227,6 +227,49 @@ describe("image generation task status", () => {
     );
   });
 
+  it("does not use a delivery-blocked image task as a succeeded duplicate guard", () => {
+    const now = Date.now();
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "agent:main",
+      taskKind: IMAGE_GENERATION_TASK_KIND,
+      sourcePrefix: "image_generate",
+      taskId: "task-blocked-delivery",
+      runId: "run-blocked-delivery",
+      taskLabel: "recent prompt",
+      requestKey: "image-request:blocked",
+      providerId: "xai",
+      progressSummary: "Generating image",
+      nowMs: now - 20_000,
+    });
+    taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([
+      {
+        taskId: "task-blocked-delivery",
+        runId: "run-blocked-delivery",
+        runtime: "cli",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourceId: "image_generate:xai",
+        requesterSessionKey: "agent:main",
+        ownerKey: "agent:main",
+        scopeKind: "session",
+        task: "recent prompt",
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Required completion delivery failed before reaching the requester.",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        createdAt: now - 20_000,
+        endedAt: now - 10_000,
+        progressSummary: "Generated 1 image",
+      },
+    ]);
+
+    expect(
+      findDuplicateGuardImageGenerationTaskForSession("agent:main", {
+        requestKey: "image-request:blocked",
+      }),
+    ).toBeUndefined();
+  });
+
   it("does not use a recent succeeded image task without a matching request key", () => {
     const now = Date.now();
     recordRecentMediaGenerationTaskStartForSession({
@@ -373,6 +416,34 @@ describe("image generation task status", () => {
         taskLabel: "stale prompt",
         requestKey: "image-request:stale",
         maxAgeMs: 10 * 60_000,
+        nowMs: now,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not keep stale recent starts forever for non-finite maxAgeMs", () => {
+    const now = Date.now();
+    recordRecentMediaGenerationTaskStartForSession({
+      sessionKey: "agent:main",
+      taskKind: IMAGE_GENERATION_TASK_KIND,
+      sourcePrefix: "image_generate",
+      taskId: "task-stale",
+      runId: "run-stale",
+      taskLabel: "stale prompt",
+      requestKey: "image-request:stale",
+      providerId: "xai",
+      progressSummary: "Generating stale image",
+      nowMs: now - 1,
+    });
+
+    expect(
+      findRecentStartedMediaGenerationTaskForSession({
+        sessionKey: "agent:main",
+        taskKind: IMAGE_GENERATION_TASK_KIND,
+        sourcePrefix: "image_generate",
+        taskLabel: "stale prompt",
+        requestKey: "image-request:stale",
+        maxAgeMs: Number.POSITIVE_INFINITY,
         nowMs: now,
       }),
     ).toBeUndefined();

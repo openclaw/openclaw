@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -21,7 +22,7 @@ import type {
   MusicGenerationProvider,
   MusicGenerationSourceImage,
 } from "../../music-generation/types.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { resolveUserPath } from "../../utils.js";
 import type { DeliveryContext } from "../../utils/delivery-context.js";
 import { buildTimeoutAbortSignal } from "../../utils/fetch-timeout.js";
@@ -41,6 +42,7 @@ import {
   createDefaultMediaGenerateBackgroundScheduler,
   notifyMediaGenerationAsyncTaskStarted,
   scheduleMediaGenerationTaskCompletion,
+  shouldDetachMediaGenerationTask,
   type MediaGenerateAsyncStartCallback,
   type MediaGenerateBackgroundScheduler,
 } from "./media-generate-background-shared.js";
@@ -124,7 +126,7 @@ const MusicGenerateToolSchema = Type.Object({
     }),
   ),
   durationSeconds: Type.Optional(
-    Type.Number({
+    Type.Integer({
       description: "Target seconds; provider may clamp.",
       minimum: 1,
     }),
@@ -143,11 +145,13 @@ const MusicGenerateToolSchema = Type.Object({
 
 function resolveMusicGenerationModelConfigForTool(params: {
   cfg?: OpenClawConfig;
+  workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
 }): ToolModelConfig | null {
   return resolveCapabilityModelConfigForTool({
     cfg: params.cfg,
+    workspaceDir: params.workspaceDir,
     agentDir: params.agentDir,
     authStore: params.authStore,
     modelConfig: params.cfg?.agents?.defaults?.musicGenerationModel,
@@ -234,9 +238,6 @@ function validateMusicGenerationCapabilities(params: {
         `${provider.id} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}.`,
       );
     }
-  }
-  if (!caps) {
-    return;
   }
 }
 
@@ -606,7 +607,7 @@ export function createMusicGenerateTool(options?: {
     name: "music_generate",
     displaySummary: "Generate music",
     description:
-      'Create audio/music for song, jingle, beat, loop, soundtrack, anthem, instrumental requests. If user asks make/generate/create song/music, call music_generate; do not just write lyrics unless lyrics/text only. Prompt gets style/genre/mood/tempo/instruments/purpose. lyrics only exact sung words. Session chats: background task; do not call again for same request; wait completion, send attachments via message tool. "status" checks active task.',
+      'Create audio/music for song, jingle, beat, loop, soundtrack, anthem, instrumental requests. If user asks make/generate/create song/music, call music_generate; do not just write lyrics unless lyrics/text only. Prompt gets style/genre/mood/tempo/instruments/purpose. lyrics only exact sung words. Session chats: background task; do not call again for same request; wait completion, then report through the current visible-reply contract with generated media attached using structured media fields. "status" checks active task.',
     parameters: MusicGenerateToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const args = rawArgs as Record<string, unknown>;
@@ -614,6 +615,7 @@ export function createMusicGenerateTool(options?: {
 
       if (action === "list") {
         return createMusicGenerateListActionResult(cfg, {
+          workspaceDir: options?.workspaceDir,
           agentDir: options?.agentDir,
           authStore: options?.authProfileStore,
         });
@@ -625,6 +627,7 @@ export function createMusicGenerateTool(options?: {
 
       const musicGenerationModelConfig = resolveMusicGenerationModelConfigForTool({
         cfg,
+        workspaceDir: options?.workspaceDir,
         agentDir: options?.agentDir,
         authStore: options?.authProfileStore,
       });
@@ -647,9 +650,15 @@ export function createMusicGenerateTool(options?: {
       const instrumental = readBooleanToolParam(args, "instrumental");
       const model = readStringParam(args, "model");
       const durationSeconds = readNumberParam(args, "durationSeconds", {
-        integer: true,
+        positiveInteger: true,
         strict: true,
       });
+      if (
+        durationSeconds === undefined &&
+        readSnakeCaseParamRaw(args, "durationSeconds") !== undefined
+      ) {
+        throw new ToolInputError("durationSeconds must be a positive integer");
+      }
       const format = normalizeOutputFormat(readStringParam(args, "format"));
       const filename = readStringParam(args, "filename");
       const timeout = normalizeMusicGenerationTimeoutMs(musicGenerationModelConfig.timeoutMs);
@@ -716,7 +725,9 @@ export function createMusicGenerateTool(options?: {
         prompt,
         providerId: selectedProvider?.id ?? selectedModelRef?.provider,
       });
-      const shouldDetach = Boolean(taskHandle && options?.agentSessionKey?.trim());
+      const shouldDetach = Boolean(
+        taskHandle && shouldDetachMediaGenerationTask(options?.agentSessionKey),
+      );
 
       if (shouldDetach && taskHandle) {
         recordRecentMediaGenerationTaskStartForSession({

@@ -1,4 +1,4 @@
-import type { Api, Context, Model } from "@earendil-works/pi-ai";
+import type { Api, Context, Model } from "../llm/types.js";
 import { repairToolUseResultPairing } from "./session-transcript-repair.js";
 
 const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
@@ -8,7 +8,7 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
   "google-generative-ai",
   "openclaw-google-generative-ai-transport",
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
   "openclaw-azure-openai-responses-transport",
@@ -20,7 +20,7 @@ const SYNTHETIC_TOOL_RESULT_APIS = new Set<string>([
 // tool-replay-repair.live.test.ts exercises both paths against real models.
 const CODEX_STYLE_ABORTED_OUTPUT_APIS = new Set<string>([
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "azure-openai-responses",
   "openclaw-openai-responses-transport",
   "openclaw-azure-openai-responses-transport",
@@ -39,10 +39,10 @@ function isFailedAssistantTurn(message: Context["messages"][number]): boolean {
 
 export function transformTransportMessages(
   messages: Context["messages"],
-  model: Model<Api>,
+  model: Model,
   normalizeToolCallId?: (
     id: string,
-    targetModel: Model<Api>,
+    targetModel: Model,
     source: { provider: string; api: Api; model: string },
   ) => string,
   options?: {
@@ -134,7 +134,7 @@ export function transformTransportMessages(
     return replayable;
   }
 
-  // PI's local transform can synthesize missing results, but it does not move
+  // The local transport transform can synthesize missing results, but it does not move
   // displaced real results back before an intervening user turn. Shared repair
   // handles both, while preserving the previous transport behavior of dropping
   // aborted/error assistant tool-call turns before replaying strict providers.

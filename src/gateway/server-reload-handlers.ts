@@ -1,14 +1,14 @@
-import { resetModelCatalogCache } from "../agents/model-catalog.js";
-import {
-  clearCurrentProviderAuthState,
-  warmCurrentProviderAuthState,
-} from "../agents/model-provider-auth.js";
-import { disposeAllSessionMcpRuntimes } from "../agents/pi-bundle-mcp-tools.js";
+import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import {
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
-} from "../agents/pi-embedded-runner/run-state.js";
+} from "../agents/embedded-agent-runner/run-state.js";
+import { resetModelCatalogCache } from "../agents/model-catalog.js";
+import {
+  clearCurrentProviderAuthState,
+  warmCurrentProviderAuthStateOffMainThread,
+} from "../agents/model-provider-auth.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
@@ -143,7 +143,7 @@ type GatewayReloadHandlerParams = {
   setState: (state: GatewayHotReloadState) => void;
   startChannel: GatewayChannelManager["startChannel"];
   stopChannel: GatewayChannelManager["stopChannel"];
-  stopPostReadySidecars?: () => void;
+  stopPostReadySidecars?: () => Promise<void> | void;
   reloadPlugins: (params: {
     nextConfig: OpenClawConfig;
     changedPaths: readonly string[];
@@ -430,7 +430,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
     }
 
     if (plan.restartGmailWatcher) {
-      params.stopPostReadySidecars?.();
+      await params.stopPostReadySidecars?.();
       const restartAbortController =
         params.createGmailRestartAbortController?.() ?? new AbortController();
       try {
@@ -440,7 +440,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
             import("../hooks/gmail-watcher-lifecycle.js"),
           ]);
           if (!restartAbortController.signal.aborted) {
-            await stopGmailWatcher().catch((err) => {
+            await stopGmailWatcher().catch((err: unknown) => {
               params.logHooks.warn(`gmail watcher stop failed during reload: ${String(err)}`);
             });
           }
@@ -500,7 +500,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
 
     applyGatewayLaneConcurrency(nextConfig);
 
-    void warmCurrentProviderAuthState(nextConfig).catch((err) => {
+    void warmCurrentProviderAuthStateOffMainThread(nextConfig).catch((err: unknown) => {
       params.logReload.warn(`provider auth state rewarm failed: ${String(err)}`);
     });
 
@@ -551,6 +551,7 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(
           nextConfig.gateway?.reload?.deferralTimeoutMs,
         ),
+        timeoutIntent: { force: true, reason: "config reload forced restart" },
         emitHooks: {
           beforeEmit: () =>
             markActiveMainSessionsForRestart(nextConfig, "config reload forced restart"),
@@ -562,20 +563,20 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           },
           onStillPending: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
+            const taskBlockersValue = formatTaskBlockers();
             params.logReload.warn(
               `restart still deferred after ${elapsedMs}ms with ${remaining.join(", ")} active${
-                taskBlockers ? ` (${taskBlockers})` : ""
+                taskBlockersValue ? ` (${taskBlockersValue})` : ""
               }`,
             );
           },
           onTimeout: (_pending, elapsedMs) => {
             const remaining = formatActiveDetails(getActiveCounts());
-            const taskBlockers = formatTaskBlockers();
+            const taskBlockersLocal = formatTaskBlockers();
             restartPending = false;
             params.logReload.warn(
               `restart timeout after ${elapsedMs}ms with ${remaining.join(", ")} still active${
-                taskBlockers ? ` (${taskBlockers})` : ""
+                taskBlockersLocal ? ` (${taskBlockersLocal})` : ""
               }; forcing restart`,
             );
           },

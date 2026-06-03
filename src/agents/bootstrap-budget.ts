@@ -1,6 +1,6 @@
 import path from "node:path";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { EmbeddedContextFile } from "./embedded-agent-helpers.js";
 import type { WorkspaceBootstrapFile } from "./workspace.js";
 
 const DEFAULT_BOOTSTRAP_NEAR_LIMIT_RATIO = 0.85;
@@ -68,8 +68,8 @@ function formatWarningCause(cause: BootstrapTruncationCause): string {
   return cause === "per-file-limit" ? "max/file" : "max/total";
 }
 
-function isAgentsBootstrapName(name: string): boolean {
-  return name.toLowerCase() === "agents.md";
+function isAgentsBootstrapName(name: string | undefined): boolean {
+  return name?.toLowerCase() === "agents.md";
 }
 
 function normalizeSeenSignatures(signatures?: string[]): string[] {

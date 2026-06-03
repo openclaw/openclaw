@@ -355,7 +355,15 @@ describe("memory-wiki gateway methods", () => {
     const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
     const { api, registerGatewayMethod } = createPluginApi();
     vi.mocked(listMemoryWikiPalace).mockResolvedValue({
-      totalItems: 3,
+      totalItems: 1,
+      totalPages: 3,
+      pageCounts: {
+        synthesis: 1,
+        entity: 0,
+        concept: 0,
+        source: 1,
+        report: 1,
+      },
       totalClaims: 4,
       totalQuestions: 1,
       totalContradictions: 1,
@@ -399,7 +407,15 @@ describe("memory-wiki gateway methods", () => {
     expect(syncMemoryWikiImportedSources).toHaveBeenCalledWith({ config, appConfig: undefined });
     expect(listMemoryWikiPalace).toHaveBeenCalledWith(config);
     expect(readRespondPayload(respond)).toEqual({
-      totalItems: 3,
+      totalItems: 1,
+      totalPages: 3,
+      pageCounts: {
+        synthesis: 1,
+        entity: 0,
+        concept: 0,
+        source: 1,
+        report: 1,
+      },
       totalClaims: 4,
       totalQuestions: 1,
       totalContradictions: 1,
@@ -449,6 +465,37 @@ describe("memory-wiki gateway methods", () => {
     expect(readRespondError(respond)).toEqual({
       code: "internal_error",
       message: "query is required.",
+    });
+  });
+
+  it.each([
+    ["wiki.importRuns", { limit: 0 }, "limit must be a positive integer"],
+    [
+      "wiki.search",
+      { query: "Teams Azure", maxResults: 1.5 },
+      "maxResults must be a positive integer",
+    ],
+    ["wiki.get", { lookup: "Teams Azure", fromLine: 1.5 }, "fromLine must be a positive integer"],
+    ["wiki.get", { lookup: "Teams Azure", lineCount: 0 }, "lineCount must be a positive integer"],
+  ])("rejects invalid positive integer gateway param for %s", async (method, params, message) => {
+    const { config } = await createVault({ prefix: "memory-wiki-gateway-" });
+    const { api, registerGatewayMethod } = createPluginApi();
+
+    registerMemoryWikiGatewayMethods({ api, config });
+    const handler = findGatewayHandler(registerGatewayMethod, method);
+    if (!handler) {
+      throw new Error(`${method} handler missing`);
+    }
+    const respond = vi.fn();
+
+    await handler({
+      params,
+      respond,
+    });
+
+    expect(readRespondError(respond)).toEqual({
+      code: "internal_error",
+      message,
     });
   });
 

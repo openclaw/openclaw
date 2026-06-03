@@ -2,16 +2,19 @@ import { isSingleUseReplyToMode } from "../../auto-reply/reply/reply-reference.j
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import type { ReplyToMode } from "../../config/types.js";
 
+/** Per-payload reply target override passed to outbound channel adapters. */
 export type ReplyToOverride = {
   replyToId?: string | null | undefined;
   replyToIdSource?: ReplyToResolution["source"] | undefined;
 };
 
+/** Resolved reply target plus whether it came from payload or ambient context. */
 export type ReplyToResolution = {
   replyToId?: string;
   source?: "explicit" | "implicit";
 };
 
+/** Creates a reply-to supplier that consumes implicit single-use reply ids once. */
 export function createReplyToFanout(params: {
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
@@ -36,6 +39,7 @@ export function createReplyToFanout(params: {
   };
 }
 
+/** Builds per-payload reply routing policy for outbound delivery batches. */
 export function createReplyToDeliveryPolicy(params: {
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
@@ -50,9 +54,7 @@ export function createReplyToDeliveryPolicy(params: {
     options?: { consumeImplicitReply?: boolean },
   ) => T;
 } {
-  const modeIsSingleUse = params.replyToMode
-    ? isSingleUseReplyToMode(params.replyToMode)
-    : false;
+  const modeIsSingleUse = params.replyToMode ? isSingleUseReplyToMode(params.replyToMode) : false;
   // Treat-as-single-use applies when the channel uses replyToId as one-shot
   // quote metadata, but only when the caller has not explicitly opted into a
   // multi-use mode like "all".
@@ -86,6 +88,8 @@ export function createReplyToDeliveryPolicy(params: {
       return overrides;
     }
     if (replyToConsumed) {
+      // Single-use implicit reply targets apply to the first delivered payload only;
+      // later payloads must not accidentally thread into the same source message.
       return { ...overrides, replyToId: undefined };
     }
     replyToConsumed = true;

@@ -8,7 +8,10 @@ import {
   resolveMemorySearchSyncConfig,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import { checkQmdBinaryAvailability } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import {
+  checkQmdBinaryAvailability,
+  resolveQmdBinaryUnavailableReason,
+} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
   resolveMemoryBackendConfig,
   type MemoryEmbeddingProbeResult,
@@ -182,13 +185,15 @@ export async function getMemorySearchManager(params: {
         cwd: workspaceDir,
       });
       if (!qmdBinary.available) {
-        const message = qmdBinary.error ?? "unknown error";
-        log.warn(
-          `qmd binary unavailable (${qmdResolved.command}); falling back to builtin: ${message}`,
-        );
+        const message = qmdBinary.error;
+        const failurePrefix =
+          resolveQmdBinaryUnavailableReason(qmdBinary) === "workspace-cwd"
+            ? `qmd workspace unavailable (${workspaceDir})`
+            : `qmd binary unavailable (${qmdResolved.command})`;
+        log.warn(`${failurePrefix}; falling back to builtin: ${message}`);
         return {
           manager: null,
-          failureReason: `qmd binary unavailable (${qmdResolved.command}): ${message}`,
+          failureReason: `${failurePrefix}: ${message}`,
         };
       }
       try {
@@ -219,7 +224,6 @@ export async function getMemorySearchManager(params: {
       if (!primary) {
         return { entry: null, failureReason };
       }
-      let cacheEntry!: CachedQmdManagerEntry;
       const wrapper = new FallbackMemoryManager(
         {
           primary,
@@ -235,7 +239,7 @@ export async function getMemorySearchManager(params: {
           }
         },
       );
-      cacheEntry = {
+      const cacheEntry: CachedQmdManagerEntry = {
         identityKey: expectedIdentityKey,
         manager: wrapper,
       };
@@ -289,7 +293,7 @@ export async function getMemorySearchManager(params: {
         }
         QMD_MANAGER_CACHE.set(scopeKey, created.entry);
         if (cached) {
-          await closeQmdManagerForReplacement(cached.manager).catch((err) => {
+          await closeQmdManagerForReplacement(cached.manager).catch((err: unknown) => {
             log.warn(`failed to retire replaced qmd memory manager: ${formatErrorMessage(err)}`);
           });
         }

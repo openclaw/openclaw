@@ -5,6 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { Writable } from "node:stream";
 import { confirm, isCancel } from "@clack/prompts";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { stylePromptMessage } from "../../../packages/terminal-core/src/prompt-style.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   checkShellCompletionStatus,
   ensureCompletionCacheExists,
@@ -48,6 +52,7 @@ import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { pathExists } from "../../infra/fs-safe.js";
 import { readJsonIfExists, writeJson } from "../../infra/json-files.js";
 import { runGlobalPackageUpdateSteps } from "../../infra/package-update-steps.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
 import {
@@ -74,7 +79,6 @@ import {
   createGlobalInstallEnv,
   cleanupGlobalRenameDirs,
   globalInstallArgs,
-  isOpenClawSourcePackageInstallSpec,
   resolveGlobalInstallTarget,
   resolveGlobalInstallSpec,
   resolvePnpmGlobalDirFromGlobalRoot,
@@ -84,12 +88,15 @@ import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runne
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
+  writePersistedInstalledPluginIndexInstallRecords,
   withoutPluginInstallRecords,
   withPluginInstallRecords,
 } from "../../plugins/installed-plugin-index-records.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
+} from "../../plugins/official-external-install-records.js";
+import {
   syncPluginsForUpdateChannel,
   updateNpmInstalledPlugins,
   type PluginUpdateIntegrityDriftParams,
@@ -97,9 +104,6 @@ import {
 } from "../../plugins/update.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { stylePromptMessage } from "../../terminal/prompt-style.js";
-import { theme } from "../../terminal/theme.js";
 import { resolveUserPath } from "../../utils.js";
 import { VERSION } from "../../version.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
@@ -236,10 +240,6 @@ function isTrackedPackageInstallRecord(record: PluginInstallRecord): boolean {
   );
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function normalizePluginInstallRecordMap(value: unknown): Record<string, PluginInstallRecord> {
   if (!isRecord(value)) {
     return {};
@@ -264,7 +264,7 @@ function normalizeChannelConfigMap(value: unknown): Record<string, unknown> | nu
 
 function normalizeDirectAuthoredChannelConfigMap(value: unknown): Record<string, unknown> | null {
   const channels = normalizeChannelConfigMap(value);
-  if (!channels || Object.prototype.hasOwnProperty.call(channels, "$include")) {
+  if (!channels || Object.hasOwn(channels, "$include")) {
     return null;
   }
   return channels;
@@ -785,8 +785,7 @@ function parsePositivePid(value: unknown): number | null {
   if (!/^\d+$/u.test(trimmed)) {
     return null;
   }
-  const parsed = Number.parseInt(trimmed, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  return parseStrictPositiveInteger(trimmed) ?? null;
 }
 
 function isInheritedGatewayRuntimePid(
@@ -1023,14 +1022,6 @@ async function resolvePackageRuntimePreflightError(params: {
       : "Upgrade Node to 22.19+ or Node 24, then rerun `openclaw update`.",
     "Bare `npm i -g openclaw` can silently install an older compatible release.",
     "After upgrading Node, use `npm i -g openclaw@latest`.",
-  ].join("\n");
-}
-
-function formatUnsupportedOpenClawSourcePackageTargetMessage(target: string): string {
-  return [
-    `Unsupported package update target: ${target}.`,
-    "OpenClaw package updates use published npm artifacts or built tarballs; npm GitHub source installs for openclaw/openclaw do not reliably produce an installable package.",
-    "Use `openclaw update --channel dev` for the moving main checkout, or target `latest`, `beta`, an exact version, or a built `.tgz` package spec.",
   ].join("\n");
 }
 
@@ -1280,7 +1271,7 @@ async function tryInstallShellCompletion(opts: {
     defaultRuntime.log(theme.muted("Upgrading shell completion to cached version..."));
     const cacheGenerated = await ensureCompletionCacheExists(CLI_NAME);
     if (cacheGenerated) {
-      await installCompletion(status.shell, true, CLI_NAME);
+      await installShellCompletionForUpdate(status.shell, true);
     }
     return;
   }
@@ -1317,7 +1308,16 @@ async function tryInstallShellCompletion(opts: {
       return;
     }
 
-    await installCompletion(status.shell, opts.skipPrompt, CLI_NAME);
+    await installShellCompletionForUpdate(status.shell, opts.skipPrompt);
+  }
+}
+
+async function installShellCompletionForUpdate(shell: string, yes: boolean): Promise<void> {
+  try {
+    await installCompletion(shell, yes, CLI_NAME);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    defaultRuntime.log(theme.warn(`Shell completion refresh failed: ${message}`));
   }
 }
 
@@ -2601,8 +2601,8 @@ async function readProcessStartTimeMs(pid: number): Promise<number | undefined> 
 async function resolvePostCoreUpdateStartedAtMs(
   env: NodeJS.ProcessEnv,
 ): Promise<number | undefined> {
-  const fromEnv = Number.parseInt(env[POST_CORE_UPDATE_STARTED_AT_ENV] ?? "", 10);
-  if (Number.isFinite(fromEnv) && fromEnv > 0) {
+  const fromEnv = parseStrictPositiveInteger(env[POST_CORE_UPDATE_STARTED_AT_ENV] ?? "");
+  if (fromEnv !== undefined) {
     return fromEnv;
   }
   return await readProcessStartTimeMs(process.ppid);
@@ -2717,6 +2717,35 @@ export function resolvePostCoreUpdateChildStdio(
   return platform === "win32" ? "pipe" : "inherit";
 }
 
+function preparePostCorePluginInstallRecordsForFreshProcess(params: {
+  records: Record<string, PluginInstallRecord>;
+  targetVersion: string | null;
+}): Record<string, PluginInstallRecord> {
+  if (!params.targetVersion) {
+    return params.records;
+  }
+  const runtimeComparison = compareSemverStrings(VERSION, params.targetVersion);
+  if (runtimeComparison === null || runtimeComparison <= 0) {
+    return params.records;
+  }
+  let changed = false;
+  const next: Record<string, PluginInstallRecord> = {};
+  for (const [pluginId, record] of Object.entries(params.records)) {
+    const installedVersion = record.resolvedVersion ?? record.version;
+    const comparison = installedVersion
+      ? compareSemverStrings(installedVersion, params.targetVersion)
+      : null;
+    if (record.source !== "npm" || comparison === null || comparison <= 0) {
+      next[pluginId] = record;
+      continue;
+    }
+    const { resolvedSpec: _resolvedSpec, resolvedVersion: _resolvedVersion, ...rest } = record;
+    next[pluginId] = rest;
+    changed = true;
+  }
+  return changed ? next : params.records;
+}
+
 async function continuePostCoreUpdateInFreshProcess(params: {
   root: string;
   channel: "stable" | "beta" | "dev";
@@ -2751,14 +2780,23 @@ async function continuePostCoreUpdateInFreshProcess(params: {
   const sourceConfigPath = path.join(resultDir, "source-config.json");
   const postCoreHostVersion = await readPackageVersion(params.root);
 
+  const pluginInstallRecords = preparePostCorePluginInstallRecordsForFreshProcess({
+    records: params.pluginInstallRecords,
+    targetVersion: postCoreHostVersion,
+  });
+
   try {
-    await writePostCorePluginInstallRecordsFile(installRecordsPath, params.pluginInstallRecords);
+    if (pluginInstallRecords && pluginInstallRecords !== params.pluginInstallRecords) {
+      await writePersistedInstalledPluginIndexInstallRecords(pluginInstallRecords);
+    }
+    await writePostCorePluginInstallRecordsFile(installRecordsPath, pluginInstallRecords);
     await writePostCoreSourceConfigFile(sourceConfigPath, params.preUpdateConfig);
     const childStdio = resolvePostCoreUpdateChildStdio();
     const child = spawn(params.nodeRunner ?? resolveNodeRunner(), argv, {
       stdio: childStdio,
       env: {
         ...stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env)),
+        OPENCLAW_UPDATE_IN_PROGRESS: "1",
         [POST_CORE_UPDATE_ENV]: "1",
         [POST_CORE_UPDATE_CHANNEL_ENV]: params.channel,
         ...(params.requestedChannel
@@ -2915,7 +2953,25 @@ async function markControlPlaneUpdateRestartSentinelFailureBestEffort(params: {
   }
 }
 
+async function withUpdateInProgressEnv<T>(run: () => Promise<T>): Promise<T> {
+  const previousUpdateInProgress = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
+  return run().finally(() => {
+    if (previousUpdateInProgress === undefined) {
+      delete process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+    } else {
+      process.env.OPENCLAW_UPDATE_IN_PROGRESS = previousUpdateInProgress;
+    }
+  });
+}
+
 export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
+  return await withUpdateInProgressEnv(async () => {
+    await updateCommandInternal(opts);
+  });
+}
+
+async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> {
   suppressDeprecations();
   await cleanupStaleManagedServiceUpdateHandoffs().catch(() => undefined);
   const invocationCwd = tryResolveInvocationCwd();
@@ -2959,7 +3015,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
     process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = (await readPackageVersion(root)) ?? VERSION;
 
-    let postCoreConfigSnapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+    let postCoreConfigSnapshot = await readConfigFileSnapshot({
+      skipPluginValidation: true,
+      suppressFutureVersionWarning: true,
+    });
     const preUpdateSourceConfig = await readPostCorePreUpdateSourceConfig({
       sourceConfigPath: process.env[POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV],
       currentSnapshot: postCoreConfigSnapshot,
@@ -3150,11 +3209,6 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
       tag,
       env: process.env,
     });
-    if (isOpenClawSourcePackageInstallSpec(packageInstallSpec)) {
-      defaultRuntime.error(formatUnsupportedOpenClawSourcePackageTargetMessage(packageInstallSpec));
-      defaultRuntime.exit(1);
-      return;
-    }
   }
 
   if (opts.dryRun) {
@@ -3430,7 +3484,10 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
 
   let postUpdateConfigSnapshot =
     result.status === "ok" && !opts.dryRun
-      ? await readConfigFileSnapshot({ skipPluginValidation: true })
+      ? await readConfigFileSnapshot({
+          skipPluginValidation: true,
+          suppressFutureVersionWarning: shouldResumePostCoreInFreshProcess,
+        })
       : configSnapshot;
   if (!shouldResumePostCoreInFreshProcess) {
     postUpdateConfigSnapshot = await persistRequestedUpdateChannel({
@@ -3501,16 +3558,40 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
         : undefined,
     );
     postUpdateConfigSnapshot = restoredConfig.snapshot;
-    postCorePluginUpdate = await runPostCorePluginUpdate({
-      root: postUpdateRoot,
-      channel,
-      configSnapshot: postUpdateConfigSnapshot,
-      configChanged: restoredConfig.changed,
-      restoredAuthoredChannels: restoredConfig.authoredChannels,
-      opts,
-      timeoutMs: updateStepTimeoutMs,
-      pluginInstallRecords: preUpdatePluginInstallRecords,
-    });
+    // Current-process post-core convergence still reports the pre-update
+    // VERSION. During downgrades, pin compatibility checks to the installed
+    // target so incompatible newer plugins are disabled before restart.
+    const postUpdateInstalledVersion = await readPackageVersion(postUpdateRoot);
+    const versionComparison =
+      postUpdateInstalledVersion && VERSION
+        ? compareSemverStrings(VERSION, postUpdateInstalledVersion)
+        : null;
+    const compatibilityDowngradeTarget =
+      versionComparison != null && versionComparison > 0 ? postUpdateInstalledVersion : null;
+    const previousCompatibilityHostVersion = process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+    if (compatibilityDowngradeTarget) {
+      process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = compatibilityDowngradeTarget;
+    }
+    try {
+      postCorePluginUpdate = await runPostCorePluginUpdate({
+        root: postUpdateRoot,
+        channel,
+        configSnapshot: postUpdateConfigSnapshot,
+        configChanged: restoredConfig.changed,
+        restoredAuthoredChannels: restoredConfig.authoredChannels,
+        opts,
+        timeoutMs: updateStepTimeoutMs,
+        pluginInstallRecords: preUpdatePluginInstallRecords,
+      });
+    } finally {
+      if (compatibilityDowngradeTarget) {
+        if (previousCompatibilityHostVersion === undefined) {
+          delete process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION;
+        } else {
+          process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION = previousCompatibilityHostVersion;
+        }
+      }
+    }
   }
 
   const resultWithPostUpdate: UpdateRunResult = postCorePluginUpdate
@@ -3541,7 +3622,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
   }
 
   let restartScriptPath: string | null = null;
-  let refreshGatewayServiceEnv = false;
+  let refreshGatewayServiceEnvLocal = false;
   let gatewayServiceEnv: NodeJS.ProcessEnv | undefined;
   let gatewayPort = resolveUpdatedGatewayRestartPort({
     config: postUpdateConfigSnapshot.valid ? postUpdateConfigSnapshot.config : undefined,
@@ -3570,7 +3651,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
           serviceEnv: gatewayServiceEnv,
         });
         restartScriptPath = await prepareRestartScript(serviceState.env, gatewayPort);
-        refreshGatewayServiceEnv = true;
+        refreshGatewayServiceEnvLocal = true;
       }
     } catch {
       // Ignore errors during pre-check; fallback to standard restart
@@ -3593,7 +3674,7 @@ export async function updateCommand(opts: UpdateCommandOptions): Promise<void> {
     shouldRestart,
     result: resultWithPostUpdate,
     opts,
-    refreshServiceEnv: refreshGatewayServiceEnv,
+    refreshServiceEnv: refreshGatewayServiceEnvLocal,
     serviceEnv: gatewayServiceEnv,
     gatewayPort,
     restartScriptPath,

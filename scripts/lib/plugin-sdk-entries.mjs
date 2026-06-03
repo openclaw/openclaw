@@ -33,10 +33,8 @@ export const deprecatedBarrelPluginSdkEntrypoints = pluginSdkSubpaths.filter((en
   deprecatedBarrelPluginSdkSubpathList.includes(entry),
 );
 
-export function buildPluginSdkEntrySources() {
-  return Object.fromEntries(
-    pluginSdkEntrypoints.map((entry) => [entry, `src/plugin-sdk/${entry}.ts`]),
-  );
+export function buildPluginSdkEntrySources(entries = pluginSdkEntrypoints) {
+  return Object.fromEntries(entries.map((entry) => [entry, `src/plugin-sdk/${entry}.ts`]));
 }
 
 export function buildPluginSdkPackageExports() {
@@ -52,7 +50,14 @@ export function buildPluginSdkPackageExports() {
 }
 
 export function listPluginSdkDistArtifacts() {
-  return pluginSdkEntrypoints.flatMap((entry) => [
+  return publicPluginSdkEntrypoints.flatMap((entry) => [
+    `dist/plugin-sdk/${entry}.js`,
+    `dist/plugin-sdk/${entry}.d.ts`,
+  ]);
+}
+
+export function listPrivateLocalOnlyPluginSdkDistArtifacts() {
+  return privateLocalOnlyPluginSdkEntrypoints.flatMap((entry) => [
     `dist/plugin-sdk/${entry}.js`,
     `dist/plugin-sdk/${entry}.d.ts`,
   ]);

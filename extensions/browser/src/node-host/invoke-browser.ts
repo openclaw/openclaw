@@ -1,4 +1,6 @@
 import fsPromises from "node:fs/promises";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
 import { resolveBrowserConfig } from "../browser/config.js";
@@ -40,7 +42,7 @@ const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
 const BROWSER_PROXY_STATUS_TIMEOUT_MS = 750;
 
 function normalizeProfileAllowlist(raw?: string[]): string[] {
-  return Array.isArray(raw) ? raw.map((entry) => entry.trim()).filter(Boolean) : [];
+  return Array.isArray(raw) ? normalizeStringEntries(raw) : [];
 }
 
 function resolveBrowserProxyConfig() {
@@ -135,9 +137,7 @@ function decodeParams<T>(raw?: string | null): T {
 }
 
 function resolveBrowserProxyTimeout(timeoutMs?: number): number {
-  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-    ? Math.max(1, Math.floor(timeoutMs))
-    : DEFAULT_BROWSER_PROXY_TIMEOUT_MS;
+  return resolveTimerTimeoutMs(timeoutMs, DEFAULT_BROWSER_PROXY_TIMEOUT_MS);
 }
 
 function isBrowserProxyTimeoutError(err: unknown): boolean {

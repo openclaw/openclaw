@@ -1,3 +1,4 @@
+import { resolveNonNegativeIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Frame, Page } from "playwright-core";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -16,7 +17,7 @@ import {
   assertBrowserNavigationResultAllowed,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
-import { DEFAULT_UPLOAD_DIR, resolveStrictExistingPathsWithinRoot } from "./paths.js";
+import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
   createObservedDialogAbortSignalForPage,
@@ -191,7 +192,7 @@ async function assertObservedDelayedNavigations(opts: {
     });
   }
   if (subframeError) {
-    throw subframeError;
+    throw toLintErrorObject(subframeError, "Non-Error thrown");
   }
 }
 
@@ -275,7 +276,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
     const settle = (err?: unknown) => {
       cleanup();
       if (err) {
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
         return;
       }
       resolve();
@@ -427,11 +428,11 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   }
 
   if (subframeError) {
-    throw subframeError;
+    throw toLintErrorObject(subframeError, "Non-Error thrown");
   }
 
   if (actionError) {
-    throw actionError;
+    throw toLintErrorObject(actionError, "Non-Error thrown");
   }
   return result as T;
 }
@@ -477,12 +478,14 @@ function createAbortPromiseWithListener(
   const abortPromise: Promise<never> = signal.aborted
     ? (() => {
         onAbort?.(signal.reason);
-        return Promise.reject(signal.reason ?? new Error("aborted"));
+        return Promise.reject(
+          toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"),
+        );
       })()
     : new Promise((_, reject) => {
         abortListener = () => {
           onAbort?.(signal.reason);
-          reject(signal.reason ?? new Error("aborted"));
+          reject(toLintErrorObject(signal.reason ?? new Error("aborted"), "Non-Error rejection"));
         };
         signal.addEventListener("abort", abortListener, { once: true });
       });
@@ -580,7 +583,9 @@ export async function clickViaPlaywright(opts: {
             abortPromise,
             reconcileRemoteDialog,
           );
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
         }
         if (opts.doubleClick) {
           await awaitActionWithAbort(
@@ -792,7 +797,7 @@ export async function pressKeyViaPlaywright(opts: {
       action: async () => {
         await awaitActionWithAbort(
           page.keyboard.press(key, {
-            delay: Math.max(0, Math.floor(opts.delayMs ?? 0)),
+            delay: resolveNonNegativeIntegerOption(opts.delayMs, 0),
           }),
           abortPromise,
           reconcileRemoteDialog,
@@ -1395,15 +1400,11 @@ export async function setInputFilesViaPlaywright(opts: {
   }
 
   const locator = inputRef ? refLocator(page, inputRef) : page.locator(element).first();
-  const uploadPathsResult = await resolveStrictExistingPathsWithinRoot({
-    rootDir: DEFAULT_UPLOAD_DIR,
-    requestedPaths: opts.paths,
-    scopeLabel: `uploads directory (${DEFAULT_UPLOAD_DIR})`,
-  });
-  if (!uploadPathsResult.ok) {
-    throw new Error(uploadPathsResult.error);
+  const resolvedResult = await resolveStrictExistingUploadPaths({ requestedPaths: opts.paths });
+  if (!resolvedResult.ok) {
+    throw new Error(resolvedResult.error);
   }
-  const resolvedPaths = uploadPathsResult.paths;
+  const resolvedPaths = resolvedResult.paths;
 
   try {
     await locator.setInputFiles(resolvedPaths);
@@ -1712,4 +1713,18 @@ export async function batchViaPlaywright(opts: {
     }
   }
   return { results };
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

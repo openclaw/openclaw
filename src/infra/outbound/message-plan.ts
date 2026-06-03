@@ -6,6 +6,9 @@ import {
 import type { OutboundDeliveryFormattingOptions } from "./formatting.js";
 import type { ReplyToOverride } from "./reply-policy.js";
 
+/**
+ * Per-send overrides carried from outbound planning into channel delivery.
+ */
 export type OutboundMessageSendOverrides = ReplyToOverride & {
   quoteAuthor?: string | null;
   threadId?: string | number | null;
@@ -14,6 +17,9 @@ export type OutboundMessageSendOverrides = ReplyToOverride & {
   formatting?: OutboundDeliveryFormattingOptions;
 };
 
+/**
+ * Planned outbound delivery unit after text chunking or media expansion.
+ */
 export type OutboundMessageUnit =
   | {
       kind: "text";
@@ -27,6 +33,9 @@ export type OutboundMessageUnit =
       overrides: OutboundMessageSendOverrides;
     };
 
+/**
+ * Splits outbound text with optional formatting-aware context.
+ */
 export type OutboundMessageChunker = (
   text: string,
   limit: number,
@@ -39,6 +48,7 @@ function withPlannedReplyTo(
   overrides: OutboundMessageSendOverrides,
   consumeReplyTo?: PlanReplyToConsumption,
 ): OutboundMessageSendOverrides {
+  // Reply-to policies can be single-use; clone overrides before consuming the implicit slot.
   return consumeReplyTo ? consumeReplyTo({ ...overrides }) : { ...overrides };
 }
 
@@ -62,6 +72,9 @@ function chunkTextForPlan(params: {
     : params.chunker(params.text, params.limit);
 }
 
+/**
+ * Plans text sends, preserving reply-to policy across chunked delivery units.
+ */
 export function planOutboundTextMessageUnits(params: {
   text: string;
   overrides: OutboundMessageSendOverrides;
@@ -126,6 +139,9 @@ export function planOutboundTextMessageUnits(params: {
   }).map(planChunkedTextUnit);
 }
 
+/**
+ * Plans media sends with a caption only on the leading media unit.
+ */
 export function planOutboundMediaMessageUnits(params: {
   caption: string;
   mediaUrls: readonly string[];

@@ -441,7 +441,7 @@ describe("msteams monitor handler authz", () => {
       tenantId: "tenant-1",
       aadObjectId: "new-user-aad",
       channelId: "msteams",
-      serviceUrl: "https://smba.trafficmanager.net/amer/",
+      serviceUrl: "https://smba.trafficmanager.net/amer",
       locale: "en-US",
       timezone: "America/New_York",
     });
@@ -505,6 +505,48 @@ describe("msteams monitor handler authz", () => {
     const storedConversation = recordFromMockCall(storedRef.conversation);
     expect(storedConversation.id).toBe("19:team-channel@thread.tacv2");
     expect(storedConversation.tenantId).toBe("tenant-from-channel-data");
+  });
+
+  it("does not persist blocked serviceUrl hosts in conversation references", async () => {
+    const { conversationStore, deps } = createDeps({
+      channels: {
+        msteams: {
+          dmPolicy: "allowlist",
+          allowFrom: ["sender-aad"],
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    await handler({
+      activity: {
+        id: "msg-blocked-service-url",
+        type: "message",
+        text: "hello",
+        from: {
+          id: "sender-id",
+          aadObjectId: "sender-aad",
+          name: "Sender",
+        },
+        recipient: {
+          id: "bot-id",
+          name: "Bot",
+        },
+        conversation: {
+          id: "a:personal-chat",
+          conversationType: "personal",
+        },
+        channelId: "msteams",
+        serviceUrl: "https://attacker.example.com/teams/",
+        channelData: {},
+        attachments: [],
+      },
+      sendActivity: vi.fn(async () => undefined),
+    } as unknown as Parameters<typeof handler>[0]);
+
+    expect(conversationStore.upsert).toHaveBeenCalledTimes(1);
+    const storedRef = recordFromMockCall(mockCallArg(conversationStore.upsert, 0, 1));
+    expect("serviceUrl" in storedRef).toBe(false);
   });
 
   it("stores no tenantId when channelData.tenant is missing", async () => {
@@ -886,8 +928,12 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.ReplyToBody).toBe("Quoted body");
-    expect(ctx.ReplyToSender).toBe("Alice");
+    expect(ctx.SupplementalContext).toMatchObject({
+      quote: {
+        body: "Quoted body",
+        sender: "Alice",
+      },
+    });
   });
 
   it("drops quote context when attachment metadata disagrees with a blocked parent sender", async () => {
@@ -900,8 +946,7 @@ describe("msteams monitor handler authz", () => {
     );
 
     const ctx = recordFromMockCall(ctxPayload);
-    expect(ctx.ReplyToBody).toBeUndefined();
-    expect(ctx.ReplyToSender).toBeUndefined();
+    expect(ctx.SupplementalContext).toEqual({});
     expect(ctx.BodyForAgent).toBe("Current message");
   });
 });

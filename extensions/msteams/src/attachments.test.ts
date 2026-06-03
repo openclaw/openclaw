@@ -154,7 +154,6 @@ type DownloadedMediaExpectation = { path?: string; placeholder?: string };
 
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_ALLOW_HOSTS = [TEST_HOST];
-const MEDIA_PLACEHOLDER_IMAGE = "<media:image>";
 const MEDIA_PLACEHOLDER_DOCUMENT = "<media:document>";
 const formatDocumentPlaceholder = (count: number) =>
   count > 1 ? `${MEDIA_PLACEHOLDER_DOCUMENT} (${count} files)` : MEDIA_PLACEHOLDER_DOCUMENT;
@@ -198,8 +197,6 @@ const createTeamsFileDownloadInfoAttachments = (
       content: { downloadUrl, fileType },
     }),
   );
-const createHostedContentsWithType = (contentType: string, ...ids: string[]) =>
-  ids.map((id) => ({ id, contentType, contentBytes: PNG_BASE64 }));
 type BinaryPayload = Uint8Array | string;
 const createBufferResponse = (payload: BinaryPayload, contentType: string, status = 200) => {
   const raw = typeof payload === "string" ? Buffer.from(payload) : payload;
@@ -208,8 +205,6 @@ const createBufferResponse = (payload: BinaryPayload, contentType: string, statu
     headers: { "content-type": contentType },
   });
 };
-const createJsonResponse = (payload: unknown, status = 200) =>
-  new Response(JSON.stringify(payload), { status });
 const createTextResponse = (body: string, status = 200) => new Response(body, { status });
 const createNotFoundResponse = () => new Response("not found", { status: 404 });
 const createRedirectResponse = (location: string, status = 302) =>
@@ -266,14 +261,6 @@ const expectMockCallState = (mockFn: unknown, shouldCall: boolean) => {
   } else {
     expect(mockFn).not.toHaveBeenCalled();
   }
-};
-
-const firstMockCall = (mock: ReturnType<typeof vi.fn>, label: string): unknown[] => {
-  const [call] = mock.mock.calls;
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
 };
 
 const expectAttachmentMediaLength = (media: DownloadedMedia, expectedLength: number) => {
@@ -703,7 +690,7 @@ describe("msteams attachments", () => {
         });
         // Should have hit the original host, NOT graph shares.
         expect(calledUrls).toContain(directUrl);
-        expect(calledUrls.filter((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toEqual([]);
+        expect(calledUrls.some((url) => url.startsWith(GRAPH_SHARES_URL_PREFIX))).toBe(false);
       });
     });
 
@@ -724,14 +711,12 @@ describe("msteams attachments", () => {
         );
 
         expectAttachmentMediaLength(media, 0);
-        expect(logger.warn).toHaveBeenCalledTimes(1);
-        expect(firstMockCall(logger.warn, "logger.warn")).toStrictEqual([
-          "msteams attachment download failed",
-          {
-            error: "HTTP 500",
-            host: "x",
-          },
-        ]);
+
+        // Migration inlines host + error into the message text — the structured
+        // meta object was being dropped by the logger formatter pre-migration.
+        expect(logger.warn).toHaveBeenCalledWith(
+          expect.stringMatching(/msteams attachment download failed.*host=.*error=.*HTTP 500/),
+        );
       });
 
       it("does not log when downloads succeed", async () => {

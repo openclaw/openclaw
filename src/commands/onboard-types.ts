@@ -59,7 +59,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   lmstudioApiKey?: string;
   customModelId?: string;
   customProviderId?: string;
-  customCompatibility?: "openai" | "anthropic";
+  customCompatibility?: "openai" | "openai-responses" | "anthropic";
   customImageInput?: boolean;
   gatewayPort?: number;
   gatewayBind?: GatewayBind;
@@ -79,6 +79,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   skipSearch?: boolean;
   skipHealth?: boolean;
   skipUi?: boolean;
+  suppressGatewayTokenOutput?: boolean;
   skipHooks?: boolean;
   nodeManager?: NodeManagerChoice;
   remoteUrl?: string;

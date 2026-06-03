@@ -153,6 +153,9 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => ({
     manifestRegistry: mockLoadPluginManifestRegistry(),
   }),
+  resolvePluginMetadataSnapshot: () => ({
+    manifestRegistry: mockLoadPluginManifestRegistry(),
+  }),
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
@@ -317,6 +320,20 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
+  it("accepts the shipped deprecated bundledDiscovery marker", () => {
+    const result = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["telegram"],
+        bundledDiscovery: "compat",
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.plugins?.bundledDiscovery).toBe("compat");
+    }
+  });
+
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
 
@@ -364,7 +381,7 @@ describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () =
   });
 
   it("loads a plugin metadata snapshot once during plugin validation", () => {
-    const loadPluginMetadataSnapshot = vi.fn((configForTest: unknown) => ({
+    const loadPluginMetadataSnapshot = vi.fn((_configForTest: unknown) => ({
       manifestRegistry: createPluginConfigSchemaRegistry(),
     }));
 

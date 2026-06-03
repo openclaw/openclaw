@@ -1,5 +1,6 @@
 import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
 import { resolveOllamaApiBase } from "./provider-models.js";
@@ -17,9 +18,6 @@ type OllamaDiscoveryContext = {
   config: {
     models?: {
       providers?: Record<string, ModelProviderConfig | undefined>;
-      ollamaDiscovery?: {
-        enabled?: boolean;
-      };
     };
   };
   env: NodeJS.ProcessEnv;
@@ -28,10 +26,6 @@ type OllamaDiscoveryContext = {
     discoveryApiKey?: unknown;
   };
 };
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function readStringValue(value: unknown): string | undefined {
   if (typeof value === "string") {
@@ -242,8 +236,7 @@ export async function resolveOllamaDiscoveryResult(params: {
   const hasRemoteOllamaApiProvider = hasExplicitRemoteOllamaApiProvider(
     params.ctx.config.models?.providers,
   );
-  const discoveryEnabled =
-    params.pluginConfig.discovery?.enabled ?? params.ctx.config.models?.ollamaDiscovery?.enabled;
+  const discoveryEnabled = params.pluginConfig.discovery?.enabled;
   if (!hasExplicitModels && discoveryEnabled === false) {
     return null;
   }

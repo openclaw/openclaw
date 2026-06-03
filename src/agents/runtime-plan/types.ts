@@ -1,5 +1,5 @@
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
+import type { AgentTool } from "../runtime/index.js";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
 
@@ -76,17 +76,28 @@ export type AgentRuntimeProviderHandle = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   applyAutoEnable?: boolean;
-  bundledProviderAllowlistCompat?: boolean;
   bundledProviderVitestCompat?: boolean;
 };
 
 export type AgentRuntimeInteractiveButtonStyle = "primary" | "secondary" | "success" | "danger";
 
+export type AgentRuntimeMessagePresentationAction =
+  | {
+      type: "command";
+      command: string;
+    }
+  | {
+      type: "callback";
+      value: string;
+    };
+
 /** Portable action control exposed to agent runtime reply payloads. */
 export type AgentRuntimeMessagePresentationButton = {
   /** User-visible button label. */
   label: string;
-  /** Callback command or opaque value sent when pressed. */
+  /** Typed action sent when pressed. */
+  action?: AgentRuntimeMessagePresentationAction;
+  /** Legacy opaque callback value sent when pressed. */
   value?: string;
   /** External URL opened by the button. */
   url?: string;
@@ -104,8 +115,10 @@ export type AgentRuntimeMessagePresentationButton = {
 export type AgentRuntimeMessagePresentationOption = {
   /** User-visible option label. */
   label: string;
-  /** Callback command or opaque value sent when selected. */
-  value: string;
+  /** Typed action sent when selected. */
+  action?: AgentRuntimeMessagePresentationAction;
+  /** Legacy opaque callback value sent when selected. */
+  value?: string;
 };
 
 /**
@@ -217,6 +230,7 @@ export type AgentRuntimeReplyPayload = {
   };
   isError?: boolean;
   isReasoning?: boolean;
+  isReasoningSnapshot?: boolean;
   isCompactionNotice?: boolean;
   isFallbackNotice?: boolean;
   isStatusNotice?: boolean;
