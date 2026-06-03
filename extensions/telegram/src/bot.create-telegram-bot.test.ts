@@ -3843,24 +3843,13 @@ describe("createTelegramBot", () => {
     expect(settings.groupSystemPrompt).toBe("Group prompt\n\nTopic prompt");
     expect(settings.skillFilter).toStrictEqual([]);
   });
-  it("delivers native /compact ack when buffered dispatch drops final delivery", async () => {
+  it("delivers native /compact status notice directly without dispatch pipeline", async () => {
     commandSpy.mockClear();
     sendMessageSpy.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
     replySpy.mockResolvedValue({
       text: "⚙️ Compaction skipped: already_compacted_recently • ctx 0%",
       isStatusNotice: true,
-    });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) => {
-      if (params.replyResolver) {
-        await params.replyResolver(params.ctx, params.replyOptions);
-      } else {
-        await replySpy(params.ctx, params.replyOptions);
-      }
-      return {
-        queuedFinal: false,
-        counts: { block: 0, final: 1, tool: 0 },
-      };
     });
 
     loadConfig.mockReturnValue({
@@ -3896,6 +3885,7 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalled();
     const compactReply = requireValue(sendMessageSpy.mock.calls.at(0), "compact reply call");
     expect(String(compactReply[1])).toContain("Compaction skipped");
+    expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
   it("threads native command replies inside topics", async () => {

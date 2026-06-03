@@ -31,10 +31,7 @@ import type {
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
-import {
-  resolveSendableOutboundReplyParts,
-  type ReplyPayload,
-} from "openclaw/plugin-sdk/reply-payload";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -1311,11 +1308,12 @@ export const registerTelegramNativeCommands = ({
           );
 
         if (isDirectStatusNotice) {
+          const replyToId = String(msg.message_id);
+          const repliesForDelivery = directReplies.map((r) =>
+            r.replyToId ? r : Object.assign({}, r, { replyToId }),
+          );
           const result = await deliverReplies({
-            replies: directReplies.map((r) => ({
-              ...r,
-              replyToId: r.replyToId ?? String(msg.message_id),
-            })),
+            replies: repliesForDelivery,
             ...deliveryBaseOptions,
             silent: false,
           });

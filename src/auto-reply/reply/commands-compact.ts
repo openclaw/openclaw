@@ -2,7 +2,6 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";

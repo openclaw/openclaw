@@ -33,6 +33,7 @@ type ReplyPayloadLike = {
   mediaUrl?: string;
   mediaUrls?: string[];
   replyToId?: string;
+  isStatusNotice?: boolean;
 };
 
 const { sessionStorePath } = vi.hoisted(() => {
