@@ -82,9 +82,62 @@ describe("createChannelProgressDraftCompositor", () => {
     });
 
     await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
-    await progress.pushReasoningProgress("<think>Checking files</think>");
+    await progress.pushReasoningProgress("<think>Checking files</think>Final answer prose");
 
     expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n• _Checking files_", undefined);
+  });
+
+  it("waits for complete reasoning tags before showing tagged progress", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    const calls = update.mock.calls.length;
+    await progress.pushReasoningProgress("<thin");
+
+    expect(update.mock.calls).toHaveLength(calls);
+  });
+
+  it("preserves partial reasoning tag buffers across deltas", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushReasoningProgress("<thin");
+    await progress.pushReasoningProgress("k>Checking files</think>Final answer prose");
+
+    expect(update).toHaveBeenLastCalledWith("Shelling\n\n🛠️ Exec\n• _Checking files_", undefined);
+  });
+
+  it("keeps literal reasoning tags inside code blocks", async () => {
+    const update = vi.fn();
+    const progress = createChannelProgressDraftCompositor({
+      entry: { streaming: { mode: "progress", progress: { label: "Shelling" } } },
+      mode: "progress",
+      active: true,
+      seed: "test",
+      update,
+    });
+
+    await progress.pushToolProgress("🛠️ Exec", { startImmediately: true });
+    await progress.pushReasoningProgress("```html\n<think>literal</think>\n```");
+
+    expect(update).toHaveBeenLastCalledWith(
+      "Shelling\n\n🛠️ Exec\n• _```html <think>literal</think> ```_",
+      undefined,
+    );
   });
 
   it("replaces repeated formatted reasoning snapshots", async () => {
