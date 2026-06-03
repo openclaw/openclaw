@@ -560,6 +560,15 @@ export type PluginHookReplyPayloadSendingEvent = {
   channel?: string;
   sessionKey?: string;
   runId?: string;
+  /**
+   * Per-turn usage snapshot — **best-effort, present only on live dispatcher
+   * delivery.** It is intentionally absent on routed durable deliveries and on
+   * recovered queue replays: those re-run this hook as a stateless transform over
+   * the original payload (see `QueuedDeliveryPayload`), and a point-in-time usage
+   * snapshot is not stateless — replaying it after a restart would surface stale
+   * numbers. Consumers (e.g. a usage footer) must treat this as optional and
+   * degrade gracefully when it is undefined.
+   */
   usageState?: PluginHookReplyUsageState;
 };
 
