@@ -758,7 +758,6 @@ describe("memory watcher config", () => {
   it("routes directories through native recursive watch on Windows", async () => {
     // Windows uses ReadDirectoryChangesW for `fs.watch(dir, { recursive: true })`,
     // which is a single-watcher native recursive backend (constant FD profile).
-    // The PR explicitly opts Windows into the native path alongside macOS.
     const originalPlatformLocal = process.platform;
     try {
       Object.defineProperty(process, "platform", { value: "win32", configurable: true });
@@ -858,10 +857,9 @@ describe("memory watcher config", () => {
   it("treats null parent-watcher filename as an unknown event and re-checks the inode", async () => {
     // Node fs.watch can emit `filename: null` on some platforms even on
     // otherwise-supported recursive backends; the parent watcher must
-    // not silently drop it — it must fall through to the inode check
-    // (clawsweeper [P2] on 5df68c…). With statSync returning the
-    // recorded inode (no real replacement), the no-action path is taken
-    // and no teardown/reattach happens.
+    // not silently drop it. With statSync returning the recorded inode
+    // (no real replacement), the no-action path is taken and no
+    // teardown/reattach happens.
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig({ extraPaths: [] });
     await expectWatcherManager(cfg);
@@ -902,7 +900,7 @@ describe("memory watcher config", () => {
     // paired parent watcher must also be closed — otherwise a later
     // root-replacement event would reattach native coverage on top of an
     // already-installed chokidar fallback, creating duplicate handles
-    // and event paths (clawsweeper [P3] on 5df68c…).
+    // and event paths.
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig({ extraPaths: [] });
     await expectWatcherManager(cfg);

@@ -104,7 +104,7 @@ const SESSION_DIRTY_DEBOUNCE_MS = 5000;
 const SESSION_DELTA_READ_CHUNK_BYTES = 64 * 1024;
 const SESSION_SYNC_YIELD_EVERY = 10;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
-// Warn only after real watcher state is high; #86613 reproduced FD pressure in large trees.
+// Warn when startup watcher state is large enough to risk FD pressure.
 const MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD = 2_000;
 const MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS = 10_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
@@ -581,8 +581,7 @@ export abstract class MemoryManagerSyncOps {
     };
     // Native recursive fs.watch for directory paths — one watcher per
     // directory on macOS (FSEvents) and Windows (ReadDirectoryChangesW).
-    // Avoids chokidar's per-file fs.watch fan-out that opened ~12k REG FDs
-    // on multi-thousand-`.md` memory trees (issue #86613).
+    // Avoids chokidar's per-file fs.watch fan-out on large memory trees.
     //
     // Linux is intentionally handled by a separate directory-tree watcher
     // below: Node's `fs.watch(dir, { recursive: true })` routes through
@@ -771,9 +770,8 @@ export abstract class MemoryManagerSyncOps {
         (_eventType, filename) => {
           // Per Node docs `filename` can be null on some platforms even
           // when the parent watcher is otherwise supported. Treat null
-          // as an unknown event and re-check the watched directory's
-          // inode (clawsweeper review [P2] 5df68c…); otherwise filter
-          // by basename so sibling events don't trigger reattach.
+          // as an unknown event and re-check the watched directory's inode;
+          // otherwise filter by basename so sibling events don't trigger reattach.
           if (filename !== null && filename !== baseName) {
             return;
           }
@@ -1137,9 +1135,7 @@ export abstract class MemoryManagerSyncOps {
     try {
       if (this.watcher) {
         // Existing chokidar watcher (handling MEMORY.md and/or other file
-        // paths) — extend it to cover this directory too. The pressure warning
-        // is startup-only for now; add a delayed check here if runtime fallback
-        // pressure needs its own warning later.
+        // paths) — extend it to cover this directory too.
         this.watcher.add(dir);
         return;
       }

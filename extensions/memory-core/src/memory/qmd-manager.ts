@@ -80,7 +80,7 @@ const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_WRITE_LOCK_MIN_WAIT_MS = 5 * 60 * 1000;
-// Warn only after real watcher state is high; #86613 reproduced FD pressure in large trees.
+// Warn when QMD watcher state is large enough to risk FD pressure.
 const QMD_WATCH_PRESSURE_WARNING_THRESHOLD = 2_000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
   factor: 1.2,
