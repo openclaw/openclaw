@@ -68,11 +68,13 @@ export type ChannelIngressPluginId = string & {
   readonly [CHANNEL_INGRESS_PLUGIN_ID]: true;
 };
 
+/** Selector for a single access-graph gate in an ingress decision. */
 export type ChannelIngressGateSelector = {
   phase: IngressGatePhase;
   kind: IngressGateKind;
 };
 
+/** Canonical direct/group and command/non-command decisions for one inbound event. */
 export type ChannelIngressDecisionBundle = {
   dm: ChannelIngressDecision;
   group: ChannelIngressDecision;
@@ -80,6 +82,7 @@ export type ChannelIngressDecisionBundle = {
   groupCommand: ChannelIngressDecision;
 };
 
+/** Side effect produced while handling an ingress decision before turn admission is mapped. */
 export type ChannelIngressSideEffectResult =
   | { kind: "none" }
   | { kind: "pairing-reply-sent" }
@@ -94,6 +97,7 @@ export type RedactedIngressDiagnostics = {
   reasonCode: IngressReasonCode;
 };
 
+/** Stable selectors for the ingress gates most plugin SDK callers inspect. */
 export const CHANNEL_INGRESS_GATE_SELECTORS = {
   command: { phase: "command", kind: "command" },
   activation: { phase: "activation", kind: "mention" },
@@ -189,6 +193,7 @@ function defaultIngressMatchKey(params: {
   return `${params.kind}:${params.value}`;
 }
 
+/** Find the first gate matching a selector in an ingress decision graph. */
 export function findChannelIngressGate(
   decision: ChannelIngressDecision,
   selector: ChannelIngressGateSelector,
@@ -198,6 +203,7 @@ export function findChannelIngressGate(
   );
 }
 
+/** Find the sender gate for a DM or group ingress decision. */
 export function findChannelIngressSenderGate(
   decision: ChannelIngressDecision,
   params: { isGroup: boolean },
@@ -210,12 +216,14 @@ export function findChannelIngressSenderGate(
   );
 }
 
+/** Find the command authorization gate in an ingress decision, when command policy ran. */
 export function findChannelIngressCommandGate(
   decision: ChannelIngressDecision,
 ): AccessGraphGate | undefined {
   return findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.command);
 }
 
+/** Run base and command ingress decisions for both DM and group states. */
 export function decideChannelIngressBundle(params: {
   directState: ChannelIngressState;
   groupState: ChannelIngressState;
@@ -268,6 +276,7 @@ function projectDmDecision(
   return decision.admission === "drop" ? "deny" : "allow";
 }
 
+/** Project a full ingress decision graph into the legacy AccessFacts shape used by channels. */
 export function projectIngressAccessFacts(decision: ChannelIngressDecision): AccessFacts {
   const command = findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.command);
   const activation = findChannelIngressGate(decision, CHANNEL_INGRESS_GATE_SELECTORS.activation);
@@ -299,6 +308,8 @@ export function projectIngressAccessFacts(decision: ChannelIngressDecision): Acc
           useAccessGroups: command.command.useAccessGroups,
           allowTextCommands: command.command.allowTextCommands,
           modeWhenAccessGroupsOff: command.command.modeWhenAccessGroupsOff,
+          // Ingress decisions keep redacted gate facts; legacy AccessFacts preserves
+          // the authorizers property but does not expose individual sender entries.
           authorizers: [],
         }
       : undefined,
