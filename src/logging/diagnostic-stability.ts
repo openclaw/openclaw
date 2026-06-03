@@ -267,6 +267,24 @@ function assignReasonCode(
   }
 }
 
+function summarizeChannelTurnTarget(target: string | undefined): string | undefined {
+  const trimmed = target?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const prefixMatch = /^([A-Za-z][A-Za-z0-9_.-]{0,31}):/u.exec(trimmed);
+  if (prefixMatch?.[1]) {
+    return `kind:${prefixMatch[1].toLowerCase()}`;
+  }
+  if (/^-?\d+$/u.test(trimmed)) {
+    return "kind:numeric-id";
+  }
+  if (/^[+@]/u.test(trimmed) || trimmed.includes("@")) {
+    return "kind:contact";
+  }
+  return "kind:named";
+}
+
 function resolveDiagnosticLivenessRecordLevel(
   event: Extract<DiagnosticEventPayload, { type: "diagnostic.liveness.warning" }>,
 ): "warning" | "info" {
@@ -355,7 +373,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       break;
     case "channel.turn.event":
       record.channel = event.channel;
-      record.target = event.target;
+      record.target = summarizeChannelTurnTarget(event.target);
       record.turnId = event.turnId;
       record.sessionKey = event.sessionKey;
       record.messageId = event.messageId;

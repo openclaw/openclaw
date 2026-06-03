@@ -530,7 +530,48 @@ describe("diagnostic stability recorder", () => {
       }),
     ]);
     expect(snapshot.events[0]).not.toHaveProperty("accountId");
+    expect(snapshot.events[0]).toHaveProperty("target", "kind:named");
     expect(JSON.stringify(snapshot)).not.toContain("hello");
+    expect(JSON.stringify(snapshot)).not.toContain("sebastian");
+  });
+
+  it("summarizes channel turn targets without storing concrete destination ids", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-channel",
+      target: "channel:C123456789",
+      turnEventType: "turn.started",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-numeric",
+      target: "-100123456789",
+      turnEventType: "turn.started",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-contact",
+      target: "+49123456789",
+      turnEventType: "turn.started",
+    });
+
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.events.map((event) => event.target)).toEqual([
+      "kind:channel",
+      "kind:numeric-id",
+      "kind:contact",
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("C123456789");
+    expect(JSON.stringify(snapshot)).not.toContain("-100123456789");
+    expect(JSON.stringify(snapshot)).not.toContain("+49123456789");
   });
 
   it("keeps the newest events when capacity is exceeded", () => {
