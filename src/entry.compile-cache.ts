@@ -4,11 +4,17 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { enableCompileCache, getCompileCacheDir } from "node:module";
 import os from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import {
   runRespawnChildWithSignalBridge,
   type RespawnChildRuntime,
 } from "./process/respawn-child-runner.js";
+
+// Node 24.0–24.14 can deadlock during ESM module loading when compile cache is
+// enabled on Windows npm-global installs. The release CI pins 24.15+ and has
+// not reproduced the hang. Skip compile cache on affected versions.
+const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
 
 export function resolveEntryInstallRoot(entryFile: string): string {
   const entryDir = path.dirname(entryFile);
@@ -31,11 +37,33 @@ function isNodeCompileCacheRequested(env: NodeJS.ProcessEnv | undefined): boolea
   return env?.NODE_COMPILE_CACHE !== undefined && !isNodeCompileCacheDisabled(env);
 }
 
+export function isNodeVersionAffectedByCompileCacheDeadlock(
+  nodeVersion: string | undefined,
+): boolean {
+  if (!nodeVersion) {
+    return false;
+  }
+  const match = nodeVersion.match(/^(\d+)\.(\d+)/);
+  if (!match) {
+    return false;
+  }
+  const major = Number.parseInt(match[1], 10);
+  const minor = Number.parseInt(match[2], 10);
+  if (major !== 24) {
+    return false;
+  }
+  return minor < MIN_COMPILE_CACHE_NODE_24_MINOR;
+}
+
 export function shouldEnableOpenClawCompileCache(params: {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
+  nodeVersion?: string;
 }): boolean {
   if (isNodeCompileCacheDisabled(params.env)) {
+    return false;
+  }
+  if (isNodeVersionAffectedByCompileCacheDeadlock(params.nodeVersion ?? process.versions.node)) {
     return false;
   }
   return !isSourceCheckoutInstallRoot(params.installRoot);
