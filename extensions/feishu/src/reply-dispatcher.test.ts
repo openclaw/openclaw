@@ -2034,25 +2034,23 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     // resolveFeishuRuntimeAccount (shared mock) throws when called with the
     // unresolved exec-SecretRef cfg; succeeds when called with resolved cfg.
     // This proves the dispatcher resolves credentials BEFORE the strict lookup.
-    resolveFeishuAccountMock.mockImplementation(
-      (p: { cfg: typeof execSecretCfg | typeof resolvedCfg }) => {
-        const feishu = (p.cfg as { channels?: { feishu?: { appSecret?: unknown } } })?.channels
-          ?.feishu;
-        if (typeof feishu?.appSecret !== "string") {
-          throw new Error("FeishuSecretRefUnavailableError: exec SecretRef in strict mode");
-        }
-        return {
-          accountId: "main",
-          config: { renderMode: "auto", streaming: false },
-          appId: "cli_main",
-          appSecret: feishu.appSecret,
-          domain: "feishu",
-          enabled: true,
-          configured: true,
-          selectionSource: "fallback",
-        };
-      },
-    );
+    resolveFeishuAccountMock.mockImplementation((p: { cfg: unknown }) => {
+      const feishu = (p.cfg as { channels?: { feishu?: { appSecret?: unknown } } })?.channels
+        ?.feishu;
+      if (typeof feishu?.appSecret !== "string") {
+        throw new Error("FeishuSecretRefUnavailableError: exec SecretRef in strict mode");
+      }
+      return {
+        accountId: "main",
+        config: { renderMode: "auto", streaming: false },
+        appId: "cli_main",
+        appSecret: feishu.appSecret,
+        domain: "feishu",
+        enabled: true,
+        configured: true,
+        selectionSource: "fallback",
+      };
+    });
 
     useNonStreamingAutoAccount();
     await createFeishuReplyDispatcher({
