@@ -3577,7 +3577,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        // Force a generic rotation (tool-progress handoff)
         await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
         await dispatcherOptions.deliver(
           { text: "A".repeat(4000) + "B".repeat(4000) },
@@ -3592,7 +3591,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
       textLimit: 4000,
     });
 
-    // The stream should receive the first chunk ("A"s), not skip it because of activeChunkIndex being falsely incremented
     expect(answerDraftStream.update).toHaveBeenCalledWith("A".repeat(4000));
   });
 
@@ -3604,11 +3602,12 @@ describe("dispatchTelegramMessage draft streaming", () => {
       return { queuedFinal: true };
     });
 
-    // Provide a config that disables partial answer streams (e.g. block mode explicitly enabled)
     await dispatchWithContext({
       context: createContext(),
       streamMode: "partial",
-      telegramCfg: { streaming: { mode: "partial", block: { enabled: true } } } as any,
+      telegramCfg: {
+        streaming: { mode: "partial", block: { enabled: true } },
+      } satisfies Parameters<typeof dispatchTelegramMessage>[0]["telegramCfg"],
     });
 
     const deliveredTexts = deliverReplies.mock.calls.flatMap((call) =>

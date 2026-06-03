@@ -278,12 +278,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         : [text];
 
     const clampActiveChunkIndex = () =>
-      Math.min(lane.activeChunkIndex ?? 0, Math.max(0, chunks.length - 1));
+      Math.min(lane.activeChunkIndex, Math.max(0, chunks.length - 1));
     const activeChunkIndex = clampActiveChunkIndex();
-    const firstChunk = chunks[activeChunkIndex];
+    const activeChunk = chunks[activeChunkIndex];
     const remainingChunks = chunks.slice(activeChunkIndex + 1);
 
-    if (!firstChunk || firstChunk.length > params.draftMaxChars) {
+    if (!activeChunk || activeChunk.length > params.draftMaxChars) {
       return undefined;
     }
 
@@ -297,12 +297,11 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         deliveredText: deliveredStreamTextBeforeUpdate,
         finalText,
       }) &&
-      deliveredStreamTextBeforeUpdate.length > firstChunk.trimEnd().length;
+      deliveredStreamTextBeforeUpdate.length > activeChunk.trimEnd().length;
 
     const finalizeDeliveredPrefix = async (
       deliveredStreamText: string,
       messageId: number,
-      suffixSourceText = activeFullText,
     ): Promise<LaneDeliveryResult> => {
       lane.finalized = true;
       params.markDelivered();
@@ -321,7 +320,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
           }
         }
       }
-      const suffix = suffixSourceText.slice(deliveredStreamText.length);
+      const suffix = activeFullText.slice(deliveredStreamText.length);
       if (suffix.trim().length > 0) {
         for (const chunk of compactChunks(params.splitFinalTextForStream?.(suffix) ?? [])) {
           if (chunk.trim().length === 0) {
@@ -408,10 +407,10 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     }
 
     if (!deliveredPrefixBeforeUpdate) {
-      lane.lastPartialText = firstChunk;
+      lane.lastPartialText = activeChunk;
       lane.hasStreamedMessage = true;
       lane.finalized = false;
-      stream.update(firstChunk);
+      stream.update(activeChunk);
     }
     if (isFinal) {
       await params.stopDraftLane(lane);
@@ -419,7 +418,7 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       await params.flushDraftLane(lane);
     }
     const activeChunkIndexAfterStop = isFinal ? clampActiveChunkIndex() : activeChunkIndex;
-    const activeChunkAfterStop = chunks[activeChunkIndexAfterStop] ?? firstChunk;
+    const activeChunkAfterStop = chunks[activeChunkIndexAfterStop] ?? activeChunk;
     const remainingChunksAfterStop = chunks.slice(activeChunkIndexAfterStop + 1);
 
     const messageId = stream.messageId();
@@ -434,14 +433,14 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
 
     const deliveredStreamTextAfterStop = stream.lastDeliveredText?.();
     const activeChunkTextAfterStop = activeChunkAfterStop.trimEnd();
-    const retainedFirstChunkAfterStop =
+    const retainedActiveChunkAfterStop =
       activeChunkIndexAfterStop !== activeChunkIndex &&
-      deliveredStreamTextAfterStop === firstChunk.trimEnd();
+      deliveredStreamTextAfterStop === activeChunk.trimEnd();
     if (
       isFinal &&
       deliveredStreamTextAfterStop !== undefined &&
       deliveredStreamTextAfterStop !== activeChunkTextAfterStop &&
-      !retainedFirstChunkAfterStop
+      !retainedActiveChunkAfterStop
     ) {
       if (
         isDeliveredPrefix({ deliveredText: deliveredStreamTextAfterStop, finalText }) &&
