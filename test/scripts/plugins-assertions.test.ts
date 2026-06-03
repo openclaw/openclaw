@@ -142,10 +142,7 @@ describe("plugins Docker assertions", () => {
 
     for (const scriptPath of scripts) {
       const script = readFileSync(scriptPath, "utf8");
-      const scriptWithoutDefaultScratch = script.replace(
-        'mktemp -d "/tmp/openclaw-plugins.XXXXXX"',
-        "",
-      );
+      const scriptWithoutDefaultScratch = script.replace('mktemp -d "/tmp/openclaw-plugins.XXXXXX"', "");
       expect(script).toContain("OPENCLAW_PLUGINS_TMP_DIR");
       expect(scriptWithoutDefaultScratch).not.toMatch(
         /\/tmp\/(?:plugins|marketplace|demo-plugin|is-number|openclaw-plugin|openclaw-clawhub)/,

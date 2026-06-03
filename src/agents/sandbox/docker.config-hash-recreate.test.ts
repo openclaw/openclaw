@@ -213,8 +213,12 @@ describe("ensureSandboxContainer config-hash recreation", () => {
 
   it("recreates shared container when array-order change alters hash", async () => {
     const workspaceDir = makeTempDir();
-    const oldCfg = createSandboxConfig(["1.1.1.1", "8.8.8.8"], [`${workspaceDir}:/workspace:rw`]);
-    const newCfg = createSandboxConfig(["8.8.8.8", "1.1.1.1"], [`${workspaceDir}:/workspace:rw`]);
+    const oldCfg = createSandboxConfig(["1.1.1.1", "8.8.8.8"], [
+      `${workspaceDir}:/workspace:rw`,
+    ]);
+    const newCfg = createSandboxConfig(["8.8.8.8", "1.1.1.1"], [
+      `${workspaceDir}:/workspace:rw`,
+    ]);
 
     const oldHash = computeSandboxConfigHash({
       docker: oldCfg.docker,
@@ -320,7 +324,10 @@ describe("ensureSandboxContainer config-hash recreation", () => {
     const workspaceDir = makeTempDir();
     const customRoot = makeTempDir();
     const customUserFile = path.join(customRoot, "USER.md");
-    const cfg = createSandboxConfig(["1.1.1.1"], [`${customUserFile}:/workspace/USER.md:ro`]);
+    const cfg = createSandboxConfig(
+      ["1.1.1.1"],
+      [`${customUserFile}:/workspace/USER.md:ro`],
+    );
     cfg.docker.dangerouslyAllowExternalBindSources = true;
     const expectedHash = computeSandboxConfigHash({
       docker: cfg.docker,

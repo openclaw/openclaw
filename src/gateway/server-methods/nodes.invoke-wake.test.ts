@@ -1,7 +1,6 @@
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
 import {
   clearNodeWakeState,
   maybeSendNodeWakeNudge,
@@ -9,6 +8,7 @@ import {
   nodeHandlers,
   waitForNodeReconnect,
 } from "./nodes.js";
+import { expectRecordFields, requireRecord } from "../test-helpers.assertions.js";
 
 type MockNodeCommandPolicyParams = {
   command: string;

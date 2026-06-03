@@ -204,7 +204,9 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("rejects malformed cross-OS positive integer environment values", () => {
-    expect(parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {})).toBe(60);
+    expect(parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {})).toBe(
+      60,
+    );
     expect(
       parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {
         OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS: "25",

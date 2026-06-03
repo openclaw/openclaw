@@ -1,12 +1,12 @@
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { ModelCatalogProvider } from "@openclaw/model-catalog-core/model-catalog-types";
-import { asFiniteNumber } from "../../../packages/normalization-core/src/number-coercion.js";
-import { normalizeOptionalString } from "../../../packages/normalization-core/src/string-coerce.js";
-import { normalizeUniqueTrimmedStringList } from "../../../packages/normalization-core/src/string-normalization.js";
 import { parseClawHubPluginSpec } from "../../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec } from "../../infra/npm-registry-spec.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
+import { asFiniteNumber } from "../../../packages/normalization-core/src/number-coercion.js";
+import { normalizeOptionalString } from "../../../packages/normalization-core/src/string-coerce.js";
+import { normalizeUniqueTrimmedStringList } from "../../../packages/normalization-core/src/string-normalization.js";
 import { isRecord } from "../../utils.js";
 import type {
   OpenClawProviderIndex,
