@@ -220,6 +220,7 @@ function normalizePreview(commandText: string, commandPreview?: string | null): 
   return preview;
 }
 
+/** Resolves sanitized command and preview text for exec approval prompts. */
 export function resolveExecApprovalCommandDisplay(request: ExecApprovalRequestPayload): {
   /** Primary command text rendered in the approval prompt. */
   commandText: string;
