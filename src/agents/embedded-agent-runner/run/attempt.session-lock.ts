@@ -8,6 +8,7 @@ import { resolveGlobalSingleton } from "../../../shared/global-singleton.js";
 import { isSessionWriteLockAcquireError } from "../../session-write-lock-error.js";
 import type { acquireSessionWriteLock } from "../../session-write-lock.js";
 import { resolveEmbeddedSessionFileKey } from "../session-file-key.js";
+import { resolveEmbeddedAbortSettleTimeoutMs } from "./attempt.abort-settle-timeout.js";
 
 type SessionLock = Awaited<ReturnType<typeof acquireSessionWriteLock>>;
 type AcquireSessionWriteLock = typeof acquireSessionWriteLock;
@@ -586,6 +587,8 @@ export type EmbeddedAttemptSessionLockController = {
 export async function createEmbeddedAttemptSessionLockController(params: {
   acquireSessionWriteLock: AcquireSessionWriteLock;
   lockOptions: LockOptions;
+  /** Bounded wait before an abort release force-releases the held lock. */
+  abortReleaseTimeoutMs?: number;
 }): Promise<EmbeddedAttemptSessionLockController> {
   const acquireLock = async (): Promise<SessionLock> =>
     await params.acquireSessionWriteLock({
@@ -823,6 +826,97 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     }
   }
 
+  /**
+   * Abort-path release. Races the graceful fence release against a bounded
+   * settle window. A retained-lock write pinned behind an unsettled provider
+   * call (a hung stream that ignores abort) keeps `waitForRetainedLockIdle`
+   * pending forever; without the bound, the lock is only reclaimed by the
+   * `maxHoldMs` watchdog and every turn in between fails with
+   * `SessionWriteLockTimeoutError` (tulgey#225, upstream #86816 family).
+   * On timeout the underlying file lock is force-released and the controller
+   * is poisoned (`takeoverDetected`) so the aborted run cannot perform torn
+   * writes after losing ownership.
+   */
+  async function releaseHeldLockForAbortBounded(): Promise<void> {
+    if (!heldLock) {
+      await waitForHeldLockDrain();
+      return;
+    }
+    const boundMs = params.abortReleaseTimeoutMs ?? resolveEmbeddedAbortSettleTimeoutMs();
+    const raceWithBound = async <T>(promise: Promise<T>): Promise<T | "abort-bound"> => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise<"abort-bound">((resolve) => {
+            timer = setTimeout(() => resolve("abort-bound"), boundMs);
+            timer.unref?.();
+          }),
+        ]);
+      } finally {
+        if (timer) {
+          clearTimeout(timer);
+        }
+      }
+    };
+    const forceRelease = async (): Promise<void> => {
+      if (!heldLock) {
+        return;
+      }
+      const lock = heldLock;
+      heldLock = undefined;
+      takeoverDetected = true;
+      await lock.release();
+    };
+
+    const drainAcquisition = beginHeldLockDrain();
+    const drainOwner = await raceWithBound(drainAcquisition);
+    if (drainOwner === "abort-bound") {
+      // Another release path owns the drain and is itself stuck. Take release
+      // ownership directly (clearing `heldLock` makes the stuck path no-op when
+      // it resumes) and hand the eventually-acquired drain straight back.
+      void drainAcquisition.then((owner) => finishHeldLockDrain(owner));
+      await forceRelease();
+      return;
+    }
+    try {
+      const idle = await raceWithBound(waitForRetainedLockIdle());
+      if (!heldLock) {
+        return;
+      }
+      if (idle === true) {
+        // Retained writes settled in time: keep the graceful fence semantics.
+        const lock = heldLock;
+        heldLock = undefined;
+        try {
+          const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+          const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+          const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+          fenceFingerprint = fingerprint;
+          fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+          fenceGeneration =
+            ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+              ? ownedWrite.generation
+              : (trustedGeneration ?? fenceGeneration);
+          fenceActive = true;
+        } finally {
+          await lock.release();
+        }
+        return;
+      }
+      if (idle === false) {
+        // Abort issued from inside an active write context; mirror the
+        // graceful path and leave release to that write's unwind.
+        return;
+      }
+      // Bounded wait expired: a retained write is pinned behind an unsettled
+      // provider call. Force-release so the next turn can acquire the lock.
+      await forceRelease();
+    } finally {
+      finishHeldLockDrain(drainOwner);
+    }
+  }
+
   async function takeHeldLockAfterRetainedIdle(): Promise<SessionLock | undefined> {
     if (!heldLock) {
       return undefined;
@@ -902,7 +996,7 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       await releaseHeldLockWithFence();
     },
     async releaseHeldLockForAbort(): Promise<void> {
-      await releaseHeldLockWithFence();
+      await releaseHeldLockForAbortBounded();
     },
     refreshAfterOwnedSessionWrite(): void {
       if (fenceActive && !takeoverDetected) {

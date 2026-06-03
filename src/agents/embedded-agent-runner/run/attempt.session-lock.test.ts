@@ -163,6 +163,73 @@ describe("embedded attempt session lock lifecycle", () => {
     }
   });
 
+  it("force-releases the held lock when a retained write never settles (tulgey#225)", async () => {
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockStuck = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockStuck,
+      lockOptions,
+      abortReleaseTimeoutMs: 20,
+    });
+
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    // A retained-lock write pinned behind a provider call that never settles
+    // (hung stream that ignores abort).
+    void controller.withSessionWriteLock(async () => {
+      markWriteStarted();
+      await new Promise<void>(() => {});
+    });
+    await writeStarted;
+
+    await controller.releaseHeldLockForAbort();
+
+    expect(release).toHaveBeenCalledTimes(1);
+    // The aborted run lost ownership; later writes from it must not tear the
+    // session file out from under the next turn's lock.
+    await expect(controller.withSessionWriteLock(async () => {})).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    await controller.dispose();
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("abort release stays graceful when retained writes settle within the bound (tulgey#225)", async () => {
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockSettles = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockSettles,
+      lockOptions,
+      abortReleaseTimeoutMs: 5_000,
+    });
+
+    let finishWrite!: () => void;
+    const writeCanFinish = new Promise<void>((resolve) => {
+      finishWrite = resolve;
+    });
+    let markWriteStarted!: () => void;
+    const writeStarted = new Promise<void>((resolve) => {
+      markWriteStarted = resolve;
+    });
+    const activeWrite = controller.withSessionWriteLock(async () => {
+      markWriteStarted();
+      await writeCanFinish;
+    });
+    await writeStarted;
+
+    const abortRelease = controller.releaseHeldLockForAbort();
+    finishWrite();
+    await activeWrite;
+    await abortRelease;
+
+    expect(release).toHaveBeenCalledTimes(1);
+    // Graceful release keeps the fence active — no takeover poisoning.
+    await expect(controller.withSessionWriteLock(async () => {})).resolves.toBeUndefined();
+    await controller.dispose();
+  });
+
   it("releaseHeldLockForAbort and dispose are idempotent in succession (#86816)", async () => {
     const release = vi.fn(async () => {});
     const acquireSessionWriteLockLocal26 = vi.fn(async () => ({ release }));
