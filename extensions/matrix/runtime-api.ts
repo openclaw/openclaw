@@ -66,7 +66,10 @@ export function chunkTextForOutbound(text: string, limit: number): string[] {
     remaining = remaining.slice(breakAt).trimStart();
   }
   if (remaining.length > 0 || text.length === 0) {
-    chunks.push(remaining);
+    const finalChunk = remaining.trimEnd();
+    if (finalChunk.length > 0 || text.length === 0) {
+      chunks.push(finalChunk);
+    }
   }
   return chunks;
 }

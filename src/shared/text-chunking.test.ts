@@ -37,4 +37,25 @@ describe("shared/text-chunking", () => {
       "def",
     ]);
   });
+
+  it("trims trailing whitespace from the final chunk", () => {
+    // Issue #64036: final chunk was not trimmed like in-loop chunks
+    expect(chunkTextByBreakResolver("  ! ", 2, (w) => w.lastIndexOf(" ") || w.length)).toEqual([
+      "!",
+    ]);
+    expect(chunkTextByBreakResolver("a b ", 2, (w) => w.lastIndexOf(" ") || w.length)).toEqual([
+      "a",
+      "b",
+    ]);
+    // "abc   " with limit 6 fits in one chunk; not the same code path.
+    // Use a multi-chunk case instead:
+    expect(chunkTextByBreakResolver("abc   def ", 6, (w) => w.lastIndexOf(" "))).toEqual([
+      "abc",
+      "def",
+    ]);
+  });
+
+  it("skips empty final chunk after trimEnd", () => {
+    expect(chunkTextByBreakResolver("   ", 2, (w) => w.lastIndexOf(" ") || w.length)).toEqual([]);
+  });
 });
