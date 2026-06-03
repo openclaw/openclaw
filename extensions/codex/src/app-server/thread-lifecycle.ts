@@ -530,10 +530,19 @@ export async function startOrResumeThread(params: {
           userMcpServersConfigPatch,
           finalConfigPatch.configPatch,
         );
+        const fallbackModelProvider =
+          resolveCodexAppServerModelProvider({
+            provider: params.params.provider,
+            authProfileId,
+            authProfileStore: params.params.authProfileStore,
+            agentDir: params.params.agentDir,
+            config: params.params.config,
+          }) ?? binding.modelProvider;
         const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
           buildThreadResumeParams(params.params, {
             threadId: binding.threadId,
             authProfileId,
+            modelProvider: fallbackModelProvider,
             appServer: params.appServer,
             dynamicTools: params.dynamicTools,
             developerInstructions: params.developerInstructions,
@@ -549,13 +558,6 @@ export async function startOrResumeThread(params: {
         );
         throwIfAborted();
         const boundAuthProfileId = authProfileId;
-        const fallbackModelProvider = resolveCodexAppServerModelProvider({
-          provider: params.params.provider,
-          authProfileId: boundAuthProfileId,
-          authProfileStore: params.params.authProfileStore,
-          agentDir: params.params.agentDir,
-          config: params.params.config,
-        });
         const nextMcpServersFingerprint =
           params.mcpServersFingerprintEvaluated === true
             ? params.mcpServersFingerprint
@@ -934,6 +936,7 @@ export function buildThreadResumeParams(
   options: {
     threadId: string;
     authProfileId?: string;
+    modelProvider?: string | null;
     appServer: CodexAppServerRuntimeOptions;
     dynamicTools?: CodexDynamicToolSpec[];
     developerInstructions?: string;
@@ -942,13 +945,14 @@ export function buildThreadResumeParams(
     nativeCodeModeOnlyEnabled?: boolean;
   },
 ): CodexThreadResumeParams {
-  const modelProvider = resolveCodexAppServerModelProvider({
+  const resolvedModelProvider = resolveCodexAppServerModelProvider({
     provider: params.provider,
     authProfileId: options.authProfileId ?? params.authProfileId,
     authProfileStore: params.authProfileStore,
     agentDir: params.agentDir,
     config: params.config,
   });
+  const modelProvider = options.modelProvider ?? resolvedModelProvider;
   return {
     threadId: options.threadId,
     model: params.modelId,

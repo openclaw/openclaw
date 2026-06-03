@@ -163,12 +163,13 @@ export async function runCodexAppServerSideQuestion(
     agentId: sessionAgentId,
   });
   const authProfileId = params.authProfileId ?? binding.authProfileId;
-  const modelProvider = resolveCodexAppServerModelProvider({
-    provider: params.provider,
-    authProfileId,
-    agentDir: params.agentDir,
-    config: params.cfg,
-  });
+  const modelProvider =
+    resolveCodexAppServerModelProvider({
+      provider: params.provider,
+      authProfileId,
+      agentDir: params.agentDir,
+      config: params.cfg,
+    }) ?? binding.modelProvider;
   const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
     provider: params.provider,
     model: params.model,

@@ -4854,6 +4854,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const resumeRequest = requests.find((request) => request.method === "thread/resume");
     const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
+    expect(resumeRequestParams?.modelProvider).toBe("lmstudio");
     expect(resumeRequestParams?.approvalsReviewer).toBe("user");
     const turnRequest = requests.find((request) => request.method === "turn/start");
     const turnRequestParams = turnRequest?.params as Record<string, unknown> | undefined;
