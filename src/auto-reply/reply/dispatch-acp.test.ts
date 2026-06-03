@@ -51,10 +51,6 @@ const channelPluginMocks = vi.hoisted(() => ({
       return undefined;
     }
     return {
-      config: {
-        listAccountIds: () => [],
-        resolveAccount: () => ({}),
-      },
       capabilities: {
         tts: {
           voice: {
@@ -87,7 +83,12 @@ const ttsMocks = vi.hoisted(() => ({
   }),
   resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
   resolveStatusTtsSnapshot: vi.fn(
-    (): { autoMode: string; provider: string; maxLength: number; summarize: boolean } | null => ({
+    (): {
+      autoMode: string;
+      provider: string;
+      maxLength: number;
+      summarize: boolean;
+    } | null => ({
       autoMode: "always",
       provider: "auto",
       maxLength: 1500,
@@ -2385,7 +2386,7 @@ describe("tryDispatchAcpReply", () => {
       block: 1,
       final: 0,
     });
-    const result = await runDispatch({
+    await runDispatch({
       bodyForAgent: "reply",
       cfg,
       dispatcher,
