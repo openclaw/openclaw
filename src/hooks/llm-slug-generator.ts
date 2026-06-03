@@ -34,6 +34,7 @@ function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
 export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
+  model?: string;
 }): Promise<string | null> {
   let tempSessionFile: string | null = null;
 
@@ -53,10 +54,12 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    const { provider, model } = resolveDefaultModelForAgent({
-      cfg: params.cfg,
-      agentId,
-    });
+    const { provider, model } = params.model
+      ? { provider: undefined, model: params.model }
+      : resolveDefaultModelForAgent({
+          cfg: params.cfg,
+          agentId,
+        });
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
     const result = await runEmbeddedAgent({

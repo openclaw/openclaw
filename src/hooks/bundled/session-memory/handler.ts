@@ -232,8 +232,8 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
 
       if (sessionContent && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
-        // Use LLM to generate a descriptive slug
-        slug = await generateSlugViaLLM({ sessionContent, cfg });
+        // Use LLM to generate a descriptive slug, honoring hook-level model override
+        slug = await generateSlugViaLLM({ sessionContent, cfg, model: hookConfig?.model });
         log.debug("Generated slug", { slug });
       }
     }
