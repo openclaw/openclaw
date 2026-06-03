@@ -2,7 +2,11 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { resetFatalErrorHooksForTest, runFatalErrorHooks } from "../infra/fatal-error-hooks.js";
 import {
   installDiagnosticStabilityFatalHook,
@@ -124,6 +128,100 @@ describe("diagnostic stability bundles", () => {
     expect(raw).not.toContain("message body");
     expect(raw).not.toContain(secret);
     expect(raw).not.toContain(os.hostname());
+  });
+
+  it("preserves sanitized channel turn health and latency diagnostics in bundles", async () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageId: "msg-1",
+      turnEventType: "delivery.required",
+      status: "required",
+      messageAgeMs: 65_000,
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageId: "msg-1",
+      turnEventType: "turn.failed",
+      status: "invalid",
+      reason: "missing_visible_delivery",
+      completionAllowed: false,
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+      receivedToTurnStartMs: 12_000,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const result = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.restart_startup_failed",
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readResult = readDiagnosticStabilityBundleFileSync(result.path);
+    if (readResult.status !== "found") {
+      throw new Error(`expected readable bundle, got ${readResult.status}`);
+    }
+
+    expect(readResult.bundle.snapshot.events.at(-1)).toMatchObject({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      messageId: "msg-1",
+      reason: "missing_visible_delivery",
+      completionAllowed: false,
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+      receivedToTurnStartMs: 12_000,
+    });
+    expect(readResult.bundle.snapshot.summary.channelTurns).toMatchObject({
+      totalEvents: 2,
+      missingVisibleDelivery: 1,
+      health: {
+        status: "degraded",
+        issues: [
+          {
+            code: "missing_visible_delivery",
+            level: "degraded",
+            count: 1,
+          },
+          {
+            code: "stale_message_at_receive",
+            level: "degraded",
+            metric: "messageAgeMs",
+            valueMs: 65_000,
+          },
+          {
+            code: "slow_receive_to_turn_start",
+            level: "warning",
+            metric: "receivedToTurnStartMs",
+            valueMs: 12_000,
+          },
+        ],
+      },
+      latency: {
+        messageAgeMs: {
+          count: 1,
+          latestMs: 65_000,
+          maxMs: 65_000,
+        },
+        receivedToTurnStartMs: {
+          count: 1,
+          latestMs: 12_000,
+          maxMs: 12_000,
+        },
+      },
+    });
+    expect(JSON.stringify(readResult.bundle)).not.toContain("raw diagnostic");
   });
 
   it("skips empty recorder snapshots by default", () => {

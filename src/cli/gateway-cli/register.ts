@@ -243,7 +243,7 @@ function formatChannelTurnSlaSummary(
       channelTurns.deliveryFailed
     } invalid=${channelTurns.invalidCompletions} missingVisible=${
       channelTurns.missingVisibleDelivery
-    }`,
+    } health=${channelTurns.health.status}`,
   ];
 
   const channelBreakdown = Object.entries(channelTurns.byChannel)
@@ -296,6 +296,18 @@ function formatChannelTurnSlaSummary(
         ].filter(Boolean);
         lines.push(`    ${parts.join(" ")}`);
       }
+    }
+  }
+
+  if (channelTurns.health.issues.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Health issues:")}`);
+    for (const issue of channelTurns.health.issues.slice(0, 5)) {
+      const parts = [
+        `${issue.level}:${issue.code}`,
+        issue.metric && issue.valueMs !== undefined ? `${issue.metric}=${issue.valueMs}ms` : "",
+        issue.count !== undefined ? `count=${issue.count}` : "",
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")} · ${issue.guidance}`);
     }
   }
 

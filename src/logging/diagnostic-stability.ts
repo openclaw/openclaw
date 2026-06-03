@@ -37,6 +37,27 @@ type DiagnosticStabilityChannelTurnLatencySummary = {
   }>;
 };
 
+export type DiagnosticStabilityHealthStatus = "ok" | "warning" | "degraded";
+
+export type DiagnosticStabilityChannelTurnHealthIssue = {
+  code:
+    | "missing_visible_delivery"
+    | "stale_message_at_receive"
+    | "slow_receive_to_turn_start"
+    | "slow_start_to_delivery";
+  level: Exclude<DiagnosticStabilityHealthStatus, "ok">;
+  message: string;
+  metric?: string;
+  valueMs?: number;
+  count?: number;
+  guidance: string;
+};
+
+export type DiagnosticStabilityChannelTurnHealth = {
+  status: DiagnosticStabilityHealthStatus;
+  issues: DiagnosticStabilityChannelTurnHealthIssue[];
+};
+
 export type DiagnosticStabilityEventRecord = {
   seq: number;
   ts: number;
@@ -180,6 +201,7 @@ export type DiagnosticStabilitySnapshot = {
         reason?: string;
       }>;
       latency?: DiagnosticStabilityChannelTurnLatencySummary;
+      health: DiagnosticStabilityChannelTurnHealth;
     };
   };
 };
@@ -688,7 +710,20 @@ function summarizeRecords(
     latency: {
       recentSlow: [],
     },
+    health: {
+      status: "ok",
+      issues: [],
+    },
   };
+
+  function pushChannelTurnHealthIssue(issue: DiagnosticStabilityChannelTurnHealthIssue): void {
+    channelTurns.health.issues.push(issue);
+    if (issue.level === "degraded") {
+      channelTurns.health.status = "degraded";
+    } else if (channelTurns.health.status === "ok") {
+      channelTurns.health.status = "warning";
+    }
+  }
 
   function recordChannelTurnLatency(
     record: DiagnosticStabilityEventRecord,
@@ -795,6 +830,53 @@ function summarizeRecords(
       recordChannelTurnLatency(record, "startToDeliveryMs", record.startToDeliveryMs);
       recordChannelTurnLatency(record, "startToCompletionMs", record.startToCompletionMs);
     }
+  }
+
+  if (channelTurns.missingVisibleDelivery > 0) {
+    pushChannelTurnHealthIssue({
+      code: "missing_visible_delivery",
+      level: "degraded",
+      message: "Direct channel turn required a visible reply but none was recorded.",
+      count: channelTurns.missingVisibleDelivery,
+      guidance:
+        "Treat direct DM delivery as unhealthy; inspect message(action=send) dispatch before declaring the turn complete.",
+    });
+  }
+  const messageAgeMax = channelTurns.latency.messageAgeMs?.maxMs;
+  if (messageAgeMax !== undefined && messageAgeMax >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+    pushChannelTurnHealthIssue({
+      code: "stale_message_at_receive",
+      level: messageAgeMax >= 60_000 ? "degraded" : "warning",
+      message: "A channel message was already stale when the runtime recorded it.",
+      metric: "messageAgeMs",
+      valueMs: messageAgeMax,
+      guidance:
+        "Compare native channel send time with runtime receive time; investigate webhook/polling/gateway ingress before blaming the agent turn.",
+    });
+  }
+  const receiveToStartMax = channelTurns.latency.receivedToTurnStartMs?.maxMs;
+  if (receiveToStartMax !== undefined && receiveToStartMax >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+    pushChannelTurnHealthIssue({
+      code: "slow_receive_to_turn_start",
+      level: receiveToStartMax >= 60_000 ? "degraded" : "warning",
+      message: "A received channel message waited too long before a turn started.",
+      metric: "receivedToTurnStartMs",
+      valueMs: receiveToStartMax,
+      guidance:
+        "Inspect queue/session pressure and background work; direct control messages should get a fast turn or cancellation path.",
+    });
+  }
+  const startToDeliveryMax = channelTurns.latency.startToDeliveryMs?.maxMs;
+  if (startToDeliveryMax !== undefined && startToDeliveryMax >= 20_000) {
+    pushChannelTurnHealthIssue({
+      code: "slow_start_to_delivery",
+      level: "warning",
+      message: "A channel turn took too long to produce visible delivery after starting.",
+      metric: "startToDeliveryMs",
+      valueMs: startToDeliveryMax,
+      guidance:
+        "Use an early visible acknowledgement before long tool work; keep final delivery after verification.",
+    });
   }
 
   return {

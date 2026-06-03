@@ -441,6 +441,28 @@ describe("diagnostic stability recorder", () => {
       deliveryFailed: 1,
       invalidCompletions: 1,
       missingVisibleDelivery: 2,
+      health: {
+        status: "degraded",
+        issues: [
+          {
+            code: "missing_visible_delivery",
+            level: "degraded",
+            count: 2,
+          },
+          {
+            code: "stale_message_at_receive",
+            level: "warning",
+            metric: "messageAgeMs",
+            valueMs: 30_000,
+          },
+          {
+            code: "slow_receive_to_turn_start",
+            level: "warning",
+            metric: "receivedToTurnStartMs",
+            valueMs: 12_000,
+          },
+        ],
+      },
       byChannel: {
         telegram: {
           deliveryRequired: 1,
