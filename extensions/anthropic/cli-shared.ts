@@ -17,6 +17,13 @@ export {
 // consulting its local login state, so inherited shell overrides must not
 // steer OpenClaw-managed Claude CLI runs toward a different provider,
 // endpoint, token source, plugin/config tree, or telemetry bootstrap mode.
+// CLAUDECODE / CLAUDE_CODE_SESSION_ID / CLAUDE_CODE_ENTRYPOINT trip Claude
+// Code's own nesting guard: when OpenClaw itself runs inside a Claude Code
+// session those vars leak into the managed CLI child and Claude Code silently
+// exits without output, which surfaced as 0% completion on dispatched
+// coding-agent workers (issue #57858). CLAUDE_CODE_SESSION_ID is the marker
+// current Claude Code actually exports; CLAUDE_CODE_SESSION (no _ID) is kept
+// as a harmless no-op to also cover any older/future shorter-named variant.
 export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_API_KEY",
   "ANTHROPIC_API_KEY_OLD",
@@ -26,6 +33,7 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "ANTHROPIC_CUSTOM_HEADERS",
   "ANTHROPIC_OAUTH_TOKEN",
   "ANTHROPIC_UNIX_SOCKET",
+  "CLAUDECODE",
   "CLAUDE_CONFIG_DIR",
   "CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR",
   "CLAUDE_CODE_ENTRYPOINT",
@@ -36,6 +44,8 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "CLAUDE_CODE_PLUGIN_CACHE_DIR",
   "CLAUDE_CODE_PLUGIN_SEED_DIR",
   "CLAUDE_CODE_REMOTE",
+  "CLAUDE_CODE_SESSION",
+  "CLAUDE_CODE_SESSION_ID",
   "CLAUDE_CODE_USE_COWORK_PLUGINS",
   "CLAUDE_CODE_USE_BEDROCK",
   "CLAUDE_CODE_USE_FOUNDRY",

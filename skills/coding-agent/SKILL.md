@@ -41,6 +41,7 @@ Use for background feature builds, PR reviews, large refactors, and issue-to-PR 
 - Always launch with `background:true`.
 - Codex and OpenCode: use `pty:true`.
 - Claude Code: no PTY; use `claude --permission-mode bypassPermissions --print`.
+- Claude Code: always prefix the launch with `env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT` so a nested OpenClaw-inside-Claude-Code session does not inherit the parent's nesting guard and silently no-op the worker (issue #57858). `CLAUDE_CODE_SESSION_ID` is the marker current Claude Code actually exports.
 - Capture a real notification route before spawning.
 - Worker must send completion/failure via `openclaw message send`.
 - Do not rely on heartbeat, system events, or notify-on-exit.
@@ -93,7 +94,7 @@ bash pty:true background:true workdir:/path/repo command:"codex exec - < \"$PROM
 Claude Code:
 
 ```bash
-bash background:true workdir:/path/repo command:"claude --permission-mode bypassPermissions --print < \"$PROMPT\""
+bash background:true workdir:/path/repo command:"env -u CLAUDECODE -u CLAUDE_CODE_SESSION_ID -u CLAUDE_CODE_ENTRYPOINT claude --permission-mode bypassPermissions --print < \"$PROMPT\""
 ```
 
 OpenCode:
