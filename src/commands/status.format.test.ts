@@ -1,5 +1,24 @@
 import { describe, expect, it } from "vitest";
-import { formatPromptCacheCompact, formatTokensCompact } from "./status.format.js";
+import { formatKTokens, formatPromptCacheCompact, formatTokensCompact } from "./status.format.js";
+
+describe("formatKTokens", () => {
+  it("renders sub-1000 values as plain integers", () => {
+    expect(formatKTokens(0)).toBe("0");
+    expect(formatKTokens(420)).toBe("420");
+    expect(formatKTokens(999)).toBe("999");
+  });
+
+  it("renders 1000+ values as before", () => {
+    expect(formatKTokens(1000)).toBe("1.0k");
+    expect(formatKTokens(1200)).toBe("1.2k");
+    expect(formatKTokens(10_000)).toBe("10k");
+    expect(formatKTokens(12_000)).toBe("12k");
+  });
+
+  it("no longer rounds 999 up to 1.0k", () => {
+    expect(formatKTokens(999)).not.toBe("1.0k");
+  });
+});
 
 describe("status cache formatting", () => {
   it("formats explicit cache details for verbose status output", () => {

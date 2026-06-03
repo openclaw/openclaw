@@ -5,8 +5,12 @@ import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
-export const formatKTokens = (value: number) =>
-  `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+export const formatKTokens = (value: number) => {
+  if (value < 1000) {
+    return String(Math.round(value));
+  }
+  return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+};
 
 export const formatDuration = (ms: number | null | undefined) => {
   if (ms == null || !Number.isFinite(ms)) {
