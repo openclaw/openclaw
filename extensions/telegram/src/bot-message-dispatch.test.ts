@@ -1624,6 +1624,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Normal reply");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(3, trailingFinalStatusText);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(1);
+    expect(answerDraftStream.forceNewMessage.mock.invocationCallOrder[0]).toBeLessThan(
+      answerDraftStream.update.mock.invocationCallOrder[2],
+    );
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
@@ -2118,6 +2121,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Cracking\n\n`🛠️ Exec`");
     expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, trailingFinalStatusText);
     expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(2);
+    expect(answerDraftStream.forceNewMessage.mock.invocationCallOrder[1]).toBeLessThan(
+      answerDraftStream.update.mock.invocationCallOrder[1],
+    );
     expectDeliveredReply(0, { text: "Branch is up to date" });
   });
 
