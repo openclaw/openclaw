@@ -1,3 +1,6 @@
+/**
+ * Tests allowlist config edit helpers for flat, nested, and account-scoped records.
+ */
 import { describe, expect, it } from "vitest";
 import {
   buildDmGroupAccountAllowlistAdapter,
@@ -77,8 +80,8 @@ describe("createFlatAllowlistOverrideResolver", () => {
     },
   ])("$name", ({ account, expected }) => {
     const resolveOverrides = createFlatAllowlistOverrideResolver({
-      resolveRecord: (account: { channels?: Record<string, { users: string[] }> }) =>
-        account.channels,
+      resolveRecord: (accountValue: { channels?: Record<string, { users: string[] }> }) =>
+        accountValue.channels,
       label: (key) => key,
       resolveEntries: (value) => value.users,
     });
@@ -103,12 +106,12 @@ describe("createNestedAllowlistOverrideResolver", () => {
     },
   ])("$name", ({ account, expected }) => {
     const resolveOverrides = createNestedAllowlistOverrideResolver({
-      resolveRecord: (account: {
+      resolveRecord: (accountLocal: {
         groups?: Record<
           string,
           { allowFrom?: string[]; topics?: Record<string, { allowFrom?: string[] }> }
         >;
-      }) => account.groups,
+      }) => accountLocal.groups,
       outerLabel: (groupId) => groupId,
       resolveOuterEntries: (group) => group.allowFrom,
       resolveChildren: (group) => group.topics,
@@ -136,8 +139,8 @@ describe("createAccountScopedAllowlistNameResolver", () => {
     const resolveNames = createAccountScopedAllowlistNameResolver({
       resolveAccount: () => ({ token }),
       resolveToken: (account) => account.token,
-      resolveNames: async ({ token, entries }) =>
-        entries.map((entry) => ({ input: entry, resolved: true, name: `${token}:${entry}` })),
+      resolveNames: async ({ token: tokenLocal, entries }) =>
+        entries.map((entry) => ({ input: entry, resolved: true, name: `${tokenLocal}:${entry}` })),
     });
 
     expect(await resolveNames({ cfg: {}, accountId: "alt", scope: "dm", entries: ["a"] })).toEqual(

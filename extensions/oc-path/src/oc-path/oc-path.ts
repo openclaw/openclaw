@@ -362,6 +362,14 @@ export function parseOrdinalSeg(seg: string): number | null {
   return m === null || m[1] === undefined ? null : Number(m[1]);
 }
 
+export function parseArrayIndexSegment(seg: string, length: number): number | null {
+  if (!/^(0|[1-9]\d*)$/.test(seg)) {
+    return null;
+  }
+  const index = Number(seg);
+  return Number.isSafeInteger(index) && index >= 0 && index < length ? index : null;
+}
+
 /** Indexable containers provide `size`; keyed containers provide ordered `keys`. */
 export interface PositionalContainer {
   readonly indexable: boolean;
@@ -644,7 +652,7 @@ function scanBracketAware(s: string, onChar: ScanCallback, onUnbalanced: () => n
 /** First top-level occurrence of `ch` in `s`; -1 when absent. */
 export function indexOfTopLevel(s: string, ch: string): number {
   let result = -1;
-  const fail = (): never => {
+  const failLocal = (): never => {
     throw new OcPathError(`Unbalanced bracket/brace in oc:// path: ${s}`, s, "OC_PATH_UNBALANCED");
   };
   scanBracketAware(
@@ -656,7 +664,7 @@ export function indexOfTopLevel(s: string, ch: string): number {
       }
       return undefined;
     },
-    fail,
+    failLocal,
   );
   return result;
 }

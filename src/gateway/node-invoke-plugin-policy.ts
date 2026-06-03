@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
+import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type {
@@ -8,11 +9,12 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { NodeSession } from "./node-registry.js";
 import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
+// Plugin node.invoke policies are the last gateway-side guard before a
+// plugin-declared dangerous node command reaches the node transport.
 function parseScopes(client: GatewayClient | null): string[] {
   return Array.isArray(client?.connect?.scopes)
     ? client.connect.scopes.filter((scope): scope is string => typeof scope === "string")
@@ -30,6 +32,8 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   }
 }
 
+// Dangerous commands must have an explicit policy. Without this check, a plugin
+// could mark a command dangerous but rely on the gateway default allow path.
 function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command: string) {
   const normalizedCommand = command.trim();
   if (!normalizedCommand) {
@@ -54,10 +58,7 @@ function createApprovalRuntime(params: {
   }
   return {
     async request(input) {
-      const timeoutMs =
-        typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)
-          ? input.timeoutMs
-          : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+      const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
         title: input.title.slice(0, 80),
@@ -113,6 +114,7 @@ function createApprovalRuntime(params: {
   };
 }
 
+/** Applies the registered plugin policy for a node.invoke command, if one exists. */
 export async function applyPluginNodeInvokePolicy(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -141,6 +143,8 @@ export async function applyPluginNodeInvokePolicy(params: {
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
+    // Policies invoke the real node through this narrowed transport wrapper so
+    // they can retry/override params without getting direct registry access.
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       command: params.command,

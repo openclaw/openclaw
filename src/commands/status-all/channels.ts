@@ -1,4 +1,7 @@
 import fs from "node:fs";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { resolveInspectedChannelAccount } from "../../channels/account-inspection.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../../channels/account-snapshot-fields.js";
 import {
@@ -21,8 +24,6 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
-import { asRecord } from "../../shared/record-coerce.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   summarizeTokenConfig,
   type ChannelAccountTokenSummaryRow,
@@ -496,6 +497,10 @@ export async function buildChannelsTable(
       ...listExplicitConfiguredChannelIdsForConfig(cfg),
     ]),
   ].toSorted((left, right) => left.localeCompare(right));
+  const explicitConfiguredChannelIds = new Set([
+    ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
+    ...listExplicitConfiguredChannelIdsForConfig(cfg),
+  ]);
   for (const channelId of missingCandidateChannelIds) {
     if (visibleChannelIds.has(channelId)) {
       continue;
@@ -506,6 +511,16 @@ export async function buildChannelsTable(
       channelId,
     });
     if (!hint || hint.channelId !== channelId) {
+      if (!includeSetupFallbackPlugins && explicitConfiguredChannelIds.has(channelId)) {
+        rows.push({
+          id: channelId,
+          label: sanitizeForLog(channelId).trim() || "configured-channel",
+          enabled: true,
+          state: "setup",
+          detail: "configured; status unavailable in fast mode",
+        });
+        visibleChannelIds.add(channelId);
+      }
       continue;
     }
     rows.push({
@@ -527,7 +542,7 @@ export async function buildChannelsTable(
       }
       rows.push({
         id: channelId,
-        label: channelId,
+        label: sanitizeForLog(channelId).trim() || "configured-channel",
         enabled: true,
         state: "setup",
         detail: "configured; status unavailable in fast mode",

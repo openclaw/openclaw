@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getBundledChannelSetupPlugin } from "../../channels/plugins/bundled.js";
 import { parseOptionalDelimitedEntries } from "../../channels/plugins/helpers.js";
@@ -18,7 +19,6 @@ import { parseStrictNonNegativeInteger } from "../../infra/parse-finite-number.j
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../../wizard/prompts.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
@@ -67,8 +67,8 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
           }),
       )
     : await import("../../channels/plugins/catalog.js").then(
-        ({ listChannelPluginCatalogEntries }) =>
-          listChannelPluginCatalogEntries({ excludeWorkspace: true }),
+        ({ listRawChannelPluginCatalogEntries }) =>
+          listRawChannelPluginCatalogEntries({ excludeWorkspace: true }),
       );
   return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
@@ -166,7 +166,7 @@ async function channelsAddCommandImpl(
     const accountIds: Partial<Record<ChannelChoice, string>> = {};
     const resolvedPlugins = new Map<ChannelChoice, ChannelSetupPlugin>();
     await prompter.intro("Channel setup");
-    let nextConfig = await onboardChannels.setupChannels(cfg, runtime, prompter, {
+    let nextConfigLocal = await onboardChannels.setupChannels(cfg, runtime, prompter, {
       allowDisable: false,
       allowSignalInstall: true,
       onPostWriteHook: (hook) => {
@@ -198,18 +198,18 @@ async function channelsAddCommandImpl(
       for (const channel of selection) {
         const accountId = accountIds[channel] ?? DEFAULT_ACCOUNT_ID;
         const plugin = resolvedPlugins.get(channel) ?? getLoadedChannelPlugin(channel);
-        const account = plugin?.config.resolveAccount(nextConfig, accountId) as
+        const account = plugin?.config.resolveAccount(nextConfigLocal, accountId) as
           | { name?: string }
           | undefined;
-        const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
+        const snapshot = plugin?.config.describeAccount?.(account, nextConfigLocal);
         const existingName = snapshot?.name ?? account?.name;
         const name = await prompter.text({
           message: `${channel} display name for account "${accountId}"`,
           initialValue: existingName,
         });
         if (name?.trim()) {
-          nextConfig = applyAccountName({
-            cfg: nextConfig,
+          nextConfigLocal = applyAccountName({
+            cfg: nextConfigLocal,
             channel,
             accountId,
             name,
@@ -238,8 +238,8 @@ async function channelsAddCommandImpl(
         initialValue: true,
       });
       if (bindNow) {
-        const agentSummaries = buildAgentSummaries(nextConfig);
-        const defaultAgentId = resolveDefaultAgentId(nextConfig);
+        const agentSummaries = buildAgentSummaries(nextConfigLocal);
+        const defaultAgentId = resolveDefaultAgentId(nextConfigLocal);
         for (const target of bindTargets) {
           const targetAgentId = await prompter.select({
             message: `Send ${target.channel}/${target.accountId} messages to agent`,
@@ -249,13 +249,13 @@ async function channelsAddCommandImpl(
             })),
             initialValue: defaultAgentId,
           });
-          const bindingResult = applyAgentBindings(nextConfig, [
+          const bindingResult = applyAgentBindings(nextConfigLocal, [
             {
               agentId: targetAgentId,
               match: { channel: target.channel, accountId: target.accountId },
             },
           ]);
-          nextConfig = bindingResult.config;
+          nextConfigLocal = bindingResult.config;
           if (bindingResult.added.length > 0 || bindingResult.updated.length > 0) {
             await prompter.note(
               [
@@ -282,7 +282,7 @@ async function channelsAddCommandImpl(
     }
 
     const committed = await commitConfigWithPendingPluginInstalls({
-      nextConfig,
+      nextConfig: nextConfigLocal,
       ...(baseHash !== undefined ? { baseHash } : {}),
     });
     const writtenConfig = committed.config;

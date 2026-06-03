@@ -1,5 +1,6 @@
 import { z, type ZodTypeAny } from "zod";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import type { PluginConfigUiHint } from "./manifest-types.js";
 import { validateJsonSchemaValue } from "./schema-validator.js";
 import type { OpenClawPluginConfigSchema } from "./types.js";
@@ -89,8 +90,7 @@ function toIssuePath(path: string): Array<string | number> {
     return [];
   }
   return path.split(".").map((segment) => {
-    const index = Number(segment);
-    return Number.isInteger(index) && String(index) === segment ? index : segment;
+    return parseConfigPathArrayIndex(segment) ?? segment;
   });
 }
 
@@ -119,6 +119,7 @@ function safeParseJsonSchema(
   };
 }
 
+/** Build a plugin config schema from JSON Schema with runtime validation/default support. */
 export function buildJsonPluginConfigSchema(
   schema: JsonSchemaObject,
   options?: BuildJsonPluginConfigSchemaOptions,
@@ -134,6 +135,7 @@ export function buildJsonPluginConfigSchema(
   };
 }
 
+/** Build a plugin config schema from Zod, exporting JSON Schema when the Zod runtime supports it. */
 export function buildPluginConfigSchema(
   schema: ZodTypeAny,
   options?: BuildPluginConfigSchemaOptions,
@@ -144,6 +146,7 @@ export function buildPluginConfigSchema(
     return {
       safeParse,
       ...(options?.uiHints ? { uiHints: options.uiHints } : {}),
+      // Normalize generated schema so plugin consumers see a stable draft-07-ish shape.
       jsonSchema: normalizeJsonSchema(
         schemaWithJson.toJSONSchema({
           target: "draft-07",
@@ -164,6 +167,7 @@ export function buildPluginConfigSchema(
   };
 }
 
+/** Return a schema for plugins that intentionally accept no config keys. */
 export function emptyPluginConfigSchema(): OpenClawPluginConfigSchema {
   return {
     safeParse(value: unknown): SafeParseResult {

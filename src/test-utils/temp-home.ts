@@ -17,6 +17,7 @@ export type TempHomeEnv = {
   restore: () => Promise<void>;
 };
 
+// Reuse prefix roots to keep temp-home-heavy suites fast without sharing per-test homes.
 const prefixRoots = new Map<string, string>();
 const pendingPrefixRoots = new Map<string, Promise<string>>();
 let nextHomeIndex = 0;
@@ -41,6 +42,7 @@ async function ensurePrefixRoot(prefix: string): Promise<string> {
   }
 }
 
+/** Creates a temporary OpenClaw home and process env override for stateful tests. */
 export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   const prefixRoot = await ensurePrefixRoot(prefix);
   const home = path.join(prefixRoot, `home-${String(nextHomeIndex)}`);

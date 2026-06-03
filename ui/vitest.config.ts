@@ -1,3 +1,5 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { playwright } from "@vitest/browser-playwright";
 import { defineConfig, defineProject } from "vitest/config";
 import {
@@ -5,20 +7,55 @@ import {
   resolveDefaultVitestPool,
 } from "../test/vitest/vitest.shared.config.ts";
 
+const here = path.dirname(fileURLToPath(import.meta.url));
+const repoRoot = path.resolve(here, "..");
+const workspaceSourceAliases = [
+  {
+    find: /^@openclaw\/normalization-core\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
+  },
+  {
+    find: "@openclaw/normalization-core",
+    replacement: path.resolve(repoRoot, "packages/normalization-core/src/index.ts"),
+  },
+  {
+    find: /^@openclaw\/media-core\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/media-core/src/$1"),
+  },
+  {
+    find: "@openclaw/media-core",
+    replacement: path.resolve(repoRoot, "packages/media-core/src/index.ts"),
+  },
+  {
+    find: /^@openclaw\/net-policy\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/net-policy/src/$1"),
+  },
+  {
+    find: "@openclaw/net-policy",
+    replacement: path.resolve(repoRoot, "packages/net-policy/src/index.ts"),
+  },
+];
 const sharedUiTestConfig = {
   isolate: false,
   pool: resolveDefaultVitestPool(),
 } as const;
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/chat-responsive.browser.test.ts",
+  "src/ui/form-controls.browser.test.ts",
   "src/ui/views/sessions.browser.test.ts",
 ] as const;
 
 export default defineConfig({
+  resolve: {
+    alias: workspaceSourceAliases,
+  },
   test: {
     ...sharedUiTestConfig,
     projects: [
       defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
         test: {
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
@@ -30,6 +67,9 @@ export default defineConfig({
         },
       }),
       defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
         test: {
           ...sharedUiTestConfig,
           deps: jsdomOptimizedDeps,
@@ -40,6 +80,9 @@ export default defineConfig({
         },
       }),
       defineProject({
+        resolve: {
+          alias: workspaceSourceAliases,
+        },
         test: {
           ...sharedUiTestConfig,
           name: "browser",

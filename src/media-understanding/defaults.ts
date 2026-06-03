@@ -1,7 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
 import {
   normalizeMediaExecutionProviderId,
@@ -136,6 +136,7 @@ function insertConfiguredImageProviders(params: {
   return uniqueStrings(merged);
 }
 
+/** Resolves the default provider model for a media capability from config or manifest metadata. */
 export function resolveDefaultMediaModel(params: {
   providerId: string;
   capability: MediaUnderstandingCapability;
@@ -168,6 +169,7 @@ export function resolveDefaultMediaModel(params: {
   return undefined;
 }
 
+/** Resolves auto-discovery provider order for a media capability using manifest priorities. */
 export function resolveAutoMediaKeyProviders(params: {
   capability: MediaUnderstandingCapability;
   cfg?: OpenClawConfig;
@@ -206,6 +208,7 @@ export function resolveAutoMediaKeyProviders(params: {
   });
 }
 
+/** Returns whether provider metadata declares native PDF document input support. */
 export function providerSupportsNativePdfDocument(params: {
   providerId: string;
   cfg?: OpenClawConfig;
@@ -218,6 +221,7 @@ export function providerSupportsNativePdfDocument(params: {
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
 }
 
+/** Resolves provider-specific document model hints, preserving explicit unsupported markers. */
 export function resolveDocumentMediaModel(params: {
   providerId: string;
   document: "pdf";

@@ -1,18 +1,20 @@
 import { createHash } from "node:crypto";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import {
   INTER_SESSION_PROMPT_PREFIX_BASE,
   normalizeInputProvenance,
+  stripInterSessionPromptPrefixForDisplay,
 } from "../sessions/input-provenance.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
   parseAssistantTextSignature,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import { asOptionalRecord as readRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripEnvelopeFromMessages } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
@@ -32,15 +34,9 @@ type PendingMessageToolVisibleReply = {
   succeeded: boolean;
 };
 
-export function resolveEffectiveChatHistoryMaxChars(
-  cfg: { gateway?: { webchat?: { chatHistoryMaxChars?: number } } },
-  maxChars?: number,
-): number {
+export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
-  }
-  if (typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number") {
-    return cfg.gateway.webchat.chatHistoryMaxChars;
   }
   return DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
 }
@@ -784,10 +780,17 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     clearPending();
   };
 
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
+  for (const message of messages) {
     const record = readRecord(message);
     if (!record) {
+      next.push(message);
+      continue;
+    }
+
+    if (
+      (record.role === "user" && isSessionsSendInterSessionUserMessage(record)) ||
+      isProjectedSessionsSendForwardedMessage(record)
+    ) {
       next.push(message);
       continue;
     }
@@ -833,8 +836,11 @@ function shouldDropAssistantHistoryMessage(message: unknown): boolean {
   if (!message || typeof message !== "object") {
     return false;
   }
-  const entry = message as { role?: unknown };
+  const entry = message as Record<string, unknown> & { role?: unknown };
   if (entry.role !== "assistant") {
+    return false;
+  }
+  if (isProjectedSessionsSendForwardedMessage(entry)) {
     return false;
   }
   if (resolveAssistantMessagePhase(message) === "commentary") {
@@ -1005,6 +1011,9 @@ function ttsSupplementMatchesAssistant(
   if (asRoleContentMessage(message)?.role !== "assistant") {
     return false;
   }
+  if (isProjectedSessionsSendForwardedMessage(message)) {
+    return false;
+  }
   if (readTtsSupplementMarker(message)) {
     return false;
   }
@@ -1084,6 +1093,22 @@ function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unkno
   );
 }
 
+function isSessionsSendInterSessionUserMessage(message: Record<string, unknown>): boolean {
+  if (message.role !== "user") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
+function isProjectedSessionsSendForwardedMessage(message: Record<string, unknown>): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  const provenance = normalizeInputProvenance(message.provenance);
+  return provenance?.kind === "inter_session" && provenance.sourceTool === "sessions_send";
+}
+
 function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): boolean {
   if (message.display === false) {
     return true;
@@ -1094,6 +1119,9 @@ function isDisplayHiddenProjectedMessage(message: Record<string, unknown>): bool
 function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
   if (isDisplayHiddenProjectedMessage(message)) {
     return true;
+  }
+  if (isProjectedSessionsSendForwardedMessage(message)) {
+    return false;
   }
   const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
@@ -1179,7 +1207,8 @@ function filterVisibleProjectedHistoryMessages(
       currentRoleContent &&
       nextRoleContent &&
       isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
-      isHeartbeatOkResponse(nextRoleContent)
+      isHeartbeatOkResponse(nextRoleContent) &&
+      !isProjectedSessionsSendForwardedMessage(next)
     ) {
       changed = true;
       i++;
@@ -1198,19 +1227,87 @@ function filterVisibleProjectedHistoryMessages(
   return changed ? visible : messages;
 }
 
+function stripInterSessionPromptPrefixFromContent(content: unknown): unknown {
+  if (typeof content === "string") {
+    return stripInterSessionPromptPrefixForDisplay(content);
+  }
+  if (!Array.isArray(content)) {
+    return content;
+  }
+  return content.map((block) => {
+    if (!block || typeof block !== "object" || Array.isArray(block)) {
+      return block;
+    }
+    const record = block as Record<string, unknown>;
+    if (typeof record.text !== "string") {
+      return block;
+    }
+    const stripped = stripInterSessionPromptPrefixForDisplay(record.text);
+    return stripped === record.text ? block : { ...record, text: stripped };
+  });
+}
+
+function extractPromptPrefixField(text: string, field: string): string | undefined {
+  const prefixIndex = text.indexOf(INTER_SESSION_PROMPT_PREFIX_BASE);
+  if (prefixIndex === -1) {
+    return undefined;
+  }
+  const lineEnd = text.indexOf("\n", prefixIndex);
+  const header = lineEnd === -1 ? text.slice(prefixIndex) : text.slice(prefixIndex, lineEnd);
+  const escapedField = field.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = new RegExp(`(?:^|\\s)${escapedField}=([^\\s]+)`).exec(header);
+  return normalizeOptionalString(match?.[1]);
+}
+
+function resolveSessionsSendForwardedSenderLabel(message: Record<string, unknown>): string {
+  const provenance = normalizeInputProvenance(message.provenance);
+  const text = extractProjectedText(message.content ?? message.text);
+  const sourceSessionKey =
+    provenance?.sourceSessionKey ?? extractPromptPrefixField(text, "sourceSession");
+  const agentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
+  return agentId ? `Forwarded from ${agentId}` : "Forwarded agent message";
+}
+
+function projectSessionsSendInterSessionMessages(
+  messages: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  let changed = false;
+  const projected = messages.map((message) => {
+    if (!isSessionsSendInterSessionUserMessage(message)) {
+      return message;
+    }
+    changed = true;
+    const next: Record<string, unknown> = {
+      ...message,
+      role: "assistant",
+      senderLabel: resolveSessionsSendForwardedSenderLabel(message),
+    };
+    if ("content" in next) {
+      next.content = stripInterSessionPromptPrefixFromContent(next.content);
+    }
+    if (typeof next.text === "string") {
+      next.text = stripInterSessionPromptPrefixForDisplay(next.text);
+    }
+    return next;
+  });
+  return changed ? projected : messages;
+}
+
 export function projectChatDisplayMessages(
   messages: unknown[],
   options?: { maxChars?: number; stripEnvelope?: boolean },
 ): Array<Record<string, unknown>> {
   const source = options?.stripEnvelope === false ? messages : stripEnvelopeFromMessages(messages);
   const mirrored = mirrorMessageToolVisibleReplies(source);
-  const merged = mergeTtsSupplementMessages(
+  const projectedForwarded = mergeTtsSupplementMessages(
     filterVisibleProjectedHistoryMessages(
-      toProjectedMessages(sanitizeChatHistoryMessages(mirrored, Number.MAX_SAFE_INTEGER)),
+      projectSessionsSendInterSessionMessages(
+        toProjectedMessages(sanitizeChatHistoryMessages(mirrored, Number.MAX_SAFE_INTEGER)),
+      ),
     ),
   );
   return sanitizeChatHistoryMessages(
-    merged,
+    projectedForwarded,
     options?.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
   ) as Array<Record<string, unknown>>;
 }

@@ -12,12 +12,14 @@ vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
 }));
 
-vi.mock("./mime.js", () => ({
+vi.mock("@openclaw/media-core/mime", () => ({
   detectMime: (...args: unknown[]) => detectMimeMock(...args),
 }));
 
 async function waitForMicrotaskTurn(): Promise<void> {
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
 }
 
 let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;
@@ -294,6 +296,39 @@ describe("fetchWithGuard", () => {
         maxRedirects: 0,
       }),
     ).rejects.toThrow("Content too large: 2048 bytes");
+
+    expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects malformed content-length before reading input files", async () => {
+    let canceled = false;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3, 4]));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: new Response(stream, {
+        status: 200,
+        headers: { "content-length": "1e9", "content-type": "application/octet-stream" },
+      }),
+      release,
+      finalUrl: "https://example.com/file.bin",
+    });
+
+    await expect(
+      fetchWithGuard({
+        url: "https://example.com/file.bin",
+        maxBytes: 1024,
+        timeoutMs: 1000,
+        maxRedirects: 0,
+      }),
+    ).rejects.toThrow("invalid content-length header: 1e9");
 
     expect(canceled).toBe(true);
     expect(release).toHaveBeenCalledTimes(1);

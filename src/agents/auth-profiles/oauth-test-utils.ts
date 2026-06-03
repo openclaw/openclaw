@@ -1,7 +1,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { resolveApiKeyForProfile } from "./oauth.js";
+import { loadPersistedAuthProfileStore } from "./persisted.js";
+import { saveAuthProfileStore } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 export const OAUTH_AGENT_ENV_KEYS = ["OPENCLAW_STATE_DIR", "OPENCLAW_AGENT_DIR"];
@@ -66,8 +69,20 @@ export async function createOAuthMainAgentDir(stateDir: string): Promise<string>
 
 export async function removeOAuthTestTempRoot(tempRoot: string): Promise<void> {
   if (tempRoot) {
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tempRoot, { recursive: true, force: true });
   }
+}
+
+export function writeAuthProfileStoreForTest(agentDir: string, store: AuthProfileStore): void {
+  saveAuthProfileStore(store, agentDir, {
+    filterExternalAuthProfiles: false,
+    syncExternalCli: false,
+  });
+}
+
+export function readAuthProfileStoreForTest(agentDir: string): AuthProfileStore {
+  return loadPersistedAuthProfileStore(agentDir) ?? { version: 1, profiles: {} };
 }
 
 type ResettableMock = {

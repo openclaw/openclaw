@@ -1,4 +1,5 @@
 import { createDedupeCache } from "../infra/dedupe.js";
+import { resolveNonNegativeIntegerOption } from "../infra/numeric-options.js";
 import type { FileLockOptions } from "./file-lock.js";
 import { withFileLock } from "./file-lock.js";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.js";
@@ -6,25 +7,37 @@ import { readJsonFileWithFallback, writeJsonFileAtomically } from "./json-store.
 type PersistentDedupeData = Record<string, number>;
 
 export type PersistentDedupeOptions = {
+  /** Milliseconds a recorded key remains recent; `0` keeps keys until cache pruning. */
   ttlMs: number;
+  /** Maximum process-local cache entries used before consulting disk. */
   memoryMaxSize: number;
+  /** Maximum persisted entries retained per namespace file. */
   fileMaxEntries: number;
+  /** Maps a namespace to the JSON file that stores its persisted dedupe timestamps. */
   resolveFilePath: (namespace: string) => string;
   lockOptions?: Partial<FileLockOptions>;
   onDiskError?: (error: unknown) => void;
 };
 
 export type PersistentDedupeCheckOptions = {
+  /** Logical bucket for the key; omitted/blank values use `global`. */
   namespace?: string;
+  /** Test or replay timestamp override used for TTL checks and writes. */
   now?: number;
+  /** Per-call disk error hook, overriding the helper-level hook. */
   onDiskError?: (error: unknown) => void;
 };
 
 export type PersistentDedupe = {
+  /** Returns true only when the key was not recently seen and was recorded for future checks. */
   checkAndRecord: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Checks memory/disk recency without recording a new timestamp. */
   hasRecent: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Loads recent disk entries into memory for one namespace and returns the loaded count. */
   warmup: (namespace?: string, onError?: (error: unknown) => void) => Promise<number>;
+  /** Clears only process-local memory; persisted namespace files are left intact. */
   clearMemory: () => void;
+  /** Returns the current process-local cache size. */
   memorySize: () => number;
 };
 
@@ -52,11 +65,14 @@ export type ClaimableDedupeOptions =
     };
 
 export type ClaimableDedupe = {
+  /** Starts ownership of a key, reports duplicates, or returns the active claim's pending result. */
   claim: (
     key: string,
     options?: PersistentDedupeCheckOptions,
   ) => Promise<ClaimableDedupeClaimResult>;
+  /** Records a claimed key as handled and resolves any waiters with the recorded result. */
   commit: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Releases an active claim without recording it, rejecting waiters with the supplied error. */
   release: (
     key: string,
     options?: {
@@ -64,9 +80,13 @@ export type ClaimableDedupe = {
       error?: unknown;
     },
   ) => void;
+  /** Checks whether the key is recent without claiming or committing it. */
   hasRecent: (key: string, options?: PersistentDedupeCheckOptions) => Promise<boolean>;
+  /** Warms persistent storage into memory when configured; memory-only guards return zero. */
   warmup: (namespace?: string, onError?: (error: unknown) => void) => Promise<number>;
+  /** Clears process-local caches and in-memory persistent state. */
   clearMemory: () => void;
+  /** Returns the current process-local cache size. */
   memorySize: () => number;
 };
 
@@ -148,9 +168,9 @@ function isRecentTimestamp(seenAt: number | undefined, ttlMs: number, now: numbe
 
 /** Create a dedupe helper that combines in-memory fast checks with a lock-protected disk store. */
 export function createPersistentDedupe(options: PersistentDedupeOptions): PersistentDedupe {
-  const ttlMs = Math.max(0, Math.floor(options.ttlMs));
-  const memoryMaxSize = Math.max(0, Math.floor(options.memoryMaxSize));
-  const fileMaxEntries = Math.max(1, Math.floor(options.fileMaxEntries));
+  const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
+  const memoryMaxSize = resolveNonNegativeIntegerOption(options.memoryMaxSize, 0);
+  const fileMaxEntries = Math.max(1, resolveNonNegativeIntegerOption(options.fileMaxEntries, 1));
   const lockOptions = mergeLockOptions(options.lockOptions);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
   const inflight = new Map<string, Promise<boolean>>();
@@ -324,15 +344,15 @@ function createReleasedClaimError(scopedKey: string): Error {
 
 /** Create a claim/commit/release dedupe guard backed by memory and optional persistent storage. */
 export function createClaimableDedupe(options: ClaimableDedupeOptions): ClaimableDedupe {
-  const ttlMs = Math.max(0, Math.floor(options.ttlMs));
-  const memoryMaxSize = Math.max(0, Math.floor(options.memoryMaxSize));
+  const ttlMs = resolveNonNegativeIntegerOption(options.ttlMs, 0);
+  const memoryMaxSize = resolveNonNegativeIntegerOption(options.memoryMaxSize, 0);
   const memory = createDedupeCache({ ttlMs, maxSize: memoryMaxSize });
   const persistent =
     options.resolveFilePath != null
       ? createPersistentDedupe({
           ttlMs,
           memoryMaxSize,
-          fileMaxEntries: Math.max(1, Math.floor(options.fileMaxEntries)),
+          fileMaxEntries: Math.max(1, resolveNonNegativeIntegerOption(options.fileMaxEntries, 1)),
           resolveFilePath: options.resolveFilePath,
           lockOptions: options.lockOptions,
           onDiskError: options.onDiskError,
@@ -411,15 +431,15 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
     }
     const namespace = resolveNamespace(dedupeOptions?.namespace);
     const scopedKey = resolveScopedKey(namespace, trimmed);
-    const claim = inflight.get(scopedKey);
+    const claimValue = inflight.get(scopedKey);
     try {
       const recorded = persistent
         ? await persistent.checkAndRecord(trimmed, dedupeOptions)
         : !memory.check(scopedKey, dedupeOptions?.now);
-      claim?.resolve(recorded);
+      claimValue?.resolve(recorded);
       return recorded;
     } catch (error) {
-      claim?.reject(error);
+      claimValue?.reject(error);
       throw error;
     } finally {
       inflight.delete(scopedKey);
@@ -439,11 +459,11 @@ export function createClaimableDedupe(options: ClaimableDedupeOptions): Claimabl
     }
     const namespace = resolveNamespace(dedupeOptions?.namespace);
     const scopedKey = resolveScopedKey(namespace, trimmed);
-    const claim = inflight.get(scopedKey);
-    if (!claim) {
+    const claimLocal = inflight.get(scopedKey);
+    if (!claimLocal) {
       return;
     }
-    claim.reject(dedupeOptions?.error ?? createReleasedClaimError(scopedKey));
+    claimLocal.reject(dedupeOptions?.error ?? createReleasedClaimError(scopedKey));
     inflight.delete(scopedKey);
   }
 

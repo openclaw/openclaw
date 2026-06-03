@@ -1,8 +1,8 @@
 import type { PromptRequest } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { expect, vi } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -12,6 +12,7 @@ type PendingPromptHarness = {
   runId: string;
 };
 
+// Shared prompt harness used by translator cancellation and lifecycle tests.
 const DEFAULT_SESSION_ID = "session-1";
 export const DEFAULT_SESSION_KEY = "agent:main:main";
 const DEFAULT_PROMPT_TEXT = "hello";
@@ -56,7 +57,7 @@ export function observeSettlement(promise: ReturnType<AcpGatewayAgent["prompt"]>
   const settleSpy = vi.fn();
   void promise.then(
     (value) => settleSpy({ kind: "resolve", value }),
-    (error) => settleSpy({ kind: "reject", error }),
+    (error: unknown) => settleSpy({ kind: "reject", error }),
   );
   return settleSpy;
 }

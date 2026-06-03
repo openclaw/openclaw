@@ -7,6 +7,7 @@ import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
+import { targetCodexMarketplaceDiscoveryTimeoutMs } from "./apply.js";
 import { buildCodexMigrationProvider } from "./provider.js";
 
 const appServerRequest = vi.hoisted(() => vi.fn());
@@ -174,6 +175,27 @@ afterEach(async () => {
 });
 
 describe("buildCodexMigrationProvider", () => {
+  it("parses target marketplace discovery timeout env strictly", () => {
+    expect(
+      targetCodexMarketplaceDiscoveryTimeoutMs({
+        OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: "0",
+      }),
+    ).toBe(0);
+    expect(
+      targetCodexMarketplaceDiscoveryTimeoutMs({
+        OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: "250",
+      }),
+    ).toBe(250);
+
+    for (const value of ["0x10", "1e3", "2.5"]) {
+      expect(
+        targetCodexMarketplaceDiscoveryTimeoutMs({
+          OPENCLAW_CODEX_MIGRATION_PLUGIN_LIST_TIMEOUT_MS: value,
+        }),
+      ).toBe(30_000);
+    }
+  });
+
   beforeEach(() => {
     appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
   });
@@ -325,7 +347,7 @@ describe("buildCodexMigrationProvider", () => {
         workspaceDir: fixture.workspaceDir,
       }),
     );
-    expectRecordFields(findItem(skippedPlan.items, "auth:openai-codex"), {
+    expectRecordFields(findItem(skippedPlan.items, "auth:openai"), {
       kind: "auth",
       status: "skipped",
       sensitive: true,
@@ -341,7 +363,7 @@ describe("buildCodexMigrationProvider", () => {
       includeSecrets: true,
     });
     const plan = await provider.plan(ctx);
-    expectRecordFields(findItem(plan.items, "auth:openai-codex"), {
+    expectRecordFields(findItem(plan.items, "auth:openai"), {
       kind: "auth",
       status: "planned",
       sensitive: true,
@@ -349,7 +371,7 @@ describe("buildCodexMigrationProvider", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expectRecordFields(findItem(result.items, "auth:openai-codex"), { status: "migrated" });
+    expectRecordFields(findItem(result.items, "auth:openai"), { status: "migrated" });
     const authStore = JSON.parse(
       await fs.readFile(
         path.join(fixture.stateDir, "agents", "main", "agent", "auth-profiles.json"),
@@ -361,17 +383,17 @@ describe("buildCodexMigrationProvider", () => {
         { access?: string; provider?: string; refresh?: string; type?: string }
       >;
     };
-    expect(authStore.profiles?.["openai-codex:account-acct_test"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: accessToken,
         refresh: "refresh-test-token",
       }),
     );
-    expect(configState.auth?.profiles?.["openai-codex:account-acct_test"]).toEqual(
+    expect(configState.auth?.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
-        provider: "openai-codex",
+        provider: "openai",
         mode: "oauth",
       }),
     );
@@ -412,8 +434,8 @@ describe("buildCodexMigrationProvider", () => {
       },
       auth: {
         profiles: {
-          "openai-codex:account-acct_conflict": {
-            provider: "openai-codex",
+          "openai:account-acct_conflict": {
+            provider: "openai",
             mode: "api_key",
           },
         },
@@ -431,12 +453,12 @@ describe("buildCodexMigrationProvider", () => {
       }),
     );
 
-    expect(findItem(plan.items, "auth:openai-codex")).toEqual(
+    expect(findItem(plan.items, "auth:openai")).toEqual(
       expect.objectContaining({
         status: "conflict",
         reason: "auth profile exists",
         details: expect.objectContaining({
-          profileId: "openai-codex:account-acct_conflict",
+          profileId: "openai:account-acct_conflict",
         }),
       }),
     );
@@ -537,10 +559,10 @@ describe("buildCodexMigrationProvider", () => {
       includeSecrets: true,
     });
     const plan = await provider.plan(ctx);
-    expect(findItem(plan.items, "auth:openai-codex").details).toEqual(
+    expect(findItem(plan.items, "auth:openai").details).toEqual(
       expect.objectContaining({
-        profileId: "openai-codex:account-acct_planned",
-        sourceProfileId: "openai-codex:account-acct_planned",
+        profileId: "openai:account-acct_planned",
+        sourceProfileId: "openai:account-acct_planned",
       }),
     );
     await writeFile(
@@ -557,7 +579,7 @@ describe("buildCodexMigrationProvider", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expect(findItem(result.items, "auth:openai-codex")).toEqual(
+    expect(findItem(result.items, "auth:openai")).toEqual(
       expect.objectContaining({
         status: "skipped",
         reason: "auth credential no longer present",
@@ -597,9 +619,9 @@ describe("buildCodexMigrationProvider", () => {
       path.join(fixture.stateDir, "agents", "main", "agent", "auth-profiles.json"),
       JSON.stringify({
         profiles: {
-          "openai-codex:account-acct_old": {
+          "openai:account-acct_old": {
             type: "oauth",
-            provider: "openai-codex",
+            provider: "openai",
             access: "old-access-token",
             refresh: "old-refresh-token",
             accountId: "acct_old",
@@ -627,18 +649,18 @@ describe("buildCodexMigrationProvider", () => {
     });
 
     const plan = await provider.plan(ctx);
-    expectRecordFields(findItem(plan.items, "auth:openai-codex"), {
+    expectRecordFields(findItem(plan.items, "auth:openai"), {
       status: "planned",
     });
-    expect(findItem(plan.items, "auth:openai-codex").details).toEqual(
+    expect(findItem(plan.items, "auth:openai").details).toEqual(
       expect.objectContaining({
-        profileId: "openai-codex:account-acct_new",
+        profileId: "openai:account-acct_new",
       }),
     );
 
     const result = await provider.apply(ctx, plan);
 
-    expectRecordFields(findItem(result.items, "auth:openai-codex"), { status: "migrated" });
+    expectRecordFields(findItem(result.items, "auth:openai"), { status: "migrated" });
     const authStore = JSON.parse(
       await fs.readFile(
         path.join(fixture.stateDir, "agents", "main", "agent", "auth-profiles.json"),
@@ -647,14 +669,14 @@ describe("buildCodexMigrationProvider", () => {
     ) as {
       profiles?: Record<string, { access?: string; accountId?: string; email?: string }>;
     };
-    expect(authStore.profiles?.["openai-codex:account-acct_old"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_old"]).toEqual(
       expect.objectContaining({
         access: "old-access-token",
         accountId: "acct_old",
         email: sharedEmail,
       }),
     );
-    expect(authStore.profiles?.["openai-codex:account-acct_new"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_new"]).toEqual(
       expect.objectContaining({
         access: accessToken,
         accountId: "acct_new",
@@ -706,8 +728,8 @@ describe("buildCodexMigrationProvider", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expectRecordFields(findItem(result.items, "auth:openai-codex"), { status: "migrated" });
-    expect(findItem(result.items, "auth:openai-codex").details).toEqual(
+    expectRecordFields(findItem(result.items, "auth:openai"), { status: "migrated" });
+    expect(findItem(result.items, "auth:openai").details).toEqual(
       expect.objectContaining({
         configUpdated: false,
       }),
@@ -720,10 +742,10 @@ describe("buildCodexMigrationProvider", () => {
     ) as {
       profiles?: Record<string, { access?: string; provider?: string; refresh?: string }>;
     };
-    expect(authStore.profiles?.["openai-codex:account-acct_test"]).toEqual(
+    expect(authStore.profiles?.["openai:account-acct_test"]).toEqual(
       expect.objectContaining({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
         access: accessToken,
       }),
     );
@@ -777,13 +799,13 @@ describe("buildCodexMigrationProvider", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expect(findItem(result.items, "auth:openai-codex").details).toEqual(
+    expect(findItem(result.items, "auth:openai").details).toEqual(
       expect.objectContaining({
         configUpdated: false,
         configPatchReturned: true,
       }),
     );
-    expect(findItem(result.items, "auth:openai-codex:config:auth")).toEqual(
+    expect(findItem(result.items, "auth:openai:config:auth")).toEqual(
       expect.objectContaining({
         kind: "config",
         action: "merge",
@@ -792,8 +814,8 @@ describe("buildCodexMigrationProvider", () => {
           path: ["auth"],
           value: expect.objectContaining({
             profiles: expect.objectContaining({
-              "openai-codex:account-acct_test": expect.objectContaining({
-                provider: "openai-codex",
+              "openai:account-acct_test": expect.objectContaining({
+                provider: "openai",
                 mode: "oauth",
               }),
             }),
@@ -801,7 +823,7 @@ describe("buildCodexMigrationProvider", () => {
         }),
       }),
     );
-    expect(findItem(result.items, "auth:openai-codex:config:agents-defaults")).toEqual(
+    expect(findItem(result.items, "auth:openai:config:agents-defaults")).toEqual(
       expect.objectContaining({
         kind: "config",
         action: "merge",
@@ -1134,7 +1156,7 @@ describe("buildCodexMigrationProvider", () => {
           },
           auth: {
             order: {
-              "openai-codex": ["openai-codex:target"],
+              openai: ["openai:target"],
             },
           },
         } as MigrationProviderContext["config"],

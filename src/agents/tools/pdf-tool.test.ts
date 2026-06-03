@@ -36,7 +36,7 @@ async function loadCreatePdfTool() {
 
 const ANTHROPIC_PDF_MODEL = "anthropic/claude-opus-4-6";
 const OPENAI_PDF_MODEL = "openai/gpt-5.4-mini";
-const CODEX_PDF_MODEL = "openai-codex/gpt-5.4";
+const CODEX_PDF_MODEL = "openai/gpt-5.4";
 const FAKE_PDF_MEDIA = {
   kind: "document",
   buffer: Buffer.from("%PDF-1.4 fake"),
@@ -132,8 +132,8 @@ async function stubPdfToolInfra(
             provider: params?.provider ?? "anthropic",
             api:
               params?.api ??
-              (params?.provider === "openai-codex"
-                ? "openai-codex-responses"
+              (params?.provider === "openai"
+                ? "openai-chatgpt-responses"
                 : params?.provider === "openai"
                   ? "openai-responses"
                   : "anthropic-messages"),
@@ -284,6 +284,42 @@ describe("createPdfTool", () => {
       const manyPdfs = Array.from({ length: 15 }, (_, i) => `/tmp/doc${i}.pdf`);
       const result = await tool.execute("t1", { prompt: "test", pdfs: manyPdfs });
       expectFields(result.details, { error: "too_many_pdfs" });
+    });
+  });
+
+  it("rejects invalid maxBytesMb before loading PDFs", async () => {
+    await withConfiguredPdfTool(async (tool) => {
+      const loadSpy = vi.spyOn(webMedia, "loadWebMediaRaw");
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "test",
+          pdf: "/tmp/doc.pdf",
+          maxBytesMb: 0,
+        }),
+      ).rejects.toThrow("maxBytesMb must be greater than 0");
+      expect(loadSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  it("passes validated maxBytesMb to PDF loading", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      const { loadSpy } = await stubPdfToolInfra(agentDir, {
+        provider: "anthropic",
+        input: ["text", "document"],
+      });
+      vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("native summary");
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+        maxBytesMb: "0.5",
+      });
+
+      const [, loadOptions] = firstMockCall(loadSpy, "loadWebMediaRaw");
+      expectFields(loadOptions, { maxBytes: 524_288 });
     });
   });
 
@@ -475,6 +511,9 @@ describe("createPdfTool", () => {
       );
       expect(modelsAgentDir).toBe(agentDir);
       expect(modelsOptions).toEqual({ workspaceDir });
+      expect(modelDiscovery.discoverModels).toHaveBeenCalledWith(expect.anything(), agentDir, {
+        workspaceDir,
+      });
       expect(extractSpy).not.toHaveBeenCalled();
       expect(result.content).toEqual([{ type: "text", text: "native summary" }]);
       expectFields(result.details, {
@@ -500,9 +539,29 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("rejects password parameter for native PDF providers", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "anthropic", input: ["text", "document"] });
+      const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await expect(
+        tool.execute("t1", {
+          prompt: "summarize",
+          pdf: "/tmp/doc.pdf",
+          password: "secret",
+        }),
+      ).rejects.toThrow("password is not supported with native PDF providers");
+    });
+  });
+
   it("uses extraction fallback for non-native models", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
-      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+      await stubPdfToolInfra(agentDir, {
+        provider: "openai",
+        api: "openai-responses",
+        input: ["text"],
+      });
       const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
         text: "Extracted content",
         images: [],
@@ -531,11 +590,63 @@ describe("createPdfTool", () => {
     });
   });
 
+  it("passes password to PDF extraction fallback", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Encrypted content",
+        images: [],
+      });
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+        password: "secret",
+      });
+
+      expect(extractSpy).toHaveBeenCalledWith(expect.objectContaining({ password: "secret" }));
+    });
+  });
+
+  it("preserves PDF password whitespace before extraction fallback", async () => {
+    await withTempPdfAgentDir(async (agentDir) => {
+      await stubPdfToolInfra(agentDir, { provider: "openai", input: ["text"] });
+      const extractSpy = vi.spyOn(pdfExtractModule, "extractPdfContent").mockResolvedValue({
+        text: "Plain content",
+        images: [],
+      });
+      completeMock.mockResolvedValue({
+        role: "assistant",
+        stopReason: "stop",
+        content: [{ type: "text", text: "fallback summary" }],
+      } as never);
+
+      const cfg = withPdfModel(OPENAI_PDF_MODEL);
+      const tool = requirePdfTool((await loadCreatePdfTool())({ config: cfg, agentDir }));
+
+      await tool.execute("t1", {
+        prompt: "summarize",
+        pdf: "/tmp/doc.pdf",
+        password: " secret ",
+      });
+
+      expect(extractSpy).toHaveBeenCalledWith(expect.objectContaining({ password: " secret " }));
+    });
+  });
+
   it("adds Codex instructions for PDF extraction fallback requests", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         input: ["text", "image"],
       });
 
@@ -571,8 +682,8 @@ describe("createPdfTool", () => {
   it("adds Codex instructions when extraction has images but the model only accepts text", async () => {
     await withTempPdfAgentDir(async (agentDir) => {
       await stubPdfToolInfra(agentDir, {
-        provider: "openai-codex",
-        api: "openai-codex-responses",
+        provider: "openai",
+        api: "openai-chatgpt-responses",
         input: ["text"],
       });
 
@@ -615,7 +726,12 @@ describe("createPdfTool", () => {
     expect(props).toHaveProperty("pdf");
     expect(props).toHaveProperty("pdfs");
     expect(props).toHaveProperty("pages");
+    expect(props).toHaveProperty("password");
     expect(props).toHaveProperty("model");
     expect(props).toHaveProperty("maxBytesMb");
+    expect(PdfToolSchema.properties.maxBytesMb).toMatchObject({
+      type: "number",
+      exclusiveMinimum: 0,
+    });
   });
 });

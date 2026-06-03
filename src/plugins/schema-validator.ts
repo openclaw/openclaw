@@ -1,5 +1,6 @@
 import { Compile, type Validator as TypeBoxValidator } from "typebox/compile";
 import { Format } from "typebox/format";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "../config/allowed-values.js";
 import {
   applyJsonSchemaDefaults,
@@ -7,7 +8,6 @@ import {
   normalizeJsonSchemaForTypeBox,
 } from "../shared/json-schema-defaults.js";
 import type { JsonSchemaObject } from "../shared/json-schema.types.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { PluginLruCache } from "./plugin-cache-primitives.js";
 
 type TypeBoxValidationError = {
@@ -25,6 +25,10 @@ type CachedValidator = {
   schemaFingerprint: string;
 };
 
+/**
+ * JSON Schema document accepted by plugin config and SDK runtime validation.
+ * Boolean schemas are valid draft-style schemas and must remain accepted here.
+ */
 export type JsonSchemaValue = JsonSchemaObject | boolean;
 
 const schemaCache = new PluginLruCache<CachedValidator>(512);
@@ -63,7 +67,7 @@ function schemaHasDefaults(schema: unknown): boolean {
     return schema.some((item) => schemaHasDefaults(item));
   }
   const record = schema as Record<string, unknown>;
-  if (Object.prototype.hasOwnProperty.call(record, "default")) {
+  if (Object.hasOwn(record, "default")) {
     return true;
   }
   return Object.values(record).some((value) => schemaHasDefaults(value));
@@ -152,6 +156,10 @@ function isDefaultActivatedConditionalFailure(params: {
   return checkSchema(originalValidator, params.originalValue) === null;
 }
 
+/**
+ * Sanitized validation error surfaced to config diagnostics, gateway hooks, and SDK callers.
+ * `path`/`message` stay raw for programmatic handling; `text` is terminal-safe display text.
+ */
 export type JsonSchemaValidationError = {
   path: string;
   message: string;
@@ -222,7 +230,7 @@ function extractAllowedValues(error: TypeBoxValidationError): unknown[] | null {
 
   if (error.keyword === "const") {
     const params = error.params;
-    if (!params || !Object.prototype.hasOwnProperty.call(params, "allowedValue")) {
+    if (!params || !Object.hasOwn(params, "allowedValue")) {
       return null;
     }
     return [params.allowedValue];
@@ -317,6 +325,10 @@ function formatValidationErrors(
   });
 }
 
+/**
+ * Validate a plugin-owned value against a JSON Schema, optionally hydrating schema defaults.
+ * The cache key is caller-owned so repeated plugin/schema validations can reuse compiled TypeBox validators.
+ */
 export function validateJsonSchemaValue(params: {
   schema: JsonSchemaValue;
   cacheKey: string;
@@ -349,6 +361,8 @@ export function validateJsonSchemaValue(params: {
         defaultedValue: value,
       })
     ) {
+      // Defaults can select a conditional branch that requires the defaulted property;
+      // keep the hydrated value when the original input was valid before hydration.
       return { ok: true, value };
     }
     return { ok: false, errors: formatValidationErrors(errors) };
@@ -391,6 +405,7 @@ export function validateJsonSchemaValue(params: {
       defaultedValue: value,
     })
   ) {
+    // Same conditional-default exception as the uncached path; cache only changes validator reuse.
     return { ok: true, value };
   }
   return { ok: false, errors: formatValidationErrors(errors) };

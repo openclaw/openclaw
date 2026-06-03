@@ -2,12 +2,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { readResponseWithLimit } from "../media/read-response-with-limit.js";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { parseStrictPositiveInteger } from "./parse-finite-number.js";
 import { isAtLeast, parseSemver } from "./runtime-guard.js";
 import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import { createTempDownloadTarget } from "./temp-download.js";
@@ -540,6 +541,22 @@ function matchWildcardComparator(token: string): "any" | "none" | null {
   return operator === ">" || operator === "<" ? "none" : "any";
 }
 
+function shouldPreservePluginApiPrereleaseFloor(target: string): boolean {
+  return Boolean(
+    parseComparableSemver(normalizePartialComparableVersion(target).version)?.prerelease?.length,
+  );
+}
+
+function normalizePluginApiVersionForComparator(version: string, target: string): string {
+  const normalizedCorrection = normalizeCalVerNumericCorrectionForPluginApi(version);
+  if (normalizedCorrection) {
+    return normalizedCorrection;
+  }
+  return shouldPreservePluginApiPrereleaseFloor(target)
+    ? version
+    : normalizeCalVerCorrectionForPluginApi(version);
+}
+
 function satisfiesComparator(version: string, token: string): boolean {
   const trimmed = token.trim();
   if (!trimmed) {
@@ -552,8 +569,9 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (trimmed.startsWith("^")) {
     const base = trimmed.slice(1).trim();
     const upperBound = upperBoundForCaret(base);
-    const lowerCmp = compareSemver(version, base);
-    const upperCmp = upperBound ? compareSemver(version, upperBound) : null;
+    const comparableVersion = normalizePluginApiVersionForComparator(version, base);
+    const lowerCmp = compareSemver(comparableVersion, base);
+    const upperCmp = upperBound ? compareSemver(comparableVersion, upperBound) : null;
     return lowerCmp != null && upperCmp != null && lowerCmp >= 0 && upperCmp < 0;
   }
 
@@ -566,8 +584,9 @@ function satisfiesComparator(version: string, token: string): boolean {
   if (!target) {
     return false;
   }
+  const comparableVersion = normalizePluginApiVersionForComparator(version, target);
   const normalizedTarget = normalizePartialComparableVersion(target);
-  const cmp = compareSemver(version, normalizedTarget.version);
+  const cmp = compareSemver(comparableVersion, normalizedTarget.version);
   if (cmp == null) {
     return false;
   }
@@ -580,7 +599,6 @@ function satisfiesComparator(version: string, token: string): boolean {
       return cmp > 0;
     case "<":
       return cmp < 0;
-    case "=":
     default:
       return normalizedTarget.isPartial && !operator ? cmp >= 0 : cmp === 0;
   }
@@ -594,7 +612,15 @@ function satisfiesSemverRange(version: string, range: string): boolean {
   return tokens.every((token) => satisfiesComparator(version, token));
 }
 
-const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+const OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN =
+  /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})(?:-\d+|-(?:alpha|beta|rc)\.\d+)$/i;
+const OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN = /^[vV]?(\d{4}\.\d{1,2}\.\d{1,2})-\d+$/;
+
+function normalizeCalVerNumericCorrectionForPluginApi(
+  pluginApiVersion: string,
+): string | undefined {
+  return OPENCLAW_CALVER_NUMERIC_CORRECTION_PATTERN.exec(pluginApiVersion.trim())?.[1];
+}
 
 function normalizeCalVerCorrectionForPluginApi(pluginApiVersion: string): string {
   const match = OPENCLAW_CALVER_STABLE_CORRECTION_PATTERN.exec(pluginApiVersion.trim());
@@ -739,8 +765,13 @@ async function readClawHubResponseBytes(params: {
   });
 }
 
+/** Resolves the configured ClawHub base URL, falling back to the default public host. */
 export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
+}
+
+export function isDefaultClawHubBaseUrl(baseUrl?: string): boolean {
+  return normalizeBaseUrl(baseUrl) === normalizeBaseUrl(DEFAULT_CLAWHUB_URL);
 }
 
 function buildVersionOrTagSearch(params: {
@@ -786,6 +817,7 @@ function safePackageTarballName(name: string, version: string): string {
   return `${base || "package"}-${version}.tgz`;
 }
 
+/** Normalizes ClawHub SHA-256 metadata into Subresource Integrity format. */
 export function normalizeClawHubSha256Integrity(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -813,6 +845,7 @@ export function normalizeClawHubSha256Integrity(value: string): string | null {
   return null;
 }
 
+/** Normalizes ClawHub SHA-256 metadata into lowercase hex form. */
 export function normalizeClawHubSha256Hex(value: string): string | null {
   const trimmed = value.trim();
   if (!/^[A-Fa-f0-9]{64}$/.test(trimmed)) {
@@ -1140,7 +1173,7 @@ export async function downloadClawHubPackageArchive(params: {
       normalizeHeaderValue(response.headers.get("X-ClawHub-Npm-Tarball-Name")) ??
       safePackageTarballName(params.name, params.version);
     const rawSpecVersion = response.headers.get("X-ClawHub-ClawPack-Spec-Version");
-    const specVersion = rawSpecVersion ? Number.parseInt(rawSpecVersion, 10) : undefined;
+    const specVersion = parseStrictPositiveInteger(rawSpecVersion);
     const target = await createTempDownloadTarget({
       prefix: "openclaw-clawhub-clawpack",
       fileName: npmTarballName,
@@ -1244,10 +1277,12 @@ export async function downloadClawHubSkillArchive(params: {
   };
 }
 
+/** Resolves the preferred latest package version from detail metadata. */
 export function resolveLatestVersionFromPackage(detail: ClawHubPackageDetail): string | null {
   return detail.package?.latestVersion ?? detail.package?.tags?.latest ?? null;
 }
 
+/** Detects package or skill detail payloads that represent skill-family packages. */
 export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkillDetail): boolean {
   if ("package" in detail) {
     return detail.package?.family === "skill";
@@ -1255,6 +1290,7 @@ export function isClawHubFamilySkill(detail: ClawHubPackageDetail | ClawHubSkill
   return Boolean(detail.skill);
 }
 
+/** Checks whether a host plugin API version satisfies a ClawHub plugin API range. */
 export function satisfiesPluginApiRange(
   pluginApiVersion: string,
   pluginApiRange?: string | null,
@@ -1262,12 +1298,10 @@ export function satisfiesPluginApiRange(
   if (!pluginApiRange) {
     return true;
   }
-  return satisfiesSemverRange(
-    normalizeCalVerCorrectionForPluginApi(pluginApiVersion),
-    pluginApiRange,
-  );
+  return satisfiesSemverRange(pluginApiVersion, pluginApiRange);
 }
 
+/** Checks whether the current gateway version satisfies a package minimum gateway version. */
 export function satisfiesGatewayMinimum(
   currentVersion: string,
   minGatewayVersion?: string | null,

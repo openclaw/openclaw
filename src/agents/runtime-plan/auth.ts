@@ -1,11 +1,17 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
-import { shouldRouteOpenAIThroughCodexAuthProvider } from "../openai-codex-routing.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import {
+  type ProviderAuthAliasLookupParams,
+  resolveProviderIdForAuth,
+} from "../provider-auth-aliases.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
-const CODEX_HARNESS_AUTH_PROVIDER = "openai-codex";
-const OPENAI_PROVIDER = "openai";
+const CODEX_HARNESS_AUTH_PROVIDER = "openai";
+const EMPTY_PROVIDER_AUTH_ALIAS_METADATA = {
+  plugins: [],
+} satisfies NonNullable<ProviderAuthAliasLookupParams["metadataSnapshot"]>;
 
 function resolveHarnessAuthProvider(params: {
   harnessId?: string;
@@ -24,13 +30,22 @@ export function buildAgentRuntimeAuthPlan(params: {
   sessionAuthProfileCandidateIds?: string[];
   config?: OpenClawConfig;
   workspaceDir?: string;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  providerAuthAliasesEnabled?: boolean;
   harnessId?: string;
   harnessRuntime?: string;
   allowHarnessAuthProfileForwarding?: boolean;
 }): AgentRuntimeAuthPlan {
+  const providerAuthAliasesEnabled =
+    params.providerAuthAliasesEnabled ??
+    (params.config ? normalizePluginsConfig(params.config.plugins).enabled : true);
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    (providerAuthAliasesEnabled ? undefined : EMPTY_PROVIDER_AUTH_ALIAS_METADATA);
   const aliasLookupParams = {
     config: params.config,
     workspaceDir: params.workspaceDir,
+    ...(metadataSnapshot ? { metadataSnapshot } : {}),
   };
   const providerForAuth = resolveProviderIdForAuth(params.provider, aliasLookupParams);
   const authProfileProviderForAuth = resolveProviderIdForAuth(
@@ -44,23 +59,10 @@ export function buildAgentRuntimeAuthPlan(params: {
   const harnessCanForwardProfile =
     params.allowHarnessAuthProfileForwarding !== false &&
     harnessProviderForAuth &&
-    (harnessProviderForAuth === authProfileProviderForAuth ||
-      (harnessProviderForAuth === CODEX_HARNESS_AUTH_PROVIDER &&
-        authProfileProviderForAuth === OPENAI_PROVIDER &&
-        params.authProfileMode === "api_key"));
-  const openAICanForwardCodexProfile = shouldRouteOpenAIThroughCodexAuthProvider({
-    provider: providerForAuth,
-    harnessRuntime: params.harnessRuntime,
-    agentHarnessId: params.harnessId,
-    authProfileProvider: authProfileProviderForAuth,
-    authProfileId: params.sessionAuthProfileId,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+    harnessProviderForAuth === authProfileProviderForAuth;
   const providerCanForwardProfile =
     !harnessProviderForAuth && providerForAuth === authProfileProviderForAuth;
-  const canForwardProfile =
-    providerCanForwardProfile || harnessCanForwardProfile || openAICanForwardCodexProfile;
+  const canForwardProfile = providerCanForwardProfile || harnessCanForwardProfile;
 
   return {
     providerForAuth,

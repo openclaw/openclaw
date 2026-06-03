@@ -1,8 +1,8 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import {
   resolveOutboundTargetWithPlugin,
@@ -18,6 +18,7 @@ function resolveLoadedOutboundChannelPlugin(channel: string): ChannelPlugin | un
   return getLoadedChannelPluginForRead(normalized);
 }
 
+/** Resolves targets through an already-loaded channel plugin without bootstrap discovery. */
 export function tryResolveLoadedOutboundTarget(params: {
   channel: GatewayMessageChannel;
   to?: string;

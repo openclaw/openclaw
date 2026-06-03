@@ -26,6 +26,9 @@ import {
   type RunBtwSideQuestionFn,
 } from "./test-helpers.runtime-state.js";
 
+/**
+ * Central Vitest module mock setup for gateway integration tests.
+ */
 export { getTestPluginRegistry, resetTestPluginRegistry, setTestPluginRegistry };
 export {
   agentCommand,
@@ -193,7 +196,9 @@ vi.mock("../config/sessions.js", async () => {
     saveSessionStore: vi.fn(async (storePath: string, store: unknown) => {
       const delay = sessionStoreSaveDelayMs.value;
       if (delay > 0) {
-        await new Promise((resolve) => setTimeout(resolve, delay));
+        await new Promise((resolve) => {
+          setTimeout(resolve, delay);
+        });
       }
       return actual.saveSessionStore(storePath, store as never);
     }),

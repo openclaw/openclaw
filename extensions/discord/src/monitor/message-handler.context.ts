@@ -297,7 +297,7 @@ export async function buildDiscordMessageProcessContext(params: {
     : undefined;
   const effectiveTo = autoThreadContext?.To ?? dmConversationTarget ?? replyTarget;
   if (!effectiveTo) {
-    runtime.error?.(danger("discord: missing reply target"));
+    runtime.error(danger("discord: missing reply target"));
     return null;
   }
   const lastRouteTo = dmConversationTarget ?? effectiveTo;
@@ -340,6 +340,7 @@ export async function buildDiscordMessageProcessContext(params: {
       id: messageChannelId,
       label: fromLabel,
       spaceId: isGuildMessage ? (guildInfo?.id ?? guildSlug) || undefined : undefined,
+      parentId: threadChannel ? threadParentId : undefined,
       threadId: threadChannel?.id ?? autoThreadContext?.createdThreadId ?? undefined,
     },
     route: {

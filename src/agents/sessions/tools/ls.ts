@@ -5,6 +5,7 @@ import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import type { AgentTool } from "../../runtime/index.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import { normalizePositiveLimit } from "./limits.js";
 import { resolveToCwd } from "./path-utils.js";
 import { getTextOutput, invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { LsToolDetails } from "./tool-contracts.js";
@@ -134,7 +135,7 @@ export function createLsToolDefinition(
         void (async () => {
           try {
             const dirPath = resolveToCwd(path || ".", cwd);
-            const effectiveLimit = limit ?? DEFAULT_LIMIT;
+            const effectiveLimit = normalizePositiveLimit(limit, DEFAULT_LIMIT);
 
             // Check if path exists.
             if (!(await ops.exists(dirPath))) {
@@ -222,7 +223,7 @@ export function createLsToolDefinition(
             });
           } catch (e: unknown) {
             signal?.removeEventListener("abort", onAbort);
-            reject(e);
+            reject(toLintErrorObject(e, "Non-Error rejection"));
           }
         })();
       });
@@ -232,9 +233,9 @@ export function createLsToolDefinition(
       text.setText(formatLsCall(args, theme));
       return text;
     },
-    renderResult(result, options, theme, context) {
+    renderResult(result, optionsLocal, theme, context) {
       const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(formatLsResult(result, options, theme, context.showImages));
+      text.setText(formatLsResult(result, optionsLocal, theme, context.showImages));
       return text;
     },
   };
@@ -242,4 +243,18 @@ export function createLsToolDefinition(
 
 export function createLsTool(cwd: string, options?: LsToolOptions): AgentTool<typeof lsSchema> {
   return wrapToolDefinition(createLsToolDefinition(cwd, options));
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

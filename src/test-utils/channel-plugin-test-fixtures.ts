@@ -1,5 +1,6 @@
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 
+/** Builds the smallest direct-message channel plugin shape used by config tests. */
 export function makeDirectPlugin(params: {
   id: string;
   label: string;

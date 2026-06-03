@@ -7,6 +7,8 @@ import {
 } from "../tasks/task-registry.maintenance.js";
 import { scheduleGatewaySigusr1Restart, type ScheduledRestart } from "./restart.js";
 
+// Safe restart coordination checks active local work before scheduling SIGUSR1
+// restarts, while still allowing explicit deferral bypasses for operators.
 export type SafeGatewayRestartCounts = {
   queueSize: number;
   pendingReplies: number;
@@ -118,6 +120,8 @@ export function createSafeGatewayRestartPreflight(
     if (taskBlockers.length === 0) {
       blockers.push(createFallbackTaskBlocker(counts.activeTasks));
     } else {
+      // Cap task details so restart diagnostics stay bounded even during a
+      // backlog; counts still preserve the total active-task signal.
       for (const task of taskBlockers.slice(0, 8)) {
         blockers.push({
           kind: "task",
@@ -145,6 +149,7 @@ export function createSafeGatewayRestartPreflight(
   };
 }
 
+/** Schedule a gateway restart after collecting queue/reply/task blockers. */
 export function requestSafeGatewayRestart(
   opts: {
     reason?: string;

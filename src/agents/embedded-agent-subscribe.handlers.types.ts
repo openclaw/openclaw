@@ -1,8 +1,10 @@
+import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
+import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
-import type { InlineCodeState } from "../markdown/code-spans.js";
 import type { HookRunner } from "../plugins/hooks.js";
+import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import type {
@@ -40,9 +42,28 @@ export type ToolCallSummary = {
   fileTarget?: import("./tool-mutation.js").FileTarget;
 };
 
+export type AssistantStreamData = {
+  text: string;
+  delta: string;
+  replace?: true;
+  mediaUrls?: string[];
+  phase?: AssistantPhase;
+};
+
+export type AssistantStreamDelivery = {
+  data: AssistantStreamData;
+  emitPartialReply: boolean;
+};
+
 export type EmbeddedAgentSubscribeState = {
   assistantTexts: string[];
-  toolMetas: Array<{ toolName?: string; meta?: string; asyncStarted?: boolean }>;
+  toolMetas: Array<{
+    toolName?: string;
+    meta?: string;
+    asyncStarted?: boolean;
+    asyncTaskRunId?: string;
+    asyncTaskId?: string;
+  }>;
   acceptedSessionSpawns: AcceptedSessionSpawn[];
   toolMetaById: Map<string, ToolCallSummary>;
   toolSummaryById: Set<string>;
@@ -64,12 +85,26 @@ export type EmbeddedAgentSubscribeState = {
     thinking: boolean;
     final: boolean;
     inlineCode: InlineCodeState;
+    fence?: FenceScanState;
+    reasoningInlineCode?: InlineCodeState;
+    reasoningFence?: FenceScanState;
+    reasoningPendingFenceFragment?: string;
+    finalInlineCode?: InlineCodeState;
+    finalFence?: FenceScanState;
+    pendingFenceFragment?: string;
     pendingTagFragment?: string;
   };
   partialBlockState: {
     thinking: boolean;
     final: boolean;
     inlineCode: InlineCodeState;
+    fence?: FenceScanState;
+    reasoningInlineCode?: InlineCodeState;
+    reasoningFence?: FenceScanState;
+    reasoningPendingFenceFragment?: string;
+    finalInlineCode?: InlineCodeState;
+    finalFence?: FenceScanState;
+    pendingFenceFragment?: string;
     pendingTagFragment?: string;
   };
   lastStreamedAssistant?: string;
@@ -78,6 +113,9 @@ export type EmbeddedAgentSubscribeState = {
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
   lastDeliveredBlockReplyText?: string;
+  deferBlockReplyDelivery: boolean;
+  deferredBlockReplies: BlockReplyPayload[];
+  deferredAssistantEvents: AssistantStreamDelivery[];
   toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
@@ -105,6 +143,7 @@ export type EmbeddedAgentSubscribeState = {
   timeoutPhase?: AgentRunTimeoutPhase;
   providerStarted?: boolean;
   hadDeterministicSideEffect?: boolean;
+  pendingEventChain: Promise<void> | null;
 
   messagingToolSentTexts: string[];
   messagingToolSentTextsNormalized: string[];
@@ -150,6 +189,13 @@ export type EmbeddedAgentSubscribeContext = {
       thinking: boolean;
       final: boolean;
       inlineCode?: InlineCodeState;
+      fence?: FenceScanState;
+      reasoningInlineCode?: InlineCodeState;
+      reasoningFence?: FenceScanState;
+      reasoningPendingFenceFragment?: string;
+      finalInlineCode?: InlineCodeState;
+      finalFence?: FenceScanState;
+      pendingFenceFragment?: string;
       pendingTagFragment?: string;
     },
     options?: { final?: boolean },
@@ -190,7 +236,15 @@ export type EmbeddedAgentSubscribeContext = {
   getUsageTotals: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
   getLastCompactionTokensAfter: () => number | undefined;
+  emitAssistantStreamData: (
+    data: AssistantStreamData,
+    options?: { emitPartialReply?: boolean },
+  ) => void;
   emitBlockReply: (payload: BlockReplyPayload) => void;
+  flushDeferredAssistantEvents: () => void;
+  flushDeferredBlockReplies: () => void;
+  clearDeferredAssistantEvents: () => void;
+  clearDeferredBlockReplies: () => void;
 };
 
 /**

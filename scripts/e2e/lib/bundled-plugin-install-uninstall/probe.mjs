@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
 
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const normalizePathForProbe = (value) => String(value ?? "").replace(/\\/g, "/");
@@ -10,6 +11,32 @@ const bundledRuntimeFragments = (pluginDir) => [
   `/dist-runtime/extensions/${pluginDir}`,
 ];
 const bundledRuntimeRootFragments = ["/dist/extensions/", "/dist-runtime/extensions/"];
+const DEFAULT_PLUGIN_LIST_TIMEOUT_MS = 30_000;
+const DEFAULT_PLUGIN_LIST_MAX_BUFFER_BYTES = 4 * 1024 * 1024;
+
+function readIntegerEnv(name, fallback, minimum) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") {
+    return fallback;
+  }
+  const text = raw.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`invalid ${name}: ${text}`);
+  }
+  return value;
+}
+
+function readPositiveIntEnv(name, fallback) {
+  return readIntegerEnv(name, fallback, 1);
+}
+
+function readNonNegativeIntEnv(name, fallback) {
+  return readIntegerEnv(name, fallback, 0);
+}
 
 function resolveStateDir() {
   if (process.env.OPENCLAW_STATE_DIR) {
@@ -42,11 +69,29 @@ function resolveOpenClawEntry() {
 
 function readPluginsList() {
   const entry = resolveOpenClawEntry();
+  const timeoutMs = readPositiveIntEnv(
+    "OPENCLAW_BUNDLED_PLUGIN_LIST_TIMEOUT_MS",
+    DEFAULT_PLUGIN_LIST_TIMEOUT_MS,
+  );
   const result = spawnSync(process.execPath, [entry, "plugins", "list", "--json"], {
     cwd: process.cwd(),
     encoding: "utf8",
     env: process.env,
+    maxBuffer: readPositiveIntEnv(
+      "OPENCLAW_BUNDLED_PLUGIN_LIST_MAX_BUFFER_BYTES",
+      DEFAULT_PLUGIN_LIST_MAX_BUFFER_BYTES,
+    ),
+    killSignal: "SIGKILL",
+    timeout: timeoutMs,
   });
+  if (result.error) {
+    const timedOut = result.error.code === "ETIMEDOUT";
+    throw new Error(
+      timedOut
+        ? `Timed out listing packaged bundled plugins after ${timeoutMs}ms`
+        : `Unable to list packaged bundled plugins: ${result.error.message}`,
+    );
+  }
   if (result.status !== 0) {
     throw new Error(
       `Unable to list packaged bundled plugins: ${result.stderr || result.stdout || `exit ${result.status}`}`,
@@ -112,14 +157,9 @@ async function loadManifestEntries() {
 
 async function selectedManifestEntries() {
   const allEntries = await loadManifestEntries();
-  const total = Number.parseInt(process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL || "1", 10);
-  const index = Number.parseInt(process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX || "0", 10);
-  if (!Number.isInteger(total) || total < 1) {
-    throw new Error(
-      `OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL must be >= 1, got ${process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL}`,
-    );
-  }
-  if (!Number.isInteger(index) || index < 0 || index >= total) {
+  const total = readPositiveIntEnv("OPENCLAW_BUNDLED_PLUGIN_SWEEP_TOTAL", 1);
+  const index = readNonNegativeIntEnv("OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX", 0);
+  if (index >= total) {
     throw new Error(
       `OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX must be in [0, ${total - 1}], got ${process.env.OPENCLAW_BUNDLED_PLUGIN_SWEEP_INDEX}`,
     );
@@ -135,10 +175,8 @@ async function selectedManifestEntries() {
 function assertInstalled(pluginId, pluginDir, requiresConfig) {
   const stateDir = resolveStateDir();
   const configPath = path.join(stateDir, "openclaw.json");
-  const indexPath = path.join(stateDir, "plugins", "installs.json");
   const config = readJson(configPath);
-  const index = readJson(indexPath);
-  const records = index.installRecords ?? index.records ?? {};
+  const records = readPluginInstallRecords({ stateDir, configPath });
   const record = records[pluginId];
   if (!record) {
     throw new Error(`missing install record for ${pluginId}`);
@@ -181,10 +219,8 @@ function assertInstalled(pluginId, pluginDir, requiresConfig) {
 function assertUninstalled(pluginId, pluginDir) {
   const stateDir = resolveStateDir();
   const configPath = path.join(stateDir, "openclaw.json");
-  const indexPath = path.join(stateDir, "plugins", "installs.json");
   const config = fs.existsSync(configPath) ? readJson(configPath) : {};
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
-  const records = index.installRecords ?? index.records ?? {};
+  const records = readPluginInstallRecords({ stateDir, configPath });
   if (records[pluginId]) {
     throw new Error(`install record still present after uninstall for ${pluginId}`);
   }

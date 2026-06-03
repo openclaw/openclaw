@@ -3,7 +3,7 @@ export {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../config/agent-limits.js";
 export { getRuntimeConfig } from "../config/config.js";
-export { mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
+export { loadSessionStore, mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
 export {
   forkSessionFromParent,
   resolveParentForkDecision,
@@ -13,6 +13,7 @@ export { ensureContextEnginesInitialized } from "../context-engine/init.js";
 export { resolveContextEngine } from "../context-engine/registry.js";
 export { callGateway } from "../gateway/call.js";
 export { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";
+export { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 export {
   pruneLegacyStoreKeys,
   resolveGatewaySessionStoreTarget,

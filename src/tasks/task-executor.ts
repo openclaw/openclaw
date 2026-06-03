@@ -43,6 +43,7 @@ import type {
 
 const log = createSubsystemLogger("tasks/executor");
 
+// One-task flows give detached ACP/subagent runs a flow handle for status and retry surfaces.
 function isOneTaskFlowEligible(task: TaskRecord): boolean {
   if (task.parentFlowId?.trim() || task.scopeKind !== "session") {
     return false;
@@ -65,6 +66,9 @@ function ensureSingleTaskFlow(params: {
       task: params.task,
       requesterOrigin: params.requesterOrigin,
     });
+    if (!flow) {
+      return params.task;
+    }
     const linked = linkTaskToFlowById({
       taskId: params.task.taskId,
       flowId: flow.flowId,
@@ -91,11 +95,14 @@ function ensureSingleTaskFlow(params: {
 type TaskRunCreateParams = DetachedTaskCreateParams;
 type RunningTaskRunCreateParams = DetachedRunningTaskCreateParams;
 
-export function createQueuedTaskRun(params: TaskRunCreateParams): TaskRecord {
+export function createQueuedTaskRun(params: TaskRunCreateParams): TaskRecord | null {
   const task = createTaskRecord({
     ...params,
     status: "queued",
   });
+  if (!task) {
+    return null;
+  }
   return ensureSingleTaskFlow({
     task,
     requesterOrigin: params.requesterOrigin,
@@ -106,11 +113,14 @@ export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
   return summarizeTaskRecords(listTasksForFlowId(flowId));
 }
 
-export function createRunningTaskRun(params: RunningTaskRunCreateParams): TaskRecord {
+export function createRunningTaskRun(params: RunningTaskRunCreateParams): TaskRecord | null {
   const task = createTaskRecord({
     ...params,
     status: "running",
   });
+  if (!task) {
+    return null;
+  }
   return ensureSingleTaskFlow({
     task,
     requesterOrigin: params.requesterOrigin,
@@ -326,6 +336,14 @@ function retryBlockedFlowTask(params: RetryBlockedFlowParams): RetryBlockedFlowR
     lastEventAt: params.lastEventAt,
     progressSummary: params.progressSummary,
   });
+  if (!task) {
+    return {
+      found: true,
+      retried: false,
+      reason: "Task persistence failed.",
+      previousTask: resolved.latestTask,
+    };
+  }
   return {
     found: true,
     retried: true,
@@ -390,10 +408,7 @@ function markFlowCancelRequested(flow: TaskFlowRecord): TaskFlowRecord | FlowUpd
     return result.flow;
   }
   return {
-    reason:
-      result.reason === "revision_conflict"
-        ? "Flow changed while cancellation was in progress."
-        : "Flow not found.",
+    reason: describeFlowUpdateFailure(result.reason),
     flow: result.current ?? getTaskFlowById(flow.flowId),
   };
 }
@@ -402,6 +417,21 @@ type FlowUpdateFailure = {
   reason: string;
   flow?: TaskFlowRecord;
 };
+
+function describeFlowUpdateFailure(
+  reason: Exclude<ReturnType<typeof requestFlowCancel>, { applied: true }>["reason"],
+): string {
+  switch (reason) {
+    case "revision_conflict":
+      return "Flow changed while cancellation was in progress.";
+    case "persist_failed":
+      return "Flow persistence failed.";
+    case "not_found":
+      return "Flow not found.";
+    default:
+      return "Flow mutation failed.";
+  }
+}
 
 function cancelManagedFlowAfterChildrenSettle(
   flow: TaskFlowRecord,
@@ -423,10 +453,7 @@ function cancelManagedFlowAfterChildrenSettle(
     return result.flow;
   }
   return {
-    reason:
-      result.reason === "revision_conflict"
-        ? "Flow changed while cancellation was in progress."
-        : "Flow not found.",
+    reason: describeFlowUpdateFailure(result.reason),
     flow: result.current ?? getTaskFlowById(flow.flowId),
   };
 }
@@ -516,7 +543,7 @@ export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult 
     notifyPolicy: params.notifyPolicy,
     deliveryStatus: params.deliveryStatus ?? "pending",
   };
-  let task: TaskRecord;
+  let task: TaskRecord | null;
   try {
     task =
       params.status === "running"
@@ -533,12 +560,29 @@ export function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult 
       flowId: flow.flowId,
     });
   }
+  if (!task) {
+    return {
+      found: true,
+      created: false,
+      reason: "Task persistence failed.",
+      flow: getTaskFlowById(flow.flowId) ?? flow,
+    };
+  }
+  const registeredTask = getTaskById(task.taskId);
+  if (!registeredTask) {
+    return {
+      found: true,
+      created: false,
+      reason: "Task persistence failed.",
+      flow: getTaskFlowById(flow.flowId) ?? flow,
+    };
+  }
 
   return {
     found: true,
     created: true,
     flow: getTaskFlowById(flow.flowId) ?? flow,
-    task,
+    task: registeredTask,
   };
 }
 

@@ -1,5 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import {
+  isInboundPathAllowed,
+  mergeInboundPathRoots,
+} from "@openclaw/media-core/inbound-path-policy";
+import { detectMime } from "@openclaw/media-core/mime";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
@@ -9,9 +14,7 @@ import {
   type MediaFetchRetryOptions,
   MediaFetchError,
 } from "../media/fetch.js";
-import { isInboundPathAllowed, mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { detectMime } from "../media/mime.js";
 import { buildRandomTempFilePath } from "../plugin-sdk/temp-path.js";
 import { normalizeAttachmentPath } from "./attachments.normalize.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
@@ -67,6 +70,7 @@ function getDefaultLocalPathRoots(): readonly string[] {
   return defaultLocalPathRoots;
 }
 
+/** Local/remote access policy used by the lazy media-understanding attachment cache. */
 export type MediaAttachmentCacheOptions = {
   localPathRoots?: readonly string[];
   includeDefaultLocalPathRoots?: boolean;
@@ -74,6 +78,12 @@ export type MediaAttachmentCacheOptions = {
   workspaceDir?: string;
 };
 
+/**
+ * Lazy resolver for media-understanding attachments.
+ *
+ * The cache prefers allowed local paths, falls back to remote URLs when a local path is blocked
+ * or missing, and owns any temporary files created for providers that require a filesystem path.
+ */
 export class MediaAttachmentCache {
   private readonly entries = new Map<number, AttachmentCacheEntry>();
   private readonly attachments: MediaAttachment[];
@@ -95,6 +105,7 @@ export class MediaAttachmentCache {
     }
   }
 
+  /** Returns attachment bytes, MIME hint, filename, and size within the requested byte limit. */
   async getBuffer(params: {
     attachmentIndex: number;
     maxBytes: number;
@@ -207,6 +218,7 @@ export class MediaAttachmentCache {
     }
   }
 
+  /** Returns a local path for providers that cannot accept buffers, creating a temp file if needed. */
   async getPath(params: {
     attachmentIndex: number;
     maxBytes?: number;
@@ -268,6 +280,7 @@ export class MediaAttachmentCache {
     return { path: tmpPath, cleanup: entry.tempCleanup };
   }
 
+  /** Removes temporary files created by `getPath`; callers should run this after provider use. */
   async cleanup(): Promise<void> {
     const cleanups: Promise<void>[] = [];
     for (const entry of this.entries.values()) {
