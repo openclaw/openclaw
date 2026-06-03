@@ -27,6 +27,8 @@ import {
   shouldShowInsecureContextHint,
 } from "./overview-hints.ts";
 import { renderOverviewLogTail } from "./overview-log-tail.ts";
+import "../components/demo-button.ts";
+import "../components/demo-status-widget.ts";
 
 export type OverviewProps = {
   connected: boolean;
@@ -406,6 +408,9 @@ export function renderOverview(props: OverviewProps) {
               </div>
             `
           : nothing}
+        <div class="row" style="margin-top: 14px;">
+          <openclaw-demo-button></openclaw-demo-button>
+        </div>
       </div>
 
       <div class="card">
@@ -435,6 +440,7 @@ export function renderOverview(props: OverviewProps) {
             </div>
           </div>
         </div>
+        <openclaw-demo-status-widget></openclaw-demo-status-widget>
         ${props.lastError
           ? html`<div class="callout danger" style="margin-top: 14px;">
               <div>${props.lastError}</div>

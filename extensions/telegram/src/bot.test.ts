@@ -3046,8 +3046,14 @@ describe("createTelegramBot", () => {
     onSpy.mockClear();
     getChatSpy.mockResolvedValue({ id: -100123456789, type: "supergroup", is_forum: true });
     const handler = vi.fn(
-      async ({ respond, conversationId, threadId }: TelegramInteractiveHandlerContext) => {
+      async ({
+        respond,
+        conversationId,
+        sessionKey,
+        threadId,
+      }: TelegramInteractiveHandlerContext) => {
         expect(conversationId).toBe("-100123456789:topic:1");
+        expect(sessionKey).toBe("agent:main:telegram:group:-100123456789:topic:1");
         expect(threadId).toBe(1);
         await respond.editMessage({
           text: `Handled ${conversationId}`,

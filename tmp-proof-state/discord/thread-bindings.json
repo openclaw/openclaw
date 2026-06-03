@@ -1,0 +1,1 @@
+{"version":1,"bindings":{"legacy-thread":{"accountId":"default","channelId":"parent-1","threadId":"legacy-thread","targetKind":"subagent","targetSessionKey":"agent:main:subagent:legacy","agentId":"main","boundBy":"system","boundAt":1780425412167,"expiresAt":1780425472167}}}

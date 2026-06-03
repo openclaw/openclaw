@@ -264,6 +264,38 @@ async function acknowledgeDiscordCodexControlConsumed(
   }
 }
 
+async function acknowledgeTelegramCodexControlConsumed(respond: {
+  reply: (params: { text: string }) => Promise<void>;
+  clearButtons?: () => Promise<void>;
+}): Promise<void> {
+  try {
+    await respond.clearButtons?.();
+  } catch {
+    // The Codex answer is already accepted; stale button edits should not block execution.
+  }
+  try {
+    await respond.reply({ text: "Sent answer to Codex." });
+  } catch {
+    // The one-shot Codex decision is already consumed; a stale Telegram ack must not block execution.
+  }
+}
+
+async function acknowledgeSlackCodexControlConsumed(respond: {
+  reply: (params: { text: string }) => Promise<void>;
+  editMessage?: (params: { text?: string; blocks?: unknown[] }) => Promise<void>;
+}): Promise<void> {
+  try {
+    await respond.editMessage?.({ blocks: [] });
+  } catch {
+    // The Codex answer is already accepted; stale button edits should not block execution.
+  }
+  try {
+    await respond.reply({ text: "Sent answer to Codex." });
+  } catch {
+    // The one-shot Codex decision is already consumed; a stale Slack ack must not block execution.
+  }
+}
+
 function registerCodexUserInputInteractiveHandlers(
   api: CodexPluginInteractiveApi,
   options: {
@@ -278,6 +310,7 @@ function registerCodexUserInputInteractiveHandlers(
       const ctx = rawCtx as {
         accountId: string;
         senderId?: string;
+        sessionKey?: string;
         threadId?: number;
         callback: { payload: string };
         auth?: { isAuthorizedSender?: boolean };
@@ -292,6 +325,7 @@ function registerCodexUserInputInteractiveHandlers(
           channel: "telegram",
           accountId: ctx.accountId,
           senderId: ctx.senderId,
+          sessionKey: ctx.sessionKey,
           messageThreadId: ctx.threadId,
         },
       });
@@ -302,11 +336,13 @@ function registerCodexUserInputInteractiveHandlers(
         await ctx.respond.reply({ text: result.message });
         return { handled: true };
       }
+      let acknowledgedConsumedPlan = false;
       const planResult = await handleCodexPlanDecisionCallbackLazy({
         ctx: buildCodexInteractiveCommandContext({
           channel: "telegram",
           accountId: ctx.accountId,
           senderId: ctx.senderId,
+          sessionKey: ctx.sessionKey,
           messageThreadId: ctx.threadId,
           isAuthorizedSender: ctx.auth?.isAuthorizedSender,
           config: options.resolveCurrentConfig?.() ?? api.config ?? {},
@@ -314,11 +350,15 @@ function registerCodexUserInputInteractiveHandlers(
         }),
         pluginConfig: options.resolveCurrentPluginConfig?.(),
         payload: ctx.callback.payload,
+        onConsumed: async () => {
+          acknowledgedConsumedPlan = true;
+          await acknowledgeTelegramCodexControlConsumed(ctx.respond);
+        },
       });
       if (!planResult.handled) {
         return { handled: false };
       }
-      if (planResult.consumed) {
+      if (planResult.consumed && !acknowledgedConsumedPlan) {
         await ctx.respond.clearButtons?.();
       }
       if (planResult.reply.text) {
@@ -412,6 +452,7 @@ function registerCodexUserInputInteractiveHandlers(
         await ctx.respond.reply({ text: result.message });
         return { handled: true };
       }
+      let acknowledgedConsumedPlan = false;
       const planResult = await handleCodexPlanDecisionCallbackLazy({
         ctx: buildCodexInteractiveCommandContext({
           channel: "slack",
@@ -424,11 +465,15 @@ function registerCodexUserInputInteractiveHandlers(
         }),
         pluginConfig: options.resolveCurrentPluginConfig?.(),
         payload: ctx.interaction.payload,
+        onConsumed: async () => {
+          acknowledgedConsumedPlan = true;
+          await acknowledgeSlackCodexControlConsumed(ctx.respond);
+        },
       });
       if (!planResult.handled) {
         return { handled: false };
       }
-      if (planResult.consumed) {
+      if (planResult.consumed && !acknowledgedConsumedPlan) {
         await ctx.respond.editMessage?.({ blocks: [] });
       }
       if (planResult.reply.text) {
@@ -462,6 +507,7 @@ function buildCodexInteractiveCommandContext(params: {
   channel: "telegram" | "discord" | "slack";
   accountId: string;
   senderId?: string;
+  sessionKey?: string;
   messageThreadId?: string | number;
   isAuthorizedSender?: boolean;
   config: OpenClawConfig;
@@ -471,6 +517,7 @@ function buildCodexInteractiveCommandContext(params: {
     channel: params.channel,
     accountId: params.accountId,
     senderId: params.senderId,
+    sessionKey: params.sessionKey,
     ...(params.messageThreadId != null ? { messageThreadId: params.messageThreadId } : {}),
     isAuthorizedSender: params.isAuthorizedSender ?? true,
     commandBody: "/codex",
