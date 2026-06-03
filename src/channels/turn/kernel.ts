@@ -80,7 +80,13 @@ export {
   materializeTurnState,
   validateTurnCompletion,
 } from "./turn-event-state.js";
-export type { AppendTurnEventInput, TurnEvent, TurnEventRecorder } from "./turn-event-state.js";
+export type {
+  AppendTurnEventInput,
+  TurnEvent,
+  TurnEventRecorder,
+  TurnState,
+  TurnStateStatus,
+} from "./turn-event-state.js";
 export type {
   AccessFacts,
   AssembledChannelTurn,

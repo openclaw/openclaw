@@ -171,6 +171,8 @@ export type {
   PreparedInboundReply,
   InboundReplyDispatchResult,
   InboundReplyRecordOptions,
+  TurnState,
+  TurnStateStatus,
 } from "../channels/message/inbound-reply-dispatch.js";
 
 export {
