@@ -83,8 +83,11 @@ const BENIGN_MCP_LITERAL_VALUES = new Set([
   "yes",
 ]);
 
-const URL_LIKE_MCP_LITERAL = /^(?:https?|wss?):\/\/\S+$/i;
-const MIME_LIKE_MCP_LITERAL = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+(?:\s*;.*)?$/i;
+const URL_LIKE_MCP_LITERAL = new RegExp(String.raw`^(?:https?|wss?)://\S+$`, "i");
+const MIME_LIKE_MCP_LITERAL = new RegExp(
+  String.raw`^[a-z0-9!#$&^_.+-]+/[a-z0-9!#$&^_.+-]+(?:\s*;.*)?$`,
+  "i",
+);
 const SENSITIVE_MCP_VALUE_FRAGMENTS = [
   "api-key",
   "api key",

@@ -69,6 +69,7 @@ function makeRuntime(
       content: [{ type: "text", text: toolName }],
       isError: false,
     }),
+    peekCatalog: () => null,
     dispose: async () => {},
   };
 }
