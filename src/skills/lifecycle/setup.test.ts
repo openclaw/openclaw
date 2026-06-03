@@ -31,10 +31,10 @@ const PLAIN_SKILL_MD = [
   "# Test",
 ].join("\n");
 
-function setupSkillMd(script: string, timeoutMs?: number): string {
+function setupSkillMd(script: string): string {
   const metadata = JSON.stringify({
     openclaw: {
-      setup: { script, ...(timeoutMs ? { timeoutMs } : {}) },
+      setup: { script },
     },
   });
   return [
@@ -269,18 +269,6 @@ describe("runSkillSetupHook", () => {
     }
   });
 
-  it("fails when setup script times out", async () => {
-    const dir = await tempDirs.make("openclaw-setup-timeout-");
-    writeSkillMd(dir, setupSkillMd("scripts/slow.sh", 500));
-    writeScript(dir, "scripts/slow.sh", "#!/bin/sh\nsleep 10\n");
-
-    const result = await runSkillSetupHook({ targetDir: dir, mode: "install" });
-    expect(result).toMatchObject({ ok: false, failureKind: "timeout" });
-    if (!result.ok) {
-      expect(result.error).toContain("timed out");
-    }
-  });
-
   it("fails when declared setup script path contains ..", async () => {
     const dir = await tempDirs.make("openclaw-setup-dotdot-");
     writeSkillMd(dir, setupSkillMd("../outside.sh"));
@@ -315,17 +303,7 @@ describe("runSkillSetupHook", () => {
     expect(result).toEqual({ ok: true });
   });
 
-  it("caps timeout at MAX_SETUP_TIMEOUT_MS", async () => {
-    const dir = await tempDirs.make("openclaw-setup-cap-");
-    // Request 10 minutes but should be capped at 300s; script exits immediately.
-    writeSkillMd(dir, setupSkillMd("scripts/fast.sh", 600_000));
-    writeScript(dir, "scripts/fast.sh", "#!/bin/sh\necho done\n");
-
-    const result = await runSkillSetupHook({ targetDir: dir, mode: "install" });
-    expect(result).toEqual({ ok: true });
-  });
-
-  it("uses default timeoutMs when not specified", async () => {
+  it("uses the internal default timeout", async () => {
     const dir = await tempDirs.make("openclaw-setup-default-");
     writeSkillMd(dir, setupSkillMd("scripts/fast.sh"));
     writeScript(dir, "scripts/fast.sh", "#!/bin/sh\necho done\n");

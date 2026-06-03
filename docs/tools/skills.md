@@ -345,12 +345,6 @@ metadata:
   `--allow-setup-hooks`.
 </ParamField>
 
-<ParamField path="setup.timeoutMs" type="number" default="60000">
-  Optional setup hook timeout in milliseconds. OpenClaw caps this at 300000 ms. A
-  non-zero exit, missing script, path escape, or timeout fails the install/update
-  that opted into running the hook before the new skill directory is published.
-</ParamField>
-
 <Note>
   Legacy `metadata.clawdbot` blocks are still accepted when
   `metadata.openclaw` is absent, so older installed skills keep their

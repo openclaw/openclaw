@@ -18,7 +18,6 @@ export type SkillInstallSpec = {
 
 export type SkillSetupSpec = {
   script: string;
-  timeoutMs?: number;
 };
 
 export type OpenClawSkillMetadata = {

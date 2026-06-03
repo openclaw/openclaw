@@ -131,11 +131,11 @@ describe("resolveOpenClawMetadata setup parsing", () => {
     expect(setup).toEqual({ script: "scripts/install.sh" });
   });
 
-  it("parses setup.script with timeoutMs", () => {
+  it("ignores setup.timeoutMs while parsing setup.script", () => {
     const setup = resolveSetup({
       metadata: '{"openclaw":{"setup":{"script":"scripts/install.sh","timeoutMs":90000}}}',
     });
-    expect(setup).toEqual({ script: "scripts/install.sh", timeoutMs: 90000 });
+    expect(setup).toEqual({ script: "scripts/install.sh" });
   });
 
   it("returns undefined when setup is absent", () => {
@@ -176,7 +176,7 @@ describe("resolveOpenClawMetadata setup parsing", () => {
     expect(metadata?.setupError).toContain("non-empty relative path");
   });
 
-  it("ignores non-numeric timeoutMs", () => {
+  it("ignores non-numeric setup.timeoutMs", () => {
     const setup = resolveSetup({
       metadata: '{"openclaw":{"setup":{"script":"run.sh","timeoutMs":"fast"}}}',
     });

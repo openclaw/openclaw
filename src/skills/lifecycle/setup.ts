@@ -10,7 +10,6 @@ import { resolveConfiguredSkillEnvOverrides } from "../runtime/env-overrides.js"
 const SKILL_MD_CANDIDATES = ["SKILL.md", "skill.md", "skills.md", "SKILL.MD"] as const;
 
 const DEFAULT_SETUP_TIMEOUT_MS = 60_000;
-const MAX_SETUP_TIMEOUT_MS = 300_000;
 
 function isReservedSetupEnvName(rawKey: string): boolean {
   const key = rawKey.trim().toUpperCase();
@@ -152,7 +151,7 @@ export async function runSkillSetupHook(params: SkillSetupParams): Promise<Skill
     executable = false;
   }
 
-  const timeoutMs = Math.min(setup.timeoutMs ?? DEFAULT_SETUP_TIMEOUT_MS, MAX_SETUP_TIMEOUT_MS);
+  const timeoutMs = DEFAULT_SETUP_TIMEOUT_MS;
 
   const hookEnv: Record<string, string> = {
     SKILL_DIR: resolvedTargetDir,

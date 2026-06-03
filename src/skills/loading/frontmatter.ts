@@ -214,9 +214,6 @@ function resolveSetupSpec(raw: unknown): ResolvedSetupSpec {
     return { error: `Invalid setup.script: path traversal is not allowed (${normalized})` };
   }
   const spec: SkillSetupSpec = { script: normalized };
-  if (typeof obj.timeoutMs === "number" && obj.timeoutMs > 0) {
-    spec.timeoutMs = obj.timeoutMs;
-  }
   return { spec };
 }
 
