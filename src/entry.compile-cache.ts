@@ -12,8 +12,7 @@ import {
 } from "./process/respawn-child-runner.js";
 
 // Node 24.0–24.14 can deadlock during ESM module loading when compile cache is
-// enabled on Windows npm-global installs. The release CI pins 24.15+ and has
-// not reproduced the hang. Skip compile cache on affected versions.
+// enabled on Windows npm-global installs. Keep the skip scoped to that platform.
 const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
 
 export function resolveEntryInstallRoot(entryFile: string): string {
@@ -59,11 +58,15 @@ export function shouldEnableOpenClawCompileCache(params: {
   env?: NodeJS.ProcessEnv;
   installRoot: string;
   nodeVersion?: string;
+  platform?: NodeJS.Platform;
 }): boolean {
   if (isNodeCompileCacheDisabled(params.env)) {
     return false;
   }
-  if (isNodeVersionAffectedByCompileCacheDeadlock(params.nodeVersion ?? process.versions.node)) {
+  if (
+    (params.platform ?? process.platform) === "win32" &&
+    isNodeVersionAffectedByCompileCacheDeadlock(params.nodeVersion ?? process.versions.node)
+  ) {
     return false;
   }
   return !isSourceCheckoutInstallRoot(params.installRoot);
