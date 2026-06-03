@@ -1,5 +1,4 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { createInterface, type Interface } from "node:readline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -67,7 +66,7 @@ export class IMessageRpcClient {
   private readonly closed: Promise<void>;
   private closedResolve: (() => void) | null = null;
   private child: ChildProcessWithoutNullStreams | null = null;
-  private reader: Interface | null = null;
+  private stdoutBuffer = "";
   private nextId = 1;
   private publicProcessError: string | null = null;
 
@@ -96,14 +95,20 @@ export class IMessageRpcClient {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;
-    this.reader = createInterface({ input: child.stdout });
 
-    this.reader.on("line", (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        return;
+    // Split on \n only — not U+2028/U+2029 — so valid JSON strings containing
+    // Unicode line/paragraph separators survive as a single line. (#89830)
+    child.stdout.on("data", (chunk: Buffer) => {
+      this.stdoutBuffer += chunk.toString("utf-8");
+      let idx: number;
+      while ((idx = this.stdoutBuffer.indexOf("\n")) !== -1) {
+        const line = this.stdoutBuffer.slice(0, idx);
+        this.stdoutBuffer = this.stdoutBuffer.slice(idx + 1);
+        const trimmed = line.trim();
+        if (trimmed) {
+          this.handleLine(trimmed);
+        }
       }
-      this.handleLine(trimmed);
     });
 
     child.stderr?.on("data", (chunk) => {
@@ -139,8 +144,7 @@ export class IMessageRpcClient {
     if (!this.child) {
       return;
     }
-    this.reader?.close();
-    this.reader = null;
+    this.stdoutBuffer = "";
     this.child.stdin?.end();
     const child = this.child;
     this.child = null;
