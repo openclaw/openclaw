@@ -21,6 +21,7 @@ export function encodeJsonPointerToken(token: string): string {
 
 /**
  * Reads a value from a JSON-like document using an absolute JSON Pointer.
+ * Missing segments throw by default; `onMissing: "undefined"` is for optional probes.
  */
 export function readJsonPointer(
   root: unknown,
