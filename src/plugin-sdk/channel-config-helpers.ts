@@ -34,8 +34,11 @@ export {
 
 const INTERNAL_MESSAGE_CHANNEL = "webchat";
 
+/** Origin scope used when authorizing channel config writes. */
 export type ConfigWriteScope = ConfigWriteScopeLike;
+/** Target account/channel for a config write authorization check. */
 export type ConfigWriteTarget = ConfigWriteTargetLike;
+/** Decision returned by channel config write policy helpers. */
 export type ConfigWriteAuthorizationResult = ConfigWriteAuthorizationResultLike;
 
 type ChannelCrudConfigAdapter<ResolvedAccount> = Pick<
@@ -61,6 +64,7 @@ type ChannelConfigAdapterWithAccessors<ResolvedAccount> = Pick<
   | "resolveDefaultTo"
 >;
 
+/** Returns whether config writes are enabled for a channel/account target. */
 export function resolveChannelConfigWrites(params: {
   cfg: OpenClawConfig;
   channelId?: string | null;
@@ -69,6 +73,7 @@ export function resolveChannelConfigWrites(params: {
   return resolveChannelConfigWritesShared(params);
 }
 
+/** Authorizes a channel config mutation against origin and target policy. */
 export function authorizeConfigWrite(params: {
   cfg: OpenClawConfig;
   origin?: ConfigWriteScope;
@@ -78,6 +83,7 @@ export function authorizeConfigWrite(params: {
   return authorizeConfigWriteShared(params);
 }
 
+/** Returns true when trusted internal message scopes can bypass config write policy. */
 export function canBypassConfigWritePolicy(params: {
   channel?: string | null;
   gatewayClientScopes?: string[] | null;
@@ -89,6 +95,7 @@ export function canBypassConfigWritePolicy(params: {
   });
 }
 
+/** Formats the denial message shown when config write authorization fails. */
 export function formatConfigWriteDeniedMessage(params: {
   result: Exclude<ConfigWriteAuthorizationResult, { allowed: true }>;
   fallbackChannelId?: string | null;
