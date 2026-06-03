@@ -228,7 +228,7 @@ describe("models-config", () => {
               baseUrl: "https://botzhipin.work/openclaw/platform/v1",
               apiKey: "main-agent-api-key",
               auth: "api-key",
-              authHeader: false,
+              authHeader: true,
               api: "openai-completions",
               headers: {
                 Authorization: "Bearer main-agent-token",
@@ -262,6 +262,7 @@ describe("models-config", () => {
             botzhipin: {
               baseUrl: "https://botzhipin.work/openclaw/platform/v1",
               auth: "api-key",
+              authHeader: true,
               api: "openai-completions",
               models: [
                 {
