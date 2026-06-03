@@ -545,19 +545,23 @@ const SkillProposalStatusSchema = Type.Union([
   Type.Literal("quarantined"),
   Type.Literal("stale"),
 ]);
+/** Skill proposal operation type: new skill or update to an existing skill. */
 const SkillProposalKindSchema = Type.Union([Type.Literal("create"), Type.Literal("update")]);
+/** Scan state for proposed skill content before it can be applied. */
 const SkillProposalScanStateSchema = Type.Union([
   Type.Literal("pending"),
   Type.Literal("clean"),
   Type.Literal("failed"),
   Type.Literal("quarantined"),
 ]);
+/** Source that created the skill proposal record. */
 const SkillProposalSourceSchema = Type.Union([
   Type.Literal("skill-workshop"),
   Type.Literal("cli"),
   Type.Literal("gateway"),
 ]);
 const SkillProposalContentString = Type.String({ minLength: 1, maxLength: 1_048_576 });
+/** Support file payload accepted from proposal create/revise requests. */
 const SkillProposalSupportFileInputSchema = Type.Object(
   {
     path: NonEmptyString,
@@ -565,6 +569,7 @@ const SkillProposalSupportFileInputSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+/** Stored support file metadata, including target conflict hashes for updates. */
 const SkillProposalSupportFileSchema = Type.Object(
   {
     path: NonEmptyString,
@@ -576,6 +581,7 @@ const SkillProposalSupportFileSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** One static-scan finding against proposed skill content. */
 const SkillProposalFindingSchema = Type.Object(
   {
     ruleId: NonEmptyString,
@@ -588,6 +594,7 @@ const SkillProposalFindingSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Aggregated scan report attached to a proposal record. */
 const SkillProposalScanSchema = Type.Object(
   {
     state: SkillProposalScanStateSchema,
@@ -600,6 +607,7 @@ const SkillProposalScanSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Skill file target that a proposal creates or updates. */
 const SkillProposalTargetSchema = Type.Object(
   {
     skillName: NonEmptyString,
@@ -612,6 +620,7 @@ const SkillProposalTargetSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Optional runtime origin tying a proposal back to an agent turn. */
 const SkillProposalOriginSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -622,6 +631,7 @@ const SkillProposalOriginSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Full persisted skill proposal record. */
 const SkillProposalRecordSchema = Type.Object(
   {
     schema: Type.Literal("openclaw.skill-workshop.proposal.v1"),
@@ -651,6 +661,7 @@ const SkillProposalRecordSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Condensed proposal manifest entry for list views. */
 const SkillProposalManifestEntrySchema = Type.Object(
   {
     id: NonEmptyString,
@@ -667,6 +678,7 @@ const SkillProposalManifestEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Lists skill-workshop proposals for the selected agent scope. */
 export const SkillsProposalsListParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -674,6 +686,7 @@ export const SkillsProposalsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Proposal manifest response for dashboard/workshop list views. */
 export const SkillsProposalsListResultSchema = Type.Object(
   {
     schema: Type.Literal("openclaw.skill-workshop.proposals-manifest.v1"),
@@ -683,6 +696,7 @@ export const SkillsProposalsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads a proposal record plus editable draft/support content. */
 export const SkillsProposalInspectParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -691,6 +705,7 @@ export const SkillsProposalInspectParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Full proposal inspection result used before apply/revise decisions. */
 export const SkillsProposalInspectResultSchema = Type.Object(
   {
     record: SkillProposalRecordSchema,
@@ -700,6 +715,7 @@ export const SkillsProposalInspectResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Creates a proposal for a new skill. */
 export const SkillsProposalCreateParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -713,6 +729,7 @@ export const SkillsProposalCreateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Creates a proposal to update an existing skill. */
 export const SkillsProposalUpdateParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -726,6 +743,7 @@ export const SkillsProposalUpdateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Replaces draft content/support files for an existing proposal. */
 export const SkillsProposalReviseParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -739,6 +757,7 @@ export const SkillsProposalReviseParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Shared approve/reject/quarantine action payload for one proposal. */
 export const SkillsProposalActionParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -748,6 +767,7 @@ export const SkillsProposalActionParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result returned after applying a skill proposal to disk. */
 export const SkillsProposalApplyResultSchema = Type.Object(
   {
     record: SkillProposalRecordSchema,
@@ -756,8 +776,10 @@ export const SkillsProposalApplyResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Proposal record result returned after non-apply proposal actions. */
 export const SkillsProposalRecordResultSchema = SkillProposalRecordSchema;
 
+/** Reads the configured tool catalog for an agent. */
 export const ToolsCatalogParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -766,6 +788,7 @@ export const ToolsCatalogParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads the effective tool set for one session. */
 export const ToolsEffectiveParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -774,6 +797,7 @@ export const ToolsEffectiveParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Invokes one tool through the gateway tool dispatcher. */
 export const ToolsInvokeParamsSchema = Type.Object(
   {
     name: NonEmptyString,
@@ -786,6 +810,7 @@ export const ToolsInvokeParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Tool profile shown in catalog views. */
 export const ToolCatalogProfileSchema = Type.Object(
   {
     id: Type.Union([
@@ -799,6 +824,7 @@ export const ToolCatalogProfileSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Tool catalog entry before session-specific filtering is applied. */
 export const ToolCatalogEntrySchema = Type.Object(
   {
     id: NonEmptyString,
@@ -823,6 +849,7 @@ export const ToolCatalogEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Group of related catalog tools from core or a plugin. */
 export const ToolCatalogGroupSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -834,6 +861,7 @@ export const ToolCatalogGroupSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Tool catalog result for agent configuration UI. */
 export const ToolsCatalogResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -843,6 +871,7 @@ export const ToolsCatalogResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Effective tool entry after session/profile/channel/plugin filtering. */
 export const ToolsEffectiveEntrySchema = Type.Object(
   {
     id: NonEmptyString,
@@ -865,6 +894,7 @@ export const ToolsEffectiveEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Effective tool group shown to runtime/session callers. */
 export const ToolsEffectiveGroupSchema = Type.Object(
   {
     id: Type.Union([
@@ -885,6 +915,7 @@ export const ToolsEffectiveGroupSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Notice explaining runtime filtering such as quarantined tool schemas. */
 export const ToolsEffectiveNoticeSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -894,6 +925,7 @@ export const ToolsEffectiveNoticeSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Effective tool set for a session, including profile and filtering notices. */
 export const ToolsEffectiveResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -904,6 +936,7 @@ export const ToolsEffectiveResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Normalized error shape for tool invocation failures. */
 export const ToolsInvokeErrorSchema = Type.Object(
   {
     code: NonEmptyString,
@@ -913,6 +946,7 @@ export const ToolsInvokeErrorSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Tool invocation result, including approval handoff when required. */
 export const ToolsInvokeResultSchema = Type.Object(
   {
     ok: Type.Boolean(),
