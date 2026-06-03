@@ -1,14 +1,19 @@
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 
 type ProviderPluginConfig = {
+  /** Whether this plugin entry is enabled in the persisted plugin registry. */
   enabled?: boolean;
 };
 
 type ProviderEnableConfigCarrier = {
   plugins?: {
+    /** Global plugin switch; false blocks provider setup from enabling entries. */
     enabled?: boolean;
+    /** Plugin ids that provider setup must not enable. */
     deny?: string[];
+    /** Plugin ids allowed to load after provider setup enables them. */
     allow?: string[];
+    /** Per-plugin registry entries updated by provider setup flows. */
     entries?: Record<string, ProviderPluginConfig | undefined>;
   };
 };
@@ -27,7 +32,9 @@ export type PluginEnableResult<TConfig extends ProviderEnableConfigCarrier> = {
  * normalization from the core plugin enable path.
  */
 export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier>(
+  /** Provider setup config object to update without channel normalization. */
   cfg: TConfig,
+  /** Provider plugin id to enable and allowlist. */
   pluginId: string,
 ): PluginEnableResult<TConfig> {
   if (cfg.plugins?.enabled === false) {
