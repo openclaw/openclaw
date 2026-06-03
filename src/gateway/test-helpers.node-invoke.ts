@@ -1,5 +1,8 @@
 import type { GatewayClient } from "./client.js";
 
+/**
+ * Node invoke acknowledgement helper for gateway tests.
+ */
 export function acknowledgeNodeInvokeRequestForTest(params: {
   client: GatewayClient;
   event: { event?: string; payload?: unknown };
