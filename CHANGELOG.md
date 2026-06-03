@@ -60,6 +60,11 @@ Docs: https://docs.openclaw.ai
 - Release/CI/E2E: keep plugin lifecycle matrix resource artifacts under a unique per-run scratch root so parallel runs cannot overwrite tarballs or inspect output.
 - Release/CI/E2E: bound mock OpenAI readiness probes in web-search and Telegram RTT Docker smokes so stalled HTTP accepts cannot hang cleanup or fall through.
 - Tooling: cancel oversized pnpm audit advisory responses before failing so registry error paths do not leave response bodies open.
+- Release/CI/E2E: stop tracked gateway and mock service process groups so descendant helpers do not survive E2E cleanup.
+- Release/CI/E2E: exit Telegram credential proof wrappers promptly after forwarded shutdown signals while keeping the descendant force-kill guard armed.
+- Release/CI/E2E: reject oversized ClickClack fixture request bodies before release journey smokes can accumulate unbounded payloads.
+- Release/CI/E2E: reject oversized OpenAI image-auth mock request bodies before Docker proof runs can accumulate unbounded payloads.
+- Release/CI/E2E: require the Kitchen Sink RPC walk to prove every expected plugin tool is cataloged and effective before invoking tool fixtures.
 - Release/CI/E2E: fail secret-provider proof runs when temporary state cleanup still fails after retries instead of hiding the cleanup error.
 - Release/CI/E2E: fail package-candidate ref proofs when temporary source worktree cleanup fails instead of leaving stale worktrees behind.
 - Release/CI/E2E: remove package tarball extract directories when tar extraction fails before validation can continue.

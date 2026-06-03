@@ -865,10 +865,37 @@ function buildApiAttachments(attachments?: ChatAttachment[]) {
 
 export type ChatSendAckStatus = "started" | "in_flight" | "ok";
 
+export type ChatSendAckServerTiming = {
+  receivedToAckMs?: number;
+  loadSessionMs?: number;
+  prepareAttachmentsMs?: number;
+};
+
 export type ChatSendAck = {
   runId: string;
   status: ChatSendAckStatus;
+  serverTiming?: ChatSendAckServerTiming;
 };
+
+function normalizeAckTimingValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function normalizeChatSendAckServerTiming(value: unknown): ChatSendAckServerTiming | undefined {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const receivedToAckMs = normalizeAckTimingValue(record.receivedToAckMs);
+  const loadSessionMs = normalizeAckTimingValue(record.loadSessionMs);
+  const prepareAttachmentsMs = normalizeAckTimingValue(record.prepareAttachmentsMs);
+  const timing: ChatSendAckServerTiming = {
+    ...(receivedToAckMs !== undefined ? { receivedToAckMs } : {}),
+    ...(loadSessionMs !== undefined ? { loadSessionMs } : {}),
+    ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
+  };
+  return Object.keys(timing).length > 0 ? timing : undefined;
+}
 
 function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSendAck {
   if (!payload || typeof payload !== "object") {
@@ -878,9 +905,11 @@ function normalizeChatSendAck(payload: unknown, fallbackRunId: string): ChatSend
   const runId =
     typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : fallbackRunId;
   const status = record.status;
+  const serverTiming = normalizeChatSendAckServerTiming(record.serverTiming);
   return {
     runId,
     status: status === "in_flight" || status === "ok" ? status : "started",
+    ...(serverTiming ? { serverTiming } : {}),
   };
 }
 

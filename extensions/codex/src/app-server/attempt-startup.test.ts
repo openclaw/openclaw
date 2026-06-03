@@ -48,6 +48,8 @@ const bundleMcpThreadConfig = {
   fingerprint: undefined,
 } satisfies CodexBundleMcpThreadConfig;
 
+const HARNESS_REQUEST_TIMEOUT_MS = 15_000;
+
 function readHarnessMessages(writes: string[]): Array<{ id?: number; method?: string }> {
   return writes.map((write) => JSON.parse(write) as { id?: number; method?: string });
 }
@@ -105,7 +107,7 @@ function startThreadWithHarness(
 async function answerInitialize(harness: ClientHarness): Promise<void> {
   await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1), {
     interval: 1,
-    timeout: 5_000,
+    timeout: HARNESS_REQUEST_TIMEOUT_MS,
   });
   const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
   harness.send({ id: initialize.id, result: { userAgent: "openclaw/0.125.0 (macOS; test)" } });
@@ -120,7 +122,7 @@ async function waitForRequest(
       expect(readHarnessMessages(harness.writes).some((write) => write.method === method)).toBe(
         true,
       ),
-    { interval: 1, timeout: 5_000 },
+    { interval: 1, timeout: HARNESS_REQUEST_TIMEOUT_MS },
   );
   const request = readHarnessMessages(harness.writes).find((write) => write.method === method);
   if (!request) {
@@ -238,9 +240,10 @@ describe("startCodexAttemptThread", () => {
       harness: retained,
       skipStartSpy: true,
     });
+    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
     const threadStart = await waitForThreadStart(retained);
 
-    await expect(run).rejects.toThrow("codex app-server startup timed out");
+    await rejected;
     expect(retained.process.stdin.destroyed).toBe(false);
 
     retained.send({ id: threadStart.id, result: { threadId: "late-thread" } });
@@ -249,11 +252,18 @@ describe("startCodexAttemptThread", () => {
   });
 
   it("closes the shared app-server when startup times out during initialize", async () => {
-    const { harness, run } = startThreadWithHarness(100);
+    const { harness, run } = startThreadWithHarness(2_000);
+    const runError = run.then(
+      () => undefined,
+      (error: unknown) => error,
+    );
 
-    await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
+    const initialize = await waitForRequest(harness, "initialize");
+    expect(initialize.id).toBeDefined();
 
-    await expect(run).rejects.toThrow("codex app-server startup timed out");
+    const error = await runError;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("codex app-server startup timed out");
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
       timeout: 2_000,
@@ -270,19 +280,29 @@ describe("startCodexAttemptThread", () => {
           abandonSignal?: AbortSignal;
         }
       | undefined;
+    let resolveFactoryDone: () => void = () => undefined;
+    const factoryDone = new Promise<void>((resolve) => {
+      resolveFactoryDone = resolve;
+    });
     const { harness, run } = startThreadWithHarness(100, new AbortController().signal, {
       attemptClientFactory:
         (factoryHarness) => async (_startOptions, _authProfileId, _agentDir, _config, options) => {
-          observedFactoryOptions = options;
-          await new Promise<void>((resolve) => {
-            setTimeout(resolve, 250);
-          });
-          options?.onStartedClient?.(factoryHarness.client);
-          return factoryHarness.client;
+          try {
+            observedFactoryOptions = options;
+            await new Promise<void>((resolve) => {
+              setTimeout(resolve, 250);
+            });
+            options?.onStartedClient?.(factoryHarness.client);
+            return factoryHarness.client;
+          } finally {
+            resolveFactoryDone();
+          }
         },
     });
+    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
 
-    await expect(run).rejects.toThrow("codex app-server startup timed out");
+    await rejected;
+    await factoryDone;
     await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true), {
       interval: 1,
       timeout: 2_000,
@@ -296,7 +316,7 @@ describe("startCodexAttemptThread", () => {
 
   it("clears the shared app-server when cancellation abandons an in-flight thread request", async () => {
     const abortController = new AbortController();
-    const { harness, run } = startThreadWithHarness(5_000, abortController.signal);
+    const { harness, run } = startThreadWithHarness(30_000, abortController.signal);
     const runError = run.then(
       () => undefined,
       (error: unknown) => error,

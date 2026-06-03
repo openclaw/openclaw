@@ -88,20 +88,44 @@ function assertMockModelConfig() {
 function assertChannelConfig() {
   const channel = process.argv[3];
   const expectedTokens = process.argv.slice(4);
-  if (expectedTokens.length === 0) {
-    throw new Error("assert-channel-config requires at least one expected token");
-  }
   const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
   const cfg = readJson(configPath);
   const entry = cfg.channels?.[channel];
   if (!entry || entry.enabled === false) {
     throw new Error(`${channel} was not enabled`);
   }
-  const serializedEntry = JSON.stringify(entry);
-  for (const token of expectedTokens) {
-    if (!serializedEntry.includes(token)) {
-      throw new Error(`${channel} token was not persisted`);
+  const assertTokenField = (field, expected) => {
+    if (entry[field] !== expected) {
+      throw new Error(
+        `${channel} config did not persist ${field}; expected ${expected}, got ${JSON.stringify(entry[field])}`,
+      );
     }
+  };
+  switch (channel) {
+    case "telegram": {
+      if (expectedTokens.length !== 1) {
+        throw new Error("telegram channel config assertion requires one bot token");
+      }
+      assertTokenField("botToken", expectedTokens[0]);
+      return;
+    }
+    case "discord": {
+      if (expectedTokens.length !== 1) {
+        throw new Error("discord channel config assertion requires one bot token");
+      }
+      assertTokenField("token", expectedTokens[0]);
+      return;
+    }
+    case "slack": {
+      if (expectedTokens.length !== 2) {
+        throw new Error("slack channel config assertion requires bot and app tokens");
+      }
+      assertTokenField("botToken", expectedTokens[0]);
+      assertTokenField("appToken", expectedTokens[1]);
+      return;
+    }
+    default:
+      throw new Error(`unsupported channel config assertion: ${channel}`);
   }
 }
 

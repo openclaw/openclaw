@@ -161,9 +161,7 @@ async function stopGateway(child) {
 }
 
 async function closeFileHandles(handles) {
-  const results = await Promise.allSettled(
-    handles.filter(Boolean).map((handle) => handle.close()),
-  );
+  const results = await Promise.allSettled(handles.filter(Boolean).map((handle) => handle.close()));
   const failedClose = results.find((result) => result.status === "rejected");
   if (failedClose) {
     throw failedClose.reason;
