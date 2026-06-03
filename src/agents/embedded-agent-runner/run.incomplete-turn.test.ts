@@ -2946,9 +2946,11 @@ describe("resolveTurnBudgetTimeoutNotice", () => {
   const silentTimeout = {
     timedOut: true,
     idleTimedOut: false,
+    timedOutDuringCompaction: false,
     payloadCount: 0,
     emptyAssistantReplyIsSilent: false,
     hasMessagingDelivery: false,
+    hasDeterministicApprovalPrompt: false,
   };
 
   it("returns the turn-budget notice when a real turn times out with no visible reply", () => {
@@ -2965,6 +2967,12 @@ describe("resolveTurnBudgetTimeoutNotice", () => {
     expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, timedOut: false })).toBeNull();
   });
 
+  it("returns null for a compaction timeout (paused/resumable, not abandoned)", () => {
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, timedOutDuringCompaction: true }),
+    ).toBeNull();
+  });
+
   it("returns null when a visible payload is already being returned", () => {
     expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, payloadCount: 1 })).toBeNull();
   });
@@ -2978,6 +2986,12 @@ describe("resolveTurnBudgetTimeoutNotice", () => {
   it("returns null when a messaging tool already delivered a reply (no double-notify)", () => {
     expect(
       resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasMessagingDelivery: true }),
+    ).toBeNull();
+  });
+
+  it("returns null when a deterministic approval prompt was delivered out-of-band", () => {
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasDeterministicApprovalPrompt: true }),
     ).toBeNull();
   });
 });
