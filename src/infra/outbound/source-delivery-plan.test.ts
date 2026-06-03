@@ -105,6 +105,28 @@ describe("source delivery plan", () => {
     expect(outcome.visibleDeliveries[0]?.verifiedTarget).toBe(false);
   });
 
+  it("matches message-tool sends against delivery aliases from target resolution", () => {
+    const contract = createSourceDeliveryPlan({
+      owner: "message_tool_then_direct_fallback",
+      reason: "cron_announce",
+      target: {
+        channel: "slack",
+        to: "channel:C0AHNV28LQJ",
+        aliases: ["C0AHNV28LQJ", "#abel-channel"],
+      },
+    });
+
+    const outcome = resolveSourceDeliveryOutcome(contract, {
+      didSendViaMessageTool: true,
+      messageToolSentTargets: [{ tool: "message", provider: "message", to: "#abel-channel" }],
+    });
+
+    expect(outcome.satisfiesSourceDelivery).toBe(true);
+    expect(outcome.verifiedMessageToolDelivery).toBe(true);
+    expect(outcome.unverifiedMessageToolDelivery).toBe(false);
+    expect(outcome.visibleDeliveries[0]?.verifiedTarget).toBe(true);
+  });
+
   it("keeps verified message-tool delivery separate from source fallback satisfaction", () => {
     const contract = createSourceDeliveryPlan({
       owner: "none",
