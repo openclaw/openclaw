@@ -1412,7 +1412,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
   it("falls back when gum reports raw-mode ioctl failures", () => {
     expect(script).toContain("setrawmode|inappropriate ioctl");
     expect(script).toContain(
-      'if "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err"; then',
+      'if "$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err"; then',
     );
     expect(script).toContain(
       'if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then',
@@ -1420,7 +1420,9 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     expect(script).toContain(
       'ui_warn "Spinner unavailable in this terminal; continuing without spinner"',
     );
-    expect(script).toContain('"$@" < /dev/null\n                return $?');
+    expect(script).toContain(
+      'if is_non_interactive_shell; then\n                    "$@" < /dev/null\n                else\n                    "$@"\n                fi\n                return $?',
+    );
   });
 
   it("reruns spinner-wrapped commands when gum reports ioctl failure", () => {

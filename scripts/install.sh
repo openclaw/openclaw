@@ -450,13 +450,17 @@ run_with_spinner() {
         local gum_err gum_out
         gum_err="$(mktempfile)"
         gum_out="$(mktempfile)"
-        if "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err"; then
+        if "$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err"; then
             if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
                 GUM=""
                 GUM_STATUS="skipped"
                 GUM_REASON="gum raw mode unavailable"
                 ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-                "$@" < /dev/null
+                if is_non_interactive_shell; then
+                    "$@" < /dev/null
+                else
+                    "$@"
+                fi
                 return $?
             fi
             if [[ -s "$gum_out" ]]; then
@@ -470,7 +474,11 @@ run_with_spinner() {
             GUM_STATUS="skipped"
             GUM_REASON="gum raw mode unavailable"
             ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-            "$@" < /dev/null
+            if is_non_interactive_shell; then
+                "$@" < /dev/null
+            else
+                "$@"
+            fi
             return $?
         fi
         if [[ -s "$gum_err" ]]; then
@@ -480,8 +488,13 @@ run_with_spinner() {
     fi
 
     # Redirect stdin from /dev/null so subprocesses cannot consume the script
-    # stream when the installer is piped via curl | bash.
-    "$@" < /dev/null
+    # stream when the installer is piped via curl | bash.  When running
+    # interactively, preserve terminal stdin for commands that need it.
+    if is_non_interactive_shell; then
+        "$@" < /dev/null
+    else
+        "$@"
+    fi
 }
 
 run_quiet_step() {
@@ -510,8 +523,14 @@ run_quiet_step() {
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
         showed_progress=true
-        if "$@" < /dev/null >"$log" 2>&1; then
-            return 0
+        if is_non_interactive_shell; then
+            if "$@" < /dev/null >"$log" 2>&1; then
+                return 0
+            fi
+        else
+            if "$@" >"$log" 2>&1; then
+                return 0
+            fi
         fi
     fi
 
