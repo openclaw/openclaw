@@ -1,3 +1,7 @@
+/**
+ * Shared channel diagnostic formatters exposed through the plugin SDK.
+ * Keep messages compact and stable enough for plugin logs without making them machine contracts.
+ */
 /** Minimal logger callback shape exposed through channel SDK helpers. */
 export type LogFn = (message: string) => void;
 
