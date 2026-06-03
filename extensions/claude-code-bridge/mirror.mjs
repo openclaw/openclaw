@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Periodic mirror: copies Claude Code's per-project auto-memory files into
-// the OpenClaw wiki vault as bridge-style source pages, so Aurelius and the
-// rest of the crew can absorb them on the next dream cycle.
+// the OpenClaw wiki vault as bridge-style source pages, so the local agent can
+// absorb them on the next dream cycle.
 //
 // Direction is one-way (Claude Code -> wiki). Reads still happen on demand
 // via openclaw_wiki_search/_get from inside Claude Code. Phase B of the
@@ -46,7 +46,7 @@ function slugify(value, max = 60) {
 }
 
 function decodeProjectName(rawDirName) {
-  // Claude Code encodes the cwd as "-Users-coryshelton-..." (slashes -> dashes,
+  // Claude Code encodes the cwd as "-Users-name-project" (slashes -> dashes,
   // leading slash dropped). Reverse it for display, but keep the raw name as
   // the project key (it's stable and unambiguous).
   if (rawDirName.startsWith("-")) {

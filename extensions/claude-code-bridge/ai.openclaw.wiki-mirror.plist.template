@@ -10,10 +10,9 @@
     1. Copy this file to ~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist
     2. Replace placeholders:
          __HOME__           -> absolute path to your home directory (for example /Users/you)
+         __BRIDGE_DIR__     -> absolute path to extensions/claude-code-bridge
          __NODE_BIN__       -> absolute path to node (likely /opt/homebrew/bin/node)
-         __INGEST_KEY__     -> super-admin API key pulled from 1Password
-       1Password CLI one-liner for the key:
-         op item get "Bench Wiki Ingest Key" --fields label=password
+         __INGEST_KEY__     -> super-admin API key pulled from your secret manager
     3. Load it:
          launchctl unload ~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist 2>/dev/null
          launchctl load   ~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist
@@ -34,7 +33,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>__NODE_BIN__</string>
-        <string>__HOME__/clawd/openclaw/extensions/claude-code-bridge/cloud-mirror.mjs</string>
+        <string>__BRIDGE_DIR__/cloud-mirror.mjs</string>
     </array>
 
     <key>EnvironmentVariables</key>

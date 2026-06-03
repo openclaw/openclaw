@@ -880,7 +880,7 @@ function buildServer() {
           .string()
           .min(1)
           .describe(
-            "FTS5 query. Examples: 'aurelius', '\"Phase D2 monorepo\"', 'hammer AND anvil', '\"#477\"'.",
+            "FTS5 query. Examples: 'roadmap', '\"Phase D2 monorepo\"', 'hammer AND anvil', '\"#477\"'.",
           ),
         sessionId: z
           .string()

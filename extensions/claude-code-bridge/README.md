@@ -4,15 +4,17 @@ Standalone MCP server that exposes OpenClaw (gateway, agents, memory wiki) as to
 
 ## Architecture
 
-Three hand-authored ESM files, no build step, no openclaw plugin SDK dependency:
+Four hand-authored ESM files and one launchd template, no build step, no openclaw plugin SDK dependency:
 
-| File             | Role                                                                                                                                                                       |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serve.mjs`      | Stdio MCP server. Registers 10 tools. Spawned by Claude Code via `mcpServers` config.                                                                                      |
-| `mirror.mjs`     | One-way mirror: copies Claude Code project memory files into `~/.openclaw/wiki/main/sources/claude-code-*.md` as bridge-style source pages. Run by launchd every 15 min. |
-| `statusline.mjs` | Fast (<100ms) filesystem-based status string for Claude Code's `statusLine` command. Never invokes the openclaw CLI.                                                       |
+| File                              | Role                                                                                                                                              |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `serve.mjs`                       | Stdio MCP server. Registers 12 tools. Spawned by Claude Code via `mcpServers` config.                                                             |
+| `mirror.mjs`                      | One-shot local mirror: copies Claude Code project memory files into `~/.openclaw/wiki/main/sources/claude-code-*.md` as bridge-style source pages. |
+| `cloud-mirror.mjs`                | Long-running cloud mirror daemon: pushes local wiki deltas to the configured Bench ingest endpoint.                                                |
+| `statusline.mjs`                  | Fast (<100ms) filesystem-based status string for Claude Code's `statusLine` command. Never invokes the openclaw CLI.                              |
+| `ai.openclaw.wiki-mirror.plist.template` | LaunchAgent template for `cloud-mirror.mjs`.                                                                                               |
 
-All three files `import` from the openclaw fork's existing `node_modules` (`@modelcontextprotocol/sdk`, `zod`) — no extension-local install needed.
+The MCP server imports from the openclaw fork's existing `node_modules` (`@modelcontextprotocol/sdk`, `zod`) — no extension-local install needed.
 
 ## Why not a real OpenClaw extension?
 
@@ -28,9 +30,9 @@ If/when this bridge graduates to a proper extension (e.g., for upstream PR or pr
 
 - **MCP registration**: user-scope Claude Code config, added via `claude mcp add openclaw --scope user -- node <repo>/extensions/claude-code-bridge/serve.mjs`.
 - **Statusline**: `~/.claude/settings.json` → `statusLine.command`.
-- **Mirror schedule**: `~/Library/LaunchAgents/ai.openclaw.claude-code-mirror.plist` — `StartInterval 900` (every 15 min), plus once at load.
+- **Cloud mirror schedule**: `~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist` from the template in this directory.
 
-## Tool surface (10 tools)
+## Tool surface (12 tools)
 
 All prefixed `openclaw_`:
 
@@ -46,6 +48,8 @@ All prefixed `openclaw_`:
 | `agent_handoff`     | gateway `sessions.create` (new session + initial brief, with heartbeat-window warning) |
 | `agent_send`        | gateway `sessions.send` (follow-up to existing sessionKey)                             |
 | `agent_messages`    | gateway `chat.history` (param is `sessionKey` not `key`)                               |
+| `lcm_grep`          | direct read-only FTS search of `~/.openclaw/lcm.db`                                    |
+| `lcm_describe`      | direct read-only conversation summary from `~/.openclaw/lcm.db`                        |
 
 ## Operational gotchas
 
