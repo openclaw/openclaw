@@ -136,6 +136,29 @@ knowledge layer beside it.
 
 See [Memory Wiki](/plugins/memory-wiki).
 
+## Extending memory with corpus supplements
+
+Beyond the built-in memory files, OpenClaw can integrate external knowledge bases
+through **MemoryCorpusSupplement** plugins. When registered, a supplement is
+automatically queried alongside `memory_search`, so your agent recalls not just
+session notes but also documents, manuals, research archives, and any structured
+wiki you maintain.
+
+Corpus supplements appear in the agent's prompt as `<active_memory_plugin>`
+blocks, seamlessly merged with regular memory results and sorted by relevance.
+They require no special configuration in the agent — once installed and enabled,
+the active-memory plugin discovers and uses them automatically.
+
+A popular example is **[ActiveWiki](https://github.com/kiagentkronos-cell/activewiki-openclaw)**,
+which provides semantic vector search and knowledge-graph relationships over a
+configurable wiki corpus. Install from ClawHub:
+
+```bash
+openclaw plugins install clawhub:@kiagentkronos-cell/activewiki
+```
+
+See [Community plugins](/plugins/community) for more third-party extensions.
+
 ## Memory search
 
 When an embedding provider is configured, `memory_search` uses **hybrid
@@ -287,6 +310,7 @@ openclaw memory index --force   # Rebuild the index
 - [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
 - [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
 - [Memory configuration reference](/reference/memory-config): all config knobs.
+- [Community plugins](/plugins/community): third-party memory extensions and corpus supplements.
 - [Compaction](/concepts/compaction): how compaction interacts with memory.
 
 ## Related
