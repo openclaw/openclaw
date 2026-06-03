@@ -1,3 +1,4 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import {
   type McpToolCatalogDiagnostic,
@@ -63,14 +64,16 @@ function providerCatalogProjectionFinding(params: {
   message: string;
   error: unknown;
 }): HealthFinding {
-  const path = providerCatalogPath(params.pluginId);
+  const providerId = sanitizeForLog(params.providerId);
+  const pluginId = params.pluginId ? sanitizeForLog(params.pluginId) : undefined;
+  const path = providerCatalogPath(pluginId);
   return {
     checkId: "core/doctor/provider-catalog-projection",
     severity: "error",
-    message: params.message,
+    message: sanitizeForLog(params.message),
     ...(path ? { path } : {}),
-    target: params.providerId,
-    requirement: formatErrorMessage(params.error),
+    target: providerId,
+    requirement: sanitizeForLog(formatErrorMessage(params.error)),
     fixHint:
       "Fix the plugin provider catalog hook or disable the plugin, then rerun doctor before relying on model discovery.",
   };
@@ -443,7 +446,7 @@ export async function collectProviderCatalogProjectionFindings(
         checkId: "core/doctor/provider-catalog-projection",
         severity: "error",
         message: "Provider catalog hooks could not be loaded for doctor validation.",
-        requirement: formatErrorMessage(error),
+        requirement: sanitizeForLog(formatErrorMessage(error)),
         fixHint: "Fix plugin provider discovery loading, then rerun doctor.",
       },
     ];

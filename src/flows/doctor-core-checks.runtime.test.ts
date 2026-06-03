@@ -507,6 +507,20 @@ describe("doctor provider catalog projection checks", () => {
     mocks.resolvePluginProviders.mockReset().mockReturnValue([]);
   });
 
+  it("sanitizes provider catalog discovery failures before rendering doctor output", async () => {
+    mocks.resolvePluginProviders.mockImplementationOnce(() => {
+      throw new Error("provider catalog\n\u001B[31mload failed");
+    });
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual({
+      checkId: "core/doctor/provider-catalog-projection",
+      severity: "error",
+      message: "Provider catalog hooks could not be loaded for doctor validation.",
+      requirement: "provider catalogload failed",
+      fixHint: "Fix plugin provider discovery loading, then rerun doctor.",
+    });
+  });
+
   it("reports provider catalog rows that fail unified text projection", async () => {
     const providers = Object.defineProperty(
       {
@@ -557,6 +571,33 @@ describe("doctor provider catalog projection checks", () => {
         discoveryEntriesOnly: true,
       }),
     );
+  });
+
+  it("sanitizes provider catalog projection findings before rendering doctor output", async () => {
+    const provider = {
+      id: "mock\u001B[31m\nprovider",
+      pluginId: "mock\u001B[31m\nplugin",
+      label: "Mock",
+      auth: [],
+    };
+    Object.defineProperty(provider, "staticCatalog", {
+      enumerable: true,
+      get() {
+        throw new Error("provider catalog\n\u001B[31morder failed");
+      },
+    });
+    mocks.resolvePluginProviders.mockReturnValueOnce([provider]);
+
+    await expect(collectProviderCatalogProjectionFindings({})).resolves.toContainEqual({
+      checkId: "core/doctor/provider-catalog-projection",
+      severity: "error",
+      message: "Provider catalog mockprovider order cannot be read during doctor validation.",
+      path: "plugins.entries.mockplugin",
+      target: "mockprovider",
+      requirement: "provider catalogorder failed",
+      fixHint:
+        "Fix the plugin provider catalog hook or disable the plugin, then rerun doctor before relying on model discovery.",
+    });
   });
 
   it("reports provider catalog model rows with invalid ids", async () => {
