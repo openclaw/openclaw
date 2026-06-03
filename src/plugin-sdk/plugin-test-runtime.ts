@@ -14,6 +14,9 @@ export {
   resolveWebSearchProviderContractEntriesForPluginId,
 } from "../plugins/contracts/registry.js";
 export { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+export { emitInternalDiagnosticEvent as emitInternalDiagnosticEventForTest } from "../infra/diagnostic-events.js";
+export { runWithDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+export { logMessageDispatchStarted, logMessageProcessed } from "../logging/diagnostic.js";
 export { resolveBundledExplicitProviderContractsFromPublicArtifacts } from "../plugins/provider-contract-public-artifacts.js";
 export {
   initializeGlobalHookRunner,
@@ -36,7 +39,9 @@ export {
   resetFacadeRuntimeStateForTest,
 } from "./facade-runtime.js";
 export { capturePluginRegistration } from "../plugins/captured-registration.js";
+export { clearHealthChecksForTest } from "../flows/health-check-registry.js";
 export { runProviderCatalog } from "../plugins/provider-discovery.js";
+export { onTrustedInternalDiagnosticEvent } from "../infra/diagnostic-events.js";
 export {
   buildProviderPluginMethodChoice,
   resolveProviderModelPickerEntries,
@@ -44,11 +49,26 @@ export {
   setProviderWizardProvidersResolverForTest,
 } from "../plugins/provider-wizard.js";
 export { resolveProviderPluginChoice } from "../plugins/provider-auth-choice.runtime.js";
+export {
+  clearEmbeddingProviders,
+  getRegisteredEmbeddingProvider,
+  listRegisteredEmbeddingProviders,
+  registerEmbeddingProvider,
+  restoreRegisteredEmbeddingProviders,
+  type RegisteredEmbeddingProvider,
+} from "../plugins/embedding-providers.js";
+export {
+  clearMemoryEmbeddingProviders,
+  listRegisteredMemoryEmbeddingProviders,
+  restoreRegisteredMemoryEmbeddingProviders,
+  type RegisteredMemoryEmbeddingProvider,
+} from "../plugins/memory-embedding-providers.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 export type { PluginHookRegistration } from "../plugins/hook-types.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { MockFn } from "../test-utils/vitest-mock-fn.js";
 export { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
+export { readQueuedEntries as readQueuedDeliveryEntriesForTest } from "../infra/outbound/delivery-queue.test-helpers.js";
 export {
   registerProviderPlugin,
   registerProviderPlugins,

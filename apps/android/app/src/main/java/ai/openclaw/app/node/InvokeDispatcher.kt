@@ -15,12 +15,16 @@ import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
 import ai.openclaw.app.protocol.OpenClawTalkCommand
 
+/** Runtime state for SMS search, split so permission prompts are not reported as hard unavailability. */
 internal enum class SmsSearchAvailabilityReason {
   Available,
   PermissionRequired,
   Unavailable,
 }
 
+/**
+ * Distinguish permanent SMS search unavailability from permission-gated search.
+ */
 internal fun classifySmsSearchAvailability(
   readSmsAvailable: Boolean,
   smsFeatureEnabled: Boolean,
@@ -53,6 +57,9 @@ internal fun smsSearchAvailabilityError(
       )
   }
 
+/**
+ * Gateway node.invoke command router for Android-owned capabilities.
+ */
 class InvokeDispatcher(
   private val canvas: CanvasController,
   private val cameraHandler: CameraHandler,
@@ -78,6 +85,7 @@ class InvokeDispatcher(
   private val smsTelephonyAvailable: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
   private val photosAvailable: () -> Boolean,
+  private val installedAppsSharingEnabled: () -> Boolean,
   private val debugBuild: () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
   private val onCanvasA2uiReset: () -> Unit,
@@ -85,6 +93,7 @@ class InvokeDispatcher(
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
 ) {
+  /** Dispatches one gateway node.invoke command after foreground and availability gates pass. */
   suspend fun handleInvoke(
     command: String,
     paramsJson: String?,
@@ -96,6 +105,7 @@ class InvokeDispatcher(
           message = "INVALID_REQUEST: unknown command",
         )
     if (spec.requiresForeground && !isForeground()) {
+      // Canvas, camera, and screen-backed commands need an active Activity/WebView surface.
       return GatewaySession.InvokeResult.error(
         code = "NODE_BACKGROUND_UNAVAILABLE",
         message = "NODE_BACKGROUND_UNAVAILABLE: canvas/camera/screen commands require foreground",
@@ -103,6 +113,7 @@ class InvokeDispatcher(
     }
     availabilityError(spec.availability)?.let { return it }
 
+    // Command strings come from OpenClawProtocolConstants; the registry above owns advertised availability.
     return when (command) {
       // Canvas commands
       OpenClawCanvasCommand.Present.rawValue -> {
@@ -183,6 +194,7 @@ class InvokeDispatcher(
       OpenClawDeviceCommand.Info.rawValue -> deviceHandler.handleDeviceInfo(paramsJson)
       OpenClawDeviceCommand.Permissions.rawValue -> deviceHandler.handleDevicePermissions(paramsJson)
       OpenClawDeviceCommand.Health.rawValue -> deviceHandler.handleDeviceHealth(paramsJson)
+      OpenClawDeviceCommand.Apps.rawValue -> deviceHandler.handleDeviceApps(paramsJson)
 
       // Notifications command
       OpenClawNotificationsCommand.List.rawValue -> notificationsHandler.handleNotificationsList(paramsJson)
@@ -239,6 +251,7 @@ class InvokeDispatcher(
         )
     val readyOnFirstCheck = a2uiHandler.ensureA2uiReady(a2uiUrl)
     if (!readyOnFirstCheck) {
+      // Gateway canvas host metadata can lag reconnects; refresh once before failing the command.
       refreshCanvasHostUrl()
       a2uiUrl = a2uiHandler.resolveA2uiHostUrl() ?: a2uiUrl
       if (!a2uiHandler.ensureA2uiReady(a2uiUrl)) {
@@ -255,6 +268,7 @@ class InvokeDispatcher(
     try {
       block()
     } catch (_: Throwable) {
+      // WebView calls throw when the Activity is backgrounded between the foreground check and execution.
       GatewaySession.InvokeResult.error(
         code = "NODE_BACKGROUND_UNAVAILABLE",
         message = "NODE_BACKGROUND_UNAVAILABLE: canvas unavailable",
@@ -312,6 +326,7 @@ class InvokeDispatcher(
       InvokeCommandAvailability.ReadSmsAvailable,
       InvokeCommandAvailability.RequestableSmsSearchAvailable,
       ->
+        // SMS search may still be advertised as promptable; runtime invoke fails only on permanent unavailability.
         smsSearchAvailabilityError(
           readSmsAvailable = readSmsAvailable(),
           smsFeatureEnabled = smsFeatureEnabled(),
@@ -335,6 +350,15 @@ class InvokeDispatcher(
             message = "PHOTOS_UNAVAILABLE: photos not available on this build",
           )
         }
+      InvokeCommandAvailability.InstalledAppsSharingEnabled ->
+        if (installedAppsSharingEnabled()) {
+          null
+        } else {
+          GatewaySession.InvokeResult.error(
+            code = "INSTALLED_APPS_SHARING_DISABLED",
+            message = "INSTALLED_APPS_SHARING_DISABLED: enable Installed Apps in Settings",
+          )
+        }
       InvokeCommandAvailability.DebugBuild ->
         if (debugBuild()) {
           null
@@ -347,12 +371,19 @@ class InvokeDispatcher(
     }
 }
 
+/**
+ * Talk-mode command adapter implemented by the voice subsystem.
+ */
 interface TalkHandler {
+  /** Starts a push-to-talk capture session and keeps it open until stop or cancel. */
   suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult
 
+  /** Finishes the active push-to-talk capture and submits recognized speech. */
   suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult
 
+  /** Aborts the active push-to-talk capture without submitting speech. */
   suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult
 
+  /** Runs a bounded one-shot push-to-talk capture. */
   suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult
 }

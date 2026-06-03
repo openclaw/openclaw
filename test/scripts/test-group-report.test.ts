@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,8 +11,12 @@ import {
 } from "../../scripts/lib/test-group-report.mjs";
 import {
   parseTestGroupReportArgs,
+  resolveFullSuiteVitestEnv,
   resolveReportArtifactDirs,
+  resolveReportRunSpecs,
+  resolveRunPlanConcurrency,
   resolveRunPlans,
+  spawnText,
 } from "../../scripts/test-group-report.mjs";
 
 describe("scripts/test-group-report grouping", () => {
@@ -44,18 +50,22 @@ describe("scripts/test-group-report aggregation", () => {
                 name: path.join(process.cwd(), "src", "commands", "agent.test.ts"),
                 startTime: 100,
                 endTime: 700,
-                assertionResults: [{}, {}],
+                assertionResults: [
+                  { duration: 150, fullName: "agent ok", status: "passed" },
+                  { duration: 2600, fullName: "agent slow", status: "passed" },
+                ],
               },
               {
                 name: path.join(process.cwd(), "extensions", "discord", "src", "send.test.ts"),
                 startTime: 200,
                 endTime: 450,
-                assertionResults: [{}],
+                assertionResults: [{ duration: 50, fullName: "send ok", status: "passed" }],
               },
             ],
           },
         },
       ],
+      maxTestMs: 2000,
     });
 
     expect(report.totals).toEqual({ durationMs: 850, fileCount: 2, testCount: 3 });
@@ -70,6 +80,15 @@ describe("scripts/test-group-report aggregation", () => {
         durationMs: 850,
         fileCount: 2,
         testCount: 3,
+      },
+    ]);
+    expect(report.slowTests).toStrictEqual([
+      {
+        config: "commands",
+        durationMs: 2600,
+        file: "src/commands/agent.test.ts",
+        fullName: "agent slow",
+        status: "passed",
       },
     ]);
   });
@@ -234,13 +253,17 @@ describe("scripts/test-group-report arg parsing", () => {
     ).toStrictEqual({
       allowFailures: true,
       compare: null,
+      concurrency: null,
       configs: ["a.ts", "b.ts"],
       fullSuite: false,
       groupBy: "folder",
+      killGraceMs: 10000,
       limit: 25,
+      maxTestMs: null,
       output: null,
       reports: [],
-      rss: process.platform === "darwin",
+      rss: process.platform !== "win32",
+      timeoutMs: 1800000,
       topFiles: 25,
       vitestArgs: ["--maxWorkers=1"],
     });
@@ -260,20 +283,228 @@ describe("scripts/test-group-report arg parsing", () => {
     ).toStrictEqual({
       allowFailures: false,
       compare: { before: "before.json", after: "after.json" },
+      concurrency: null,
       configs: [],
       fullSuite: false,
       groupBy: "area",
+      killGraceMs: 10000,
       limit: 5,
+      maxTestMs: null,
       output: null,
       reports: [],
-      rss: process.platform === "darwin",
+      rss: process.platform !== "win32",
+      timeoutMs: 1800000,
       topFiles: 3,
       vitestArgs: [],
     });
   });
+
+  it("parses individual test duration threshold", () => {
+    expect(parseTestGroupReportArgs(["--max-test-ms", "2000"])).toMatchObject({
+      maxTestMs: 2000,
+    });
+  });
+
+  it("parses explicit run concurrency", () => {
+    expect(parseTestGroupReportArgs(["--concurrency", "4"])).toMatchObject({
+      concurrency: 4,
+    });
+  });
+
+  it("parses per-config timeout controls", () => {
+    expect(
+      parseTestGroupReportArgs(["--timeout-ms", "5000", "--kill-grace-ms", "250"]),
+    ).toMatchObject({
+      killGraceMs: 250,
+      timeoutMs: 5000,
+    });
+  });
+
+  it("rejects malformed positive integer flags", () => {
+    for (const flag of [
+      "--limit",
+      "--top-files",
+      "--max-test-ms",
+      "--timeout-ms",
+      "--kill-grace-ms",
+      "--concurrency",
+    ]) {
+      expect(() => parseTestGroupReportArgs([flag, "20x"])).toThrow(
+        `${flag} must be a positive integer`,
+      );
+      expect(() => parseTestGroupReportArgs([flag, "0"])).toThrow(
+        `${flag} must be a positive integer`,
+      );
+    }
+  });
+});
+
+describe("scripts/test-group-report child process guard", () => {
+  it("times out a child that ignores SIGTERM", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const started = Date.now();
+    const result = await spawnText(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000);",
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        killGraceMs: 50,
+        timeoutMs: 250,
+      },
+    );
+
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(result).toMatchObject({
+      status: 1,
+      signal: "SIGKILL",
+      timedOut: true,
+    });
+    expect(result.output).toContain("command timed out after 250ms");
+    expect(result.output).toContain("sending SIGKILL");
+  });
+
+  it("kills timed wrapper process groups without orphaning the measured process", async () => {
+    if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
+      return;
+    }
+
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-"));
+    const markerPath = path.join(tempDir, "marker.txt");
+    try {
+      const result = await spawnText(
+        "/usr/bin/time",
+        [
+          process.execPath,
+          "--input-type=module",
+          "--eval",
+          [
+            "import fs from 'node:fs';",
+            "process.on('SIGTERM', () => {});",
+            `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          killGraceMs: 50,
+          timeoutMs: 250,
+        },
+      );
+
+      expect(result).toMatchObject({
+        status: 1,
+        timedOut: true,
+      });
+      expect(result.output).toContain("command timed out after 250ms");
+      expect(result.output).toContain("sending SIGKILL");
+
+      const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
+      const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      expect(sizeAfterWait).toBe(sizeAfterReturn);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("scripts/test-group-report run plans", () => {
+  it("caps Vitest workers for full-suite profiling by default", () => {
+    expect(resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {})).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+    });
+  });
+
+  it("uses a serial worker budget for commands full-suite profiling", () => {
+    expect(
+      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {}, "commands"),
+    ).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "1",
+    });
+  });
+
+  it("preserves explicit Vitest worker budgets for full-suite profiling", () => {
+    expect(
+      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {
+        OPENCLAW_VITEST_MAX_WORKERS: "2",
+      }),
+    ).toEqual({});
+    expect(
+      resolveFullSuiteVitestEnv(parseTestGroupReportArgs(["--full-suite"]), {
+        OPENCLAW_TEST_WORKERS: "2",
+      }),
+    ).toEqual({});
+  });
+
+  it("parallelizes repeated explicit configs but keeps full-suite profiling serial by default", () => {
+    expect(
+      resolveRunPlanConcurrency(parseTestGroupReportArgs(["--config", "a", "--config", "b"]), 2),
+    ).toBe(2);
+    expect(resolveRunPlanConcurrency(parseTestGroupReportArgs(["--full-suite"]), 8)).toBe(1);
+    expect(
+      resolveRunPlanConcurrency(
+        parseTestGroupReportArgs(["--full-suite", "--concurrency", "3"]),
+        8,
+      ),
+    ).toBe(3);
+    expect(resolveRunPlanConcurrency(parseTestGroupReportArgs(["--concurrency", "9"]), 2)).toBe(2);
+  });
+
+  it("isolates Vitest filesystem module caches for parallel report configs", () => {
+    const args = parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]);
+    const specs = resolveReportRunSpecs(
+      args,
+      [
+        { config: "a.ts", forwardedArgs: [], label: "a" },
+        { config: "b.ts", forwardedArgs: [], label: "b" },
+      ],
+      { cwd: "/repo", env: {} },
+    );
+
+    expect(specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH)).toEqual([
+      path.join("/repo", "node_modules", ".experimental-vitest-cache", "0-a.ts"),
+      path.join("/repo", "node_modules", ".experimental-vitest-cache", "1-b.ts"),
+    ]);
+  });
+
+  it("uses leaf configs for full-suite profiling without requiring parallel env", () => {
+    const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    const previousLeaf = process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+    delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+    try {
+      const plans = resolveRunPlans(parseTestGroupReportArgs(["--full-suite"]));
+
+      expect(plans.map((plan) => plan.config)).not.toContain(
+        "test/vitest/vitest.full-agentic.config.ts",
+      );
+      expect(plans.map((plan) => plan.config)).toContain(
+        "test/vitest/vitest.agents-tools.config.ts",
+      );
+    } finally {
+      if (previousParallel === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = previousParallel;
+      }
+      if (previousLeaf === undefined) {
+        delete process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS;
+      } else {
+        process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS = previousLeaf;
+      }
+    }
+  });
+
   it("preserves full-suite shard file args and unique report labels", () => {
     const previousParallel = process.env.OPENCLAW_TEST_PROJECTS_PARALLEL;
     process.env.OPENCLAW_TEST_PROJECTS_PARALLEL = "6";

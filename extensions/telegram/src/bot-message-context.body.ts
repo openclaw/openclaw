@@ -5,6 +5,7 @@ import {
   logInboundDrop,
   matchesMentionWithExplicit,
   resolveInboundMentionDecision,
+  type BuildMentionRegexesOptions,
   type NormalizedLocation,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
@@ -34,10 +35,10 @@ import type {
 import {
   buildSenderLabel,
   buildSenderName,
-  expandTextLinks,
   extractTelegramLocation,
   getTelegramTextParts,
   hasBotMention,
+  renderTelegramTextEntities,
   resolveTelegramPrimaryMedia,
 } from "./bot/body-helpers.js";
 import { buildTelegramGroupPeerId, buildTelegramInboundOriginTarget } from "./bot/helpers.js";
@@ -148,6 +149,7 @@ export async function resolveTelegramInboundBody(params: {
   effectiveDmAllow: NormalizedAllowFrom;
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
+  providerMentionPatterns?: BuildMentionRegexesOptions["providerPolicy"];
   requireMention?: boolean;
   options?: TelegramMessageContextOptions;
   groupHistories: Map<string, HistoryEntry[]>;
@@ -173,6 +175,7 @@ export async function resolveTelegramInboundBody(params: {
     effectiveDmAllow,
     groupConfig,
     topicConfig,
+    providerMentionPatterns,
     requireMention,
     options,
     groupHistories,
@@ -180,7 +183,11 @@ export async function resolveTelegramInboundBody(params: {
     logger,
   } = params;
   const botUsername = normalizeOptionalLowercaseString(primaryCtx.me?.username);
-  const mentionRegexes = buildMentionRegexes(cfg, routeAgentId);
+  const mentionRegexes = buildMentionRegexes(cfg, routeAgentId, {
+    provider: "telegram",
+    conversationId: isGroup ? buildTelegramGroupPeerId(chatId, resolvedThreadId) : String(chatId),
+    providerPolicy: providerMentionPatterns,
+  });
   const messageTextParts = getTelegramTextParts(msg);
   const allowForCommands = isGroup ? effectiveGroupAllow : effectiveDmAllow;
   const useAccessGroups = cfg.commands?.useAccessGroups !== false;
@@ -224,7 +231,10 @@ export async function resolveTelegramInboundBody(params: {
 
   const locationData = extractTelegramLocation(msg);
   const locationText = locationData ? formatLocationText(locationData) : undefined;
-  const rawText = expandTextLinks(messageTextParts.text, messageTextParts.entities).trim();
+  const rawText = renderTelegramTextEntities(
+    messageTextParts.text,
+    messageTextParts.entities,
+  ).trim();
   const hasUserText = Boolean(rawText || locationText);
   let rawBody = [rawText, locationText].filter(Boolean).join("\n").trim();
   if (!rawBody) {

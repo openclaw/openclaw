@@ -4,12 +4,15 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
+import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
 
 describe("gateway restart benchmark script", () => {
-  it("prints help without running benchmark cases", () => {
-    const result = spawnSync(
+  let helpResult: ReturnType<typeof spawnSync>;
+
+  beforeAll(() => {
+    helpResult = spawnSync(
       process.execPath,
       ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--help"],
       {
@@ -21,17 +24,20 @@ describe("gateway restart benchmark script", () => {
         },
       },
     );
+  });
 
-    expect(result.status).toBe(0);
-    expect(result.stdout).toContain("OpenClaw Gateway restart benchmark");
-    expect(result.stdout).toContain("--restarts <n>");
-    expect(result.stdout).toContain("--post-ready-delay-ms <ms>");
-    expect(result.stdout).toContain("skipChannels (gateway restart, skip channels)");
-    expect(result.stdout).toContain(
+  it("prints help without running benchmark cases", () => {
+    expect(helpResult.status).toBe(0);
+    expect(helpResult.stdout).toContain("OpenClaw Gateway restart benchmark");
+    expect(helpResult.stdout).toContain("--restarts <n>");
+    expect(helpResult.stdout).toContain("Timeout for initial startup and each restart");
+    expect(helpResult.stdout).toContain("--post-ready-delay-ms <ms>");
+    expect(helpResult.stdout).toContain("skipChannels (gateway restart, skip channels)");
+    expect(helpResult.stdout).toContain(
       "skipChannelsNoAcpxProbe (gateway restart, skip channels, ACPX startup probe off)",
     );
-    expect(result.stdout).not.toContain("[gateway-restart-bench]");
-    expect(result.stderr).toBe("");
+    expect(helpResult.stdout).not.toContain("[gateway-restart-bench]");
+    expect(helpResult.stderr).toBe("");
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
@@ -209,6 +215,51 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     expect(testing.resolveRestartDeadlineFailure(true)).toBe("restart_child_exited");
   });
 
+  registerStopChildBehaviorTests({
+    stopChild: testing.stopChild,
+    queuedExitCode: 0,
+  });
+
+  it("marks clean and signaled pre-teardown child exits as benchmark failures", () => {
+    expect(
+      testing.resolveSampleExitFailure({
+        exitedBeforeTeardown: true,
+        exitCode: 0,
+        signal: null,
+      }),
+    ).toBe("restart_child_exited");
+    expect(
+      testing.resolveSampleExitFailure({
+        exitedBeforeTeardown: true,
+        exitCode: null,
+        signal: "SIGSEGV",
+      }),
+    ).toBe("restart_child_exited");
+    expect(
+      testing.resolveSampleExitFailure({
+        exitedBeforeTeardown: true,
+        exitCode: 9,
+        signal: null,
+      }),
+    ).toBe("child_nonzero_exit");
+    expect(
+      testing.resolveSampleExitFailure({
+        exitedBeforeTeardown: false,
+        exitCode: null,
+        signal: "SIGTERM",
+      }),
+    ).toBeNull();
+  });
+
+  it("budgets timeout per restart instead of against the whole sample", () => {
+    const sampleStartAt = 1_000;
+    const timeoutMs = 30_000;
+    const restart20SignalAt = sampleStartAt + 25_000;
+
+    expect(testing.resolvePhaseDeadlineAt(sampleStartAt, timeoutMs)).toBe(31_000);
+    expect(testing.resolvePhaseDeadlineAt(restart20SignalAt, timeoutMs)).toBe(56_000);
+  });
+
   it("does not fail successful restarts when probes miss the unavailable window", () => {
     const iteration = testing.createRestartIteration(1);
     iteration.gatewayReadyLogMs = 40;
@@ -242,6 +293,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         childExitCode: null,
         childSignal: "SIGTERM",
         events: [],
+        exitedBeforeTeardown: false,
         failureCode: null,
         firstOutputMs: 1,
         initialGatewayReadyLogLine: "[gateway] ready",
@@ -367,6 +419,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         childExitCode: null,
         childSignal: null,
         events: [],
+        exitedBeforeTeardown: true,
         failureCode: "initial_readyz_timeout",
         firstOutputMs: 1,
         initialGatewayReadyLogLine: "[gateway] ready",
@@ -408,6 +461,58 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
 
     expect(result.summary.failureRate).toBe(1);
     expect(result.summary.firstFailureCode).toBe("initial_readyz_timeout");
+    expect(testing.hasBenchmarkFailures([result])).toBe(true);
+    expect(testing.shouldFailBenchmark([result], { allowFailures: false })).toBe(true);
+    expect(testing.shouldFailBenchmark([result], { allowFailures: true })).toBe(false);
+  });
+
+  it("does not mark failure-free benchmark summaries as failed", () => {
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+      {
+        childExitCode: 0,
+        childSignal: null,
+        events: [],
+        exitedBeforeTeardown: false,
+        failureCode: null,
+        firstOutputMs: 1,
+        initialGatewayReadyLogLine: "[gateway] ready",
+        initialGatewayReadyLogMs: 20,
+        initialHealthz: {
+          downtimeMs: null,
+          firstErrorKind: null,
+          firstRecoveryMs: null,
+          ms: 10,
+          status: 200,
+          transitions: [],
+          unavailableMs: null,
+        },
+        initialHttpListenLogLine: "[gateway] http server listening (0 plugins)",
+        initialHttpListenLogMs: 9,
+        initialReadyz: {
+          downtimeMs: null,
+          firstErrorKind: null,
+          firstRecoveryMs: null,
+          ms: 12,
+          status: 200,
+          transitions: [],
+          unavailableMs: null,
+        },
+        initialStartupTrace: {},
+        iterations: [],
+        maxRssMb: 220,
+        outputTail: "",
+        resourceSlope: {
+          activeHandlesCountPerRestart: null,
+          activeRequestsCountPerRestart: null,
+          activeTimersCountPerRestart: null,
+          fdCountPerRestart: null,
+          heapUsedMbPerRestart: null,
+          rssMbPerRestart: null,
+        },
+      },
+    ]);
+
+    expect(testing.hasBenchmarkFailures([result])).toBe(false);
   });
 
   it("writes restart intent files for the target gateway pid", () => {

@@ -282,6 +282,62 @@ describe("resolveBootstrapFilesForRun", () => {
     );
     expect(files.map((file) => file.path)).not.toContain(path.join(workspaceDir, "BOOTSTRAP.md"));
   });
+
+  it("keeps subagent sessions to project and tool bootstrap files", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-subagent-");
+    await Promise.all(
+      [
+        ["AGENTS.md", "project rules"],
+        ["TOOLS.md", "tool rules"],
+        ["SOUL.md", "persona"],
+        ["IDENTITY.md", "identity"],
+        ["USER.md", "user profile"],
+        ["MEMORY.md", "memory"],
+        ["HEARTBEAT.md", "heartbeat"],
+        ["BOOTSTRAP.md", "setup"],
+      ].map(([fileName, content]) =>
+        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+      ),
+    );
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:subagent:worker",
+    });
+
+    expect(files.map((file) => file.name)).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
+  });
+
+  it("keeps cron sessions on their existing minimal bootstrap files", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-cron-");
+    await Promise.all(
+      [
+        ["AGENTS.md", "project rules"],
+        ["TOOLS.md", "tool rules"],
+        ["SOUL.md", "persona"],
+        ["IDENTITY.md", "identity"],
+        ["USER.md", "user profile"],
+        ["MEMORY.md", "memory"],
+        ["HEARTBEAT.md", "heartbeat"],
+        ["BOOTSTRAP.md", "setup"],
+      ].map(([fileName, content]) =>
+        fs.writeFile(path.join(workspaceDir, fileName), content, "utf8"),
+      ),
+    );
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:cron:daily:run:run-1",
+    });
+
+    expect(files.map((file) => file.name)).toStrictEqual([
+      "AGENTS.md",
+      "SOUL.md",
+      "TOOLS.md",
+      "IDENTITY.md",
+      "USER.md",
+    ]);
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {
@@ -578,11 +634,11 @@ describe("makeBootstrapWarn", () => {
       warn: (message) => warnings.push(message),
     });
 
-    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
-    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
+    warn?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
 
     expect(warnings).toEqual([
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:test-session)",
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:test-session)",
     ]);
   });
 
@@ -597,12 +653,12 @@ describe("makeBootstrapWarn", () => {
       warn: (message) => warnings.push(message),
     });
 
-    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
-    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
+    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
 
     expect(warnings).toEqual([
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:first-session)",
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:second-session)",
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:first-session)",
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:second-session)",
     ]);
   });
 
@@ -619,12 +675,12 @@ describe("makeBootstrapWarn", () => {
       warn: (message) => warnings.push(message),
     });
 
-    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
-    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating");
+    first?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
+    second?.("workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating");
 
     expect(warnings).toEqual([
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:shared-session)",
-      "workspace bootstrap file MEMORY.md is 36697 chars (limit 12000); truncating (sessionKey=agent:main:shared-session)",
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:shared-session)",
+      "workspace bootstrap file MEMORY.md is 36697 chars (limit 20000); truncating (sessionKey=agent:main:shared-session)",
     ]);
   });
 });

@@ -3,7 +3,7 @@
 // to bare/functional images, and runs lanes through weighted resource pools.
 import { spawn } from "node:child_process";
 import fs from "node:fs";
-import { mkdir, readFile } from "node:fs/promises";
+import { mkdir, open, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -36,37 +36,85 @@ const DEFAULT_LANE_TIMEOUT_MS = 120 * 60 * 1000;
 const DEFAULT_LANE_START_STAGGER_MS = 2_000;
 const DEFAULT_STATUS_INTERVAL_MS = 30_000;
 const DEFAULT_PREFLIGHT_RUN_TIMEOUT_MS = 60_000;
+export const SHELL_CAPTURE_MAX_CHARS = 1024 * 1024;
+export const LOG_TAIL_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TIMINGS_FILE = path.join(ROOT_DIR, ".artifacts/docker-tests/lane-timings.json");
 const DEFAULT_GITHUB_WORKFLOW = "openclaw-live-and-e2e-checks-reusable.yml";
 const IS_MAIN = process.argv[1]
   ? path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
   : false;
-const cliArgs = new Set(IS_MAIN ? process.argv.slice(2) : []);
-if (IS_MAIN) {
-  for (const arg of cliArgs) {
-    if (arg !== "--plan-json") {
-      throw new Error(`unknown argument: ${arg}`);
+
+export function dockerAllUsage() {
+  return [
+    "Usage: node scripts/test-docker-all.mjs [--plan-json]",
+    "",
+    "Options:",
+    "  --plan-json    Print the resolved Docker E2E plan as JSON and exit.",
+    "  -h, --help     Show this help.",
+    "",
+    "Lane selection and scheduler settings are configured with OPENCLAW_DOCKER_ALL_* env vars.",
+  ].join("\n");
+}
+
+export function parseDockerAllCliArgs(argv) {
+  const options = {
+    help: false,
+    planJson: false,
+  };
+  for (const arg of argv) {
+    if (arg === "--plan-json") {
+      options.planJson = true;
+    } else if (arg === "--help" || arg === "-h") {
+      options.help = true;
+    } else {
+      throw new Error(`unknown argument: ${arg}\n\n${dockerAllUsage()}`);
     }
+  }
+  return options;
+}
+
+let cliOptions = {
+  help: false,
+  planJson: false,
+};
+if (IS_MAIN) {
+  try {
+    cliOptions = parseDockerAllCliArgs(process.argv.slice(2));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(1);
+  }
+  if (cliOptions.help) {
+    console.log(dockerAllUsage());
+    process.exit(0);
   }
 }
 
 function parsePositiveInt(raw, fallback, label) {
-  if (!raw) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
     throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   return parsed;
 }
 
 function parseNonNegativeInt(raw, fallback, label) {
-  if (!raw) {
+  if (raw === undefined || raw === "") {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isInteger(parsed) || parsed < 0) {
+  const text = String(raw).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a non-negative integer. Got: ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
     throw new Error(`${label} must be a non-negative integer. Got: ${JSON.stringify(raw)}`);
   }
   return parsed;
@@ -477,16 +525,16 @@ function printLaneManifest(label, poolLanes, timingStore) {
   }
 }
 
-function dockerPreflightContainerNames(raw) {
+export function dockerPreflightContainerNames(raw) {
   return raw
     .split(/\r?\n/)
     .map((line) => line.trim().split(/\s+/, 1)[0])
     .filter((name) =>
-      /^(?:openclaw-(?:gateway-e2e|openwebui|openwebui-gateway|config-reload-e2e)-)/.test(name),
+      /^(?:openclaw-[a-z0-9-]+-e2e-\d+|openclaw-openwebui(?:-gateway)?-\d+)$/u.test(name),
     );
 }
 
-function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
+export function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTimeoutMs }) {
   return new Promise((resolve) => {
     const pipeOutput = Boolean(logFile || noOutputTimeoutMs > 0);
     const child = spawn("bash", ["-c", command], {
@@ -562,6 +610,9 @@ function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTime
       if (noOutputTimer) {
         clearTimeout(noOutputTimer);
       }
+      if (timedOut) {
+        terminateChild(child, "SIGKILL");
+      }
       if (killTimer) {
         clearTimeout(killTimer);
       }
@@ -580,7 +631,15 @@ function runShellCommand({ command, env, label, logFile, timeoutMs, noOutputTime
   });
 }
 
-function runShellCaptureCommand({ command, env, label, timeoutMs }) {
+export function appendBoundedShellCapture(current, chunk, maxChars = SHELL_CAPTURE_MAX_CHARS) {
+  const combined = `${current}${String(chunk)}`;
+  if (combined.length <= maxChars) {
+    return { text: combined, truncated: false };
+  }
+  return { text: combined.slice(-maxChars), truncated: true };
+}
+
+export function runShellCaptureCommand({ command, env, label, timeoutMs }) {
   return new Promise((resolve) => {
     const child = spawn("bash", ["-c", command], {
       cwd: ROOT_DIR,
@@ -591,29 +650,52 @@ function runShellCaptureCommand({ command, env, label, timeoutMs }) {
     activeChildren.add(child);
     let stdout = "";
     let stderr = "";
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
     let timedOut = false;
+    let killTimer;
     const timeoutTimer =
       timeoutMs > 0
         ? setTimeout(() => {
             timedOut = true;
             terminateChild(child, "SIGTERM");
-            setTimeout(() => terminateChild(child, "SIGKILL"), 10_000).unref?.();
+            killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), 10_000);
+            killTimer.unref?.();
           }, timeoutMs)
         : undefined;
     timeoutTimer?.unref?.();
     child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
+      const next = appendBoundedShellCapture(stdout, chunk);
+      stdout = next.text;
+      stdoutTruncated ||= next.truncated;
     });
     child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+      const next = appendBoundedShellCapture(stderr, chunk);
+      stderr = next.text;
+      stderrTruncated ||= next.truncated;
     });
     child.on("close", (status, signal) => {
       if (timeoutTimer) {
         clearTimeout(timeoutTimer);
       }
+      if (timedOut) {
+        terminateChild(child, "SIGKILL");
+      }
+      if (killTimer) {
+        clearTimeout(killTimer);
+      }
       activeChildren.delete(child);
       const exitCode = typeof status === "number" ? status : signal ? 128 : 1;
-      resolve({ label, signal, status: exitCode, stderr, stdout, timedOut });
+      resolve({
+        label,
+        signal,
+        status: exitCode,
+        stderr,
+        stderrTruncated,
+        stdout,
+        stdoutTruncated,
+        timedOut,
+      });
     });
   });
 }
@@ -943,8 +1025,7 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
     await waitForLaneStartSlot();
     reserve(poolLane);
     activeLanes.set(poolLane.name, { name: poolLane.name, startedAt: Date.now() });
-    let promise;
-    promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs)
+    const promise = runLane(poolLane, baseEnv, logDir, options.timeoutMs)
       .then((result) => ({ lane: poolLane, promise, result }))
       .finally(() => {
         activeLanes.delete(poolLane.name);
@@ -1009,8 +1090,21 @@ async function runLanePool(poolLanes, baseEnv, logDir, parallelism, options) {
   return { failures, results };
 }
 
-async function tailFile(file, lines) {
-  const content = await readFile(file, "utf8").catch(() => "");
+export async function tailFile(file, lines, maxBytes = LOG_TAIL_MAX_BYTES) {
+  let handle;
+  let content;
+  try {
+    handle = await open(file, "r");
+    const stat = await handle.stat();
+    const bytesToRead = Math.min(Math.max(1, maxBytes), stat.size);
+    const buffer = Buffer.alloc(bytesToRead);
+    await handle.read(buffer, 0, bytesToRead, stat.size - bytesToRead);
+    content = buffer.toString("utf8");
+  } catch {
+    content = "";
+  } finally {
+    await handle?.close().catch(() => {});
+  }
   const tail = content.split(/\r?\n/).slice(-lines).join("\n");
   return tail.trimEnd();
 }
@@ -1107,7 +1201,7 @@ async function main() {
   const timingsEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_TIMINGS, true);
   const buildEnabled = parseBool(process.env.OPENCLAW_DOCKER_ALL_BUILD, true);
   const planJson =
-    cliArgs.has("--plan-json") || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
+    cliOptions.planJson || parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_JSON, false);
   const planReleaseAll = parseBool(process.env.OPENCLAW_DOCKER_ALL_PLAN_RELEASE_ALL, false);
   const profile = parseProfile(process.env.OPENCLAW_DOCKER_ALL_PROFILE);
   const releaseProfile = normalizeReleaseProfile(
@@ -1388,8 +1482,10 @@ async function main() {
 }
 
 if (IS_MAIN) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

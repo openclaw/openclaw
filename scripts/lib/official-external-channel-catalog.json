@@ -167,7 +167,7 @@
         "install": {
           "npmSpec": "@openclaw/feishu",
           "defaultChoice": "npm",
-          "minHostVersion": ">=2026.4.25"
+          "minHostVersion": ">=2026.5.29"
         }
       }
     },
@@ -260,6 +260,7 @@
           "docsLabel": "matrix",
           "blurb": "open protocol; install the plugin to enable.",
           "order": 70,
+          "markdownCapable": true,
           "quickstartAllowFrom": true,
           "doctorCapabilities": {
             "dmAllowFromMode": "nestedOnly",
@@ -408,6 +409,16 @@
           "blurb": "supported (Socket Mode).",
           "systemImage": "number",
           "markdownCapable": true
+        },
+        "channelConfigs": {
+          "slack": {
+            "label": "Slack",
+            "description": "Slack channel, DM, command, and app event integration.",
+            "schema": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
         },
         "install": {
           "npmSpec": "@openclaw/slack",

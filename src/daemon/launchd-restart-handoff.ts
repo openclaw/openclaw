@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
+export { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
@@ -92,21 +93,6 @@ function resolveLaunchdRestartTarget(
   };
 }
 
-export function isCurrentProcessLaunchdServiceLabel(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  const launchdLabel =
-    normalizeOptionalString(env.LAUNCH_JOB_LABEL) ||
-    normalizeOptionalString(env.LAUNCH_JOB_NAME) ||
-    normalizeOptionalString(env.XPC_SERVICE_NAME);
-  if (launchdLabel) {
-    return launchdLabel === label;
-  }
-  const configuredLabel = normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL);
-  return Boolean(configuredLabel && configuredLabel === label);
-}
-
 function buildLaunchdRestartScript(
   mode: LaunchdRestartHandoffMode,
   restartLogEnv: LaunchdRestartLogEnv,
@@ -153,6 +139,19 @@ exit "$status"
   if (mode === "reload") {
     // Reloading is required after plist content changes; kickstart alone keeps
     // launchd's already-loaded stdout/stderr/stdin paths.
+    // After bootout we poll until launchd finishes the async unload before
+    // re-bootstrapping to avoid EIO (Bootstrap failed: 5) from the race.
+    // If bootstrap still fails, kickstart -k as a fallback to keep the service
+    // alive rather than leaving it deregistered.
+    const bootoutWaitLoop = `bootout_wait_count="${START_AFTER_EXIT_PRINT_RETRY_COUNT}"
+while [ "$bootout_wait_count" -gt 0 ]; do
+  if ! launchctl print "$service_target" >/dev/null 2>&1; then
+    break
+  fi
+  bootout_wait_count=$((bootout_wait_count - 1))
+  sleep ${START_AFTER_EXIT_PRINT_RETRY_DELAY_SECONDS}
+done
+`;
     return `service_target="$1"
 domain="$2"
 plist_path="$3"
@@ -160,9 +159,12 @@ ${waitForCallerPid}
 status=0
 launchctl enable "$service_target"
 launchctl bootout "$service_target" >/dev/null 2>&1 || true
+${bootoutWaitLoop}
 if launchctl bootstrap "$domain" "$plist_path"; then
   status=0
 else
+  status=$?
+  launchctl kickstart -k "$service_target"
   status=$?
 fi
 if [ "$status" -eq 0 ]; then

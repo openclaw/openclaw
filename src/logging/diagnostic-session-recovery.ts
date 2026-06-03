@@ -3,13 +3,6 @@ import type {
   DiagnosticSessionState,
 } from "../infra/diagnostic-events.js";
 
-export type DiagnosticSessionRecoveryStatus =
-  | "aborted"
-  | "released"
-  | "skipped"
-  | "noop"
-  | "failed";
-
 export type DiagnosticSessionRecoverySkipReason =
   | "active_embedded_run"
   | "active_reply_work"
@@ -23,12 +16,27 @@ export type DiagnosticSessionRecoveryNoopReason = "no_active_work";
 export type StuckSessionRecoveryRequest = {
   sessionId?: string;
   sessionKey?: string;
+  sessionFile?: string;
   ageMs: number;
   queueDepth?: number;
   allowActiveAbort?: boolean;
   expectedState?: DiagnosticSessionState;
   stateGeneration?: number;
+  /**
+   * Resolved no-forward-progress age (from `diagnostics.stuckSessionAbortMs`) after
+   * which an "active" run with queued work is treated as a leaked/dead handle and
+   * reclaimed. Honors an operator-raised threshold; falls back to a safe floor.
+   */
+  staleActiveProgressAbortMs?: number;
 };
+
+export function resolveStuckSessionRecoveryRef(
+  params: Pick<StuckSessionRecoveryRequest, "sessionId" | "sessionKey">,
+): string | undefined {
+  // In-flight recovery gates must key by logical session only; generation is
+  // stale-state evidence, not concurrency identity.
+  return params.sessionKey?.trim() || params.sessionId?.trim() || undefined;
+}
 
 type DiagnosticSessionRecoveryBaseOutcome = {
   sessionId?: string;

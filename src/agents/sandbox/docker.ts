@@ -177,7 +177,14 @@ import { readRegistryEntry, updateRegistry } from "./registry.js";
 import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
-import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
+import {
+  appendReadOnlyWorkspaceSkillMountArgs,
+  appendWorkspaceMountArgs,
+  formatReadOnlyWorkspaceSkillMountHashState,
+  resolveReadOnlyWorkspaceSkillMounts,
+  SANDBOX_MOUNT_FORMAT_VERSION,
+  type ReadOnlyWorkspaceSkillMount,
+} from "./workspace-mounts.js";
 
 const log = createSubsystemLogger("docker");
 
@@ -376,6 +383,10 @@ function normalizeDockerLimit(value?: string | number) {
   return trimmed ? trimmed : undefined;
 }
 
+function normalizeFiniteDockerNumber(value: unknown, min: number): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.max(min, value) : undefined;
+}
+
 function formatUlimitValue(
   name: string,
   value: string | number | { soft?: number; hard?: number },
@@ -383,12 +394,16 @@ function formatUlimitValue(
   if (!name.trim()) {
     return null;
   }
-  if (typeof value === "number" || typeof value === "string") {
-    const raw = String(value).trim();
+  if (typeof value === "number") {
+    const normalized = normalizeFiniteDockerNumber(value, 0);
+    return normalized === undefined ? null : `${name}=${normalized}`;
+  }
+  if (typeof value === "string") {
+    const raw = value.trim();
     return raw ? `${name}=${raw}` : null;
   }
-  const soft = typeof value.soft === "number" ? Math.max(0, value.soft) : undefined;
-  const hard = typeof value.hard === "number" ? Math.max(0, value.hard) : undefined;
+  const soft = normalizeFiniteDockerNumber(value.soft, 0);
+  const hard = normalizeFiniteDockerNumber(value.hard, 0);
   if (soft === undefined && hard === undefined) {
     return null;
   }
@@ -495,8 +510,9 @@ export function buildSandboxCreateArgs(params: {
       args.push("--add-host", entry);
     }
   }
-  if (typeof params.cfg.pidsLimit === "number" && params.cfg.pidsLimit > 0) {
-    args.push("--pids-limit", String(params.cfg.pidsLimit));
+  const pidsLimit = normalizeFiniteDockerNumber(params.cfg.pidsLimit, 0);
+  if (pidsLimit !== undefined && pidsLimit > 0) {
+    args.push("--pids-limit", String(pidsLimit));
   }
   const memory = normalizeDockerLimit(params.cfg.memory);
   if (memory) {
@@ -506,8 +522,9 @@ export function buildSandboxCreateArgs(params: {
   if (memorySwap) {
     args.push("--memory-swap", memorySwap);
   }
-  if (typeof params.cfg.cpus === "number" && params.cfg.cpus > 0) {
-    args.push("--cpus", String(params.cfg.cpus));
+  const cpus = normalizeFiniteDockerNumber(params.cfg.cpus, 0);
+  if (cpus !== undefined && cpus > 0) {
+    args.push("--cpus", String(cpus));
   }
   const gpus = params.cfg.gpus?.trim();
   if (gpus) {
@@ -544,6 +561,7 @@ async function createSandboxContainer(params: {
   agentWorkspaceDir: string;
   scopeKey: string;
   configHash?: string;
+  readOnlyWorkspaceSkillMounts: readonly ReadOnlyWorkspaceSkillMount[];
 }) {
   const { name, cfg, workspaceDir, scopeKey } = params;
   await ensureDockerImage(cfg.image);
@@ -563,8 +581,14 @@ async function createSandboxContainer(params: {
     agentWorkspaceDir: params.agentWorkspaceDir,
     workdir: cfg.workdir,
     workspaceAccess: params.workspaceAccess,
+    readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
+    includeReadOnlyWorkspaceSkillMounts: false,
   });
   appendCustomBinds(args, cfg);
+  appendReadOnlyWorkspaceSkillMountArgs({
+    args,
+    readOnlyWorkspaceSkillMounts: params.readOnlyWorkspaceSkillMounts,
+  });
   args.push(cfg.image, "sleep", "infinity");
 
   await execDocker(args);
@@ -600,6 +624,12 @@ export async function ensureSandboxContainer(params: {
   const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
   const name = `${params.cfg.docker.containerPrefix}${slug}`;
   const containerName = name.slice(0, 63);
+  const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    workdir: params.cfg.docker.workdir,
+    workspaceAccess: params.cfg.workspaceAccess,
+  });
   const expectedHash = computeSandboxConfigHash({
     docker: params.cfg.docker,
     dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(params.cfg.docker.env),
@@ -607,6 +637,9 @@ export async function ensureSandboxContainer(params: {
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
     mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    readOnlyWorkspaceSkillMounts: formatReadOnlyWorkspaceSkillMountHashState(
+      readOnlyWorkspaceSkillMounts,
+    ),
   });
   const now = Date.now();
   const state = await dockerContainerState(containerName);
@@ -653,6 +686,7 @@ export async function ensureSandboxContainer(params: {
       agentWorkspaceDir: params.agentWorkspaceDir,
       scopeKey,
       configHash: expectedHash,
+      readOnlyWorkspaceSkillMounts,
     });
   } else if (!running) {
     await execDocker(["start", containerName]);

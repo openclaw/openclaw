@@ -1,6 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Api, Model } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { Api, Model } from "../llm/types.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
 import { createAnthropicMessagesTransportStreamFn } from "./anthropic-transport-stream.js";
 import {
@@ -10,10 +9,11 @@ import {
 } from "./openai-transport-stream.js";
 import { getModelProviderLocalService } from "./provider-local-service.js";
 import { getModelProviderRequestTransport } from "./provider-request-config.js";
+import type { StreamFn } from "./runtime/index.js";
 
 const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
   "openai-responses",
-  "openai-codex-responses",
+  "openai-chatgpt-responses",
   "openai-completions",
   "azure-openai-responses",
   "anthropic-messages",
@@ -22,7 +22,7 @@ const SUPPORTED_TRANSPORT_APIS = new Set<Api>([
 
 const SIMPLE_TRANSPORT_API_ALIAS: Record<string, Api> = {
   "openai-responses": "openclaw-openai-responses-transport",
-  "openai-codex-responses": "openclaw-openai-responses-transport",
+  "openai-chatgpt-responses": "openclaw-openai-responses-transport",
   "openai-completions": "openclaw-openai-completions-transport",
   "azure-openai-responses": "openclaw-azure-openai-responses-transport",
   "anthropic-messages": "openclaw-anthropic-messages-transport",
@@ -37,7 +37,7 @@ type ProviderTransportStreamContext = {
 };
 
 function createProviderOwnedGoogleTransportStreamFn(
-  model: Model<Api>,
+  model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
   return (
@@ -74,12 +74,12 @@ function createProviderOwnedGoogleTransportStreamFn(
 }
 
 function createSupportedTransportStreamFn(
-  model: Model<Api>,
+  model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
   switch (model.api) {
     case "openai-responses":
-    case "openai-codex-responses":
+    case "openai-chatgpt-responses":
       return createOpenAIResponsesTransportStreamFn();
     case "openai-completions":
       return createOpenAICompletionsTransportStreamFn();
@@ -94,7 +94,7 @@ function createSupportedTransportStreamFn(
   }
 }
 
-function hasOpenClawTransportRequirement(model: Model<Api>): boolean {
+function hasOpenClawTransportRequirement(model: Model): boolean {
   const request = getModelProviderRequestTransport(model);
   return Boolean(request?.proxy || request?.tls || getModelProviderLocalService(model));
 }
@@ -108,7 +108,7 @@ export function resolveTransportAwareSimpleApi(api: Api): Api | undefined {
 }
 
 export function createTransportAwareStreamFnForModel(
-  model: Model<Api>,
+  model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
   if (!hasOpenClawTransportRequirement(model)) {
@@ -123,7 +123,7 @@ export function createTransportAwareStreamFnForModel(
 }
 
 export function createOpenClawTransportStreamFnForModel(
-  model: Model<Api>,
+  model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
   // Explicit fallback callers use this when they need OpenClaw's HTTP
@@ -137,11 +137,11 @@ export function createOpenClawTransportStreamFnForModel(
 }
 
 export function createBoundaryAwareStreamFnForModel(
-  model: Model<Api>,
+  model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
-  // Default embedded-runner fallback. Keep OpenAI-family APIs here until PI's
-  // native HTTP streams preserve the same OpenClaw request contract.
+  // Default embedded-runner fallback. Keep OpenAI-family APIs here while native
+  // HTTP streams preserve the same OpenClaw request contract.
   if (!isTransportAwareApiSupported(model.api)) {
     return undefined;
   }
@@ -151,8 +151,8 @@ export function createBoundaryAwareStreamFnForModel(
 export function prepareTransportAwareSimpleModel<TApi extends Api>(
   model: Model<TApi>,
   ctx?: ProviderTransportStreamContext,
-): Model<Api> {
-  const streamFn = createTransportAwareStreamFnForModel(model as Model<Api>, ctx);
+): Model {
+  const streamFn = createTransportAwareStreamFnForModel(model as Model, ctx);
   const alias = resolveTransportAwareSimpleApi(model.api);
   if (!streamFn || !alias) {
     return model;
@@ -164,7 +164,7 @@ export function prepareTransportAwareSimpleModel<TApi extends Api>(
 }
 
 export function buildTransportAwareSimpleStreamFn(
-  model: Model<Api>,
+  model: Model,
   ctx?: ProviderTransportStreamContext,
 ): StreamFn | undefined {
   return createTransportAwareStreamFnForModel(model, ctx);

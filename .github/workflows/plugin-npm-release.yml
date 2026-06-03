@@ -32,6 +32,10 @@ on:
         description: Comma-separated plugin package names to publish when publish_scope=selected
         required: false
         type: string
+      release_publish_run_id:
+        description: Approved OpenClaw Release Publish workflow run id
+        required: false
+        type: string
 
 concurrency:
   group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
@@ -40,7 +44,6 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
 
 jobs:
   preview_plugins_npm:
@@ -64,7 +67,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
 
       - name: Resolve checked-out ref
@@ -173,6 +175,43 @@ jobs:
             exit 1
           fi
 
+  validate_release_publish_approval:
+    name: Validate release publish approval
+    needs: preview_plugins_npm
+    if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_npm.outputs.has_candidates == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Validate release publish approval run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${RELEASE_PUBLISH_RUN_ID// }" ]]; then
+            if [[ "${GITHUB_ACTOR}" == "github-actions[bot]" ]]; then
+              echo "Plugin npm publish dispatched by another workflow must include release_publish_run_id." >&2
+              exit 1
+            fi
+            echo "Direct Plugin NPM Release dispatch; relying on this workflow's npm-release environment approval."
+            exit 0
+          fi
+          direct_recovery=false
+          if [[ "${GITHUB_ACTOR}" != "github-actions[bot]" ]]; then
+            direct_recovery=true
+            echo "Direct Plugin NPM Release recovery with release_publish_run_id; relying on this workflow's npm-release environment approval."
+          fi
+          RUN_JSON="$(gh run view "$RELEASE_PUBLISH_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,headBranch,event,status,conclusion,url)"
+          printf '%s' "$RUN_JSON" | DIRECT_RELEASE_RECOVERY="${direct_recovery}" node scripts/validate-release-publish-approval.mjs
+
   preview_plugin_pack:
     needs: preview_plugins_npm
     if: needs.preview_plugins_npm.outputs.has_candidates == 'true'
@@ -195,7 +234,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
 
       - name: Preview publish command
@@ -205,11 +243,12 @@ jobs:
         run: bash scripts/plugin-npm-publish.sh --pack-dry-run "${{ matrix.plugin.packageDir }}"
 
   publish_plugins_npm:
-    needs: [preview_plugins_npm, preview_plugin_pack]
+    needs: [preview_plugins_npm, preview_plugin_pack, validate_release_publish_approval]
     if: github.event_name == 'workflow_dispatch' && needs.preview_plugins_npm.outputs.has_candidates == 'true'
     runs-on: ubuntu-latest
     environment: npm-release
     permissions:
+      actions: read
       contents: read
       id-token: write
     strategy:
@@ -228,10 +267,10 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "false"
 
-      - name: Ensure version is not already published
+      - name: Check npm package version
+        id: npm_package_version
         env:
           PACKAGE_NAME: ${{ matrix.plugin.packageName }}
           PACKAGE_VERSION: ${{ matrix.plugin.version }}
@@ -239,10 +278,13 @@ jobs:
           set -euo pipefail
           if npm view "${PACKAGE_NAME}@${PACKAGE_VERSION}" version >/dev/null 2>&1; then
             echo "${PACKAGE_NAME}@${PACKAGE_VERSION} is already published on npm."
-            exit 1
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Publish
+        if: steps.npm_package_version.outputs.already_published != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
