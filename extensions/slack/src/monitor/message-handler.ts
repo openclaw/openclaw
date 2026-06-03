@@ -8,7 +8,10 @@ import type { SlackMessageEvent } from "../types.js";
 import { stripSlackMentionsForCommandDetection } from "./commands.js";
 import type { SlackMonitorContext } from "./context.js";
 import {
+  acceptSlackInboundMessageIngress,
+  completeSlackInboundMessageIngress,
   hasSlackInboundMessageDelivery,
+  releaseSlackInboundMessageIngress,
   recordSlackInboundMessageDeliveries,
 } from "./inbound-delivery-state.js";
 import {
@@ -117,6 +120,16 @@ export function createSlackMessageHandler(params: {
           },
         });
         if (!prepared) {
+          await Promise.all(
+            entries.map((entry) =>
+              completeSlackInboundMessageIngress({
+                accountId: ctx.accountId,
+                message: entry.message,
+                outcome: "dropped",
+                reason: "prepare-null",
+              }),
+            ),
+          );
           return;
         }
         if (seenMessageKey) {
@@ -144,16 +157,45 @@ export function createSlackMessageHandler(params: {
         }
         try {
           await dispatchPreparedSlackMessage(prepared);
+          await Promise.all(
+            entries.map((entry) =>
+              completeSlackInboundMessageIngress({
+                accountId: ctx.accountId,
+                message: entry.message,
+                outcome: "delivered",
+              }),
+            ),
+          );
           await recordSlackInboundMessageDeliveries({
             accountId: ctx.accountId,
             messages: entries.map((entry) => entry.message),
           });
         } catch (error) {
           if (!(error instanceof SlackRetryableInboundError)) {
+            await Promise.all(
+              entries.map((entry) =>
+                completeSlackInboundMessageIngress({
+                  accountId: ctx.accountId,
+                  message: entry.message,
+                  outcome: "error",
+                  reason: formatErrorMessage(error),
+                }),
+              ),
+            );
             await recordSlackInboundMessageDeliveries({
               accountId: ctx.accountId,
               messages: entries.map((entry) => entry.message),
             });
+          } else {
+            await Promise.all(
+              entries.map((entry) =>
+                releaseSlackInboundMessageIngress({
+                  accountId: ctx.accountId,
+                  message: entry.message,
+                  reason: formatErrorMessage(error),
+                }),
+              ),
+            );
           }
           throw error;
         }
@@ -219,6 +261,11 @@ export function createSlackMessageHandler(params: {
       return;
     }
     const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
+    const ingress = await acceptSlackInboundMessageIngress({
+      accountId: ctx.accountId,
+      message,
+      opts,
+    });
     if (
       seenMessageKey &&
       (await hasSlackInboundMessageDelivery({
@@ -227,6 +274,14 @@ export function createSlackMessageHandler(params: {
         ts: message.ts,
       }))
     ) {
+      if (ingress.accepted) {
+        await completeSlackInboundMessageIngress({
+          accountId: ctx.accountId,
+          message,
+          outcome: "duplicate-delivered",
+          reason: "already-delivered",
+        });
+      }
       return;
     }
     const wasSeen = seenMessageKey ? ctx.markMessageSeen(message.channel, message.ts) : false;
@@ -239,6 +294,14 @@ export function createSlackMessageHandler(params: {
       // Allow exactly one app_mention retry if the same ts was previously dropped
       // from the message stream before it reached dispatch.
       if (opts.source !== "app_mention" || !consumeAppMentionRetryKey(seenMessageKey)) {
+        if (ingress.accepted) {
+          await completeSlackInboundMessageIngress({
+            accountId: ctx.accountId,
+            message,
+            outcome: "dropped",
+            reason: "seen-duplicate",
+          });
+        }
         return;
       }
     }
