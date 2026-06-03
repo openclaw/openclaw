@@ -16,6 +16,7 @@ function hasRecursiveSecretValue(params: {
     return false;
   }
   if (params.seen.has(params.value)) {
+    // Config-like objects can be caller-constructed; avoid cycles while scanning recursively.
     return false;
   }
   params.seen.add(params.value);
@@ -30,6 +31,9 @@ function hasRecursiveSecretValue(params: {
   });
 }
 
+/**
+ * Returns whether a value tree contains anything coercible to a SecretRef.
+ */
 export function hasSecretRefCandidate(
   value: unknown,
   defaults: SecretDefaults | undefined,
@@ -38,6 +42,9 @@ export function hasSecretRefCandidate(
   return hasRecursiveSecretValue({ value, defaults, seen });
 }
 
+/**
+ * Returns whether a value tree contains SecretRefs or non-empty credential-looking fields.
+ */
 export function hasCredentialBearingObjectValue(
   value: unknown,
   defaults: SecretDefaults | undefined,
