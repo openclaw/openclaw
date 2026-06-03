@@ -326,7 +326,7 @@ describe("memory rerank stage", () => {
         candidates: ReadonlyArray<MemoryRerankCandidate>;
       }): Promise<MemoryRerankScore[]> =>
         // NaN score must be rejected as non-finite
-        candidates.map((c) => ({ ref: c.ref, score: NaN })),
+        candidates.map((c) => ({ ref: c.ref, score: Number.NaN })),
     });
 
     const results = await baseline.search("alpha", { maxResults: 10 });
