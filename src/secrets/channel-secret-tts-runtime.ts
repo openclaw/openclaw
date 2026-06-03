@@ -6,6 +6,7 @@ import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js"
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
 
+/** Collects nested TTS provider SecretRefs from channel root and account-specific blocks. */
 export function collectNestedChannelTtsAssignments(params: {
   channelKey: string;
   nestedKey: string;
