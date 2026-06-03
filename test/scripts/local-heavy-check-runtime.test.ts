@@ -233,10 +233,21 @@ describe("local-heavy-check-runtime", () => {
     ).toBe(true);
   });
 
-  it("refuses local native type-aware checks by default", () => {
+  it("keeps local native type-aware checks compatible by default", () => {
+    expect(
+      getLocalNativeTypecheckRefusalError({
+        args: ["--extendedDiagnostics"],
+        env: makeEnv(),
+        shouldRunHeavyCheck: true,
+        toolName: "tsgo",
+      }),
+    ).toBeNull();
+  });
+
+  it("refuses local native type-aware checks when the strict refusal guard is enabled", () => {
     const error = getLocalNativeTypecheckRefusalError({
       args: ["--extendedDiagnostics"],
-      env: makeEnv(),
+      env: makeEnv({ OPENCLAW_REFUSE_LOCAL_NATIVE_TYPECHECK: "1" }),
       shouldRunHeavyCheck: true,
       toolName: "tsgo",
     });

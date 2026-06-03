@@ -276,11 +276,15 @@ export function getLocalNativeTypecheckRefusalError({
     return null;
   }
 
+  if (env.OPENCLAW_REFUSE_LOCAL_NATIVE_TYPECHECK !== "1") {
+    return null;
+  }
+
   return [
     `Refusing to start ${toolName} on this local host.`,
-    "Native type-aware checks can exhaust constrained developer/agent machines; run them in GitHub CI, Blacksmith/Testbox, or another remote worker instead.",
+    "Native type-aware checks can exhaust constrained developer/agent machines; this opt-in guard keeps them on GitHub CI, Blacksmith/Testbox, or another remote worker instead.",
     `Arguments: ${args.length > 0 ? args.join(" ") : "<default project run>"}`,
-    "If you really mean to run this locally, rerun with OPENCLAW_HEAVY_CHECK_FORCE=1 or OPENCLAW_ALLOW_LOCAL_NATIVE_TYPECHECK=1.",
+    "If you really mean to run this locally, unset OPENCLAW_REFUSE_LOCAL_NATIVE_TYPECHECK or rerun with OPENCLAW_HEAVY_CHECK_FORCE=1 or OPENCLAW_ALLOW_LOCAL_NATIVE_TYPECHECK=1.",
   ].join("\n");
 }
 
