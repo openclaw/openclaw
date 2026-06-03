@@ -3,7 +3,6 @@ import {
   getRuntimeAuthProfileStoreSnapshot,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../agents/auth-profiles/runtime-snapshots.js";
-import { clearLoadedAuthStoreCache } from "../agents/auth-profiles/store-cache.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -202,7 +201,6 @@ export function clearSecretsRuntimeSnapshot(): void {
   setRuntimeConfigSnapshotRefreshHandler(null);
   clearRuntimeConfigSnapshot();
   clearRuntimeAuthProfileStoreSnapshots();
-  clearLoadedAuthStoreCache();
   for (const clearHook of clearHooks) {
     clearHook();
   }

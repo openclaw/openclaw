@@ -2087,6 +2087,9 @@ function shouldUseWholeConfigTarget(kind, targetArg, cwd) {
     return false;
   }
   const relative = toRepoRelativeTarget(targetArg, cwd);
+  if (isTestFileTarget(relative)) {
+    return false;
+  }
   return relative.startsWith("ui/src/") && !relative.startsWith("ui/src/ui/");
 }
 

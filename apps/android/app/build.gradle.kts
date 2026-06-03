@@ -66,7 +66,7 @@ android {
     minSdk = 31
     targetSdk = 36
     versionCode = 2026060201
-    versionName = "2026.6.3"
+    versionName = "2026.6.2"
     ndk {
       // Support all major ABIs — native libs are tiny (~47 KB per ABI)
       abiFilters += listOf("armeabi-v7a", "arm64-v8a", "x86", "x86_64")

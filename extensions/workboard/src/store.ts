@@ -1215,6 +1215,7 @@ function normalizeMetadata(
       : null;
   const hasArchivedAt = Object.hasOwn(record, "archivedAt");
   const hasStale = Object.hasOwn(record, "stale");
+  const hasLifecycleStatusSourceUpdatedAt = Object.hasOwn(record, "lifecycleStatusSourceUpdatedAt");
   const links = Array.isArray(record.links)
     ? record.links.map(normalizeLink).filter((link): link is WorkboardLink => link !== null)
     : undefined;
@@ -1311,6 +1312,9 @@ function normalizeMetadata(
           }
         : undefined
       : fallback.stale,
+    lifecycleStatusSourceUpdatedAt: hasLifecycleStatusSourceUpdatedAt
+      ? normalizeTimestamp(record.lifecycleStatusSourceUpdatedAt, 0)
+      : fallback.lifecycleStatusSourceUpdatedAt,
     failureCount:
       typeof record.failureCount === "number" && Number.isFinite(record.failureCount)
         ? Math.max(0, Math.trunc(record.failureCount))
@@ -1419,6 +1423,7 @@ function removeUndefinedMetadataFields(metadata: WorkboardMetadata): WorkboardMe
     "templateId",
     "archivedAt",
     "stale",
+    "lifecycleStatusSourceUpdatedAt",
     "failureCount",
   ] as const) {
     const value = next[key];
@@ -1637,6 +1642,49 @@ function latestMetadataIdChanged(
 ): boolean {
   const latestId = next?.at(-1)?.id;
   return Boolean(latestId && latestId !== existing?.at(-1)?.id);
+}
+
+function lifecycleStatusSourceUpdatedAtFromPatch(metadata: unknown): number | undefined {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  if (!Object.hasOwn(metadata, "lifecycleStatusSourceUpdatedAt")) {
+    return undefined;
+  }
+  const sourceUpdatedAt = normalizeTimestamp(
+    (metadata as Record<string, unknown>).lifecycleStatusSourceUpdatedAt,
+    0,
+  );
+  return sourceUpdatedAt;
+}
+
+function latestStatusTransitionAt(card: WorkboardCard): number | undefined {
+  for (let index = (card.events?.length ?? 0) - 1; index >= 0; index -= 1) {
+    const event = card.events?.[index];
+    if (
+      (event?.kind === "moved" || event?.kind === "created") &&
+      ((event.kind === "created" && card.status !== "todo") ||
+        (event.kind === "moved" && event.fromStatus !== event.toStatus)) &&
+      event.toStatus === card.status &&
+      typeof event.at === "number" &&
+      Number.isFinite(event.at)
+    ) {
+      return event.at;
+    }
+  }
+  return undefined;
+}
+
+function shouldSkipPersistedLifecycleStatusUpdate(
+  existing: WorkboardCard,
+  sourceUpdatedAt: number,
+): boolean {
+  const lifecycleStatusSourceUpdatedAt = existing.metadata?.lifecycleStatusSourceUpdatedAt;
+  if (lifecycleStatusSourceUpdatedAt !== undefined) {
+    return sourceUpdatedAt < lifecycleStatusSourceUpdatedAt;
+  }
+  const statusTransitionAt = latestStatusTransitionAt(existing);
+  return statusTransitionAt !== undefined && sourceUpdatedAt < statusTransitionAt;
 }
 
 function updateEvent(
@@ -2586,6 +2634,31 @@ export class WorkboardStore {
     if (!existing) {
       throw new Error(`card not found: ${id}`);
     }
+    const lifecycleStatusSourceUpdatedAt = lifecycleStatusSourceUpdatedAtFromPatch(patch.metadata);
+    const existingLifecycleStatusSourceUpdatedAt =
+      existing.metadata?.lifecycleStatusSourceUpdatedAt;
+    const hasFreshLifecycleStatusSource =
+      lifecycleStatusSourceUpdatedAt !== undefined &&
+      lifecycleStatusSourceUpdatedAt !== existingLifecycleStatusSourceUpdatedAt;
+    if (
+      patch.status !== undefined &&
+      lifecycleStatusSourceUpdatedAt !== undefined &&
+      shouldSkipPersistedLifecycleStatusUpdate(existing, lifecycleStatusSourceUpdatedAt)
+    ) {
+      // Ignore stale lifecycle status writes, but still accept any non-status updates in the patch.
+      patch.status = undefined;
+      if (patch.metadata && typeof patch.metadata === "object" && !Array.isArray(patch.metadata)) {
+        const metadataPatch = patch.metadata as Record<string, unknown>;
+        const { lifecycleStatusSourceUpdatedAt: _ignored, ...rest } = metadataPatch;
+        patch.metadata = Object.keys(rest).length > 0 ? rest : undefined;
+      }
+      const hasSemanticPatch = Object.entries(patch).some(
+        ([key, value]) => key !== "status" && key !== "metadata" && value !== undefined,
+      );
+      if (!hasSemanticPatch && patch.metadata === undefined) {
+        return existing;
+      }
+    }
     const status = normalizeStatus(patch.status, existing.status);
     const now = Date.now();
     const startedAt =
@@ -2613,6 +2686,11 @@ export class WorkboardStore {
     let metadata = normalizeMetadata(patch.metadata, existing.metadata, {
       allowDependencyLinks: options.allowMetadataDependencyLinks !== false,
     });
+    if (status !== existing.status && !hasFreshLifecycleStatusSource) {
+      // Status patches often spread existing metadata. Only a newly supplied
+      // lifecycle source is provenance; copied markers must not survive a manual transition.
+      metadata = { ...metadata, lifecycleStatusSourceUpdatedAt: undefined };
+    }
     const automationPatch: Record<string, unknown> = {};
     for (const key of [
       "tenant",

@@ -11,6 +11,7 @@ import {
   AUTH_STATE_FILENAME,
   LEGACY_AUTH_FILENAME,
 } from "../agents/auth-profiles/path-constants.js";
+import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveOAuthPath } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -98,6 +99,7 @@ function resolveCandidateAgentDirs(params: {
 
 function hasCandidateAuthProfileStoreSource(agentDir: string): boolean {
   return (
+    existsSync(resolveAuthProfileDatabasePath(agentDir)) ||
     existsSync(path.join(agentDir, AUTH_PROFILE_FILENAME)) ||
     existsSync(path.join(agentDir, AUTH_STATE_FILENAME)) ||
     existsSync(path.join(agentDir, LEGACY_AUTH_FILENAME))
