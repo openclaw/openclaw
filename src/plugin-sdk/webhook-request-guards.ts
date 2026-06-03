@@ -11,6 +11,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
 import { resolveWebhookIntegerOption } from "./webhook-numeric-options.js";
 
+/** Body-read profile for webhook payload limits before or after authentication. */
 export type WebhookBodyReadProfile = "pre-auth" | "post-auth";
 
 export {
@@ -21,6 +22,7 @@ export {
   requestBodyErrorToText,
 } from "../infra/http-body.js";
 
+/** Default webhook body size/time limits for pre-auth and post-auth reads. */
 export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
   preAuth: {
     maxBytes: 64 * 1024,
@@ -32,11 +34,13 @@ export const WEBHOOK_BODY_READ_DEFAULTS = Object.freeze({
   },
 });
 
+/** Default in-flight concurrency limits for webhook request pipelines. */
 export const WEBHOOK_IN_FLIGHT_DEFAULTS = Object.freeze({
   maxInFlightPerKey: 8,
   maxTrackedKeys: 4_096,
 });
 
+/** Per-key in-flight limiter used to bound concurrent webhook handlers. */
 export type WebhookInFlightLimiter = {
   tryAcquire: (key: string) => boolean;
   release: (key: string) => void;
@@ -235,6 +239,7 @@ export function beginWebhookRequestPipelineOrReject(params: {
       if (released) {
         return;
       }
+      // Pipeline cleanup may run from multiple exits; release must stay idempotent.
       released = true;
       if (inFlightLimiter && inFlightKey) {
         inFlightLimiter.release(inFlightKey);
