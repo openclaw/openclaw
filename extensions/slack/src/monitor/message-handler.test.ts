@@ -2,6 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
+const acceptIngressMock = vi.fn(async () => ({ accepted: true, id: "default:D1:123.456" }));
+const completeIngressMock = vi.fn(async () => {});
+const releaseIngressMock = vi.fn(async () => {});
+const hasDeliveryMock = vi.fn(async () => false);
+const recordDeliveriesMock = vi.fn(async () => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
   ...message,
 }));
@@ -28,6 +33,14 @@ vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({
     resolve: (entry: { message: Record<string, unknown> }) => resolveThreadTsMock(entry),
   }),
+}));
+
+vi.mock("./inbound-delivery-state.js", () => ({
+  acceptSlackInboundMessageIngress: (...args: unknown[]) => acceptIngressMock(...args),
+  completeSlackInboundMessageIngress: (...args: unknown[]) => completeIngressMock(...args),
+  releaseSlackInboundMessageIngress: (...args: unknown[]) => releaseIngressMock(...args),
+  hasSlackInboundMessageDelivery: (...args: unknown[]) => hasDeliveryMock(...args),
+  recordSlackInboundMessageDeliveries: (...args: unknown[]) => recordDeliveriesMock(...args),
 }));
 
 function createContext(overrides?: {
@@ -79,7 +92,14 @@ describe("createSlackMessageHandler", () => {
   beforeEach(() => {
     enqueueMock.mockClear();
     flushKeyMock.mockClear();
+    acceptIngressMock.mockClear();
+    completeIngressMock.mockClear();
+    releaseIngressMock.mockClear();
+    hasDeliveryMock.mockClear();
+    recordDeliveriesMock.mockClear();
     resolveThreadTsMock.mockClear();
+    hasDeliveryMock.mockResolvedValue(false);
+    acceptIngressMock.mockResolvedValue({ accepted: true, id: "default:D1:123.456" });
   });
 
   it("does not track invalid non-message events from the message stream", async () => {
@@ -124,6 +144,31 @@ describe("createSlackMessageHandler", () => {
     expect(trackEvent).toHaveBeenCalledTimes(1);
     expect(resolveThreadTsMock).toHaveBeenCalledTimes(1);
     expect(enqueueMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("records Slack thread mentions as durable ingress before queueing", async () => {
+    const { handler } = createHandlerWithTracker();
+    const message = {
+      type: "message",
+      channel: "C111",
+      user: "U111",
+      ts: "1709000000.000300",
+      text: "<@U0B5YPJJS2Z> teste",
+      thread_ts: "1709000000.000100",
+    } as never;
+
+    await handler(message, { source: "app_mention", wasMentioned: true });
+
+    expect(acceptIngressMock).toHaveBeenCalledWith({
+      accountId: "default",
+      message,
+      opts: { source: "app_mention", wasMentioned: true },
+    });
+    expect(enqueueMock).toHaveBeenCalledTimes(1);
+    expect(acceptIngressMock.mock.invocationCallOrder[0]).toBeLessThan(
+      enqueueMock.mock.invocationCallOrder[0],
+    );
+    expect(completeIngressMock).not.toHaveBeenCalled();
   });
 
   it("accepts thread_broadcast messages from the message stream", async () => {
