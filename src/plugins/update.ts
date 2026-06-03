@@ -292,11 +292,17 @@ async function loadNpmPackageVersionsForUpdate(params: {
   );
 }
 
-async function resolveTrustedOfficialStableFallbackMetadataForUpdate(params: {
+async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(params: {
   metadata: NpmSpecResolution;
   spec: string;
   timeoutMs?: number;
-}): Promise<NpmSpecResolution | undefined> {
+}): Promise<
+  | {
+      kind: "stable" | "prerelease-only";
+      metadata: NpmSpecResolution;
+    }
+  | undefined
+> {
   const parsedSpec = parseRegistryNpmSpec(params.spec);
   if (
     !parsedSpec ||
@@ -317,14 +323,31 @@ async function resolveTrustedOfficialStableFallbackMetadataForUpdate(params: {
     ?.filter((value) => !isPrereleaseSemverVersion(value))
     .toSorted(compareNpmSemverForUpdate)
     .at(-1);
-  if (!stableVersion) {
+  if (stableVersion) {
+    const stableMetadata = await resolveNpmSpecMetadata({
+      spec: `${parsedSpec.name}@${stableVersion}`,
+      timeoutMs: params.timeoutMs,
+    });
+    return stableMetadata.ok ? { kind: "stable", metadata: stableMetadata.metadata } : undefined;
+  }
+
+  const prereleaseVersion = versions
+    ?.filter(isPrereleaseSemverVersion)
+    .toSorted(compareNpmSemverForUpdate)
+    .at(-1);
+  if (!prereleaseVersion || !versions?.every(isPrereleaseSemverVersion)) {
     return undefined;
   }
-  const stableMetadata = await resolveNpmSpecMetadata({
-    spec: `${parsedSpec.name}@${stableVersion}`,
+  if (prereleaseVersion === params.metadata.version) {
+    return { kind: "prerelease-only", metadata: params.metadata };
+  }
+  const prereleaseMetadata = await resolveNpmSpecMetadata({
+    spec: `${parsedSpec.name}@${prereleaseVersion}`,
     timeoutMs: params.timeoutMs,
   });
-  return stableMetadata.ok ? stableMetadata.metadata : undefined;
+  return prereleaseMetadata.ok
+    ? { kind: "prerelease-only", metadata: prereleaseMetadata.metadata }
+    : undefined;
 }
 
 async function expectedIntegrityForNpmFallback(params: {
@@ -1371,23 +1394,22 @@ export async function updateNpmInstalledPlugins(params: {
             trustedSourceLinkedOfficialInstall,
           },
         );
-        const expectedIntegrityMetadata =
-          (trustedSourceLinkedOfficialInstall &&
-            (await resolveTrustedOfficialStableFallbackMetadataForUpdate({
+        const trustedPrereleaseFallback = trustedSourceLinkedOfficialInstall
+          ? await resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate({
               metadata: metadataResult.metadata,
               spec: effectiveSpec!,
               timeoutMs: params.timeoutMs,
-            }))) ||
-          metadataResult.metadata;
-        const resolvedStableFallbackMetadata =
-          expectedIntegrityMetadata !== metadataResult.metadata;
+            })
+          : undefined;
+        const expectedIntegrityMetadata =
+          trustedPrereleaseFallback?.metadata ?? metadataResult.metadata;
         expectedIntegrity = expectedIntegrityForNpmUpdate({
           effectiveSpec,
           metadata: expectedIntegrityMetadata,
           record,
           trustedSourceLinkedOfficialInstall,
         });
-        if (bypassTrustedOfficialUnchangedNpmCheck && !resolvedStableFallbackMetadata) {
+        if (bypassTrustedOfficialUnchangedNpmCheck && !trustedPrereleaseFallback) {
           expectedIntegrity = undefined;
         }
         if (

@@ -730,6 +730,51 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("keeps integrity drift checks for exact prerelease-only official pins", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/voice-call",
+      version: "0.0.2-beta.1",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/voice-call",
+      version: "0.0.2-beta.1",
+      integrity: "sha512-beta",
+    });
+    mockNpmViewVersions(["0.0.1-beta.1", "0.0.2-beta.1"]);
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "voice-call",
+        targetDir: installPath,
+        version: "0.0.2-beta.1",
+        npmResolution: {
+          name: "@openclaw/voice-call",
+          version: "0.0.2-beta.1",
+          resolvedSpec: "@openclaw/voice-call@0.0.2-beta.1",
+        },
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "voice-call",
+        spec: "@openclaw/voice-call@0.0.2-beta.1",
+        installPath,
+        resolvedName: "@openclaw/voice-call",
+        resolvedSpec: "@openclaw/voice-call@0.0.2-beta.1",
+        resolvedVersion: "0.0.2-beta.1",
+        integrity: "sha512-old",
+      }),
+      pluginIds: ["voice-call"],
+      syncOfficialPluginInstalls: true,
+    });
+
+    expectNpmUpdateCall({
+      spec: "@openclaw/voice-call",
+      expectedPluginId: "voice-call",
+      expectedIntegrity: "sha512-old",
+    });
+  });
+
   it("keeps integrity drift checks for exact official pins during beta fallback", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",
