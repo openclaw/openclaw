@@ -1,0 +1,92 @@
+{
+  "name": "cinematic-scroll",
+  "version": "2.0.0",
+  "description": "Build cinematic scroll-driven, 3D-tilt, parallax, and environment-morphing websites — pinned chapter reveals, hero parallax, depth-image figures, hover-tilt cards, release/launch pages, and editorial microsites. Single self-contained scroll sections (Mode A) or full Shopify-Editions-style Next.js release pages with AI-generated visuals (Mode B). A cinematic web production studio in an Agent Skill: an optional 5-phase pipeline (Cinematic Audit → Motion Storyboard → Technical Spec → Build → Polish) with taste guardrails, 12 scroll patterns, 7 visual systems, a scroll-choreography.json schema, and a 4-dimension audit mode. Built with React, Next.js, GSAP, Lenis, fal.ai.",
+  "author": {
+    "name": "Simone Leonelli",
+    "email": "simone@w230.net"
+  },
+  "license": "MIT",
+  "licenseFile": "LICENSE",
+  "price": 0,
+  "currency": "USD",
+  "maintained": false,
+  "maintenanceNote": "Provided as-is. Not actively maintained — issues and PRs welcome but may not get a timely response.",
+  "category": "frontend",
+  "tags": [
+    "react",
+    "nextjs",
+    "gsap",
+    "framer-motion",
+    "scroll",
+    "3d",
+    "parallax",
+    "animation",
+    "cinematic",
+    "fal.ai",
+    "ai-images",
+    "shopify-editions",
+    "release-page",
+    "landing-page",
+    "tailwind"
+  ],
+  "compatibility": {
+    "claude": ">=3.5",
+    "agentskills.io": "1.x"
+  },
+  "entry": "SKILL.md",
+  "templates": "templates/nextjs/",
+  "repository": "https://github.com/MustBeSimo/cinematic-scroll-skill",
+  "homepage": "https://w230.net",
+  "requires": {
+    "npmPackages": [
+      "choreo-3d",
+      "framer-motion",
+      "gsap",
+      "lenis",
+      "@fal-ai/client",
+      "@fal-ai/server-proxy",
+      "next",
+      "react",
+      "react-dom",
+      "tailwindcss"
+    ],
+    "envVars": [
+      "FAL_KEY",
+      "FAL_IMAGE_MODEL"
+    ]
+  },
+  "modes": [
+    {
+      "name": "Scroll artifact",
+      "description": "Single self-contained HTML or .tsx scroll section / page. No build step, no AI keys. Fast preview."
+    },
+    {
+      "name": "Full release site",
+      "description": "Tested Next.js App Router templates + fal.ai asset pipeline for a complete cinematic release website. Bring your own fal.ai key."
+    },
+    {
+      "name": "Cinematic audit",
+      "description": "Analyze an existing URL's scroll experience. Scores pacing, performance, accessibility, and emotional arc. Outputs remediation-plan.md with prioritized fixes."
+    }
+  ],
+  "references": [
+    "taste-guardrails.md",
+    "references/scroll-patterns.md",
+    "references/film-archetypes.md",
+    "references/performance-budget.md",
+    "audit-mode.md",
+    "scroll-choreography.json"
+  ],
+  "pipeline": {
+    "phases": 5,
+    "gated": true,
+    "artifacts": [
+      "cinematic-audit.md",
+      "motion-storyboard.md",
+      "technical-spec.md",
+      "code-output",
+      "polish-report.md"
+    ]
+  }
+}
