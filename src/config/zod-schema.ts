@@ -1130,6 +1130,17 @@ export const OpenClawSchema = z
           .object({
             deny: z.array(z.string()).optional(),
             allow: z.array(z.string()).optional(),
+            // PR #85664: distinct surface-specific opt-ins for tools that
+            // expand the security boundary beyond the regular allow/deny
+            // policy. Dual-key gated — each flag must be set in addition to
+            // including the tool name in `allow` for the tool to be reachable.
+            directInvoke: z
+              .object({
+                /** Gates the `read` coding tool on the direct-invoke surface. */
+                hostFsRead: z.boolean().optional(),
+              })
+              .strict()
+              .optional(),
           })
           .strict()
           .optional(),
