@@ -403,7 +403,7 @@ function meetStatusScript(params: {
       return pattern.test(label) && !/remotely mute|someone else/i.test(label) && !button.disabled;
     });
   const input = [...document.querySelectorAll('input')].find((el) =>
-    /your name/i.test(el.getAttribute('aria-label') || el.placeholder || '')
+    /your name|您的姓名|姓名|nombre|nom|name/i.test(el.getAttribute('aria-label') || el.placeholder || '')
   );
   if (!readOnly && ${JSON.stringify(params.autoJoin)} && input && !input.value) {
     input.focus();
@@ -416,27 +416,27 @@ function meetStatusScript(params: {
   const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
   const permissionNeeded = /permission needed|microphone problem|speaker problem|allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera|speaker)/i.test(permissionText);
-  let mic = findCallControlButton(/^\\s*turn (?:off|on) microphone\\b/i);
+  let mic = findCallControlButton(/^\\s*(?:turn (?:off|on) microphone|關閉麥克風|開啟麥克風|关闭麦克风|开启麦克风|マイクを(?:オン|オフ)|(?:activar|desactivar) micrófono|(?:activer|désactiver) le micro|mikrofon (?:einschalten|ausschalten))\\b/i);
   if (!mic) {
     const callControls = document.querySelector('[role="region"][aria-label="Call controls"]');
     mic = [...(callControls?.querySelectorAll('button') || [])].find((button) =>
-      /^\\s*turn (?:off|on) microphone\\b/i.test(buttonLabel(button))
+      /^\\s*(?:turn (?:off|on) microphone|關閉麥克風|開啟麥克風|关闭麦克风|开启麦克风|マイクを(?:オン|オフ)|(?:activar|desactivar) micrófono|(?:activer|désactiver) le micro|mikrofon (?:einschalten|ausschalten))\\b/i.test(buttonLabel(button))
     );
   }
-  if (!readOnly && allowMicrophone && mic && /turn on microphone/i.test(buttonLabel(mic))) {
+  if (!readOnly && allowMicrophone && mic && /(?:turn on microphone|開啟麥克風|开启麦克风|マイクをオン|activar micrófono|activer le micro|mikrofon einschalten)/i.test(buttonLabel(mic))) {
     mic.click();
     notes.push("Attempted to turn on the Meet microphone for talk-back mode.");
   }
-  if (!readOnly && !allowMicrophone && mic && /turn off microphone/i.test(mic.getAttribute('aria-label') || text(mic))) {
+  if (!readOnly && !allowMicrophone && mic && /(?:turn off microphone|關閉麥克風|关闭麦克风|マイクをオフ|desactivar micrófono|désactiver le micro|mikrofon ausschalten)/i.test(mic.getAttribute('aria-label') || text(mic))) {
     mic.click();
     notes.push("Muted Meet microphone for observe-only mode.");
   }
   const join = !readOnly && ${JSON.stringify(params.autoJoin)}
-    ? findButton(/join now|ask to join/i)
+    ? findButton(/join now|ask to join|立即加入|要求加入|申請加入|申请加入|同时在?此处加入|同時在?這裡加入|Join here too|今すぐ参加|参加をリクエスト|こちらからも参加|unirse|solicitar unirse|rejoindre|participer|demander à participer|jetzt teilnehmen|teilnahme erbitten/i) || buttons.find(b => b.getAttribute('jsname') === 'Qx7uuf')
     : null;
   if (join) join.click();
-  const microphoneChoice = findButton(/\\buse microphone\\b/i);
-  const noMicrophoneChoice = findButton(/\\b(continue|join|use) without (microphone|mic)\\b|\\bnot now\\b/i);
+  const microphoneChoice = findButton(/\\buse microphone\\b|使用麥克風|使用麦克风|マイクを使用|usar micrófono|utiliser le micro|mikrofon verwenden/i);
+  const noMicrophoneChoice = findButton(/\\b(continue|join|use) without (microphone|mic)\\b|\\bnot now\\b|不使用麥克風直接加入|不開啟麥克風直接加入|不使用麦克风直接加入|不开启麦克风直接加入|マイクなしで参加|unirse sin micrófono|continuer sans micro|ohne mikrofon teilnehmen/i);
   if (!readOnly && allowMicrophone && microphoneChoice) {
     microphoneChoice.click();
     notes.push("Accepted Meet microphone prompt with browser automation.");
@@ -444,7 +444,7 @@ function meetStatusScript(params: {
     noMicrophoneChoice.click();
     notes.push("Skipped Meet microphone prompt for observe-only mode.");
   }
-  const inCall = buttons.some((button) => /leave call/i.test(button.getAttribute('aria-label') || text(button)));
+  const inCall = buttons.some((button) => /(?:leave call|離開|結束|结束|退出|hang up|salir|quitter|verlassen)/i.test(button.getAttribute('aria-label') || text(button)) || button.getAttribute('jsname') === 'HeV7id');
   const routeMeetAudioOutput = async () => {
     if (
       !allowMicrophone ||
@@ -501,7 +501,7 @@ function meetStatusScript(params: {
   let lastCaptionSpeaker;
   let lastCaptionText;
   let recentTranscript = [];
-  const captionSelector = '[role="region"][aria-label*="aption" i], [aria-live="polite"][role="region"], div[aria-live="polite"]';
+  const captionSelector = '[role="region"][aria-label*="aption" i], [role="region"][aria-label*="字幕" i], [role="region"][aria-label*="cc" i], [aria-live="polite"][role="region"], div[aria-live="polite"]';
   const captionState = (() => {
     if (!captureCaptions) return undefined;
     const w = window;
@@ -521,7 +521,7 @@ function meetStatusScript(params: {
     const clean = String(captionText || "").replace(/\\s+/g, " ").trim();
     const cleanSpeaker = String(speaker || "").replace(/\\s+/g, " ").trim();
     if (!clean || clean.length < 2) return;
-    if (/^(turn on captions|turn off captions|captions)$/i.test(clean)) return;
+    if (/^(turn on captions|turn off captions|captions|開啟字幕|开启字幕|字幕をオン|字幕をオフ|關閉字幕|关闭字幕|activar subtítulos|desactivar subtítulos|activer les sous-titres|désactiver les sous-titres|untertitel einschalten|untertitel ausschalten)$/i.test(clean)) return;
     const key = (cleanSpeaker + "\\n" + clean).toLowerCase();
     if (captionState.seen[key]) return;
     captionState.seen[key] = true;
@@ -545,12 +545,12 @@ function meetStatusScript(params: {
   };
   if (captionState) {
     if (!readOnly && inCall && !captionState.enabledAttempted) {
-      const captionButton = findButton(/turn on captions|show captions|captions/i);
+      const captionButton = findButton(/turn on captions|show captions|captions|開啟字幕|开启字幕|字幕をオン|activar subtítulos|activer les sous-titres|untertitel einschalten/i);
       const captionLabel = captionButton ? (captionButton.getAttribute("aria-label") || captionButton.getAttribute("data-tooltip") || text(captionButton)) : "";
       if (captionButton) {
         captionState.enabledAttempted = true;
         captionsEnabledAttempted = true;
-        if (!/turn off captions|hide captions/i.test(captionLabel)) {
+        if (!/turn off captions|hide captions|關閉字幕|关闭字幕|字幕をオフ|desactivar subtítulos|désactiver les sous-titres|untertitel ausschalten/i.test(captionLabel)) {
           captionButton.click();
           notes.push("Attempted to enable Meet captions for observe-only transcript health.");
         }
@@ -579,16 +579,16 @@ function meetStatusScript(params: {
     lastCaptionText = last?.text;
     recentTranscript = lines.slice(-5);
   }
-  const lobbyWaiting = !inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText);
-  const leaveReason = /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i.test(pageText)
-    ? pageText.match(/you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended/i)?.[0]
+  const lobbyWaiting = !inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join|等待對方同意|等待主辦人同意|要求加入|等待批准|等待接纳|参加のリクエスト中|esperando|en attente|teilnahme angefragt/i.test(pageText);
+  const leaveReason = /you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended|你已離開這場會議|通話已結束|會議已結束|你已离开这场会议|会議から退出しました|has salido|vous avez quitté|sie haben die besprechung verlassen/i.test(pageText)
+    ? pageText.match(/you left the meeting|you.?ve left the meeting|removed from the meeting|you were removed|call ended|meeting ended|你已離開這場會議|通話已結束|會議已結束|你已离开这场会议|会議から退出しました|has salido|vous avez quitté|sie haben die besprechung verlassen/i)?.[0]
     : undefined;
   let manualActionReason;
   let manualActionMessage;
-  if (!inCall && (host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)/i.test(pageText))) {
+  if (!inCall && (host === "accounts.google.com" || /use your google account|to continue to google meet|choose an account|sign in to (join|continue)|使用您的 Google 帳戶|選擇帳戶|登入|使用您的 Google 帐户|选择帐户|登录|ログイン|iniciar sesión|se connecter|anmelden/i.test(pageText))) {
     manualActionReason = "google-login-required";
     manualActionMessage = "Sign in to Google in the OpenClaw browser profile, then retry the Meet join.";
-  } else if (!inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join/i.test(pageText)) {
+  } else if (!inCall && /asking to be let in|you.?ll join when someone lets you in|waiting to be let in|ask to join|等待對方同意|等待主辦人同意|要求加入|等待批准|等待接纳|参加のリクエスト中|esperando|en attente|teilnahme angefragt/i.test(pageText)) {
     manualActionReason = "meet-admission-required";
     manualActionMessage = "Admit the OpenClaw browser participant in Google Meet, then retry speech.";
   } else if (permissionNeeded) {
@@ -596,7 +596,7 @@ function meetStatusScript(params: {
     manualActionMessage = allowMicrophone
       ? "Allow microphone/camera/speaker permissions for Meet in the OpenClaw browser profile, then retry."
       : "Join without microphone/camera permissions in the OpenClaw browser profile, then retry.";
-  } else if (!inCall && (allowMicrophone ? !microphoneChoice : !noMicrophoneChoice) && /do you want people to hear you in the meeting/i.test(pageText)) {
+  } else if (!inCall && (allowMicrophone ? !microphoneChoice : !noMicrophoneChoice) && /do you want people to hear you in the meeting|你希望大家在會議中聽到你的聲音嗎|在会议中听到你的声音吗/i.test(pageText)) {
     manualActionReason = "meet-audio-choice-required";
     manualActionMessage = allowMicrophone
       ? "Meet is showing the microphone choice. Click Use microphone in the OpenClaw browser profile, then retry."
@@ -606,7 +606,7 @@ function meetStatusScript(params: {
     clickedJoin: Boolean(join),
     clickedMicrophoneChoice: Boolean(allowMicrophone && microphoneChoice),
     inCall,
-    micMuted: mic ? /turn on microphone/i.test(buttonLabel(mic)) : undefined,
+    micMuted: mic ? /(?:turn on microphone|開啟麥克風|开启麦克风|マイクをオン|activar micrófono|activer le micro|mikrofon einschalten)/i.test(buttonLabel(mic)) : undefined,
     lobbyWaiting,
     leaveReason,
     captioning,
