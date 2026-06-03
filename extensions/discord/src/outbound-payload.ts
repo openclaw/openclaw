@@ -47,9 +47,10 @@ function createDiscordUnknownPayloadResult(target: string) {
 function resolveDiscordDeliveryOptions(
   ctx: DiscordOutboundPayloadContext,
   sendContext: DiscordPayloadSendContext,
+  options?: { replyTo?: string },
 ) {
   return {
-    replyTo: sendContext.resolveReplyTo(),
+    replyTo: options?.replyTo ?? sendContext.resolveReplyTo(),
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
@@ -59,9 +60,10 @@ function resolveDiscordDeliveryOptions(
 function resolveDiscordFormattedDeliveryOptions(
   ctx: DiscordOutboundPayloadContext,
   sendContext: DiscordPayloadSendContext,
+  options?: { replyTo?: string },
 ) {
   return {
-    ...resolveDiscordDeliveryOptions(ctx, sendContext),
+    ...resolveDiscordDeliveryOptions(ctx, sendContext, options),
     ...sendContext.formatting,
   };
 }
