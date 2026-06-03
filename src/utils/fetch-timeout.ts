@@ -93,6 +93,10 @@ function abortDueToTimeout(
   controller.abort(error);
 }
 
+/**
+ * Builds an abort signal that combines an optional parent signal with a timeout.
+ * Callers must run `cleanup`; `refresh` restarts only the internal timeout timer.
+ */
 export function buildTimeoutAbortSignal(params: TimeoutAbortSignalParams): {
   signal?: AbortSignal;
   cleanup: () => void;
