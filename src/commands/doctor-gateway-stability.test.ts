@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { DiagnosticStabilitySnapshot } from "../logging/diagnostic-stability.js";
-import { buildGatewayChannelTurnHealthDoctorNote } from "./doctor-gateway-stability.js";
+import {
+  buildGatewayChannelTurnHealthDoctorNote,
+  buildGatewaySessionAttentionDoctorNote,
+} from "./doctor-gateway-stability.js";
 
 function makeSnapshot(
   channelTurns: NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>,
@@ -15,6 +18,19 @@ function makeSnapshot(
       byType: {},
       channelTurns,
     },
+  };
+}
+
+function makeSnapshotFromSummary(
+  summary: DiagnosticStabilitySnapshot["summary"],
+): DiagnosticStabilitySnapshot {
+  return {
+    generatedAt: "2026-06-03T10:00:00.000Z",
+    capacity: 1000,
+    count: 1,
+    dropped: 0,
+    events: [],
+    summary,
   };
 }
 
@@ -352,5 +368,83 @@ describe("doctor gateway stability", () => {
     expect(note?.body).toContain(
       "- seq=9 channel=telegram receivedToTurnStartMs=15000ms turn=turn-2",
     );
+  });
+
+  it("stays quiet when no session attention is present", () => {
+    const note = buildGatewaySessionAttentionDoctorNote({
+      snapshot: makeSnapshotFromSummary({ byType: {} }),
+    });
+
+    expect(note).toBeNull();
+  });
+
+  it("reports session attention without payload contents", () => {
+    const note = buildGatewaySessionAttentionDoctorNote({
+      sourceLabel: "live Gateway diagnostics",
+      snapshot: makeSnapshotFromSummary({
+        byType: { "session.stalled": 1 },
+        sessions: {
+          attention: {
+            longRunning: 0,
+            stalled: 1,
+            stuck: 0,
+            recoveryRequested: 1,
+            recoveryCompleted: 0,
+            byClassification: {
+              blocked_tool_call: 1,
+              active_work_without_progress: 1,
+            },
+            byActiveWorkKind: {
+              tool_call: 1,
+            },
+            recent: [
+              {
+                seq: 12,
+                ts: 1_717_421_000_000,
+                type: "session.stalled",
+                state: "processing",
+                reason: "blocked_tool_call",
+                classification: "blocked_tool_call",
+                activeWorkKind: "tool_call",
+                toolName: "home_assistant",
+                ageMs: 90_000,
+                queueDepth: 2,
+              },
+              {
+                seq: 13,
+                ts: 1_717_421_001_000,
+                type: "session.recovery.requested",
+                state: "processing",
+                reason: "active_work_without_progress",
+                activeWorkKind: "tool_call",
+                ageMs: 91_000,
+                queueDepth: 2,
+              },
+            ],
+          },
+        },
+      }),
+    });
+
+    expect(note).toEqual({
+      title: "Gateway sessions",
+      body: expect.stringContaining("Session attention is active from live Gateway diagnostics."),
+    });
+    expect(note?.body).toContain(
+      "Counts: longRunning=0, stalled=1, stuck=0, recoveryRequested=1, recoveryCompleted=0.",
+    );
+    expect(note?.body).toContain(
+      "Classifications: active_work_without_progress=1, blocked_tool_call=1.",
+    );
+    expect(note?.body).toContain("Active work: tool_call=1.");
+    expect(note?.body).toContain(
+      "- seq=13 session.recovery.requested reason=active_work_without_progress activeWork=tool_call age=91000ms queueDepth=2",
+    );
+    expect(note?.body).toContain(
+      "- seq=12 session.stalled classification=blocked_tool_call reason=blocked_tool_call activeWork=tool_call tool=home_assistant age=90000ms queueDepth=2",
+    );
+    expect(note?.body).toContain("official cancel, recovery, or TaskFlow handoff paths");
+    expect(note?.body).not.toContain("payload");
+    expect(note?.body).not.toContain("call-secret");
   });
 });

@@ -11,7 +11,7 @@ import {
 type ChannelTurnSummary = NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>;
 
 export type GatewayChannelTurnHealthDoctorNote = {
-  title: "Gateway channel turns";
+  title: "Gateway channel turns" | "Gateway sessions";
   body: string;
 };
 
@@ -35,6 +35,15 @@ function formatChannelTurnLatencyLine(latency: ChannelTurnSummary["latency"]): s
     return null;
   }
   return `Latency: ${parts.join("; ")}.`;
+}
+
+function formatTopCountMap(values: Record<string, number>, limit = 5): string | null {
+  const formatted = Object.entries(values)
+    .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([key, count]) => `${key}=${count}`)
+    .join(", ");
+  return formatted || null;
 }
 
 export function buildGatewayChannelTurnHealthDoctorNote(params: {
@@ -149,6 +158,67 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
   };
 }
 
+export function buildGatewaySessionAttentionDoctorNote(params: {
+  snapshot: DiagnosticStabilitySnapshot;
+  sourceLabel?: string;
+}): GatewayChannelTurnHealthDoctorNote | null {
+  const attention = params.snapshot.summary.sessions?.attention;
+  if (!attention) {
+    return null;
+  }
+  const totalAttention =
+    attention.longRunning +
+    attention.stalled +
+    attention.stuck +
+    attention.recoveryRequested +
+    attention.recoveryCompleted;
+  if (totalAttention <= 0) {
+    return null;
+  }
+
+  const source = params.sourceLabel?.trim() || "Gateway diagnostics";
+  const lines = [
+    `Session attention is active from ${source}.`,
+    `Counts: longRunning=${attention.longRunning}, stalled=${attention.stalled}, stuck=${attention.stuck}, recoveryRequested=${attention.recoveryRequested}, recoveryCompleted=${attention.recoveryCompleted}.`,
+  ];
+
+  const classifications = formatTopCountMap(attention.byClassification);
+  if (classifications) {
+    lines.push(`Classifications: ${classifications}.`);
+  }
+  const activeWork = formatTopCountMap(attention.byActiveWorkKind);
+  if (activeWork) {
+    lines.push(`Active work: ${activeWork}.`);
+  }
+
+  const recent = attention.recent.slice(-5).reverse();
+  if (recent.length > 0) {
+    lines.push("Recent session attention:");
+    for (const event of recent) {
+      const details = [
+        `seq=${event.seq}`,
+        event.type,
+        event.classification ? `classification=${event.classification}` : "",
+        event.reason ? `reason=${event.reason}` : "",
+        event.activeWorkKind ? `activeWork=${event.activeWorkKind}` : "",
+        event.toolName ? `tool=${event.toolName}` : "",
+        event.ageMs !== undefined ? `age=${formatChannelTurnLatencyMs(event.ageMs)}` : "",
+        event.queueDepth !== undefined ? `queueDepth=${event.queueDepth}` : "",
+      ].filter(Boolean);
+      lines.push(`- ${details.join(" ")}`);
+    }
+  }
+
+  lines.push(
+    "Guidance: inspect the active tool/run and use official cancel, recovery, or TaskFlow handoff paths before adding prompt-only rules.",
+  );
+
+  return {
+    title: "Gateway sessions",
+    body: lines.join("\n"),
+  };
+}
+
 async function loadGatewayStabilitySnapshot(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
@@ -194,8 +264,11 @@ export async function noteGatewayChannelTurnHealth(params: {
   }
 
   const healthNote = buildGatewayChannelTurnHealthDoctorNote(loaded);
-  if (!healthNote) {
-    return;
+  if (healthNote) {
+    note(healthNote.body, healthNote.title);
   }
-  note(healthNote.body, healthNote.title);
+  const sessionNote = buildGatewaySessionAttentionDoctorNote(loaded);
+  if (sessionNote) {
+    note(sessionNote.body, sessionNote.title);
+  }
 }
