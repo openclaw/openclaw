@@ -18,19 +18,26 @@ export type RuntimeWebDiagnostic = {
 
 /** Runtime selection metadata for the web search tool. */
 export type RuntimeWebSearchMetadata = {
+  /** Provider explicitly configured in source config, before auto-detect fallback. */
   providerConfigured?: string;
   providerSource: "configured" | "auto-detect" | "none";
+  /** Provider that runtime calls should use after config validation and credential lookup. */
   selectedProvider?: string;
+  /** Source that supplied the selected provider credential, or why it is unavailable. */
   selectedProviderKeySource?: "config" | "secretRef" | "env" | "missing";
+  /** Perplexity transport chosen from provider config or runtime default. */
   perplexityTransport?: "search_api" | "chat_completions";
   diagnostics: RuntimeWebDiagnostic[];
 };
 
 /** Runtime selection metadata for the web fetch tool. */
 export type RuntimeWebFetchMetadata = {
+  /** Provider explicitly configured in source config, before auto-detect fallback. */
   providerConfigured?: string;
   providerSource: "configured" | "auto-detect" | "none";
+  /** Provider that runtime calls should use after config validation and credential lookup. */
   selectedProvider?: string;
+  /** Source that supplied the selected provider credential, or why it is unavailable. */
   selectedProviderKeySource?: "config" | "secretRef" | "env" | "missing";
   diagnostics: RuntimeWebDiagnostic[];
 };
