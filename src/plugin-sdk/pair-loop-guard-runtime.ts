@@ -42,6 +42,7 @@ type PairLoopGuardEntry = {
 
 /** In-memory guard for suppressing repeated bidirectional bot pair loops. */
 export type PairLoopGuard = {
+  /** Records one sender/receiver interaction and reports whether it enters or is inside cooldown. */
   recordAndCheck: (params: {
     scopeId: string;
     conversationId: string;
@@ -50,7 +51,9 @@ export type PairLoopGuard = {
     settings: PairLoopGuardSettings;
     nowMs?: number;
   }) => PairLoopGuardResult;
+  /** Clears all tracked pair state and scheduled pruning state. */
   clear: () => void;
+  /** Returns tracked pair counters for diagnostics and tests without exposing mutable state. */
   snapshot: () => PairLoopGuardSnapshotEntry[];
 };
 
@@ -138,6 +141,7 @@ export function resolvePairLoopGuardSettings(params: {
     DEFAULT_PAIR_LOOP_GUARD_CONFIG.cooldownSeconds;
 
   return {
+    // Channel-level capability gates can disable protection even when config/defaults enable it.
     enabled: params.defaultEnabled && configuredEnabled,
     maxEventsPerWindow,
     windowMs: windowSeconds * 1000,
