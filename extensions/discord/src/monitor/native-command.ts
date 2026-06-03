@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+import path from "node:path";
 import { ApplicationCommandOptionType } from "discord-api-types/v10";
 import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -538,6 +540,13 @@ async function dispatchDiscordCommandInteraction(params: {
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
     });
+    const pluginSessionFile = await resolvePluginCommandSessionFile({
+      cfg,
+      agentId: pluginCommandAgentId,
+      sessionKey: effectiveRoute.sessionKey,
+      sessionEntry: targetSessionEntry,
+      messageThreadId,
+    });
     const pluginReply = await nativeCommandRuntime.executePluginCommand({
       command: pluginMatch.command,
       args: pluginMatch.args,
@@ -548,6 +557,7 @@ async function dispatchDiscordCommandInteraction(params: {
       senderIsOwner: senderIsCommandOwner,
       agentId: pluginCommandAgentId,
       sessionKey: effectiveRoute.sessionKey,
+      sessionFile: pluginSessionFile,
       authProfileId: targetSessionEntry?.authProfileOverride,
       commandBody: prompt,
       config: cfg,
@@ -691,6 +701,52 @@ async function dispatchDiscordCommandInteraction(params: {
   });
 
   return { accepted: true, effectiveRoute };
+}
+
+async function resolvePluginCommandSessionFile(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  sessionEntry?: ReturnType<typeof nativeCommandRuntime.getSessionEntry>;
+  messageThreadId?: string | number;
+}): Promise<string | undefined> {
+  if (params.sessionEntry?.sessionFile?.trim()) {
+    return params.sessionEntry.sessionFile;
+  }
+  try {
+    const storePath = nativeCommandRuntime.resolveStorePath(params.cfg.session?.store, {
+      agentId: params.agentId,
+    });
+    const sessionStore = nativeCommandRuntime.loadSessionStore(storePath, { clone: false });
+    const storeEntry =
+      nativeCommandRuntime.resolveSessionStoreEntry({
+        store: sessionStore,
+        sessionKey: params.sessionKey,
+      }).existing ?? params.sessionEntry;
+    const sessionId = storeEntry?.sessionId?.trim() || crypto.randomUUID();
+    const fallbackSessionFile = !storeEntry?.sessionFile
+      ? nativeCommandRuntime.resolveSessionTranscriptPathInDir(
+          sessionId,
+          path.dirname(storePath),
+          params.messageThreadId,
+        )
+      : undefined;
+    const resolved = await nativeCommandRuntime.resolveAndPersistSessionFile({
+      sessionId,
+      sessionKey: params.sessionKey,
+      sessionStore,
+      storePath,
+      sessionEntry: storeEntry,
+      agentId: params.agentId,
+      sessionsDir: path.dirname(storePath),
+      fallbackSessionFile,
+      activeSessionKey: params.sessionKey,
+    });
+    return resolved.sessionFile;
+  } catch (error) {
+    logVerbose(`discord native plugin command: failed resolving session file: ${String(error)}`);
+    return undefined;
+  }
 }
 
 export function createDiscordCommandArgFallbackButton(params: DiscordCommandArgContext): Button {
