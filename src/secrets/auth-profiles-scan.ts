@@ -13,8 +13,11 @@ type ApiKeyCredentialVisit = {
   kind: "api_key";
   profileId: string;
   provider: string;
+  /** Original mutable profile record from auth-profiles.json. */
   profile: Record<string, unknown>;
+  /** Plaintext value field name derived from the secret target registry. */
   valueField: string;
+  /** SecretRef sibling field name derived from the secret target registry. */
   refField: string;
   value: unknown;
   refValue: unknown;
@@ -24,8 +27,11 @@ type TokenCredentialVisit = {
   kind: "token";
   profileId: string;
   provider: string;
+  /** Original mutable profile record from auth-profiles.json. */
   profile: Record<string, unknown>;
+  /** Plaintext value field name derived from the secret target registry. */
   valueField: string;
+  /** SecretRef sibling field name derived from the secret target registry. */
   refField: string;
   value: unknown;
   refValue: unknown;
@@ -36,7 +42,9 @@ type OauthCredentialVisit = {
   profileId: string;
   provider: string;
   profile: Record<string, unknown>;
+  /** Whether the profile currently stores a materialized OAuth access token. */
   hasAccess: boolean;
+  /** Whether the profile currently stores a materialized OAuth refresh token. */
   hasRefresh: boolean;
 };
 
@@ -96,7 +104,7 @@ function toSecretCredentialVisit(params: {
   };
 }
 
-/** Iterates credential-bearing auth profiles with normalized field metadata. */
+/** Iterates credential-bearing auth profiles with normalized field metadata for audit/apply. */
 export function* iterateAuthProfileCredentials(
   profiles: Record<string, unknown>,
 ): Iterable<AuthProfileCredentialVisit> {
