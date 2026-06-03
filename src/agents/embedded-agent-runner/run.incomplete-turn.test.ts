@@ -1,5 +1,6 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { inferToolMetaFromArgs } from "../embedded-agent-utils.js";
 import {
   hasCommittedMessagingToolDeliveryEvidence,
   hasOutboundDeliveryEvidence,
@@ -1189,7 +1190,12 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toContain("Act now");
   });
 
-  function resolveStrictAgenticBashRetryInstruction(command: string): string | null {
+  function resolveStrictAgenticBashRetryInstruction(
+    command: string,
+    options?: { meta?: string },
+  ): string | null {
+    const meta =
+      options?.meta ?? inferToolMetaFromArgs("bash", { command }, { detailMode: "explain" });
     return resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -1199,7 +1205,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["I'll update the code now."],
-        toolMetas: [{ toolName: "bash", meta: command }],
+        toolMetas: [{ toolName: "bash", meta }],
         itemLifecycle: {
           startedCount: 1,
           completedCount: 1,
@@ -1224,24 +1230,33 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
   }
 
-  it("treats a dummy sleep tool-use turn as planning-only in strict-agentic runs", () => {
-    const retryInstruction = resolveStrictAgenticBashRetryInstruction("sleep 0.1");
-
-    expect(retryInstruction).toContain("Act now");
-  });
-
-  it("does not treat ordinary bash tool-use turns as planning-only", () => {
-    const retryInstruction = resolveStrictAgenticBashRetryInstruction("pnpm test");
-
-    expect(retryInstruction).toBeNull();
-  });
-
-  it("does not treat sleep followed by shell grouping as planning-only", () => {
-    const retryInstruction = resolveStrictAgenticBashRetryInstruction(
-      "sleep 0.1; (touch /tmp/openclaw-sentinel)",
+  it("classifies production bash metadata for strict-agentic sleep retry boundaries", () => {
+    const shellGroupCommand = "sleep 0.1; (touch /tmp/openclaw-sentinel)";
+    const sleepMeta = inferToolMetaFromArgs(
+      "bash",
+      { command: "sleep 0.1" },
+      { detailMode: "explain" },
+    );
+    const ordinaryMeta = inferToolMetaFromArgs(
+      "bash",
+      { command: "pnpm test" },
+      { detailMode: "explain" },
+    );
+    const shellGroupMeta = inferToolMetaFromArgs(
+      "bash",
+      { command: shellGroupCommand },
+      { detailMode: "explain" },
     );
 
-    expect(retryInstruction).toBeNull();
+    expect(sleepMeta).toBe("sleep 0.1");
+    expect(ordinaryMeta).toBe("run tests");
+    expect(shellGroupMeta).toBe(shellGroupCommand);
+    expect(resolveStrictAgenticBashRetryInstruction("sleep 0.1")).toContain("Act now");
+    expect(
+      resolveStrictAgenticBashRetryInstruction("sleep 0.1", { meta: `${sleepMeta} · pty` }),
+    ).toContain("Act now");
+    expect(resolveStrictAgenticBashRetryInstruction("pnpm test")).toBeNull();
+    expect(resolveStrictAgenticBashRetryInstruction(shellGroupCommand)).toBeNull();
   });
 
   it("allows one retry by default and two retries for strict-agentic runs", () => {
