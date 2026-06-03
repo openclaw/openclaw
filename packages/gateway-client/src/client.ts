@@ -795,6 +795,22 @@ export class GatewayClient {
       forceTerminateTimer.unref?.();
       pendingStop.terminateTimer = forceTerminateTimer;
       ws.close();
+      // After close(), the underlying TCP/unix socket can stay ref'd in the
+      // Node event loop, preventing a natural process exit (e.g. the CLI
+      // hangs after `openclaw message send` completes). The socket close
+      // handshake may outlive the command, but the open FD must not block
+      // exit. The forceTerminateTimer above is already unref'd; the socket
+      // itself was not. Fixes #88230.
+      try {
+        const internalSocket = (
+          ws as unknown as {
+            _socket?: { unref?(): void };
+          }
+        )["_socket"];
+        internalSocket?.unref?.();
+      } catch {
+        // The socket is internal to the `ws` package; ignore if unavailable.
+      }
       this.flushPendingErrors(new Error("gateway client stopped"));
       return pendingStop.promise;
     }
