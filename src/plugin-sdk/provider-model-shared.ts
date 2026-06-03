@@ -83,7 +83,10 @@ export {
 /**
  * Normalizes provider ids for config, catalog, and plugin-registry matching.
  */
-export function normalizeProviderId(provider: string): string {
+export function normalizeProviderId(
+  /** Provider id from config, catalog, or plugin metadata. */
+  provider: string,
+): string {
   return normalizeProviderIdCore(provider);
 }
 export {
@@ -125,7 +128,10 @@ function getModelProviderHint(modelId: string): string | null {
 }
 
 /** @deprecated Proxy provider-owned model helper; do not use from third-party plugins. */
-export function isProxyReasoningUnsupportedModelHint(modelId: string): boolean {
+export function isProxyReasoningUnsupportedModelHint(
+  /** Model id that may include a provider prefix such as `x-ai/model`. */
+  modelId: string,
+): boolean {
   return getModelProviderHint(modelId) === "x-ai";
 }
 
@@ -143,12 +149,18 @@ function isClaudeOpus48ModelId(modelId: string): boolean {
 }
 
 /** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
-export function isClaudeAdaptiveThinkingDefaultModelId(modelId: string): boolean {
+export function isClaudeAdaptiveThinkingDefaultModelId(
+  /** Claude model id to check against adaptive-thinking default families. */
+  modelId: string,
+): boolean {
   return matchesClaudeModelPrefix(modelId, CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES);
 }
 
 /** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
-export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingProfile {
+export function resolveClaudeThinkingProfile(
+  /** Claude model id used to choose available thinking levels and defaults. */
+  modelId: string,
+): ProviderThinkingProfile {
   if (isClaudeOpus48ModelId(modelId)) {
     return {
       levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
@@ -173,14 +185,20 @@ export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingP
 /**
  * Normalizes Antigravity preview model ids to the canonical provider catalog form.
  */
-export function normalizeAntigravityPreviewModelId(id: string): string {
+export function normalizeAntigravityPreviewModelId(
+  /** Antigravity preview model id from config or catalog data. */
+  id: string,
+): string {
   return normalizeAntigravityPreviewModelIdCore(id);
 }
 
 /**
  * Normalizes Google preview model ids to the canonical provider catalog form.
  */
-export function normalizeGooglePreviewModelId(id: string): string {
+export function normalizeGooglePreviewModelId(
+  /** Google preview model id from config or catalog data. */
+  id: string,
+): string {
   return normalizeGooglePreviewModelIdCore(id);
 }
 
@@ -202,16 +220,33 @@ type ProviderReplayFamilyHooks = Pick<
 
 type BuildProviderReplayFamilyHooksOptions =
   | {
+      /** OpenAI-compatible transcript family using OpenAI-style tool calls. */
       family: "openai-compatible";
+      /** Whether replay policy should rewrite tool call ids for provider compatibility. */
       sanitizeToolCallIds?: boolean;
+      /** Whether replay policy should strip reasoning blocks from history. */
       dropReasoningFromHistory?: boolean;
     }
-  | { family: "anthropic-by-model" }
-  | { family: "native-anthropic-by-model" }
-  | { family: "google-gemini" }
-  | { family: "passthrough-gemini" }
   | {
+      /** Anthropic-style transcript policy selected by Claude model id. */
+      family: "anthropic-by-model";
+    }
+  | {
+      /** Native Anthropic transcript policy preserving Anthropic ids/signatures. */
+      family: "native-anthropic-by-model";
+    }
+  | {
+      /** Google Gemini transcript policy with Gemini replay sanitation hooks. */
+      family: "google-gemini";
+    }
+  | {
+      /** OpenAI-compatible transport carrying Gemini-style thought signatures. */
+      family: "passthrough-gemini";
+    }
+  | {
+      /** Family that switches between Anthropic and OpenAI-compatible replay by request context. */
       family: "hybrid-anthropic-openai";
+      /** Whether Anthropic-model replay should drop thinking blocks in hybrid mode. */
       anthropicModelDropThinkingBlocks?: boolean;
     };
 
