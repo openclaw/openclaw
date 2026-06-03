@@ -92,8 +92,9 @@ function resolveStartupEntryPath(env: GatewayServiceEnv, extension?: "cmd" | "vb
 
 function resolveStartupEntryPaths(env: GatewayServiceEnv): string[] {
   const primaryPath = resolveStartupEntryPath(env);
-  const legacyCmdPath = resolveStartupEntryPath(env, "cmd");
-  return uniqueStrings([primaryPath, legacyCmdPath]);
+  const cmdPath = resolveStartupEntryPath(env, "cmd");
+  const hiddenPath = resolveStartupEntryPath(env, "vbs");
+  return uniqueStrings([primaryPath, cmdPath, hiddenPath]);
 }
 
 // `/TR` is parsed by schtasks itself, while the generated `gateway.cmd` line is parsed by cmd.exe.
@@ -460,6 +461,18 @@ async function isStartupEntryInstalled(env: GatewayServiceEnv): Promise<boolean>
     } catch {}
   }
   return false;
+}
+
+async function removeStartupEntries(
+  env: GatewayServiceEnv,
+  stdout?: NodeJS.WritableStream,
+): Promise<void> {
+  for (const startupEntryPath of resolveStartupEntryPaths(env)) {
+    try {
+      await fs.unlink(startupEntryPath);
+      stdout?.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
+    } catch {}
+  }
 }
 
 async function isRegisteredScheduledTask(env: GatewayServiceEnv): Promise<boolean> {
@@ -995,11 +1008,14 @@ async function updateExistingScheduledTask(params: {
   } finally {
     await fs.rm(path.dirname(upgradeXmlPath), { recursive: true, force: true }).catch(() => {});
   }
-  await runScheduledTaskOrThrow({
+  const runResult = await runScheduledTaskOrThrow({
     taskName: params.taskName,
     env: params.env,
     scriptPath: params.scriptPath,
   });
+  if (runResult.taskStarted) {
+    await removeStartupEntries(params.env, params.stdout);
+  }
   writeFormattedLines(
     params.stdout,
     [
@@ -1014,15 +1030,21 @@ async function updateExistingScheduledTask(params: {
 async function shouldFallbackScheduledTaskLaunch(params: {
   env: GatewayServiceEnv;
   scriptPath: string;
-}): Promise<boolean> {
+}): Promise<{ shouldLaunchFallback: boolean; taskStarted: boolean }> {
   const readLaunchObservation = async (): Promise<{
-    state: "running" | "not-yet-run" | "other";
+    state: "confirmed-running" | "running" | "not-yet-run" | "other";
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
     if (runtime?.status === "running") {
+      const normalizedResult = normalizeTaskResultCode(runtime.lastRunResult);
+      const state = normalizedResult
+        ? RUNNING_RESULT_CODES.has(normalizedResult)
+          ? "confirmed-running"
+          : "running"
+        : "running";
       return {
-        state: "running",
+        state,
         signature: [runtime.state, runtime.lastRunTime, runtime.lastRunResult, runtime.detail]
           .filter(Boolean)
           .join("|"),
@@ -1104,39 +1126,54 @@ async function shouldFallbackScheduledTaskLaunch(params: {
   };
 
   const initial = await readLaunchObservation();
+  if (initial.state === "confirmed-running") {
+    return { shouldLaunchFallback: false, taskStarted: true };
+  }
   if (initial.state !== "not-yet-run") {
-    return false;
+    return { shouldLaunchFallback: false, taskStarted: false };
   }
 
   const deadline = Date.now() + SCHEDULED_TASK_FALLBACK_TIMEOUT_MS;
   while (Date.now() < deadline) {
     await sleep(SCHEDULED_TASK_FALLBACK_POLL_MS);
     const current = await readLaunchObservation();
+    if (current.state === "confirmed-running") {
+      return { shouldLaunchFallback: false, taskStarted: true };
+    }
+    if (current.state === "running") {
+      return { shouldLaunchFallback: false, taskStarted: false };
+    }
     if (current.state !== "not-yet-run") {
-      return false;
+      return { shouldLaunchFallback: false, taskStarted: false };
     }
     if (current.signature !== initial.signature) {
-      return false;
+      return { shouldLaunchFallback: false, taskStarted: false };
     }
   }
-  return !(await hasLaunchEvidence());
+  return {
+    shouldLaunchFallback: !(await hasLaunchEvidence()),
+    taskStarted: false,
+  };
 }
 
 async function runScheduledTaskOrThrow(params: {
   taskName: string;
   env: GatewayServiceEnv;
   scriptPath: string;
-}): Promise<void> {
+}): Promise<{ fallbackLaunched: boolean; taskStarted: boolean }> {
   const run = await execSchtasks(["/Run", "/TN", params.taskName]);
   if (run.code !== 0) {
     throw new Error(`schtasks run failed: ${run.stderr || run.stdout}`.trim());
   }
-  if (
-    !(await shouldFallbackScheduledTaskLaunch({ env: params.env, scriptPath: params.scriptPath }))
-  ) {
-    return;
+  const launchResult = await shouldFallbackScheduledTaskLaunch({
+    env: params.env,
+    scriptPath: params.scriptPath,
+  });
+  if (!launchResult.shouldLaunchFallback) {
+    return { fallbackLaunched: false, taskStarted: launchResult.taskStarted };
   }
   await launchFallbackTaskScript(params.env);
+  return { fallbackLaunched: true, taskStarted: false };
 }
 
 async function activateScheduledTask(params: {
@@ -1211,11 +1248,14 @@ async function activateScheduledTask(params: {
     throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
-  await runScheduledTaskOrThrow({
+  const runResult = await runScheduledTaskOrThrow({
     taskName,
     env: params.env,
     scriptPath: params.scriptPath,
   });
+  if (runResult.taskStarted) {
+    await removeStartupEntries(params.env, params.stdout);
+  }
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
     params.stdout,
@@ -1252,12 +1292,7 @@ export async function uninstallScheduledTask({
     await execSchtasks(["/Delete", "/F", "/TN", taskName]);
   }
 
-  for (const startupEntryPath of resolveStartupEntryPaths(env)) {
-    try {
-      await fs.unlink(startupEntryPath);
-      stdout.write(`${formatLine("Removed Windows login item", startupEntryPath)}\n`);
-    } catch {}
-  }
+  await removeStartupEntries(env, stdout);
 
   const scriptPath = resolveTaskScriptPath(env);
   const launcherPath = resolveTaskLauncherScriptPath(env, scriptPath);

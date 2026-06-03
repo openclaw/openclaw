@@ -248,6 +248,15 @@ function notYetRunTaskQueryOutput() {
   ].join("\r\n");
 }
 
+function runningTaskQueryOutput() {
+  return [
+    "Status: Running",
+    "Last Run Time: 11/30/1999 12:00:00 AM",
+    "Last Run Result: 267009",
+    "",
+  ].join("\r\n");
+}
+
 beforeEach(() => {
   resetSchtasksBaseMocks();
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
@@ -320,6 +329,34 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("removes a stale Startup-folder launcher after Scheduled Task install succeeds", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 1, stdout: "", stderr: "not found" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+      );
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      const hiddenStartupEntryPath = resolveStartupEntryPath(env, "vbs");
+      await fs.writeFile(hiddenStartupEntryPath, "' stale hidden launcher\r\n", "utf8");
+      const stdout = new PassThrough();
+      let printed = "";
+      stdout.on("data", (chunk) => {
+        printed += String(chunk);
+      });
+
+      await installGatewayScheduledTask(env, stdout);
+
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
+      await expect(fs.access(hiddenStartupEntryPath)).rejects.toThrow();
+      expect(printed).toContain("Removed Windows login item");
+      expect(printed).toContain("Installed Scheduled Task");
+    });
+  });
+
   it("falls back to a Startup-folder launcher when schtasks create returns Spanish access denied", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses([
@@ -376,10 +413,12 @@ describe("Windows startup fallback", () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
       addAcceptedRunNeverStartsResponses();
+      const startupEntryPath = await writeStartupFallbackEntry(env);
 
       await installGatewayScheduledTask(env);
 
       expectStartupFallbackSpawn();
+      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
     });
   });
 
