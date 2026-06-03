@@ -1,3 +1,6 @@
+/**
+ * Early gateway startup helper tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type StartGatewayDiscovery = typeof import("./server-discovery-runtime.js").startGatewayDiscovery;
