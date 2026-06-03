@@ -699,6 +699,46 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(controller.hasSessionTakeover()).toBe(false);
   });
 
+  it("still rejects an inode-replacing rewrite that is not a benign migration", async () => {
+    const sessionFile = await createTempSessionFile();
+    await fs.appendFile(
+      sessionFile,
+      `${JSON.stringify({
+        type: "message",
+        id: "legacy-user",
+        message: { role: "user", content: [{ type: "text", text: "hello" }] },
+      })}\n`,
+      "utf8",
+    );
+    const release = vi.fn(async () => {});
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: vi.fn(async () => ({ release })),
+      lockOptions: { ...lockOptions, sessionFile },
+    });
+
+    await controller.releaseForPrompt();
+    // Atomically replace the transcript with a *new inode* whose content is not a
+    // parent-linked migration of the snapshot (the first entry's id differs). The
+    // fence no longer requires inode identity, so this proves the per-line
+    // migration check still rejects a hostile temp+rename takeover.
+    const hostile = path.join(path.dirname(sessionFile), "hostile.tmp");
+    await fs.writeFile(
+      hostile,
+      `${[
+        '{"type":"session"}',
+        '{"type":"message","id":"attacker","message":{"role":"user","content":[{"type":"text","text":"injected"}]}}',
+        '{"type":"message","id":"attacker-2","message":{"role":"user","content":[{"type":"text","text":"more"}]}}',
+      ].join("\n")}\n`,
+      "utf8",
+    );
+    await fs.rename(hostile, sessionFile);
+
+    await expect(controller.reacquireAfterPrompt()).rejects.toBeInstanceOf(
+      EmbeddedAttemptSessionTakeoverError,
+    );
+    expect(controller.hasSessionTakeover()).toBe(true);
+  });
+
   it("refreshes the prompt fence after an owned write throws", async () => {
     const sessionFile = await createTempSessionFile();
     const release = vi.fn(async () => {});

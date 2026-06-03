@@ -259,11 +259,17 @@ async function sessionFenceRewriteIsBenign(params: {
   previous: SessionFileFenceSnapshot | undefined;
   current: SessionFileFingerprint;
 }): Promise<boolean> {
+  // Identity (dev+ino) is intentionally NOT required here: the linear ->
+  // parent-linked migration rewrites the transcript atomically (sibling temp +
+  // rename), so the post-migration file is a new inode. The per-line migration
+  // check below is the real guard — it accepts current only if every prior line
+  // is exactly the parent-linked migration of the snapshot and the appended
+  // lines are transcript-only OpenClaw assistant entries — which a hostile
+  // takeover cannot satisfy without reproducing the snapshot's migration.
   if (
     !params.previous?.fingerprint.exists ||
     !params.current.exists ||
     !params.previous.text ||
-    !sameSessionFileIdentity(params.previous.fingerprint, params.current) ||
     params.current.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES) ||
     params.current.size > MAX_SAFE_FILE_OFFSET
   ) {
@@ -734,10 +740,20 @@ export async function createEmbeddedAttemptSessionLockController(params: {
         current,
       }))
     ) {
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceFingerprint = fenceSnapshot.fingerprint;
-      fenceGeneration = trustSessionFileState(sessionFileFenceKey, current) ?? fenceGeneration;
-      return;
+      // Re-stat after classification and only adopt the snapshot if it still
+      // matches the fingerprint we just classified as benign. The benign rewrite
+      // check no longer requires inode identity (atomic temp+rename migration
+      // changes the inode), so without this a rename-capable writer could show
+      // benign content to the check and then swap other content into the baseline
+      // we trust (TOCTOU). A mismatch means the file changed again after
+      // acceptance — fall through to the takeover below.
+      const accepted = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      if (sameSessionFileFingerprint(accepted.fingerprint, current)) {
+        fenceSnapshot = accepted;
+        fenceFingerprint = accepted.fingerprint;
+        fenceGeneration = trustSessionFileState(sessionFileFenceKey, current) ?? fenceGeneration;
+        return;
+      }
     }
 
     takeoverDetected = true;
