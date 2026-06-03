@@ -236,6 +236,13 @@ const McpConfigSchema = z
   .strict()
   .optional();
 
+const PiiCategoryRuleSchema = z
+  .object({
+    redact: z.boolean().optional(),
+    placeholder: z.string().optional(),
+  })
+  .strict();
+
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
@@ -1004,6 +1011,57 @@ export const OpenClawSchema = z
           })
           .strict(),
       )
+      .optional(),
+    privacy: z
+      .object({
+        enabled: z.boolean().optional(),
+        pii: z
+          .object({
+            enabled: z.boolean().optional(),
+            systemPrompt: z.boolean().optional(),
+            userMessages: z.boolean().optional(),
+            toolOutputs: z.boolean().optional(),
+            categories: z
+              .object({
+                email: PiiCategoryRuleSchema.optional(),
+                phone: PiiCategoryRuleSchema.optional(),
+                ssn: PiiCategoryRuleSchema.optional(),
+                creditCard: PiiCategoryRuleSchema.optional(),
+                ipv4: PiiCategoryRuleSchema.optional(),
+                uuid: PiiCategoryRuleSchema.optional(),
+              })
+              .strict()
+              .optional(),
+          })
+          .strict()
+          .optional(),
+        media: z
+          .object({
+            blockAttachments: z.boolean().optional(),
+            warnOnBlock: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+        atRest: z
+          .object({
+            enabled: z.boolean().optional(),
+            passphrase: z.string().optional(),
+            pbkdf2Iterations: z.number().int().positive().optional(),
+          })
+          .strict()
+          .optional(),
+        systemPrompt: z
+          .object({
+            maskHostname: z.boolean().optional(),
+            maskRepoPath: z.boolean().optional(),
+            maskOs: z.boolean().optional(),
+            maskShell: z.boolean().optional(),
+            suppressContextFiles: z.boolean().optional(),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict()
       .optional(),
   })
   .strict()

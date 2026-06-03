@@ -199,9 +199,10 @@ export function applyRuntimeLineMasking(runtimeLine: string, config?: PrivacyCon
 
   if (sp.maskRepoPath) {
     // Replace the full path with just the final directory component
-    line = line.replace(/(\|\s*repo=)([^\s|]+)/g, (_match, prefix, repoPath: string) => {
-      const parts = repoPath.replace(/\\/g, "/").split("/").filter(Boolean);
-      const basename = parts[parts.length - 1] ?? repoPath;
+    line = line.replace(/(\|\s*repo=)([^|]+)/g, (_match, prefix, repoPath: string) => {
+      const trimmed = repoPath.trimEnd();
+      const parts = trimmed.replace(/\\/g, "/").split("/").filter(Boolean);
+      const basename = parts[parts.length - 1] ?? trimmed;
       return `${prefix}${basename}`;
     });
   }

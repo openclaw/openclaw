@@ -12,9 +12,11 @@
  * ───────
  * The encryption is applied at the JSONL *line* level.  Each line of the
  * transcript is individually encrypted so that:
- *  1. Streaming appends remain efficient (no full-file rewrite per line).
- *  2. Partial corruption only affects individual messages, not the whole file.
- *  3. The file header (first line) stays readable as a plain JSON marker.
+ *  1. Partial corruption only affects individual messages, not the whole file.
+ *  2. The file header (first line) stays readable as a plain JSON marker.
+ *
+ * Note: encryption is currently applied in bulk (full-file rewrite) via
+ * `encryptSessionFile`.  Per-line streaming appends are not yet implemented.
  *
  * On-disk format (encrypted file)
  * ───────────────────────────────
@@ -37,10 +39,11 @@
  * @module privacy/session-encrypt
  */
 
-import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, pbkdf2, randomBytes } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -56,6 +59,8 @@ const SALT_LEN = 32;
 
 const ENCRYPTED_HEADER_TYPE = "openclaw_encrypted_session";
 const ENCRYPTED_HEADER_VERSION = 1;
+
+export const ERR_ALREADY_ENCRYPTED = "File is already encrypted" as const;
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Types
@@ -92,8 +97,10 @@ export type SessionDecryptResult = { ok: true; lines: string[] } | { ok: false; 
 // Key derivation
 // ──────────────────────────────────────────────────────────────────────────────
 
-function deriveKey(passphrase: string, salt: Buffer, iterations: number): Buffer {
-  return pbkdf2Sync(passphrase, salt, iterations, KEY_LEN, "sha256");
+const pbkdf2Async = promisify(pbkdf2);
+
+async function deriveKey(passphrase: string, salt: Buffer, iterations: number): Promise<Buffer> {
+  return pbkdf2Async(passphrase, salt, iterations, KEY_LEN, "sha256");
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -139,11 +146,14 @@ export async function isEncryptedSessionFile(filePath: string): Promise<boolean>
   try {
     const fd = await fs.open(filePath, "r");
     const buf = Buffer.alloc(256);
-    const { bytesRead } = await fd.read(buf, 0, 256, 0);
-    await fd.close();
-    const firstLine = buf.subarray(0, bytesRead).toString("utf8").split("\n")[0] ?? "";
-    const header = JSON.parse(firstLine.trim()) as Partial<EncryptedFileHeader>;
-    return header.type === ENCRYPTED_HEADER_TYPE && header.v === ENCRYPTED_HEADER_VERSION;
+    try {
+      const { bytesRead } = await fd.read(buf, 0, 256, 0);
+      const firstLine = buf.subarray(0, bytesRead).toString("utf8").split("\n")[0] ?? "";
+      const header = JSON.parse(firstLine.trim()) as Partial<EncryptedFileHeader>;
+      return header.type === ENCRYPTED_HEADER_TYPE && header.v === ENCRYPTED_HEADER_VERSION;
+    } finally {
+      await fd.close();
+    }
   } catch {
     return false;
   }
@@ -167,7 +177,7 @@ export async function encryptSessionFile(
   }
 
   if (await isEncryptedSessionFile(filePath)) {
-    return { ok: false, error: "File is already encrypted" };
+    return { ok: false, error: ERR_ALREADY_ENCRYPTED };
   }
 
   const raw = readFileSync(filePath, "utf8");
@@ -178,7 +188,7 @@ export async function encryptSessionFile(
   }
 
   const salt = randomBytes(SALT_LEN);
-  const key = deriveKey(passphrase, salt, iterations);
+  const key = await deriveKey(passphrase, salt, iterations);
 
   const header: EncryptedFileHeader = {
     type: ENCRYPTED_HEADER_TYPE,
@@ -253,7 +263,7 @@ export async function decryptSessionFile(
   }
 
   const salt = Buffer.from(header.salt, "hex");
-  const key = deriveKey(passphrase, salt, header.iter);
+  const key = await deriveKey(passphrase, salt, header.iter);
 
   const plainLines: string[] = [];
   const encryptedLines = allLines.slice(1); // skip header
@@ -339,7 +349,7 @@ export async function encryptSessionDirectory(params: {
       } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
         const result = await encryptSessionFile({ filePath: full, passphrase, iterations });
         if (!result.ok) {
-          if (result.error === "File is already encrypted") {
+          if (result.error === ERR_ALREADY_ENCRYPTED) {
             skipped++;
           } else {
             failed.push({ file: full, error: result.error });
