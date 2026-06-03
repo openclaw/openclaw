@@ -3,6 +3,7 @@ import { createGatewayCredentialPlan } from "../gateway/credential-planner.js";
 import type { SecretDefaults } from "./runtime-shared.js";
 import { isRecord } from "./shared.js";
 
+/** Stable evaluation order for gateway credential surfaces that may hold SecretRefs. */
 export const GATEWAY_AUTH_SURFACE_PATHS = [
   "gateway.auth.token",
   "gateway.auth.password",
@@ -20,6 +21,7 @@ export type GatewayAuthSurfaceState = {
   hasSecretRef: boolean;
 };
 
+/** Complete state map keyed by every known gateway credential surface path. */
 export type GatewayAuthSurfaceStateMap = Record<GatewayAuthSurfacePath, GatewayAuthSurfaceState>;
 
 function formatAuthMode(mode: string | undefined): string {
@@ -173,6 +175,8 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     if (plan.remoteTokenFallbackActive) {
       return "local token auth can win and no env/auth token is configured.";
     }
+    // Remote credentials also act as local auth fallbacks when no stronger source wins.
+    // Keep fallback diagnostics separate from explicit remote exposure diagnostics.
     if (!plan.localTokenCanWin) {
       return `token auth cannot win with gateway.auth.mode="${formatAuthMode(plan.authMode)}".`;
     }
@@ -195,6 +199,8 @@ export function evaluateGatewayAuthSurfaceStates(params: {
     if (plan.remotePasswordFallbackActive) {
       return "password auth can win and no env/auth password is configured.";
     }
+    // Password fallback is suppressed by token-capable modes and stronger local sources.
+    // The inactive reason feeds audit warnings, so report the winning auth decision.
     if (!plan.passwordCanWin) {
       if (
         plan.authMode === "token" ||
