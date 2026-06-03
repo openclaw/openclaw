@@ -1,17 +1,19 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createBundleMcpJsonSchemaValidator } from "./pi-bundle-mcp-runtime.js";
-import { cleanupBundleMcpHarness } from "./pi-bundle-mcp-test-harness.js";
+import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import {
   __testing,
+  createBundleMcpJsonSchemaValidator,
   getOrCreateSessionMcpRuntime,
-  materializeBundleMcpToolsForRun,
   retireSessionMcpRuntime,
   retireSessionMcpRuntimeForSessionKey,
-} from "./pi-bundle-mcp-tools.js";
-import type { SessionMcpRuntime } from "./pi-bundle-mcp-types.js";
+} from "./agent-bundle-mcp-runtime.js";
+import { cleanupBundleMcpHarness } from "./agent-bundle-mcp-test-harness.js";
+import type { SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 
-vi.mock("./embedded-pi-mcp.js", () => ({
-  loadEmbeddedPiMcpConfig: (params: { cfg?: { mcp?: { servers?: Record<string, unknown> } } }) => ({
+vi.mock("./embedded-agent-mcp.js", () => ({
+  loadEmbeddedAgentMcpConfig: (params: {
+    cfg?: { mcp?: { servers?: Record<string, unknown> } };
+  }) => ({
     diagnostics: [],
     mcpServers: params.cfg?.mcp?.servers ?? {},
   }),
