@@ -1186,7 +1186,21 @@ describe("refreshChat", () => {
   });
 });
 
-descr
+
+describe("handleSendChat", () => {
+  beforeAll(async () => {
+    await loadChatHelpers();
+  });
+
+  beforeEach(() => {
+    executeSlashCommandMock.mockReset();
+    setLastActiveSessionKeyMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
 
   it("forwards numeric-only chatMessage to chat.send unchanged", async () => {
     const request = vi.fn(async (method: string) => {
@@ -1210,20 +1224,6 @@ descr
         message: "123456789",
       }),
     );
-  });
-ibe("handleSendChat", () => {
-  beforeAll(async () => {
-    await loadChatHelpers();
-  });
-
-  beforeEach(() => {
-    executeSlashCommandMock.mockReset();
-    setLastActiveSessionKeyMock.mockReset();
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
   });
 
   it("cancels button-triggered /new resets when confirmation is declined", async () => {
