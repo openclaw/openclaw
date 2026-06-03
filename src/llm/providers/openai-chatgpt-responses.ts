@@ -25,6 +25,7 @@ import {
   resolveTimerTimeoutMs,
   clampTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { registerSessionResourceCleanup } from "../session-resources.js";
@@ -488,7 +489,8 @@ function buildRequestBody(
     model: model.id,
     store: false,
     stream: true,
-    instructions: context.systemPrompt || "You are a helpful assistant.",
+    instructions:
+      stripSystemPromptCacheBoundary(context.systemPrompt ?? "") || "You are a helpful assistant.",
     input: messages,
     text: { verbosity: options?.textVerbosity || "low" },
     include: ["reasoning.encrypted_content"],

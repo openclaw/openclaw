@@ -1,6 +1,7 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import {
@@ -260,6 +261,24 @@ describe("convertResponsesMessages", () => {
       role: "user",
       content: [{ type: "input_text", text: "hello" }],
     });
+  });
+
+  it("strips the internal cache boundary marker from the system prompt message", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+        messages: [],
+      } satisfies Context,
+      allowedToolCallProviders,
+    );
+
+    expect(input[0]).toMatchObject({
+      type: "message",
+      role: "developer",
+      content: [{ type: "input_text", text: "Stable\nDynamic" }],
+    });
+    expect(JSON.stringify(input)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
   });
 
   it("omits phase-tagged assistant replay ids without reasoning", () => {
