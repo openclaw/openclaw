@@ -194,6 +194,11 @@ function accountsEqual(left?: string, right?: string): boolean {
   return (left ?? "") === (right ?? "");
 }
 
+/**
+ * Checks strict route equality after normalization.
+ * Missing account ids are not compatible here; use share-conversation helpers for parent/child
+ * matching where omitted account/thread values intentionally widen the route.
+ */
 export function channelRoutesMatchExact(params: {
   left?: ChannelRouteRef | null;
   right?: ChannelRouteRef | null;
@@ -234,7 +239,7 @@ export function channelRoutesShareConversation(params: {
   return threadIdsEqual(left.thread.id, right.thread.id);
 }
 
-/** Exact route comparison for loose target input. */
+/** Exact route comparison for loose target input after SDK boundary normalization. */
 export function channelRouteTargetsMatchExact(params: {
   left?: ChannelRouteTargetInput | null;
   right?: ChannelRouteTargetInput | null;
@@ -245,7 +250,7 @@ export function channelRouteTargetsMatchExact(params: {
   });
 }
 
-/** Conversation-level route comparison for loose target input. */
+/** Conversation-level route comparison for loose target input after SDK boundary normalization. */
 export function channelRouteTargetsShareConversation(params: {
   left?: ChannelRouteTargetInput | null;
   right?: ChannelRouteTargetInput | null;
