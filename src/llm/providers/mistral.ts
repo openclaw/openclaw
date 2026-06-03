@@ -6,6 +6,7 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -300,7 +301,7 @@ function buildChatPayload(
   if (context.systemPrompt) {
     payload.messages.unshift({
       role: "system",
-      content: sanitizeSurrogates(context.systemPrompt),
+      content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
     });
   }
 
