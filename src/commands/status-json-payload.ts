@@ -20,6 +20,7 @@ export function buildStatusJsonPayload(params: {
   health?: unknown;
   usage?: unknown;
   lastHeartbeat?: unknown;
+  runtimeControlLane?: unknown;
   runtimeRecommendations?: unknown;
   pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
 }) {
@@ -61,5 +62,6 @@ export function buildStatusJsonPayload(params: {
     ...(params.runtimeRecommendations
       ? { runtimeRecommendations: params.runtimeRecommendations }
       : {}),
+    ...(params.runtimeControlLane ? { runtimeControlLane: params.runtimeControlLane } : {}),
   };
 }

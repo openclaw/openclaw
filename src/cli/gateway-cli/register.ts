@@ -485,6 +485,43 @@ function formatChannelTurnSlaSummary(
   return lines;
 }
 
+function formatControlLaneHealthSummary(
+  controlLane: NonNullable<DiagnosticStabilitySnapshot["summary"]["controlLane"]>,
+  rich: boolean,
+): string[] {
+  const lines = [
+    `${colorize(rich, theme.muted, "Control lane:")} status=${
+      controlLane.status
+    } required=${controlLane.deliveryRequired} sent=${controlLane.deliverySent} failed=${
+      controlLane.deliveryFailed
+    } missing=${controlLane.missingVisibleDelivery} slowIngress=${
+      controlLane.slowIngress
+    } slowQueue=${controlLane.slowQueue} slowVisible=${controlLane.slowVisibleDelivery}`,
+  ];
+  if (controlLane.reasons.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Reasons:")} ${controlLane.reasons.join(", ")}`);
+  }
+  const metrics = [
+    controlLane.maxMessageAgeMs !== undefined
+      ? `maxMessageAge=${formatChannelTurnLatencyMs(controlLane.maxMessageAgeMs)}`
+      : "",
+    controlLane.maxQueueWaitMs !== undefined
+      ? `maxQueueWait=${formatChannelTurnLatencyMs(controlLane.maxQueueWaitMs)}`
+      : "",
+    controlLane.maxReceiveToStartMs !== undefined
+      ? `maxReceiveToStart=${formatChannelTurnLatencyMs(controlLane.maxReceiveToStartMs)}`
+      : "",
+    controlLane.maxStartToDeliveryMs !== undefined
+      ? `maxStartToDelivery=${formatChannelTurnLatencyMs(controlLane.maxStartToDeliveryMs)}`
+      : "",
+  ].filter(Boolean);
+  if (metrics.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Metrics:")} ${metrics.join(", ")}`);
+  }
+  lines.push(`  ${controlLane.guidance}`);
+  return lines;
+}
+
 function formatRuntimeRecommendations(
   recommendations: NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>,
   rich: boolean,
@@ -562,6 +599,11 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   const queues = snapshot.summary.queues;
   if (queues) {
     lines.push(...formatQueueSummary(queues, rich));
+  }
+
+  const controlLane = snapshot.summary.controlLane;
+  if (controlLane) {
+    lines.push(...formatControlLaneHealthSummary(controlLane, rich));
   }
 
   const recommendations = snapshot.summary.recommendations;

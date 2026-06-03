@@ -299,6 +299,25 @@ describe("gateway-cli coverage", () => {
               "Inspect queue/session pressure, stale work, and overlapping background jobs; direct control messages should not wait behind long work.",
           },
         ],
+        controlLane: {
+          status: "degraded",
+          reasons: ["missing_visible_delivery", "queue_pressure", "blocked_tool_call"],
+          deliveryRequired: 1,
+          deliverySent: 0,
+          deliveryFailed: 1,
+          missingVisibleDelivery: 1,
+          slowIngress: 0,
+          slowQueue: 1,
+          slowVisibleDelivery: 0,
+          slowPreDeliveryTools: 0,
+          blockedSessions: 1,
+          stuckSessions: 0,
+          maxQueueWaitMs: 12_500,
+          maxReceiveToStartMs: 12_000,
+          maxStartToDeliveryMs: 2_500,
+          guidance:
+            "Direct-control lane is degraded; inspect delivery, queue/session pressure, or blocked tools before treating physical-control turns as healthy.",
+        },
         channelTurns: {
           totalEvents: 4,
           deliveryRequired: 1,
@@ -422,6 +441,13 @@ describe("gateway-cli coverage", () => {
     expect(output).toContain("main=enq:1/deq:1/slow:0/maxWait:250ms/maxQueue:1");
     expect(output).toContain("Recent slow queue waits:");
     expect(output).toContain("lane=session wait=12500ms queueSize=2");
+    expect(output).toContain("Control lane: status=degraded");
+    expect(output).toContain(
+      "Reasons: missing_visible_delivery, queue_pressure, blocked_tool_call",
+    );
+    expect(output).toContain(
+      "Metrics: maxQueueWait=12500ms, maxReceiveToStart=12000ms, maxStartToDelivery=2500ms",
+    );
     expect(output).toContain("Runtime recommendations:");
     expect(output).toContain("high:inspect_missing_delivery source=channel_turns");
     expect(output).toContain(

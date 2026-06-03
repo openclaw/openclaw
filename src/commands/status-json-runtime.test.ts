@@ -66,6 +66,22 @@ describe("status-json-runtime", () => {
       health: { ok: true },
       gatewayDiagnostics: {
         summary: {
+          controlLane: {
+            status: "warning",
+            reasons: ["slow_pre_delivery_tool"],
+            deliveryRequired: 1,
+            deliverySent: 1,
+            deliveryFailed: 0,
+            missingVisibleDelivery: 0,
+            slowIngress: 0,
+            slowQueue: 0,
+            slowVisibleDelivery: 0,
+            slowPreDeliveryTools: 1,
+            blockedSessions: 0,
+            stuckSessions: 0,
+            guidance:
+              "Direct-control lane has latency pressure; send early acknowledgements and move long work to Tasks/TaskFlow.",
+          },
           recommendations: [
             {
               code: "send_early_ack",
@@ -124,6 +140,22 @@ describe("status-json-runtime", () => {
         guidance: "Send a short visible acknowledgement before long tool work.",
       },
     ]);
+    expect(payloadInput.runtimeControlLane).toStrictEqual({
+      status: "warning",
+      reasons: ["slow_pre_delivery_tool"],
+      deliveryRequired: 1,
+      deliverySent: 1,
+      deliveryFailed: 0,
+      missingVisibleDelivery: 0,
+      slowIngress: 0,
+      slowQueue: 0,
+      slowVisibleDelivery: 0,
+      slowPreDeliveryTools: 1,
+      blockedSessions: 0,
+      stuckSessions: 0,
+      guidance:
+        "Direct-control lane has latency pressure; send early acknowledgements and move long work to Tasks/TaskFlow.",
+    });
     expect(payloadInput.lastHeartbeat).toStrictEqual({ status: "ok" });
     expect(payloadInput.pluginCompatibility).toStrictEqual([
       {
@@ -174,6 +206,7 @@ describe("status-json-runtime", () => {
     expect(payloadInput.usage).toBeUndefined();
     expect(payloadInput.health).toBeUndefined();
     expect(payloadInput.runtimeRecommendations).toBeUndefined();
+    expect(payloadInput.runtimeControlLane).toBeUndefined();
     expect(payloadInput.lastHeartbeat).toBeNull();
     expect(payloadInput.pluginCompatibility).toBeUndefined();
   });

@@ -169,6 +169,35 @@ export type DiagnosticStabilityRecommendation = {
 
 export type DiagnosticStabilityHealthStatus = "ok" | "warning" | "degraded";
 
+export type DiagnosticStabilityControlLaneReason =
+  | "missing_visible_delivery"
+  | "stale_ingress"
+  | "queue_pressure"
+  | "slow_visible_delivery"
+  | "slow_pre_delivery_tool"
+  | "blocked_tool_call"
+  | "stale_session";
+
+export type DiagnosticStabilityControlLaneHealth = {
+  status: DiagnosticStabilityHealthStatus;
+  reasons: DiagnosticStabilityControlLaneReason[];
+  deliveryRequired: number;
+  deliverySent: number;
+  deliveryFailed: number;
+  missingVisibleDelivery: number;
+  slowIngress: number;
+  slowQueue: number;
+  slowVisibleDelivery: number;
+  slowPreDeliveryTools: number;
+  blockedSessions: number;
+  stuckSessions: number;
+  maxMessageAgeMs?: number;
+  maxQueueWaitMs?: number;
+  maxReceiveToStartMs?: number;
+  maxStartToDeliveryMs?: number;
+  guidance: string;
+};
+
 export type DiagnosticStabilityChannelTurnHealthIssue = {
   code:
     | "missing_visible_delivery"
@@ -345,6 +374,7 @@ export type DiagnosticStabilitySnapshot = {
       attention: DiagnosticStabilitySessionAttentionSummary;
     };
     queues?: DiagnosticStabilityQueueSummary;
+    controlLane?: DiagnosticStabilityControlLaneHealth;
     recommendations?: DiagnosticStabilityRecommendation[];
   };
 };
@@ -943,6 +973,95 @@ function summarizeRecords(
     } else if (channelTurns.health.status === "ok") {
       channelTurns.health.status = "warning";
     }
+  }
+
+  function buildControlLaneHealth(): DiagnosticStabilityControlLaneHealth | undefined {
+    const messageAge = channelTurns.latency.messageAgeMs;
+    const receiveToStart = channelTurns.latency.receivedToTurnStartMs;
+    const startToDelivery = channelTurns.latency.startToDeliveryMs;
+    const blockedSessions = sessionAttention.byClassification.blocked_tool_call ?? 0;
+    const stuckSessions = sessionAttention.stuck;
+    const hasControlLaneEvidence =
+      channelTurns.deliveryRequired > 0 ||
+      channelTurns.deliveryFailed > 0 ||
+      channelTurns.missingVisibleDelivery > 0 ||
+      (messageAge?.slowCount ?? 0) > 0 ||
+      (receiveToStart?.slowCount ?? 0) > 0 ||
+      (startToDelivery?.slowCount ?? 0) > 0 ||
+      channelTurns.tools.slowPreDeliveryResults > 0 ||
+      queues.slowDequeues > 0 ||
+      blockedSessions > 0 ||
+      stuckSessions > 0;
+    if (!hasControlLaneEvidence) {
+      return undefined;
+    }
+
+    const reasons: DiagnosticStabilityControlLaneReason[] = [];
+    const pushReason = (reason: DiagnosticStabilityControlLaneReason): void => {
+      if (!reasons.includes(reason)) {
+        reasons.push(reason);
+      }
+    };
+
+    if (channelTurns.missingVisibleDelivery > 0) {
+      pushReason("missing_visible_delivery");
+    }
+    if ((messageAge?.slowCount ?? 0) > 0) {
+      pushReason("stale_ingress");
+    }
+    if ((receiveToStart?.slowCount ?? 0) > 0 || queues.slowDequeues > 0) {
+      pushReason("queue_pressure");
+    }
+    if ((startToDelivery?.maxMs ?? 0) >= 20_000) {
+      pushReason("slow_visible_delivery");
+    }
+    if (channelTurns.tools.slowPreDeliveryResults > 0) {
+      pushReason("slow_pre_delivery_tool");
+    }
+    if (blockedSessions > 0 || sessionAttention.stalled > 0) {
+      pushReason("blocked_tool_call");
+    }
+    if (stuckSessions > 0 || sessionAttention.recoveryRequested > 0) {
+      pushReason("stale_session");
+    }
+
+    const degraded =
+      channelTurns.missingVisibleDelivery > 0 ||
+      (messageAge?.maxMs ?? 0) >= 60_000 ||
+      (receiveToStart?.maxMs ?? 0) >= 60_000 ||
+      (queues.maxWaitMs ?? 0) >= 60_000 ||
+      blockedSessions > 0 ||
+      stuckSessions > 0;
+    const status: DiagnosticStabilityHealthStatus =
+      degraded || reasons.length > 0 ? (degraded ? "degraded" : "warning") : "ok";
+    const guidance =
+      status === "degraded"
+        ? "Direct-control lane is degraded; inspect delivery, queue/session pressure, or blocked tools before treating physical-control turns as healthy."
+        : status === "warning"
+          ? "Direct-control lane has latency pressure; send early acknowledgements and move long work to Tasks/TaskFlow."
+          : "Direct-control lane has visible delivery proof and no current latency pressure.";
+
+    return {
+      status,
+      reasons,
+      deliveryRequired: channelTurns.deliveryRequired,
+      deliverySent: channelTurns.deliverySent,
+      deliveryFailed: channelTurns.deliveryFailed,
+      missingVisibleDelivery: channelTurns.missingVisibleDelivery,
+      slowIngress: messageAge?.slowCount ?? 0,
+      slowQueue: Math.max(receiveToStart?.slowCount ?? 0, queues.slowDequeues),
+      slowVisibleDelivery: startToDelivery?.slowCount ?? 0,
+      slowPreDeliveryTools: channelTurns.tools.slowPreDeliveryResults,
+      blockedSessions,
+      stuckSessions,
+      ...(messageAge?.maxMs !== undefined ? { maxMessageAgeMs: messageAge.maxMs } : {}),
+      ...(queues.maxWaitMs !== undefined ? { maxQueueWaitMs: queues.maxWaitMs } : {}),
+      ...(receiveToStart?.maxMs !== undefined ? { maxReceiveToStartMs: receiveToStart.maxMs } : {}),
+      ...(startToDelivery?.maxMs !== undefined
+        ? { maxStartToDeliveryMs: startToDelivery.maxMs }
+        : {}),
+      guidance,
+    };
   }
 
   function buildRecommendations(): DiagnosticStabilityRecommendation[] {
@@ -1611,6 +1730,7 @@ function summarizeRecords(
     });
   }
 
+  const controlLane = buildControlLaneHealth();
   const recommendations = buildRecommendations();
 
   return {
@@ -1635,6 +1755,7 @@ function summarizeRecords(
       ? { sessions: { attention: sessionAttention } }
       : {}),
     ...(queues.enqueued > 0 || queues.dequeued > 0 ? { queues } : {}),
+    ...(controlLane ? { controlLane } : {}),
     ...(recommendations.length > 0 ? { recommendations } : {}),
   };
 }

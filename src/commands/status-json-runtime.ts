@@ -86,6 +86,10 @@ export async function resolveStatusJsonOutput(params: {
     gatewayDiagnostics && typeof gatewayDiagnostics === "object" && "summary" in gatewayDiagnostics
       ? gatewayDiagnostics.summary.recommendations
       : undefined;
+  const runtimeControlLane =
+    gatewayDiagnostics && typeof gatewayDiagnostics === "object" && "summary" in gatewayDiagnostics
+      ? gatewayDiagnostics.summary.controlLane
+      : undefined;
 
   return buildStatusJsonPayload({
     summary: scan.summary,
@@ -104,6 +108,7 @@ export async function resolveStatusJsonOutput(params: {
     health,
     usage,
     lastHeartbeat,
+    runtimeControlLane,
     runtimeRecommendations,
     pluginCompatibility: params.includePluginCompatibility ? scan.pluginCompatibility : undefined,
   });

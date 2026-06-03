@@ -563,7 +563,18 @@ describe("diagnostic stability bundles", () => {
         }),
       ]),
     );
+    expect(readResult.bundle.snapshot.summary.controlLane).toMatchObject({
+      status: "degraded",
+      reasons: ["missing_visible_delivery", "queue_pressure"],
+      deliveryFailed: 1,
+      missingVisibleDelivery: 1,
+      slowQueue: 1,
+      maxQueueWaitMs: 12_500,
+    });
     expect(JSON.stringify(readResult.bundle.snapshot.summary.recommendations)).not.toContain(
+      "telegram:direct:owner",
+    );
+    expect(JSON.stringify(readResult.bundle.snapshot.summary.controlLane)).not.toContain(
       "telegram:direct:owner",
     );
   });

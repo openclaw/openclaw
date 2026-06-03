@@ -1396,6 +1396,107 @@ function readOptionalQueueSummary(
   };
 }
 
+function readOptionalControlLaneHealth(
+  value: unknown,
+): DiagnosticStabilitySnapshot["summary"]["controlLane"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const health = readObject(value, "snapshot.summary.controlLane");
+  const status = readCodeString(
+    health.status,
+    "snapshot.summary.controlLane.status",
+  ) as NonNullable<DiagnosticStabilitySnapshot["summary"]["controlLane"]>["status"];
+  if (status !== "ok" && status !== "warning" && status !== "degraded") {
+    throw new Error("Invalid stability bundle: snapshot.summary.controlLane.status");
+  }
+  if (!Array.isArray(health.reasons)) {
+    throw new Error(
+      "Invalid stability bundle: snapshot.summary.controlLane.reasons must be an array",
+    );
+  }
+  const reasons = health.reasons.map((entry, index) => {
+    const reason = readCodeString(entry, `snapshot.summary.controlLane.reasons[${index}]`);
+    if (
+      reason !== "missing_visible_delivery" &&
+      reason !== "stale_ingress" &&
+      reason !== "queue_pressure" &&
+      reason !== "slow_visible_delivery" &&
+      reason !== "slow_pre_delivery_tool" &&
+      reason !== "blocked_tool_call" &&
+      reason !== "stale_session"
+    ) {
+      throw new Error(`Invalid stability bundle: snapshot.summary.controlLane.reasons[${index}]`);
+    }
+    return reason;
+  });
+  return {
+    status,
+    reasons,
+    deliveryRequired: readNumber(
+      health.deliveryRequired,
+      "snapshot.summary.controlLane.deliveryRequired",
+    ),
+    deliverySent: readNumber(health.deliverySent, "snapshot.summary.controlLane.deliverySent"),
+    deliveryFailed: readNumber(
+      health.deliveryFailed,
+      "snapshot.summary.controlLane.deliveryFailed",
+    ),
+    missingVisibleDelivery: readNumber(
+      health.missingVisibleDelivery,
+      "snapshot.summary.controlLane.missingVisibleDelivery",
+    ),
+    slowIngress: readNumber(health.slowIngress, "snapshot.summary.controlLane.slowIngress"),
+    slowQueue: readNumber(health.slowQueue, "snapshot.summary.controlLane.slowQueue"),
+    slowVisibleDelivery: readNumber(
+      health.slowVisibleDelivery,
+      "snapshot.summary.controlLane.slowVisibleDelivery",
+    ),
+    slowPreDeliveryTools: readNumber(
+      health.slowPreDeliveryTools,
+      "snapshot.summary.controlLane.slowPreDeliveryTools",
+    ),
+    blockedSessions: readNumber(
+      health.blockedSessions,
+      "snapshot.summary.controlLane.blockedSessions",
+    ),
+    stuckSessions: readNumber(health.stuckSessions, "snapshot.summary.controlLane.stuckSessions"),
+    ...(health.maxMessageAgeMs !== undefined
+      ? {
+          maxMessageAgeMs: readNumber(
+            health.maxMessageAgeMs,
+            "snapshot.summary.controlLane.maxMessageAgeMs",
+          ),
+        }
+      : {}),
+    ...(health.maxQueueWaitMs !== undefined
+      ? {
+          maxQueueWaitMs: readNumber(
+            health.maxQueueWaitMs,
+            "snapshot.summary.controlLane.maxQueueWaitMs",
+          ),
+        }
+      : {}),
+    ...(health.maxReceiveToStartMs !== undefined
+      ? {
+          maxReceiveToStartMs: readNumber(
+            health.maxReceiveToStartMs,
+            "snapshot.summary.controlLane.maxReceiveToStartMs",
+          ),
+        }
+      : {}),
+    ...(health.maxStartToDeliveryMs !== undefined
+      ? {
+          maxStartToDeliveryMs: readNumber(
+            health.maxStartToDeliveryMs,
+            "snapshot.summary.controlLane.maxStartToDeliveryMs",
+          ),
+        }
+      : {}),
+    guidance: readString(health.guidance, "snapshot.summary.controlLane.guidance"),
+  };
+}
+
 function readOptionalRecommendations(
   value: unknown,
 ): DiagnosticStabilitySnapshot["summary"]["recommendations"] | undefined {
@@ -1734,6 +1835,9 @@ function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
         ? { sessions: readOptionalSessionAttentionSummary(summary.sessions) }
         : {}),
       ...(summary.queues !== undefined ? { queues: readOptionalQueueSummary(summary.queues) } : {}),
+      ...(summary.controlLane !== undefined
+        ? { controlLane: readOptionalControlLaneHealth(summary.controlLane) }
+        : {}),
       ...(summary.recommendations !== undefined
         ? { recommendations: readOptionalRecommendations(summary.recommendations) }
         : {}),

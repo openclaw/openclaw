@@ -293,6 +293,12 @@ describe("diagnostic stability recorder", () => {
         }),
       ],
     });
+    expect(snapshot.summary.controlLane).toMatchObject({
+      status: "warning",
+      reasons: ["queue_pressure"],
+      slowQueue: 1,
+      maxQueueWaitMs: 12_500,
+    });
     expect(snapshot.summary.recommendations).toEqual([
       expect.objectContaining({
         code: "clear_queue_pressure",
@@ -747,6 +753,18 @@ describe("diagnostic stability recorder", () => {
         valueMs: 12_000,
       }),
     ]);
+    expect(snapshot.summary.controlLane).toMatchObject({
+      status: "degraded",
+      reasons: ["missing_visible_delivery", "stale_ingress", "queue_pressure"],
+      deliveryRequired: 1,
+      deliverySent: 1,
+      deliveryFailed: 1,
+      missingVisibleDelivery: 2,
+      slowIngress: 1,
+      slowQueue: 1,
+      maxMessageAgeMs: 30_000,
+      maxReceiveToStartMs: 12_000,
+    });
     expect(snapshot.events[0]).not.toHaveProperty("accountId");
     expect(snapshot.events[0]).toHaveProperty("target", "kind:named");
     expect(snapshot.summary.recommendations).toEqual(
@@ -1028,6 +1046,11 @@ describe("diagnostic stability recorder", () => {
       "slow_tool_result",
       "slow_tool_before_visible_delivery",
     ]);
+    expect(snapshot.summary.controlLane).toMatchObject({
+      status: "warning",
+      reasons: ["slow_pre_delivery_tool"],
+      slowPreDeliveryTools: 1,
+    });
     expect(snapshot.summary.recommendations).toEqual([
       expect.objectContaining({
         code: "send_early_ack",
