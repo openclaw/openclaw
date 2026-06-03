@@ -13,6 +13,9 @@ function hasRawExplicitPort(raw: string): boolean {
   return /:\d+$/.test(hostPort);
 }
 
+/**
+ * Parses a browser/CDP endpoint and returns both URL semantics and display-safe normalized forms.
+ */
 export function parseBrowserHttpUrl(raw: string, label: string) {
   const trimmed = raw.trim();
   const parsed = new URL(trimmed);
@@ -38,6 +41,8 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
   const normalized = parsed.toString().replace(/\/$/, "");
   let normalizedWithPort: string;
   if (hasExplicitPort && !parsed.port) {
+    // URL normalizes away default ports, but config diagnostics need to preserve
+    // whether the operator explicitly wrote `:80` or `:443`.
     const proto = parsed.protocol + "//";
     const rest = normalized.slice(proto.length);
     const atIdx = rest.indexOf("@");
@@ -64,6 +69,9 @@ export function parseBrowserHttpUrl(raw: string, label: string) {
   };
 }
 
+/**
+ * Redacts credentials and known sensitive tokens from CDP URLs before logs or diagnostics.
+ */
 export function redactCdpUrl(cdpUrl: string | null | undefined): string | null | undefined {
   if (typeof cdpUrl !== "string") {
     return cdpUrl;
