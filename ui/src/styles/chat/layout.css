@@ -132,6 +132,11 @@
   border-color: color-mix(in srgb, var(--border) 70%, transparent);
 }
 
+.context-notice--stale {
+  opacity: 0.6;
+  font-style: italic;
+}
+
 .context-notice__icon {
   width: 16px;
   height: 16px;

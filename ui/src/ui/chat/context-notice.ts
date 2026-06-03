@@ -62,10 +62,9 @@ export function getContextNoticeViewModel(
   bg: string;
   warning: boolean;
   compactRecommended: boolean;
+  stale: boolean;
 } | null {
-  if (session?.totalTokensFresh === false) {
-    return null;
-  }
+  const stale = session?.totalTokensFresh === false;
   const used = session?.totalTokens;
   const limit = session?.contextTokens ?? defaultContextTokens ?? 0;
   if (typeof used !== "number" || !Number.isFinite(used) || used < 0 || !limit) {
@@ -74,14 +73,16 @@ export function getContextNoticeViewModel(
   const ratio = used / limit;
   const pct = Math.min(Math.round(ratio * 100), 100);
   const warning = ratio >= CONTEXT_NOTICE_RATIO;
+  const prefix = stale ? "~" : "";
   if (!warning) {
     return {
       pct,
-      detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
+      detail: `${prefix}${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
       color: "var(--muted)",
       bg: "color-mix(in srgb, var(--muted) 8%, transparent)",
       warning,
       compactRecommended: false,
+      stale,
     };
   }
   // Read theme semantic tokens so color tracks the active theme (Dash, dark, light ...).
@@ -97,11 +98,12 @@ export function getContextNoticeViewModel(
   const bg = `rgba(${r}, ${g}, ${b}, ${bgOpacity})`;
   return {
     pct,
-    detail: `${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
+    detail: `${prefix}${formatTokensCompact(used)} / ${formatTokensCompact(limit)}`,
     color,
     bg,
     warning,
     compactRecommended: ratio >= CONTEXT_COMPACT_RATIO,
+    stale,
   };
 }
 
@@ -116,12 +118,13 @@ export function renderContextNotice(
   }
   const canRenderCompact = model.compactRecommended && options.onCompact;
   const compactDisabled = options.compactDisabled === true || options.compactBusy === true;
+  const staleClass = model.stale ? " context-notice--stale" : "";
   return html`
     <div
-      class="context-notice ${model.warning ? "context-notice--warning" : "context-notice--usage"}"
+      class="context-notice ${model.warning ? "context-notice--warning" : "context-notice--usage"}${staleClass}"
       role="status"
       style="--ctx-color:${model.color};--ctx-bg:${model.bg}"
-      title=${`Session context usage: ${model.detail} (${model.pct}%)`}
+      title=${`Session context usage: ${model.detail} (${model.pct}%)${model.stale ? " (stale)" : ""}`}
     >
       ${model.warning
         ? html`
