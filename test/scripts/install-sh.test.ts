@@ -1420,7 +1420,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     expect(script).toContain(
       'ui_warn "Spinner unavailable in this terminal; continuing without spinner"',
     );
-    expect(script).toContain('"$@"\n                return $?');
+    expect(script).toContain('"$@" < /dev/null\n                return $?');
   });
 
   it("reruns spinner-wrapped commands when gum reports ioctl failure", () => {
