@@ -12,6 +12,7 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
   Api,
@@ -217,7 +218,7 @@ export function convertResponsesMessages<TApi extends Api>(
     const role = model.reasoning ? "developer" : "system";
     messages.push({
       role,
-      content: sanitizeSurrogates(context.systemPrompt),
+      content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
     });
   }
 

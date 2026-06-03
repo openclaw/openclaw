@@ -1,5 +1,6 @@
 import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
 import type { Context, Model, Tool } from "../types.js";
 import { convertResponsesMessages } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
@@ -126,6 +127,21 @@ describe("convertResponsesTools", () => {
 
 describe("convertResponsesMessages", () => {
   const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+
+  it("strips the internal cache boundary marker from the system prompt message", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: `Stable${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic`,
+        messages: [],
+      } satisfies Context,
+      allowedToolCallProviders,
+    ) as Array<{ role?: string; content?: string }>;
+
+    const systemMessage = input.find((item) => item.role === "developer" || item.role === "system");
+    expect(systemMessage?.content).toBe("Stable\nDynamic");
+    expect(JSON.stringify(input)).not.toContain("OPENCLAW_CACHE_BOUNDARY");
+  });
 
   it("omits phase-tagged assistant replay ids without reasoning", () => {
     const input = convertResponsesMessages(
