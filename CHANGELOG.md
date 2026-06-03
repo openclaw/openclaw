@@ -128,6 +128,7 @@ Docs: https://docs.openclaw.ai
 - Performance: prebuild QA runtime probes with generated plugin assets but without CLI startup metadata.
 - Performance: skip declaration bundling for runtime-only CLI startup and gateway watch build profiles.
 - Performance: reuse prepared provider handles, strict tool schemas, gateway runtime metadata, session maintenance config, plugin metadata, bundled skill allowlists, package-local plugin artifacts, single-entry store writes, and validated/serialized session prompt blobs.
+- TUI: include `openclaw devices approve <requestId>` in the pairing-required disconnect hint when the gateway provides a requestId. (#67618)
 
 ## 2026.5.28
 

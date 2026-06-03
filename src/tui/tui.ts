@@ -16,6 +16,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { CommandEntry } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentIdByWorkspacePath, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
+import { readConnectPairingRequiredMessage } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { registerUncaughtExceptionHandler } from "../infra/unhandled-rejections.js";
 import { setConsoleSubsystemFilter } from "../logging/console.js";
@@ -199,11 +200,14 @@ export function resolveGatewayDisconnectState(reason?: string): {
 } {
   const reasonLabel = reason?.trim() ? reason.trim() : "closed";
   if (/pairing required/i.test(reasonLabel)) {
+    const pairingDetails = readConnectPairingRequiredMessage(reasonLabel);
+    const requestId = pairingDetails?.requestId;
     return {
       connectionStatus: `gateway disconnected: ${reasonLabel}`,
       activityStatus: "pairing required: run openclaw devices list",
-      pairingHint:
-        "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
+      pairingHint: requestId
+        ? `Pairing required. Run \`openclaw devices approve ${requestId}\` to approve this device, then reconnect.`
+        : "Pairing required. Run `openclaw devices list`, approve your request ID, then reconnect.",
     };
   }
   return {
