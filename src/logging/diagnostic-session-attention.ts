@@ -92,11 +92,9 @@ export function classifySessionAttention(params: {
     };
   }
 
-  // External runtimes (e.g. claude-cli) emit run.progress but do not register
-  // an embedded run handle, so activity.activeWorkKind stays undefined. Fresh
-  // progress is the authoritative signal that the session is still healthy;
-  // skipping this check would force-recover an actively streaming run while
-  // its lane has no command-queue task to release (released=0 no-op).
+  // External runtimes emit run.progress without registering an embedded run
+  // handle, leaving activeWorkKind undefined; without this gate an actively
+  // streaming session is force-recovered while its lane has nothing to reclaim.
   const lastProgressAgeMs = params.activity.lastProgressAgeMs;
   if (typeof lastProgressAgeMs === "number" && lastProgressAgeMs <= params.staleMs) {
     return {
