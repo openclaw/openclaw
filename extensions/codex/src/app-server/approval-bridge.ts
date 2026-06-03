@@ -548,20 +548,21 @@ function configuredAgentModelAliasMatches(
   config: EmbeddedRunAttemptParams["config"] | undefined,
   modelRef: string,
 ): boolean {
+  const normalizedModelRef = normalizeExecReviewerAliasRef(modelRef);
   const agents = readUnknownRecord(readUnknownRecord(config)?.agents);
-  if (agentModelAliasMatches(readUnknownRecord(agents?.defaults), modelRef)) {
+  if (agentModelAliasMatches(readUnknownRecord(agents?.defaults), normalizedModelRef)) {
     return true;
   }
   const list = agents?.list;
   if (!Array.isArray(list)) {
     return false;
   }
-  return list.some((agent) => agentModelAliasMatches(readUnknownRecord(agent), modelRef));
+  return list.some((agent) => agentModelAliasMatches(readUnknownRecord(agent), normalizedModelRef));
 }
 
 function agentModelAliasMatches(
   agentConfig: Record<string, unknown> | undefined,
-  modelRef: string,
+  normalizedModelRef: string,
 ): boolean {
   const models = readUnknownRecord(agentConfig?.models);
   if (!models) {
@@ -569,11 +570,18 @@ function agentModelAliasMatches(
   }
   for (const entry of Object.values(models)) {
     const alias = readUnknownRecord(entry)?.alias;
-    if (typeof alias === "string" && alias.trim() === modelRef) {
+    if (typeof alias === "string" && normalizeExecReviewerAliasRef(alias) === normalizedModelRef) {
       return true;
     }
   }
   return false;
+}
+
+function normalizeExecReviewerAliasRef(modelRef: string): string {
+  const trimmed = modelRef.trim().toLowerCase();
+  const slashIndex = trimmed.indexOf("/");
+  const authProfileIndex = trimmed.indexOf("@", slashIndex + 1);
+  return authProfileIndex > 0 ? trimmed.slice(0, authProfileIndex) : trimmed;
 }
 
 function configuredOpenAIProviderIsTrustedForExecReview(params: {

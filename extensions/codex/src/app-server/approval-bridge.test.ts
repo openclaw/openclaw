@@ -498,7 +498,7 @@ describe("Codex app-server approval bridge", () => {
         defaults: {
           models: {
             "lmstudio/local-reviewer": {
-              alias: "openai/reviewer",
+              alias: "OpenAI/Reviewer",
             },
           },
         },
@@ -507,7 +507,7 @@ describe("Codex app-server approval bridge", () => {
         exec: {
           mode: "auto",
           reviewer: {
-            model: "openai/reviewer",
+            model: "openai/reviewer@work",
           },
         },
       },
