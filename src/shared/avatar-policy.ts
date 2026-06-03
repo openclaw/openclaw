@@ -2,8 +2,10 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { isPathInside } from "../infra/path-guards.js";
 
+/** Maximum avatar payload size accepted by local file and gateway upload paths. */
 export const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
+// Local avatar serving intentionally excludes formats handled only as MIME fallbacks.
 const LOCAL_AVATAR_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
 
 const AVATAR_MIME_BY_EXT: Record<string, string> = {
@@ -18,10 +20,15 @@ const AVATAR_MIME_BY_EXT: Record<string, string> = {
   ".tiff": "image/tiff",
 };
 
+/** Detects data URLs before image-specific avatar validation. */
 export const AVATAR_DATA_RE = /^data:/i;
+/** Detects inline image data URLs that can be used as avatar sources. */
 export const AVATAR_IMAGE_DATA_RE = /^data:image\//i;
+/** Detects remote avatar URLs served over HTTP(S). */
 export const AVATAR_HTTP_RE = /^https?:\/\//i;
+/** Detects URI schemes so non-path avatar values can be rejected or routed. */
 export const AVATAR_SCHEME_RE = /^[a-z][a-z0-9+.-]*:/i;
+/** Detects Windows absolute paths before URI-scheme classification. */
 export const WINDOWS_ABS_RE = /^[a-zA-Z]:[\\/]/;
 
 const AVATAR_PATH_EXT_RE = /\.(png|jpe?g|gif|webp|svg|ico)$/i;
