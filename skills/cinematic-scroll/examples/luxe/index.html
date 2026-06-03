@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Maison Solenne — Quiet Luxury · cinematic-scroll example</title>
+<meta name="description" content="A restrained, quiet-luxury cinematic-scroll page — warm ivory and sand, refined thin serif display, barely-there parallax, and a letter-spacing title scrub. A worked example for the cinematic-scroll Agent Skill." />
+
+<!-- Open Graph / preview -->
+<meta property="og:title" content="Maison Solenne — Quiet Luxury" />
+<meta property="og:description" content="Four chapters in warm ivory and cognac — long slow pins, letter-spacing title reveals, museum-restraint motion. Built with the cinematic-scroll Agent Skill, no build step." />
+<meta property="og:type" content="website" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<!-- Cormorant Garamond (thin serif display), EB Garamond (body serif), Jost (mono-ish UI labels) -->
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;1,300;1,400&family=EB+Garamond:wght@400;500&family=Jost:wght@300;400&display=swap" rel="stylesheet" />
+
+<!-- GSAP + ScrollTrigger (now 100% free) — powers the one dedicated "The Object"
+     showcase beat: a PUSH-IN (slow scale 1 → 1.08) + a MATCH-CUT (two captions
+     crossfade by opacity over a perfectly-still composition). Deferred + feature-
+     detected: if the CDN fails, the beat simply stays at its complete static state
+     and the hand-rolled rAF quiet-luxury engine below still runs untouched. -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
+
+<style>
+  /* ───────────────────────────────────────────────────────────────
+     cinematic-scroll · Quiet-Luxury example  (MAISON SOLENNE)
+     Single-file, no build, no external JS. GitHub-Pages friendly.
+
+     Visual system: Atmospheric Sublime restraint + Symmetric Monument stillness.
+       Vast negative space · glacial 220vh pins · barely-there parallax
+       (depth multipliers ≤ 0.50; background drifts ~3% over the whole pin).
+     Title treatment: LETTER-SPACING SCRUB — 0.45em → 0em over the first
+       ~30% of each pin (the "refined / luxury" reveal from taste-guardrails).
+     Motion contract: only `transform` and `opacity` mutate per frame; one
+       rAF batch; passive scroll listener; only in-view sections are driven.
+       No `filter`, no glow, no 3D tilt (calm, and avoids motion-sickness).
+     Degrade: reduced-motion AND mobile (≤680px) snap to a clean static
+       mid-state — full opacity, letter-spacing settled, no scrolljack.
+     ─────────────────────────────────────────────────────────────── */
+
+  :root{
+    --ivory:   #F6F1E7;   /* warm ivory ground */
+    --sand:    #ECE3D4;   /* secondary sand ground */
+    --ecru:    #E4D8C4;   /* deepest light ground */
+    --bark:    #36302A;   /* primary text — strong contrast on ivory */
+    --body:    #4E463C;   /* body copy — legible, warm */
+    --muted:   #8A7F6D;   /* labels / captions */
+    --cognac:  #9A6A3C;   /* the single restrained accent */
+    --cognac-2:#7E5530;
+    --line:    rgba(54,48,42,.14);
+
+    --display: "Cormorant Garamond", Georgia, "Times New Roman", serif;
+    --serif:   "EB Garamond", Georgia, serif;
+    --ui:      "Jost", system-ui, -apple-system, sans-serif;
+  }
+
+  *{ margin:0; padding:0; box-sizing:border-box; }
+  html{ scroll-behavior:smooth; }
+  body{
+    background:var(--ivory);
+    color:var(--bark);
+    font-family:var(--serif);
+    line-height:1.6;
+    -webkit-font-smoothing:antialiased;
+    overflow-x:hidden;
+    transition:background 1.2s cubic-bezier(.22,1,.36,1);
+  }
+  a{ color:inherit; }
+  ::selection{ background:rgba(154,106,60,.22); color:var(--bark); }
+
+  /* ── Fixed atmosphere + grain ────────────────────────────────── */
+  .atmos{
+    position:fixed; inset:0; z-index:-2; pointer-events:none;
+    background:
+      radial-gradient(130% 90% at 22% 8%,  rgba(154,106,60,.06), rgba(154,106,60,0) 58%),
+      radial-gradient(110% 80% at 88% 96%, rgba(54,48,42,.05),   rgba(54,48,42,0)   60%),
+      var(--ivory);
+    transition:background 1.2s cubic-bezier(.22,1,.36,1);
+  }
+  .grain{
+    position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.4;
+    mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.45'/%3E%3C/svg%3E");
+  }
+
+  /* ── Fixed masthead ──────────────────────────────────────────── */
+  .masthead{
+    position:fixed; top:0; left:0; right:0; z-index:50;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:clamp(18px,2.6vw,30px) clamp(20px,5vw,64px);
+    padding-top:max(clamp(18px,2.6vw,30px), env(safe-area-inset-top));
+    background:linear-gradient(to bottom, var(--ivory) 18%, rgba(246,241,231,.72) 64%, rgba(246,241,231,0));
+  }
+  .masthead .mark{ display:flex; align-items:baseline; gap:14px; }
+  .masthead .mark b{
+    font-family:var(--display); font-weight:400; font-size:clamp(17px,2vw,22px);
+    letter-spacing:.30em; text-transform:uppercase; color:var(--bark);
+  }
+  .masthead .mark span{
+    font-family:var(--ui); font-weight:300; font-size:9px; letter-spacing:.36em;
+    text-transform:uppercase; color:var(--cognac);
+  }
+  .masthead nav{ display:flex; gap:clamp(16px,2.6vw,34px); }
+  .masthead nav a{
+    font-family:var(--ui); font-weight:300; font-size:11px; letter-spacing:.26em;
+    text-transform:uppercase; color:var(--muted); text-decoration:none; transition:color .4s;
+  }
+  .masthead nav a:hover{ color:var(--bark); }
+  @media (max-width:680px){ .masthead nav{ display:none; } }
+
+  /* ── Quiet progress rail (chapter index) ─────────────────────── */
+  .rail{
+    position:fixed; top:50%; left:clamp(18px,3vw,42px); transform:translateY(-50%);
+    z-index:40; display:flex; flex-direction:column; gap:18px;
+    padding-left:env(safe-area-inset-left);
+  }
+  .rail button{
+    display:flex; align-items:center; gap:12px;
+    background:none; border:none; cursor:pointer; color:var(--muted);
+    font-family:var(--ui); font-weight:300; font-size:10px; letter-spacing:.22em;
+    text-transform:uppercase; transition:color .4s; padding:2px 0;
+  }
+  .rail button .tick{ width:18px; height:1px; background:currentColor; opacity:.45; transition:width .5s, opacity .5s; flex:none; }
+  .rail button .nm{ opacity:0; transform:translateX(-4px); transition:opacity .4s, transform .4s; max-width:0; overflow:hidden; white-space:nowrap; }
+  .rail:hover button .nm{ opacity:.7; transform:translateX(0); max-width:160px; }
+  .rail button[aria-current="true"]{ color:var(--bark); }
+  .rail button[aria-current="true"] .tick{ width:40px; opacity:1; background:var(--cognac); }
+  .rail button[aria-current="true"] .nm{ opacity:1; transform:translateX(0); max-width:160px; }
+  @media (max-width:880px){ .rail{ display:none; } }
+
+  /* ── Chapter / pin ───────────────────────────────────────────── */
+  .chapter{ position:relative; height:220vh; }     /* long, slow pin room */
+  .chapter .stage{
+    position:sticky; top:0; height:100vh; overflow:hidden;
+    display:grid; align-content:center;
+  }
+  .stage .inner{
+    width:min(1200px,90vw); margin:0 auto;
+    display:grid; grid-template-columns:1.05fr .95fr; gap:clamp(36px,6vw,88px);
+    align-items:center; padding:0 clamp(10px,2vw,28px);
+  }
+  .chapter[data-side="left"] .copy{ order:2; }
+  .chapter[data-side="left"] .figure{ order:1; }
+
+  .layer{ will-change:transform, opacity; }
+
+  /* copy column — generous negative space, left-aligned body */
+  .copy .eyebrow{
+    font-family:var(--ui); font-weight:300; font-size:10px; letter-spacing:.40em;
+    text-transform:uppercase; color:var(--cognac); margin-bottom:clamp(22px,3vw,34px); display:block;
+  }
+  .copy h2{
+    font-family:var(--display); font-weight:300; font-size:clamp(2.6rem,6.4vw,5.6rem);
+    line-height:1.04; letter-spacing:0; color:var(--bark);
+    margin-bottom:clamp(24px,3vw,36px);
+  }
+  .copy h2 .scrub{ display:inline-block; will-change:letter-spacing; }
+  .copy h2 em{ font-style:italic; font-weight:300; color:var(--cognac-2); }
+  .copy .rule{ height:1px; width:120px; background:linear-gradient(to right, var(--cognac), rgba(154,106,60,0)); margin:2px 0 26px; }
+  .copy p.lede{
+    font-family:var(--serif); font-weight:400; font-size:clamp(1.05rem,1.5vw,1.26rem);
+    line-height:1.72; color:var(--body); max-width:44ch;
+  }
+  .copy .meta{
+    margin-top:24px; font-family:var(--ui); font-weight:300; font-size:10px; letter-spacing:.24em;
+    text-transform:uppercase; color:var(--muted);
+  }
+  .copy .cta{
+    margin-top:clamp(28px,3.4vw,42px); display:inline-flex; align-items:center; gap:14px;
+    padding:15px 30px; border-radius:999px; border:1px solid var(--line);
+    background:transparent; color:var(--bark);
+    font-family:var(--ui); font-weight:300; font-size:11px; letter-spacing:.24em; text-transform:uppercase;
+    text-decoration:none; transition:background .5s, color .5s, border-color .5s;
+  }
+  .copy .cta:hover{ background:var(--bark); color:var(--ivory); border-color:var(--bark); }
+
+  /* figure column — the single framed "product moment" */
+  .figure{ position:relative; }
+  .frame{
+    position:relative; width:100%; max-width:480px; margin-inline:auto;
+    aspect-ratio:4/5; border-radius:18px; overflow:hidden;
+    box-shadow:0 40px 90px -50px rgba(54,48,42,.55);
+  }
+  .chapter[data-side="left"] .frame{ margin-left:auto; }
+  .frame .pic{
+    position:absolute; inset:0; background-size:cover; background-position:center;
+    background-color:var(--ecru); border-radius:18px;
+  }
+  /* CSS-only placeholder visual (when no real image is present) — soft warm
+     gradients + subtle grain, so the page reads intentional with zero files. */
+  .frame .pic.placeholder{
+    background-image:
+      radial-gradient(120% 90% at 34% 24%, rgba(255,252,246,.9) 0%, rgba(228,216,196,.6) 46%, rgba(154,106,60,.30) 100%),
+      linear-gradient(155deg, #F3ECDF 0%, #E7DAC6 52%, #C9A878 100%);
+  }
+  .frame .pic.placeholder::before{
+    /* a faint vertical "object" highlight — suggests a framed still life */
+    content:""; position:absolute; left:50%; top:14%; width:34%; height:72%;
+    transform:translateX(-50%); border-radius:120px;
+    background:linear-gradient(180deg, rgba(255,253,248,.55), rgba(154,106,60,.10) 70%, rgba(126,85,48,.18));
+    box-shadow:0 30px 60px -30px rgba(126,85,48,.5);
+  }
+  .frame .pic::after{ /* fine grain over the still */
+    content:""; position:absolute; inset:0; opacity:.35; mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.4'/%3E%3C/svg%3E");
+  }
+  .frame .edge{ position:absolute; inset:0; border-radius:18px; pointer-events:none;
+    box-shadow:inset 0 0 0 1px rgba(54,48,42,.10); }
+
+  .figcap{
+    margin-top:18px; display:flex; align-items:baseline; gap:14px;
+    font-family:var(--ui); font-weight:300; font-size:10px; letter-spacing:.24em;
+    text-transform:uppercase; color:var(--muted);
+  }
+  .figcap .n{ color:var(--cognac); }
+  .figcap .ln{ height:1px; flex:1; background:currentColor; opacity:.25; }
+
+  /* scroll cue (opening chapter only) */
+  .cue{
+    position:absolute; left:50%; bottom:26px; transform:translateX(-50%); z-index:30;
+    display:flex; flex-direction:column; align-items:center; gap:10px; color:var(--muted);
+    background:none; border:none; cursor:pointer;
+    font-family:var(--ui); font-weight:300; font-size:9px; letter-spacing:.30em; text-transform:uppercase;
+  }
+  .cue .bar{ width:1px; height:44px; background:currentColor; opacity:.4; transform-origin:top; animation:cuebar 3.2s infinite ease-in-out; }
+  @keyframes cuebar{ 0%,100%{ transform:scaleY(1); } 50%{ transform:scaleY(.35); } }
+
+  /* colophon / footer */
+  .colophon{ position:relative; padding:clamp(80px,16vh,180px) 24px; text-align:center; }
+  .colophon .vine{ width:120px; height:1px; margin:0 auto 30px; background:linear-gradient(to right, transparent, var(--cognac), transparent); }
+  .colophon h3{ font-family:var(--display); font-weight:300; font-style:italic; font-size:clamp(1.7rem,3.6vw,2.8rem); color:var(--bark); margin-bottom:16px; letter-spacing:.01em; }
+  .colophon p{ font-family:var(--serif); color:var(--body); max-width:52ch; margin:0 auto 10px; }
+  .colophon .src{ font-family:var(--ui); font-weight:300; font-size:10px; letter-spacing:.22em; text-transform:uppercase; color:var(--muted); margin-top:24px; }
+  .colophon .src a{ color:var(--cognac-2); text-decoration:none; border-bottom:1px solid rgba(126,85,48,.3); }
+
+  /* ── Mobile (≤680px): no pin, stacked, clean fade-up ─────────── */
+  @media (max-width:680px){
+    .chapter{ height:auto; }
+    .chapter .stage{ position:relative; height:auto; min-height:auto; padding:clamp(72px,13vh,120px) 0; }
+    .stage .inner{ grid-template-columns:1fr; gap:32px; width:88vw; }
+    .chapter[data-side="left"] .copy,
+    .chapter[data-side="left"] .figure{ order:initial; }
+    .figure{ order:2 !important; } .copy{ order:1 !important; }
+    .layer{ transform:none !important; opacity:1 !important; }
+    .copy h2 .scrub{ letter-spacing:0 !important; }
+    .frame{ max-width:100%; aspect-ratio:5/4; }
+    .reveal{ opacity:0; transform:translateY(22px); transition:opacity .9s ease, transform .9s cubic-bezier(.16,1,.3,1); }
+    .reveal.in{ opacity:1; transform:none; }
+  }
+
+  /* ── Reduced motion: snap to a readable static mid-state ─────── */
+  @media (prefers-reduced-motion:reduce){
+    html{ scroll-behavior:auto; }
+    .chapter{ height:auto; }
+    .chapter .stage{ position:relative; height:auto; min-height:auto; padding:96px 0; }
+    .stage .inner{ grid-template-columns:1fr; }
+    .layer{ transform:none !important; opacity:1 !important; }
+    .copy h2 .scrub{ letter-spacing:0 !important; }
+    .cue .bar{ animation:none; }
+  }
+
+  /* ── GSAP SHOWCASE — "THE OBJECT, HELD" ──────────────────────────
+     One dedicated beat demonstrating two restrained techniques the
+     hand-rolled engine doesn't (taste-guardrails §2):
+       • PUSH-IN  — a very slow scale(1 → 1.08) on the framed object over
+                    the pin (intensifying focus; no other foreground motion).
+       • MATCH-CUT — two captions occupy the SAME position; content swaps by
+                    opacity crossfade while the layout holds perfectly still.
+     No 3D tilt, no snap, no velocity, no glow (museum restraint, §1.9).
+     STATIC DEFAULTS below keep the beat whole when GSAP is absent / reduced-
+     motion / mobile: object at rest scale 1, first caption visible, second
+     hidden, all content present. GSAP owns the pin scroll-room at runtime. */
+  .chapter.showcase{ height:auto; }                  /* GSAP pin grants the scroll-room */
+  .show-stage{
+    position:relative; height:100vh; overflow:hidden;
+    display:grid; place-items:center; padding:0 clamp(20px,5vw,64px);
+  }
+  .show-inner{ width:min(720px,90vw); text-align:center; }
+  .show-eyebrow{
+    font-family:var(--ui); font-weight:300; font-size:10px; letter-spacing:.40em;
+    text-transform:uppercase; color:var(--cognac); display:block;
+    margin-bottom:clamp(26px,4vw,44px);
+  }
+  /* the still the PUSH-IN scales (own layer; not driven by the rAF engine) */
+  .show-object{
+    position:relative; width:min(360px,64vw); aspect-ratio:4/5; margin:0 auto;
+    border-radius:18px; overflow:hidden; transform-origin:50% 46%;
+    box-shadow:0 40px 90px -50px rgba(54,48,42,.55);
+    will-change:transform;                           /* one element only */
+    background-image:
+      radial-gradient(120% 90% at 38% 22%, rgba(255,252,246,.92) 0%, rgba(228,216,196,.6) 48%, rgba(154,106,60,.32) 100%),
+      linear-gradient(155deg, #F3ECDF 0%, #E7DAC6 52%, #C9A878 100%);
+    background-color:var(--ecru);
+  }
+  .show-object::before{
+    content:""; position:absolute; left:50%; top:14%; width:34%; height:72%;
+    transform:translateX(-50%); border-radius:120px;
+    background:linear-gradient(180deg, rgba(255,253,248,.55), rgba(154,106,60,.10) 70%, rgba(126,85,48,.18));
+  }
+  .show-object::after{   /* static grain locked to the still */
+    content:""; position:absolute; inset:0; opacity:.32; mix-blend-mode:multiply; pointer-events:none;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='go'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23go)' opacity='0.4'/%3E%3C/svg%3E");
+  }
+  /* MATCH-CUT: both captions share ONE grid cell → identical position; only
+     opacity differs. Static default: first shown, second hidden. */
+  .show-caps{ display:grid; margin-top:clamp(30px,4vw,48px); }
+  .show-cap{
+    grid-area:1 / 1; align-self:start;
+    font-family:var(--display); font-weight:300; font-style:italic;
+    font-size:clamp(1.4rem,3.4vw,2.4rem); line-height:1.2; color:var(--bark);
+  }
+  .show-cap small{
+    display:block; margin-top:14px; font-family:var(--ui); font-weight:300; font-style:normal;
+    font-size:10px; letter-spacing:.24em; text-transform:uppercase; color:var(--muted);
+  }
+  .show-cap.b{ opacity:0; }                          /* second state hidden at rest */
+  .show-cap em{ color:var(--cognac-2); }
+
+  @media (max-width:680px){
+    /* static + stacked: no pin, show both captions, object at rest */
+    .chapter.showcase .show-stage{ height:auto; padding:clamp(72px,13vh,120px) 22px; }
+    .show-object{ transform:none !important; width:min(320px,74vw); }
+    .show-caps{ display:block; }
+    .show-cap{ display:block; opacity:1 !important; }
+    .show-cap.b{ margin-top:24px; }
+  }
+  @media (prefers-reduced-motion:reduce){
+    .show-stage{ height:auto; padding:96px 22px; }
+    .show-object{ transform:none !important; }
+    .show-caps{ display:block; }
+    .show-cap{ opacity:1 !important; }
+    .show-cap.b{ margin-top:24px; }
+  }
+</style>
+</head>
+<body>
+  <div class="atmos" id="atmos" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <div class="mark">
+      <b>Maison&nbsp;Solenne</b>
+      <span>Paris · MCMXXIV</span>
+    </div>
+    <nav aria-label="Primary">
+      <a href="#provenance">Provenance</a>
+      <a href="#object">The Object</a>
+      <a href="#atelier">Atelier</a>
+      <a href="#audience">Enquire</a>
+    </nav>
+  </header>
+
+  <nav class="rail" id="rail" aria-label="Chapters"></nav>
+
+  <main id="book"></main>
+
+  <footer class="colophon">
+    <div class="vine"></div>
+    <h3>What is made slowly is kept for a long time.</h3>
+    <p>Four chapters for a maison that does not exist — rendered as a single, build-free HTML page in warm ivory and cognac.</p>
+    <p class="src">
+      Built with the <a href="https://github.com/MustBeSimo/cinematic-scroll-skill">cinematic-scroll</a> Agent Skill · fictional maison, no real brands ·
+      one of many possible aesthetics.
+    </p>
+  </footer>
+
+<script>
+/* ───────────────────────────────────────────────────────────────
+   Manifest — the page is generated from this array. Edit to retheme.
+   Fictional maison; no real brands or people.
+   title: array of [text, italic?] fragments. The first fragment of each
+          title carries the letter-spacing scrub class (the reveal).
+   ─────────────────────────────────────────────────────────────── */
+const CHAPTERS = [
+  { id:'overture', num:'I', nm:'Overture',
+    eyebrow:'Maison Solenne · Volume I',
+    title:[['The art of', 0],['keeping', 1],['still.', 0]],
+    lede:'A maison founded on a single, unfashionable belief: that the finest objects ask nothing of you. They wait. They weather. They are made once, and made completely — and then they are simply present, for the length of a life.',
+    fig:'I', figLabel:'Frontispiece · warm ivory',
+    meta:'Provenance · est. MCMXXIV',
+    side:'right',
+    morph:'radial-gradient(130% 90% at 22% 8%, rgba(154,106,60,.06), rgba(154,106,60,0) 58%), radial-gradient(110% 80% at 88% 96%, rgba(54,48,42,.05), rgba(54,48,42,0) 60%), #F6F1E7',
+    cue:true,
+    prompt:'overture · still life'
+  },
+  { id:'provenance', num:'II', nm:'Provenance',
+    eyebrow:'Chapter II · Provenance',
+    title:[['A hundred', 0],['unhurried', 1],['years.', 0]],
+    lede:'Four generations in the same three rooms above the rue. No collections, no seasons, no haste — only the slow accumulation of judgement that cannot be bought, briefed, or rushed. The house keeps its own time.',
+    fig:'II', figLabel:'The archive · sand light',
+    meta:'Atelier · rue de Solenne',
+    side:'left',
+    morph:'radial-gradient(130% 90% at 20% 10%, rgba(154,106,60,.07), rgba(154,106,60,0) 56%), radial-gradient(100% 80% at 86% 92%, rgba(54,48,42,.04), rgba(54,48,42,0) 60%), #ECE3D4',
+    prompt:'provenance · archive'
+  },
+  { id:'object', num:'III', nm:'The Object',
+    eyebrow:'Chapter III · The Object',
+    title:[['One object,', 0],['considered', 1],['completely.', 0]],
+    lede:'A single form, returned to until nothing remains to remove. Hand-burnished cognac leather over a frame that will outlast its first owner. No monogram. No hardware that announces itself. The restraint is the luxury.',
+    fig:'III', figLabel:'The object · cognac still',
+    meta:'Made to be kept',
+    side:'right',
+    morph:'radial-gradient(130% 90% at 24% 12%, rgba(154,106,60,.10), rgba(154,106,60,0) 56%), radial-gradient(100% 80% at 88% 90%, rgba(126,85,48,.06), rgba(126,85,48,0) 60%), #E4D8C4',
+    prompt:'the object · product moment'
+  },
+  { id:'audience', num:'IV', nm:'Enquire',
+    eyebrow:'Chapter IV · An Audience',
+    title:[['Request an', 0],['audience', 1],['with the house.', 0]],
+    lede:'We make a small number of pieces each year, by enquiry only. If you would like to commission one — and to wait the time it properly takes — the house keeps a quiet correspondence with those who understand the value of patience.',
+    fig:'IV', figLabel:'The correspondence',
+    meta:'By enquiry only',
+    side:'left',
+    morph:'radial-gradient(130% 90% at 22% 8%, rgba(154,106,60,.06), rgba(154,106,60,0) 58%), radial-gradient(110% 80% at 88% 96%, rgba(54,48,42,.05), rgba(54,48,42,0) 60%), #EFE7D8',
+    cta:'Begin a correspondence',
+    prompt:'audience · the correspondence'
+  },
+];
+
+/* ── helpers ─────────────────────────────────────────────────── */
+const clamp  = (n,a,b)=>Math.max(a,Math.min(b,n));
+const smooth = (a,b,t)=>{ const x=clamp((t-a)/(b-a),0,1); return x*x*(3-2*x); };
+const reduce   = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isMobile = () => window.matchMedia('(max-width: 680px)').matches;
+
+const book  = document.getElementById('book');
+const rail  = document.getElementById('rail');
+const atmos = document.getElementById('atmos');
+
+/* probe a real still; fall back to the CSS placeholder if it 404s */
+function probe(src){ return new Promise(res=>{ const i=new Image(); i.onload=()=>res(true); i.onerror=()=>res(false); i.src=src; }); }
+
+(async () => {
+  for (const ch of CHAPTERS){
+    const imgPath = `assets/${ch.id}.jpg`;
+    const hasImg  = await probe(imgPath);
+    const picCls  = hasImg ? 'pic' : 'pic placeholder';
+    const picStyle= hasImg ? `background-image:url('${imgPath}')` : '';
+
+    // first title fragment carries the letter-spacing scrub
+    const titleHTML = ch.title.map(([txt,it],k)=>{
+      const inner = it ? `<em>${txt}</em>` : txt;
+      return k===0 ? `<span class="scrub">${inner}</span> ` : `${inner} `;
+    }).join('');
+
+    const sec = document.createElement('section');
+    sec.className = 'chapter';
+    sec.id = ch.id;
+    sec.dataset.side = ch.side;
+    sec.innerHTML = `
+      <div class="stage">
+        <div class="inner">
+          <div class="copy">
+            <div class="layer copytext" data-depth="0.50">
+              <span class="eyebrow reveal">${ch.eyebrow}</span>
+              <h2>${titleHTML}</h2>
+              <div class="rule reveal"></div>
+              <p class="lede reveal">${ch.lede}</p>
+              ${ch.cta
+                ? `<a class="cta reveal" href="mailto:audience@example.com?subject=An%20audience%20with%20Maison%20Solenne">${ch.cta} →</a>`
+                : `<p class="meta reveal">${ch.meta}</p>`}
+            </div>
+          </div>
+          <div class="figure">
+            <div class="layer figwrap" data-depth="0.28">
+              <div class="frame">
+                <div class="${picCls}" style="${picStyle}"></div>
+                <div class="edge"></div>
+              </div>
+              <div class="figcap reveal">
+                <span class="n">Fig. ${ch.fig}</span><span class="ln"></span><span>${ch.figLabel}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        ${ch.cue ? `<button class="cue" type="button" data-goto="provenance" aria-label="Scroll to Provenance">
+          <span>Read on</span><span class="bar"></span></button>` : ''}
+      </div>`;
+    book.appendChild(sec);
+
+    const b = document.createElement('button');
+    b.type='button'; b.dataset.goto=ch.id;
+    b.innerHTML = `<span style="font-family:var(--display);font-size:12px">${ch.num}</span><span class="nm">${ch.nm}</span><span class="tick"></span>`;
+    rail.appendChild(b);
+  }
+
+  /* ── INSERT THE GSAP SHOWCASE BEAT ("THE OBJECT, HELD") ──────────────
+     Placed right after Chapter III · The Object, so the object is first
+     introduced, then held and considered, before the closing enquiry —
+     and BEFORE sections/railBtns/CHAPTERS are read by the scroll-spy, so the
+     parallel arrays (sections ↔ railBtns ↔ CHAPTERS) stay index-aligned.
+     Pure markup here; motion is wired at the end (desktop + non-reduced only,
+     and only if GSAP actually loaded). Stays static otherwise. */
+  const SHOW_AFTER = 'object';                 // chapter whose index we insert after
+  const anchorSec  = document.getElementById(SHOW_AFTER);
+  const anchorIdx  = CHAPTERS.findIndex(c=>c.id===SHOW_AFTER);   // 2 → insert at 3
+  const showMorph  = 'radial-gradient(130% 90% at 28% 14%, rgba(154,106,60,.12), rgba(154,106,60,0) 56%), radial-gradient(100% 80% at 84% 88%, rgba(126,85,48,.07), rgba(126,85,48,0) 60%), #E8DCC8';
+
+  const show = document.createElement('section');
+  show.className = 'chapter showcase';
+  show.id = 'held';
+  show.innerHTML = `
+    <div class="show-stage">
+      <div class="show-inner">
+        <span class="show-eyebrow">Chapter III · ½ — The Object, Held</span>
+        <div class="show-object" role="img" aria-label="The object, considered in soft light"></div>
+        <div class="show-caps">
+          <p class="show-cap a">One object, considered <em>completely</em>.<small>The form, before it is named</small></p>
+          <p class="show-cap b">Nothing left <em>to remove</em>.<small>The same form, now resolved</small></p>
+        </div>
+      </div>
+    </div>`;
+  anchorSec.after(show);                         // DOM: directly after Chapter III
+
+  const showBtn = document.createElement('button');
+  showBtn.type = 'button'; showBtn.dataset.goto = 'held';
+  showBtn.innerHTML = `<span style="font-family:var(--display);font-size:12px">·</span><span class="nm">Held</span><span class="tick"></span>`;
+  rail.children[anchorIdx].after(showBtn);       // rail: matching entry, same offset
+  // keep the CHAPTERS lookup aligned with the new section list (spy reads CHAPTERS[idx].morph)
+  CHAPTERS.splice(anchorIdx + 1, 0, { id:'held', nm:'Held', morph:showMorph });
+
+  const sections = [...document.querySelectorAll('.chapter')];
+  const railBtns = [...rail.children];
+
+  /* navigation clicks (rail + scroll cue) */
+  document.querySelectorAll('[data-goto]').forEach(el=>{
+    el.addEventListener('click', ()=>{
+      document.getElementById(el.dataset.goto)?.scrollIntoView({ behavior: reduce ? 'auto':'smooth' });
+    });
+  });
+
+  /* scroll-spy → active rail + background morph.
+     Sections are 220vh — taller than the viewport — so collapse the observer
+     root to a 1px band at the vertical centre via rootMargin: the section
+     straddling screen-centre is the active one (reliable at any height). */
+  let activeIdx = -1;
+  const spy = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{
+      if (!e.isIntersecting) return;
+      const idx = sections.indexOf(e.target);
+      if (idx===activeIdx) return;
+      activeIdx = idx;
+      railBtns.forEach((b,j)=> b.setAttribute('aria-current', j===idx ? 'true':'false'));
+      const m = CHAPTERS[idx].morph;
+      atmos.style.background = m;
+      document.body.style.background = m;
+    });
+  }, { threshold:0, rootMargin:'-50% 0px -50% 0px' });
+  sections.forEach(s=> spy.observe(s));
+  // paint initial state immediately
+  railBtns[0].setAttribute('aria-current','true'); activeIdx = 0;
+
+  /* mobile / reduced-motion: clean fade-up only, skip the rAF engine */
+  if (reduce || isMobile()){
+    const up = new IntersectionObserver((es)=>{
+      es.forEach(e=>{ if (e.isIntersecting){ e.target.classList.add('in'); up.unobserve(e.target); } });
+    }, { threshold:.16 });
+    document.querySelectorAll('.reveal').forEach(el=> up.observe(el));
+    return;
+  }
+
+  /* ── Desktop parallax — quiet-luxury engine ────────────────────
+     Unified progress T ∈ [0,1] over each section's whole pass
+     (approach → pin → exit), so content is fully composed when the
+     chapter is centred (including chapter I at load). Never starts
+     invisible. Only transform + opacity mutate per frame.
+
+       • figure : BARELY-there drift — depth 0.28, ~3% of viewport over
+                  the whole pin (perceptual depth, no obvious movement)
+                  + a hair of scale settle. No 3D tilt, no filter.
+       • copy   : gentle counter-drift, full block.
+       • title  : LETTER-SPACING SCRUB 0.45em → 0em over the first ~30%.
+       • reveals: eyebrow / rule / lede / caption ease in and hold.            */
+  let ticking = false;
+  function parallax(){
+    const vh = window.innerHeight;
+    for (const sec of sections){
+      const rect  = sec.getBoundingClientRect();
+      // only drive sections that are actually on/near screen (perf)
+      if (rect.bottom < -vh*0.2 || rect.top > vh*1.2) continue;
+
+      const total = sec.offsetHeight + vh;
+      const T     = clamp((vh - rect.top) / total, 0, 1);   // 0 below → 1 past
+      const enter = smooth(0.10, 0.34, T);                  // composed by pin
+      const exit  = 1 - smooth(0.70, 0.90, T);              // fades away late
+      const live  = enter * exit;
+      const drift = 0.46 - T;                               // signed, ~0 at hold
+
+      // figure — barely-there: depth 0.28 × 24px ≈ ~3% of a 760px viewport
+      const fig = sec.querySelector('.figwrap');
+      if (fig){
+        const depth = +fig.dataset.depth;             // 0.28
+        const y  = drift * 24 * (depth / 0.28);       // ~±5–6px across the pin
+        const sc = 1.012 - 0.012 * enter;             // imperceptible settle
+        fig.style.transform = `translate3d(0, ${y.toFixed(2)}px, 0) scale(${sc.toFixed(4)})`;
+        fig.style.opacity   = (0.18 + 0.82 * live).toFixed(3);
+      }
+
+      // copy block — gentle counter-drift
+      const copy = sec.querySelector('.copytext');
+      if (copy){
+        copy.style.transform = `translate3d(0, ${(drift * 30).toFixed(2)}px, 0)`;
+        copy.style.opacity   = (0.16 + 0.84 * live).toFixed(3);
+
+        // title letter-spacing scrub: 0.45em → 0em over the first ~30%
+        const sp = (1 - smooth(0.06, 0.32, T)) * 0.45;
+        copy.querySelectorAll('h2 .scrub').forEach(s=>{ s.style.letterSpacing = `${sp.toFixed(3)}em`; });
+
+        // supporting reveals ease in, then hold (and fade with the exit)
+        const rv = smooth(0.16, 0.40, T) * exit;
+        copy.querySelectorAll('.reveal').forEach(r=>{ r.style.opacity = rv.toFixed(3); });
+      }
+
+      // caption — rides with the figure, a touch later
+      const cap = sec.querySelector('.figcap');
+      if (cap){ cap.style.opacity = (smooth(0.22, 0.46, T) * exit).toFixed(3); }
+    }
+    ticking = false;
+  }
+  function onScroll(){ if (!ticking){ ticking = true; requestAnimationFrame(parallax); } }
+  window.addEventListener('scroll', onScroll, { passive:true });
+  window.addEventListener('resize', ()=>{ ticking = true; requestAnimationFrame(parallax); }, { passive:true });
+  parallax(); // initial paint so nothing starts invisible if scroll never fires
+
+  /* ── GSAP SHOWCASE WIRING — "The Object, Held" ─────────────────────
+     Polls for GSAP (the CDN is deferred); guarded again by matchMedia so it
+     only arms on desktop + no-reduced-motion and auto-reverts on resize into a
+     small / reduced context. Two restrained techniques (taste-guardrails §2):
+       • PUSH-IN   — the framed object scales 1 → 1.08 over the pin (slow zoom
+                     toward the subject; nothing else moves in the foreground).
+       • MATCH-CUT — caption A → caption B by opacity over a perfectly-still
+                     composition (identical position; only the words change).
+     Only transform + opacity mutate. If GSAP never loads, #held stays static. */
+  (function wireShowcase(tries){
+    if (!window.gsap || !window.ScrollTrigger){
+      if (tries > 0) requestAnimationFrame(()=> wireShowcase(tries-1));
+      return;
+    }
+    gsap.registerPlugin(ScrollTrigger);
+    ScrollTrigger.defaults({ scrub:0.5, fastScrollEnd:true, invalidateOnRefresh:true });
+    const mm = gsap.matchMedia();
+    mm.add('(min-width:769px) and (prefers-reduced-motion:no-preference)', () => {
+      const stage = document.querySelector('#held .show-stage');
+      if (!stage) return;
+      const obj  = stage.querySelector('.show-object');
+      const capA = stage.querySelector('.show-cap.a');
+      const capB = stage.querySelector('.show-cap.b');
+      const els  = [obj, capA, capB];
+      const tl = gsap.timeline({ scrollTrigger:{
+        trigger:'#held', start:'top top', end:'+=220%', pin:stage, anticipatePin:1 } });
+      tl.fromTo(obj,  { scale:1 },  { scale:1.08, ease:'none' }, 0)                       // PUSH-IN (§2)
+        .to(capA,     { opacity:0, ease:'none', duration:0.4 }, 0.45)                     // MATCH-CUT: A out
+        .fromTo(capB, { opacity:0 }, { opacity:1, ease:'none', duration:0.4 }, 0.45);     // MATCH-CUT: B in (same cell)
+      return () => gsap.set(els, { clearProps:'all' });   // revert to static defaults
+    });
+  })(120);
+})();
+</script>
+</body>
+</html>
