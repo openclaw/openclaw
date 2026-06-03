@@ -8,8 +8,11 @@ import type { Model } from "../llm/types.js";
 const LOGO_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 800" aria-hidden="true"><path fill="#fff" fill-rule="evenodd" d="M165.29 165.29 H517.36 V400 H400 V517.36 H282.65 V634.72 H165.29 Z M282.65 282.65 V400 H400 V282.65 Z"/><path fill="#fff" d="M517.36 400 H634.72 V634.72 H517.36 Z"/></svg>`;
 
 export type OAuthCredentials = {
+  /** Refresh token or provider-equivalent long-lived credential. */
   refresh: string;
+  /** Access token or provider-equivalent bearer credential. */
   access: string;
+  /** Absolute epoch milliseconds when the access token should be considered expired. */
   expires: number;
   [key: string]: unknown;
 };
@@ -26,12 +29,16 @@ export type OAuthPrompt = {
 };
 
 export type OAuthAuthorizationInput = {
+  /** Authorization code parsed from a callback URL, query string, or pasted code. */
   code?: string;
+  /** Optional OAuth state parsed from callback URL, query string, or `code#state` input. */
   state?: string;
 };
 
 export type OAuthAuthInfo = {
+  /** Provider authorization URL shown to the user. */
   url: string;
+  /** Optional provider-specific instruction text for manual flows. */
   instructions?: string;
 };
 
@@ -46,12 +53,17 @@ export type OAuthSelectPrompt = {
 };
 
 export interface OAuthLoginCallbacks {
+  /** Emits authorization URL/instructions to the UI before waiting for completion. */
   onAuth: (info: OAuthAuthInfo) => void;
+  /** Prompts for manual input such as pasted callback URLs or authorization codes. */
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
+  /** Reports human-readable login progress without exposing secrets. */
   onProgress?: (message: string) => void;
+  /** Optional direct manual-code entry hook used when callback-server flows cannot complete. */
   onManualCodeInput?: () => Promise<string>;
   /** Show an interactive selector and return the selected option id, or undefined on cancel. */
   onSelect?: (prompt: OAuthSelectPrompt) => Promise<string | undefined>;
+  /** Cancels pending OAuth waits and prompts when aborted. */
   signal?: AbortSignal;
 }
 
@@ -203,6 +215,7 @@ function base64urlEncode(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/[=]/g, "");
 }
 
+/** Generates an OAuth PKCE verifier and SHA-256 challenge using base64url encoding. */
 export async function generatePKCE(): Promise<{ verifier: string; challenge: string }> {
   const verifierBytes = new Uint8Array(32);
   crypto.getRandomValues(verifierBytes);
@@ -216,12 +229,17 @@ export async function generatePKCE(): Promise<{ verifier: string; challenge: str
   return { verifier, challenge };
 }
 
+/** Generates a random base64url OAuth state value for CSRF protection. */
 export function generateOAuthState(): string {
   const stateBytes = new Uint8Array(32);
   crypto.getRandomValues(stateBytes);
   return base64urlEncode(stateBytes);
 }
 
+/**
+ * Parses callback URLs, raw query strings, `code#state`, or plain pasted codes.
+ * Empty input returns an empty object so callers can keep prompting.
+ */
 export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationInput {
   const value = input.trim();
   if (!value) {
@@ -254,10 +272,12 @@ export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationI
   return { code: value };
 }
 
+/** Converts provider `expires_in` seconds into safe positive milliseconds. */
 export function resolveOAuthTokenLifetimeMs(value: unknown): number | undefined {
   return positiveSecondsToSafeMilliseconds(value);
 }
 
+/** Resolves provider token lifetime into an absolute expiry timestamp with optional refresh skew. */
 export function resolveOAuthTokenExpiresAt(
   value: unknown,
   options: { nowMs?: number; refreshSkewMs?: number } = {},
