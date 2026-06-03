@@ -21,6 +21,7 @@ import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline
 import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
+import type { TurnEventRecorder } from "./turn-event-state.js";
 
 export type { InboundEventKind } from "../inbound-event/kind.js";
 
@@ -388,6 +389,7 @@ export type AssembledChannelTurn = {
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
   log?: (event: ChannelTurnLogEvent) => void;
+  turnEvents?: TurnEventRecorder;
   messageId?: string;
 };
 
@@ -407,6 +409,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;
   log?: (event: ChannelTurnLogEvent) => void;
+  turnEvents?: TurnEventRecorder;
   messageId?: string;
 };
 
@@ -491,4 +494,5 @@ export type RunChannelTurnParams<TRaw, TDispatchResult = DispatchFromConfigResul
   raw: TRaw;
   adapter: ChannelTurnAdapter<TRaw, TDispatchResult>;
   log?: (event: ChannelTurnLogEvent) => void;
+  turnEvents?: TurnEventRecorder;
 };

@@ -21,6 +21,9 @@ export type DiagnosticStabilityEventRecord = {
   pluginId?: string;
   source?: string;
   target?: string;
+  turnId?: string;
+  sessionKey?: string;
+  messageId?: string;
   surface?: string;
   action?: string;
   reason?: string;
@@ -47,6 +50,9 @@ export type DiagnosticStabilityEventRecord = {
   exitCode?: number;
   timedOut?: boolean;
   final?: boolean;
+  completionAllowed?: boolean;
+  visibleDeliveryRequired?: boolean;
+  visibleDeliverySent?: boolean;
   costUsd?: number;
   count?: number;
   bytes?: number;
@@ -266,6 +272,19 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.durationMs = event.durationMs;
       record.outcome = "error";
       assignReasonCode(record, event.errorCategory);
+      break;
+    case "channel.turn.event":
+      record.channel = event.channel;
+      record.target = event.target;
+      record.turnId = event.turnId;
+      record.sessionKey = event.sessionKey;
+      record.messageId = event.messageId;
+      record.action = event.turnEventType;
+      record.outcome = event.status;
+      record.completionAllowed = event.completionAllowed;
+      record.visibleDeliveryRequired = event.visibleDeliveryRequired;
+      record.visibleDeliverySent = event.visibleDeliverySent;
+      assignReasonCode(record, event.reason);
       break;
     case "talk.event":
       record.talkEventType = event.talkEventType;

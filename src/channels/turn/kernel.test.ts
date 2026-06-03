@@ -9,6 +9,7 @@ import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
   waitForDiagnosticEventsDrained,
+  type DiagnosticChannelTurnEvent,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
@@ -27,6 +28,8 @@ import {
   dispatchAssembledChannelTurn,
   hasFinalChannelTurnDispatch,
   hasVisibleChannelTurnDispatch,
+  InMemoryTurnEventStore,
+  materializeTurnState,
   resolveChannelTurnDispatchCounts,
   runPreparedChannelTurn,
   runChannelTurn,
@@ -1279,6 +1282,181 @@ describe("channel turn kernel", () => {
       reason: "broadcast-observer",
     });
     expect(finalizedResult.dispatched).toBe(true);
+  });
+
+  it("marks telegram direct turns without visible delivery as invalid", async () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    const result = await runChannelTurn({
+      channel: "telegram",
+      raw: {},
+      turnEvents,
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        resolveTurn: () => ({
+          channel: "telegram",
+          routeSessionKey: "agent:main:telegram:peer",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({
+            ChatType: "dm",
+            SessionKey: "agent:main:telegram:peer",
+            To: "sebastian",
+          }),
+          recordInboundSession: createRecordInboundSession(),
+          runDispatch: async () => ({
+            queuedFinal: false,
+            counts: { tool: 0, block: 0, final: 0 },
+          }),
+        }),
+      },
+    });
+
+    expect(result.dispatched).toBe(true);
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.map((event) => event.type)).toEqual([
+      "message.received",
+      "turn.started",
+      "delivery.required",
+      "delivery.failed",
+      "turn.failed",
+    ]);
+    const state = materializeTurnState(events);
+    expect(state.visibleDeliveryRequired).toBe(true);
+    expect(state.visibleDeliverySent).toBe(false);
+    expect(state.completionAllowed).toBe(false);
+    expect(state.errors).toContain("missing_visible_delivery");
+  });
+
+  it("emits bounded diagnostic turn events without requiring a custom recorder", async () => {
+    const diagnostics: DiagnosticChannelTurnEvent[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === "channel.turn.event") {
+        diagnostics.push(event);
+      }
+    });
+
+    try {
+      await runChannelTurn({
+        channel: "telegram",
+        accountId: "acct",
+        raw: {},
+        adapter: {
+          ingest: () => ({ id: "msg-1", rawText: "hello" }),
+          resolveTurn: () => ({
+            channel: "telegram",
+            accountId: "acct",
+            routeSessionKey: "agent:main:telegram:peer",
+            storePath: "/tmp/sessions.json",
+            ctxPayload: createCtx({
+              ChatType: "direct",
+              SessionKey: "agent:main:telegram:peer",
+              To: "sebastian",
+            }),
+            recordInboundSession: createRecordInboundSession(),
+            runDispatch: async () => ({
+              queuedFinal: false,
+              counts: { tool: 0, block: 0, final: 0 },
+            }),
+          }),
+        },
+      });
+      await waitForDiagnosticEventsDrained();
+    } finally {
+      unsubscribe();
+    }
+
+    expect(diagnostics.map((event) => event.turnEventType)).toEqual([
+      "message.received",
+      "turn.started",
+      "delivery.required",
+      "delivery.failed",
+      "turn.failed",
+    ]);
+    expect(diagnostics.at(-1)).toMatchObject({
+      type: "channel.turn.event",
+      channel: "telegram",
+      accountId: "acct",
+      turnId: "telegram:acct:message:msg-1",
+      turnEventType: "turn.failed",
+      reason: "missing_visible_delivery",
+      completionAllowed: false,
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+    });
+  });
+
+  it("marks telegram direct turns with visible delivery as completed", async () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    const result = await runChannelTurn({
+      channel: "telegram",
+      raw: {},
+      turnEvents,
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        resolveTurn: () => ({
+          channel: "telegram",
+          routeSessionKey: "agent:main:telegram:peer",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({
+            ChatType: "direct",
+            SessionKey: "agent:main:telegram:peer",
+            To: "sebastian",
+          }),
+          recordInboundSession: createRecordInboundSession(),
+          runDispatch: async () => ({
+            queuedFinal: true,
+            counts: { tool: 0, block: 0, final: 1 },
+          }),
+        }),
+      },
+    });
+
+    expect(result.dispatched).toBe(true);
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.map((event) => event.type)).toEqual([
+      "message.received",
+      "turn.started",
+      "delivery.required",
+      "delivery.sent",
+      "turn.completed",
+    ]);
+    const state = materializeTurnState(events);
+    expect(state.currentState).toBe("completed");
+    expect(state.visibleDeliverySent).toBe(true);
+    expect(state.completionAllowed).toBe(true);
+  });
+
+  it("does not require direct-message delivery for telegram group turns", async () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    await runChannelTurn({
+      channel: "telegram",
+      raw: {},
+      turnEvents,
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "hello" }),
+        resolveTurn: () => ({
+          channel: "telegram",
+          routeSessionKey: "agent:main:telegram:group",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({
+            ChatType: "group",
+            SessionKey: "agent:main:telegram:group",
+          }),
+          recordInboundSession: createRecordInboundSession(),
+          runDispatch: async () => ({
+            queuedFinal: false,
+            counts: { tool: 0, block: 0, final: 0 },
+          }),
+        }),
+      },
+    });
+
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.map((event) => event.type)).toEqual([
+      "message.received",
+      "turn.started",
+      "turn.completed",
+    ]);
+    expect(materializeTurnState(events).completionAllowed).toBe(true);
   });
 
   it("finalizes failed dispatches before rethrowing", async () => {

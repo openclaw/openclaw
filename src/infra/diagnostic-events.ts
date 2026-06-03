@@ -160,6 +160,33 @@ export type DiagnosticMessageDeliveryErrorEvent = DiagnosticMessageDeliveryBaseE
   errorCategory: string;
 };
 
+export type DiagnosticChannelTurnEventKind =
+  | "message.received"
+  | "turn.started"
+  | "delivery.required"
+  | "tool.called"
+  | "tool.result"
+  | "delivery.sent"
+  | "delivery.failed"
+  | "turn.completed"
+  | "turn.failed";
+
+export type DiagnosticChannelTurnEvent = DiagnosticBaseEvent & {
+  type: "channel.turn.event";
+  channel: string;
+  accountId?: string;
+  turnId: string;
+  sessionKey?: string;
+  messageId?: string;
+  target?: string;
+  turnEventType: DiagnosticChannelTurnEventKind;
+  status?: string;
+  reason?: string;
+  completionAllowed?: boolean;
+  visibleDeliveryRequired?: boolean;
+  visibleDeliverySent?: boolean;
+};
+
 export type DiagnosticTalkEvent = DiagnosticBaseEvent & {
   type: "talk.event";
   sessionId?: string;
@@ -657,6 +684,7 @@ export type DiagnosticEventPayload =
   | DiagnosticMessageDeliveryStartedEvent
   | DiagnosticMessageDeliveryCompletedEvent
   | DiagnosticMessageDeliveryErrorEvent
+  | DiagnosticChannelTurnEvent
   | DiagnosticTalkEvent
   | DiagnosticSessionStateEvent
   | DiagnosticSessionLongRunningEvent
@@ -764,6 +792,7 @@ const ASYNC_DIAGNOSTIC_EVENT_TYPES = new Set<DiagnosticEventPayload["type"]>([
   "message.delivery.started",
   "message.delivery.completed",
   "message.delivery.error",
+  "channel.turn.event",
   "talk.event",
   "model.call.started",
   "model.call.completed",
