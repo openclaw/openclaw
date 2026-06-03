@@ -319,6 +319,10 @@ async function collectInstalledPathErrors(params: {
   return errors;
 }
 
+/**
+ * Returns true when a target can be resolved through npm registry metadata.
+ * Explicit tarball, URL, git, and main-branch specs bypass registry lookup.
+ */
 export function canResolveRegistryVersionForPackageTarget(value: string): boolean {
   const trimmed = normalizePackageTarget(value);
   if (!trimmed) {
@@ -368,6 +372,10 @@ function applyCorepackDownloadPromptEnv(env: Record<string, string>) {
   }
 }
 
+/**
+ * Converts a user tag or explicit package target into the package-manager spec
+ * used by global install commands.
+ */
 export function resolveGlobalInstallSpec(params: {
   packageName: string;
   tag: string;
@@ -389,6 +397,11 @@ export function resolveGlobalInstallSpec(params: {
   return `${params.packageName}@${target}`;
 }
 
+/**
+ * Builds the package-manager environment used for global installs.
+ * It keeps caller env values, adds platform-specific install defaults, and
+ * disables npm/corepack prompts that would otherwise hang unattended updates.
+ */
 export async function createGlobalInstallEnv(
   env?: NodeJS.ProcessEnv,
 ): Promise<NodeJS.ProcessEnv | undefined> {
