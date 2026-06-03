@@ -324,6 +324,17 @@ describe("Codex app-server config", () => {
       model: "openai/gpt-5.5",
     });
     expect(canUseCodexModelBackedApprovalsReviewerForModel(switchedOpenAIModel)).toBe(true);
+    const boundLocalOpenAIName = resolveCodexModelBackedReviewerPolicyContext({
+      provider: "codex",
+      model: "openai/gpt-oss-20b",
+      bindingModel: "openai/gpt-oss-20b",
+      bindingModelProvider: "lmstudio",
+    });
+    expect(boundLocalOpenAIName).toEqual({
+      modelProvider: "lmstudio",
+      model: "openai/gpt-oss-20b",
+    });
+    expect(canUseCodexModelBackedApprovalsReviewerForModel(boundLocalOpenAIName)).toBe(false);
   });
 
   it("uses user approvals when requirements force prompting but model provider is unknown", () => {

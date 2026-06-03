@@ -491,6 +491,59 @@ describe("Codex app-server approval bridge", () => {
     },
   );
 
+  it("falls back to plugin approval when an OpenAI-looking reviewer is a configured model alias", async () => {
+    const params = createParams();
+    params.config = {
+      agents: {
+        defaults: {
+          models: {
+            "lmstudio/local-reviewer": {
+              alias: "openai/reviewer",
+            },
+          },
+        },
+      },
+      tools: {
+        exec: {
+          mode: "auto",
+          reviewer: {
+            model: "openai/reviewer",
+          },
+        },
+      },
+    } as EmbeddedRunAttemptParams["config"];
+    mockReviewExecRequestWithConfiguredModel.mockResolvedValueOnce({
+      decision: "allow-once",
+      rationale: "aliased local reviewer",
+      risk: "low",
+    });
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-aliased-openai", status: "accepted" })
+      .mockResolvedValueOnce({ id: "plugin:approval-aliased-openai", decision: "allow-once" });
+
+    const result = await handleCodexAppServerApprovalRequest({
+      method: "item/commandExecution/requestApproval",
+      requestParams: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        itemId: "cmd-auto-review-aliased-openai",
+        command: "node --version",
+      },
+      paramsForRun: params,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      execPolicy: { mode: "auto" },
+      internalExecAutoReview: true,
+    });
+
+    expect(result).toEqual({ decision: "accept" });
+    expect(mockReviewExecRequestWithConfiguredModel).not.toHaveBeenCalled();
+    expect(mockCallGatewayTool.mock.calls.map(([method]) => method)).toEqual([
+      "plugin.approval.request",
+      "plugin.approval.waitDecision",
+    ]);
+  });
+
   it("keeps permission amendment command approvals on the plugin approval route", async () => {
     const params = createParams();
     params.config = {

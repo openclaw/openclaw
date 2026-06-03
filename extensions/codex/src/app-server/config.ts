@@ -621,6 +621,15 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
       model: params.model,
     };
   }
+  const bindingModelProvider = params.bindingModelProvider?.trim();
+  const currentModel = params.model?.trim();
+  const bindingModel = params.bindingModel?.trim();
+  if (bindingModelProvider && (!currentModel || !bindingModel || currentModel === bindingModel)) {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(bindingModelProvider),
+      model: params.model ?? params.bindingModel,
+    };
+  }
   const currentModelProvider = inferProviderFromModelRef(params.model);
   if (currentModelProvider) {
     return {
@@ -628,7 +637,6 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
       model: params.model,
     };
   }
-  const bindingModelProvider = params.bindingModelProvider?.trim();
   if (bindingModelProvider) {
     return {
       modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(bindingModelProvider),

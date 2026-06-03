@@ -512,6 +512,9 @@ function canUseInternalExecAutoReviewReviewer(
   if (!model || slashIndex <= 0) {
     return false;
   }
+  if (configuredAgentModelAliasMatches(config, model)) {
+    return false;
+  }
   const provider = model.slice(0, slashIndex).trim().toLowerCase();
   if (provider !== "openai") {
     return false;
@@ -531,6 +534,38 @@ function readExecReviewerModelRef(
   }
   const primary = readUnknownRecord(model)?.primary;
   return typeof primary === "string" && primary.trim() ? primary.trim() : undefined;
+}
+
+function configuredAgentModelAliasMatches(
+  config: EmbeddedRunAttemptParams["config"] | undefined,
+  modelRef: string,
+): boolean {
+  const agents = readUnknownRecord(readUnknownRecord(config)?.agents);
+  if (agentModelAliasMatches(readUnknownRecord(agents?.defaults), modelRef)) {
+    return true;
+  }
+  const list = agents?.list;
+  if (!Array.isArray(list)) {
+    return false;
+  }
+  return list.some((agent) => agentModelAliasMatches(readUnknownRecord(agent), modelRef));
+}
+
+function agentModelAliasMatches(
+  agentConfig: Record<string, unknown> | undefined,
+  modelRef: string,
+): boolean {
+  const models = readUnknownRecord(agentConfig?.models);
+  if (!models) {
+    return false;
+  }
+  for (const entry of Object.values(models)) {
+    const alias = readUnknownRecord(entry)?.alias;
+    if (typeof alias === "string" && alias.trim() === modelRef) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function configuredOpenAIProviderIsTrustedForExecReview(params: {
