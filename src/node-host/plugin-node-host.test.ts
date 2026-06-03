@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginNodeHostCommandRegistration } from "../plugins/registry-types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   invokeRegisteredNodeHostCommand,
@@ -74,6 +75,41 @@ describe("plugin node-host registry", () => {
       '{"ok":true}',
     );
     await expect(invokeRegisteredNodeHostCommand("missing.command", null)).resolves.toBeNull();
+    expect(handle).toHaveBeenCalledWith('{"ok":true}');
+  });
+
+  it("keeps healthy node-host commands available after unreadable command metadata", async () => {
+    const handle = vi.fn(async (paramsJSON?: string | null) => paramsJSON ?? "");
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "broken",
+        pluginName: "Broken",
+        source: "test",
+        get command() {
+          throw new Error("node host command getter exploded");
+        },
+      } as PluginNodeHostCommandRegistration,
+      {
+        pluginId: "browser",
+        pluginName: "Browser",
+        command: {
+          command: "browser.proxy",
+          cap: "browser",
+          handle,
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(listRegisteredNodeHostCapsAndCommands()).toEqual({
+      caps: ["browser"],
+      commands: ["browser.proxy"],
+    });
+    await expect(invokeRegisteredNodeHostCommand("browser.proxy", '{"ok":true}')).resolves.toBe(
+      '{"ok":true}',
+    );
     expect(handle).toHaveBeenCalledWith('{"ok":true}');
   });
 });
