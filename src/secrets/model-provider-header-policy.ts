@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** Exact header names that always carry credential material for model provider requests. */
 const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "authorization",
   "proxy-authorization",
@@ -27,6 +28,7 @@ const SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS = [
 
 /**
  * Returns whether a model-provider header name should be treated as secret-bearing.
+ * This is intentionally conservative: false positives are audit noise, false negatives leak keys.
  */
 export function isLikelySensitiveModelProviderHeaderName(value: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);
