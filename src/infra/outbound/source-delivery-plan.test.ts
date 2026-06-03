@@ -112,13 +112,13 @@ describe("source delivery plan", () => {
       target: {
         channel: "slack",
         to: "channel:C0AHNV28LQJ",
-        aliases: ["C0AHNV28LQJ", "#abel-channel"],
+        aliases: ["C0AHNV28LQJ", "abel-channel"],
       },
     });
 
     const outcome = resolveSourceDeliveryOutcome(contract, {
       didSendViaMessageTool: true,
-      messageToolSentTargets: [{ tool: "message", provider: "message", to: "#abel-channel" }],
+      messageToolSentTargets: [{ tool: "message", provider: "message", to: "abel-channel" }],
     });
 
     expect(outcome.satisfiesSourceDelivery).toBe(true);
