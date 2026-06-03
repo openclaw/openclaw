@@ -1130,7 +1130,11 @@ export async function runEmbeddedAttempt(
       !isRawModelRun &&
       params.toolsAllow?.length !== 0 &&
       !codeModeControlsEnabledForRun &&
-      resolveToolSearchConfig(params.config).enabled;
+      resolveToolSearchConfig({
+        config: params.config,
+        agentId: sessionAgentId,
+        sessionKey: sandboxSessionKey,
+      }).enabled;
     const effectiveToolsAllow =
       toolSearchControlsEnabledForRun && toolsAllowWithForcedRuntimeTools
         ? [

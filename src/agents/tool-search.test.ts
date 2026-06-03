@@ -77,6 +77,101 @@ describe("Tool Search", () => {
     expect(resolved.mode).toBe("tools");
   });
 
+  it("uses smaller implicit search limits for lean local agents", () => {
+    const baseConfig = {
+      tools: {
+        toolSearch: true,
+      },
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+        list: [
+          {
+            id: "full",
+            experimental: {
+              localModelLean: false,
+            },
+          },
+        ],
+      },
+    };
+    const config = baseConfig as never;
+
+    expect(testing.resolveToolSearchConfig({ config, agentId: "local" })).toMatchObject({
+      searchDefaultLimit: 4,
+      maxSearchLimit: 8,
+    });
+    expect(testing.resolveToolSearchConfig({ config, agentId: "full" })).toMatchObject({
+      searchDefaultLimit: 8,
+      maxSearchLimit: 20,
+    });
+    expect(
+      testing.resolveToolSearchConfig({
+        config: {
+          ...baseConfig,
+          tools: {
+            toolSearch: {
+              enabled: true,
+              searchDefaultLimit: 10,
+              maxSearchLimit: 12,
+            },
+          },
+        } as never,
+        agentId: "local",
+      }),
+    ).toMatchObject({
+      searchDefaultLimit: 10,
+      maxSearchLimit: 12,
+    });
+  });
+
+  it("applies lean search defaults when runtime search omits a limit", async () => {
+    const config = {
+      tools: {
+        toolSearch: true,
+      },
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+    } as never;
+    const sessionId = "session-lean-search-limit";
+    applyToolSearchCatalog({
+      tools: [
+        fakeTool(TOOL_SEARCH_CODE_MODE_TOOL_NAME, "code mode"),
+        fakeTool(TOOL_SEARCH_RAW_TOOL_NAME, "search"),
+        fakeTool(TOOL_DESCRIBE_RAW_TOOL_NAME, "describe"),
+        fakeTool(TOOL_CALL_RAW_TOOL_NAME, "call"),
+        pluginTool("fake_ticket_alpha", "Ticket workflow alpha"),
+        pluginTool("fake_ticket_beta", "Ticket workflow beta"),
+        pluginTool("fake_ticket_delta", "Ticket workflow delta"),
+        pluginTool("fake_ticket_gamma", "Ticket workflow gamma"),
+        pluginTool("fake_ticket_zeta", "Ticket workflow zeta"),
+      ],
+      config,
+      agentId: "local",
+      sessionId,
+    });
+
+    const searchTool = createToolSearchTools({
+      config,
+      agentId: "local",
+      sessionId,
+    }).find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME);
+    if (!searchTool) {
+      throw new Error("Expected Tool Search control");
+    }
+    const result = await searchTool.execute("search-lean", { query: "ticket" });
+
+    expect(result.details as unknown[]).toHaveLength(4);
+  });
+
   it("falls back to structured controls when code mode is unsupported", () => {
     testing.setToolSearchCodeModeSupportedForTest(false);
     try {

@@ -14,6 +14,7 @@ import {
   type HookContext,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
+import { isLocalModelLeanEnabled } from "./local-model-lean.js";
 import type { AgentMessage, AgentToolResult, AgentToolUpdateCallback } from "./runtime/index.js";
 import type { ToolDefinition } from "./sessions/index.js";
 import { asToolParamsRecord, jsonResult, ToolInputError } from "./tools/common.js";
@@ -34,6 +35,8 @@ const TOOL_SEARCH_CONTROL_TOOL_NAMES = new Set([
 const DEFAULT_CODE_TIMEOUT_MS = 10_000;
 const DEFAULT_SEARCH_LIMIT = 8;
 const DEFAULT_MAX_SEARCH_LIMIT = 20;
+const LOCAL_MODEL_LEAN_DEFAULT_SEARCH_LIMIT = 4;
+const LOCAL_MODEL_LEAN_DEFAULT_MAX_SEARCH_LIMIT = 8;
 const MAX_REUSABLE_CATALOG_SNAPSHOTS = 256;
 
 type ToolSearchMode = "code" | "tools";
@@ -87,6 +90,18 @@ export type ToolSearchToolContext = {
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
 };
+
+type ToolSearchConfigContext = {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+};
+
+function isToolSearchConfigContext(
+  input: OpenClawConfig | ToolSearchConfigContext,
+): input is ToolSearchConfigContext {
+  return "config" in input || "agentId" in input || "sessionKey" in input;
+}
 
 export type ToolSearchCatalogEntry = {
   id: string;
@@ -420,17 +435,39 @@ function resolveMinCodeTimeoutMs(): number {
   return toolSearchMinCodeTimeoutMsForTest ?? 1000;
 }
 
-export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
-  const raw = readToolSearchConfig(config);
+function resolveToolSearchConfigContext(
+  input?: OpenClawConfig | ToolSearchConfigContext,
+): ToolSearchConfigContext {
+  if (!input) {
+    return {};
+  }
+  if (isToolSearchConfigContext(input)) {
+    return input;
+  }
+  return { config: input };
+}
+
+export function resolveToolSearchConfig(
+  input?: OpenClawConfig | ToolSearchConfigContext,
+): ToolSearchConfig {
+  const context = resolveToolSearchConfigContext(input);
+  const raw = readToolSearchConfig(context.config);
   const rawMode = typeof raw.mode === "string" ? raw.mode : "code";
   const requestedMode: ToolSearchMode =
     rawMode === "tools" || rawMode === "code" ? rawMode : "code";
   const mode: ToolSearchMode =
     requestedMode === "code" && !isToolSearchCodeModeSupported() ? "tools" : requestedMode;
   const configured = Object.keys(raw).some((key) => key !== "enabled");
+  const leanEnabled = isLocalModelLeanEnabled(context);
+  const defaultSearchLimit = leanEnabled
+    ? LOCAL_MODEL_LEAN_DEFAULT_SEARCH_LIMIT
+    : DEFAULT_SEARCH_LIMIT;
+  const defaultMaxSearchLimit = leanEnabled
+    ? LOCAL_MODEL_LEAN_DEFAULT_MAX_SEARCH_LIMIT
+    : DEFAULT_MAX_SEARCH_LIMIT;
   const maxSearchLimit = Math.max(
     1,
-    Math.min(50, readInteger(raw.maxSearchLimit, DEFAULT_MAX_SEARCH_LIMIT)),
+    Math.min(50, readInteger(raw.maxSearchLimit, defaultMaxSearchLimit)),
   );
   return {
     enabled: readBoolean(raw.enabled, configured),
@@ -441,7 +478,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     ),
     searchDefaultLimit: Math.max(
       1,
-      Math.min(maxSearchLimit, readInteger(raw.searchDefaultLimit, DEFAULT_SEARCH_LIMIT)),
+      Math.min(maxSearchLimit, readInteger(raw.searchDefaultLimit, defaultSearchLimit)),
     ),
     maxSearchLimit,
   };
@@ -847,7 +884,7 @@ export function applyToolSearchCatalog(params: {
   catalogRegistered: boolean;
   catalogReused: boolean;
 } {
-  const config = resolveToolSearchConfig(params.config);
+  const config = resolveToolSearchConfig(params);
   return applyToolCatalogCompaction({
     ...params,
     enabled: config.enabled,
@@ -868,7 +905,7 @@ export function addClientToolsToToolSearchCatalog(params: {
 }): { tools: ToolDefinition[]; compacted: boolean; catalogToolCount: number } {
   return addClientToolsToToolCatalog({
     ...params,
-    enabled: resolveToolSearchConfig(params.config).enabled,
+    enabled: resolveToolSearchConfig(params).enabled,
   });
 }
 
@@ -1646,7 +1683,11 @@ function readCode(args: unknown): string {
 }
 
 export function createToolSearchTools(ctx: ToolSearchToolContext): AnyAgentTool[] {
-  const config = resolveToolSearchConfig(ctx.runtimeConfig ?? ctx.config);
+  const config = resolveToolSearchConfig({
+    config: ctx.runtimeConfig ?? ctx.config,
+    agentId: ctx.agentId,
+    sessionKey: ctx.sessionKey,
+  });
   const runtime = new ToolSearchRuntime(ctx, config);
   return [
     {

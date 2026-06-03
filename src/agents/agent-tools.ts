@@ -582,7 +582,11 @@ export function createOpenClawCodingTools(options?: {
     (options?.trigger === "heartbeat" &&
       options?.config?.messages?.visibleReplies === "message_tool");
   const forceHeartbeatTool = options?.forceHeartbeatTool === true || enableHeartbeatTool;
-  const toolSearchConfig = resolveToolSearchConfig(options?.config);
+  const toolSearchConfig = resolveToolSearchConfig({
+    config: options?.config,
+    agentId,
+    sessionKey: options?.sessionKey,
+  });
   const toolSearchControlsEnabled =
     options?.includeToolSearchControls === true && toolSearchConfig.enabled;
   const toolSearchControlAllowlist = toolSearchControlsEnabled
