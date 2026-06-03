@@ -711,6 +711,21 @@ function updateChatSendAckTiming(
   entries.set(ack.runId, next);
 }
 
+function chatSendAckServerTimingEventFields(ack: ChatSendAck): Record<string, number> {
+  const timing = ack.serverTiming;
+  return {
+    ...(typeof timing?.receivedToAckMs === "number"
+      ? { serverReceivedToAckMs: timing.receivedToAckMs }
+      : {}),
+    ...(typeof timing?.loadSessionMs === "number"
+      ? { serverLoadSessionMs: timing.loadSessionMs }
+      : {}),
+    ...(typeof timing?.prepareAttachmentsMs === "number"
+      ? { serverPrepareAttachmentsMs: timing.prepareAttachmentsMs }
+      : {}),
+  };
+}
+
 function chatEventHasVisibleTerminalPayload(payload: ChatEventPayload): boolean {
   if (payload.state === "error" && payload.errorMessage?.trim()) {
     return true;
@@ -920,6 +935,7 @@ async function sendQueuedChatMessage(
     recordChatSendTiming(host, sendingItem, "ack", sendingItem.sendSubmittedAtMs, {
       ackStatus: ack.status,
       requestDurationMs: roundedControlUiDurationMs(controlUiNowMs() - requestStartedAtMs),
+      ...chatSendAckServerTimingEventFields(ack),
     });
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
     if (isVisibleSession()) {

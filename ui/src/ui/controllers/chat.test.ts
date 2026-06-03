@@ -1798,6 +1798,38 @@ describe("sendChatMessage", () => {
     expect(sendParams.sessionId).toBeUndefined();
   });
 
+  it("preserves optional Gateway ACK server timing metadata", async () => {
+    const request = vi.fn().mockResolvedValue({
+      runId: "run-timed",
+      status: "started",
+      serverTiming: {
+        receivedToAckMs: 18.25,
+        loadSessionMs: 4.5,
+        prepareAttachmentsMs: 9,
+        ignored: "nope",
+      },
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await requestChatSend(state, {
+      message: "queued",
+      runId: "run-timed",
+    });
+
+    expect(result).toEqual({
+      runId: "run-timed",
+      status: "started",
+      serverTiming: {
+        receivedToAckMs: 18.25,
+        loadSessionMs: 4.5,
+        prepareAttachmentsMs: 9,
+      },
+    });
+  });
+
   it("omits literal global send agentId until selected/default agent is known", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-global", status: "started" });
     const state = createState({

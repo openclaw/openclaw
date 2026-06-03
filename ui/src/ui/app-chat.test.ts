@@ -1335,7 +1335,14 @@ describe("handleSendChat", () => {
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
-        return { status: "started" };
+        return {
+          status: "started",
+          serverTiming: {
+            receivedToAckMs: 17,
+            loadSessionMs: 4,
+            prepareAttachmentsMs: 0.5,
+          },
+        };
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -1360,6 +1367,11 @@ describe("handleSendChat", () => {
     });
     expect(ack?.durationMs).toEqual(expect.any(Number));
     expect(ack?.requestDurationMs).toEqual(expect.any(Number));
+    expect(ack).toMatchObject({
+      serverReceivedToAckMs: 17,
+      serverLoadSessionMs: 4,
+      serverPrepareAttachmentsMs: 0.5,
+    });
   });
 
   it("records pending send paint timing before a delayed chat.send ACK", async () => {

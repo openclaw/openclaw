@@ -66,9 +66,10 @@ function createDeferred<T>() {
 
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
+  options?: { headers?: Record<string, string> },
 ) {
   const tempDirs: string[] = [];
-  const ws = await harness.openWs();
+  const ws = await harness.openWs(options?.headers);
   const createSessionDir = async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     tempDirs.push(sessionDir);
@@ -865,7 +866,14 @@ describe("gateway server chat", () => {
           {
             id: "first",
             ok: true,
-            payload: { runId: "idem-active-a", status: "started" },
+            payload: expect.objectContaining({
+              runId: "idem-active-a",
+              status: "started",
+              serverTiming: {
+                receivedToAckMs: expect.any(Number),
+                loadSessionMs: expect.any(Number),
+              },
+            }),
             error: undefined,
           },
         ]);
@@ -877,7 +885,14 @@ describe("gateway server chat", () => {
         {
           id: "first",
           ok: true,
-          payload: { runId: "idem-active-a", status: "started" },
+          payload: expect.objectContaining({
+            runId: "idem-active-a",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          }),
           error: undefined,
         },
         {
@@ -993,13 +1008,27 @@ describe("gateway server chat", () => {
         {
           id: "first",
           ok: true,
-          payload: { runId: "idem-sequential-a", status: "started" },
+          payload: expect.objectContaining({
+            runId: "idem-sequential-a",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          }),
           error: undefined,
         },
         {
           id: "second",
           ok: true,
-          payload: { runId: "idem-sequential-b", status: "started" },
+          payload: expect.objectContaining({
+            runId: "idem-sequential-b",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          }),
           error: undefined,
         },
       ]);
@@ -1326,47 +1355,70 @@ describe("gateway server chat", () => {
     process.env.OPENCLAW_DIAGNOSTICS = "timeline";
     process.env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH = timelinePath;
     try {
-      await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
-        const spy = getReplyFromConfig;
-        await connectOk(ws);
-
-        await createSessionDir();
-        await writeMainSessionStore();
-        mockGetReplyFromConfigOnce(async () => undefined);
-
-        const sendRes = await rpcReq(ws, "chat.send", {
-          sessionKey: "main",
-          message: "hello",
-          idempotencyKey: "idem-timeline",
-        });
-        expect(sendRes.ok).toBe(true);
-
-        await vi.waitFor(() => {
-          expect(spy.mock.calls.length).toBeGreaterThan(0);
-        }, FAST_WAIT_OPTS);
-        await vi.waitFor(async () => {
-          const events = await readTimelineEvents(timelinePath);
-          const ackReady = events.find(
-            (event) =>
-              event.type === "mark" &&
-              event.name === "gateway.chat_send.ack_ready" &&
-              (event.attributes as Record<string, unknown> | undefined)?.runId === "idem-timeline",
-          );
-          expect(ackReady?.attributes).toMatchObject({
-            runId: "idem-timeline",
-            ackStatus: "started",
+      await withGatewayChatHarness(
+        async ({ ws, createSessionDir }) => {
+          const spy = getReplyFromConfig;
+          await connectOk(ws, {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              version: "1.0.0",
+              platform: "web",
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
           });
-          expect(
-            events.some(
+
+          await createSessionDir();
+          await writeMainSessionStore();
+          mockGetReplyFromConfigOnce(async () => undefined);
+
+          const sendRes = await rpcReq(ws, "chat.send", {
+            sessionKey: "main",
+            message: "hello",
+            idempotencyKey: "idem-timeline",
+          });
+          expect(sendRes.ok).toBe(true);
+          expect(sendRes.payload).toMatchObject({
+            runId: "idem-timeline",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          });
+
+          await vi.waitFor(() => {
+            expect(spy.mock.calls.length).toBeGreaterThan(0);
+          }, FAST_WAIT_OPTS);
+          await vi.waitFor(async () => {
+            const events = await readTimelineEvents(timelinePath);
+            const ackReady = events.find(
               (event) =>
-                event.type === "span.end" &&
-                event.name === "gateway.chat_send.dispatch_inbound" &&
+                event.type === "mark" &&
+                event.name === "gateway.chat_send.ack_ready" &&
                 (event.attributes as Record<string, unknown> | undefined)?.runId ===
                   "idem-timeline",
-            ),
-          ).toBe(true);
-        }, FAST_WAIT_OPTS);
-      });
+            );
+            expect(ackReady?.attributes).toMatchObject({
+              runId: "idem-timeline",
+              ackStatus: "started",
+              serverReceivedToAckMs: expect.any(Number),
+              serverLoadSessionMs: expect.any(Number),
+            });
+            expect(
+              events.some(
+                (event) =>
+                  event.type === "span.end" &&
+                  event.name === "gateway.chat_send.dispatch_inbound" &&
+                  (event.attributes as Record<string, unknown> | undefined)?.runId ===
+                    "idem-timeline",
+              ),
+            ).toBe(true);
+          }, FAST_WAIT_OPTS);
+        },
+        {
+          headers: { origin: `http://127.0.0.1:${harness.port}` },
+        },
+      );
     } finally {
       if (previousDiagnostics === undefined) {
         delete process.env.OPENCLAW_DIAGNOSTICS;
@@ -1380,6 +1432,43 @@ describe("gateway server chat", () => {
       }
       await fs.rm(timelineDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
+  });
+
+  test("chat.send omits ACK server timing for public WebChat clients", async () => {
+    await withGatewayChatHarness(
+      async ({ ws, createSessionDir }) => {
+        await connectOk(ws, {
+          client: {
+            id: GATEWAY_CLIENT_NAMES.WEBCHAT_UI,
+            version: "1.0.0",
+            platform: "web",
+            mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+          },
+        });
+
+        await createSessionDir();
+        await writeMainSessionStore();
+        mockGetReplyFromConfigOnce(async () => undefined);
+
+        const sendRes = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hello",
+          idempotencyKey: "idem-public-webchat",
+        });
+
+        expect(sendRes.ok).toBe(true);
+        expect(sendRes.payload).toMatchObject({
+          runId: "idem-public-webchat",
+          status: "started",
+        });
+        expect(
+          (sendRes.payload as { serverTiming?: unknown } | undefined)?.serverTiming,
+        ).toBeUndefined();
+      },
+      {
+        headers: { origin: `http://127.0.0.1:${harness.port}` },
+      },
+    );
   });
 
   test("chat.history hard-caps single oversized nested payloads", async () => {
