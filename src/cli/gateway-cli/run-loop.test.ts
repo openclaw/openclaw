@@ -1394,8 +1394,12 @@ describe("runGatewayLoop", () => {
 
       sigusr1();
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(markGatewayDraining).toHaveBeenCalledTimes(1);
       expect(runWithGatewayDrainInternalContext).toHaveBeenCalledTimes(1);
@@ -1445,8 +1449,12 @@ describe("runGatewayLoop", () => {
 
       sigusr1();
 
-      await new Promise<void>((resolve) => setImmediate(resolve));
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
 
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "channel run queue drain timeout; 2 item(s) still pending",

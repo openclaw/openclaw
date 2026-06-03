@@ -1006,8 +1006,7 @@ describe("flushAllInboundDebouncers", () => {
     const calls: Array<string[]> = [];
     let enqueuedDuringFlush = false;
 
-    let debouncer: ReturnType<typeof createInboundDebouncer<{ key: string; id: string }>>;
-    debouncer = createInboundDebouncer<{ key: string; id: string }>({
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
       debounceMs: 5000,
       buildKey: (item) => item.key,
       onFlush: async (items) => {
@@ -1035,8 +1034,7 @@ describe("flushAllInboundDebouncers", () => {
     let now = 0;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
 
-    let debouncer: ReturnType<typeof createInboundDebouncer<{ key: string; id: string }>>;
-    debouncer = createInboundDebouncer<{ key: string; id: string }>({
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
       debounceMs: 5000,
       buildKey: (item) => item.key,
       onFlush: async (items) => {
@@ -1314,8 +1312,7 @@ describe("createInboundDebouncer flushAll", () => {
     let now = 0;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
 
-    let debouncer: ReturnType<typeof createInboundDebouncer<{ key: string; id: string }>>;
-    debouncer = createInboundDebouncer<{ key: string; id: string }>({
+    const debouncer = createInboundDebouncer<{ key: string; id: string }>({
       debounceMs: 5000,
       buildKey: (item) => item.key,
       onFlush: async (items) => {
