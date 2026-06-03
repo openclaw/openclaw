@@ -99,7 +99,9 @@ function isSecretKey(key: string): boolean {
 }
 
 export type MigrationConfigPatchDetails = {
+  /** Config object path where the patch should be merged. */
   path: string[];
+  /** Patch value stored on the migration item. */
   value: unknown;
 };
 
@@ -110,6 +112,7 @@ class MigrationConfigPatchConflictError extends Error {
   }
 }
 
+/** Reads a nested config value, returning undefined when a parent is not an object. */
 export function readMigrationConfigPath(
   root: Record<string, unknown>,
   path: readonly string[],
@@ -164,6 +167,7 @@ export function hasMigrationConfigPatchConflict(
   value: unknown,
 ): boolean {
   if (!isRecord(value)) {
+    // Scalar patches conflict with any existing value at the target path.
     return readMigrationConfigPath(config as Record<string, unknown>, path) !== undefined;
   }
   const existing = readMigrationConfigPath(config as Record<string, unknown>, path);
