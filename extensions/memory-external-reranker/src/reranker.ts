@@ -58,10 +58,15 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
       const modelId = slashIdx >= 0 ? candidate.slice(slashIdx + 1) : candidate;
       const provider = this.cfg.providers[providerId];
       if (!provider) {
-        errors.push(new Error(`unknown provider: ${providerId}`));
+        const err = new Error(`unknown provider: ${providerId}`);
+        console.debug(`[memory-external-reranker] candidate=${candidate} skipped: ${err.message}`);
+        errors.push(err);
         continue;
       }
       const url = `${provider.baseUrl}${endpointPath}`;
+      console.debug(
+        `[memory-external-reranker] candidate=${candidate} provider=${providerId} model=${modelId} url=${url} topN=${topN} documents=${documents.length}`,
+      );
       try {
         const response = await fetch(url, {
           method: "POST",
@@ -77,6 +82,10 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
           }),
         });
 
+        console.debug(
+          `[memory-external-reranker] candidate=${candidate} response status=${response.status} ok=${response.ok}`,
+        );
+
         if (!response.ok) {
           const body = await response.text().catch(() => "");
           throw new Error(`HTTP ${response.status}${body ? `: ${body}` : ""}`);
@@ -88,11 +97,13 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
           score: r.relevance_score,
         }));
         console.debug(
-          `[memory-external-reranker] reranking results: ${results.length} documents reranked`,
+          `[memory-external-reranker] candidate=${candidate} success: ${results.length} documents reranked`,
         );
         return results;
       } catch (err) {
-        errors.push(err instanceof Error ? err : new Error(String(err)));
+        const error = err instanceof Error ? err : new Error(String(err));
+        console.debug(`[memory-external-reranker] candidate=${candidate} failed: ${error.message}`);
+        errors.push(error);
       }
     }
 

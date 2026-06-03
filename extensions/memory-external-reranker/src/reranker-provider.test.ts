@@ -21,7 +21,7 @@ function mockOkFetch(results: Array<{ index: number; relevance_score: number }>)
 }
 
 function fetchCallUrl(fn: ReturnType<typeof vi.fn>, index = 0): string {
-  return String((fn.mock.calls[index] as [string, RequestInit])[0]);
+  return (fn.mock.calls[index] as [string, RequestInit])[0];
 }
 
 function fetchCallBody(fn: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {

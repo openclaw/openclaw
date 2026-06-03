@@ -1,7 +1,3 @@
-import type {
-  MemoryRerankerPlugin,
-  RerankResult,
-} from "openclaw/plugin-sdk/memory-core-host-engine-reranker";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
 
@@ -108,9 +104,9 @@ describe("memory hybrid helpers", () => {
 
   describe("mergeHybridResults with injected reranker", () => {
     const mockReranker = vi.fn(
-      async (items: Array<{ id: string; score: number; content: string }>, lambda: number) => {
+      async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) => {
         // Sort by score descending (highest first)
-        const sorted = [...items].sort((a, b) => b.score - a.score);
+        const sorted = [...items].toSorted((a, b) => b.score - a.score);
         return sorted;
       },
     );
@@ -197,9 +193,9 @@ describe("memory hybrid helpers", () => {
       });
 
       const fallbackReranker = vi.fn(
-        async (items: Array<{ id: string; score: number; content: string }>, lambda: number) => {
+        async (items: Array<{ id: string; score: number; content: string }>, _lambda: number) => {
           // Sort by score descending
-          const sorted = [...items].sort((a, b) => b.score - a.score);
+          const sorted = [...items].toSorted((a, b) => b.score - a.score);
           return sorted;
         },
       );

@@ -4,9 +4,6 @@
   "private": true,
   "description": "OpenClaw bundled MMR reranker plugin",
   "type": "module",
-  "dependencies": {
-    "typebox": "1.1.39"
-  },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "2026.5.28"
