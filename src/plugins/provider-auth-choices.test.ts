@@ -157,6 +157,63 @@ describe("provider auth choice manifest helpers", () => {
     });
   });
 
+  it("keeps healthy provider auth choices after unreadable plugin metadata", () => {
+    const unreadablePlugin = {
+      get id() {
+        throw new Error("provider auth choice plugin id getter exploded");
+      },
+      origin: "config",
+      providerAuthChoices: [
+        createProviderAuthChoice({
+          provider: "broken",
+          method: "api-key",
+          choiceId: "broken-api-key",
+          choiceLabel: "Broken API key",
+        }),
+      ],
+    } as never;
+    setManifestPlugins([
+      unreadablePlugin,
+      {
+        id: "healthy",
+        origin: "bundled",
+        providerAuthChoices: [
+          createProviderAuthChoice({
+            provider: "healthy",
+            method: "api-key",
+            choiceId: "healthy-api-key",
+            choiceLabel: "Healthy API key",
+            optionKey: "healthyApiKey",
+            cliFlag: "--healthy-api-key",
+            cliOption: "--healthy-api-key <key>",
+          }),
+        ],
+      },
+    ]);
+
+    expect(resolveManifestProviderAuthChoices()).toEqual([
+      {
+        pluginId: "healthy",
+        providerId: "healthy",
+        methodId: "api-key",
+        choiceId: "healthy-api-key",
+        choiceLabel: "Healthy API key",
+        optionKey: "healthyApiKey",
+        cliFlag: "--healthy-api-key",
+        cliOption: "--healthy-api-key <key>",
+      },
+    ]);
+    expect(resolveManifestProviderOnboardAuthFlags()).toEqual([
+      {
+        optionKey: "healthyApiKey",
+        authChoice: "healthy-api-key",
+        cliFlag: "--healthy-api-key",
+        cliOption: "--healthy-api-key <key>",
+        description: "Healthy API key",
+      },
+    ]);
+  });
+
   it.each([
     {
       name: "deduplicates flag metadata by option key + flag",

@@ -49,6 +49,10 @@ type ManifestProviderAuthChoiceParams = {
   env?: NodeJS.ProcessEnv;
   includeUntrustedWorkspacePlugins?: boolean;
 };
+type ProviderAuthChoicePluginMetadata = Pick<
+  PluginManifestRecord,
+  "id" | "origin" | "providerAuthChoices" | "setup" | "setupSource"
+>;
 
 const PROVIDER_AUTH_CHOICE_ORIGIN_PRIORITY: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
@@ -124,8 +128,24 @@ function normalizeManifestAuthDescriptorId(value: string): string {
   return sanitizeForLog(value).trim();
 }
 
+function readProviderAuthChoicePluginMetadata(
+  plugin: PluginManifestRecord,
+): ProviderAuthChoicePluginMetadata | undefined {
+  try {
+    return {
+      id: plugin.id,
+      origin: plugin.origin,
+      providerAuthChoices: plugin.providerAuthChoices,
+      setup: plugin.setup,
+      setupSource: plugin.setupSource,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 function toSetupProviderAuthChoiceCandidate(params: {
-  plugin: PluginManifestRecord;
+  plugin: ProviderAuthChoicePluginMetadata;
   providerId: string;
   methodId: string;
 }): ProviderAuthChoiceCandidate {
@@ -145,7 +165,7 @@ function toSetupProviderAuthChoiceCandidate(params: {
   };
 }
 
-function listSetupProviderAuthChoiceCandidates(plugin: PluginManifestRecord) {
+function listSetupProviderAuthChoiceCandidates(plugin: ProviderAuthChoicePluginMetadata) {
   if (plugin.setup?.requiresRuntime !== false && plugin.setupSource) {
     return [];
   }
@@ -189,7 +209,11 @@ function resolveManifestProviderAuthChoiceCandidates(params?: {
   });
   const registry = metadataSnapshot.manifestRegistry;
   const normalizedConfig = normalizePluginsConfig(params?.config?.plugins);
-  return registry.plugins.flatMap((plugin) => {
+  return registry.plugins.flatMap((registryPlugin) => {
+    const plugin = readProviderAuthChoicePluginMetadata(registryPlugin);
+    if (!plugin) {
+      return [];
+    }
     if (
       plugin.origin === "workspace" &&
       params?.includeUntrustedWorkspacePlugins === false &&
