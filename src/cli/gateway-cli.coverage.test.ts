@@ -256,6 +256,13 @@ describe("gateway-cli coverage", () => {
               maxMs: 2_500,
               p95Ms: 2_500,
             },
+            bottleneck: {
+              phase: "queue",
+              metric: "receivedToTurnStartMs",
+              maxMs: 12_000,
+              slowCount: 1,
+              count: 1,
+            },
             recentSlow: [
               {
                 seq: 4,
@@ -311,6 +318,9 @@ describe("gateway-cli coverage", () => {
       "warning:slow_receive_to_turn_start receivedToTurnStartMs=12000ms count=1",
     );
     expect(output).toContain("Latency:");
+    expect(output).toContain(
+      "Latency bottleneck: phase=queue metric=receivedToTurnStartMs max=12000ms slow=1/1",
+    );
     expect(output).toContain("receivedToStart latest:12000ms/max:12000ms/p95:12000ms/slow:1/1");
     expect(output).toContain("receivedToTurnStartMs=12000ms");
     expect(output).toContain("receivedToStart=12000ms");

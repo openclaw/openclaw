@@ -312,6 +312,15 @@ function formatChannelTurnSlaSummary(
     if (latencyParts.length > 0) {
       lines.push(`  ${colorize(rich, theme.muted, "Latency:")} ${latencyParts.join(", ")}`);
     }
+    if (latency.bottleneck) {
+      lines.push(
+        `  ${colorize(rich, theme.muted, "Latency bottleneck:")} phase=${
+          latency.bottleneck.phase
+        } metric=${latency.bottleneck.metric} max=${formatChannelTurnLatencyMs(
+          latency.bottleneck.maxMs,
+        )} slow=${latency.bottleneck.slowCount}/${latency.bottleneck.count}`,
+      );
+    }
     if (latency.recentSlow.length > 0) {
       lines.push(`  ${colorize(rich, theme.muted, "Recent slow channel turns:")}`);
       for (const slow of latency.recentSlow.slice(-3)) {

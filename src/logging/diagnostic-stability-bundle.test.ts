@@ -289,6 +289,13 @@ describe("diagnostic stability bundles", () => {
           p90Ms: 12_000,
           p95Ms: 12_000,
         },
+        bottleneck: {
+          phase: "ingress",
+          metric: "messageAgeMs",
+          maxMs: 65_000,
+          slowCount: 1,
+          count: 1,
+        },
       },
     });
     expect(JSON.stringify(readResult.bundle)).not.toContain("raw diagnostic");

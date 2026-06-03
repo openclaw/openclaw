@@ -532,6 +532,13 @@ describe("diagnostic stability recorder", () => {
         p90Ms: 2_700,
         p95Ms: 2_700,
       },
+      bottleneck: {
+        phase: "ingress",
+        metric: "messageAgeMs",
+        maxMs: 30_000,
+        slowCount: 1,
+        count: 1,
+      },
     });
     expect(snapshot.summary.channelTurns?.latency?.recentSlow).toEqual([
       expect.objectContaining({
@@ -743,6 +750,13 @@ describe("diagnostic stability recorder", () => {
       p50Ms: 300,
       p90Ms: 500,
       p95Ms: 500,
+    });
+    expect(snapshot.summary.channelTurns?.latency?.bottleneck).toEqual({
+      phase: "queue",
+      metric: "receivedToTurnStartMs",
+      maxMs: 500,
+      slowCount: 0,
+      count: 5,
     });
   });
 

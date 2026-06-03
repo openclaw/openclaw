@@ -713,6 +713,54 @@ function readOptionalLatencyMetric(
   };
 }
 
+function readOptionalChannelTurnLatencyBottleneck(
+  value: unknown,
+): NonNullable<
+  NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["latency"]
+>["bottleneck"] {
+  if (value === undefined) {
+    return undefined;
+  }
+  type ChannelTurnLatencyBottleneck = NonNullable<
+    NonNullable<
+      NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["latency"]
+    >["bottleneck"]
+  >;
+  const bottleneck = readObject(value, "snapshot.summary.channelTurns.latency.bottleneck");
+  const phase = readCodeString(
+    bottleneck.phase,
+    "snapshot.summary.channelTurns.latency.bottleneck.phase",
+  ) as ChannelTurnLatencyBottleneck["phase"];
+  if (!["ingress", "queue", "visible_delivery", "completion"].includes(phase)) {
+    throw new Error(
+      "Invalid stability bundle: snapshot.summary.channelTurns.latency.bottleneck.phase",
+    );
+  }
+  const metric = readCodeString(
+    bottleneck.metric,
+    "snapshot.summary.channelTurns.latency.bottleneck.metric",
+  ) as ChannelTurnLatencyBottleneck["metric"];
+  if (
+    !["messageAgeMs", "receivedToTurnStartMs", "startToDeliveryMs", "startToCompletionMs"].includes(
+      metric,
+    )
+  ) {
+    throw new Error(
+      "Invalid stability bundle: snapshot.summary.channelTurns.latency.bottleneck.metric",
+    );
+  }
+  return {
+    phase,
+    metric,
+    maxMs: readNumber(bottleneck.maxMs, "snapshot.summary.channelTurns.latency.bottleneck.maxMs"),
+    slowCount: readNumber(
+      bottleneck.slowCount,
+      "snapshot.summary.channelTurns.latency.bottleneck.slowCount",
+    ),
+    count: readNumber(bottleneck.count, "snapshot.summary.channelTurns.latency.bottleneck.count"),
+  };
+}
+
 function readOptionalChannelTurnLatencySummary(
   value: unknown,
 ): NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["latency"] | undefined {
@@ -803,6 +851,9 @@ function readOptionalChannelTurnLatencySummary(
             "snapshot.summary.channelTurns.latency.startToCompletionMs",
           ),
         }
+      : {}),
+    ...(latency.bottleneck !== undefined
+      ? { bottleneck: readOptionalChannelTurnLatencyBottleneck(latency.bottleneck) }
       : {}),
     recentSlow,
   };

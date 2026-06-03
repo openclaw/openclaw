@@ -82,6 +82,13 @@ describe("doctor gateway stability", () => {
             maxMs: 2_500,
             p95Ms: 2_500,
           },
+          bottleneck: {
+            phase: "visible_delivery",
+            metric: "startToDeliveryMs",
+            maxMs: 2_500,
+            slowCount: 0,
+            count: 1,
+          },
           recentSlow: [],
         },
         health: {
@@ -105,6 +112,9 @@ describe("doctor gateway stability", () => {
       body: expect.stringContaining("Channel turn health is degraded"),
     });
     expect(note?.body).toContain("missing_visible_delivery");
+    expect(note?.body).toContain(
+      "Latency bottleneck: phase=visible_delivery, metric=startToDeliveryMs, max=2500ms, slow=0/1.",
+    );
     expect(note?.body).toContain("turn=turn-1");
     expect(note?.body).not.toContain("msg-1");
     expect(note?.body).not.toContain("Direct channel turn completed without visible delivery.");
@@ -210,6 +220,13 @@ describe("doctor gateway stability", () => {
             maxMs: 15_000,
             p95Ms: 15_000,
           },
+          bottleneck: {
+            phase: "queue",
+            metric: "receivedToTurnStartMs",
+            maxMs: 15_000,
+            slowCount: 1,
+            count: 1,
+          },
           recentSlow: [
             {
               seq: 9,
@@ -244,6 +261,9 @@ describe("doctor gateway stability", () => {
     expect(note?.body).toContain("count=1");
     expect(note?.body).toContain(
       "Latency: receivedToStart latest=15000ms max=15000ms p95=15000ms slow=1/1.",
+    );
+    expect(note?.body).toContain(
+      "Latency bottleneck: phase=queue, metric=receivedToTurnStartMs, max=15000ms, slow=1/1.",
     );
     expect(note?.body).toContain("Recent slow turns:");
     expect(note?.body).toContain(

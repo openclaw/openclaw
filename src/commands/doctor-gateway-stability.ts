@@ -56,6 +56,15 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
   if (latencyLine) {
     lines.push(latencyLine);
   }
+  if (channelTurns.latency?.bottleneck) {
+    lines.push(
+      `Latency bottleneck: phase=${channelTurns.latency.bottleneck.phase}, metric=${
+        channelTurns.latency.bottleneck.metric
+      }, max=${formatChannelTurnLatencyMs(channelTurns.latency.bottleneck.maxMs)}, slow=${
+        channelTurns.latency.bottleneck.slowCount
+      }/${channelTurns.latency.bottleneck.count}.`,
+    );
+  }
 
   if (channelTurns.tools && (channelTurns.tools.called > 0 || channelTurns.tools.results > 0)) {
     lines.push(

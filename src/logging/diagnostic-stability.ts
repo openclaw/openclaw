@@ -25,11 +25,26 @@ type DiagnosticStabilityLatencyMetric = {
   p95Ms?: number;
 };
 
+type DiagnosticStabilityChannelTurnLatencyMetricKey =
+  | "messageAgeMs"
+  | "receivedToTurnStartMs"
+  | "startToDeliveryMs"
+  | "startToCompletionMs";
+
+type DiagnosticStabilityChannelTurnLatencyBottleneck = {
+  phase: "ingress" | "queue" | "visible_delivery" | "completion";
+  metric: DiagnosticStabilityChannelTurnLatencyMetricKey;
+  maxMs: number;
+  slowCount: number;
+  count: number;
+};
+
 type DiagnosticStabilityChannelTurnLatencySummary = {
   messageAgeMs?: DiagnosticStabilityLatencyMetric;
   receivedToTurnStartMs?: DiagnosticStabilityLatencyMetric;
   startToDeliveryMs?: DiagnosticStabilityLatencyMetric;
   startToCompletionMs?: DiagnosticStabilityLatencyMetric;
+  bottleneck?: DiagnosticStabilityChannelTurnLatencyBottleneck;
   recentSlow: Array<{
     seq: number;
     ts: number;
@@ -40,11 +55,6 @@ type DiagnosticStabilityChannelTurnLatencySummary = {
     valueMs: number;
   }>;
 };
-
-type DiagnosticStabilityChannelTurnLatencyMetricKey = Exclude<
-  keyof DiagnosticStabilityChannelTurnLatencySummary,
-  "recentSlow"
->;
 
 type DiagnosticStabilityChannelTurnToolSummary = {
   called: number;
@@ -871,7 +881,23 @@ function summarizeRecords(
     return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
   }
 
+  function resolveChannelTurnLatencyPhase(
+    metric: DiagnosticStabilityChannelTurnLatencyMetricKey,
+  ): DiagnosticStabilityChannelTurnLatencyBottleneck["phase"] {
+    switch (metric) {
+      case "messageAgeMs":
+        return "ingress";
+      case "receivedToTurnStartMs":
+        return "queue";
+      case "startToDeliveryMs":
+        return "visible_delivery";
+      case "startToCompletionMs":
+        return "completion";
+    }
+  }
+
   function finalizeChannelTurnLatencyMetrics(): void {
+    let bottleneck: DiagnosticStabilityChannelTurnLatencyBottleneck | undefined;
     for (const [metric, values] of Object.entries(channelTurnLatencySamples) as Array<
       [DiagnosticStabilityChannelTurnLatencyMetricKey, number[]]
     >) {
@@ -885,6 +911,26 @@ function summarizeRecords(
         p90Ms: computePercentile(values, 90),
         p95Ms: computePercentile(values, 95),
       };
+      const maxMs = current.maxMs;
+      if (typeof maxMs !== "number" || !Number.isFinite(maxMs)) {
+        continue;
+      }
+      if (
+        !bottleneck ||
+        current.slowCount > bottleneck.slowCount ||
+        (current.slowCount === bottleneck.slowCount && maxMs > bottleneck.maxMs)
+      ) {
+        bottleneck = {
+          phase: resolveChannelTurnLatencyPhase(metric),
+          metric,
+          maxMs,
+          slowCount: current.slowCount,
+          count: current.count,
+        };
+      }
+    }
+    if (bottleneck) {
+      channelTurns.latency.bottleneck = bottleneck;
     }
   }
 

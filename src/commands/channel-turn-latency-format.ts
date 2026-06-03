@@ -11,7 +11,7 @@ type LatencyFormatStyle = {
 
 const CHANNEL_TURN_LATENCY_METRICS: Array<{
   label: string;
-  metric: keyof Omit<ChannelTurnLatency, "recentSlow">;
+  metric: keyof Omit<ChannelTurnLatency, "bottleneck" | "recentSlow">;
 }> = [
   { label: "messageAge", metric: "messageAgeMs" },
   { label: "receivedToStart", metric: "receivedToTurnStartMs" },
