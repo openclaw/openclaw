@@ -233,7 +233,7 @@ Grok can also reuse an xAI OAuth auth profile from `openclaw models auth login
 --provider xai --method oauth`; API-key config remains the fallback.
 
 `tools.web.search.provider` is validated against the web-search provider ids
-declared by bundled and installed plugin manifests. A typo such as `"brvae"`
+declared by bundled and installed plugin manifests. A typo such as `"brave"`
 fails config validation instead of silently falling back to auto-detection. If a
 configured provider only has stale plugin evidence, such as a leftover
 `plugins.entries.<plugin>` block after uninstalling a third-party plugin,
