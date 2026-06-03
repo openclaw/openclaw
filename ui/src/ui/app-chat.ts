@@ -1,4 +1,3 @@
-import type { CommandsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
@@ -26,11 +25,7 @@ import {
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
-import {
-  applyRemoteSlashCommandsResult,
-  parseSlashCommand,
-  refreshSlashCommands,
-} from "./chat/slash-commands.ts";
+import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
 import { formatConnectError } from "./connect-error.ts";
 import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
@@ -50,9 +45,8 @@ import {
   type ChatHistoryResult,
   type ChatSendAck,
   type ChatState,
-  isGatewayMethodAdvertised,
 } from "./controllers/chat.ts";
-import { applyModelCatalogResult, loadModels } from "./controllers/models.ts";
+import { loadModels } from "./controllers/models.ts";
 import {
   applyChatHistorySessionInfo,
   loadSessions,
@@ -131,10 +125,6 @@ export type ChatHost = ChatInputHistoryState & {
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: Array<{ id: string }>;
-};
-
-type ChatMetadataResult = CommandsListResult & {
-  models?: ModelCatalogEntry[];
 };
 
 function setChatError(host: ChatHost, error: string | null) {
@@ -1861,9 +1851,11 @@ export async function refreshChat(
     if (host.sessionKey !== refreshedSessionKey || !host.connected) {
       return;
     }
-    void Promise.allSettled([refreshChatAvatar(host), refreshChatMetadata(host)]).finally(
-      requestUpdate,
-    );
+    void Promise.allSettled([
+      refreshChatAvatar(host),
+      refreshChatModels(host),
+      refreshChatCommands(host),
+    ]).finally(requestUpdate);
   });
   void historyRefresh;
   void secondaryRefresh;
@@ -1903,62 +1895,6 @@ async function refreshChatCommands(host: ChatHost) {
     client: host.client,
     agentId: resolveAgentIdForSession(host),
   });
-}
-
-async function refreshChatMetadata(host: ChatHost) {
-  if (!host.client || !host.connected) {
-    host.chatModelsLoading = false;
-    host.chatModelCatalog = [];
-    return;
-  }
-  const client = host.client;
-  const sessionKey = host.sessionKey;
-  const agentId = resolveAgentIdForSession(host);
-  const metadataAdvertised = isGatewayMethodAdvertised(
-    host as unknown as ChatState,
-    "chat.metadata",
-  );
-  if (metadataAdvertised === false) {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
-    return;
-  }
-
-  host.chatModelsLoading = true;
-  try {
-    const result = await client.request<ChatMetadataResult>(
-      "chat.metadata",
-      agentId ? { agentId } : {},
-    );
-    if (
-      host.client !== client ||
-      !host.connected ||
-      host.sessionKey !== sessionKey ||
-      resolveAgentIdForSession(host) !== agentId
-    ) {
-      return;
-    }
-    const models = applyModelCatalogResult(result.models);
-    if (models) {
-      host.chatModelCatalog = models;
-    }
-    const commandsApplied = applyRemoteSlashCommandsResult({
-      client,
-      agentId,
-      result,
-    });
-    if (!models || !commandsApplied) {
-      await Promise.allSettled([
-        ...(models ? [] : [refreshChatModels(host)]),
-        ...(commandsApplied ? [] : [refreshChatCommands(host)]),
-      ]);
-    }
-  } catch {
-    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
-  } finally {
-    if (host.client === client) {
-      host.chatModelsLoading = false;
-    }
-  }
 }
 
 export const flushChatQueueForEvent = flushChatQueue;

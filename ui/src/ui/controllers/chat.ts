@@ -331,7 +331,7 @@ function isUnknownGatewayMethodError(err: unknown, method: string): err is Gatew
   );
 }
 
-export function isGatewayMethodAdvertised(state: ChatState, method: string): boolean | null {
+function isGatewayMethodAdvertised(state: ChatState, method: string): boolean | null {
   const methods = state.hello?.features?.methods;
   if (!Array.isArray(methods)) {
     return null;

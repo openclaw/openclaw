@@ -2,7 +2,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderUsageTab } from "./app-render-usage-tab.ts";
 import type { AppViewState } from "./app-view-state.ts";
-import type { LazyView } from "./lazy-view.ts";
 import type { UsageProps } from "./views/usageTypes.ts";
 
 const loadUsageMock = vi.hoisted(() => vi.fn(async () => {}));
@@ -16,17 +15,9 @@ vi.mock("./controllers/usage.ts", async (importOriginal) => {
   };
 });
 
-type UsageViewModule = typeof import("./views/usage.ts");
-
-function createLoadedUsageView(): LazyView<UsageViewModule> {
-  return {
-    read: () => ({ renderUsage: renderUsageMock }) as unknown as UsageViewModule,
-    retry: () => {},
-    error: () => undefined,
-    hasError: () => false,
-    pending: () => false,
-  };
-}
+vi.mock("./views/usage.ts", () => ({
+  renderUsage: renderUsageMock,
+}));
 
 function createState(overrides: Partial<AppViewState> = {}): AppViewState {
   return {
@@ -61,7 +52,7 @@ describe("renderUsageTab", () => {
   });
 
   it("passes configured agents to the usage view", () => {
-    renderUsageTab(createState(), createLoadedUsageView());
+    renderUsageTab(createState());
 
     expect(renderUsageMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -73,7 +64,7 @@ describe("renderUsageTab", () => {
   it("reloads usage when selecting an agent scope", () => {
     const state = createState();
 
-    renderUsageTab(state, createLoadedUsageView());
+    renderUsageTab(state);
     expect(renderUsageMock).toHaveBeenCalled();
     const props = renderUsageMock.mock.calls[0]?.[0];
     if (!props) {
