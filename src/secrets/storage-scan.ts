@@ -8,14 +8,17 @@ import { resolveUserPath } from "../utils.js";
 import { listAuthProfileStorePaths as listAuthProfileStorePathsFromAuthStorePaths } from "./auth-store-paths.js";
 import { parseEnvValue } from "./shared.js";
 
+/** Parses one .env assignment value using the shared shell-ish env parser. */
 export function parseEnvAssignmentValue(raw: string): string {
   return parseEnvValue(raw);
 }
 
+/** Lists auth-profile stores visible to storage scanners. */
 export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
   return listAuthProfileStorePathsFromAuthStorePaths(config, stateDir);
 }
 
+/** Lists legacy per-agent auth.json stores that can contain static credentials. */
 export function listLegacyAuthJsonPaths(stateDir: string): string[] {
   const out: string[] = [];
   const agentsRoot = path.join(resolveUserPath(stateDir), "agents");
@@ -42,6 +45,7 @@ function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = proces
   return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
 }
 
+/** Lists models.json paths that may contain materialized provider credentials. */
 export function listAgentModelsJsonPaths(
   config: OpenClawConfig,
   stateDir: string,
@@ -74,11 +78,13 @@ export function listAgentModelsJsonPaths(
   return [...paths];
 }
 
+/** Limits for safe opportunistic JSON reads during local storage scans. */
 export type ReadJsonObjectOptions = {
   maxBytes?: number;
   requireRegularFile?: boolean;
 };
 
+/** Reads a JSON object if the file exists, returning parse/stat errors without throwing. */
 export function readJsonObjectIfExists(filePath: string): {
   value: Record<string, unknown> | null;
   error?: string;
