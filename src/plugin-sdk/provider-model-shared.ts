@@ -1,8 +1,3 @@
-// Shared model/catalog helpers for provider plugins.
-//
-// Keep provider-owned exports out of this subpath so plugin loaders can import it
-// without recursing through provider-specific facades.
-
 import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
@@ -85,6 +80,9 @@ export {
   buildStrictAnthropicReplayPolicy,
 };
 
+/**
+ * Normalizes provider ids for config, catalog, and plugin-registry matching.
+ */
 export function normalizeProviderId(provider: string): string {
   return normalizeProviderIdCore(provider);
 }
@@ -172,14 +170,23 @@ export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingP
   return { levels: BASE_CLAUDE_THINKING_LEVELS };
 }
 
+/**
+ * Normalizes Antigravity preview model ids to the canonical provider catalog form.
+ */
 export function normalizeAntigravityPreviewModelId(id: string): string {
   return normalizeAntigravityPreviewModelIdCore(id);
 }
 
+/**
+ * Normalizes Google preview model ids to the canonical provider catalog form.
+ */
 export function normalizeGooglePreviewModelId(id: string): string {
   return normalizeGooglePreviewModelIdCore(id);
 }
 
+/**
+ * Shared replay-policy families reused by provider plugins with matching transcript semantics.
+ */
 export type ProviderReplayFamily =
   | "openai-compatible"
   | "anthropic-by-model"
@@ -208,6 +215,9 @@ type BuildProviderReplayFamilyHooksOptions =
       anthropicModelDropThinkingBlocks?: boolean;
     };
 
+/**
+ * Builds provider replay hooks for a known transcript/reasoning compatibility family.
+ */
 export function buildProviderReplayFamilyHooks(
   options: BuildProviderReplayFamilyHooksOptions,
 ): ProviderReplayFamilyHooks {
