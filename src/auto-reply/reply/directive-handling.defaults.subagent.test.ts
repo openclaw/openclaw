@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  buildModelAliasIndex,
-  resolveModelRefFromString,
-} from "../../agents/model-selection.js";
+import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveSubagentSessionDefaultModel } from "./directive-handling.defaults.js";
 
