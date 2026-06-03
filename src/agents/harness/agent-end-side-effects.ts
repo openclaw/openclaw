@@ -1,4 +1,5 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { shouldSkipSkillResearchAutoCaptureSession } from "../../skills/research/autocapture-session.js";
 import { runSkillResearchAutoCapture } from "../../skills/research/autocapture.js";
 import {
   awaitAgentHarnessAgentEndHook,
@@ -10,6 +11,10 @@ const log = createSubsystemLogger("agents/harness");
 type AgentEndSideEffectsParams = Parameters<typeof runAgentHarnessAgentEndHook>[0];
 
 async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Promise<void> {
+  if (shouldSkipSkillResearchAutoCaptureSession(params.ctx)) {
+    return;
+  }
+
   try {
     await runSkillResearchAutoCapture({
       event: params.event,

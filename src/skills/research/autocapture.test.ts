@@ -95,6 +95,56 @@ describe("skill research auto-capture", () => {
     expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
   });
 
+  it("skips Active Memory helper sessions", async () => {
+    const cases = [
+      {
+        label: "session id prefix",
+        ctx: {
+          sessionId: "active-memory-abcdef123456",
+        },
+      },
+      {
+        label: "session key segment",
+        ctx: {
+          sessionKey: "agent:main:telegram:direct:12345:active-memory:abcdef123456",
+        },
+      },
+    ];
+
+    for (const { ctx, label } of cases) {
+      const workspaceDir = await makeWorkspace();
+
+      await runSkillResearchAutoCapture({
+        event: {
+          success: true,
+          messages: [
+            {
+              role: "user",
+              content:
+                "From now on, when working on GitHub PRs, always check CI before final response.",
+            },
+          ],
+        },
+        ctx: {
+          workspaceDir,
+          agentId: "main",
+          ...ctx,
+        },
+        config: {
+          skills: {
+            workshop: {
+              autonomous: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      });
+
+      expect((await listSkillProposals({ workspaceDir })).proposals, label).toHaveLength(0);
+    }
+  });
+
   it("preserves existing skill content when auto-capturing an update", async () => {
     const workspaceDir = await makeWorkspace();
     const skillFile = path.join(workspaceDir, "skills", "github-pr-workflow", "SKILL.md");

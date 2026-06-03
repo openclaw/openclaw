@@ -113,4 +113,22 @@ describe("agent end side effects", () => {
     });
     expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
   });
+
+  it("skips Skill Research auto-capture for Active Memory helper sessions", async () => {
+    runAgentEndSideEffects({
+      event: {
+        messages: [],
+        success: true,
+      },
+      ctx: {
+        runId: "run-1",
+        workspaceDir: "/workspace",
+        sessionId: "active-memory-abcdef123456",
+        sessionKey: "agent:main:telegram:direct:12345:active-memory:abcdef123456",
+      },
+    });
+
+    expect(mockAutoCapture).not.toHaveBeenCalled();
+    expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
+  });
 });
