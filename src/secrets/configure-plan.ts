@@ -7,6 +7,9 @@ import {
   type SecretRef,
 } from "../config/types.secrets.js";
 import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+import {
+  shouldIncludeConfigureMcpCandidate,
+} from "./mcp-target-sensitivity.js";
 import type { SecretsApplyPlan } from "./plan.js";
 import { isRecord } from "./shared.js";
 import {
@@ -73,6 +76,32 @@ function resolveAuthProfileProvider(
   return provider.length > 0 ? provider : undefined;
 }
 
+function shouldIncludeConfigureCandidate(path: {
+  entry: { id: string };
+  pathSegments: string[];
+  value: unknown;
+  refValue?: unknown;
+}): boolean {
+  const leafSegment = path.pathSegments.at(-1) ?? "";
+  if (path.entry.id === "mcp.servers.*.env.*") {
+    return shouldIncludeConfigureMcpCandidate({
+      kind: "env",
+      name: leafSegment,
+      value: path.value,
+      refValue: path.refValue,
+    });
+  }
+  if (path.entry.id === "mcp.servers.*.headers.*") {
+    return shouldIncludeConfigureMcpCandidate({
+      kind: "header",
+      name: leafSegment,
+      value: path.value,
+      refValue: path.refValue,
+    });
+  }
+  return true;
+}
+
 export function buildConfigureCandidatesForScope(params: {
   config: OpenClawConfig;
   authoredOpenClawConfig?: OpenClawConfig;
@@ -88,6 +117,7 @@ export function buildConfigureCandidatesForScope(params: {
 
   const openclawCandidates = discoverConfigSecretTargets(params.config)
     .filter((entry) => entry.entry.includeInConfigure)
+    .filter((entry) => shouldIncludeConfigureCandidate(entry))
     .map((entry) => {
       const resolved = resolveSecretInputRef({
         value: entry.value,

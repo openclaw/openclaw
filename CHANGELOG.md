@@ -863,6 +863,7 @@ Docs: https://docs.openclaw.ai
 - Telegram: add allowlisted native DM draft previews for transient tool progress while keeping final answers on the normal persistent delivery path. (#83622) Thanks @akrimm702.
 - QA-Lab: add a personal-agent share-safe diagnostics artifact scenario so support handoffs keep useful status while omitting raw personal content. Thanks @iFiras-Max1.
 - QA-Lab: add a personal-agent no-fake-progress scenario so completion claims stay tied to local evidence instead of unsupported external progress. (#83824) Thanks @iFiras-Max1.
+- MCP: allow SecretRef values in mcp.servers env and headers, with plaintext audit narrowed to credential-bearing keys and inactive transports skipped to avoid spurious resolution.
 
 ### Fixes
 

@@ -87,4 +87,63 @@ describe("collectCommandSecretAssignmentsFromSnapshot", () => {
       "agents.defaults.memorySearch.remote.apiKey: secret ref is configured on an inactive surface; skipping command-time assignment.",
     ]);
   });
+
+  it("resolves core mcp env and header refs for custom key names", () => {
+    const sourceConfig = {
+      mcp: {
+        servers: {
+          demo: {
+            env: {
+              MC_WORKSPACE_ID: {
+                source: "env",
+                provider: "default",
+                id: "MC_WORKSPACE_ID",
+              },
+            },
+            headers: {
+              "X-Custom-Auth": {
+                source: "env",
+                provider: "default",
+                id: "REMOTE_MCP_CUSTOM_AUTH",
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const resolvedConfig = {
+      mcp: {
+        servers: {
+          demo: {
+            env: {
+              MC_WORKSPACE_ID: "workspace-secret",
+            },
+            headers: {
+              "X-Custom-Auth": "Bearer custom-secret",
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = collectCommandSecretAssignmentsFromSnapshot({
+      sourceConfig,
+      resolvedConfig,
+      commandName: "agent",
+      targetIds: new Set(["mcp.servers.*.env.*", "mcp.servers.*.headers.*"]),
+    });
+
+    expect(result.assignments).toEqual([
+      {
+        path: "mcp.servers.demo.env.MC_WORKSPACE_ID",
+        pathSegments: ["mcp", "servers", "demo", "env", "MC_WORKSPACE_ID"],
+        value: "workspace-secret",
+      },
+      {
+        path: "mcp.servers.demo.headers.X-Custom-Auth",
+        pathSegments: ["mcp", "servers", "demo", "headers", "X-Custom-Auth"],
+        value: "Bearer custom-secret",
+      },
+    ]);
+  });
 });
