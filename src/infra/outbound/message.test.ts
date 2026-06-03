@@ -486,6 +486,39 @@ describe("sendMessage", () => {
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
   });
 
+  it("bootstraps a setup-only loaded channel that only gains sendText after bootstrap", async () => {
+    // Setup shell (e.g. qqbot during onboarding) has no send capability until the
+    // runtime sender is bootstrapped. resolveRequiredPlugin must bootstrap rather
+    // than throw "Unknown channel" before the durable delivery path materializes it.
+    const setupShell = { outbound: { deliveryMode: "direct" } };
+    const sendCapable = { outbound: { deliveryMode: "direct", sendText: vi.fn() } };
+    let bootstrapped = false;
+    mocks.resolveRuntimePluginRegistry.mockImplementation(() => {
+      bootstrapped = true;
+      return undefined;
+    });
+    mocks.getChannelPlugin.mockImplementation(() => (bootstrapped ? sendCapable : setupShell));
+
+    const result = await sendMessage({
+      cfg: { channels: { forum: { token: "test-token" } } },
+      channel: "forum",
+      to: "123456",
+      content: "hi",
+    });
+
+    expectRecordFields(
+      result,
+      {
+        channel: "forum",
+        to: "123456",
+        via: "direct",
+      },
+      "setup-only bootstrap send result",
+    );
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledOnce();
+    expectDeliveryCallFields({ channel: "forum", to: "123456" });
+  });
+
   it("does not throw best-effort direct send failures", async () => {
     mocks.deliverOutboundPayloads.mockImplementationOnce(async (params: unknown) => {
       (

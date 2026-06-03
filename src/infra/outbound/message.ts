@@ -179,7 +179,13 @@ async function resolveRequiredChannel(params: {
 }
 
 function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
-  const plugin = resolveOutboundChannelPluginForDelivery({ channel, cfg });
+  // allowBootstrap: this preflight runs before the durable delivery path that
+  // lazily bootstraps the runtime sender (deliver.ts loadBootstrappedOutboundAdapter).
+  // Without it, a setup-only loaded shell (e.g. qqbot during onboarding) fails the
+  // send-capability gate and throws "Unknown channel" before the runtime send plugin
+  // is materialized. Bootstrapping here is idempotent and keeps the setup-shell from
+  // shadowing the send-capable runtime plugin.
+  const plugin = resolveOutboundChannelPluginForDelivery({ channel, cfg, allowBootstrap: true });
   if (!plugin) {
     throw new Error(`Unknown channel: ${channel}`);
   }

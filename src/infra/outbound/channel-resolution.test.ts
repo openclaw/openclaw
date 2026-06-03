@@ -539,6 +539,25 @@ describe("outbound channel resolution", () => {
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
 
+  it("delivery resolver bootstraps a setup-only loaded plugin into a send-capable one when allowBootstrap is set", async () => {
+    const setupShell = { id: "alpha" };
+    const sendCapable = createSendingPlugin("alpha");
+    // Loaded shell lacks send capability until bootstrap; active registry is empty so
+    // bootstrap is forced, after which the loaded plugin resolves send-capable.
+    getLoadedChannelPluginMock.mockReturnValueOnce(setupShell).mockReturnValue(sendCapable);
+    getActivePluginRegistryMock.mockReturnValue({ channels: [] });
+    const channelResolution = await importChannelResolution("delivery-bootstrap-setup-only");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: { channels: {} } as never,
+        allowBootstrap: true,
+      }),
+    ).toBe(sendCapable);
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+  });
+
   it("returns a plugin with only the legacy outbound text adapter", async () => {
     const plugin = createSendingPlugin("alpha", {
       message: undefined,
