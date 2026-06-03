@@ -61,5 +61,6 @@ execution path is not instrumented here yet. A future iteration can attach tool
 events through the same event recorder once delivery health is stable.
 
 There is no persistent event store in this directory. `InMemoryTurnEventStore`
-exists for focused tests and for small runtime slices that need an append-only
-store shape without committing to a storage backend.
+exists for focused tests and for small runtime slices that need an append-like
+store shape without committing to a storage backend. It is bounded by default
+and reports dropped older events through `stats()`.

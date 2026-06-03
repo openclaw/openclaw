@@ -59,6 +59,7 @@ export type TurnState = {
 };
 
 let inMemoryTurnEventSequence = 0;
+const DEFAULT_IN_MEMORY_TURN_EVENT_CAPACITY = 1_000;
 const MAX_TURN_EVENT_METADATA_STRING_LENGTH = 256;
 const SENSITIVE_TURN_EVENT_METADATA_KEY =
   /(?:authorization|body|content|cookie|credential|password|payload|raw|secret|text|token)/i;
@@ -109,10 +110,16 @@ export class InMemoryTurnEventStore implements TurnEventRecorder {
   private readonly events: TurnEvent[] = [];
   private readonly now: () => number;
   private readonly createId: () => string;
+  private readonly capacity: number;
+  private dropped = 0;
 
-  constructor(options: { now?: () => number; createId?: () => string } = {}) {
+  constructor(options: { now?: () => number; createId?: () => string; capacity?: number } = {}) {
     this.now = options.now ?? Date.now;
     this.createId = options.createId ?? createTurnEventId;
+    this.capacity =
+      typeof options.capacity === "number" && Number.isFinite(options.capacity)
+        ? Math.max(0, Math.floor(options.capacity))
+        : DEFAULT_IN_MEMORY_TURN_EVENT_CAPACITY;
   }
 
   append(event: AppendTurnEventInput): TurnEvent {
@@ -121,6 +128,14 @@ export class InMemoryTurnEventStore implements TurnEventRecorder {
       timestamp: event.timestamp ?? this.now(),
       ...event,
     });
+    if (this.capacity <= 0) {
+      this.dropped += 1;
+      return recorded;
+    }
+    if (this.events.length >= this.capacity) {
+      this.events.shift();
+      this.dropped += 1;
+    }
     this.events.push(recorded);
     return recorded;
   }
@@ -131,6 +146,14 @@ export class InMemoryTurnEventStore implements TurnEventRecorder {
 
   all(): readonly TurnEvent[] {
     return [...this.events];
+  }
+
+  stats(): { capacity: number; count: number; dropped: number } {
+    return {
+      capacity: this.capacity,
+      count: this.events.length,
+      dropped: this.dropped,
+    };
   }
 }
 

@@ -42,6 +42,59 @@ describe("turn event state", () => {
     expect(store.all()).toEqual([recorded]);
   });
 
+  it("bounds stored events while preserving append return values", () => {
+    let nextId = 0;
+    const store = new InMemoryTurnEventStore({
+      capacity: 2,
+      createId: () => `evt-${++nextId}`,
+      now: () => 123,
+    });
+
+    const first = store.append({
+      type: "message.received",
+      turnId: "telegram:message:old",
+      actor: "user",
+      channel: "telegram",
+    });
+    const second = store.append({
+      type: "message.received",
+      turnId: "telegram:message:msg-1",
+      actor: "user",
+      channel: "telegram",
+    });
+    const third = store.append({
+      type: "turn.started",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+    });
+
+    expect(first.id).toBe("evt-1");
+    expect(store.all()).toEqual([second, third]);
+    expect(store.list("telegram:message:old")).toEqual([]);
+    expect(store.list("telegram:message:msg-1")).toEqual([second, third]);
+    expect(store.stats()).toEqual({ capacity: 2, count: 2, dropped: 1 });
+  });
+
+  it("supports zero-capacity recording for diagnostics-only append flows", () => {
+    const store = new InMemoryTurnEventStore({
+      capacity: 0,
+      createId: () => "evt-1",
+      now: () => 123,
+    });
+
+    const recorded = store.append({
+      type: "message.received",
+      turnId: "telegram:message:msg-1",
+      actor: "user",
+      channel: "telegram",
+    });
+
+    expect(recorded.id).toBe("evt-1");
+    expect(store.all()).toEqual([]);
+    expect(store.stats()).toEqual({ capacity: 0, count: 0, dropped: 1 });
+  });
+
   it("sanitizes event metadata before storing it", () => {
     const store = new InMemoryTurnEventStore({
       createId: () => "evt-1",
