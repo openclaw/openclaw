@@ -13,10 +13,12 @@ import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendBoundedOutput,
+  assertCommandResourceCeiling,
   assertDiagnosticStabilityClean,
   assertResourceCeiling,
   cleanupKitchenSinkEnv,
   createGatewayReadyLogScanner,
+  createRpcCliRunOptions,
   extractPluginCommandNames,
   fetchJson,
   findErrorLogFindings,
@@ -32,6 +34,7 @@ import {
   stopGateway,
   summarizeProcessSamples,
   tailFile,
+  unwrapRpcPayload,
   usesBuiltOpenClawEntry,
   waitForGatewayReady,
 } from "../../scripts/e2e/kitchen-sink-rpc-walk.mjs";
@@ -137,7 +140,9 @@ describe("kitchen-sink RPC gateway teardown", () => {
       throw error;
     });
 
-    await expect(stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 })).resolves.toBeUndefined();
+    await expect(
+      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
+    ).resolves.toBeUndefined();
 
     expect(child.kill).toHaveBeenCalledOnce();
   });
@@ -152,7 +157,9 @@ describe("kitchen-sink RPC gateway teardown", () => {
     child.signalCode = null;
     child.kill = vi.fn(() => false);
 
-    await expect(stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 })).resolves.toBeUndefined();
+    await expect(
+      stopGateway(child, { killGraceMs: 1, teardownGraceMs: 1 }),
+    ).resolves.toBeUndefined();
 
     expect(child.kill).toHaveBeenCalledOnce();
   });
@@ -411,6 +418,24 @@ setInterval(() => {}, 1000);
 });
 
 describe("kitchen-sink RPC caller loading", () => {
+  it("samples CLI-backed gateway RPC calls as command work", () => {
+    const resourceSamples: unknown[] = [];
+
+    expect(
+      createRpcCliRunOptions("tools.invoke", {
+        commandResourceOptions: {
+          resourceSampleIntervalMs: 500,
+          resourceSamples,
+        },
+      }),
+    ).toMatchObject({
+      resourceLabel: "gateway call tools.invoke",
+      resourceSampleIntervalMs: 500,
+      resourceSamples,
+      timeoutMs: 90_000,
+    });
+  });
+
   it("uses built callGateway chunks for dist and packaged entries", () => {
     expect(usesBuiltOpenClawEntry({ command: "node", baseArgs: ["dist/index.js"] })).toBe(true);
     expect(
@@ -440,6 +465,19 @@ describe("kitchen-sink RPC caller loading", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("kitchen-sink RPC payload unwrapping", () => {
+  it("preserves explicit nullish JSON-RPC result fields", () => {
+    expect(unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
+    expect(unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();
+  });
+
+  it("prefers result before legacy payload and data envelopes", () => {
+    expect(unwrapRpcPayload({ result: false, payload: { stale: true } })).toBe(false);
+    expect(unwrapRpcPayload({ payload: null, data: { stale: true } })).toBeNull();
+    expect(unwrapRpcPayload({ data: 0 })).toBe(0);
   });
 });
 
@@ -621,7 +659,7 @@ describe("kitchen-sink RPC process sampling", () => {
       platform: "linux",
       runCommand: async (command: string, args: string[]) => {
         expect(command).toBe("ps");
-        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        expect(args).toEqual(["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="]);
         return {
           stdout: [
             " 4321     1  262144  12.5 node dist/index.js gateway --port 19080",
@@ -646,7 +684,7 @@ describe("kitchen-sink RPC process sampling", () => {
       posixCommandLineNeedles: ["gateway", "--port", "19080"],
       runCommand: async (command: string, args: string[]) => {
         expect(command).toBe("ps");
-        expect(args).toEqual(["-axo", "pid=,ppid=,rss=,pcpu=,command="]);
+        expect(args).toEqual(["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="]);
         return {
           stdout: [
             " 4321     1   16384   0.0 node /usr/local/bin/corepack pnpm openclaw gateway --port 19080",
@@ -866,6 +904,13 @@ describe("kitchen-sink RPC process sampling", () => {
 
   it("fails when process sampling does not capture RSS", () => {
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
+  });
+
+  it("allows missing command samples but fails command RSS spikes", () => {
+    expect(() => assertCommandResourceCeiling(null)).not.toThrow();
+    expect(() =>
+      assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 }),
+    ).toThrow("command aggregate RSS exceeded 8192 MiB: 8193 MiB");
   });
 });
 

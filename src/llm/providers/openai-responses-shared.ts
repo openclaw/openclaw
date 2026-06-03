@@ -18,7 +18,6 @@ import {
   type AzureResponsesTextContentPart,
   type AzureResponsesTextDeltaEvent,
   isAzureResponsesTextDeltaEvent,
-  isResponsesTextContentPartType,
 } from "../../shared/openai-responses-stream-compat.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -661,29 +660,23 @@ export async function processResponsesStream<TApi extends Api>(
           currentItem.content.push(event.part);
         }
       }
-    } else if (event.type === "response.output_text.delta") {
-      if (currentItem?.type === "message" && currentBlock?.type === "text") {
-        if (!currentItem.content || currentItem.content.length === 0) {
-          continue;
-        }
-        const lastPart = currentItem.content[currentItem.content.length - 1];
-        if (isResponsesTextContentPartType(lastPart?.type)) {
-          currentBlock.text += event.delta;
-          lastPart.text += event.delta;
-          stream.push({
-            type: "text_delta",
-            contentIndex: blockIndex(),
-            delta: event.delta,
-            partial: output,
-          });
-        }
-      }
-    } else if (isAzureResponsesTextDeltaEvent(event)) {
+    } else if (
+      event.type === "response.output_text.delta" ||
+      isAzureResponsesTextDeltaEvent(event)
+    ) {
       if (currentItem?.type === "message" && currentBlock?.type === "text") {
         currentItem.content = currentItem.content || [];
         let lastPart = currentItem.content[currentItem.content.length - 1];
-        if (lastPart?.type !== "text") {
-          lastPart = { type: "text", text: "" };
+        // Azure AI Foundry Responses streams emit text deltas (under either the
+        // documented `response.output_text.delta` event or the Azure `response.text.delta`
+        // alias) that may not be preceded by a `response.content_part.added` event, so
+        // lazily open an Azure text content part when no text part is currently active.
+        if (
+          !lastPart ||
+          (lastPart.type !== OPENAI_RESPONSES_OUTPUT_TEXT_CONTENT_PART_TYPE &&
+            lastPart.type !== AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE)
+        ) {
+          lastPart = { type: AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE, text: "" };
           currentItem.content.push(lastPart);
         }
         currentBlock.text += event.delta;

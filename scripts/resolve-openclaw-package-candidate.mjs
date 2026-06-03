@@ -21,6 +21,13 @@ const PACKAGE_URL_MAX_BYTES = 250 * 1024 * 1024;
 const PACKAGE_URL_MAX_REDIRECTS = 5;
 const COMMAND_STDOUT_CAPTURE_MAX_CHARS = 8 * 1024 * 1024;
 const COMMAND_STDERR_CAPTURE_MAX_CHARS = 128 * 1024;
+const COMMAND_TIMEOUT_KILL_AFTER_MS = 5_000;
+const ACTIVE_CHILD_KILLERS = new Set();
+const SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
 const TRUSTED_PACKAGE_SOURCE_POLICY = ".github/package-trusted-sources.json";
 const TRUSTED_PACKAGE_SOURCE_TOKEN_ENV = "OPENCLAW_TRUSTED_PACKAGE_TOKEN";
 const BLOCKED_PACKAGE_HOSTNAMES = new Set([
@@ -28,6 +35,27 @@ const BLOCKED_PACKAGE_HOSTNAMES = new Set([
   "localhost.localdomain",
   "metadata.google.internal",
 ]);
+let forwardedSignalExitCode;
+let forwardedSignalForceKillTimer;
+
+for (const signal of Object.keys(SIGNAL_EXIT_CODES)) {
+  process.on(signal, () => {
+    forwardedSignalExitCode ??= SIGNAL_EXIT_CODES[signal];
+    if (ACTIVE_CHILD_KILLERS.size === 0) {
+      process.exit(forwardedSignalExitCode);
+    }
+    const activeKillers = Array.from(ACTIVE_CHILD_KILLERS);
+    for (const killChild of activeKillers) {
+      killChild(signal);
+    }
+    forwardedSignalForceKillTimer ??= setTimeout(() => {
+      for (const killChild of activeKillers) {
+        killChild("SIGKILL");
+      }
+      process.exit(forwardedSignalExitCode);
+    }, COMMAND_TIMEOUT_KILL_AFTER_MS);
+  });
+}
 export const OPENCLAW_PACKAGE_SPEC_RE =
   /^openclaw@(alpha|beta|latest|[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*|-(alpha|beta)\.[1-9][0-9]*)?)$/u;
 
@@ -127,6 +155,7 @@ export function resolveNpmPackageCandidatePackRunner(packageSpec, outputDir, par
 
 function run(command, args, options = {}) {
   return new Promise((resolve, reject) => {
+    const useProcessGroup = process.platform !== "win32";
     const spawnOptions = {
       cwd: options.cwd ?? ROOT_DIR,
       stdio: options.capture ? ["ignore", "pipe", "pipe"] : ["ignore", "inherit", "inherit"],
@@ -135,22 +164,45 @@ function run(command, args, options = {}) {
       ...(options.windowsVerbatimArguments !== undefined
         ? { windowsVerbatimArguments: options.windowsVerbatimArguments }
         : {}),
+      detached: useProcessGroup,
     };
     const child = spawn(command, args, {
       ...spawnOptions,
     });
     let timedOut = false;
     let killTimer;
+    let timeoutReject;
+    const killChild = (signal) => {
+      if (useProcessGroup && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // The process group can disappear between timeout and cleanup.
+        }
+      }
+      child.kill(signal);
+    };
+    const terminateChild = () => {
+      killChild("SIGTERM");
+      killTimer = setTimeout(
+        () => {
+          killTimer = undefined;
+          killChild("SIGKILL");
+          timeoutReject?.();
+        },
+        options.killAfterMs ?? COMMAND_TIMEOUT_KILL_AFTER_MS,
+      );
+    };
     const timeout =
       options.timeoutMs === undefined
         ? undefined
         : setTimeout(() => {
             timedOut = true;
-            child.kill("SIGTERM");
-            killTimer = setTimeout(() => child.kill("SIGKILL"), 5_000);
-            killTimer.unref?.();
+            terminateChild();
           }, options.timeoutMs);
     timeout?.unref?.();
+    ACTIVE_CHILD_KILLERS.add(killChild);
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     if (options.capture) {
@@ -161,16 +213,37 @@ function run(command, args, options = {}) {
         stderr = appendBoundedCommandOutput(stderr, chunk, COMMAND_STDERR_CAPTURE_MAX_CHARS);
       });
     }
-    child.on("error", reject);
+    child.on("error", (error) => {
+      ACTIVE_CHILD_KILLERS.delete(killChild);
+      reject(toLintErrorObject(error, "Non-Error rejection"));
+    });
     child.on("close", (status, signal) => {
       if (timeout) {
         clearTimeout(timeout);
       }
-      if (killTimer) {
+      if (killTimer && !timedOut) {
         clearTimeout(killTimer);
       }
+      ACTIVE_CHILD_KILLERS.delete(killChild);
+      if (
+        forwardedSignalExitCode !== undefined &&
+        ACTIVE_CHILD_KILLERS.size === 0 &&
+        forwardedSignalForceKillTimer === undefined
+      ) {
+        process.exit(forwardedSignalExitCode);
+      }
+      if (forwardedSignalExitCode !== undefined) {
+        return;
+      }
       if (timedOut) {
-        reject(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        const timeoutError = new Error(
+          `${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`,
+        );
+        if (killTimer) {
+          timeoutReject = () => reject(timeoutError);
+          return;
+        }
+        reject(timeoutError);
         return;
       }
       if (status === 0) {
@@ -1206,4 +1279,18 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       process.exit(1);
     },
   );
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

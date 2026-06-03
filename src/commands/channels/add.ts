@@ -67,8 +67,8 @@ async function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | nul
           }),
       )
     : await import("../../channels/plugins/catalog.js").then(
-        ({ listChannelPluginCatalogEntries }) =>
-          listChannelPluginCatalogEntries({ excludeWorkspace: true }),
+        ({ listRawChannelPluginCatalogEntries }) =>
+          listRawChannelPluginCatalogEntries({ excludeWorkspace: true }),
       );
   return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {

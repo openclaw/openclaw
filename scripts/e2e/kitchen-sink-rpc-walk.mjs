@@ -33,6 +33,10 @@ const FETCH_BODY_MAX_BYTES = readPositiveInt(
   1024 * 1024,
 );
 const MAX_RSS_MIB = readPositiveInt(process.env.OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB, 2048);
+const MAX_COMMAND_RSS_MIB = readPositiveInt(
+  process.env.OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB,
+  8192,
+);
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
 const OUTPUT_CAPTURE_CHARS = readPositiveInt(
@@ -43,6 +47,7 @@ const DEFAULT_PORT = 19000 + Math.floor(Math.random() * 1000);
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
 const LOG_TAIL_BYTES = 256 * 1024;
+const POSIX_PROCESS_SNAPSHOT_ARGS = ["-ww", "-axo", "pid=,ppid=,rss=,pcpu=,command="];
 const ERROR_LOG_DENY_PATTERNS = [
   /\buncaught exception\b/iu,
   /\bunhandled rejection\b/iu,
@@ -73,6 +78,7 @@ Environment:
   OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS   Plugin install timeout.
   OPENCLAW_KITCHEN_SINK_RPC_CALL_MS      RPC call timeout.
   OPENCLAW_KITCHEN_SINK_MAX_RSS_MIB      Gateway RSS ceiling.
+  OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB  Install/CLI command RSS ceiling.
   OPENCLAW_KITCHEN_SINK_KEEP_TMP=1       Preserve the isolated temp home.
 `;
 }
@@ -403,11 +409,27 @@ function findBalancedJsonObjectEnd(text, startIndex) {
   return -1;
 }
 
-function unwrapRpcPayload(raw) {
+function hasOwnPayloadField(raw, field) {
+  return (
+    ((typeof raw === "object" && raw !== null) || typeof raw === "function") &&
+    Object.hasOwn(raw, field)
+  );
+}
+
+export function unwrapRpcPayload(raw) {
   if (raw?.ok === false) {
     throw new Error(`gateway RPC failed: ${JSON.stringify(raw.error ?? raw)}`);
   }
-  return raw?.result ?? raw?.payload ?? raw?.data ?? raw;
+  if (hasOwnPayloadField(raw, "result")) {
+    return raw.result;
+  }
+  if (hasOwnPayloadField(raw, "payload")) {
+    return raw.payload;
+  }
+  if (hasOwnPayloadField(raw, "data")) {
+    return raw.data;
+  }
+  return raw;
 }
 
 async function rpcCall(method, params, options) {
@@ -465,9 +487,17 @@ async function rpcCallViaCli(method, params, options) {
       JSON.stringify(params ?? {}),
     ],
     options.env,
-    { timeoutMs: RPC_TIMEOUT_MS + 30000 },
+    createRpcCliRunOptions(method, options),
   );
   return parseJsonOutput(stdout);
+}
+
+export function createRpcCliRunOptions(method, options = {}) {
+  return {
+    ...options.commandResourceOptions,
+    resourceLabel: `gateway call ${method}`,
+    timeoutMs: RPC_TIMEOUT_MS + 30000,
+  };
 }
 
 export function findDistCallGatewayModuleFiles(cwd = process.cwd()) {
@@ -1034,7 +1064,7 @@ async function samplePosixProcessWithDescendants(pid, run) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);
@@ -1054,7 +1084,7 @@ async function samplePosixProcessTree(pid, run, commandLineNeedles) {
     return null;
   }
   try {
-    const { stdout } = await run("ps", ["-axo", "pid=,ppid=,rss=,pcpu=,command="], {
+    const { stdout } = await run("ps", POSIX_PROCESS_SNAPSHOT_ARGS, {
       timeoutMs: 5000,
     });
     const rows = parsePosixProcessRows(stdout);
@@ -1314,18 +1344,36 @@ async function sampleWindowsProcess(pid, run, commandLineNeedles = []) {
   return null;
 }
 
-export function assertResourceCeiling(sample) {
+function assertProcessResourceCeiling(sample, { label, maxRssMiB, requireSample = true }) {
   if (!sample) {
-    throw new Error("gateway RSS sample was not captured");
+    if (requireSample) {
+      throw new Error(`${label} RSS sample was not captured`);
+    }
+    return;
   }
-  if (sample.rssMiB > MAX_RSS_MIB) {
-    throw new Error(`gateway RSS exceeded ${MAX_RSS_MIB} MiB: ${sample.rssMiB} MiB`);
+  if (sample.rssMiB > maxRssMiB) {
+    throw new Error(`${label} RSS exceeded ${maxRssMiB} MiB: ${sample.rssMiB} MiB`);
   }
-  if ((sample.aggregateRssMiB ?? sample.rssMiB) > MAX_RSS_MIB) {
+  if ((sample.aggregateRssMiB ?? sample.rssMiB) > maxRssMiB) {
     throw new Error(
-      `gateway aggregate RSS exceeded ${MAX_RSS_MIB} MiB: ${sample.aggregateRssMiB} MiB`,
+      `${label} aggregate RSS exceeded ${maxRssMiB} MiB: ${sample.aggregateRssMiB} MiB`,
     );
   }
+}
+
+export function assertResourceCeiling(sample) {
+  assertProcessResourceCeiling(sample, {
+    label: "gateway",
+    maxRssMiB: MAX_RSS_MIB,
+  });
+}
+
+export function assertCommandResourceCeiling(sample) {
+  assertProcessResourceCeiling(sample, {
+    label: "command",
+    maxRssMiB: MAX_COMMAND_RSS_MIB,
+    requireSample: false,
+  });
 }
 
 export function findErrorLogFindings(logPath) {
@@ -1492,6 +1540,7 @@ export async function main() {
     assertIncludesAny(inspectProviders, EXPECTED_PROVIDERS, "plugins inspect providers");
 
     child = await startGateway(runner, port, env, logPath);
+    const rpcOptions = { commandResourceOptions, env, port, runner };
     const sampleGateway = async () => {
       const gatewayCommandLineNeedles = ["gateway", "--port", String(port)];
       const processSampleOptions = runner.pnpm
@@ -1531,19 +1580,19 @@ export async function main() {
       throw new Error(`/readyz did not report ready: ${JSON.stringify(readyz)}`);
     }
 
-    await retryRpcCall("health", {}, { runner, port, env });
-    await retryRpcCall("status", {}, { runner, port, env });
+    await retryRpcCall("health", {}, rpcOptions);
+    await retryRpcCall("status", {}, rpcOptions);
     const channelStatus = await retryRpcCall(
       "channels.status",
       { probe: true, timeoutMs: 10000 },
-      { runner, port, env },
+      rpcOptions,
     );
     const channelAccount = assertChannelAccountRunning(channelStatus);
 
     const commands = await retryRpcCall(
       "commands.list",
       { agentId: "main", scope: "text" },
-      { runner, port, env },
+      rpcOptions,
     );
     const commandNames = extractPluginCommandNames(commands);
     assertIncludesAll(commandNames, EXPECTED_COMMANDS, "commands.list plugin commands");
@@ -1551,7 +1600,7 @@ export async function main() {
     const catalog = await retryRpcCall(
       "tools.catalog",
       { agentId: "main", includePlugins: true },
-      { runner, port, env },
+      rpcOptions,
     );
     const catalogTools = extractToolEntries(catalog);
     const catalogToolIds = catalogTools.map((entry) => entry?.id).filter(isNonEmptyString);
@@ -1564,12 +1613,12 @@ export async function main() {
     const createdSession = await retryRpcCall(
       "sessions.create",
       { key: SESSION_KEY, agentId: "main", label: "kitchen-sink-rpc" },
-      { runner, port, env },
+      rpcOptions,
     );
     const effective = await retryRpcCall(
       "tools.effective",
       { sessionKey: createdSession.key, agentId: "main" },
-      { runner, port, env },
+      rpcOptions,
     );
     const effectiveToolIds = extractToolEntries(effective).map((entry) => entry?.id);
     assertIncludesAny(effectiveToolIds, EXPECTED_TOOLS, "tools.effective plugin tools");
@@ -1583,22 +1632,22 @@ export async function main() {
         agentId: "main",
         idempotencyKey: "kitchen-sink-rpc-search",
       },
-      { runner, port, env },
+      rpcOptions,
     );
     assertToolInvokeResult(invoked);
 
-    const ttsProviders = await retryRpcCall("tts.providers", {}, { runner, port, env });
-    const ttsStatus = await retryRpcCall("tts.status", {}, { runner, port, env });
+    const ttsProviders = await retryRpcCall("tts.providers", {}, rpcOptions);
+    const ttsStatus = await retryRpcCall("tts.status", {}, rpcOptions);
     assertIncludesAny(extractProviderIds(ttsProviders), EXPECTED_SPEECH_PROVIDERS, "tts.providers");
     assertIncludesAny(extractProviderIds(ttsStatus), EXPECTED_SPEECH_PROVIDERS, "tts.status");
 
-    const uiDescriptors = await retryRpcCall("plugins.uiDescriptors", {}, { runner, port, env });
+    const uiDescriptors = await retryRpcCall("plugins.uiDescriptors", {}, rpcOptions);
     if (!uiDescriptors || typeof uiDescriptors !== "object") {
       throw new Error(
         `plugins.uiDescriptors returned invalid payload: ${JSON.stringify(uiDescriptors)}`,
       );
     }
-    const stability = await retryRpcCall("diagnostics.stability", {}, { runner, port, env });
+    const stability = await retryRpcCall("diagnostics.stability", {}, rpcOptions);
     assertDiagnosticStabilityClean(stability);
     await sampleInFlight?.catch(() => {});
     const finalSample = await sampleGateway();
@@ -1606,6 +1655,7 @@ export async function main() {
     const peakSample = summarizeProcessSamples(processSamples);
     const commandPeakSample = summarizeProcessSamples(commandSamples);
     assertResourceCeiling(peakSample);
+    assertCommandResourceCeiling(commandPeakSample);
     assertNoErrorLogs(logPath);
 
     console.log(

@@ -672,4 +672,105 @@ describe("Azure OpenAI Responses content type support", () => {
       text: "No explicit part",
     });
   });
+
+  it("processResponsesStream handles Azure output_text deltas without a content_part.added event", async () => {
+    const azureEvents: OpenAIResponsesStreamEvent[] = [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        sequence_number: 1,
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_azure_output_text_without_part",
+          content: [],
+          status: "in_progress",
+        },
+      },
+      {
+        type: "response.output_text.delta",
+        item_id: "msg_azure_output_text_without_part",
+        output_index: 0,
+        content_index: 0,
+        sequence_number: 2,
+        logprobs: [],
+        delta: "No explicit",
+      },
+      {
+        type: "response.output_text.delta",
+        item_id: "msg_azure_output_text_without_part",
+        output_index: 0,
+        content_index: 0,
+        sequence_number: 3,
+        logprobs: [],
+        delta: " part",
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        sequence_number: 4,
+        item: {
+          type: "message",
+          role: "assistant",
+          id: "msg_azure_output_text_without_part",
+          content: [
+            {
+              type: "text",
+              text: "No explicit part",
+            },
+          ],
+          status: "completed",
+        },
+      },
+      {
+        type: "response.completed",
+        sequence_number: 5,
+        response: {
+          id: "resp_azure_output_text_without_part",
+          created_at: 1,
+          output_text: "No explicit part",
+          error: null,
+          incomplete_details: null,
+          instructions: null,
+          metadata: null,
+          model: azureModel.id,
+          object: "response",
+          output: [],
+          parallel_tool_calls: false,
+          temperature: null,
+          tool_choice: "auto",
+          tools: [],
+          top_p: null,
+          status: "completed",
+          usage: {
+            input_tokens: 3,
+            input_tokens_details: { cached_tokens: 0 },
+            output_tokens: 3,
+            output_tokens_details: { reasoning_tokens: 0 },
+            total_tokens: 6,
+          },
+        },
+      },
+    ];
+
+    const { stream, events } = createCapturedAssistantMessageEventStream();
+    const output = createResponsesAssistantOutput(azureModel, "azure-openai-responses");
+
+    await processResponsesStream(streamResponsesEvents(azureEvents), output, stream, azureModel);
+
+    expect(
+      events.map((event) =>
+        event.type === "text_delta"
+          ? event.delta
+          : event.type === "text_end"
+            ? `[END:${event.content}]`
+            : event.type,
+      ),
+    ).toEqual(["text_start", "No explicit", " part", "[END:No explicit part]"]);
+
+    expect(output.content[0]).toMatchObject({
+      type: "text",
+      text: "No explicit part",
+    });
+  });
 });
