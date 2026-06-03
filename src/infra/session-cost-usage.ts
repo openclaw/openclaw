@@ -256,10 +256,21 @@ async function writeUsageCostCacheLockAtomically(
   lockPath: string,
   lock: UsageCostCacheLock,
 ): Promise<void> {
+  const payload = `${JSON.stringify(lock)}\n`;
   const tempPath = `${lockPath}.${process.pid}.${process.hrtime.bigint()}.tmp`;
-  await fs.promises.writeFile(tempPath, `${JSON.stringify(lock)}\n`, { flag: "wx" });
+  await fs.promises.writeFile(tempPath, payload, { flag: "wx" });
   try {
-    await fs.promises.link(tempPath, lockPath);
+    try {
+      await fs.promises.link(tempPath, lockPath);
+    } catch (linkErr) {
+      // Hard links are unsupported on some filesystems (SMB, NFS, virtiofs, FUSE).
+      // Fall back to exclusive create which works everywhere.
+      if ((linkErr as NodeJS.ErrnoException).code === "ENOTSUP") {
+        await fs.promises.writeFile(lockPath, payload, { flag: "wx" });
+      } else {
+        throw linkErr;
+      }
+    }
   } finally {
     await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
   }
