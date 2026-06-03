@@ -1,3 +1,4 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -18,6 +19,11 @@ function readDiagnosticPluginId(params: {
   }
 }
 
+function sanitizeQuarantineDiagnosticText(value: string, fallback: string): string {
+  const sanitized = sanitizeForLog(value);
+  return sanitized.length > 0 ? sanitized : fallback;
+}
+
 export function logRuntimeToolSchemaQuarantine(params: {
   diagnostics: readonly RuntimeToolSchemaDiagnostic[];
   tools: readonly AnyAgentTool[];
@@ -31,19 +37,26 @@ export function logRuntimeToolSchemaQuarantine(params: {
   const summary = params.diagnostics
     .map((diagnostic) => {
       const pluginId = readDiagnosticPluginId({ tools: params.tools, diagnostic });
-      const owner = pluginId ? ` plugin=${pluginId}` : "";
+      const safeToolName = sanitizeQuarantineDiagnosticText(diagnostic.toolName, "unknown-tool");
+      const safePluginId = pluginId
+        ? sanitizeQuarantineDiagnosticText(pluginId, "unknown-plugin")
+        : undefined;
+      const reason = diagnostic.violations
+        .map((violation) => sanitizeQuarantineDiagnosticText(violation, "unsupported schema"))
+        .join(", ");
+      const owner = safePluginId ? ` plugin=${safePluginId}` : "";
       emitTrustedDiagnosticEvent({
         type: "tool.execution.blocked",
         runId: params.runId,
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
         ...(params.sessionId ? { sessionId: params.sessionId } : {}),
-        toolName: diagnostic.toolName,
-        toolSource: pluginId ? "plugin" : "core",
-        ...(pluginId ? { toolOwner: pluginId } : {}),
+        toolName: safeToolName,
+        toolSource: safePluginId ? "plugin" : "core",
+        ...(safePluginId ? { toolOwner: safePluginId } : {}),
         deniedReason: "unsupported_tool_schema",
-        reason: diagnostic.violations.join(", "),
+        reason,
       });
-      return `${diagnostic.toolName}${owner}: ${diagnostic.violations.join(", ")}`;
+      return `${safeToolName}${owner}: ${reason}`;
     })
     .join("; ");
   log.warn(
