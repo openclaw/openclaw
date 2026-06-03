@@ -8,7 +8,7 @@ Four hand-authored ESM files and one launchd template, no build step, no opencla
 
 | File                              | Role                                                                                                                                              |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `serve.mjs`                       | Stdio MCP server. Registers 12 tools. Spawned by Claude Code via `mcpServers` config.                                                             |
+| `serve.mjs`                       | Stdio MCP server. Registers 10 tools. Spawned by Claude Code via `mcpServers` config.                                                             |
 | `mirror.mjs`                      | One-shot local mirror: copies Claude Code project memory files into the active wiki vault (`~/.openclaw/wiki/{instanceId}` or `main`) as bridge-style source pages. |
 | `cloud-mirror.mjs`                | Long-running cloud mirror daemon: pushes local wiki deltas to the configured Bench ingest endpoint.                                                |
 | `statusline.mjs`                  | Fast (<100ms) filesystem-based status string for Claude Code's `statusLine` command. Never invokes the openclaw CLI.                              |
@@ -32,7 +32,7 @@ If/when this bridge graduates to a proper extension (e.g., for upstream PR or pr
 - **Statusline**: `~/.claude/settings.json` → `statusLine.command`.
 - **Cloud mirror schedule**: `~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist` from the template in this directory.
 
-## Tool surface (12 tools)
+## Tool surface (10 tools)
 
 All prefixed `openclaw_`:
 
@@ -48,8 +48,6 @@ All prefixed `openclaw_`:
 | `agent_handoff`     | gateway `sessions.create` (new session + initial brief, with heartbeat-window warning) |
 | `agent_send`        | gateway `sessions.send` (follow-up to existing sessionKey)                             |
 | `agent_messages`    | gateway `chat.history` (param is `sessionKey` not `key`)                               |
-| `lcm_grep`          | direct read-only FTS search of `~/.openclaw/lcm.db`                                    |
-| `lcm_describe`      | direct read-only conversation summary from `~/.openclaw/lcm.db`                        |
 
 ## Operational gotchas
 
