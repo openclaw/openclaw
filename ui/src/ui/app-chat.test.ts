@@ -2185,6 +2185,61 @@ describe("handleSendChat", () => {
     expect(userMessage.role).toBe("user");
   });
 
+  it("routes queued Skill Workshop revisions through the proposal request RPC", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "skills.proposals.requestRevision") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "keep my draft",
+    });
+    (host as ChatHost & { currentSessionId?: string }).currentSessionId = "session-current";
+
+    const send = handleSendChat(host, "Make the support files 5", {
+      restoreDraft: true,
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        agentId: "proposal-owner",
+      },
+    });
+    await Promise.resolve();
+
+    expect(host.chatQueue[0]).toMatchObject({
+      text: "Make the support files 5",
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        agentId: "proposal-owner",
+      },
+    });
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "skills.proposals.requestRevision",
+      "revision request payload",
+    );
+    expect(payload).toMatchObject({
+      agentId: "proposal-owner",
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "Make the support files 5",
+      sessionKey: "agent:main",
+      sessionId: "session-current",
+    });
+    expect(payload).not.toHaveProperty("message");
+    expect(payload).not.toHaveProperty("targetAgentId");
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatQueue).toStrictEqual([]);
+    expect(host.chatMessages).toHaveLength(1);
+    const userMessage = requireRecord(host.chatMessages[0], "user message");
+    expect(userMessage.role).toBe("user");
+    expect(userMessage.content).toEqual([{ type: "text", text: "Make the support files 5" }]);
+  });
+
   it("keeps ACK-completed sends idle when sessions.list returns a stale active row", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "chat.send") {

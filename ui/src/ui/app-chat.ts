@@ -44,6 +44,7 @@ import {
   appendUserChatMessage,
   loadChatHistory,
   requestChatSend,
+  requestSkillWorkshopRevisionChatSend,
   sendDetachedChatMessage,
   sendSteerChatMessage,
   type ChatEventPayload,
@@ -81,7 +82,12 @@ import type {
   ModelCatalogEntry,
 } from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
-import type { ChatAttachment, ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
+import type {
+  ChatAttachment,
+  ChatQueueItem,
+  ChatQueueSkillWorkshopRevision,
+  ChatSessionRefreshTarget,
+} from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
 import { isRenderableControlUiAvatarUrl } from "./views/agents-utils.ts";
 
@@ -145,6 +151,7 @@ function setChatError(host: ChatHost, error: string | null) {
 export type ChatSendOptions = {
   confirmReset?: boolean;
   restoreDraft?: boolean;
+  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision;
 };
 
 export type ChatAbortOptions = {
@@ -421,6 +428,7 @@ function enqueuePendingSendMessage(
   sendState: ChatQueueItem["sendState"] = host.connected && host.client
     ? "sending"
     : "waiting-reconnect",
+  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -439,6 +447,7 @@ function enqueuePendingSendMessage(
     sendSubmittedAtMs: submittedAtMs,
     sessionKey: host.sessionKey,
     agentId: scopedAgentIdForSession(host, host.sessionKey),
+    ...(skillWorkshopRevision ? { skillWorkshopRevision } : {}),
   };
   host.chatQueue = [...host.chatQueue, pending];
   recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
@@ -981,6 +990,14 @@ async function sendQueuedChatMessage(
     removeQueuedMessageWithoutReleasing(host, id, prepared.sessionKey ?? host.sessionKey);
     return "sent";
   }
+  if (prepared.skillWorkshopRevision && hasAttachments) {
+    updateQueuedMessageForSession(host, prepared.sessionKey ?? host.sessionKey, id, (item) => ({
+      ...item,
+      sendError: "Skill Workshop revision requests do not support attachments.",
+      sendState: "failed",
+    }));
+    return "failed";
+  }
   const sessionKey = prepared.sessionKey ?? host.sessionKey;
   if (!host.connected || !host.client) {
     updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
@@ -1017,13 +1034,24 @@ async function sendQueuedChatMessage(
   }
 
   try {
-    const ack = await requestChatSend(host as unknown as ChatState, {
-      message,
-      attachments: hasAttachments ? attachments : undefined,
-      runId,
-      sessionKey,
-      agentId: prepared.agentId,
-    });
+    const ack = prepared.skillWorkshopRevision
+      ? await requestSkillWorkshopRevisionChatSend(host as unknown as ChatState, {
+          proposalId: prepared.skillWorkshopRevision.proposalId,
+          ...(prepared.skillWorkshopRevision.agentId
+            ? { agentId: prepared.skillWorkshopRevision.agentId }
+            : {}),
+          ...(prepared.agentId ? { targetAgentId: prepared.agentId } : {}),
+          instructions: message,
+          runId,
+          sessionKey,
+        })
+      : await requestChatSend(host as unknown as ChatState, {
+          message,
+          attachments: hasAttachments ? attachments : undefined,
+          runId,
+          sessionKey,
+          agentId: prepared.agentId,
+        });
     updateChatSendAckTiming(host, runId, ack, sendingItem, requestStartedAtMs);
     recordChatSendTiming(host, sendingItem, "ack", sendingItem.sendSubmittedAtMs, {
       ackStatus: ack.status,
@@ -1203,11 +1231,14 @@ function chatSubmitKey(
   kind: "btw" | "message",
   message: string,
   attachments: ChatAttachment[],
+  skillWorkshopRevision?: ChatQueueSkillWorkshopRevision,
 ): string {
   return JSON.stringify([
     kind,
     host.sessionKey,
     message.trim(),
+    skillWorkshopRevision?.proposalId ?? "",
+    skillWorkshopRevision?.agentId ?? "",
     attachments.map(attachmentSubmitSignature),
   ]);
 }
@@ -1731,7 +1762,13 @@ export async function handleSendChat(
   }
 
   const refreshSessions = isChatResetCommand(message);
-  const submitKey = chatSubmitKey(host, "message", message, attachmentsToSend);
+  const submitKey = chatSubmitKey(
+    host,
+    "message",
+    message,
+    attachmentsToSend,
+    opts?.skillWorkshopRevision,
+  );
   await withChatSubmitGuard(host, submitKey, async () => {
     if (host.sessionKey !== submittedSessionKey) {
       return;
@@ -1753,6 +1790,7 @@ export async function handleSendChat(
       refreshSessions,
       submittedAtMs,
       waitingForModel ? "waiting-model" : undefined,
+      opts?.skillWorkshopRevision,
     );
     if (!queued) {
       return;
