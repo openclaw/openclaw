@@ -1023,8 +1023,10 @@ describe("memory watcher config", () => {
     await expectWatcherManager(cfg);
 
     const chokidarWatcher = createdChokidarWatchers[0];
-    expect(chokidarWatcher).toBeDefined();
-    chokidarWatcher!.watchedEntries = {
+    if (!chokidarWatcher) {
+      throw new Error("expected chokidar watcher");
+    }
+    chokidarWatcher.watchedEntries = {
       [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
     };
     expect(memoryLoggerWarn).not.toHaveBeenCalledWith(
