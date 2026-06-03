@@ -158,7 +158,7 @@ describe("loadExtraBootstrapFiles", () => {
         const branchDir = path.join(workspaceDir, `branch-${dirIndex}`, "nested");
         await fs.mkdir(branchDir, { recursive: true });
         await Promise.all(
-          Array.from({ length: filesPerDir }, (_, fileIndex) =>
+          Array.from({ length: filesPerDir }, (__, fileIndex) =>
             fs.writeFile(path.join(branchDir, `noise-${fileIndex}.txt`), "x", "utf-8"),
           ),
         );
