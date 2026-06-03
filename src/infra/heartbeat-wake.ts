@@ -40,6 +40,7 @@ export type HeartbeatWakeSource =
   | "acp-spawn"
   | "cli-watchdog"
   | "restart-sentinel"
+  | "followup-queue-restore"
   | "retry"
   | "other";
 
