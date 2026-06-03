@@ -838,6 +838,42 @@ describe("resolveEffectiveToolInventory", () => {
     });
   });
 
+  it("skips unreadable plugin tool metadata while building effective inventory", async () => {
+    const registry = createEmptyPluginRegistry();
+    const metadata = {};
+    Object.defineProperty(metadata, "toolName", {
+      enumerable: true,
+      get() {
+        throw new Error("metadata toolName getter exploded");
+      },
+    });
+    registry.toolMetadata = [
+      {
+        pluginId: "docs",
+        pluginName: "Docs",
+        source: "fixture",
+        metadata,
+      } as never,
+    ];
+    setActivePluginRegistry(registry);
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryScoped } =
+      await loadHarness({
+        tools: [mockTool({ name: "docs_lookup", label: "Lookup", description: "Search docs" })],
+        pluginMeta: { docs_lookup: { pluginId: "docs" } },
+      });
+
+    const result = resolveEffectiveToolInventoryScoped({ cfg: {} });
+
+    expect(result.groups[0]?.tools[0]).toEqual({
+      id: "docs_lookup",
+      label: "Lookup",
+      description: "Search docs",
+      rawDescription: "Search docs",
+      source: "plugin",
+      pluginId: "docs",
+    });
+  });
+
   it("prefers displaySummary over raw description", async () => {
     const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryItem } = await loadHarness({
       tools: [

@@ -3,7 +3,9 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { PluginToolMetadataRegistration } from "../plugins/host-hooks.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import type { PluginToolMetadataRegistryRegistration } from "../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildPluginToolMetadataKey, getPluginToolMeta } from "../plugins/tools.js";
 import { getChannelAgentToolMeta } from "./channel-tools.js";
@@ -153,18 +155,101 @@ function disambiguateLabels(entries: EffectiveToolInventoryEntry[]): EffectiveTo
   });
 }
 
+function readPluginToolMetadataArray(): readonly PluginToolMetadataRegistryRegistration[] {
+  const registry = getActivePluginRegistry();
+  if (!registry) {
+    return [];
+  }
+  try {
+    return Array.isArray(registry.toolMetadata) ? registry.toolMetadata : [];
+  } catch {
+    return [];
+  }
+}
+
+function readOptionalPluginToolMetadataString(
+  metadata: PluginToolMetadataRegistration,
+  key: "displayName" | "description",
+): string | undefined {
+  try {
+    const value = metadata[key];
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readOptionalPluginToolMetadataRisk(
+  metadata: PluginToolMetadataRegistration,
+): PluginToolMetadataRegistration["risk"] | undefined {
+  try {
+    const value = metadata.risk;
+    return value === "low" || value === "medium" || value === "high" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readOptionalPluginToolMetadataTags(
+  metadata: PluginToolMetadataRegistration,
+): string[] | undefined {
+  try {
+    return Array.isArray(metadata.tags) ? [...metadata.tags] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function snapshotPluginToolMetadata(
+  entry: PluginToolMetadataRegistryRegistration,
+): [string, PluginToolMetadataRegistration] | null {
+  try {
+    const { pluginId, metadata } = entry;
+    const toolName = metadata.toolName;
+    if (typeof pluginId !== "string" || typeof toolName !== "string" || !toolName.trim()) {
+      return null;
+    }
+    const snapshot: PluginToolMetadataRegistration = { toolName };
+    const displayName = readOptionalPluginToolMetadataString(metadata, "displayName");
+    if (displayName !== undefined) {
+      snapshot.displayName = displayName;
+    }
+    const description = readOptionalPluginToolMetadataString(metadata, "description");
+    if (description !== undefined) {
+      snapshot.description = description;
+    }
+    const risk = readOptionalPluginToolMetadataRisk(metadata);
+    if (risk !== undefined) {
+      snapshot.risk = risk;
+    }
+    const tags = readOptionalPluginToolMetadataTags(metadata);
+    if (tags !== undefined) {
+      snapshot.tags = tags;
+    }
+    return [buildPluginToolMetadataKey(pluginId, toolName), snapshot];
+  } catch {
+    return null;
+  }
+}
+
+function buildPluginToolMetadataMap(): ReadonlyMap<string, PluginToolMetadataRegistration> {
+  const metadataByTool = new Map<string, PluginToolMetadataRegistration>();
+  for (const entry of readPluginToolMetadataArray()) {
+    const snapshot = snapshotPluginToolMetadata(entry);
+    if (snapshot) {
+      metadataByTool.set(snapshot[0], snapshot[1]);
+    }
+  }
+  return metadataByTool;
+}
+
 export function buildEffectiveToolInventoryEntries(
   tools: readonly AnyAgentTool[],
   rawToolsByName: ReadonlyMap<string, AnyAgentTool> = new Map(),
 ): EffectiveToolInventoryEntry[] {
   // Key metadata by plugin ownership and tool name so only the owning plugin can
   // project display/risk metadata for its own tool.
-  const pluginToolMetadata = new Map(
-    (getActivePluginRegistry()?.toolMetadata ?? []).map((entry) => [
-      buildPluginToolMetadataKey(entry.pluginId, entry.metadata.toolName),
-      entry.metadata,
-    ]),
-  );
+  const pluginToolMetadata = buildPluginToolMetadataMap();
 
   return disambiguateLabels(
     tools
