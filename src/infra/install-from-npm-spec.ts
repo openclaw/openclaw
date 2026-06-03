@@ -6,7 +6,11 @@ import {
 } from "./npm-pack-install.js";
 import { validateRegistryNpmSpec } from "./npm-registry-spec.js";
 
-/** Validates a registry npm spec, downloads its archive, then delegates final installation. */
+/**
+ * Validates a registry npm spec, downloads its archive, and delegates final installation.
+ * The caller supplies archive-specific params without `archivePath`; this helper injects
+ * the downloaded archive path and normalizes the npm archive flow result.
+ */
 export async function installFromValidatedNpmSpecArchive<
   TResult extends { ok: boolean },
   TArchiveInstallParams extends { archivePath: string },
