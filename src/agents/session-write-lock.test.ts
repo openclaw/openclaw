@@ -467,6 +467,34 @@ describe("acquireSessionWriteLock", () => {
     });
   });
 
+  it("reclaims a live OpenClaw-owned lock that exceeded its own maxHoldMs", async () => {
+    await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
+      const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
+        stdio: "ignore",
+      });
+      if (!owner.pid) {
+        throw new Error("missing lock owner pid");
+      }
+      // Live OpenClaw owner, within staleMs but past its own recorded maxHoldMs: a stuck
+      // holder whose in-process watchdog can never fire must still be reclaimable. (#87483)
+      await fs.writeFile(
+        lockPath,
+        JSON.stringify({
+          pid: owner.pid,
+          createdAt: new Date(Date.now() - 30_000).toISOString(),
+          maxHoldMs: 1_000,
+        }),
+        "utf8",
+      );
+
+      try {
+        await expectCurrentPidOwnsLock({ sessionFile, timeoutMs: 500, staleMs: 600_000 });
+      } finally {
+        owner.kill("SIGTERM");
+      }
+    });
+  });
+
   it("retries when a stale lock report disappears before diagnostics", async () => {
     await withTempSessionLockFile(async ({ sessionFile, lockPath }) => {
       const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", "openclaw"], {
