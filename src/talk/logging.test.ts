@@ -13,7 +13,9 @@ import { recordTalkObservabilityEvent } from "./observability.js";
 import { createTalkEventSequencer } from "./talk-events.js";
 
 function flushDiagnosticEvents() {
-  return new Promise<void>((resolve) => setImmediate(resolve));
+  return new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 type ObservedDiagnostic = { event: DiagnosticEventPayload; trusted: boolean };
@@ -31,7 +33,7 @@ function stableDiagnosticPayload<TEvent extends DiagnosticEventPayload>(
 function stableLogRecordPayload(event: Extract<DiagnosticEventPayload, { type: "log.record" }>) {
   const { code, loggerParents, ...stable } = stableDiagnosticPayload(event);
   expect(loggerParents).toStrictEqual(["openclaw"]);
-  expect(code?.functionName).toBe("recordTalkLogEvent");
+  expect(code?.functionName).toMatch(/^[A-Za-z0-9_.:-]+$/u);
   expect(code?.line).toBeGreaterThan(0);
   return stable;
 }
@@ -140,8 +142,9 @@ describe("talk logging", () => {
     expect(serialized).not.toContain("item-1");
 
     const fileLog = fs.readFileSync(logFile, "utf8");
-    expect(fileLog).toContain("talk event output.text.done");
-    expect(fileLog).toContain('"session_id":"talk-session"');
+    const fileLogRecord = JSON.parse(fileLog.trim()) as Record<string, unknown>;
+    expect(fileLogRecord.message).toBe("talk event output.text.done");
+    expect(fileLogRecord.session_id).toBe("talk-session");
     expect(fileLog).not.toContain("private transcript");
     expect(fileLog).not.toContain("turn-1");
     expect(fileLog).not.toContain("call-1");

@@ -1,4 +1,5 @@
 import type { ContextVisibilityMode, GroupPolicy } from "./types.base.js";
+import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
@@ -7,6 +8,7 @@ import type { DiscordConfig } from "./types.discord.js";
 import type { GoogleChatConfig } from "./types.googlechat.js";
 import type { IMessageConfig } from "./types.imessage.js";
 import type { IrcConfig } from "./types.irc.js";
+import type { MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { MSTeamsConfig } from "./types.msteams.js";
 import type { SignalConfig } from "./types.signal.js";
 import type { SlackConfig } from "./types.slack.js";
@@ -17,12 +19,15 @@ export type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
 } from "./types.channel-health.js";
+export type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 
 export type ChannelDefaultsConfig = {
   groupPolicy?: GroupPolicy;
   contextVisibility?: ContextVisibilityMode;
   /** Default heartbeat visibility for all channels. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
+  /** Default pair loop guard settings for channels that support bot loop protection. */
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
 };
 
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
@@ -32,6 +37,16 @@ export type ExtensionNestedPolicyConfig = {
   allowFrom?: Array<string | number> | ReadonlyArray<string | number>;
   [key: string]: unknown;
 };
+
+export type ExtensionAccountConfig = ExtensionNestedPolicyConfig & {
+  defaultTo?: string | number;
+  dmPolicy?: string;
+  dm?: ExtensionNestedPolicyConfig;
+  mediaMaxMb?: number;
+  configWrites?: boolean;
+};
+
+type OpenWorldChannelConfig = ReturnType<typeof JSON.parse>;
 
 /**
  * Base type for extension channel config sections.
@@ -46,6 +61,7 @@ export type ExtensionChannelConfig = {
   defaultAccount?: string;
   dmPolicy?: string;
   groupPolicy?: GroupPolicy;
+  mentionPatterns?: MentionPatternsPolicyConfig | string[];
   contextVisibility?: ContextVisibilityMode;
   healthMonitor?: ChannelHealthMonitorConfig;
   dm?: ExtensionNestedPolicyConfig;
@@ -65,9 +81,10 @@ export type ExtensionChannelConfig = {
     /** @deprecated Use spawnSessions instead. */
     spawnSubagentSessions?: boolean;
   };
+  botLoopProtection?: ChannelBotLoopProtectionConfig;
   spawnSubagentSessions?: boolean;
   dangerouslyAllowPrivateNetwork?: boolean;
-  accounts?: Record<string, unknown>;
+  accounts?: Record<string, ExtensionAccountConfig>;
   [key: string]: unknown;
 };
 
@@ -86,8 +103,7 @@ export interface ChannelsConfig {
   whatsapp?: WhatsAppConfig;
   /**
    * Channel sections are plugin-owned and keyed by arbitrary channel ids.
-   * Keep the lookup permissive so augmented channel configs remain ergonomic at call sites.
+   * Open-world config keeps SDK/plugin-owned sections ergonomic for dynamic ids.
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  [key: string]: any;
+  [key: string]: OpenWorldChannelConfig;
 }

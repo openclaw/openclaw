@@ -1,3 +1,4 @@
 // Narrow response-size reader for plugins that download bounded HTTP bodies.
 
-export { readResponseWithLimit } from "../media/read-response-with-limit.js";
+export { readByteStreamWithLimit } from "@openclaw/media-core/read-byte-stream-with-limit";
+export { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";

@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EventLogEntry } from "./app-events.ts";
 import {
+  recordControlUiConnectTiming,
   recordControlUiPerformanceEvent,
   recordControlUiRenderTiming,
   startControlUiResponsivenessObserver,
@@ -89,6 +90,49 @@ describe("recordControlUiPerformanceEvent", () => {
     }
     expect(newestEvent.payload).toEqual({ i: 259 });
     expect(oldestEvent.payload).toEqual({ i: 10 });
+  });
+});
+
+describe("recordControlUiConnectTiming", () => {
+  it("records safe connect phase payloads without auth material", () => {
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const host = createHost();
+
+    recordControlUiConnectTiming(host, {
+      generation: 1,
+      phase: "request-sent",
+      durationMs: 42.2,
+      phaseDurationMs: 5.8,
+      hasChallenge: true,
+      usedFallback: false,
+      secureContext: true,
+      hasDeviceIdentity: true,
+      hasDevice: true,
+      hasAuthToken: true,
+      hasDeviceToken: false,
+      hasPassword: false,
+    });
+
+    const entry = requireBufferedEvent(host);
+    const payload = payloadOf(entry);
+    expect(entry.event).toBe("control-ui.connect");
+    expect(payload).toEqual({
+      generation: 1,
+      phase: "request-sent",
+      durationMs: 42,
+      phaseDurationMs: 6,
+      slow: false,
+      hasChallenge: true,
+      usedFallback: false,
+      secureContext: true,
+      hasDeviceIdentity: true,
+      hasDevice: true,
+      hasAuthToken: true,
+      hasDeviceToken: false,
+      hasPassword: false,
+      errorCode: undefined,
+    });
+    expect(JSON.stringify(payload)).not.toContain("token-value");
   });
 });
 
@@ -228,10 +272,14 @@ describe("startControlUiResponsivenessObserver", () => {
     }
 
     expect(host.eventLogBuffer).toHaveLength(250);
-    expect(
-      host.eventLogBuffer.filter((entry) => entry.event === "control-ui.longtask"),
-    ).toHaveLength(50);
-    expect(host.eventLogBuffer.map((entry) => entry.event)).toContain("gateway.event");
+    const eventCounts = host.eventLogBuffer.reduce<Record<string, number>>((counts, entry) => {
+      counts[entry.event] = (counts[entry.event] ?? 0) + 1;
+      return counts;
+    }, {});
+    expect(eventCounts).toEqual({
+      "gateway.event": 200,
+      "control-ui.longtask": 50,
+    });
   });
 
   it("returns null when responsiveness entries are unsupported or observe fails", () => {

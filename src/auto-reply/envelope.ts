@@ -1,3 +1,7 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveUserTimezone } from "../agents/date-time.js";
 import { normalizeChatType } from "../channels/chat-type.js";
 import { resolveSenderLabel, type SenderLabelParams } from "../channels/sender-label.js";
@@ -8,10 +12,6 @@ import {
   formatZonedTimestamp,
 } from "../infra/format-time/format-datetime.ts";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 
 type AgentEnvelopeParams = {
   channel: string;
@@ -142,15 +142,25 @@ export function formatEnvelopeTimestamp(
 
   const formatted =
     zone.mode === "utc"
-      ? formatUtcTimestamp(date)
+      ? formatUtcTimestamp(date, { displaySeconds: true })
       : zone.mode === "local"
-        ? formatZonedTimestamp(date)
-        : formatZonedTimestamp(date, { timeZone: zone.timeZone });
+        ? formatZonedTimestamp(date, { displaySeconds: true })
+        : formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true });
 
   if (!formatted) {
     return undefined;
   }
   return weekday ? `${weekday} ${formatted}` : formatted;
+}
+
+function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
+  const label = sanitizeEnvelopeHeaderPart(from || "");
+  const idMarkerIndex = label.search(/\s+id:/i);
+  if (idMarkerIndex > 0) {
+    const displayLabel = label.slice(0, idMarkerIndex).trim();
+    return displayLabel.includes(":") ? "(sender)" : displayLabel;
+  }
+  return label.includes(":") ? "(sender)" : label;
 }
 
 export function formatAgentEnvelope(params: AgentEnvelopeParams): string {
@@ -211,12 +221,15 @@ export function formatInboundEnvelope(params: {
   const resolvedSenderRaw =
     normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
+  const directSender = resolveDirectEnvelopeBodyLabel(normalizeOptionalString(params.from));
   const body =
     isDirect && params.fromMe
       ? `(self): ${params.body}`
-      : !isDirect && resolvedSender
-        ? `${resolvedSender}: ${params.body}`
-        : params.body;
+      : isDirect && directSender
+        ? `${directSender}: ${params.body}`
+        : !isDirect && resolvedSender
+          ? `${resolvedSender}: ${params.body}`
+          : params.body;
   return formatAgentEnvelope({
     channel: params.channel,
     from: params.from,

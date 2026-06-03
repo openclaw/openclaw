@@ -306,6 +306,29 @@ describe("runReplyAgent runtime config", () => {
     expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
+  it("surfaces preflight compaction failures before the agent starts", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    runPreflightCompactionIfNeededMock.mockRejectedValue(
+      new Error("Preflight compaction required but failed: auth profile mismatch"),
+    );
+    runMemoryFlushIfNeededMock.mockResolvedValue(undefined);
+
+    const result = await runReplyAgent(replyParams);
+
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single preflight compaction failure reply payload");
+    }
+    expect(result.text).toContain("Context is too large");
+    expect(result.text).toContain("auto-compaction could not recover");
+    expect(result.text).toContain("/compact");
+    expect(result.text).toContain("/new");
+    const metadata = getReplyPayloadMetadata(result);
+    expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
+  });
+
   it("does not resolve secrets before the enqueue-followup queue path", async () => {
     const { followupRun, resolvedQueue, replyParams } = createDirectRuntimeReplyParams({
       shouldFollowup: true,
@@ -316,7 +339,7 @@ describe("runReplyAgent runtime config", () => {
 
     expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
     expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
-    const enqueueCall = enqueueFollowupRunMock.mock.calls[0];
+    const enqueueCall = enqueueFollowupRunMock.mock.calls.at(0);
     expect(enqueueCall?.[0]).toBe("main");
     expect(enqueueCall?.[1]).toBe(followupRun);
     expect(enqueueCall?.[2]).toBe(resolvedQueue);

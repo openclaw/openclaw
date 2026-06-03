@@ -5,7 +5,7 @@ const mocks = vi.hoisted(() => ({
   normalizeProviderToolSchemas: vi.fn((params: { tools: unknown[] }) => params.tools),
 }));
 
-vi.mock("../pi-embedded-runner/tool-schema-runtime.js", () => ({
+vi.mock("../embedded-agent-runner/tool-schema-runtime.js", () => ({
   logProviderToolSchemaDiagnostics: mocks.logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas: mocks.normalizeProviderToolSchemas,
 }));
@@ -25,7 +25,7 @@ describe("AgentRuntimePlan tool diagnostics legacy fallback", () => {
     });
 
     expect(mocks.logProviderToolSchemaDiagnostics).toHaveBeenCalledTimes(1);
-    expect(mocks.logProviderToolSchemaDiagnostics.mock.calls[0]?.[0]).toEqual({
+    expect(mocks.logProviderToolSchemaDiagnostics.mock.calls.at(0)?.[0]).toEqual({
       tools,
       provider: "openai",
       config: undefined,

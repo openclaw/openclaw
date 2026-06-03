@@ -1,8 +1,8 @@
 import type { CancelNotification } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
+import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import type { GatewayClient } from "../gateway/client.js";
-import type { EventFrame } from "../gateway/protocol/index.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { promptAgent } from "./translator.prompt-harness.test-support.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
@@ -158,7 +158,7 @@ function requireRecord(value: unknown): Record<string, unknown> {
 }
 
 function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error("expected mock call");
   }
@@ -457,7 +457,7 @@ describe("ACP translator permission relay", () => {
     } as EventFrame);
 
     expect(harness.requestPermission).not.toHaveBeenCalled();
-    const sessionUpdate = firstCallArg(harness.connection.__sessionUpdateMock);
+    const sessionUpdate = firstCallArg(harness.connection["__sessionUpdateMock"]);
     const update = requireRecord(sessionUpdate.update);
     expect(sessionUpdate.sessionId).toBe(SESSION_ID);
     expect(update.sessionUpdate).toBe("tool_call");

@@ -16,9 +16,13 @@ vi.mock("../plugins/manifest-registry.js", () => ({
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listKnownProviderEnvApiKeyNames: () => ["OPENAI_API_KEY"],
-  PROVIDER_ENV_API_KEY_CANDIDATES: { openai: ["OPENAI_API_KEY"] },
   resolveProviderEnvApiKeyCandidates: () => ({ openai: ["OPENAI_API_KEY"] }),
   resolveProviderEnvAuthEvidence: () => ({}),
+  resolveProviderEnvAuthLookupMaps: () => ({
+    aliasMap: {},
+    envCandidateMap: { openai: ["OPENAI_API_KEY"] },
+    authEvidenceMap: {},
+  }),
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
@@ -92,6 +96,40 @@ function createOpenAiApiKeyRuntimeConfig(): OpenClawConfig {
         openai: {
           baseUrl: "https://api.openai.com/v1",
           apiKey: "sk-runtime-resolved", // pragma: allowlist secret
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function createCustomProviderApiKeySourceConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        litellm: {
+          baseUrl: "https://litellm.example/v1",
+          apiKey: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_MODEL_LITELLM_API_KEY", // pragma: allowlist secret
+          },
+          api: "openai-completions" as const,
+          models: [],
+        },
+      },
+    },
+  };
+}
+
+function createCustomProviderApiKeyRuntimeConfig(): OpenClawConfig {
+  return {
+    models: {
+      providers: {
+        litellm: {
+          baseUrl: "https://litellm.example/v1",
+          apiKey: "sk-litellm-runtime-secret", // pragma: allowlist secret
           api: "openai-completions" as const,
           models: [],
         },
@@ -273,6 +311,24 @@ describe("models-config runtime source snapshot", () => {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
         await ensureOpenClawModelsJson(clonedRuntimeConfig, agentDir);
         await expectGeneratedProviderApiKey(agentDir, "openai", "OPENAI_API_KEY"); // pragma: allowlist secret
+      } finally {
+        clearRuntimeConfigSnapshot();
+        clearConfigCache();
+      }
+    });
+  });
+
+  it("preserves source markers for custom-provider api keys after models status secret resolution", async () => {
+    const agentDir = await fixtureSuite.createCaseDir("agent");
+    await withTempEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS, async () => {
+      unsetEnv(MODELS_CONFIG_IMPLICIT_ENV_VARS);
+      const sourceConfig = createCustomProviderApiKeySourceConfig();
+      const runtimeConfig = createCustomProviderApiKeyRuntimeConfig();
+
+      try {
+        setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
+        await ensureOpenClawModelsJson(runtimeConfig, agentDir);
+        await expectGeneratedProviderApiKey(agentDir, "litellm", "OPENCLAW_MODEL_LITELLM_API_KEY"); // pragma: allowlist secret
       } finally {
         clearRuntimeConfigSnapshot();
         clearConfigCache();

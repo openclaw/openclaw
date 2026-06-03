@@ -9,6 +9,8 @@ import {
   makeTempDir,
 } from "./exec-approvals-test-helpers.js";
 import {
+  analyzeArgvCommand,
+  evaluateExecAllowlist,
   evaluateShellAllowlist,
   requiresExecApproval,
   resolveAllowAlwaysPatterns,
@@ -222,6 +224,27 @@ describe("resolveAllowAlwaysPatterns", () => {
     expect(patterns).toStrictEqual([]);
   });
 
+  it("persists allow-always executable patterns with the trust realpath", () => {
+    const patterns = resolveAllowAlwaysPatterns({
+      segments: [
+        {
+          raw: "rg -n needle",
+          argv: ["rg", "-n", "needle"],
+          resolution: makeMockCommandResolution({
+            execution: makeMockExecutableResolution({
+              rawExecutable: "rg",
+              resolvedPath: "/opt/homebrew/bin/rg",
+              resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+              executableName: "rg",
+            }),
+          }),
+        },
+      ],
+    });
+
+    expect(patterns).toEqual(["/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg"]);
+  });
+
   it("persists benign awk interpreters when strict inline-eval is enabled", () => {
     if (process.platform === "win32") {
       return;
@@ -292,6 +315,69 @@ describe("resolveAllowAlwaysPatterns", () => {
       ),
     ).toBeNull();
   });
+
+  it.each([
+    {
+      name: "empty PowerShell file argument",
+      argvPrefix: [],
+      fileFlag: "-File",
+      scriptArgs: [""],
+      expectedArgPattern: "^\x00$",
+    },
+    {
+      name: "PowerShell file alias argument",
+      argvPrefix: [],
+      fileFlag: "-fi",
+      scriptArgs: ["arg"],
+      expectedArgPattern: "^arg\x00$",
+    },
+    {
+      name: "empty PowerShell file argument after dispatch unwrap",
+      argvPrefix: ["env"],
+      fileFlag: "/file",
+      scriptArgs: [""],
+      expectedArgPattern: "^\x00$",
+    },
+  ])(
+    "persists allow-always patterns for $name",
+    ({ argvPrefix, fileFlag, scriptArgs, expectedArgPattern }) => {
+      const dir = makeTempDir();
+      makeExecutable(dir, "env");
+      makeExecutable(dir, "pwsh");
+      const scriptPath = path.join(dir, "script.ps1");
+      fs.writeFileSync(scriptPath, "");
+      fs.chmodSync(scriptPath, 0o755);
+      try {
+        const env = makePathEnv(dir);
+        const analysis = analyzeArgvCommand({
+          argv: [...argvPrefix, "pwsh", fileFlag, scriptPath, ...scriptArgs],
+          cwd: dir,
+          env,
+        });
+        expect(analysis.ok).toBe(true);
+
+        const entries = resolveAllowAlwaysPatternEntries({
+          segments: analysis.segments,
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(entries).toEqual([{ pattern: scriptPath, argPattern: expectedArgPattern }]);
+
+        const result = evaluateExecAllowlist({
+          analysis,
+          allowlist: entries,
+          safeBins: new Set(),
+          cwd: dir,
+          env,
+          platform: "win32",
+        });
+        expect(result.allowlistSatisfied).toBe(true);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("keeps inline awk programs out of allow-always persistence in strict inline-eval mode", () => {
     if (process.platform === "win32") {
@@ -925,21 +1011,40 @@ $0 \\"$1\\"" touch {marker}`,
     expect(second.allowlistSatisfied).toBe(false);
   });
 
-  it("prevents allow-always bypass for script wrapper chains", () => {
+  it("keeps policy-blocked script wrapper chains out of allow-always", () => {
     if (process.platform !== "darwin" && process.platform !== "freebsd") {
       return;
     }
     const dir = makeTempDir();
-    const echo = makeExecutable(dir, "echo");
+    makeExecutable(dir, "echo");
     makeExecutable(dir, "id");
     const env = makePathEnv(dir);
-    expectAllowAlwaysBypassBlocked({
+    const safeBins = resolveSafeBins(undefined);
+    const { persisted } = resolvePersistedPatterns({
+      command: "/usr/bin/script -q /dev/null /bin/sh -c 'echo warmup-ok'",
       dir,
-      firstCommand: "/usr/bin/script -q /dev/null /bin/sh -c 'echo warmup-ok'",
-      secondCommand: "/usr/bin/script -q /dev/null /bin/sh -c 'id > marker'",
       env,
-      persistedPattern: echo,
+      safeBins,
     });
+    expect(persisted).toStrictEqual([]);
+
+    const second = evaluateShellAllowlist({
+      command: "/usr/bin/script -q /dev/null /bin/sh -c 'id > marker'",
+      allowlist: persisted.map((pattern) => ({ pattern })),
+      safeBins,
+      cwd: dir,
+      env,
+      platform: process.platform,
+    });
+    expect(second.allowlistSatisfied).toBe(false);
+    expect(
+      requiresExecApproval({
+        ask: "on-miss",
+        security: "allowlist",
+        analysisOk: second.analysisOk,
+        allowlistSatisfied: second.allowlistSatisfied,
+      }),
+    ).toBe(true);
   });
 
   it("does not persist comment-tailed payload paths that never execute", () => {

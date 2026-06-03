@@ -282,12 +282,16 @@ function startPollingLoop(params: ZaloPollingLoopParams) {
         // no updates
       } else if (!isStopped() && !abortSignal.aborted) {
         runtime.error?.(`[${account.accountId}] Zalo polling error: ${formatZaloError(err)}`);
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await new Promise((resolve) => {
+          setTimeout(resolve, 5000);
+        });
       }
     }
 
     if (!isStopped() && !abortSignal.aborted) {
-      setImmediate(poll);
+      setImmediate(() => {
+        void poll();
+      });
     }
   };
 
@@ -378,13 +382,7 @@ async function handleImageMessage(params: ZaloImageMessageParams): Promise<void>
   if (photo_url) {
     try {
       const maxBytes = mediaMaxMb * 1024 * 1024;
-      const fetched = await core.channel.media.fetchRemoteMedia({ url: photo_url, maxBytes });
-      const saved = await core.channel.media.saveMediaBuffer(
-        fetched.buffer,
-        fetched.contentType,
-        "inbound",
-        maxBytes,
-      );
+      const saved = await core.channel.media.saveRemoteMedia({ url: photo_url, maxBytes });
       mediaPath = saved.path;
       mediaType = saved.contentType;
     } catch (err) {
@@ -457,7 +455,7 @@ async function authorizeZaloMessage(
       providerMissingFallbackApplied: senderAccess.providerMissingFallbackApplied,
       providerKey: "zalo",
       accountId: account.accountId,
-      log: (message) => logVerbose(core, runtime, message),
+      log: (messageValue) => logVerbose(core, runtime, messageValue),
     });
     if (!senderAccess.allowed) {
       if (senderAccess.reasonCode === "group_policy_disabled") {
@@ -492,12 +490,12 @@ async function authorizeZaloMessage(
         onCreated: () => {
           logVerbose(core, runtime, `zalo pairing request sender=${senderId}`);
         },
-        sendPairingReply: async (text) => {
+        sendPairingReply: async (textLocal) => {
           await sendMessage(
             token,
             {
               chat_id: chatId,
-              text,
+              text: textLocal,
             },
             fetcher,
           );
@@ -583,7 +581,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     body: rawBody,
   });
 
-  const ctxPayload = core.channel.turn.buildContext({
+  const ctxPayload = core.channel.inbound.buildContext({
     channel: "zalo",
     accountId: route.accountId,
     messageId: message_id,
@@ -597,10 +595,6 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       kind: isGroup ? "group" : "direct",
       id: chatId,
       label: fromLabel,
-      routePeer: {
-        kind: isGroup ? "group" : "direct",
-        id: chatId,
-      },
     },
     route: {
       agentId: route.agentId,
@@ -609,14 +603,12 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     },
     reply: {
       to: `zalo:${chatId}`,
-      originatingTo: `zalo:${chatId}`,
     },
     message: {
       body,
       bodyForAgent: rawBody,
       rawBody,
       commandBody: rawBody,
-      envelopeFrom: fromLabel,
     },
     media:
       mediaPath || mediaType
@@ -654,7 +646,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
       },
       onStartError: (err: unknown) => {
         logTypingFailure({
-          log: (message) => logVerbose(core, runtime, message),
+          log: (messageLocal) => logVerbose(core, runtime, messageLocal),
           channel: "zalo",
           action: "start",
           target: chatId,
@@ -664,7 +656,7 @@ async function processMessageWithPipeline(params: ZaloMessagePipelineParams): Pr
     },
   };
 
-  await core.channel.turn.runAssembled({
+  await core.channel.inbound.dispatchReply({
     cfg: config,
     channel: "zalo",
     accountId: account.accountId,
@@ -1011,7 +1003,8 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   }
 }
 
-export const __testing = {
+export const testing = {
   resolveZaloRuntimeGroupPolicy,
   clearHostedMediaRouteRefsForTest: () => hostedMediaRouteRefs.clear(),
 };
+export { testing as __testing };

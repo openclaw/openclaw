@@ -1,15 +1,19 @@
 import { cancel, confirm, isCancel } from "@clack/prompts";
+import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
+import {
+  stylePromptMessage,
+  stylePromptTitle,
+} from "../../packages/terminal-core/src/prompt-style.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isNixMode } from "../config/config.js";
 import { resolveGatewayService } from "../daemon/service.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { selectStyled } from "../terminal/prompt-select-styled.js";
-import { stylePromptMessage, stylePromptTitle } from "../terminal/prompt-style.js";
 import { resolveCleanupPlanFromDisk } from "./cleanup-plan.js";
 import {
   listAgentSessionDirs,
   removePath,
   removeStateAndLinkedPaths,
+  removeWorkspaceAttestationPaths,
   removeWorkspaceDirs,
 } from "./cleanup-utils.js";
 
@@ -27,7 +31,7 @@ async function stopGatewayIfRunning(runtime: RuntimeEnv) {
     return;
   }
   const service = resolveGatewayService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -145,7 +149,7 @@ export async function resetCommand(runtime: RuntimeEnv, opts: ResetOptions) {
       { dryRun },
     );
     await removeWorkspaceDirs(workspaceDirs, runtime, { dryRun });
+    await removeWorkspaceAttestationPaths(workspaceDirs, runtime, { dryRun });
     runtime.log(`Next: ${formatCliCommand("openclaw onboard --install-daemon")}`);
-    return;
   }
 }

@@ -1,10 +1,11 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { listSpeechProviders } from "./provider-registry.js";
 import type {
   SpeechModelOverridePolicy,
   SpeechProviderConfig,
+  SpeechProviderOverrides,
   TtsDirectiveOverrides,
   TtsDirectiveParseResult,
 } from "./provider-types.js";
@@ -57,11 +58,14 @@ function prioritizeProvider(
   if (!providerId) {
     return [...providers];
   }
-  const preferredProvider = providers.find((provider) => provider.id === providerId);
+  const preferredProvider = resolveDirectiveProvider(providers, providerId);
   if (!preferredProvider) {
     return [...providers];
   }
-  return [preferredProvider, ...providers.filter((provider) => provider.id !== providerId)];
+  return [
+    preferredProvider,
+    ...providers.filter((provider) => provider.id !== preferredProvider.id),
+  ];
 }
 
 function resolveDirectiveProvider(
@@ -77,6 +81,36 @@ function resolveDirectiveProvider(
       provider.id === normalized ||
       provider.aliases?.some((alias) => normalizeLowercaseStringOrEmpty(alias) === normalized),
   );
+}
+
+function parseGenericSpeakerDirective(params: {
+  key: string;
+  value: string;
+  policy: SpeechModelOverridePolicy;
+  currentOverrides?: SpeechProviderOverrides;
+}): SpeechProviderOverrides | undefined {
+  if (!params.policy.allowVoice) {
+    return undefined;
+  }
+  switch (params.key) {
+    case "speakervoice":
+    case "speaker_voice":
+      return {
+        ...params.currentOverrides,
+        speakerVoice: params.value,
+        voice: params.value,
+        voiceName: params.value,
+      };
+    case "speakervoiceid":
+    case "speaker_voice_id":
+      return {
+        ...params.currentOverrides,
+        speakerVoiceId: params.value,
+        voiceId: params.value,
+      };
+    default:
+      return undefined;
+  }
 }
 
 function collectMarkdownCodeRanges(text: string): TextRange[] {
@@ -308,8 +342,25 @@ export function parseTtsDirectives(
       }
 
       let handled = false;
-      const directiveProviders = getDirectiveProviders();
-      for (const provider of directiveProviders) {
+      const directiveProvidersLocal = getDirectiveProviders();
+      for (const provider of directiveProvidersLocal) {
+        const genericSpeakerOverrides = parseGenericSpeakerDirective({
+          key,
+          value: rawValue,
+          policy,
+          currentOverrides: overrides.providerOverrides?.[provider.id],
+        });
+        if (genericSpeakerOverrides) {
+          overrides.providerOverrides = {
+            ...overrides.providerOverrides,
+            [provider.id]: {
+              ...overrides.providerOverrides?.[provider.id],
+              ...genericSpeakerOverrides,
+            },
+          };
+          handled = true;
+          break;
+        }
         const parsed = provider.parseDirectiveToken?.({
           key,
           value: rawValue,
@@ -336,7 +387,7 @@ export function parseTtsDirectives(
         handled = true;
         break;
       }
-      if (!handled && declaredProviderId && directiveProviders.length > 0) {
+      if (!handled && declaredProviderId && directiveProvidersLocal.length > 0) {
         warnings.push(`unsupported ${declaredProviderId} directive key "${key}"`);
       }
     }

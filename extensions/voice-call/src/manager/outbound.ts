@@ -19,12 +19,19 @@ import { finalizeCall } from "./lifecycle.js";
 import { getCallByProviderCallId } from "./lookup.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
+import { resolveVoiceCallSecondsTimerDelayMs } from "./timer-delays.js";
 import { clearTranscriptWaiter, waitForFinalTranscript } from "./timers.js";
 import { generateDtmfRedirectTwiml, generateNotifyTwiml } from "./twiml.js";
 
 type InitiateContext = Pick<
   CallManagerContext,
-  "activeCalls" | "providerCallIdMap" | "provider" | "config" | "storePath" | "webhookUrl"
+  | "activeCalls"
+  | "providerCallIdMap"
+  | "provider"
+  | "config"
+  | "storePath"
+  | "webhookUrl"
+  | "streamSessionIssuer"
 >;
 
 type SpeakContext = Pick<
@@ -201,6 +208,17 @@ export async function initiateCall(
       );
     }
 
+    const streamSession =
+      ctx.config.realtime?.enabled && ctx.provider.name === "telnyx" && ctx.streamSessionIssuer
+        ? ctx.streamSessionIssuer({
+            providerName: "telnyx",
+            callId,
+            from,
+            to,
+            direction: "outbound",
+          })
+        : undefined;
+
     const result = await ctx.provider.initiateCall({
       callId,
       from,
@@ -208,6 +226,9 @@ export async function initiateCall(
       webhookUrl: ctx.webhookUrl,
       inlineTwiml,
       preConnectTwiml,
+      ...(streamSession
+        ? { streamUrl: streamSession.streamUrl, streamAuthToken: streamSession.token }
+        : {}),
     });
 
     callRecord.providerCallId = result.providerCallId;
@@ -360,14 +381,17 @@ export async function speakInitialMessage(
 
     if (mode === "notify") {
       const delaySec = ctx.config.outbound.notifyHangupDelaySec;
+      const delayMs = resolveVoiceCallSecondsTimerDelayMs(delaySec, 0);
       console.log(`[voice-call] Notify mode: auto-hangup in ${delaySec}s for call ${call.callId}`);
-      setTimeout(async () => {
-        const currentCall = ctx.activeCalls.get(call.callId);
-        if (currentCall && !TerminalStates.has(currentCall.state)) {
-          console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
-          await endCall(ctx, call.callId);
-        }
-      }, delaySec * 1000);
+      setTimeout(() => {
+        void (async () => {
+          const currentCall = ctx.activeCalls.get(call.callId);
+          if (currentCall && !TerminalStates.has(currentCall.state)) {
+            console.log(`[voice-call] Notify mode: hanging up call ${call.callId}`);
+            await endCall(ctx, call.callId);
+          }
+        })();
+      }, delayMs);
     } else if (
       mode === "conversation" &&
       ctx.provider &&

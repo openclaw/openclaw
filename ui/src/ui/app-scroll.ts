@@ -1,3 +1,5 @@
+import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
+
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
 const HEADER_HIDE_SCROLL_DELTA = 12;
@@ -16,8 +18,14 @@ type ScrollHost = {
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll: boolean;
   chatProgrammaticScrollTarget: number;
+  settings?: {
+    chatAutoScroll?: ChatAutoScrollMode;
+  };
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
+  activityScrollFrame?: number | null;
+  activityAutoFollow?: boolean;
+  activityAtBottom?: boolean;
   topbarObserver: ResizeObserver | null;
 };
 
@@ -25,7 +33,16 @@ function queryHost(host: Partial<ScrollHost>, selectors: string): Element | null
   return typeof host.querySelector === "function" ? host.querySelector(selectors) : null;
 }
 
-export function scheduleChatScroll(host: ScrollHost, force = false, smooth = false) {
+type ChatScrollOptions = {
+  source?: "auto" | "manual";
+};
+
+export function scheduleChatScroll(
+  host: ScrollHost,
+  force = false,
+  smooth = false,
+  options: ChatScrollOptions = {},
+) {
   if (host.chatScrollFrame) {
     cancelAnimationFrame(host.chatScrollFrame);
   }
@@ -56,12 +73,19 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         return;
       }
       const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
+      const autoScrollMode = normalizeChatAutoScrollMode(host.settings?.chatAutoScroll);
+      const manualScroll = options.source === "manual";
 
       // force=true only overrides when we haven't auto-scrolled yet (initial load).
       // After initial load, respect the user's scroll position.
       const effectiveForce = force && !host.chatHasAutoScrolled;
       const shouldStick =
-        effectiveForce || host.chatUserNearBottom || distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+        manualScroll ||
+        autoScrollMode === "always" ||
+        (autoScrollMode === "near-bottom" &&
+          (effectiveForce ||
+            host.chatUserNearBottom ||
+            distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
 
       if (!shouldStick) {
         // User is scrolled up — flag that new content arrived below.
@@ -100,9 +124,12 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         const latestDistanceFromBottom =
           latest.scrollHeight - latest.scrollTop - latest.clientHeight;
         const shouldStickRetry =
-          effectiveForce ||
-          host.chatUserNearBottom ||
-          latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+          manualScroll ||
+          autoScrollMode === "always" ||
+          (autoScrollMode === "near-bottom" &&
+            (effectiveForce ||
+              host.chatUserNearBottom ||
+              latestDistanceFromBottom < NEAR_BOTTOM_THRESHOLD));
         if (!shouldStickRetry) {
           return;
         }
@@ -136,6 +163,32 @@ export function scheduleLogsScroll(host: ScrollHost, force = false) {
         return;
       }
       container.scrollTop = container.scrollHeight;
+    });
+  });
+}
+
+export function scheduleActivityScroll(host: ScrollHost, force = false) {
+  if (host.activityScrollFrame) {
+    cancelAnimationFrame(host.activityScrollFrame);
+  }
+  void host.updateComplete.then(() => {
+    host.activityScrollFrame = requestAnimationFrame(() => {
+      host.activityScrollFrame = null;
+      const container = queryHost(host, ".activity-stream") as HTMLElement | null;
+      if (!container) {
+        return;
+      }
+      const distanceFromBottom =
+        container.scrollHeight - container.scrollTop - container.clientHeight;
+      const shouldStick =
+        force ||
+        (host.activityAutoFollow !== false &&
+          (host.activityAtBottom !== false || distanceFromBottom < 120));
+      if (!shouldStick) {
+        return;
+      }
+      container.scrollTop = container.scrollHeight;
+      host.activityAtBottom = true;
     });
   });
 }
@@ -184,6 +237,15 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
   }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.logsAtBottom = distanceFromBottom < 80;
+}
+
+export function handleActivityScroll(host: ScrollHost, event: Event) {
+  const container = event.currentTarget as HTMLElement | null;
+  if (!container) {
+    return;
+  }
+  const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+  host.activityAtBottom = distanceFromBottom < 120;
 }
 
 export function resetChatScroll(host: ScrollHost) {

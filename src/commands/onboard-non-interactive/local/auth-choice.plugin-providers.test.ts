@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import type { CodexRuntimePluginInstallResult } from "../../codex-runtime-plugin-install.js";
+import type { CopilotRuntimePluginInstallResult } from "../../copilot-runtime-plugin-install.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() =>
@@ -13,7 +14,24 @@ const ensureCodexRuntimePluginForModelSelection = vi.hoisted(() =>
   ),
 );
 vi.mock("../../codex-runtime-plugin-install.js", () => ({
+  CODEX_RUNTIME_PLUGIN_ID: "codex",
   ensureCodexRuntimePluginForModelSelection,
+}));
+const ensureCopilotRuntimePluginForModelSelection = vi.hoisted(() =>
+  vi.fn(
+    async ({ cfg }: { cfg: OpenClawConfig }): Promise<CopilotRuntimePluginInstallResult> => ({
+      cfg,
+      required: false,
+      installed: false,
+    }),
+  ),
+);
+vi.mock("../../copilot-runtime-plugin-install.js", () => ({
+  ensureCopilotRuntimePluginForModelSelection,
+}));
+const offerPostInstallMigrations = vi.hoisted(() => vi.fn(async () => {}));
+vi.mock("../../../wizard/setup.post-install-migration.js", () => ({
+  offerPostInstallMigrations,
 }));
 const resolvePreferredProviderForAuthChoice = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../../../plugins/provider-auth-choice-preference.js", () => ({
@@ -29,7 +47,7 @@ const resolveProviderPluginChoice = vi.hoisted(() => vi.fn());
 const resolvePluginProviders = vi.hoisted(() => vi.fn(() => []));
 vi.mock("./auth-choice.plugin-providers.runtime.js", () => ({
   authChoicePluginProvidersRuntime: {
-    resolveOwningPluginIdsForProvider,
+    resolveOwningPluginIdsForProviderRef: resolveOwningPluginIdsForProvider,
     resolveProviderPluginChoice,
     resolvePluginProviders,
   },
@@ -47,6 +65,12 @@ beforeEach(() => {
     required: false,
     installed: false,
   }));
+  ensureCopilotRuntimePluginForModelSelection.mockImplementation(async ({ cfg }) => ({
+    cfg,
+    required: false,
+    installed: false,
+  }));
+  offerPostInstallMigrations.mockClear();
 });
 
 function createRuntime() {
@@ -85,7 +109,8 @@ function expectConfigDefaults(value: unknown) {
 }
 
 function expectRuntimeErrorIncludes(runtime: ReturnType<typeof createRuntime>, text: string) {
-  expect(runtime.error.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
+  const errorOutput = runtime.error.mock.calls.map(([message]) => String(message)).join("\n");
+  expect(errorOutput).toContain(text);
 }
 
 describe("applyNonInteractivePluginProviderChoice", () => {
@@ -269,5 +294,87 @@ describe("applyNonInteractivePluginProviderChoice", () => {
     expect(ensureInput.runtime).toBe(runtime);
     expectWorkspaceDir(ensureInput.workspaceDir);
     expect(result).toBe(installedConfig);
+    expect(offerPostInstallMigrations).toHaveBeenCalledOnce();
+    const migrationInput = mockArg(offerPostInstallMigrations);
+    expect(migrationInput.config).toBe(installedConfig);
+    expect(migrationInput.installedPluginIds).toEqual(["codex"]);
+    expect(migrationInput.nonInteractive).toBe(true);
+  });
+
+  it("ensures Copilot after a non-interactive GitHub Copilot choice opts into the runtime", async () => {
+    const runtime = createRuntime();
+    const selectedConfig = {
+      agents: { defaults: { model: { primary: "github-copilot/gpt-5.5" } } },
+      models: {
+        providers: {
+          "github-copilot": { agentRuntime: { id: "copilot" } },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const installedConfig = {
+      ...selectedConfig,
+      plugins: { entries: { copilot: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+    const runNonInteractive = vi.fn(async () => selectedConfig);
+    ensureCopilotRuntimePluginForModelSelection.mockResolvedValue({
+      cfg: installedConfig,
+      required: true,
+      installed: true,
+      status: "installed",
+    });
+    resolvePluginProviders.mockReturnValue([
+      { id: "github-copilot", pluginId: "github-copilot" },
+    ] as never);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "github-copilot", pluginId: "github-copilot", label: "GitHub Copilot" },
+      method: { runNonInteractive },
+    });
+
+    const result = await applyNonInteractivePluginProviderChoice({
+      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      authChoice: "github-copilot",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    const ensureInput = mockArg(ensureCopilotRuntimePluginForModelSelection);
+    expect(ensureInput.cfg).toBe(selectedConfig);
+    expect(ensureInput.model).toBe("github-copilot/gpt-5.5");
+    expect(ensureInput.runtime).toBe(runtime);
+    expectWorkspaceDir(ensureInput.workspaceDir);
+    expect(result).toBe(installedConfig);
+  });
+
+  it("does not offer post-install migration when Codex is not required for the selected model", async () => {
+    const runtime = createRuntime();
+    const selectedConfig = {
+      agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
+    } as OpenClawConfig;
+    const runNonInteractive = vi.fn(async () => selectedConfig);
+    ensureCodexRuntimePluginForModelSelection.mockResolvedValue({
+      cfg: selectedConfig,
+      required: false,
+      installed: false,
+    });
+    resolvePluginProviders.mockReturnValue([{ id: "openai", pluginId: "openai" }] as never);
+    resolveProviderPluginChoice.mockReturnValue({
+      provider: { id: "openai", pluginId: "openai", label: "OpenAI" },
+      method: { runNonInteractive },
+    });
+
+    await applyNonInteractivePluginProviderChoice({
+      nextConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      authChoice: "openai-api-key",
+      opts: {} as never,
+      runtime: runtime as never,
+      baseConfig: { agents: { defaults: {} } } as OpenClawConfig,
+      resolveApiKey: vi.fn(),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(offerPostInstallMigrations).not.toHaveBeenCalled();
   });
 });

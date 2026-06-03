@@ -25,6 +25,10 @@ function createProps(overrides: Partial<DebugProps> = {}): DebugProps {
   };
 }
 
+function normalizedText(element: Element | null | undefined): string | undefined {
+  return element?.textContent?.replace(/\s+/gu, " ").trim();
+}
+
 describe("renderDebug", () => {
   beforeEach(async () => {
     vi.stubGlobal("localStorage", createStorageMock());
@@ -61,7 +65,33 @@ describe("renderDebug", () => {
     if (!command) {
       throw new Error("expected debug security audit command");
     }
+    const callout = container.querySelector(".callout");
+    expect(callout?.className).toBe("callout warn");
+    expect(normalizedText(callout)).toBe(
+      "安全审计: 1 个警告 · 2 条信息. 运行 openclaw security audit --deep 查看详情。",
+    );
     expect(command.textContent).toBe("openclaw security audit --deep");
-    expect(container.textContent).toContain("安全审计");
+  });
+
+  it("does not render Invalid Date for Date-invalid event timestamps", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderDebug(
+        createProps({
+          eventLog: [
+            {
+              ts: 8_640_000_000_000_001,
+              event: "gateway",
+              payload: { ok: true },
+            },
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.textContent).toContain("gateway");
+    expect(container.textContent).not.toContain("Invalid Date");
   });
 });

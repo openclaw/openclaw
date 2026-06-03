@@ -43,6 +43,22 @@ const officialEndpointValidationCases = [
   },
 ];
 
+function firstFetchCall(fetchMock: ReturnType<typeof vi.fn>): unknown[] {
+  const call = fetchMock.mock.calls[0];
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call;
+}
+
+function firstFetchInit(fetchMock: ReturnType<typeof vi.fn>): RequestInit {
+  const init = firstFetchCall(fetchMock)[1];
+  if (!init || typeof init !== "object") {
+    throw new Error("expected fetch init");
+  }
+  return init as RequestInit;
+}
+
 describe("openai tts", () => {
   const proxyReset = installDebugProxyTestResetHooks();
   const originalFetch = globalThis.fetch;
@@ -148,7 +164,8 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const [url, init] = fetchMock.mock.calls[0] ?? [];
+      const url = firstFetchCall(fetchMock)[0];
+      const init = firstFetchInit(fetchMock);
       const headers = init?.headers as Record<string, string> | undefined;
       expect(url).toBe("https://api.openai.com/v1/audio/speech");
       expect(headers?.originator).toBe("openclaw");
@@ -174,7 +191,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const init = firstFetchInit(fetchMock);
       if (typeof init?.body !== "string") {
         throw new Error("expected JSON request body");
       }
@@ -206,7 +223,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const init = firstFetchInit(fetchMock);
       if (typeof init?.body !== "string") {
         throw new Error("expected JSON request body");
       }
@@ -241,7 +258,7 @@ describe("openai tts", () => {
         timeoutMs: 5_000,
       });
 
-      const [, init] = fetchMock.mock.calls[0] ?? [];
+      const init = firstFetchInit(fetchMock);
       if (typeof init?.body !== "string") {
         throw new Error("expected JSON request body");
       }
@@ -303,6 +320,32 @@ describe("openai tts", () => {
           timeoutMs: 5_000,
         }),
       ).rejects.toThrow("OpenAI TTS API error (503): temporary upstream outage");
+    });
+
+    it("caps streamed audio responses instead of buffering oversized TTS output", async () => {
+      const streamed = createStreamingErrorResponse({
+        status: 200,
+        chunkCount: 20,
+        chunkSize: 1024,
+        byte: 121,
+      });
+      const fetchMock = vi.fn(async () => streamed.response);
+      globalThis.fetch = fetchMock as unknown as typeof fetch;
+
+      await expect(
+        openaiTTS({
+          text: "hello",
+          apiKey: "test-key",
+          baseUrl: "https://api.openai.com/v1",
+          model: "gpt-4o-mini-tts",
+          voice: "alloy",
+          responseFormat: "mp3",
+          timeoutMs: 5_000,
+          maxBytes: 2048,
+        }),
+      ).rejects.toThrow("OpenAI TTS audio response exceeds 2048 bytes");
+
+      expect(streamed.getReadCount()).toBeLessThan(20);
     });
 
     it("caps streamed non-JSON error reads instead of consuming full response bodies", async () => {

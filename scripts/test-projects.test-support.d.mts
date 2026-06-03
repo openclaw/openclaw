@@ -21,6 +21,7 @@ export type ChangedTestTargetOptions = {
 };
 
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS: string;
+export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS: string;
 
 export function parseTestProjectsArgs(
   args: string[],
@@ -63,6 +64,15 @@ export function createVitestRunSpecs(
     tempDir?: string;
   },
 ): VitestRunSpec[];
+
+export function findUnmatchedExplicitTestTargets(
+  args: string[],
+  cwd?: string,
+): Array<{
+  target: string;
+  reason: "glob-matched-no-files" | "path-does-not-exist" | "target-matched-no-test-files";
+  includePattern?: string;
+}>;
 
 export function applyDefaultVitestNoOutputTimeout(
   specs: VitestRunSpec[],

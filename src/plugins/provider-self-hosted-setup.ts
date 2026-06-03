@@ -1,5 +1,15 @@
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -10,10 +20,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
@@ -179,7 +185,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
       });
       const runtimeContextTokensByModelId = new Map<string, number>();
       if (params.contextWindow === undefined) {
-        const uniqueModelIds = [...new Set(discoveredModels.map((model) => model.id))];
+        const uniqueModelIds = uniqueStrings(discoveredModels.map((model) => model.id));
         const runtimeContextTokenResults = await Promise.all(
           uniqueModelIds.map(
             async (modelId) =>
@@ -395,10 +401,20 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
 >(params: {
   ctx: ProviderDiscoveryContext;
   providerId: string;
-  buildProvider: (params: { apiKey?: string }) => Promise<T>;
+  buildProvider: (params: { apiKey?: string; baseUrl?: string }) => Promise<T>;
 }): Promise<{ provider: T & { apiKey: string } } | null> {
-  if (params.ctx.config.models?.providers?.[params.providerId]) {
-    return null;
+  const configuredProvider = findNormalizedProviderValue(
+    params.ctx.config.models?.providers,
+    params.providerId,
+  );
+  const configuredBaseUrl = configuredProvider
+    ? normalizeOptionalString(configuredProvider.baseUrl)
+    : undefined;
+  if (configuredProvider) {
+    const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.ctx.config });
+    if (!visibility.providerWildcards.has(normalizeProviderId(params.providerId))) {
+      return null;
+    }
   }
   const { apiKey, discoveryApiKey } = params.ctx.resolveProviderApiKey(params.providerId);
   if (!apiKey) {
@@ -406,7 +422,10 @@ export async function discoverOpenAICompatibleSelfHostedProvider<
   }
   return {
     provider: {
-      ...(await params.buildProvider({ apiKey: discoveryApiKey })),
+      ...(await params.buildProvider({
+        apiKey: discoveryApiKey,
+        ...(configuredBaseUrl ? { baseUrl: configuredBaseUrl } : {}),
+      })),
       apiKey,
     },
   };

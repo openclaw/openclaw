@@ -27,7 +27,7 @@ vi.mock("./configure.shared.js", () => ({
   confirm: mocks.confirm,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 
@@ -83,7 +83,7 @@ async function runGatewayPrompt(params: {
   );
 
   const result = await promptGatewayConfig(params.baseConfig ?? {}, makeRuntime());
-  const authConfigCall = mocks.buildGatewayAuthConfig.mock.calls.at(0);
+  const authConfigCall = mocks.buildGatewayAuthConfig.mock.calls[0];
   if (!authConfigCall) {
     throw new Error("expected gateway auth config call");
   }

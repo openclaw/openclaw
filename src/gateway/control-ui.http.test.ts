@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { resolveStateDir } from "../config/paths.js";
-import { approveDevicePairing, requestDevicePairing } from "../infra/device-pairing.js";
+import {
+  approveDevicePairing,
+  ensureDeviceToken,
+  requestDevicePairing,
+} from "../infra/device-pairing.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "./control-ui-contract.js";
@@ -14,6 +19,7 @@ import {
   handleControlUiAvatarRequest,
   handleControlUiHttpRequest,
 } from "./control-ui.js";
+import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { makeMockHttpResponse } from "./test-http-response.js";
 
 describe("handleControlUiHttpRequest", () => {
@@ -31,7 +37,7 @@ describe("handleControlUiHttpRequest", () => {
   }
 
   function parseBootstrapPayload(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
-    return JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+    return JSON.parse(responseBody(end)) as {
       basePath: string;
       assistantName: string;
       assistantAvatar: string;
@@ -39,6 +45,18 @@ describe("handleControlUiHttpRequest", () => {
       localMediaPreviewRoots?: string[];
       chatMessageMaxWidth?: string;
     };
+  }
+
+  function responseBody(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
+    return String(end.mock.calls[0]?.[0] ?? "");
+  }
+
+  function responseJson(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
+    return JSON.parse(responseBody(end)) as unknown;
+  }
+
+  function firstEndCallLength(end: ReturnType<typeof makeMockHttpResponse>["end"]) {
+    return end.mock.calls[0]?.length ?? -1;
   }
 
   function expectNotFoundResponse(params: {
@@ -214,7 +232,7 @@ describe("handleControlUiHttpRequest", () => {
   }) {
     expect(params.handled).toBe(true);
     expect(params.res.statusCode).toBe(403);
-    expect(JSON.parse(String(params.end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(responseJson(params.end)).toEqual({
       ok: false,
       error: {
         type: "forbidden",
@@ -267,7 +285,11 @@ describe("handleControlUiHttpRequest", () => {
     }
   }
 
-  async function withPairedOperatorDeviceToken<T>(params: { fn: (token: string) => Promise<T> }) {
+  async function withPairedOperatorDeviceToken<T>(params: {
+    issuerGeneration?: string;
+    browserMetadata?: boolean;
+    fn: (token: string) => Promise<T>;
+  }) {
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ui-device-token-"));
     vi.stubEnv("OPENCLAW_HOME", tempHome);
     try {
@@ -277,15 +299,31 @@ describe("handleControlUiHttpRequest", () => {
         publicKey: "test-public-key",
         role: "operator",
         scopes: ["operator.read"],
-        clientId: "openclaw-control-ui",
-        clientMode: "webchat",
+        ...(params.browserMetadata
+          ? {
+              clientId: "openclaw-control-ui",
+              clientMode: "webchat",
+            }
+          : {}),
       });
       const approved = await approveDevicePairing(requested.request.requestId, {
         callerScopes: ["operator.read"],
       });
       expect(approved?.status).toBe("approved");
-      const operatorToken =
+      let operatorToken =
         approved?.status === "approved" ? approved.device.tokens?.operator?.token : undefined;
+      if (params.issuerGeneration) {
+        const issued = await ensureDeviceToken({
+          deviceId,
+          role: "operator",
+          scopes: ["operator.read"],
+          issuer: {
+            kind: "shared-gateway-auth",
+            generation: params.issuerGeneration,
+          },
+        });
+        operatorToken = issued?.token;
+      }
       expect(typeof operatorToken).toBe("string");
       return await params.fn(operatorToken ?? "");
     } finally {
@@ -372,7 +410,7 @@ describe("handleControlUiHttpRequest", () => {
       });
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+      const payload = responseJson(end) as {
         available?: boolean;
         mediaTicket?: string;
         mediaTicketExpiresAt?: string;
@@ -414,7 +452,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        const payload = JSON.parse(String(end.mock.calls[0]?.[0] ?? "")) as {
+        const payload = responseJson(end) as {
           available?: boolean;
           mediaTicket?: string;
           mediaTicketExpiresAt?: string;
@@ -424,6 +462,36 @@ describe("handleControlUiHttpRequest", () => {
         expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
       },
     });
+  });
+
+  it("reports assistant media metadata when the process clock is outside the Date range", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    try {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-bad-clock-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const { res, handled, end } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const payload = responseJson(end) as {
+            available?: boolean;
+            mediaTicket?: string;
+            mediaTicketExpiresAt?: string;
+          };
+          expect(payload.available).toBe(true);
+          expect(payload.mediaTicket).toBeUndefined();
+          expect(payload.mediaTicketExpiresAt).toBeUndefined();
+        },
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("serves assistant local media with a scoped media ticket after metadata auth", async () => {
@@ -440,7 +508,7 @@ describe("handleControlUiHttpRequest", () => {
             authorization: "Bearer test-token",
           },
         });
-        const payload = JSON.parse(String(meta.end.mock.calls[0]?.[0] ?? "")) as {
+        const payload = responseJson(meta.end) as {
           mediaTicket?: string;
         };
         expect(meta.handled).toBe(true);
@@ -472,7 +540,7 @@ describe("handleControlUiHttpRequest", () => {
             authorization: "Bearer test-token",
           },
         });
-        const payload = JSON.parse(String(meta.end.mock.calls[0]?.[0] ?? "")) as {
+        const payload = responseJson(meta.end) as {
           mediaTicket?: string;
         };
 
@@ -483,7 +551,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(refresh.handled).toBe(true);
         expect(refresh.res.statusCode).toBe(401);
-        expect(String(refresh.end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(responseBody(refresh.end)).toContain("Unauthorized");
       },
     });
   });
@@ -501,7 +569,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(responseBody(end)).toContain("Unauthorized");
       },
     });
   });
@@ -514,7 +582,7 @@ describe("handleControlUiHttpRequest", () => {
     });
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(responseJson(end)).toEqual({
       available: false,
       code: "outside-allowed-folders",
       reason: "Outside allowed folders",
@@ -534,7 +602,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(responseBody(end)).toContain("Unauthorized");
       },
     });
   });
@@ -551,6 +619,39 @@ describe("handleControlUiHttpRequest", () => {
               url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
               method: "GET",
               auth: { mode: "token", token: "shared-token", allowTailscale: false },
+              headers: {
+                authorization: `Bearer ${operatorToken}`,
+              },
+            });
+            expect(handled).toBe(true);
+            expect(res.statusCode).toBe(200);
+          },
+        });
+      },
+    });
+  });
+
+  it("accepts shared-gateway issuer tagged device tokens on assistant media requests", async () => {
+    const auth = {
+      mode: "token",
+      token: "shared-token",
+      allowTailscale: false,
+    } satisfies ResolvedGatewayAuth;
+    const issuerGeneration = resolveSharedGatewaySessionGeneration(auth);
+    expect(typeof issuerGeneration).toBe("string");
+    await withPairedOperatorDeviceToken({
+      issuerGeneration,
+      browserMetadata: true,
+      fn: async (operatorToken) => {
+        await withAllowedAssistantMediaRoot({
+          prefix: "ui-media-issued-device-token-",
+          fn: async (tmpRoot) => {
+            const filePath = path.join(tmpRoot, "photo.png");
+            await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+            const { res, handled } = await runAssistantMediaRequest({
+              url: `/__openclaw__/assistant-media?source=${encodeURIComponent(filePath)}`,
+              method: "GET",
+              auth,
               headers: {
                 authorization: `Bearer ${operatorToken}`,
               },
@@ -598,7 +699,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(responseBody(end)).toContain("Unauthorized");
       },
     });
   });
@@ -719,7 +820,7 @@ describe("handleControlUiHttpRequest", () => {
         });
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(401);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+        expect(responseBody(end)).toContain("Unauthorized");
       },
     });
   });
@@ -805,7 +906,7 @@ describe("handleControlUiHttpRequest", () => {
 
       expect(handled).toBe(true);
       expect(res.statusCode).toBe(200);
-      expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+      expect(responseBody(end)).toBe("avatar-bytes\n");
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }
@@ -876,7 +977,7 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled).toBe(true);
           expect(res.statusCode).toBe(200);
-          expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("avatar-bytes\n");
+          expect(responseBody(end)).toBe("avatar-bytes\n");
         } finally {
           await fs.rm(tmp, { recursive: true, force: true });
         }
@@ -901,7 +1002,7 @@ describe("handleControlUiHttpRequest", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(responseJson(end)).toEqual({
       avatarUrl: "https://example.com/avatar.png",
       avatarSource: "remote URL",
       avatarStatus: "remote",
@@ -922,7 +1023,7 @@ describe("handleControlUiHttpRequest", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(JSON.parse(String(end.mock.calls[0]?.[0] ?? ""))).toEqual({
+    expect(responseJson(end)).toEqual({
       avatarUrl: null,
       avatarSource: null,
       avatarStatus: "none",
@@ -940,7 +1041,7 @@ describe("handleControlUiHttpRequest", () => {
 
     expect(handled).toBe(true);
     expect(res.statusCode).toBe(401);
-    expect(String(end.mock.calls[0]?.[0] ?? "")).toContain("Unauthorized");
+    expect(responseBody(end)).toContain("Unauthorized");
   });
 
   it("rejects trusted-proxy avatar metadata requests without operator.read scope", async () => {
@@ -995,7 +1096,31 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("inside-ok\n");
+        expect(responseBody(end)).toBe("inside-ok\n");
+      },
+    });
+  });
+
+  it("serves static assets without synchronous file reads", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+        const readFileSync = vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+          throw new Error("readFileSync should not run on Control UI request path");
+        });
+        try {
+          const { res, end, handled } = await runControlUiRequest({
+            url: "/assets/actual.txt",
+            method: "GET",
+            rootPath: tmp,
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(responseBody(end)).toBe("inside-ok\n");
+        } finally {
+          readFileSync.mockRestore();
+        }
       },
     });
   });
@@ -1013,7 +1138,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(end.mock.calls[0]?.length ?? -1).toBe(0);
+        expect(firstEndCallLength(end)).toBe(0);
       },
     });
   });
@@ -1096,7 +1221,7 @@ describe("handleControlUiHttpRequest", () => {
 
         expect(handled).toBe(true);
         expect(res.statusCode).toBe(200);
-        expect(String(end.mock.calls[0]?.[0] ?? "")).toBe("console.log('hi');");
+        expect(responseBody(end)).toBe("console.log('hi');");
       },
     });
   });
@@ -1123,7 +1248,7 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled, `expected ${url} to be handled`).toBe(true);
           expect(res.statusCode, `expected ${url} to be served`).toBe(200);
-          expect(res.setHeader).toHaveBeenCalledWith("Content-Type", expectedType);
+          expect(res["setHeader"]).toHaveBeenCalledWith("Content-Type", expectedType);
           expect(end, `expected ${url} to write a body`).toHaveBeenCalled();
         }
       },

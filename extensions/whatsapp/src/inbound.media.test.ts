@@ -11,10 +11,61 @@ import {
 } from "../../../test/mocks/baileys.js";
 
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
+type InMemoryKeyedStoreEntry<T> = {
+  key: string;
+  value: T;
+  createdAt: number;
+  expiresAt?: number;
+};
+
+function createInMemoryKeyedStore<T>() {
+  const entries = new Map<string, InMemoryKeyedStoreEntry<T>>();
+  return {
+    async register(key: string, value: T, opts?: { ttlMs?: number }) {
+      const createdAt = Date.now();
+      entries.set(key, {
+        key,
+        value,
+        createdAt,
+        ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+      });
+    },
+    async registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }) {
+      if (entries.has(key)) {
+        return false;
+      }
+      const createdAt = Date.now();
+      entries.set(key, {
+        key,
+        value,
+        createdAt,
+        ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+      });
+      return true;
+    },
+    async lookup(key: string) {
+      return entries.get(key)?.value;
+    },
+    async consume(key: string) {
+      const value = entries.get(key)?.value;
+      entries.delete(key);
+      return value;
+    },
+    async delete(key: string) {
+      return entries.delete(key);
+    },
+    async entries() {
+      return Array.from(entries.values());
+    },
+    async clear() {
+      entries.clear();
+    },
+  };
+}
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
-const saveMediaBufferSpy = vi.fn();
+const saveMediaStreamSpy = vi.fn();
 let currentMockSocket:
   | {
       ev: import("node:events").EventEmitter;
@@ -82,10 +133,32 @@ vi.mock("openclaw/plugin-sdk/media-store", async () => {
   );
   return {
     ...actual,
-    saveMediaBuffer: vi.fn(async (...args: Parameters<typeof actual.saveMediaBuffer>) => {
-      saveMediaBufferSpy(...args);
-      return actual.saveMediaBuffer(...args);
+    saveMediaStream: vi.fn(async (...args: Parameters<typeof actual.saveMediaStream>) => {
+      saveMediaStreamSpy(...args);
+      return actual.saveMediaStream(...args);
     }),
+  };
+});
+
+vi.mock("./runtime.js", async () => {
+  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
+    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
+      "openclaw/plugin-sdk/plugin-state-test-runtime",
+    ),
+  );
+  const stateDir = `/tmp/openclaw-whatsapp-inbound-media-${Date.now()}-${Math.random()}`;
+  return {
+    getOptionalWhatsAppRuntime: () => undefined,
+    getWhatsAppRuntime: () => ({
+      state: {
+        resolveStateDir: () => stateDir,
+        openKeyedStore: () => createInMemoryKeyedStore(),
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
+      },
+    }),
+    setWhatsAppRuntime: vi.fn(),
   };
 });
 
@@ -95,6 +168,7 @@ process.env.HOME = HOME;
 
 vi.mock("baileys", async () => {
   const actual = await vi.importActual<typeof import("baileys")>("baileys");
+  const { Readable } = require("node:stream") as typeof import("node:stream");
   const jpegBuffer = Buffer.from([
     0xff, 0xd8, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x03, 0x02, 0x02, 0x02, 0x02, 0x02, 0x03, 0x02, 0x02,
     0x02, 0x03, 0x03, 0x03, 0x03, 0x04, 0x06, 0x04, 0x04, 0x04, 0x04, 0x04, 0x08, 0x06, 0x06, 0x05,
@@ -110,7 +184,7 @@ vi.mock("baileys", async () => {
   return {
     ...actual,
     DisconnectReason: actual.DisconnectReason ?? { loggedOut: 401 },
-    downloadMediaMessage: vi.fn().mockResolvedValue(jpegBuffer),
+    downloadMediaMessage: vi.fn().mockImplementation(() => Readable.from([jpegBuffer])),
     extractMessageContent: vi.fn((message: MockMessageInput) => mockExtractMessageContent(message)),
     getContentType: vi.fn((message: MockMessageInput) => mockGetContentType(message)),
     isJidGroup: vi.fn((jid: string | undefined | null) => mockIsJidGroup(jid)),
@@ -153,7 +227,15 @@ async function waitForMessage(onMessage: ReturnType<typeof vi.fn>) {
     interval: 1,
     timeout: 250,
   });
-  return onMessage.mock.calls[0][0];
+  return onMessage.mock.calls[0]?.[0];
+}
+
+function latestSaveMediaStreamCall() {
+  const call = saveMediaStreamSpy.mock.calls[saveMediaStreamSpy.mock.calls.length - 1];
+  if (!call) {
+    throw new Error("expected saveMediaStream call");
+  }
+  return call;
 }
 
 function requireMediaPath(value: unknown): string {
@@ -173,7 +255,7 @@ describe("web inbound media saves with extension", () => {
   beforeEach(() => {
     vi.useRealTimers();
     currentMockSocket = undefined;
-    saveMediaBufferSpy.mockClear();
+    saveMediaStreamSpy.mockClear();
     resetWebInboundDedupe();
   });
 
@@ -238,9 +320,9 @@ describe("web inbound media saves with extension", () => {
 
     const second = await waitForMessage(onMessage);
     expect(second.mediaFileName).toBe(fileName);
-    expect(saveMediaBufferSpy).toHaveBeenCalled();
-    const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
-    expect(lastCall?.[4]).toBe(fileName);
+    expect(saveMediaStreamSpy).toHaveBeenCalled();
+    const lastCall = latestSaveMediaStreamCall();
+    expect(lastCall[4]).toBe(fileName);
 
     await listener.close();
   });
@@ -286,14 +368,14 @@ describe("web inbound media saves with extension", () => {
     expect(inbound.replyToBody).toBe("<media:image>");
     const mediaPath = requireMediaPath(inbound.mediaPath);
     expect(path.extname(mediaPath)).toBe(".jpg");
-    expect(saveMediaBufferSpy).toHaveBeenCalled();
-    const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
-    expect(lastCall?.[1]).toBe("image/jpeg");
+    expect(saveMediaStreamSpy).toHaveBeenCalled();
+    const lastCall = latestSaveMediaStreamCall();
+    expect(lastCall[1]).toBe("image/jpeg");
 
     await listener.close();
   });
 
-  it("passes mediaMaxMb to saveMediaBuffer", async () => {
+  it("passes mediaMaxMb to saveMediaStream", async () => {
     const onMessage = vi.fn();
     const listener = await monitorWebInbox({
       cfg: {
@@ -322,9 +404,9 @@ describe("web inbound media saves with extension", () => {
     realSock.ev.emit("messages.upsert", upsert);
 
     await waitForMessage(onMessage);
-    expect(saveMediaBufferSpy).toHaveBeenCalled();
-    const lastCall = saveMediaBufferSpy.mock.calls.at(-1);
-    expect(lastCall?.[3]).toBe(1 * 1024 * 1024);
+    expect(saveMediaStreamSpy).toHaveBeenCalled();
+    const lastCall = latestSaveMediaStreamCall();
+    expect(lastCall[3]).toBe(1 * 1024 * 1024);
 
     await listener.close();
   });

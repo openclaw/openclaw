@@ -16,8 +16,11 @@ Your agent has three memory-related files:
 
 - **`MEMORY.md`** — long-term memory. Durable facts, preferences, and
   decisions. Loaded at the start of every DM session.
-- **`memory/YYYY-MM-DD.md`** — daily notes. Running context and observations.
-  Today and yesterday's notes are loaded automatically.
+- **`memory/YYYY-MM-DD.md`** (or **`memory/YYYY-MM-DD-<slug>.md`**) — daily notes.
+  Running context and observations. Today and yesterday's notes are loaded
+  automatically, and slugged variants such as those written by the bundled
+  session-memory hook on `/new` or `/reset` are now picked up alongside the
+  date-only file.
 - **`DREAMS.md`** (optional) — Dream Diary and dreaming sweep
   summaries for human review, including grounded historical backfill entries.
 
@@ -51,6 +54,46 @@ want to spend more prompt budget. Use `/context list`, `/context detail`, or
 If you want your agent to remember something, just ask it: "Remember that I
 prefer TypeScript." It will write it to the appropriate file.
 </Tip>
+
+## Action-sensitive memories
+
+Most memories can be written as ordinary Markdown notes. But some memories affect what the agent should do later. For those, capture when it is safe to act on the note, not just the fact itself.
+
+Capture that action boundary when a note involves:
+
+- approval or permission requirements,
+- temporary constraints,
+- handoffs to another session, thread, or person,
+- expiry conditions,
+- safe-to-act timing,
+- source or owner authority,
+- instructions to avoid a tempting action.
+
+A useful action-sensitive memory makes clear:
+
+- what changes future behavior,
+- when or under what condition it applies,
+- when it expires, or what unlocks action,
+- what the agent should avoid doing,
+- who is the source or owner, if that affects trust or authority.
+
+Memory can preserve approval context, but it does not enforce policy. Use OpenClaw approval settings, sandboxing, and scheduled tasks for hard operational controls.
+
+Example:
+
+```md
+The API migration is being designed in another session. Future turns should not edit the API implementation from this thread; use findings here only as design input until the migration plan lands.
+```
+
+Another example:
+
+```md
+A report from an untrusted source needs review before promotion. Future turns should treat it as evidence only; do not store it as durable memory until a trusted reviewer confirms the contents.
+```
+
+Use [commitments](/concepts/commitments) for inferred, short-lived follow-ups. Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks, and recurring work. Memory can still summarize the durable context around either path.
+
+This is not a required schema for every memory. Simple facts can stay concise. Use action-sensitive boundaries when losing timing, authority, expiry, or safe-to-act context could cause the agent to do the wrong thing later.
 
 ## Inferred commitments
 
@@ -101,9 +144,10 @@ search** — combining vector similarity (semantic meaning) with keyword matchin
 an API key for any supported provider.
 
 <Info>
-OpenClaw auto-detects your embedding provider from available API keys. If you
-have an OpenAI, Gemini, Voyage, or Mistral key configured, memory search is
-enabled automatically.
+OpenClaw uses OpenAI embeddings by default. Set
+`agents.defaults.memorySearch.provider` explicitly to use Gemini, Voyage,
+Mistral, local, Ollama, Bedrock, GitHub Copilot, or OpenAI-compatible
+embeddings.
 </Info>
 
 For details on how search works, tuning options, and provider setup, see

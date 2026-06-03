@@ -1,6 +1,6 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatCliCommand } from "../../cli/command-format.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
-import { normalizeProviderId } from "../provider-id.js";
 
 export type OAuthRefreshFailureReason =
   | "refresh_token_reused"
@@ -9,8 +9,34 @@ export type OAuthRefreshFailureReason =
   | "invalid_refresh_token"
   | "revoked";
 
+export type OAuthRefreshFailure = {
+  provider: string | null;
+  reason: OAuthRefreshFailureReason | null;
+};
+
+export class OAuthRefreshFailureError extends Error {
+  readonly provider: string;
+  readonly reason: OAuthRefreshFailureReason | null;
+
+  constructor(params: { provider: string; message: string; cause?: unknown }) {
+    super(params.message, { cause: params.cause });
+    this.name = "OAuthRefreshFailureError";
+    this.provider = params.provider;
+    this.reason = classifyOAuthRefreshFailureReason(params.message);
+  }
+}
+
 const OAUTH_REFRESH_FAILURE_PROVIDER_RE = /OAuth token refresh failed for ([^:]+):/i;
 const SAFE_PROVIDER_ID_RE = /^[a-z0-9][a-z0-9._-]*$/;
+
+function isOAuthRefreshFailureMessage(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes("oauth token refresh failed") ||
+    lower.includes("access token could not be refreshed") ||
+    lower.includes("authentication session could not be refreshed automatically")
+  );
+}
 
 function extractOAuthRefreshFailureProvider(message: string): string | null {
   const provider = message.match(OAUTH_REFRESH_FAILURE_PROVIDER_RE)?.[1]?.trim();
@@ -45,11 +71,8 @@ export function classifyOAuthRefreshFailureReason(
   return null;
 }
 
-export function classifyOAuthRefreshFailure(message: string): {
-  provider: string | null;
-  reason: OAuthRefreshFailureReason | null;
-} | null {
-  if (!/oauth token refresh failed/i.test(message)) {
+export function classifyOAuthRefreshFailure(message: string): OAuthRefreshFailure | null {
+  if (!isOAuthRefreshFailureMessage(message)) {
     return null;
   }
   return {
@@ -58,9 +81,19 @@ export function classifyOAuthRefreshFailure(message: string): {
   };
 }
 
+export function classifyOAuthRefreshFailureError(err: unknown): OAuthRefreshFailure | null {
+  if (!(err instanceof OAuthRefreshFailureError)) {
+    return null;
+  }
+  return {
+    provider: sanitizeOAuthRefreshFailureProvider(err.provider),
+    reason: err.reason,
+  };
+}
+
 export function buildOAuthRefreshFailureLoginCommand(provider: string | null | undefined): string {
-  const safeProvider = sanitizeOAuthRefreshFailureProvider(provider);
-  return safeProvider
-    ? formatCliCommand(`openclaw models auth login --provider ${safeProvider}`)
+  const sanitizedProvider = sanitizeOAuthRefreshFailureProvider(provider);
+  return sanitizedProvider
+    ? formatCliCommand(`openclaw models auth login --provider ${sanitizedProvider}`)
     : formatCliCommand("openclaw models auth login");
 }

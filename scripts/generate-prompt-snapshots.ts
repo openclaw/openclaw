@@ -8,6 +8,10 @@ import {
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
   createHappyPathPromptSnapshotFiles,
 } from "../test/helpers/agents/happy-path-prompt-snapshots.js";
+import {
+  deleteStalePromptSnapshotFiles,
+  listCommittedSnapshotArtifactPaths,
+} from "./prompt-snapshot-files.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const oxfmtPath = path.resolve(
@@ -18,14 +22,10 @@ const oxfmtPath = path.resolve(
 );
 const execFileAsync = promisify(execFile);
 
-type PromptSnapshotFile = ReturnType<typeof createHappyPathPromptSnapshotFiles>[number];
+type PromptSnapshotFile = Awaited<ReturnType<typeof createHappyPathPromptSnapshotFiles>>[number];
 
 function describeError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function hasErrorCode(error: unknown, code: string): boolean {
-  return Boolean(error && typeof error === "object" && "code" in error && error.code === code);
 }
 
 async function writeSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
@@ -59,37 +59,8 @@ async function readSnapshotFiles(root: string, files: PromptSnapshotFile[]) {
   );
 }
 
-async function listCommittedSnapshotArtifactPaths(root: string): Promise<string[]> {
-  let committedEntries: string[];
-  try {
-    committedEntries = await fs.readdir(
-      path.resolve(root, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR),
-    );
-  } catch (error) {
-    if (!hasErrorCode(error, "ENOENT")) {
-      throw error;
-    }
-    committedEntries = [];
-  }
-  return committedEntries
-    .filter((entry) => entry.endsWith(".md") || entry.endsWith(".json"))
-    .map((entry) => path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, entry));
-}
-
-export async function deleteStalePromptSnapshotFiles(
-  root: string,
-  files: Array<{ path: string }>,
-): Promise<string[]> {
-  const expectedPaths = new Set(files.map((file) => file.path));
-  const stalePaths = (await listCommittedSnapshotArtifactPaths(root)).filter(
-    (snapshotPath) => !expectedPaths.has(snapshotPath),
-  );
-  await Promise.all(stalePaths.map((snapshotPath) => fs.rm(path.resolve(root, snapshotPath))));
-  return stalePaths;
-}
-
 export async function createFormattedPromptSnapshotFiles(): Promise<PromptSnapshotFile[]> {
-  const files = createHappyPathPromptSnapshotFiles();
+  const files = await createHappyPathPromptSnapshotFiles();
   const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-prompt-snapshots-"));
   try {
     await writeSnapshotFiles(tmpRoot, files);

@@ -6,7 +6,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   getActiveRuntimeWebToolsMetadata: vi.fn(),
-  getActiveSecretsRuntimeSnapshot: vi.fn(),
+  getActiveSecretsRuntimeConfigSnapshot: vi.fn(),
   resolveManifestContractOwnerPluginId: vi.fn(),
 }));
 
@@ -18,8 +18,8 @@ vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
   getActiveRuntimeWebToolsMetadata: mocks.getActiveRuntimeWebToolsMetadata,
 }));
 
-vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: mocks.getActiveSecretsRuntimeSnapshot,
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeConfigSnapshot: mocks.getActiveSecretsRuntimeConfigSnapshot,
 }));
 
 function latestOwnerLookupParams(): Record<string, unknown> {
@@ -34,8 +34,8 @@ describe("web tool runtime context", () => {
   beforeEach(() => {
     mocks.getActiveRuntimeWebToolsMetadata.mockReset();
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue(null);
-    mocks.getActiveSecretsRuntimeSnapshot.mockReset();
-    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue(null);
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReset();
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue(null);
     mocks.resolveManifestContractOwnerPluginId.mockReset();
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue(undefined);
   });
@@ -44,7 +44,7 @@ describe("web tool runtime context", () => {
     const runtimeConfig = {
       tools: { web: { search: { provider: "perplexity" } } },
     };
-    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue({ config: runtimeConfig });
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({ config: runtimeConfig });
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue({
       search: {
         providerConfigured: "perplexity",
@@ -77,7 +77,7 @@ describe("web tool runtime context", () => {
     const ownerLookup = latestOwnerLookupParams();
     expect(ownerLookup.contract).toBe("webSearchProviders");
     expect(ownerLookup.value).toBe("perplexity");
-    expect(ownerLookup.origin).toBe("bundled");
+    expect(ownerLookup).not.toHaveProperty("origin");
     expect(ownerLookup.config).toBe(runtimeConfig);
   });
 
@@ -103,7 +103,7 @@ describe("web tool runtime context", () => {
     const ownerLookup = latestOwnerLookupParams();
     expect(ownerLookup.contract).toBe("webSearchProviders");
     expect(ownerLookup.value).toBe("brave");
-    expect(ownerLookup.origin).toBe("bundled");
+    expect(ownerLookup).not.toHaveProperty("origin");
     expect(ownerLookup.config).toBe(capturedConfig);
   });
 
@@ -115,10 +115,25 @@ describe("web tool runtime context", () => {
     const ownerLookup = latestOwnerLookupParams();
     expect(ownerLookup.contract).toBe("webSearchProviders");
     expect(ownerLookup.value).toBe("brave");
-    expect(ownerLookup.origin).toBe("bundled");
+    expect(ownerLookup).not.toHaveProperty("origin");
     expect(ownerLookup.config).toEqual({
       tools: { web: { search: { provider: "Brave" } } },
     });
+  });
+
+  it("treats resolved global provider owners as explicit selections", async () => {
+    mocks.resolveManifestContractOwnerPluginId.mockReturnValue("brave");
+    const { resolveWebSearchToolRuntimeContext: resolveWebSearchToolRuntimeContextLocal } =
+      await import("./web-tool-runtime-context.js");
+
+    const resolved = resolveWebSearchToolRuntimeContextLocal({
+      config: { tools: { web: { search: { provider: "brave" } } } },
+    });
+
+    expect(resolved.preferRuntimeProviders).toBe(false);
+    expect(mocks.resolveManifestContractOwnerPluginId.mock.calls.at(-1)?.[0]).not.toHaveProperty(
+      "origin",
+    );
   });
 
   it("keeps runtime providers disabled for bundled fetch owners", async () => {

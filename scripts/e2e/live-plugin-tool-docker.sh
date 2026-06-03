@@ -11,8 +11,20 @@ IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-live-plugin-tool-e2e" OPENCLAW_
 DOCKER_TARGET="${OPENCLAW_LIVE_PLUGIN_TOOL_DOCKER_TARGET:-bare}"
 HOST_BUILD="${OPENCLAW_LIVE_PLUGIN_TOOL_HOST_BUILD:-1}"
 PACKAGE_TGZ="${OPENCLAW_CURRENT_PACKAGE_TGZ:-}"
-AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS:-900}"
+AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS:-300}"
 PROFILE_FILE="${OPENCLAW_LIVE_PLUGIN_TOOL_PROFILE_FILE:-${OPENCLAW_TESTBOX_PROFILE_FILE:-$HOME/.openclaw-testbox-live.profile}}"
+run_log=""
+
+cleanup() {
+  if [ -n "${PACKAGE_TGZ:-}" ]; then
+    docker_e2e_cleanup_package_tgz "$PACKAGE_TGZ"
+  fi
+  if [ -n "${run_log:-}" ]; then
+    rm -f "$run_log"
+  fi
+}
+trap cleanup EXIT
+
 if [ ! -f "$PROFILE_FILE" ] && [ -f "$HOME/.profile" ]; then
   PROFILE_FILE="$HOME/.profile"
 fi
@@ -54,7 +66,7 @@ if ! docker_e2e_run_with_harness \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e OPENAI_API_KEY \
   -e OPENAI_BASE_URL \
-  -e OPENCLAW_LIVE_PLUGIN_TOOL_MODEL="${OPENCLAW_LIVE_PLUGIN_TOOL_MODEL:-openai/gpt-5.4-mini}" \
+  -e OPENCLAW_LIVE_PLUGIN_TOOL_MODEL="${OPENCLAW_LIVE_PLUGIN_TOOL_MODEL:-openai/gpt-5.5}" \
   -e "OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS=$AGENT_TURN_TIMEOUT_SECONDS" \
   -e "OPENCLAW_TEST_STATE_SCRIPT_B64=$OPENCLAW_TEST_STATE_SCRIPT_B64" \
   "${DOCKER_E2E_PACKAGE_ARGS[@]}" \
@@ -117,6 +129,7 @@ chmod 700 "$XDG_CACHE_HOME" "$NPM_CONFIG_CACHE" || true
 
 openclaw_e2e_install_package /tmp/openclaw-install.log
 command -v openclaw >/dev/null
+openclaw_e2e_enable_openclaw_cli_timeout
 
 fixture_dir="$(mktemp -d /tmp/openclaw-live-plugin-tool.XXXXXX)"
 plugin_dir="$fixture_dir/package"
@@ -140,7 +153,7 @@ openclaw agent --local \
   --model "$MODEL_REF" \
   --message "Call the tool named ${TOOL_NAME}. Reply with only the exact text returned by that tool. Do not compute, transform, or explain it." \
   --thinking off \
-  --timeout "${OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS:-900}" \
+  --timeout "${OPENCLAW_LIVE_PLUGIN_TOOL_TIMEOUT_SECONDS:-300}" \
   --json >/tmp/openclaw-agent.json 2>/tmp/openclaw-agent.err
 
 node scripts/e2e/lib/live-plugin-tool/assertions.mjs assert-agent-turn
@@ -148,9 +161,7 @@ node scripts/e2e/lib/live-plugin-tool/assertions.mjs assert-agent-turn
 echo "Live plugin tool Docker E2E passed"
 EOF
   docker_e2e_print_log "$run_log"
-  rm -f "$run_log"
   exit 1
 fi
 
-rm -f "$run_log"
 echo "Live plugin tool Docker E2E passed"

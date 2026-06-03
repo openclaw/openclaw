@@ -177,12 +177,39 @@ describe("config io write prepare", () => {
             primary: "google/gemini-3-pro-preview",
             fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
           },
+          heartbeat: { model: "google/gemini-3-pro-preview" },
+          subagents: {
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+          },
+          compaction: {
+            model: "google/gemini-3-pro-preview",
+            memoryFlush: { model: "google/gemini-3-pro-preview" },
+          },
           models: {
             "google/gemini-3-pro-preview": {
               alias: "Gemini",
             },
           },
         },
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            heartbeat: { model: "google/gemini-3-pro-preview" },
+            subagents: { model: "google/gemini-3-pro-preview" },
+            models: {
+              "google/gemini-3-pro-preview": {
+                alias: "Ops Gemini",
+              },
+            },
+          },
+        ],
       },
       gateway: { port: 18789 },
     };
@@ -193,12 +220,39 @@ describe("config io write prepare", () => {
             primary: "google/gemini-3.1-pro-preview",
             fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
           },
+          heartbeat: { model: "google/gemini-3.1-pro-preview" },
+          subagents: {
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+              fallbacks: ["google/gemini-3.1-pro-preview"],
+            },
+          },
+          compaction: {
+            model: "google/gemini-3.1-pro-preview",
+            memoryFlush: { model: "google/gemini-3.1-pro-preview" },
+          },
           models: {
             "google/gemini-3.1-pro-preview": {
               alias: "Gemini",
             },
           },
         },
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+              fallbacks: ["google/gemini-3.1-pro-preview"],
+            },
+            heartbeat: { model: "google/gemini-3.1-pro-preview" },
+            subagents: { model: "google/gemini-3.1-pro-preview" },
+            models: {
+              "google/gemini-3.1-pro-preview": {
+                alias: "Ops Gemini",
+              },
+            },
+          },
+        ],
       },
       gateway: { port: 18789 },
     };
@@ -215,9 +269,29 @@ describe("config io write prepare", () => {
       primary: "google/gemini-3.1-pro-preview",
       fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
     });
+    expect(persisted.agents?.defaults?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.defaults?.subagents?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(persisted.agents?.defaults?.compaction?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.defaults?.compaction?.memoryFlush?.model).toBe(
+      "google/gemini-3.1-pro-preview",
+    );
     expect(persisted.agents?.defaults?.models).toEqual({
       "google/gemini-3.1-pro-preview": {
         alias: "Gemini",
+      },
+    });
+    expect(persisted.agents?.list?.[0]?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(persisted.agents?.list?.[0]?.heartbeat?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.list?.[0]?.subagents?.model).toBe("google/gemini-3.1-pro-preview");
+    expect(persisted.agents?.list?.[0]?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "Ops Gemini",
       },
     });
     expect(persisted.gateway?.port).toBe(18888);
@@ -277,6 +351,62 @@ describe("config io write prepare", () => {
     ]);
     expect(persisted.models?.providers?.kilocode?.models).toEqual([
       makeModel("google/gemini-3.1-pro-preview", "Gemini via Kilo"),
+    ]);
+    expect(persisted.gateway?.port).toBe(18888);
+  });
+
+  it("normalizes manifest-backed provider catalog refs during unrelated config writes", () => {
+    const makeModel = (id: string) => ({
+      id,
+      name: "Custom latest",
+      reasoning: false,
+      input: ["text" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 8192,
+    });
+    const sourceConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            models: [makeModel("latest")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      models: {
+        providers: {
+          myproxy: {
+            baseUrl: "https://proxy.example/v1",
+            models: [makeModel("vendor/modern-model")],
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: {
+        ...runtimeConfig,
+        gateway: { port: 18888 },
+      },
+      modelIdNormalizationPolicies: new Map([
+        [
+          "myproxy",
+          {
+            aliases: { latest: "modern-model" },
+            prefixWhenBare: "vendor",
+          },
+        ],
+      ]),
+    }) as OpenClawConfig;
+
+    expect(persisted.models?.providers?.myproxy?.models).toEqual([
+      makeModel("vendor/modern-model"),
     ]);
     expect(persisted.gateway?.port).toBe(18888);
   });
@@ -414,6 +544,24 @@ describe("config io write prepare", () => {
       "exec",
       "read",
     ]);
+  });
+
+  it("treats invalid array-index unset paths as no-ops", () => {
+    const input: OpenClawConfig = {
+      gateway: { mode: "local" },
+      tools: { alsoAllow: ["exec", "fetch"] },
+    } satisfies OpenClawConfig;
+
+    for (const path of [
+      ["tools", "alsoAllow", "1abc"],
+      ["tools", "alsoAllow", "+0"],
+      ["tools", "alsoAllow", "9007199254740993"],
+      ["tools", "alsoAllow", "4294967294"],
+    ]) {
+      const next = unsetPathForWrite(input, path);
+      expect(next.changed).toBe(false);
+      expect(next.next).toBe(input);
+    }
   });
 
   it("treats missing unset paths as no-op without mutating caller config", () => {
@@ -613,7 +761,7 @@ describe("config io write prepare", () => {
         },
       },
     } satisfies OpenClawConfig;
-    (runtimeConfig.channels?.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
+    (runtimeConfig.channels!.imessage as Record<string, unknown>).runtimeOnlyDefault = true;
 
     const nextConfig: OpenClawConfig = structuredClone(runtimeConfig);
     nextConfig.gateway = {
@@ -915,6 +1063,42 @@ describe("config io write prepare", () => {
       id: "gpt-5.5",
       contextWindow: 128000,
     });
+  });
+
+  it("ignores unsafe array-index explicit set paths", () => {
+    const runtimeConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", contextWindow: 128000 }],
+          },
+        },
+      },
+    };
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [
+        ["models", "providers", "openai", "models", "0abc", "contextWindow"],
+        ["models", "providers", "openai", "models", "+0", "contextWindow"],
+        ["models", "providers", "openai", "models", "9007199254740993", "contextWindow"],
+        ["models", "providers", "openai", "models", "4294967294", "contextWindow"],
+      ],
+    }) as { models?: { providers?: { openai?: { models?: Array<Record<string, unknown>> } } } };
+
+    expect(persisted.models?.providers?.openai?.models).toEqual([{ id: "gpt-5.5" }]);
   });
 
   it("rejects default-valued explicit writes under include-owned paths", () => {

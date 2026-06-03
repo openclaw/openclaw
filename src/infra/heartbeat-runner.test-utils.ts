@@ -17,6 +17,9 @@ type HeartbeatSessionSeed = {
   lastTo: string;
   pendingFinalDelivery?: boolean;
   pendingFinalDeliveryText?: string;
+  pendingFinalDeliveryCreatedAt?: number;
+  pendingFinalDeliveryAttemptCount?: number;
+  pendingFinalDeliveryLastError?: string | null;
   agentHarnessId?: string;
   agentRuntimeOverride?: string;
   model?: string;
@@ -37,7 +40,7 @@ export async function seedSessionStore(
   sessionKey: string,
   session: HeartbeatSessionSeed,
 ): Promise<void> {
-  let existingStore: Record<string, unknown> = {};
+  let existingStore: Record<string, unknown>;
   try {
     existingStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<string, unknown>;
   } catch {
