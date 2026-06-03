@@ -332,9 +332,12 @@ Most non-terminal notifications for the same turn disarm that short watchdog
 because Codex has proven the turn is still alive. Tool handoffs use a longer
 post-tool idle budget: after OpenClaw returns an `item/tool/call` response, after
 native tool items such as `commandExecution` complete, after raw
-`custom_tool_call_output` completions, and after post-tool raw assistant
-progress. The guard uses `appServer.postToolRawAssistantCompletionIdleTimeoutMs`
-when configured and defaults to five minutes otherwise. That same post-tool
+`custom_tool_call_output` completions, after post-tool raw assistant
+progress, and after a post-tool raw reasoning `rawResponseItem/completed` with
+no active items, since long-running model reasoning between a tool handoff and
+`turn/completed` is progress rather than a terminal stall. The guard uses
+`appServer.postToolRawAssistantCompletionIdleTimeoutMs` when configured and
+defaults to five minutes otherwise. That same post-tool
 budget also extends the progress watchdog for the silent synthesis window before
 Codex emits the next current-turn event. Reasoning completions, commentary
 `agentMessage` completions, and pre-tool raw reasoning or assistant progress can
