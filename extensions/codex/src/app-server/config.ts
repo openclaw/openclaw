@@ -624,7 +624,7 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
   const bindingModelProvider = params.bindingModelProvider?.trim();
   const currentModel = params.model?.trim();
   const bindingModel = params.bindingModel?.trim();
-  if (bindingModelProvider && (!currentModel || !bindingModel || currentModel === bindingModel)) {
+  if (bindingModelProvider && currentModel && bindingModel && currentModel === bindingModel) {
     return {
       modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(bindingModelProvider),
       model: params.model ?? params.bindingModel,

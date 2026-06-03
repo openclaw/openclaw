@@ -324,6 +324,16 @@ describe("Codex app-server config", () => {
       model: "openai/gpt-5.5",
     });
     expect(canUseCodexModelBackedApprovalsReviewerForModel(switchedOpenAIModel)).toBe(true);
+    const legacyBindingOpenAIModel = resolveCodexModelBackedReviewerPolicyContext({
+      provider: "codex",
+      model: "openai/gpt-5.5",
+      bindingModelProvider: "lmstudio",
+    });
+    expect(legacyBindingOpenAIModel).toEqual({
+      modelProvider: "openai",
+      model: "openai/gpt-5.5",
+    });
+    expect(canUseCodexModelBackedApprovalsReviewerForModel(legacyBindingOpenAIModel)).toBe(true);
     const boundLocalOpenAIName = resolveCodexModelBackedReviewerPolicyContext({
       provider: "codex",
       model: "openai/gpt-oss-20b",
