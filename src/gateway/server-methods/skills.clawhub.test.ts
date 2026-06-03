@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { callGatewayHandler } from "./skills.test-helpers.js";
 
 const loadConfigMock = vi.fn(() => ({}));
+const listAgentIdsMock = vi.fn(() => ["main"]);
 const resolveDefaultAgentIdMock = vi.fn(() => "main");
 const resolveAgentWorkspaceDirMock = vi.fn(() => "/tmp/workspace");
 const buildWorkspaceSkillStatusMock = vi.fn();
@@ -17,10 +18,10 @@ vi.mock("../../config/config.js", () => ({
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentIds: vi.fn(() => ["main"]),
+  listAgentIds: (...args: unknown[]) => listAgentIdsMock(...args),
   resolveAgentConfig: vi.fn(() => undefined),
   resolveDefaultAgentId: () => resolveDefaultAgentIdMock(),
-  resolveAgentWorkspaceDir: () => resolveAgentWorkspaceDirMock(),
+  resolveAgentWorkspaceDir: (...args: unknown[]) => resolveAgentWorkspaceDirMock(...args),
   resolveSessionAgentId: vi.fn(() => undefined),
 }));
 
@@ -80,6 +81,7 @@ async function expectEmptySecurityVerdictsWithoutFetch(): Promise<void> {
 describe("skills gateway handlers (clawhub)", () => {
   beforeEach(() => {
     loadConfigMock.mockReset();
+    listAgentIdsMock.mockReset();
     resolveDefaultAgentIdMock.mockReset();
     resolveAgentWorkspaceDirMock.mockReset();
     buildWorkspaceSkillStatusMock.mockReset();
@@ -90,6 +92,7 @@ describe("skills gateway handlers (clawhub)", () => {
     updateSkillsFromClawHubMock.mockReset();
 
     loadConfigMock.mockReturnValue({});
+    listAgentIdsMock.mockReturnValue(["main"]);
     resolveDefaultAgentIdMock.mockReturnValue("main");
     resolveAgentWorkspaceDirMock.mockReturnValue("/tmp/workspace");
     buildWorkspaceSkillStatusMock.mockReturnValue(emptySkillStatusReport());
@@ -259,6 +262,35 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.version).toBe("1.2.3");
   });
 
+  it("installs a ClawHub skill into an explicit agent workspace", async () => {
+    listAgentIdsMock.mockReturnValue(["main", "writer"]);
+    resolveAgentWorkspaceDirMock.mockImplementation(
+      (_configForTest: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
+    );
+    installSkillFromClawHubMock.mockResolvedValue({
+      ok: true,
+      slug: "calendar",
+      version: "1.2.3",
+      targetDir: "/tmp/workspace-writer/skills/calendar",
+    });
+
+    const { ok, error } = await callSkillsHandler("skills.install", {
+      agentId: "writer",
+      source: "clawhub",
+      slug: "calendar",
+    });
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({}, "writer");
+    expect(installSkillFromClawHubMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace-writer",
+        slug: "calendar",
+      }),
+    );
+  });
+
   it("forwards dangerous override for local skill installs", async () => {
     installSkillMock.mockResolvedValue({
       ok: true,
@@ -288,6 +320,36 @@ describe("skills gateway handlers (clawhub)", () => {
     const result = response as { ok?: boolean; message?: string } | undefined;
     expect(result?.ok).toBe(true);
     expect(result?.message).toBe("Installed");
+  });
+
+  it("installs local skill dependencies in an explicit agent workspace", async () => {
+    listAgentIdsMock.mockReturnValue(["main", "writer"]);
+    resolveAgentWorkspaceDirMock.mockImplementation(
+      (_configForTest: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
+    );
+    installSkillMock.mockResolvedValue({
+      ok: true,
+      message: "Installed",
+      stdout: "",
+      stderr: "",
+      code: 0,
+    });
+
+    const { ok, error } = await callSkillsHandler("skills.install", {
+      agentId: "writer",
+      name: "calendar",
+      installId: "deps",
+    });
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({}, "writer");
+    expect(installSkillMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace-writer",
+        skillName: "calendar",
+      }),
+    );
   });
 
   it("updates ClawHub skills through skills.update", async () => {
@@ -330,6 +392,37 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.config?.results?.[0]?.ok).toBe(true);
     expect(result?.config?.results?.[0]?.slug).toBe("calendar");
     expect(result?.config?.results?.[0]?.version).toBe("1.2.3");
+  });
+
+  it("updates ClawHub skills in an explicit agent workspace", async () => {
+    listAgentIdsMock.mockReturnValue(["main", "writer"]);
+    resolveAgentWorkspaceDirMock.mockImplementation(
+      (_configForTest: unknown, agentId: string) => `/tmp/workspace-${agentId}`,
+    );
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: true,
+        slug: "calendar",
+        previousVersion: "1.2.2",
+        version: "1.2.3",
+        changed: true,
+        targetDir: "/tmp/workspace-writer/skills/calendar",
+      },
+    ]);
+
+    const { ok, error } = await callSkillsHandler("skills.update", {
+      agentId: "writer",
+      source: "clawhub",
+      slug: "calendar",
+    });
+
+    expect(error).toBeUndefined();
+    expect(ok).toBe(true);
+    expect(resolveAgentWorkspaceDirMock).toHaveBeenCalledWith({}, "writer");
+    expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
+      workspaceDir: "/tmp/workspace-writer",
+      slug: "calendar",
+    });
   });
 
   it("rejects ClawHub skills.update requests without slug or all", async () => {
