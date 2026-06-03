@@ -70,6 +70,7 @@ import {
 import { listFeishuDirectoryGroups, listFeishuDirectoryPeers } from "./directory.static.js";
 import { feishuDoctor } from "./doctor.js";
 import { messageActionTargetAliases } from "./message-action-contract.js";
+import { normalizeOutboundMentions } from "./outbound-mention.js";
 import { resolveFeishuGroupToolPolicy } from "./policy.js";
 import { buildFeishuPresentationCard } from "./presentation-card.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
@@ -778,7 +779,19 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu thread-reply requires messageId.");
             }
             const presentation = normalizeMessagePresentation(ctx.params.presentation);
-            const text = readFirstString(ctx.params, ["text", "message"]);
+            const rawText = readFirstString(ctx.params, ["text", "message"]);
+            // L2: normalize AI-output mention variants in tool-sent messages.
+            const chatId = to.replace(/^(chat|user):/, "");
+            const l2 = rawText
+              ? normalizeOutboundMentions({
+                  text: rawText,
+                  // Resolved account id (named-default / multi-account safe): the
+                  // mention registry is keyed by the resolved account.
+                  accountId: account.accountId,
+                  chatId,
+                })
+              : undefined;
+            const text = l2?.text ?? rawText;
             const mediaUrl = readFeishuMediaParam(ctx.params);
             const audioAsVoice = readBooleanParam(ctx.params, ["asVoice", "audioAsVoice"]);
             const card = presentation

@@ -15,6 +15,7 @@ import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
+import { ensureMention, normalizeOutboundMentions, toCardMentions } from "./outbound-mention.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
@@ -132,6 +133,9 @@ type CreateFeishuReplyDispatcherParams = {
    *  indicators on old/replayed messages after context compaction (#30418). */
   messageCreateTimeMs?: number;
   sessionKey?: string;
+  /** When set, the outbound reply is guaranteed to @mention this entity (the
+   *  bot sender) so a bot-to-bot reply actually reaches it. See ensureMention. */
+  ensureMentionTarget?: { openId: string; name?: string };
 };
 
 export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
@@ -147,6 +151,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId,
     accountId,
     identity,
+    ensureMentionTarget,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
@@ -407,7 +412,31 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       await partialUpdateQueue;
       if (streaming?.isActive()) {
         statusLine = "";
-        const text = buildCombinedStreamText(reasoningText, streamText);
+        // L2: normalize mentions in streamed text before final card close.
+        const l2Stream = normalizeOutboundMentions({
+          text: streamText,
+          accountId: account.accountId,
+          chatId,
+        });
+        if (l2Stream.text !== streamText) {
+          params.runtime.log?.(
+            `feishu[${account.accountId}]: L2 normalized outbound mentions (streaming) in ${chatId}`,
+          );
+        }
+        if (l2Stream.failures.length > 0) {
+          params.runtime.log?.(
+            `feishu[${account.accountId}]: L2 unresolved @mentions (streaming): [${l2Stream.failures.join(", ")}] in ${chatId}`,
+          );
+        }
+        // Streaming replies always close as a lark_md card, so convert any
+        // text-form tags to the card form (`<at id=..>`) and guarantee the
+        // bot-sender mention in that form — the text form would not notify.
+        const cardStream = toCardMentions(l2Stream.text);
+        const ensuredStream =
+          ensureMentionTarget && cardStream
+            ? ensureMention(cardStream, ensureMentionTarget, { card: true })
+            : cardStream;
+        const text = buildCombinedStreamText(reasoningText, ensuredStream);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         const contentVisible = await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
@@ -459,6 +488,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     text: string;
     useCard: boolean;
     infoKind?: string;
+    /** When set, guarantee every chunk @mentions this entity using the syntax
+     *  matching the payload (card vs text). Callers pass undefined for reasoning
+     *  previews so a thinking preview is never tagged. */
+    mentionTarget?: { openId: string; name?: string };
     sendChunk: (params: { chunk: string; isFirst: boolean }) => Promise<void>;
   }) => {
     const chunkSource = paramsLocal.useCard
@@ -467,13 +500,30 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     const chunkText = paramsLocal.useCard
       ? core.channel.text.chunkMarkdownTextWithMode
       : core.channel.text.chunkTextWithMode;
+    // When a bot-sender mention must be guaranteed, every chunk needs the <at>
+    // tag: a Feishu group message reaches the bot only if it @mentions it, so a
+    // reply split across messages would leave later chunks invisible to the peer
+    // bot. Reserve room for the tag up front so re-applying it per chunk stays
+    // within the limit. No reserve when there is no target (behavior unchanged).
+    const mentionTarget = paramsLocal.mentionTarget;
+    const mentionReserve = mentionTarget
+      ? ensureMention("", mentionTarget, { card: paramsLocal.useCard }).length + 1
+      : 0;
+    const effectiveLimit = Math.max(1, textChunkLimit - mentionReserve);
     const chunks = resolveTextChunksWithFallback(
       chunkSource,
-      chunkText(chunkSource, textChunkLimit, chunkMode),
+      chunkText(chunkSource, effectiveLimit, chunkMode),
     );
     for (const [index, chunk] of chunks.entries()) {
+      // Cards notify only via `<at id=..>`; convert any text-form tags the
+      // normalizer/model produced so every card recipient is reachable, then
+      // guarantee the bot-sender tag in the matching syntax.
+      const cardified = paramsLocal.useCard ? toCardMentions(chunk) : chunk;
+      const chunkToSend = mentionTarget
+        ? ensureMention(cardified, mentionTarget, { card: paramsLocal.useCard })
+        : cardified;
       await paramsLocal.sendChunk({
-        chunk,
+        chunk: chunkToSend,
         isFirst: index === 0,
       });
       markVisibleReplySent();
@@ -506,6 +556,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             text: options.fallbackText,
             useCard: false,
             infoKind: "final",
+            mentionTarget: ensureMentionTarget,
             sendChunk: async ({ chunk }) => {
               await sendMessageFeishu({
                 cfg,
@@ -533,6 +584,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: fallbackText,
                 useCard: false,
                 infoKind: "final",
+                mentionTarget: ensureMentionTarget,
                 sendChunk: async ({ chunk }) => {
                   await sendMessageFeishu({
                     cfg,
@@ -622,7 +674,27 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         const payloadText =
           payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
         const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
-        const text = reply.text;
+        // L2: normalize AI-output mention variants before sending.
+        const rawText = reply.text;
+        const l2Result = rawText
+          ? normalizeOutboundMentions({ text: rawText, accountId: account.accountId, chatId })
+          : { text: rawText, failures: [] as string[] };
+        // The bot-sender mention is injected per outbound unit, not here: each
+        // chunk (sendChunkedTextReply) and the streaming-card close re-apply it
+        // with the syntax matching that payload (text vs lark_md card). Injecting
+        // a single text-form tag here would split across chunks and use the wrong
+        // syntax on card paths, so the peer bot would miss later/card messages.
+        const text = l2Result.text;
+        if (rawText && text !== rawText) {
+          params.runtime.log?.(
+            `feishu[${account.accountId}]: L2 normalized outbound mentions in ${chatId}`,
+          );
+        }
+        if (l2Result.failures.length > 0) {
+          params.runtime.log?.(
+            `feishu[${account.accountId}]: L2 unresolved @mentions: [${l2Result.failures.join(", ")}] in ${chatId}`,
+          );
+        }
         const hasText = reply.hasText;
         const hasMedia = reply.hasMedia;
         const hasVoiceMedia =
@@ -714,6 +786,11 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             return;
           }
 
+          // Guarantee the bot-sender mention on real replies only — never a
+          // reasoning/thinking preview. Per-chunk injection (above) renders the
+          // right syntax for card vs text.
+          const deliverMentionTarget =
+            ensureMentionTarget && !payload.isReasoning ? ensureMentionTarget : undefined;
           if (useCard) {
             const cardHeader = resolveCardHeader(agentId, identity);
             const cardNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
@@ -721,6 +798,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text,
               useCard: true,
               infoKind: info?.kind,
+              mentionTarget: deliverMentionTarget,
               sendChunk: async ({ chunk }) => {
                 await sendStructuredCardFeishu({
                   cfg,
@@ -740,6 +818,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text,
               useCard: false,
               infoKind: info?.kind,
+              mentionTarget: deliverMentionTarget,
               sendChunk: async ({ chunk }) => {
                 await sendMessageFeishu({
                   cfg,

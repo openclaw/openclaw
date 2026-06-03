@@ -430,6 +430,25 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
+  it("mentions the bot sender on every chunk of a chunked bot-to-bot reply", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkTextWithMode.mockReturnValue(["0123456789", "abcdefghij"]);
+
+    const { options } = createDispatcherHarness({
+      ensureMentionTarget: { openId: "ou_peerbot", name: "PeerBot" },
+    });
+    await options.deliver({ text: "0123456789abcdefghij" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(2);
+    // Every chunk must carry the peer bot's <at>: a Feishu group message reaches
+    // the bot only if it @mentions it, so later chunks would otherwise be lost.
+    const sentTexts = sendMessageFeishuMock.mock.calls.map((call) => call[0].text);
+    expect(sentTexts[0]).toBe('<at user_id="ou_peerbot">PeerBot</at> 0123456789');
+    expect(sentTexts[1]).toBe('<at user_id="ou_peerbot">PeerBot</at> abcdefghij');
+  });
+
   it("keeps oversized auto mode markdown final text on the chunked card path", async () => {
     const runtime = getFeishuRuntimeMock();
     runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
@@ -455,6 +474,51 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       1,
     );
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("mentions the bot sender with card syntax on every chunk of a card reply", async () => {
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue(["```ts\nx\n```", "tail"]);
+
+    const { options } = createDispatcherHarness({
+      runtime: createRuntimeLogger(),
+      ensureMentionTarget: { openId: "ou_peerbot", name: "PeerBot" },
+    });
+    await options.deliver({ text: "```ts\nconst x = 1\n```\ntail" }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(2);
+    // Card mentions must use the lark_md `<at id=..>` form, not the post/text
+    // form — the text form does not notify the peer bot inside a card.
+    const sentTexts = sendStructuredCardFeishuMock.mock.calls.map((call) => call[0].text);
+    for (const sent of sentTexts) {
+      expect(sent).toContain("<at id=ou_peerbot></at>");
+      expect(sent).not.toContain('user_id="ou_peerbot"');
+    }
+  });
+
+  it("converts existing text-form mentions to card form on a card reply", async () => {
+    const runtime = getFeishuRuntimeMock();
+    // Small limit forces the static chunked card path (not the streaming card).
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(10);
+    // Markdown content drives the card path; the chunk carries a text-form tag.
+    runtime.channel.text.chunkMarkdownTextWithMode.mockReturnValue([
+      '<at user_id="ou_x">X</at> ```ts\ny\n```',
+    ]);
+
+    const { options } = createDispatcherHarness({ runtime: createRuntimeLogger() });
+    await options.deliver(
+      { text: '<at user_id="ou_x">X</at>\n```ts\nconst y = 1\n```' },
+      { kind: "final" },
+    );
+    await options.onIdle?.();
+
+    expect(sendStructuredCardFeishuMock).toHaveBeenCalledTimes(1);
+    // A text-form tag in a card would not notify, so it is rewritten to `<at id=>`.
+    const sent = sendStructuredCardFeishuMock.mock.calls[0][0].text;
+    expect(sent).toContain("<at id=ou_x></at>");
+    expect(sent).not.toContain('user_id="ou_x"');
   });
 
   it("discards partial streaming preview before oversized final text fallback", async () => {

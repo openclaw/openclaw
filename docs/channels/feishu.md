@@ -151,6 +151,44 @@ In `allowlist` mode, you can also admit a group by adding an explicit `groups.<c
 }
 ```
 
+### Bot-to-bot conversations
+
+By default the agent treats messages from other bots like user messages, so it
+can take part in bot-to-bot conversations. In a Feishu group a message only
+notifies the entities it explicitly `@mentions`, so replies to a bot sender are
+guaranteed to `@mention` that bot (otherwise the reply would never reach it).
+
+Receiving other bots' group messages requires the Feishu app scope
+`im:message.group_at_msg.include_bot:readonly`.
+
+Use `allowBots` to control whether bot-authored messages trigger replies:
+
+| `allowBots`  | Behavior                                            |
+| ------------ | --------------------------------------------------- |
+| _(omitted)_  | Accept bot-authored messages (default)              |
+| `false`      | Ignore bot-authored messages                        |
+| `"mentions"` | Accept only when the bot is explicitly `@mentioned` |
+
+A sliding-window guard (`botLoopProtection`) suppresses runaway two-bot loops.
+It is on by default whenever bot messages can reach dispatch; tune or disable it
+per channel or account:
+
+```json5
+{
+  channels: {
+    feishu: {
+      allowBots: "mentions",
+      botLoopProtection: {
+        enabled: true, // default true
+        maxEventsPerWindow: 20, // default 20
+        windowSeconds: 60, // default 60
+        cooldownSeconds: 60, // default 60
+      },
+    },
+  },
+}
+```
+
 ---
 
 <a id="get-groupuser-ids"></a>

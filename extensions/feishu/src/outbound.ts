@@ -28,6 +28,7 @@ import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { deliverCommentThreadText } from "./drive.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
+import { normalizeOutboundMentions, toCardMentions } from "./outbound-mention.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
 import {
@@ -611,8 +612,19 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       }
 
       const account = resolveFeishuAccount({ cfg, accountId: accountId ?? undefined });
+      // L2: this is the shared outbound send path used by message-tool replies,
+      // which bypass the dispatcher. Resolve model-authored mention variants
+      // (@Name, @ou_, card/text tags) here too so they actually notify.
+      const chatId = to.replace(/^(chat|user):/, "");
+      // Use the RESOLVED account id (named-default / multi-account safe): the
+      // registry is keyed by the resolved account, so a literal "default" here
+      // would miss @Name resolution for those setups.
+      const normalizedText = text
+        ? normalizeOutboundMentions({ text, accountId: account.accountId, chatId }).text
+        : text;
       const renderMode = account.config?.renderMode ?? "auto";
-      const useCard = renderMode === "card" || (renderMode === "auto" && shouldUseCard(text));
+      const useCard =
+        renderMode === "card" || (renderMode === "auto" && shouldUseCard(normalizedText));
       if (useCard) {
         const header = identity
           ? {
@@ -625,7 +637,8 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         return await sendStructuredCardFeishu({
           cfg,
           to,
-          text,
+          // Cards notify only via the `<at id=..>` form.
+          text: toCardMentions(normalizedText),
           replyToMessageId,
           replyInThread,
           accountId: accountId ?? undefined,
@@ -635,7 +648,7 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       return await sendOutboundText({
         cfg,
         to,
-        text,
+        text: normalizedText,
         accountId: accountId ?? undefined,
         replyToMessageId,
         replyInThread,
