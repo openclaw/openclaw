@@ -1,0 +1,187 @@
+name: Codex CI Fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to diagnose.
+        required: true
+        type: string
+      head_sha:
+        description: Expected PR head SHA.
+        required: false
+        default: ""
+        type: string
+      base_branch:
+        description: Base branch for the PR.
+        required: false
+        default: main
+        type: string
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+
+concurrency:
+  group: codex-ci-fix-pr-${{ inputs.pr_number }}
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  propose-fix:
+    if: github.repository == 'openclaw/openclaw'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      final_message: ${{ steps.run_codex.outputs.final-message }}
+      has_patch: ${{ steps.patch.outputs.has_patch }}
+    steps:
+      - name: Checkout PR merge ref
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          ref: refs/pull/${{ inputs.pr_number }}/merge
+          fetch-depth: 0
+          persist-credentials: false
+          submodules: false
+
+      - name: Build CI failure context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ inputs.pr_number }}
+          EXPECTED_HEAD_SHA: ${{ inputs.head_sha }}
+          BASE_BRANCH: ${{ inputs.base_branch }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p .artifacts/codex-ci-fix
+
+          pr_json="$(
+            gh pr view "$PR_NUMBER" \
+              --json number,title,url,headRefName,baseRefName,headRefOid,mergeStateStatus,reviewDecision,statusCheckRollup,labels
+          )"
+          printf '%s\n' "$pr_json" > .artifacts/codex-ci-fix/pr.json
+          actual_head_sha="$(jq -r '.headRefOid // ""' .artifacts/codex-ci-fix/pr.json)"
+
+          if [ -n "$EXPECTED_HEAD_SHA" ] && [ "$EXPECTED_HEAD_SHA" != "$actual_head_sha" ]; then
+            echo "PR head SHA changed from expected ${EXPECTED_HEAD_SHA} to ${actual_head_sha}; refusing stale CI fix."
+            exit 1
+          fi
+
+          runs_json="$(
+            gh run list \
+              --commit "$actual_head_sha" \
+              --status failure \
+              --limit 5 \
+              --json databaseId,name,displayTitle,workflowName,event,conclusion,createdAt,headSha,url
+          )"
+          printf '%s\n' "$runs_json" > .artifacts/codex-ci-fix/failing-runs.json
+
+          jq -n \
+            --arg baseBranch "$BASE_BRANCH" \
+            --arg runUrl "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            --slurpfile pr .artifacts/codex-ci-fix/pr.json \
+            --slurpfile runs .artifacts/codex-ci-fix/failing-runs.json \
+            '{
+              base_branch: $baseBranch,
+              steward_run_url: $runUrl,
+              pull_request: $pr[0],
+              failing_runs: $runs[0]
+            }' > .artifacts/codex-ci-fix/context.json
+
+          jq -r '.[].databaseId' .artifacts/codex-ci-fix/failing-runs.json |
+            while IFS= read -r run_id; do
+              [ -n "$run_id" ] || continue
+              log_file=".artifacts/codex-ci-fix/failed-run-${run_id}.log"
+              if gh run view "$run_id" --log-failed > "$log_file" 2>&1; then
+                python3 - "$log_file" <<'PY'
+          import pathlib
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          data = path.read_bytes()
+          limit = 300_000
+          if len(data) > limit:
+            path.write_bytes(data[-limit:])
+          PY
+              else
+                echo "Could not read failed logs for run ${run_id}." > "$log_file"
+              fi
+            done
+
+      - name: Ensure Codex CI fix key exists
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENCLAW_CI_FIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${OPENAI_API_KEY:-}" ]; then
+            echo "Missing OPENCLAW_CI_FIX_OPENAI_API_KEY or OPENAI_API_KEY secret." >&2
+            exit 1
+          fi
+
+      - name: Run Codex CI fix agent
+        id: run_codex
+        uses: openai/codex-action@5c3f4ccdb2b8790f73d6b21751ac00e602aa0c02
+        with:
+          openai-api-key: ${{ secrets.OPENCLAW_CI_FIX_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
+          prompt-file: .github/codex/prompts/ci-fix-agent.md
+          model: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          effort: high
+          sandbox: workspace-write
+          safety-strategy: drop-sudo
+          codex-args: '["--full-auto"]'
+
+      - name: Capture patch
+        id: patch
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "has_patch=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          git diff --check
+          git diff --binary > codex-ci-fix.patch
+          echo "has_patch=true" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Codex patch
+        if: steps.patch.outputs.has_patch == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v7
+        with:
+          name: codex-ci-fix-pr-${{ inputs.pr_number }}-${{ inputs.head_sha || github.run_id }}
+          path: codex-ci-fix.patch
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Comment with Codex result
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          HEAD_SHA: ${{ inputs.head_sha }}
+          HAS_PATCH: ${{ steps.patch.outputs.has_patch }}
+          CODEX_FINAL_MESSAGE: ${{ steps.run_codex.outputs.final-message }}
+        with:
+          script: |
+            const marker = `<!-- openclaw:codex-ci-fix-result:${process.env.HEAD_SHA || context.runId} -->`;
+            const finalMessage = (process.env.CODEX_FINAL_MESSAGE || "").trim() || "_Codex did not return a final message._";
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const hasPatch = process.env.HAS_PATCH === "true";
+            const body = [
+              marker,
+              "Codex CI fix completed.",
+              "",
+              `Patch artifact: ${hasPatch ? `[available in this run](${runUrl})` : "none"}`,
+              "",
+              finalMessage,
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: Number(process.env.PR_NUMBER),
+              body,
+            });

@@ -1,0 +1,96 @@
+name: PR Queue Steward
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/pr-queue-steward.yml"
+      - "scripts/github/pr-queue-steward.mjs"
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+    inputs:
+      base_branch:
+        description: Base branch to steward.
+        required: false
+        default: main
+        type: string
+      max_prs:
+        description: Maximum open PRs to inspect.
+        required: false
+        default: "30"
+        type: string
+      enqueue_ready:
+        description: Queue eligible maintainer-ready PRs.
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      dispatch_codex_fixes:
+        description: Dispatch Codex CI fixes for queueable failed PRs.
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      comment_mode:
+        description: PR comment behavior.
+        required: false
+        default: actions
+        type: choice
+        options:
+          - actions
+          - all
+          - "off"
+
+permissions:
+  actions: write
+  checks: read
+  contents: read
+  issues: write
+  pull-requests: write
+  statuses: read
+
+concurrency:
+  group: pr-queue-steward-${{ github.repository }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.event_name == 'workflow_dispatch' && inputs.base_branch || vars.PR_STEWARD_BASE_BRANCH || 'main' }}
+  cancel-in-progress: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  steward:
+    if: github.repository == 'openclaw/openclaw' || github.event_name != 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PR_STEWARD_BASE_BRANCH: ${{ github.event_name == 'workflow_dispatch' && inputs.base_branch || vars.PR_STEWARD_BASE_BRANCH || 'main' }}
+      PR_STEWARD_MAX_PRS: ${{ github.event_name == 'workflow_dispatch' && inputs.max_prs || vars.PR_STEWARD_MAX_PRS || '30' }}
+      PR_STEWARD_ENQUEUE_READY: ${{ github.event_name == 'pull_request' && 'false' || github.event_name == 'workflow_dispatch' && inputs.enqueue_ready || vars.PR_STEWARD_ENQUEUE_READY || 'true' }}
+      PR_STEWARD_DISPATCH_CODEX_FIXES: ${{ github.event_name == 'pull_request' && 'false' || github.event_name == 'workflow_dispatch' && inputs.dispatch_codex_fixes || vars.PR_STEWARD_DISPATCH_CODEX_FIXES || 'true' }}
+      PR_STEWARD_COMMENT_MODE: ${{ github.event_name == 'pull_request' && 'off' || github.event_name == 'workflow_dispatch' && inputs.comment_mode || vars.PR_STEWARD_COMMENT_MODE || 'actions' }}
+      PR_STEWARD_READY_LABELS: ${{ vars.PR_STEWARD_READY_LABELS || 'clawsweeper:automerge,clawsweeper:merge-ready' }}
+      PR_STEWARD_FIX_LABELS: ${{ vars.PR_STEWARD_FIX_LABELS || 'clawsweeper:queueable-fix' }}
+      PR_STEWARD_REQUIRE_APPROVAL: ${{ vars.PR_STEWARD_REQUIRE_APPROVAL || 'false' }}
+      PR_STEWARD_CODEX_FIX_WORKFLOW: codex-fix-ci.yml
+      PR_STEWARD_CAN_DISPATCH_CODEX_FIXES: ${{ (secrets.OPENCLAW_CI_FIX_OPENAI_API_KEY != '' || secrets.OPENAI_API_KEY != '') && 'true' || 'false' }}
+    steps:
+      - name: Checkout steward script
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          persist-credentials: false
+          submodules: false
+
+      - name: Steward PR queue
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          script: |
+            const { pathToFileURL } = require("node:url");
+            const moduleUrl = pathToFileURL(
+              `${process.env.GITHUB_WORKSPACE}/scripts/github/pr-queue-steward.mjs`,
+            );
+            const { runPrQueueSteward } = await import(moduleUrl.href);
+
+            await runPrQueueSteward({ github, context, core });

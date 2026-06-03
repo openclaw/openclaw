@@ -117,6 +117,7 @@ Skills own workflows; root owns hard policy and routing.
 ## GitHub / PRs
 
 - Use `$openclaw-pr-maintainer` immediately for maintainer-side OpenClaw issue/PR review, triage, duplicates, labels, comments, close, land, or evidence. Contributor PR creation/refresh follows the requested contributor workflow; linked refs alone do not require maintainer archive tooling.
+- PR queue steward automation is label-gated. It may enqueue only non-draft green PRs with `clawsweeper:automerge` or `clawsweeper:merge-ready`; it may dispatch Codex CI fix only for failing PRs with `clawsweeper:queueable-fix`. It must not merge directly, bypass branch protection, or change GitHub rulesets/secrets without maintainer approval.
 - Pasted GitHub issue/PR: first `git status -sb`; if dirty, yell; then `git push` + `git pull --ff-only`.
 - PR refs: `gh pr view/diff` or `gh api`, not web search. Prefer `gitcrawl` for maintainer discovery; missing/stale `gitcrawl` falls through to live `gh`, not contributor setup. Verify live with `gh` before mutation.
 - Bare issue/PR URL/number means review/report in chat. Suggest comment/close/merge when appropriate; mutate only when asked.

@@ -4,6 +4,8 @@ on:
   pull_request:
     paths-ignore:
       - "CHANGELOG.md"
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
     paths-ignore:

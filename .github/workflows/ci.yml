@@ -22,6 +22,8 @@ on:
     types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
     paths-ignore:
       - "CHANGELOG.md"
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   contents: read
@@ -103,8 +105,8 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event_name == 'merge_group' && github.event.merge_group.base_ref || github.event.pull_request.base.ref }}
 
       - name: Detect docs-only changes
         id: docs_scope
@@ -120,6 +122,8 @@ jobs:
 
           if [ "${{ github.event_name }}" = "push" ]; then
             BASE="${{ github.event.before }}"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            BASE="${{ github.event.merge_group.base_sha }}"
           else
             BASE="${{ github.event.pull_request.base.sha }}"
           fi
@@ -334,8 +338,8 @@ jobs:
         if: github.event_name != 'workflow_dispatch'
         uses: ./.github/actions/ensure-base-commit
         with:
-          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event.pull_request.base.ref }}
+          base-sha: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
+          fetch-ref: ${{ github.event_name == 'push' && github.ref_name || github.event_name == 'merge_group' && github.event.merge_group.base_ref || github.event.pull_request.base.ref }}
 
       - name: Prepare trusted pre-commit config
         if: github.event_name == 'pull_request'
@@ -378,7 +382,7 @@ jobs:
 
       - name: Audit changed GitHub workflows with zizmor
         env:
-          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event.pull_request.base.sha }}
+          BASE_SHA: ${{ github.event_name == 'push' && github.event.before || github.event_name == 'merge_group' && github.event.merge_group.base_sha || github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 

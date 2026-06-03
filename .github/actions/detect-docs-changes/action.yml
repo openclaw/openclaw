@@ -21,6 +21,8 @@ runs:
       run: |
         if [ "${{ github.event_name }}" = "push" ]; then
           BASE="${{ github.event.before }}"
+        elif [ "${{ github.event_name }}" = "merge_group" ]; then
+          BASE="${{ github.event.merge_group.base_sha }}"
         else
           # Use the exact base SHA from the event payload — stable regardless
           # of base branch movement (avoids origin/<ref> drift).
