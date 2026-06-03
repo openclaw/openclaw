@@ -787,6 +787,61 @@ describe("resolvePluginProviders", () => {
     });
   });
 
+  it("skips unreadable runtime provider rows while resolving plugin providers", () => {
+    setManifestPlugins([
+      createManifestProviderPlugin({
+        id: "healthy-plugin",
+        providerIds: ["healthy-provider"],
+        enabledByDefault: true,
+      }),
+    ]);
+    const registry = createEmptyPluginRegistry();
+    const brokenRegistration = Object.defineProperty(
+      {
+        pluginId: "broken-plugin",
+        source: "test",
+      },
+      "provider",
+      {
+        get() {
+          throw new Error("provider row exploded");
+        },
+      },
+    );
+    const healthyProvider: ProviderPlugin = {
+      id: "healthy-provider",
+      label: "Healthy Provider",
+      auth: [],
+    };
+    const outOfScopeProvider: ProviderPlugin = {
+      id: "out-of-scope-provider",
+      label: "Out of Scope Provider",
+      auth: [],
+    };
+    registry.providers.push(
+      { pluginId: "out-of-scope-plugin", provider: outOfScopeProvider, source: "test" },
+      brokenRegistration as never,
+      {
+        pluginId: "healthy-plugin",
+        provider: healthyProvider,
+        source: "test",
+      },
+    );
+    resolveRuntimePluginRegistryMock.mockReturnValue(registry);
+
+    expect(
+      resolvePluginProviders({
+        config: {},
+        onlyPluginIds: ["healthy-plugin"],
+      }),
+    ).toEqual([
+      {
+        ...healthyProvider,
+        pluginId: "healthy-plugin",
+      },
+    ]);
+  });
+
   it("keeps bundled provider plugins enabled when they default on outside Vitest compat", () => {
     expect(resolveEnabledProviderPluginIds({ config: {}, env: {} as NodeJS.ProcessEnv })).toEqual([
       "google",
