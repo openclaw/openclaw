@@ -326,16 +326,11 @@ describe("createTelegramDraftStream", () => {
       deleteMessage: vi.fn().mockResolvedValue(true),
     };
     const onSupersededPreview = vi.fn();
-    const stream = createTelegramDraftStream({
-      api: api as unknown as Bot["api"],
-      chatId: 123,
-      onSupersededPreview,
-    });
+    const stream = createDraftStream(api, { onSupersededPreview });
 
     stream.update("Message A partial");
     await vi.waitFor(() => expect(api.sendMessage).toHaveBeenCalledTimes(1));
 
-    // Rotate to message B before message A send resolves.
     stream.forceNewMessage();
     stream.update("Message B partial");
 
