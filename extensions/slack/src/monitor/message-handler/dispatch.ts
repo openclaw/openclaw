@@ -62,6 +62,7 @@ import {
   isSlackInteractiveRepliesEnabled,
 } from "../../interactive-replies.js";
 import { SLACK_TEXT_LIMIT } from "../../limits.js";
+import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import {
   buildSlackProgressDraftBlocks,
   buildSlackProgressStreamCompletionChunks,
@@ -520,6 +521,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
 
+  // Shared context for the `message_sent` plugin hook emitted on each delivered
+  // reply (both the `deliverReplies` paths and the native-streaming finalizer).
+  const messageSentHookContext = {
+    sessionKeyForInternalHooks: route.sessionKey,
+    isGroup: prepared.isRoomish,
+    groupId: prepared.isRoomish ? message.channel : undefined,
+  };
+
   const reactionMessageTs = prepared.ackReactionMessageTs;
   const messageTs = message.ts ?? message.event_ts;
   const incomingThreadTs = message.thread_ts;
@@ -703,6 +712,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let usedBlockReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
   let observedFinalReplyDelivery = false;
+  // Text of the final reply delivered through the native stream. Captured so
+  // the `message_sent` plugin hook can be emitted once the stream is finalized
+  // (stopSlackStream flushes any locally-buffered text to Slack). Mirrors the
+  // streaming-path emit in Telegram (extensions/telegram/src/bot-native-commands.ts).
+  let streamedFinalContent: string | undefined;
   const deliveryTracker = createSlackEventDeliveryTracker();
   const resolveDeliveryThreadTs = (params: {
     kind: ReplyDispatchKind;
@@ -754,6 +768,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         replyToMode: replyDeliveryMode,
         ...(slackIdentity ? { identity: slackIdentity } : {}),
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+        ...messageSentHookContext,
       });
       markSlackStreamFallbackDelivered(session);
       observedReplyDelivery = true;
@@ -807,6 +822,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       replyToMode: replyDeliveryMode,
       ...(slackIdentity ? { identity: slackIdentity } : {}),
       ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
+      ...messageSentHookContext,
     });
     observedReplyDelivery = true;
     if (params.kind === "final") {
@@ -875,6 +891,13 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
 
     const text = reply.trimmedText;
+    // Remember the final reply text streamed to Slack so the `message_sent`
+    // hook can fire after the stream is finalized. The SDK may buffer this
+    // locally until stopSlackStream flushes it, so we capture regardless of the
+    // current `streamSession.delivered` state.
+    if (params.kind === "final" && text) {
+      streamedFinalContent = text;
+    }
     let plannedThreadTs: string | undefined;
     try {
       if (!streamSession && nativeProgressStreamStartPromise) {
@@ -1816,15 +1839,40 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       if (completionChunks?.length) {
         nativeProgressCompletionSent = true;
       }
-      await stopSlackStream({
+      const stopResult = await stopSlackStream({
         session: finalStream,
         ...(completionChunks?.length ? { chunks: completionChunks } : {}),
         ...(slackMessageMetadata ? { metadata: slackMessageMetadata } : {}),
       });
+      // The stream finalized successfully, flushing any buffered final text to
+      // Slack. Emit the `message_sent` plugin hook for the streamed final reply
+      // here (the streaming happy-path never goes through deliverReplies, which
+      // emits for the non-streaming/fallback paths). emitSlackMessageSentHooks
+      // self-gates on registered listeners, so this is a no-op when unused.
+      if (streamedFinalContent) {
+        emitSlackMessageSentHooks({
+          ...messageSentHookContext,
+          to: prepared.replyTarget,
+          accountId: account.accountId,
+          content: streamedFinalContent,
+          success: true,
+          ...(stopResult.messageId ? { messageId: stopResult.messageId } : {}),
+        });
+      }
     } catch (err) {
       if (err instanceof SlackStreamNotDeliveredError) {
         streamFallbackDelivered = await deliverPendingStreamFallback(finalStream, err);
       } else {
+        if (streamedFinalContent) {
+          emitSlackMessageSentHooks({
+            ...messageSentHookContext,
+            to: prepared.replyTarget,
+            accountId: account.accountId,
+            content: streamedFinalContent,
+            success: false,
+            error: formatSlackError(err),
+          });
+        }
         runtime.error?.(danger(`slack-stream: failed to stop stream: ${formatSlackError(err)}`));
       }
     }

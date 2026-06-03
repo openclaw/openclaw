@@ -1,6 +1,7 @@
 // Slack plugin module implements replies behavior.
 import type { MessageMetadata } from "@slack/types";
 import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   chunkMarkdownTextWithMode,
   isSilentReplyText,
@@ -16,8 +17,9 @@ import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
+import { emitSlackMessageSentHooks } from "../message-sent-hook.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
-import { sendMessageSlack, type SlackSendIdentity } from "./send.runtime.js";
+import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
@@ -46,6 +48,16 @@ export async function deliverReplies(params: {
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
   metadata?: MessageMetadata;
+  /**
+   * Canonical session key for the internal `message:sent` hook. When set, the
+   * internal hook fires alongside the plugin `message_sent` hook. The plugin
+   * hook fires regardless (self-gated on registered listeners).
+   */
+  sessionKeyForInternalHooks?: string;
+  /** Whether the reply target is a group/channel (vs a DM). */
+  isGroup?: boolean;
+  /** Group/channel id for the `message_sent` event when `isGroup` is true. */
+  groupId?: string;
 }) {
   for (const payload of params.replies) {
     if (payload.isReasoning === true) {
@@ -62,6 +74,35 @@ export async function deliverReplies(params: {
       continue;
     }
 
+    // Fire the `message_sent` hook(s) after delivery, mirroring Telegram's
+    // `emitMessageSentHooks` in `extensions/telegram/src/bot/delivery.replies.ts`.
+    // `emitSlackMessageSentHooks` self-gates on registered listeners, so this is
+    // a no-op when no plugin observes `message_sent`.
+    const emitSent = (content: string, result?: SlackSendResult) => {
+      emitSlackMessageSentHooks({
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        to: params.target,
+        accountId: params.accountId,
+        content,
+        success: true,
+        messageId: result?.messageId,
+        isGroup: params.isGroup,
+        groupId: params.groupId,
+      });
+    };
+    const emitFailed = (content: string, error: unknown) => {
+      emitSlackMessageSentHooks({
+        sessionKeyForInternalHooks: params.sessionKeyForInternalHooks,
+        to: params.target,
+        accountId: params.accountId,
+        content,
+        success: false,
+        error: formatErrorMessage(error),
+        isGroup: params.isGroup,
+        groupId: params.groupId,
+      });
+    };
+
     if (!reply.hasMedia && slackBlocks?.length) {
       const trimmed = reply.trimmedText;
       if (!trimmed && !slackBlocks?.length) {
@@ -70,15 +111,22 @@ export async function deliverReplies(params: {
       if (trimmed && isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
         continue;
       }
-      await sendMessageSlack(params.target, trimmed, {
-        cfg: params.cfg,
-        token: params.token,
-        threadTs,
-        accountId: params.accountId,
-        ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
-        ...(params.identity ? { identity: params.identity } : {}),
-        ...(params.metadata ? { metadata: params.metadata } : {}),
-      });
+      let result: SlackSendResult;
+      try {
+        result = await sendMessageSlack(params.target, trimmed, {
+          cfg: params.cfg,
+          token: params.token,
+          threadTs,
+          accountId: params.accountId,
+          ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
+          ...(params.identity ? { identity: params.identity } : {}),
+          ...(params.metadata ? { metadata: params.metadata } : {}),
+        });
+      } catch (error) {
+        emitFailed(trimmed, error);
+        throw error;
+      }
+      emitSent(trimmed, result);
       params.runtime.log?.(`delivered reply to ${params.target}`);
       continue;
     }
@@ -96,25 +144,40 @@ export async function deliverReplies(params: {
           }
         : undefined,
       sendText: async (trimmed) => {
-        await sendMessageSlack(params.target, trimmed, {
-          cfg: params.cfg,
-          token: params.token,
-          threadTs,
-          accountId: params.accountId,
-          ...(params.identity ? { identity: params.identity } : {}),
-          ...(params.metadata ? { metadata: params.metadata } : {}),
-        });
+        let result: SlackSendResult;
+        try {
+          result = await sendMessageSlack(params.target, trimmed, {
+            cfg: params.cfg,
+            token: params.token,
+            threadTs,
+            accountId: params.accountId,
+            ...(params.identity ? { identity: params.identity } : {}),
+            ...(params.metadata ? { metadata: params.metadata } : {}),
+          });
+        } catch (error) {
+          emitFailed(trimmed, error);
+          throw error;
+        }
+        emitSent(trimmed, result);
       },
       sendMedia: async ({ mediaUrl, caption }) => {
-        await sendMessageSlack(params.target, caption ?? "", {
-          cfg: params.cfg,
-          token: params.token,
-          mediaUrl,
-          threadTs,
-          accountId: params.accountId,
-          ...(params.identity ? { identity: params.identity } : {}),
-          ...(params.metadata ? { metadata: params.metadata } : {}),
-        });
+        const content = caption ?? "";
+        let result: SlackSendResult;
+        try {
+          result = await sendMessageSlack(params.target, content, {
+            cfg: params.cfg,
+            token: params.token,
+            mediaUrl,
+            threadTs,
+            accountId: params.accountId,
+            ...(params.identity ? { identity: params.identity } : {}),
+            ...(params.metadata ? { metadata: params.metadata } : {}),
+          });
+        } catch (error) {
+          emitFailed(content, error);
+          throw error;
+        }
+        emitSent(content, result);
       },
     });
     if (delivered !== "empty") {
