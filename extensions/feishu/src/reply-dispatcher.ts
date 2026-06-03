@@ -133,7 +133,7 @@ type CreateFeishuReplyDispatcherParams = {
   sessionKey?: string;
 };
 
-export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
+export async function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherParams) {
   const core = getFeishuRuntime();
   const {
     cfg,
@@ -147,6 +147,10 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     accountId,
     identity,
   } = params;
+  // Resolve exec/keychain app credential SecretRefs before the strict runtime
+  // account lookup — the sync resolver only handles env/plaintext and throws on
+  // exec/keychain refs, which would drop the send path entirely (#89338).
+  const resolvedCfg = await resolveFeishuOutboundCredentialsConfig({ cfg, accountId });
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
@@ -156,18 +160,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     rootId !== undefined &&
     sendReplyToMessageId !== undefined &&
     sendReplyToMessageId !== rootId;
-  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  const prefixContext = createReplyPrefixContext({ cfg, agentId });
-
-  // Resolve exec/keychain app credential SecretRefs once on first send; the sync
-  // runtime resolver only handles env/plaintext, so unresolved refs would throw (#89338).
-  let resolvedCfgP: Promise<ClawdbotConfig> | undefined;
-  const getResolvedCfg = () =>
-    (resolvedCfgP ??= resolveFeishuOutboundCredentialsConfig({ cfg, accountId }));
+  const account = resolveFeishuRuntimeAccount({ cfg: resolvedCfg, accountId });
+  const prefixContext = createReplyPrefixContext({ cfg: resolvedCfg, agentId });
 
   let typingState: TypingIndicatorState | null = null;
   const { typingCallbacks } = createChannelMessageReplyPipeline({
-    cfg,
+    cfg: resolvedCfg,
     agentId,
     channel: "feishu",
     accountId,
@@ -196,7 +194,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
         typingState = await addTypingIndicator({
-          cfg,
+          cfg: resolvedCfg,
           messageId: replyToMessageId,
           accountId,
           runtime: params.runtime,
@@ -207,7 +205,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
           return;
         }
         await removeTypingIndicator({
-          cfg,
+          cfg: resolvedCfg,
           state: typingState,
           accountId,
           runtime: params.runtime,
@@ -231,11 +229,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     },
   });
 
-  const textChunkLimit = core.channel.text.resolveTextChunkLimit(cfg, "feishu", accountId, {
+  const textChunkLimit = core.channel.text.resolveTextChunkLimit(resolvedCfg, "feishu", accountId, {
     fallbackLimit: 4000,
   });
-  const chunkMode = core.channel.text.resolveChunkMode(cfg, "feishu");
-  const tableMode = core.channel.text.resolveMarkdownTableMode({ cfg, channel: "feishu" });
+  const chunkMode = core.channel.text.resolveChunkMode(resolvedCfg, "feishu");
+  const tableMode = core.channel.text.resolveMarkdownTableMode({
+    cfg: resolvedCfg,
+    channel: "feishu",
+  });
   const renderMode = account.config?.renderMode ?? "auto";
   const streamingEnabled = account.config?.streaming !== false && renderMode !== "raw";
   const coreBlockStreamingEnabled = account.config?.blockStreaming === true;
@@ -489,7 +490,6 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   };
 
   const sendMediaReplies = async (payload: ReplyPayload, options?: { fallbackText?: string }) => {
-    const resolvedCfg = await getResolvedCfg();
     const mediaUrls = resolveSendableOutboundReplyParts(payload).mediaUrls;
     let sentFallbackText = false;
     await sendMediaWithLeadingCaption({
@@ -567,7 +567,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       return false;
     }
     await sendMessageFeishu({
-      cfg: await getResolvedCfg(),
+      cfg: resolvedCfg,
       to: chatId,
       text: NO_VISIBLE_REPLY_FALLBACK_TEXT,
       replyToMessageId: sendReplyToMessageId,
@@ -595,9 +595,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     core.channel.reply.createReplyDispatcherWithTyping({
       responsePrefix: prefixContext.responsePrefix,
       responsePrefixContextProvider: prefixContext.responsePrefixContextProvider,
-      humanDelay: core.channel.reply.resolveHumanDelayConfig(cfg, agentId),
+      humanDelay: core.channel.reply.resolveHumanDelayConfig(resolvedCfg, agentId),
       silentReplyContext: {
-        cfg,
+        cfg: resolvedCfg,
         sessionKey: params.sessionKey,
         surface: "feishu",
         conversationType: chatId.startsWith("oc_") ? "group" : "direct",
@@ -729,7 +729,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               infoKind: info?.kind,
               sendChunk: async ({ chunk }) => {
                 await sendStructuredCardFeishu({
-                  cfg: await getResolvedCfg(),
+                  cfg: resolvedCfg,
                   to: chatId,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
@@ -748,7 +748,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               infoKind: info?.kind,
               sendChunk: async ({ chunk }) => {
                 await sendMessageFeishu({
-                  cfg: await getResolvedCfg(),
+                  cfg: resolvedCfg,
                   to: chatId,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,

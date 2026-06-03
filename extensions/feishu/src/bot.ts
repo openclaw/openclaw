@@ -1510,7 +1510,7 @@ export async function handleFeishuMessage(params: {
           // Active agent: real Feishu dispatcher (responds on Feishu)
           const identity = resolveAgentOutboundIdentity(cfg, agentId);
           const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } =
-            createFeishuReplyDispatcher({
+            await createFeishuReplyDispatcher({
               cfg,
               agentId,
               runtime: runtime as RuntimeEnv,
@@ -1686,7 +1686,7 @@ export async function handleFeishuMessage(params: {
         sessionKey: route.sessionKey,
       });
       const { dispatcher, replyOptions, markDispatchIdle, ensureNoVisibleReplyFallback } =
-        createFeishuReplyDispatcher({
+        await createFeishuReplyDispatcher({
           cfg,
           agentId: route.agentId,
           runtime: runtime as RuntimeEnv,
