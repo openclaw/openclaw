@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
@@ -10,6 +11,8 @@ import {
   fetchLmstudioModels,
 } from "./models.fetch.js";
 import {
+  mapLmstudioWireEntry,
+  normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
   resolveLmstudioReasoningCompat,
@@ -88,6 +91,7 @@ describe("lmstudio-models", () => {
 
   afterEach(() => {
     fetchWithSsrFGuardMock.mockReset();
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
 
@@ -130,6 +134,49 @@ describe("lmstudio-models", () => {
         headers: { "X-Proxy-Auth": "token" },
       },
       models: [],
+    });
+  });
+
+  it("drops malformed configured catalog token metadata", () => {
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "bad-window",
+        contextWindow: Number.POSITIVE_INFINITY,
+        contextTokens: 4096.5,
+      }),
+    ).toMatchObject({
+      id: "bad-window",
+      contextWindow: undefined,
+      contextTokens: undefined,
+    });
+
+    expect(
+      normalizeLmstudioConfiguredCatalogEntry({
+        id: "bad-tokens",
+        contextWindow: -1,
+        contextTokens: 0,
+      }),
+    ).toMatchObject({
+      id: "bad-tokens",
+      contextWindow: undefined,
+      contextTokens: undefined,
+    });
+  });
+
+  it("drops malformed discovered context metadata", () => {
+    const model = mapLmstudioWireEntry({
+      type: "llm",
+      key: "bad-context",
+      max_context_length: 32768.5,
+      loaded_instances: [{ id: "loaded", config: { context_length: Number.POSITIVE_INFINITY } }],
+    });
+
+    expect(model).toMatchObject({
+      id: "bad-context",
+      contextWindow: SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
+      contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
+      maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
+      loaded: false,
     });
   });
 
@@ -334,6 +381,45 @@ describe("lmstudio-models", () => {
     }
   });
 
+  it("caps oversized direct fetch timeouts before discovering models", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const fetchMock = vi.fn(async (_url: string | URL, init?: RequestInit) => ({
+      ok: true,
+      status: 200,
+      requestInit: init,
+      json: async () => ({ models: [] }),
+    }));
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      fetchImpl: asFetch(fetchMock),
+    });
+
+    expect(result.reachable).toBe(true);
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
+    expect(fetchMock.mock.calls[0]?.[1]?.signal).toBe(timeoutController.signal);
+  });
+
+  it("caps oversized guarded-fetch timeouts before discovering models", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(JSON.stringify({ models: [] }), { status: 200 }),
+      release: vi.fn(async () => undefined),
+    });
+
+    const result = await fetchLmstudioModels({
+      baseUrl: "http://localhost:1234/v1",
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      ssrfPolicy: {},
+    });
+
+    expect(result.reachable).toBe(true);
+    expect(fetchWithSsrFGuardMock.mock.calls[0]?.[0]).toMatchObject({
+      timeoutMs: MAX_TIMER_TIMEOUT_MS,
+    });
+  });
+
   it("skips model load when already loaded", async () => {
     const fetchMock = createModelLoadFetchMock({ loadedContextLength: 64000 });
     vi.stubGlobal("fetch", asFetch(fetchMock));
@@ -470,6 +556,24 @@ describe("lmstudio-models", () => {
     ).resolves.toBeUndefined();
 
     expectLoadContextLength(fetchMock, 8192);
+  });
+
+  it("omits malformed context lengths before loading models", async () => {
+    const fetchMock = createModelLoadFetchMock({
+      loadedContextLength: 4096.5,
+      maxContextLength: 32768.5,
+    });
+    vi.stubGlobal("fetch", asFetch(fetchMock));
+
+    await expect(
+      ensureLmstudioModelLoaded({
+        baseUrl: "http://localhost:1234/v1",
+        modelKey: "qwen3-8b-instruct",
+        requestedContextLength: 8192.5,
+      }),
+    ).resolves.toBeUndefined();
+
+    expectLoadContextLength(fetchMock, LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });
 
   it("throws when model discovery fails", async () => {

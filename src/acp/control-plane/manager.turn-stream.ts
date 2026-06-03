@@ -1,10 +1,10 @@
-import { AcpRuntimeError } from "../runtime/errors.js";
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
   AcpRuntimeTurnInput,
   AcpRuntimeTurnResult,
-} from "../runtime/types.js";
+} from "@openclaw/acp-core/runtime/types";
+import { AcpRuntimeError } from "../runtime/errors.js";
 import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
@@ -12,6 +12,7 @@ export type AcpTurnEventGate = {
   open: boolean;
 };
 
+/** Summary of whether a turn stream emitted user-visible output or terminal events. */
 export type AcpTurnStreamOutcome = {
   sawOutput: boolean;
   sawTerminalEvent: boolean;
@@ -113,6 +114,7 @@ export async function consumeAcpTurnStream(params: {
   ) => Promise<void> | void;
 }): Promise<AcpTurnStreamOutcome> {
   if (params.runtime.startTurn) {
+    // startTurn exposes result and event streams separately; coordinate both before reporting done.
     const turn = params.runtime.startTurn(params.turn);
     const eventsPromise = consumeAcpTurnEvents({
       events: turn.events,

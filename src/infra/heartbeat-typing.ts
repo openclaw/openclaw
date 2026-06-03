@@ -4,6 +4,8 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 const DEFAULT_HEARTBEAT_TYPING_INTERVAL_SECONDS = 6;
 
+// Heartbeat typing callbacks use optional channel heartbeat hooks to keep a
+// typing indicator alive while the heartbeat response is generated.
 type HeartbeatTypingLogger = {
   debug?: (message: string, meta?: Record<string, unknown>) => void;
 };
@@ -15,6 +17,7 @@ type HeartbeatTypingTarget = {
   threadId?: string | number | null;
 };
 
+/** Create typing start/stop/keepalive callbacks for a heartbeat delivery target. */
 export function createHeartbeatTypingCallbacks(params: {
   cfg: OpenClawConfig;
   target: HeartbeatTypingTarget;

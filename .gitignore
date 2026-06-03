@@ -42,6 +42,7 @@ apps/macos-mlx-tts/.build/
 apps/shared/MoltbotKit/.build/
 apps/shared/OpenClawKit/.build/
 apps/shared/*/.build/
+packages/*/dist/
 apps/shared/OpenClawKit/Package.resolved
 **/ModuleCache/
 bin/
@@ -178,6 +179,7 @@ mantis/
 /local/
 /client_secret_*.json
 package-lock.json
+!src/commands/copilot-sdk-install-manifest/package-lock.json
 .claude/
 .agent/
 skills-lock.json

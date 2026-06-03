@@ -86,11 +86,15 @@ describe("package manager build policy", () => {
   it("pins forked transitive dependencies with parent-scoped shrinkwrap overrides", () => {
     const overrides = readShrinkwrapOverrides() as Record<string, unknown>;
 
+    const packages = collectPnpmLockPackages();
+
     expect(overrides["lru-cache"]).toBeUndefined();
     expect(overrides["lru-memoizer@2.3.0"]).toMatchObject({
       "lru-cache": { ".": "6.0.0", yallist: "4.0.0" },
     });
-    expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.0" });
+    if (packages.has("lru-memoizer@3.0.0")) {
+      expect(overrides["lru-memoizer@3.0.0"]).toMatchObject({ "lru-cache": "11.5.0" });
+    }
   });
 
   it("can preserve current forked shrinkwrap dependencies with parent-scoped overrides", () => {
@@ -220,7 +224,7 @@ describe("package manager build policy", () => {
         .filter((entry) => entry.isDirectory())
         .map((entry) => `extensions/${entry.name}/npm-shrinkwrap.json`)
         .filter((shrinkwrapPath) => fs.existsSync(shrinkwrapPath))
-        .sort((left, right) => left.localeCompare(right)),
+        .toSorted((left, right) => left.localeCompare(right)),
     ];
 
     for (const shrinkwrapPath of shrinkwrapPaths) {

@@ -22,6 +22,13 @@ import {
 } from "./agent-scope.js";
 import { MODELS_JSON_STATE, type ContentHashOutcome } from "./models-config-state.js";
 import { planOpenClawModelsJson } from "./models-config.plan.js";
+import {
+  decodePluginModelCatalogRelativePathPluginId,
+  isGeneratedPluginModelCatalog,
+  isPluginModelCatalogRelativePath,
+  listPluginModelCatalogRelativePaths,
+  resolvePluginModelCatalogOwnerPluginId,
+} from "./plugin-model-catalog.js";
 import { stableStringify } from "./stable-stringify.js";
 
 export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
@@ -508,6 +515,111 @@ export async function writeModelsFileAtomicForModelsJson(
   contents: string,
 ): Promise<void> {
   await privateFileStore(path.dirname(targetPath)).writeText(path.basename(targetPath), contents);
+}
+
+async function isGeneratedPluginCatalogFile(targetPath: string): Promise<boolean> {
+  return (await readGeneratedPluginCatalog(targetPath)) !== undefined;
+}
+
+async function readGeneratedPluginCatalog(targetPath: string): Promise<unknown> {
+  const existing = await readExistingModelsFile(targetPath);
+  const parsed = existing.parsed;
+  return isGeneratedPluginModelCatalog(parsed) ? parsed : undefined;
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
+  agentDir: string;
+  existingParsed: unknown;
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
+}): Promise<unknown> {
+  const root = isRecordLike(params.existingParsed) ? params.existingParsed : {};
+  const providers = isRecordLike(root.providers) ? { ...root.providers } : {};
+  let changed = false;
+  for (const relativePath of listPluginModelCatalogRelativePaths(params.agentDir)) {
+    const catalogPluginId = decodePluginModelCatalogRelativePathPluginId(relativePath);
+    if (!catalogPluginId) {
+      continue;
+    }
+    const catalog = await readGeneratedPluginCatalog(path.join(params.agentDir, relativePath));
+    if (!isRecordLike(catalog) || !isRecordLike(catalog.providers)) {
+      continue;
+    }
+    for (const [providerId, provider] of Object.entries(catalog.providers)) {
+      const currentOwnerPluginId = resolvePluginModelCatalogOwnerPluginId({
+        providerId,
+        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+      });
+      if (currentOwnerPluginId !== catalogPluginId) {
+        continue;
+      }
+      providers[providerId] = provider;
+      changed = true;
+    }
+  }
+  if (!changed) {
+    return params.existingParsed;
+  }
+  return { ...root, providers };
+}
+
+async function removeStalePluginCatalogs(params: {
+  agentDir: string;
+  activeRelativePaths: ReadonlySet<string>;
+}): Promise<boolean> {
+  let wrote = false;
+  for (const relativePath of listPluginModelCatalogRelativePaths(params.agentDir)) {
+    if (params.activeRelativePaths.has(path.normalize(relativePath))) {
+      continue;
+    }
+    const targetPath = path.join(params.agentDir, relativePath);
+    if (!(await isGeneratedPluginCatalogFile(targetPath))) {
+      continue;
+    }
+    await fs.unlink(targetPath).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      throw error;
+    });
+    wrote = true;
+  }
+  return wrote;
+}
+
+async function writePluginCatalogsForModelsJson(params: {
+  agentDir: string;
+  pluginCatalogWrites?: Record<string, string>;
+}): Promise<boolean> {
+  if (!params.pluginCatalogWrites) {
+    return false;
+  }
+  let wrote = false;
+  const activeRelativePaths = new Set<string>();
+  for (const [relativePath, contents] of Object.entries(params.pluginCatalogWrites)) {
+    if (!isPluginModelCatalogRelativePath(relativePath)) {
+      continue;
+    }
+    activeRelativePaths.add(path.normalize(relativePath));
+    const targetPath = path.join(params.agentDir, relativePath);
+    const existing = await readExistingModelsFile(targetPath);
+    if (existing.raw === contents) {
+      await ensureModelsFileModeForModelsJson(targetPath);
+      continue;
+    }
+    await fs.mkdir(path.dirname(targetPath), { recursive: true, mode: 0o700 });
+    await writeModelsFileAtomicForModelsJson(targetPath, contents);
+    await ensureModelsFileModeForModelsJson(targetPath);
+    wrote = true;
+  }
+  const removedStale = await removeStalePluginCatalogs({
+    agentDir: params.agentDir,
+    activeRelativePaths,
+  });
+  return wrote || removedStale;
 }
 
 function resolveModelsConfigInput(config?: OpenClawConfig): {

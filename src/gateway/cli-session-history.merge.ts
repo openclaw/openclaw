@@ -1,9 +1,14 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import { normalizeOptionalString, readStringValue } from "../shared/string-coerce.js";
 
 const DEDUPE_TIMESTAMP_WINDOW_MS = 5 * 60 * 1000;
 
+// Imported CLI history can overlap local transcript writes. Dedupe prefers
+// stable imported external ids, then falls back to role/text/timestamp matching.
 function extractComparableText(message: unknown): string | undefined {
   if (!message || typeof message !== "object") {
     return undefined;
@@ -54,6 +59,8 @@ function resolveComparableRole(message: unknown): string | undefined {
   return readStringValue((message as { role?: unknown }).role);
 }
 
+// External identity survives text edits, so it is the strongest match signal
+// for imported messages from Claude CLI or similar external histories.
 type ImportedExternalIdentity = {
   externalId: string;
   importedFrom?: string;
@@ -131,6 +138,7 @@ function compareHistoryMessages(
   return a.order - b.order;
 }
 
+/** Merges imported CLI transcript messages into local history without duplicating overlaps. */
 export function mergeImportedChatHistoryMessages(params: {
   localMessages: unknown[];
   importedMessages: unknown[];

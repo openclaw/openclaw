@@ -1,4 +1,6 @@
 import type { Command } from "commander";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatAuthChoiceChoicesForCli } from "../../commands/auth-choice-options.js";
 import type { GatewayDaemonRuntime } from "../../commands/daemon-runtime.js";
 import { CORE_ONBOARD_AUTH_FLAGS } from "../../commands/onboard-core-auth-flags.js";
@@ -12,8 +14,6 @@ import type {
   TailscaleMode,
 } from "../../commands/onboard-types.js";
 import { resolveManifestProviderOnboardAuthFlags } from "../../plugins/provider-auth-choices.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
 import { parsePort } from "../shared/parse-port.js";
 
@@ -141,7 +141,7 @@ export function registerOnboardCommand(program: Command): void {
     .option("--custom-provider-id <id>", "Custom provider ID (optional; auto-derived by default)")
     .option(
       "--custom-compatibility <mode>",
-      "Custom provider API compatibility: openai|anthropic (default: openai)",
+      "Custom provider API compatibility: openai|openai-responses|anthropic (default: openai)",
     )
     .option("--custom-image-input", "Mark the custom provider model as image-capable")
     .option("--custom-text-input", "Mark the custom provider model as text-only")
@@ -217,7 +217,11 @@ export function registerOnboardCommand(program: Command): void {
           customApiKey: opts.customApiKey as string | undefined,
           customModelId: opts.customModelId as string | undefined,
           customProviderId: opts.customProviderId as string | undefined,
-          customCompatibility: opts.customCompatibility as "openai" | "anthropic" | undefined,
+          customCompatibility: opts.customCompatibility as
+            | "openai"
+            | "openai-responses"
+            | "anthropic"
+            | undefined,
           customImageInput:
             opts.customTextInput === true
               ? false

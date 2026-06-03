@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  listManagedPluginNpmRoots: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
   relinkOpenClawPeerDependenciesInManagedNpmRoot: vi.fn(),
   runPluginPayloadSmokeCheck: vi.fn(),
@@ -15,6 +16,9 @@ vi.mock("../../commands/doctor/shared/missing-configured-plugin-install.js", () 
 vi.mock("../../plugins/plugin-peer-link.js", () => ({
   relinkOpenClawPeerDependenciesInManagedNpmRoot:
     mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot,
+}));
+vi.mock("../../plugins/npm-project-roots.js", () => ({
+  listManagedPluginNpmRoots: mocks.listManagedPluginNpmRoots,
 }));
 vi.mock("./plugin-payload-validation.js", () => ({
   runPluginPayloadSmokeCheck: mocks.runPluginPayloadSmokeCheck,
@@ -33,6 +37,9 @@ describe("runPostCorePluginConvergence", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listManagedPluginNpmRoots.mockImplementation((npmRoot: string) =>
+      Promise.resolve([npmRoot]),
+    );
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -148,26 +155,41 @@ describe("runPostCorePluginConvergence", () => {
     });
   });
 
-  it("repairs managed npm openclaw peer links before payload smoke checks", async () => {
+  it("repairs managed npm openclaw peer links in every managed npm project before payload smoke checks", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [],
       records: { codex: { source: "npm", installPath: "/p/codex" } },
     });
-    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot.mockResolvedValue({
-      checked: 1,
-      attempted: 1,
-      repaired: 1,
-      skipped: 0,
-    });
+    mocks.listManagedPluginNpmRoots.mockResolvedValue([
+      "/tmp/openclaw-state/npm",
+      "/tmp/openclaw-state/npm/projects/codex",
+    ]);
+    mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot
+      .mockResolvedValueOnce({
+        checked: 0,
+        attempted: 0,
+        repaired: 0,
+        skipped: 0,
+      })
+      .mockResolvedValueOnce({
+        checked: 1,
+        attempted: 1,
+        repaired: 1,
+        skipped: 0,
+      });
 
     const result = await runPostCorePluginConvergence({
       cfg: { plugins: { entries: { codex: { enabled: true } } } } as unknown as OpenClawConfig,
       env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
     });
 
-    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenCalledWith({
+    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(1, {
       npmRoot: "/tmp/openclaw-state/npm",
+      logger: {},
+    });
+    expect(mocks.relinkOpenClawPeerDependenciesInManagedNpmRoot).toHaveBeenNthCalledWith(2, {
+      npmRoot: "/tmp/openclaw-state/npm/projects/codex",
       logger: {},
     });
     expect(result.changes).toEqual([
@@ -253,7 +275,7 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({ brave: baseline.brave });
   });
 
-  it("flags errored=true and surfaces actionable guidance when repair warns", async () => {
+  it("keeps repair warnings nonblocking with actionable guidance", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [
@@ -267,7 +289,7 @@ describe("runPostCorePluginConvergence", () => {
       } as unknown as OpenClawConfig,
       env: {},
     });
-    expect(result.errored).toBe(true);
+    expect(result.errored).toBe(false);
     expect(result.warnings).toStrictEqual([
       {
         reason:
@@ -277,6 +299,68 @@ describe("runPostCorePluginConvergence", () => {
         guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
       },
     ]);
+  });
+
+  it("keeps failed configured-plugin repair fetches nonblocking", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [
+        'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
+      ],
+      failedPluginIds: ["matrix"],
+      records: {},
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { matrix: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(false);
+    expect(result.warnings).toStrictEqual([
+      {
+        reason:
+          'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
+        message:
+          'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
+        guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
+      },
+    ]);
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: {},
+      env: expect.any(Object),
+    });
+  });
+
+  it("keeps inactive repair failures nonblocking", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: [],
+      warnings: [
+        'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+      ],
+      failedPluginIds: ["discord"],
+      records: {
+        discord: {
+          source: "npm",
+          spec: "@acme/discord",
+          installPath: "/p/discord",
+        },
+      },
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: {
+          deny: ["discord"],
+          entries: { discord: { enabled: true } },
+        },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(false);
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: {},
+      env: expect.any(Object),
+    });
   });
 
   it("flags errored=true when smoke check finds a missing main entry", async () => {

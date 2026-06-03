@@ -96,6 +96,12 @@ afterAll(() => {
   vi.resetModules();
 });
 
+describe("feishuPlugin metadata", () => {
+  it("opts announce delivery into persisted session lookup", () => {
+    expect(feishuPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
+  });
+});
+
 describe("feishuPlugin.status.probeAccount", () => {
   it("uses current account credentials for multi-account config", async () => {
     const cfg = {
@@ -273,7 +279,7 @@ describe("feishuPlugin actions", () => {
   });
 
   it("honors the selected Feishu account during discovery", () => {
-    const cfg = {
+    const cfgLocal = {
       channels: {
         feishu: {
           enabled: true,
@@ -296,7 +302,7 @@ describe("feishuPlugin actions", () => {
       },
     } as OpenClawConfig;
 
-    expect(getDescribedActions(cfg, "default")).toEqual([
+    expect(getDescribedActions(cfgLocal, "default")).toEqual([
       "send",
       "read",
       "edit",
@@ -308,7 +314,7 @@ describe("feishuPlugin actions", () => {
       "channel-info",
       "channel-list",
     ]);
-    expect(getDescribedActions(cfg, "work")).toEqual([
+    expect(getDescribedActions(cfgLocal, "work")).toEqual([
       "send",
       "read",
       "edit",
@@ -443,6 +449,36 @@ describe("feishuPlugin actions", () => {
     expect(
       elements.some((element) => requireRecord(element, "card element").tag === "action"),
     ).toBe(false);
+  });
+
+  it("does not render callback action buttons as Feishu quick commands", async () => {
+    sendCardFeishuMock.mockResolvedValueOnce({ messageId: "om_card", chatId: "oc_group_1" });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: {
+        to: "chat:oc_group_1",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Inspect", action: { type: "callback", value: "inspect:123" } }],
+            },
+          ],
+        },
+      },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    const sendCardArgs = requireRecord(
+      mockCallArg(sendCardFeishuMock, 0, 0, "sendCardFeishu"),
+      "send card args",
+    );
+    const card = requireRecord(sendCardArgs.card, "card");
+    const elements = requireArray(requireRecord(card.body, "card body").elements, "card elements");
+    expect(elements).toEqual([{ tag: "markdown", content: "- Inspect" }]);
   });
 
   it("renders legacy web_app presentation buttons as native Feishu link buttons", async () => {
@@ -1039,6 +1075,68 @@ describe("feishuPlugin actions", () => {
     const peers = requireArray(details.peers, "peers");
     expect(requireRecord(groups[0], "group").id).toBe("oc_group_1");
     expect(requireRecord(peers[0], "peer").id).toBe("ou_1");
+  });
+
+  it("accepts plus-signed channel-list limits", async () => {
+    listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "channel-list",
+      params: { query: "eng", limit: "+05", scope: "groups" },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledWith({
+      cfg,
+      query: "eng",
+      limit: 5,
+      fallbackToStatic: false,
+      accountId: undefined,
+    });
+  });
+
+  it("ignores malformed channel-list limits", async () => {
+    listFeishuDirectoryGroupsLiveMock.mockResolvedValueOnce([{ kind: "group", id: "oc_group_1" }]);
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "channel-list",
+      params: { query: "eng", limit: "-1", scope: "groups" },
+      cfg,
+      accountId: undefined,
+    } as never);
+
+    expect(listFeishuDirectoryGroupsLiveMock).toHaveBeenCalledWith({
+      cfg,
+      query: "eng",
+      limit: undefined,
+      fallbackToStatic: false,
+      accountId: undefined,
+    });
+  });
+
+  it("ignores non-decimal Feishu action page sizes", async () => {
+    getChatMembersMock.mockResolvedValueOnce({
+      chat_id: "oc_group_1",
+      members: [],
+      has_more: false,
+    });
+
+    await feishuPlugin.actions?.handleAction?.({
+      action: "member-info",
+      params: { chatId: "oc_group_1", pageSize: "0x10" },
+      cfg,
+      accountId: undefined,
+      toolContext: {},
+    } as never);
+
+    expect(getChatMembersMock).toHaveBeenCalledWith(
+      { tag: "client" },
+      "oc_group_1",
+      undefined,
+      undefined,
+      "open_id",
+    );
   });
 
   it("fails channel-list when live discovery fails", async () => {

@@ -78,6 +78,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -116,6 +117,7 @@
   "approvalPolicy": "never",
   "approvalsReviewer": "user",
   "config": {
+    "features.apply_patch_streaming_events": true,
     "features.code_mode": true,
     "features.code_mode_only": false
   },
@@ -221,8 +223,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 0
   },
   "dynamicToolsJson": {
-    "chars": 40277,
-    "roughTokens": 10070
+    "chars": 43943,
+    "roughTokens": 10986
   },
   "openClawDeveloperInstructions": {
     "chars": 2988,
@@ -233,8 +235,8 @@ This is the deterministic model-bound layer stack OpenClaw can snapshot for the 
     "roughTokens": 6925
   },
   "totalWithDynamicToolsJson": {
-    "chars": 67979,
-    "roughTokens": 16995
+    "chars": 71645,
+    "roughTokens": 17912
   },
   "userInputText": {
     "chars": 1629,
@@ -601,19 +603,10 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "description": "Structured attachments; each entry uses media.",
           "items": {
             "properties": {
-              "filePath": {
-                "type": "string"
-              },
-              "fileUrl": {
-                "type": "string"
-              },
               "media": {
-                "type": "string"
-              },
-              "mediaUrl": {
                 "type": "string"
               },
               "mimeType": {
@@ -622,14 +615,8 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
               "name": {
                 "type": "string"
               },
-              "path": {
-                "type": "string"
-              },
               "type": {
                 "enum": ["image", "audio", "video", "file"],
-                "type": "string"
-              },
-              "url": {
                 "type": "string"
               }
             },
@@ -664,9 +651,6 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
         "filename": {
           "type": "string"
         },
-        "filePath": {
-          "type": "string"
-        },
         "forceDocument": {
           "description": "Send image/GIF/video as document; avoids compression.",
           "type": "boolean"
@@ -688,9 +672,6 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "string"
         },
         "mimeType": {
-          "type": "string"
-        },
-        "path": {
           "type": "string"
         },
         "quoteText": {
@@ -718,7 +699,8 @@ Full JSON: `codex-dynamic-tools.discord-group.json`
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],

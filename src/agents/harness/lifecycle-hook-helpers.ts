@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import type {
@@ -10,7 +11,6 @@ import type {
 } from "../../plugins/hook-types.js";
 import type { VoidHookRunOptions } from "../../plugins/hooks.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { normalizeOptionalString as normalizeTrimmedString } from "../../shared/string-coerce.js";
 import { buildAgentHookContext, type AgentHarnessHookContext } from "./hook-context.js";
 
 const log = createSubsystemLogger("agents/harness");
@@ -75,9 +75,11 @@ export function runAgentHarnessLlmInputHook(params: {
   if (!hookRunner?.hasHooks("llm_input") || typeof hookRunner.runLlmInput !== "function") {
     return;
   }
-  void hookRunner.runLlmInput(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
-    log.warn(`llm_input hook failed: ${String(error)}`);
-  });
+  void hookRunner
+    .runLlmInput(params.event, buildAgentHookContext(params.ctx))
+    .catch((error: unknown) => {
+      log.warn(`llm_input hook failed: ${String(error)}`);
+    });
 }
 
 export function runAgentHarnessLlmOutputHook(params: {
@@ -89,9 +91,11 @@ export function runAgentHarnessLlmOutputHook(params: {
   if (!hookRunner?.hasHooks("llm_output") || typeof hookRunner.runLlmOutput !== "function") {
     return;
   }
-  void hookRunner.runLlmOutput(params.event, buildAgentHookContext(params.ctx)).catch((error) => {
-    log.warn(`llm_output hook failed: ${String(error)}`);
-  });
+  void hookRunner
+    .runLlmOutput(params.event, buildAgentHookContext(params.ctx))
+    .catch((error: unknown) => {
+      log.warn(`llm_output hook failed: ${String(error)}`);
+    });
 }
 
 async function executeAgentHarnessAgentEndHook(params: {

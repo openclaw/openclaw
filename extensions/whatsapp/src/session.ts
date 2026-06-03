@@ -1,14 +1,11 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:https";
-import { HttpsProxyAgent } from "https-proxy-agent";
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { VERSION } from "openclaw/plugin-sdk/cli-runtime";
 import {
   createHttp1EnvHttpProxyAgent,
   createHttp1ProxyAgent,
-  resolveActiveManagedProxyTlsOptions,
-  resolveEnvHttpProxyUrl,
-  shouldUseEnvHttpProxyForUrl,
+  createNodeProxyAgent,
 } from "openclaw/plugin-sdk/fetch-runtime";
 import { danger, success } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger, toPinoLikeLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -57,7 +54,6 @@ export {
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
   type WhatsAppWebAuthState,
-  WA_WEB_AUTH_DIR,
   webAuthExists,
 } from "./auth-store.js";
 export {
@@ -124,7 +120,7 @@ async function safeSaveCreds(
 }
 
 async function printTerminalQr(qr: string): Promise<void> {
-  const output = await renderQrTerminal(qr);
+  const output = await renderQrTerminal(qr, { small: true });
   process.stdout.write(output.endsWith("\n") ? output : `${output}\n`);
 }
 
@@ -192,34 +188,36 @@ export async function createWaSocket(
   });
 
   sock.ev.on("creds.update", () => enqueueSaveCreds(authDir, saveCreds, sessionLogger));
-  sock.ev.on("connection.update", async (update: Partial<import("baileys").ConnectionState>) => {
-    try {
-      const { connection, lastDisconnect, qr } = update;
-      if (qr) {
-        opts.onQr?.(qr);
-        if (printQr) {
-          console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
-          void printTerminalQr(qr).catch((err) => {
-            sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
-          });
+  sock.ev.on("connection.update", (update: Partial<import("baileys").ConnectionState>) => {
+    void (async () => {
+      try {
+        const { connection, lastDisconnect, qr } = update;
+        if (qr) {
+          opts.onQr?.(qr);
+          if (printQr) {
+            console.log("Open the WhatsApp app, go to Linked Devices, then scan this QR:");
+            void printTerminalQr(qr).catch((err: unknown) => {
+              sessionLogger.warn({ error: String(err) }, "failed rendering WhatsApp QR");
+            });
+          }
         }
-      }
-      if (connection === "close") {
-        const status = getStatusCode(lastDisconnect?.error);
-        if (status === LOGGED_OUT_STATUS) {
-          console.error(
-            danger(
-              `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
-            ),
-          );
+        if (connection === "close") {
+          const status = getStatusCode(lastDisconnect?.error);
+          if (status === LOGGED_OUT_STATUS) {
+            console.error(
+              danger(
+                `WhatsApp session logged out. Run: ${formatCliCommand("openclaw channels login")}`,
+              ),
+            );
+          }
         }
+        if (connection === "open" && verbose) {
+          console.log(success("WhatsApp Web connected."));
+        }
+      } catch (err) {
+        sessionLogger.error({ error: String(err) }, "connection.update handler error");
       }
-      if (connection === "open" && verbose) {
-        console.log(success("WhatsApp Web connected."));
-      }
-    } catch (err) {
-      sessionLogger.error({ error: String(err) }, "connection.update handler error");
-    }
+    })();
   });
 
   // Handle WebSocket-level errors to prevent unhandled exceptions from crashing the process
@@ -235,17 +233,15 @@ export async function createWaSocket(
 async function resolveEnvProxyAgent(
   logger: ReturnType<typeof getChildLogger>,
 ): Promise<Agent | undefined> {
-  if (!shouldUseEnvHttpProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET)) {
-    return undefined;
-  }
-  const proxyUrl = resolveEnvHttpProxyUrl("https");
-  if (!proxyUrl) {
-    return undefined;
-  }
-  const proxyTls = resolveActiveManagedProxyTlsOptions({ proxyUrl });
-  const proxyAgentOptions = proxyTls?.ca ? { ca: proxyTls.ca } : undefined;
   try {
-    const agent = new HttpsProxyAgent(proxyUrl, proxyAgentOptions) as Agent;
+    const agent = createNodeProxyAgent({
+      mode: "env",
+      targetUrl: WHATSAPP_WEBSOCKET_PROXY_TARGET,
+      protocol: "https",
+    }) as Agent | undefined;
+    if (!agent) {
+      return undefined;
+    }
     logger.info("Using ambient env proxy for WhatsApp WebSocket connection");
     return agent;
   } catch (error) {
@@ -278,6 +274,15 @@ async function resolveEnvFetchDispatcher(
 }
 
 function resolveProxyUrlFromAgent(agent: unknown): string | undefined {
+  if (
+    typeof agent === "object" &&
+    agent !== null &&
+    "getProxyForUrl" in agent &&
+    typeof agent.getProxyForUrl === "function"
+  ) {
+    const proxyUrl = agent.getProxyForUrl(WHATSAPP_WEBSOCKET_PROXY_TARGET);
+    return typeof proxyUrl === "string" && proxyUrl.length > 0 ? proxyUrl : undefined;
+  }
   if (typeof agent !== "object" || agent === null || !("proxy" in agent)) {
     return undefined;
   }
@@ -321,7 +326,12 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
       }
       if (update.connection === "close") {
         evWithOff.off?.("connection.update", handler);
-        reject(update.lastDisconnect ?? new Error("Connection closed"));
+        reject(
+          toLintErrorObject(
+            update.lastDisconnect ?? new Error("Connection closed"),
+            "Non-Error rejection",
+          ),
+        );
       }
     };
 
@@ -331,4 +341,18 @@ export async function waitForWaConnection(sock: ReturnType<typeof makeWASocket>)
 
 export function newConnectionId() {
   return randomUUID();
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

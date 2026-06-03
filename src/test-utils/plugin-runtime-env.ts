@@ -5,6 +5,7 @@ type RuntimeEnvOptions = {
   throwOnExit?: boolean;
 };
 
+/** Creates a plugin runtime env with test-safe defaults and optional exit throwing. */
 export function createRuntimeEnv(options?: RuntimeEnvOptions): OutputRuntimeEnv {
   const throwOnExit = options?.throwOnExit ?? true;
   return {

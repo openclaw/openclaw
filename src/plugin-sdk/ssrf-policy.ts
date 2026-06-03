@@ -1,3 +1,6 @@
+import { asNullableRecord } from "../../packages/normalization-core/src/record-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeUniqueStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
@@ -6,9 +9,6 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
-import { asNullableRecord } from "../shared/record-coerce.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeUniqueStringEntries } from "../shared/string-normalization.js";
 import type {
   ChannelDoctorConfigMutation,
   ChannelDoctorLegacyConfigRule,
@@ -24,15 +24,18 @@ export type PrivateNetworkOptInInput =
   | undefined
   | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
   | {
+      /** Canonical explicit opt-in for private/internal network targets. */
       dangerouslyAllowPrivateNetwork?: boolean | null;
       /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
       allowPrivateNetwork?: boolean | null;
+      /** Nested channel config shape used by current plugin network settings. */
       network?:
         | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
         | null
         | undefined;
     };
 
+/** Reads current and legacy private-network opt-in shapes from channel config. */
 export function isPrivateNetworkOptInEnabled(input: PrivateNetworkOptInInput): boolean {
   if (input === true) {
     return true;
@@ -50,23 +53,27 @@ export function isPrivateNetworkOptInEnabled(input: PrivateNetworkOptInInput): b
   );
 }
 
+/** Converts channel private-network opt-in config into the shared SSRF policy shape. */
 export function ssrfPolicyFromPrivateNetworkOptIn(
   input: PrivateNetworkOptInInput,
 ): SsrFPolicy | undefined {
   return isPrivateNetworkOptInEnabled(input) ? { allowPrivateNetwork: true } : undefined;
 }
 
+/** Compatibility wrapper for callers that already use the canonical dangerous flag name. */
 export function ssrfPolicyFromDangerouslyAllowPrivateNetwork(
   dangerouslyAllowPrivateNetwork: boolean | null | undefined,
 ): SsrFPolicy | undefined {
   return ssrfPolicyFromPrivateNetworkOptIn(dangerouslyAllowPrivateNetwork);
 }
 
+/** Detects the retired flat `allowPrivateNetwork` key before doctor migration. */
 export function hasLegacyFlatAllowPrivateNetworkAlias(value: unknown): boolean {
   const entry = asNullableRecord(value);
-  return Boolean(entry && Object.prototype.hasOwnProperty.call(entry, "allowPrivateNetwork"));
+  return Boolean(entry && Object.hasOwn(entry, "allowPrivateNetwork"));
 }
 
+/** Moves flat private-network config into `network.dangerouslyAllowPrivateNetwork`. */
 export function migrateLegacyFlatAllowPrivateNetworkAlias(params: {
   entry: Record<string, unknown>;
   pathPrefix: string;
@@ -201,12 +208,14 @@ export function createLegacyPrivateNetworkDoctorContract(params: { channelKey: s
   };
 }
 
+/** @deprecated Use `ssrfPolicyFromDangerouslyAllowPrivateNetwork`. */
 export function ssrfPolicyFromAllowPrivateNetwork(
   allowPrivateNetwork: boolean | null | undefined,
 ): SsrFPolicy | undefined {
   return ssrfPolicyFromDangerouslyAllowPrivateNetwork(allowPrivateNetwork);
 }
 
+/** Allows cleartext HTTP only when the target is loopback/private or DNS-pins to private IPs. */
 export async function assertHttpUrlTargetsPrivateNetwork(
   url: string,
   params: {
@@ -288,6 +297,7 @@ export function normalizeHostnameSuffixAllowlist(
   }
   const normalized = normalizeUniqueStringEntries(source.map(normalizeHostnameSuffix));
   if (normalized.includes("*")) {
+    // `*` is an explicit opt-out from hostname suffix restrictions.
     return ["*"];
   }
   return normalized;

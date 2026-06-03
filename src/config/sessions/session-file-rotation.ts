@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
+/** Rewrites transcript file paths when a session id changes during reset or fork. */
 export function rewriteSessionFileForNewSessionId(params: {
   sessionFile?: string;
   previousSessionId: string;

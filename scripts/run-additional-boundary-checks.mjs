@@ -66,18 +66,21 @@ export const BOUNDARY_CHECKS = [
   ["lint:ui:no-raw-window-open", "pnpm", ["lint:ui:no-raw-window-open"]],
 ].map(([label, command, args]) => ({ label, command, args }));
 
-export function resolveConcurrency(value, fallback = 4) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return parsed;
+export function resolveConcurrency(value, fallback = 4, label = "concurrency") {
+  return resolvePositiveInteger(value, fallback, label);
 }
 
-export function resolvePositiveInteger(value, fallback) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed) || parsed < 1) {
+export function resolvePositiveInteger(value, fallback, label = "value") {
+  if (value === undefined || value === null || value === "") {
     return fallback;
+  }
+  const text = String(value).trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer; got: ${value}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error(`${label} must be a positive integer; got: ${value}`);
   }
   return parsed;
 }
@@ -150,7 +153,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
 
   const append = (value) => {
     const text = String(value);
-    let textBytes = Buffer.byteLength(text);
+    const textBytes = Buffer.byteLength(text);
     if (textBytes >= limit) {
       const buffer = Buffer.from(text);
       const tail = buffer.subarray(buffer.length - limit).toString("utf8");
@@ -185,9 +188,7 @@ export function createBoundedOutputBuffer(maxBytes = DEFAULT_OUTPUT_MAX_BYTES) {
     append,
     read() {
       const output = chunks.join("");
-      return truncated
-        ? `[output truncated to last ${limit} bytes]\n${output}`
-        : output;
+      return truncated ? `[output truncated to last ${limit} bytes]\n${output}` : output;
     },
   };
 }
@@ -434,17 +435,27 @@ function resolveCliShardSpec(args, env) {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  const concurrency = resolveConcurrency(
+  const concurrencyRaw =
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY ??
-      process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY,
+    process.env.OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY;
+  const concurrencyLabel =
+    process.env.OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY === undefined
+      ? "OPENCLAW_EXTENSION_BOUNDARY_CONCURRENCY"
+      : "OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY";
+  const concurrency = resolveConcurrency(
+    concurrencyRaw,
+    4,
+    concurrencyLabel,
   );
   const checkTimeoutMs = resolvePositiveInteger(
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS,
     DEFAULT_CHECK_TIMEOUT_MS,
+    "OPENCLAW_ADDITIONAL_BOUNDARY_TIMEOUT_MS",
   );
   const outputMaxBytes = resolvePositiveInteger(
     process.env.OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES,
     DEFAULT_OUTPUT_MAX_BYTES,
+    "OPENCLAW_ADDITIONAL_BOUNDARY_OUTPUT_MAX_BYTES",
   );
   const shards = parseShardSelection(resolveCliShardSpec(process.argv.slice(2), process.env));
   const checks = selectChecksForShard(BOUNDARY_CHECKS, shards);

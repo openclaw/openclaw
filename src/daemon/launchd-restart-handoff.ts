@@ -1,11 +1,12 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sanitizeHostExecEnv } from "../infra/host-env-security.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveGatewayLaunchAgentLabel } from "./constants.js";
+export { isCurrentProcessLaunchdServiceLabel } from "./launchd-current-service.js";
 import { renderPosixRestartLogSetup } from "./restart-logs.js";
 
 type LaunchdRestartHandoffMode = "kickstart" | "reload" | "start-after-exit";
@@ -90,21 +91,6 @@ function resolveLaunchdRestartTarget(
     plistPath,
     serviceTarget: `${domain}/${label}`,
   };
-}
-
-export function isCurrentProcessLaunchdServiceLabel(
-  label: string,
-  env: NodeJS.ProcessEnv = process.env,
-): boolean {
-  const launchdLabel =
-    normalizeOptionalString(env.LAUNCH_JOB_LABEL) ||
-    normalizeOptionalString(env.LAUNCH_JOB_NAME) ||
-    normalizeOptionalString(env.XPC_SERVICE_NAME);
-  if (launchdLabel) {
-    return launchdLabel === label;
-  }
-  const configuredLabel = normalizeOptionalString(env.OPENCLAW_LAUNCHD_LABEL);
-  return Boolean(configuredLabel && configuredLabel === label);
 }
 
 function buildLaunchdRestartScript(

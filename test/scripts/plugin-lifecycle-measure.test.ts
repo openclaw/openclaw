@@ -1,5 +1,10 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -38,6 +43,35 @@ function waitForPidExit(pid: number, timeoutMs: number): boolean {
   return !pidExists(pid);
 }
 
+function waitForPath(filePath: string, timeoutMs: number): boolean {
+  const waitBuffer = new SharedArrayBuffer(4);
+  const waitView = new Int32Array(waitBuffer);
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (existsSync(filePath)) {
+      return true;
+    }
+    Atomics.wait(waitView, 0, 0, 25);
+  }
+  return existsSync(filePath);
+}
+
+function waitForChildClose(
+  child: ChildProcess,
+  timeoutMs: number,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGKILL");
+      reject(new Error("timed out waiting for measured wrapper to exit"));
+    }, timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve({ code, signal });
+    });
+  });
+}
+
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
     rmSync(dir, { recursive: true, force: true });
@@ -45,13 +79,51 @@ afterEach(() => {
 });
 
 describe("plugin lifecycle resource sampler", () => {
+  it("rejects loose numeric env values instead of parsing prefixes", () => {
+    const dir = makeTempDir();
+    const summary = path.join(dir, "summary.tsv");
+    const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "150ms",
+      },
+      timeout: 5000,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS must be a positive integer; got: 150ms",
+    );
+  });
+
+  it("rejects zero lifecycle timeouts instead of disabling the guard", () => {
+    const dir = makeTempDir();
+    const summary = path.join(dir, "summary.tsv");
+    const result = spawnSync("node", [scriptPath, summary, "invalid-env", "--", "node", "-e", ""], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "0",
+      },
+      timeout: 5000,
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS must be a positive integer; got: 0",
+    );
+  });
+
   it("configures a phase timeout with process-group cleanup", () => {
     const script = readFileSync(scriptPath, "utf8");
 
     expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS");
     expect(script).toContain("OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS");
     expect(script).toContain("detached: true");
-    expect(script).toContain('process.kill(-child.pid, signal)');
+    expect(script).toContain("process.kill(-child.pid, signal)");
     expect(script).toContain('const summarySignal = timedOut ? "timeout"');
     expect(script).toContain("process.exit(124)");
   });
@@ -78,7 +150,9 @@ describe("plugin lifecycle resource sampler", () => {
 
       expect(result.status).toBe(124);
       expect(result.stdout).toContain("signal=timeout");
-      expect(readFileSync(summary, "utf8")).toMatch(/^wedged\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu);
+      expect(readFileSync(summary, "utf8")).toMatch(
+        /^wedged\t\d+\t[\d.]+\t\d+\t[\d.]+\ttimeout$/mu,
+      );
     },
   );
 
@@ -88,7 +162,7 @@ describe("plugin lifecycle resource sampler", () => {
       const dir = makeTempDir();
       const summary = path.join(dir, "summary.tsv");
       const pidFile = path.join(dir, "descendant.pid");
-      let descendantPid = 0;
+      let descendantPid;
 
       try {
         const result = spawnSync(
@@ -134,7 +208,7 @@ describe("plugin lifecycle resource sampler", () => {
     const dir = makeTempDir();
     const summary = path.join(dir, "summary.tsv");
     const pidFile = path.join(dir, "descendant.pid");
-    let descendantPid = 0;
+    let descendantPid;
 
     try {
       const result = spawnSync(
@@ -173,4 +247,88 @@ describe("plugin lifecycle resource sampler", () => {
       }
     }
   });
+
+  it.runIf(process.platform === "linux")(
+    "exits promptly when externally terminated phases stop during grace",
+    async () => {
+      const dir = makeTempDir();
+      const summary = path.join(dir, "summary.tsv");
+      const readyFile = path.join(dir, "ready.pid");
+      const result = spawn(
+        "node",
+        [
+          scriptPath,
+          summary,
+          "external-fast-stop",
+          "--",
+          "node",
+          "--input-type=module",
+          "--eval",
+          [
+            "import { writeFileSync } from 'node:fs';",
+            "writeFileSync(process.env.READY_FILE, String(process.pid));",
+            "process.on('SIGTERM', () => process.exit(0));",
+            "setInterval(() => {}, 1000);",
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
+            OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
+            READY_FILE: readyFile,
+          },
+          stdio: "ignore",
+        },
+      );
+
+      expect(waitForPath(readyFile, 1000)).toBe(true);
+      const started = Date.now();
+      result.kill("SIGTERM");
+      const close = await waitForChildClose(result, 5000);
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(close.signal).toBe("SIGTERM");
+    },
+  );
+
+  it.runIf(process.platform === "linux")(
+    "exits promptly when shell descendants drain during termination grace",
+    async () => {
+      const dir = makeTempDir();
+      const summary = path.join(dir, "summary.tsv");
+      const readyFile = path.join(dir, "ready.pid");
+      const result = spawn(
+        "node",
+        [
+          scriptPath,
+          summary,
+          "external-descendant-drain",
+          "--",
+          "bash",
+          "-lc",
+          'trap "exit 0" TERM; bash -c \'trap "sleep 0.15; exit 0" TERM; printf "%s\\n" "$$" >"$READY_FILE"; while :; do sleep 1; done\' & wait',
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS: "5000",
+            OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS: "1500",
+            READY_FILE: readyFile,
+          },
+          stdio: "ignore",
+        },
+      );
+
+      expect(waitForPath(readyFile, 1000)).toBe(true);
+      const started = Date.now();
+      result.kill("SIGTERM");
+      const close = await waitForChildClose(result, 5000);
+
+      expect(Date.now() - started).toBeLessThan(1000);
+      expect(close.signal).toBe("SIGTERM");
+    },
+  );
 });

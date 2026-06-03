@@ -6,6 +6,7 @@ type ToolContextLike = {
 
 export type ToolLike = {
   name: string;
+  parameters?: unknown;
   execute: (
     toolCallId: string,
     params: unknown,
@@ -33,6 +34,7 @@ function asToolLike(tool: unknown, fallbackName?: string): ToolLike {
   }
   return {
     name,
+    parameters: candidate.parameters,
     execute: (toolCallId, params) => execute(toolCallId, params),
   };
 }
@@ -75,5 +77,6 @@ export function createToolFactoryHarness(cfg: OpenClawPluginApi["config"]) {
   return {
     api: api as OpenClawPluginApi,
     resolveTool,
+    registered,
   };
 }

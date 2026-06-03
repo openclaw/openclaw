@@ -15,6 +15,7 @@ export function buildBaseOptions(
   return {
     temperature: options?.temperature,
     maxTokens: options?.maxTokens,
+    stop: options?.stop,
     signal: options?.signal,
     apiKey: apiKey || options?.apiKey,
     transport: options?.transport,
@@ -49,6 +50,7 @@ export function adjustMaxTokensForThinking(
     low: 2048,
     medium: 8192,
     high: 16384,
+    max: 32768,
   };
   const budgets = { ...defaultBudgets, ...customBudgets };
 

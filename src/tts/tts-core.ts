@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { getApiKeyForModel, requireApiKey } from "../agents/model-auth.js";
 import {
@@ -10,7 +11,7 @@ import { prepareModelForSimpleCompletion } from "../agents/simple-completion-tra
 import type { OpenClawConfig } from "../config/types.js";
 import { completeSimple } from "../llm/stream.js";
 import type { TextContent } from "../llm/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {
   normalizeApplyTextNormalization,
@@ -76,6 +77,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
 }
 
+/** Summarize long text before synthesis using the configured summary model. */
 export async function summarizeText(
   params: {
     text: string;
@@ -105,9 +107,12 @@ export async function summarizeText(
 
   try {
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const resolvedTimeoutMs = resolveTimerTimeoutMs(timeoutMs, 1);
+    const timeout = setTimeout(() => controller.abort(), resolvedTimeoutMs);
 
     try {
+      // Keep summarization on the simple-completion path so provider auth,
+      // aliases, and timeout behavior match other lightweight model calls.
       const res = await deps.completeSimple(
         completionModel,
         {

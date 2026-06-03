@@ -9,9 +9,9 @@ export const AUTH_STORE_VERSION = 1;
 
 /** @deprecated Anthropic provider-owned CLI profile id; do not use from third-party plugins. */
 export const CLAUDE_CLI_PROFILE_ID = "anthropic:claude-cli";
-/** @deprecated OpenAI Codex provider-owned CLI profile id; do not use from third-party plugins. */
-export const CODEX_CLI_PROFILE_ID = "openai-codex:codex-cli";
-export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai-codex:default";
+/** @deprecated OpenAI provider-owned CLI profile id; do not use from third-party plugins. */
+export const CODEX_CLI_PROFILE_ID = "openai:codex-cli";
+export const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 /** @deprecated MiniMax provider-owned CLI profile id; do not use from third-party plugins. */
 export const MINIMAX_CLI_PROFILE_ID = "minimax-portal:minimax-cli";
 
@@ -28,7 +28,7 @@ export const AUTH_STORE_LOCK_OPTIONS = {
 
 // Separate from AUTH_STORE_LOCK_OPTIONS for independent tuning: this lock
 // serializes the cross-agent OAuth refresh (see issue #26322), whereas
-// AUTH_STORE_LOCK_OPTIONS guards per-store file writes. Keeping them
+// AUTH_STORE_LOCK_OPTIONS guards per-store refresh updates. Keeping them
 // distinct lets us widen the refresh lock's timeout/retry budget without
 // affecting the hot-path auth-store writers.
 //

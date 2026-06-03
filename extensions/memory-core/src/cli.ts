@@ -4,6 +4,10 @@ import {
   formatHelpExamples,
   theme,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-cli";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   MemoryCommandOptions,
   MemoryPromoteCommandOptions,
@@ -26,6 +30,8 @@ async function loadMemoryCliRuntime(): Promise<MemoryCliRuntime> {
   memoryCliRuntimePromise ??= import("./cli.runtime.js");
   return await memoryCliRuntimePromise;
 }
+
+const DECIMAL_NUMBER_RE = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/;
 
 export async function runMemoryStatus(opts: MemoryCommandOptions) {
   const runtime = await loadMemoryCliRuntime();
@@ -75,7 +81,8 @@ function invalidCliArgument(message: string): Error & { code: string; exitCode: 
 }
 
 function parseMemoryCliNumberOption(value: string, flag: string): number {
-  const parsed = Number(value);
+  const trimmed = value.trim();
+  const parsed = DECIMAL_NUMBER_RE.test(trimmed) ? Number(trimmed) : Number.NaN;
   if (!Number.isFinite(parsed)) {
     throw invalidCliArgument(`${flag} must be a finite number.`);
   }
@@ -83,16 +90,16 @@ function parseMemoryCliNumberOption(value: string, flag: string): number {
 }
 
 function parseMemoryCliPositiveIntegerOption(value: string, flag: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
     throw invalidCliArgument(`${flag} must be a positive integer.`);
   }
   return parsed;
 }
 
 function parseMemoryCliNonNegativeIntegerOption(value: string, flag: string): number {
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+  const parsed = parseStrictNonNegativeInteger(value);
+  if (parsed === undefined) {
     throw invalidCliArgument(`${flag} must be a non-negative integer.`);
   }
   return parsed;

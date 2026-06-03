@@ -6,6 +6,10 @@ import { isRecord } from "../utils.js";
 import { collectEnabledInsecureOrDangerousFlagsFromContracts } from "./dangerous-config-flags-core.js";
 import { collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot } from "./dangerous-config-flags-current.js";
 
+/**
+ * Collect enabled insecure/dangerous config flags for audit warnings and gateway tool previews.
+ * Plugin flags use current metadata when requested, then fall back to resolving manifest contracts.
+ */
 export function collectEnabledInsecureOrDangerousFlags(
   cfg: OpenClawConfig,
   options: { preferCurrentPluginMetadataSnapshot?: boolean } = {},

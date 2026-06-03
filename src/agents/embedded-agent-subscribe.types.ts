@@ -15,6 +15,7 @@ import type {
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
 export type {
   BlockReplyChunking,
@@ -25,6 +26,8 @@ export type {
 export type SubscribeEmbeddedAgentSessionParams = {
   session: AgentSession;
   runId: string;
+  /** Originating message channel used for subsystem log attribution. */
+  messageChannel?: string;
   initialReplayState?: EmbeddedRunReplayState;
   hookRunner?: HookRunner;
   verboseLevel?: VerboseLevel;
@@ -36,7 +39,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
   shouldEmitToolOutput?: () => boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
-  onReasoningStream?: (payload: { text?: string; mediaUrls?: string[] }) => void | Promise<void>;
+  onReasoningStream?: (payload: {
+    text?: string;
+    mediaUrls?: string[];
+    isReasoningSnapshot?: boolean;
+  }) => void | Promise<void>;
   /** Called when a thinking/reasoning block ends (</think> tag processed). */
   onReasoningEnd?: () => void | Promise<void>;
   onBlockReply?: (payload: BlockReplyPayload) => void | Promise<void>;
@@ -59,6 +66,17 @@ export type SubscribeEmbeddedAgentSessionParams = {
   }) => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
   terminalLifecyclePhase?: "end" | "finishing";
+  /** Gate final block delivery/lifecycle after the natural answer is known. */
+  onBeforeTerminalDelivery?: (event: {
+    messages: AgentMessage[];
+    willRetry: boolean;
+    lastAssistant?: AgentMessage;
+    assistantTexts: readonly string[];
+    hasAssistantVisibleText: boolean;
+    isError: boolean;
+    incompleteTerminalAssistant: boolean;
+    hadDeterministicSideEffect: boolean;
+  }) => void | Promise<void | { suppressTerminalDelivery?: boolean }>;
   /** Best-effort hook invoked immediately before the terminal lifecycle event is emitted. */
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;
@@ -74,7 +92,7 @@ export type SubscribeEmbeddedAgentSessionParams = {
    */
   builtinToolNames?: ReadonlySet<string>;
   /**
-   * Exact raw names allowed to emit local MEDIA: paths for this run.
+   * Exact raw names allowed to emit local media paths for this run.
    * Includes core trusted tools plus bundled plugin tools proven from the
    * startup metadata snapshot.
    */

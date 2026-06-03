@@ -1,7 +1,10 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
-import { findNormalizedProviderKey, normalizeProviderId } from "../provider-id.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
@@ -10,6 +13,19 @@ import {
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
 export { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+
+function findProviderAuthStateKey(
+  entries: Record<string, unknown> | undefined,
+  providerKey: string,
+): string | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const normalizedProviderKey = resolveProviderIdForAuth(providerKey);
+  return Object.keys(entries).find(
+    (key) => resolveProviderIdForAuth(key) === normalizedProviderKey,
+  );
+}
 
 function resetSuccessfulUsageStats(
   existing: ProfileUsageStats | undefined,
@@ -75,20 +91,40 @@ export async function promoteAuthProfileInOrder(params: {
   agentDir?: string;
   provider: string;
   profileId: string;
+  createIfMissing?: boolean;
+  createFromOrder?: string[];
 }): Promise<AuthProfileStore | null> {
   const providerKey = resolveProviderIdForAuth(params.provider);
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
+    ...(params.createFromOrder
+      ? { saveOptions: { preserveOrderProfileIds: params.createFromOrder } }
+      : {}),
     updater: (store) => {
       const profile = store.profiles[params.profileId];
       if (!profile || resolveProviderIdForAuth(profile.provider) !== providerKey) {
         return false;
       }
       const orderKey =
-        findNormalizedProviderKey(store.order, providerKey) ?? normalizeProviderId(providerKey);
+        findProviderAuthStateKey(store.order, providerKey) ??
+        findNormalizedProviderKey(store.order, providerKey) ??
+        normalizeProviderId(providerKey);
       const existing = store.order?.[orderKey];
       if (!existing || existing.length === 0) {
-        return false;
+        if (!params.createIfMissing) {
+          return false;
+        }
+        const providerProfiles = dedupeProfileIds(
+          params.createFromOrder !== undefined
+            ? params.createFromOrder
+            : listProfilesForProvider(store, providerKey),
+        );
+        const next = dedupeProfileIds([
+          params.profileId,
+          ...providerProfiles.filter((profileId) => profileId !== params.profileId),
+        ]);
+        store.order = { ...store.order, [orderKey]: next };
+        return true;
       }
       const next = dedupeProfileIds([
         params.profileId,
@@ -214,10 +250,11 @@ export async function clearLastGoodProfileWithLock(params: {
   return await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
     updater: (store) => {
-      if (store.lastGood?.[providerKey] !== params.profileId) {
+      const lastGoodKey = findProviderAuthStateKey(store.lastGood, providerKey);
+      if (!lastGoodKey || store.lastGood?.[lastGoodKey] !== params.profileId) {
         return false;
       }
-      delete store.lastGood[providerKey];
+      delete store.lastGood[lastGoodKey];
       if (Object.keys(store.lastGood).length === 0) {
         store.lastGood = undefined;
       }

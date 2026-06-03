@@ -246,14 +246,16 @@ function stubEditedImageFlow(params?: { width?: number; height?: number }) {
 }
 
 function createFalEditProvider(params?: {
+  defaultModel?: string;
   maxInputImages?: number;
+  models?: string[];
   supportsAspectRatio?: boolean;
   aspectRatios?: string[];
 }) {
   return {
     id: "fal",
-    defaultModel: "fal-ai/flux/dev",
-    models: ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
+    defaultModel: params?.defaultModel ?? "fal-ai/flux/dev",
+    models: params?.models ?? ["fal-ai/flux/dev", "fal-ai/flux/dev/image-to-image"],
     capabilities: {
       generate: {
         maxCount: 4,
@@ -508,7 +510,7 @@ describe("createImageGenerateTool", () => {
       },
       {
         id: "openai",
-        aliases: ["openai-codex"],
+        aliases: ["openai"],
         defaultModel: "gpt-image-2",
         models: ["gpt-image-2"],
         isConfigured: () => true,
@@ -528,7 +530,7 @@ describe("createImageGenerateTool", () => {
           agents: {
             defaults: {
               model: {
-                primary: "openai-codex/gpt-5.5",
+                primary: "openai/gpt-5.5",
               },
             },
           },
@@ -756,7 +758,7 @@ describe("createImageGenerateTool", () => {
     expect(details.async).toBe(true);
     expect(details.status).toBe("started");
     expect(details.taskId).toBe("task-image-123");
-    expect((result as { terminate?: boolean }).terminate).toBe(true);
+    expect((result as { terminate?: boolean }).terminate).toBeUndefined();
     expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
       expect.objectContaining({
         taskKind: "image_generation",
@@ -777,6 +779,76 @@ describe("createImageGenerateTool", () => {
       "Image generation task task-image-123 is already running",
     );
     expect(resultDetails(duplicateResult).duplicateGuard).toBe(true);
+  });
+
+  it("starts run-scoped cron image generation as a tracked async task", async () => {
+    stubImageGenerationProviders();
+    vi.stubEnv("OPENAI_API_KEY", "openai-test");
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-1",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cron.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated-cron.png",
+      id: "generated-cron.png",
+      size: 7,
+      contentType: "image/png",
+    });
+    taskRuntimeMocks.createRunningTaskRun.mockReturnValue({
+      taskId: "task-cron-image",
+    });
+    const scheduled: Array<() => Promise<void>> = [];
+    const onAsyncTaskStarted = vi.fn();
+    const tool = requireImageGenerateTool(
+      createImageGenerateTool({
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/agent",
+        agentSessionKey: "agent:main:cron:daily-media:run:run-123",
+        requesterOrigin: {
+          channel: "slack",
+          to: "channel:C123",
+        },
+        scheduleBackgroundWork: (work) => {
+          scheduled.push(work);
+        },
+        onAsyncTaskStarted,
+      }),
+    );
+
+    const result = await tool.execute("call-cron-inline", {
+      prompt: "Daily proof image",
+      model: "openai/gpt-image-1",
+    });
+
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(scheduled).toHaveLength(1);
+    expect(onAsyncTaskStarted).toHaveBeenCalledOnce();
+    expect(resultText(result)).toContain("Background task started for image generation");
+    expect(resultDetails(result).async).toBe(true);
+    expect(resultDetails(result).runId).toEqual(expect.stringMatching(/^tool:image_generate:/));
+    expect(taskRuntimeMocks.createRunningTaskRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        runId: expect.stringMatching(/^tool:image_generate:/),
+        requesterSessionKey: "agent:main:cron:daily-media:run:run-123",
+      }),
+    );
   });
 
   it("starts a distinct image request while another image task is active", async () => {
@@ -1300,6 +1372,130 @@ describe("createImageGenerateTool", () => {
     expect(details.outputFormat).toBe("jpeg");
   });
 
+  it("forwards generic fal provider options", async () => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model: "krea/v2/medium/text-to-image",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("krea-out"),
+          mimeType: "image/png",
+          fileName: "krea.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/krea.png",
+      id: "krea.png",
+      size: 8,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("fal/krea/v2/medium/text-to-image");
+    await tool.execute("call-fal-krea-options", {
+      prompt: "Expressive print portrait",
+      aspectRatio: "2.35:1",
+      fal: {
+        creativity: "high",
+      },
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.providerOptions).toEqual({
+      fal: {
+        creativity: "high",
+      },
+    });
+    expect(generateArgs.aspectRatio).toBe("2.35:1");
+  });
+
+  it("does not infer edit resolution for fal Krea style references", async () => {
+    vi.spyOn(imageGenerationRuntime, "listRuntimeImageGenerationProviders").mockReturnValue([
+      createFalEditProvider({
+        defaultModel: "krea/v2/medium/text-to-image",
+        models: ["krea/v2/medium/text-to-image"],
+        maxInputImages: 10,
+        supportsAspectRatio: true,
+      }),
+    ]);
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "fal",
+      model: "krea/v2/medium/text-to-image",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("krea-style-out"),
+          mimeType: "image/png",
+          fileName: "krea-style.png",
+        },
+      ],
+    });
+    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+      kind: "image",
+      buffer: Buffer.from("style-ref"),
+      contentType: "image/png",
+    });
+    vi.spyOn(imageOps, "getImageMetadata").mockResolvedValue({
+      width: 2048,
+      height: 2048,
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/krea-style.png",
+      id: "krea-style.png",
+      size: 14,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("fal/krea/v2/medium/text-to-image", {
+      workspaceDir: process.cwd(),
+    });
+    await tool.execute("call-fal-krea-style", {
+      prompt: "Style-directed portrait",
+      image: "./fixtures/style.png",
+    });
+
+    const generateArgs = mockCallArg(generateImage, 0, "generateImage");
+    expect(generateArgs.resolution).toBeUndefined();
+    expect(generateArgs.inputImages).toHaveLength(1);
+  });
+
+  it.each([60.5, "60px", null])("rejects malformed OpenAI output compression %s", async (value) => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "openai",
+      model: "gpt-image-2",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("jpg-out"),
+          mimeType: "image/jpeg",
+          fileName: "preview.jpg",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.jpg",
+      id: "generated.jpg",
+      size: 5,
+      contentType: "image/jpeg",
+    });
+
+    const tool = createToolWithPrimaryImageModel("openai/gpt-image-2");
+    await expect(
+      tool.execute("call-openai-malformed-hints", {
+        prompt: "Cheap preview",
+        outputFormat: "jpeg",
+        openai: {
+          outputCompression: value,
+        },
+      }),
+    ).rejects.toThrow("openai.outputCompression must be between 0 and 100");
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
   it("forwards transparent OpenAI background requests with a PNG output format", async () => {
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
       provider: "openai",
@@ -1467,6 +1663,37 @@ describe("createImageGenerateTool", () => {
     );
   });
 
+  it.each([2.5, "2cats", null])("rejects malformed image count %s", async (count) => {
+    const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      images: [
+        {
+          buffer: Buffer.from("png-out"),
+          mimeType: "image/png",
+          fileName: "cat.png",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated.png",
+      id: "generated.png",
+      size: 7,
+      contentType: "image/png",
+    });
+
+    const tool = createToolWithPrimaryImageModel("google/gemini-3.1-flash-image-preview");
+    await expect(
+      tool.execute("call-fractional-count", {
+        prompt: "A cat wearing sunglasses",
+        count,
+      }),
+    ).rejects.toThrow("count must be between 1 and 4");
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
   it("forwards reference images and inferred resolution for edit mode", async () => {
     const generateImage = stubEditedImageFlow({ width: 3200, height: 1800 });
     const tool = createToolWithPrimaryImageModel("google/gemini-3-pro-image-preview", {
@@ -1531,6 +1758,9 @@ describe("createImageGenerateTool", () => {
     const defaultLoadOptions = mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 1);
     expect(defaultLoadUrl).toBe("http://198.18.0.153/reference.png");
     expect(requireRecord(defaultLoadOptions, "loadWebMedia options").ssrfPolicy).toBeUndefined();
+    expect(requireRecord(defaultLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
 
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
@@ -1555,6 +1785,9 @@ describe("createImageGenerateTool", () => {
     expect(requireRecord(configuredLoadOptions, "loadWebMedia options").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });
+    expect(requireRecord(configuredLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
     expect(mockCallArg(generateImage, 1, "generateImage").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });
@@ -1907,7 +2140,7 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-bad-aspect", { prompt: "portrait", aspectRatio: "7:5" }),
     ).rejects.toThrow(
-      "aspectRatio must be one of 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, or 21:9",
+      "aspectRatio must be one of 1:1, 2:3, 3:2, 2.35:1, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, or 1:8",
     );
   });
 
@@ -2015,7 +2248,7 @@ describe("createImageGenerateTool", () => {
       createFalEditProvider(),
     ]);
     const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage");
-    vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
+    const loadWebMedia = vi.spyOn(webMedia, "loadWebMedia").mockResolvedValue({
       kind: "image",
       buffer: Buffer.from("input-image"),
       contentType: "image/png",
@@ -2028,9 +2261,10 @@ describe("createImageGenerateTool", () => {
     await expect(
       tool.execute("call-fal-edit", {
         prompt: "combine",
-        images: ["./fixtures/a.png", "./fixtures/b.png"],
+        images: ["https://example.test/a.png", "https://example.test/b.png"],
       }),
     ).rejects.toThrow("fal edit supports at most 1 reference image");
+    expect(loadWebMedia).not.toHaveBeenCalled();
     expect(generateImage).not.toHaveBeenCalled();
   });
 

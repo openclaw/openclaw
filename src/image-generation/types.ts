@@ -1,7 +1,7 @@
+import type { MediaNormalizationEntry } from "../../packages/media-generation-core/src/normalization.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import type { MediaNormalizationEntry } from "../media-generation/normalization.types.js";
 
 export type GeneratedImageAsset = {
   buffer: Buffer;
@@ -30,7 +30,7 @@ export type ImageGenerationOpenAIOptions = {
   user?: string;
 };
 
-export type ImageGenerationProviderOptions = {
+export type ImageGenerationProviderOptions = Record<string, unknown> & {
   openai?: ImageGenerationOpenAIOptions;
 };
 
@@ -99,8 +99,11 @@ type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
 
 type ImageGenerationGeometryCapabilities = {
   sizes?: string[];
+  sizesByModel?: Record<string, string[]>;
   aspectRatios?: string[];
+  aspectRatiosByModel?: Record<string, string[]>;
   resolutions?: ImageGenerationResolution[];
+  resolutionsByModel?: Record<string, ImageGenerationResolution[]>;
 };
 
 type ImageGenerationOutputCapabilities = {

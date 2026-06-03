@@ -1,5 +1,7 @@
 import { isTruthyEnvValue } from "../infra/env.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { pickPrimaryTailnetIPv4, pickPrimaryTailnetIPv6 } from "../infra/tailnet.js";
+import { parseTcpPort } from "../infra/tcp-port.js";
 import { resolveWideAreaDiscoveryDomain, writeWideAreaGatewayZone } from "../infra/widearea-dns.js";
 import type { PluginGatewayDiscoveryServiceRegistration } from "../plugins/registry-types.js";
 import {
@@ -15,8 +17,8 @@ function resolveDiscoveryAdvertiseTimeoutMs(env: NodeJS.ProcessEnv): number {
   if (!raw) {
     return DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
   }
-  const parsed = Number.parseInt(raw, 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const parsed = parseStrictPositiveInteger(raw);
+  if (parsed === undefined) {
     return DEFAULT_DISCOVERY_ADVERTISE_TIMEOUT_MS;
   }
   return parsed;
@@ -51,9 +53,9 @@ export async function startGatewayDiscovery(params: {
   const tailnetDns = needsTailnetDns
     ? await resolveTailnetDnsHint({ enabled: tailscaleEnabled })
     : undefined;
-  const sshPortEnv = mdnsMinimal ? undefined : process.env.OPENCLAW_SSH_PORT?.trim();
-  const sshPortParsed = sshPortEnv ? Number.parseInt(sshPortEnv, 10) : Number.NaN;
-  const sshPort = Number.isFinite(sshPortParsed) && sshPortParsed > 0 ? sshPortParsed : undefined;
+  const sshPort = mdnsMinimal
+    ? undefined
+    : (parseTcpPort(process.env.OPENCLAW_SSH_PORT) ?? undefined);
   const cliPath = mdnsMinimal ? undefined : resolveBonjourCliPath();
 
   if (localDiscoveryEnabled) {
@@ -99,7 +101,7 @@ export async function startGatewayDiscovery(params: {
               }
               return started;
             },
-            (err) => {
+            (err: unknown) => {
               params.logDiscovery.warn(
                 `gateway discovery service failed${timedOut ? " after startup timeout" : ""} (${entry.service.id}, plugin=${entry.pluginId}): ${String(err)}`,
               );

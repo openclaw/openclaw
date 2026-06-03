@@ -49,6 +49,8 @@ export type PartialReplyPayload = Pick<ReplyPayload, "text" | "mediaUrls"> & {
 export type GetReplyOptions = {
   /** Override run id for agent events (defaults to random UUID). */
   runId?: string;
+  /** Stable provider prompt-cache affinity key; distinct from run id/idempotency. */
+  promptCacheKey?: string;
   /** Abort signal for the underlying agent run. */
   abortSignal?: AbortSignal;
   /** Optional inbound images (used for webchat attachments). */
@@ -105,6 +107,8 @@ export type GetReplyOptions = {
   onToolResult?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a tool phase starts/updates, before summary payloads are emitted. */
   onToolStart?: (payload: {
+    itemId?: string;
+    toolCallId?: string;
     name?: string;
     phase?: string;
     args?: Record<string, unknown>;

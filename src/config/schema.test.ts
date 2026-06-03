@@ -1,9 +1,10 @@
+import { SENSITIVE_URL_HINT_TAG } from "@openclaw/net-policy/redact-sensitive-url";
 import { beforeAll, describe, expect, it } from "vitest";
-import { SENSITIVE_URL_HINT_TAG } from "../shared/net/redact-sensitive-url.js";
 import { buildConfigSchema, lookupConfigSchema } from "./schema.js";
 import { applyDerivedTags, CONFIG_TAGS, deriveTagsForPath } from "./schema.tags.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { OpenClawSchema } from "./zod-schema.js";
+import { DiscordConfigSchema, TelegramConfigSchema } from "./zod-schema.providers-core.js";
 
 describe("config schema", () => {
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchema>[0]>;
@@ -109,6 +110,7 @@ describe("config schema", () => {
     expect(gatewayPortSchema?.description).toContain("TCP port used by the gateway listener");
     expect(res.uiHints.gateway?.label).toBe("Gateway");
     expect(res.uiHints["gateway.auth.token"]?.sensitive).toBe(true);
+    expect(res.uiHints["security.installPolicy.exec.env.*"]?.sensitive).toBe(true);
     const groupPolicyLabel = res.uiHints["channels.defaults.groupPolicy"]?.label;
     expect(groupPolicyLabel).toBeTypeOf("string");
     expect(groupPolicyLabel?.trim().length).toBeGreaterThan(0);
@@ -142,6 +144,14 @@ describe("config schema", () => {
       | undefined;
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("headers");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("transport");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("enabled");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("timeout");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("connectTimeout");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("auth");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("oauth");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("sslVerify");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("clientCert");
+    expect(serversNode?.additionalProperties?.properties).toHaveProperty("toolFilter");
     expect(serversNode?.additionalProperties?.properties).toHaveProperty("codex");
   });
 
@@ -187,6 +197,44 @@ describe("config schema", () => {
     ).toThrow();
   });
 
+  it("validates MCP OAuth client metadata URLs against the SDK contract", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        mcp: {
+          servers: {
+            docs: {
+              url: "https://mcp.example.com/mcp",
+              transport: "streamable-http",
+              auth: "oauth",
+              oauth: {
+                clientMetadataUrl: "https://client.example.com/openclaw-mcp.json",
+              },
+            },
+          },
+        },
+      }),
+    ).not.toThrow();
+    for (const clientMetadataUrl of [
+      "http://client.example.com/openclaw-mcp.json",
+      "https://client.example.com/",
+    ]) {
+      expect(() =>
+        OpenClawSchema.parse({
+          mcp: {
+            servers: {
+              docs: {
+                url: "https://mcp.example.com/mcp",
+                transport: "streamable-http",
+                auth: "oauth",
+                oauth: { clientMetadataUrl },
+              },
+            },
+          },
+        }),
+      ).toThrow();
+    }
+  });
+
   it("merges plugin ui hints", () => {
     const res = buildConfigSchema(pluginUiHintInput);
 
@@ -225,13 +273,34 @@ describe("config schema", () => {
     const channelSchema = channelsProps?.matrix as Record<string, unknown> | undefined;
     const channelProps = channelSchema?.properties as Record<string, unknown> | undefined;
     expect(channelProps).toHaveProperty("accessToken");
+    const progressPropsFor = (channelId: string) => {
+      const channel = channelsProps?.[channelId] as Record<string, unknown> | undefined;
+      const properties = channel?.properties as Record<string, unknown> | undefined;
+      const streaming = properties?.streaming as Record<string, unknown> | undefined;
+      const streamingProperties = streaming?.properties as Record<string, unknown> | undefined;
+      const progress = streamingProperties?.progress as Record<string, unknown> | undefined;
+      return progress?.properties as Record<string, unknown> | undefined;
+    };
+    expect(progressPropsFor("slack")).toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("discord")).not.toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("telegram")).not.toHaveProperty("nativeTaskCards");
+    expect(progressPropsFor("discord")).toHaveProperty("commentary");
+    expect(progressPropsFor("telegram")).toHaveProperty("commentary");
     expect(res.uiHints["channels.matrix"]?.label).toBe("Matrix");
     expect(res.uiHints["channels.matrix.accessToken"]?.sensitive).toBe(true);
     expect(res.uiHints["channels.matrix.streaming.progress.label"]?.label).toBe(
       "Matrix Progress Label",
     );
+    expect(res.uiHints["channels.slack.streaming.progress.nativeTaskCards"]?.label).toBe(
+      "Slack Native Progress Task Cards",
+    );
+    expect(res.uiHints["channels.discord.streaming.progress.nativeTaskCards"]).toBeUndefined();
+    expect(res.uiHints["channels.telegram.streaming.progress.nativeTaskCards"]).toBeUndefined();
     expect(res.uiHints["channels.discord.streaming.progress.toolProgress"]?.label).toBe(
       "Discord Progress Tool Lines",
+    );
+    expect(res.uiHints["channels.telegram.streaming.progress.commentary"]?.label).toBe(
+      "Telegram Progress Commentary",
     );
     expect(res.uiHints["channels.mattermost.streaming.progress.label"]?.label).toBe(
       "Mattermost Progress Label",
@@ -390,6 +459,26 @@ describe("config schema", () => {
     ).toBe(false);
   });
 
+  it("accepts progress commentary for Discord and Telegram streaming config", () => {
+    expect(
+      DiscordConfigSchema.safeParse({
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true },
+        },
+      }).success,
+    ).toBe(true);
+
+    expect(
+      TelegramConfigSchema.safeParse({
+        streaming: {
+          mode: "progress",
+          progress: { commentary: true },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
   it("keeps per-agent model overrides limited to model selection", () => {
     const result = OpenClawSchema.safeParse({
       agents: {
@@ -453,6 +542,69 @@ describe("config schema", () => {
     expect(config.agents?.list?.[0]?.tools?.exec?.commandHighlighting).toBe(false);
   });
 
+  it("accepts exec reviewer model config in global and agent scopes", () => {
+    const tools = ToolsSchema.parse({
+      exec: {
+        reviewer: {
+          model: {
+            primary: "openrouter/anthropic/claude-sonnet-4-6",
+          },
+          timeoutMs: 15_000,
+        },
+      },
+    });
+    expect(tools?.exec?.reviewer?.model).toEqual({
+      primary: "openrouter/anthropic/claude-sonnet-4-6",
+    });
+
+    const config = OpenClawSchema.parse({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              exec: {
+                reviewer: {
+                  model: "openai/gpt-5.5",
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    expect(config.agents?.list?.[0]?.tools?.exec?.reviewer?.model).toBe("openai/gpt-5.5");
+  });
+
+  it("rejects mixed normalized and legacy exec policy config", () => {
+    expect(
+      ToolsSchema.safeParse({
+        exec: {
+          mode: "auto",
+          ask: "always",
+        },
+      }).success,
+    ).toBe(false);
+
+    expect(
+      OpenClawSchema.safeParse({
+        agents: {
+          list: [
+            {
+              id: "main",
+              tools: {
+                exec: {
+                  mode: "full",
+                  security: "deny",
+                },
+              },
+            },
+          ],
+        },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts experimental tool flags in the runtime zod schema", () => {
     const parsed = ToolsSchema.parse({
       experimental: {
@@ -493,6 +645,38 @@ describe("config schema", () => {
         },
       }).success,
     ).toBe(false);
+  });
+
+  it("accepts install policy exec config in the runtime zod schema", () => {
+    const parsed = OpenClawSchema.parse({
+      security: {
+        installPolicy: {
+          enabled: true,
+          targets: ["skill", "plugin"],
+          exec: {
+            source: "exec",
+            command: "/usr/local/bin/openclaw-install-policy",
+            args: ["--json"],
+            timeoutMs: 5000,
+            noOutputTimeoutMs: 2500,
+            maxOutputBytes: 65536,
+            env: {
+              POLICY_MODE: "strict",
+            },
+            passEnv: ["OPENCLAW_STATE_DIR"],
+            trustedDirs: ["/usr/local/bin"],
+            allowInsecurePath: false,
+            allowSymlinkCommand: false,
+          },
+        },
+      },
+    });
+
+    expect(parsed.security?.installPolicy?.targets).toEqual(["skill", "plugin"]);
+    expect(parsed.security?.installPolicy?.exec?.source).toBe("exec");
+    expect(parsed.security?.installPolicy?.exec?.command).toBe(
+      "/usr/local/bin/openclaw-install-policy",
+    );
   });
 
   it("accepts Code Mode config in the runtime zod schema", () => {
@@ -810,6 +994,25 @@ describe("config schema", () => {
     expect(lookup?.path).toBe("pair.1");
     expect(lookup?.schema?.type).toBe("number");
     expect((lookup?.schema as { items?: unknown } | undefined)?.items).toBeUndefined();
+  });
+
+  it("rejects impractical numeric tuple lookup indexes", () => {
+    const tupleSchema = {
+      schema: {
+        type: "object",
+        properties: {
+          pair: {
+            type: "array",
+            items: [{ type: "string" }, { type: "number" }],
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
+
+    expect(lookupConfigSchema(tupleSchema, "pair.4294967294")).toBeNull();
   });
 
   it("rejects prototype-chain lookup segments", () => {

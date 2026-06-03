@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
 import {
@@ -5,7 +6,6 @@ import {
   resolveEffectiveMediaEntryCapabilities,
 } from "../media-understanding/entry-capabilities.js";
 import { buildMediaUnderstandingCapabilityRegistry } from "../media-understanding/provider-capability-registry.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 import { collectTtsApiKeyAssignments } from "./runtime-config-collectors-tts.js";
 import { evaluateGatewayAuthSurfaceStates } from "./runtime-gateway-auth-surfaces.js";
 import {
@@ -135,12 +135,12 @@ function collectAgentMemorySearchAssignments(params: {
     if (memorySearch?.enabled === false) {
       continue;
     }
-    if (!memorySearch || !Object.prototype.hasOwnProperty.call(memorySearch, "remote")) {
+    if (!memorySearch || !Object.hasOwn(memorySearch, "remote")) {
       hasEnabledAgentWithoutOverride = true;
       continue;
     }
     const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.prototype.hasOwnProperty.call(remote, "apiKey")) {
+    if (!remote || !Object.hasOwn(remote, "apiKey")) {
       hasEnabledAgentWithoutOverride = true;
       continue;
     }
@@ -173,7 +173,7 @@ function collectAgentMemorySearchAssignments(params: {
       return;
     }
     const remote = isRecord(memorySearch.remote) ? memorySearch.remote : undefined;
-    if (!remote || !Object.prototype.hasOwnProperty.call(remote, "apiKey")) {
+    if (!remote || !Object.hasOwn(remote, "apiKey")) {
       return;
     }
     const enabled = rawAgent.enabled !== false && memorySearch.enabled !== false;
@@ -378,6 +378,8 @@ function collectProviderRequestAssignments(params: {
   };
 
   if (params.collectTransportSecrets !== false) {
+    // Transport credentials can live below direct TLS or proxy TLS config; model-provider
+    // request surfaces opt out when those nested transport secrets are owned elsewhere.
     collectTlsAssignments(
       isRecord(params.request.tls) ? params.request.tls : undefined,
       `${params.pathPrefix}.tls`,
@@ -440,6 +442,8 @@ function collectMediaRequestAssignments(params: {
   collectModelAssignments(media.models, "tools.media.models", (rawModel) => {
     const entry = rawModel as MediaUnderstandingModelConfig;
     const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+    // Shared models are active only for enabled capabilities; when the config omits explicit
+    // capabilities, provider metadata is the contract for which media sections can use it.
     const capabilities =
       configuredCapabilities ??
       resolveEffectiveMediaEntryCapabilities({
@@ -591,7 +595,7 @@ function collectSandboxSshAssignments(params: {
     const active =
       normalizeOptionalLowercaseString(effectiveBackend) === "ssh" && effectiveMode !== "off";
     for (const key of ["identityData", "certificateData", "knownHostsData"] as const) {
-      if (ssh && Object.prototype.hasOwnProperty.call(ssh, key)) {
+      if (ssh && Object.hasOwn(ssh, key)) {
         collectSecretInputAssignment({
           value: ssh[key],
           path: `agents.list.${index}.sandbox.ssh.${key}`,
@@ -605,6 +609,7 @@ function collectSandboxSshAssignments(params: {
           },
         });
       } else if (active) {
+        // Defaults are active when at least one enabled SSH agent inherits this material.
         inheritedDefaultsUsage[key] = true;
       }
     }
@@ -635,6 +640,7 @@ function collectSandboxSshAssignments(params: {
   }
 }
 
+/** Collects SecretRef assignments from core-owned config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;

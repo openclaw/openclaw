@@ -9,6 +9,7 @@ import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type { TaskRecord, TaskRegistrySummary } from "./task-registry.types.js";
 
+/** Maps internal task summary counts to the plugin task-domain view contract. */
 export function mapTaskRunAggregateSummary(summary: TaskRegistrySummary): TaskRunAggregateSummary {
   return {
     total: summary.total,

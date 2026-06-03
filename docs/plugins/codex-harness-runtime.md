@@ -34,9 +34,10 @@ personality files and OpenClaw agent identity stay authoritative. Lightweight
 OpenClaw runs still preserve their existing project-doc suppression. OpenClaw
 developer instructions cover OpenClaw runtime concerns such as source-channel
 delivery, OpenClaw dynamic tools, ACP delegation, adapter context, and the
-active agent workspace profile files. OpenClaw skill catalogs plus `MEMORY.md`
-and active `BOOTSTRAP.md` content are projected as turn input reference context
-for native Codex.
+active agent workspace profile files. OpenClaw skill catalogs and tool-routed
+`MEMORY.md` pointers are projected as turn-scoped collaboration developer
+instructions for native Codex. Active `BOOTSTRAP.md` content and full
+`MEMORY.md` fallback injection still use turn input reference context.
 
 ## Thread bindings and model changes
 
@@ -98,6 +99,16 @@ harness adapter. For Codex-native tools, Codex owns the canonical tool record.
 OpenClaw can mirror selected events, but it cannot rewrite the native Codex
 thread unless Codex exposes that operation through app-server or native hook
 callbacks.
+
+Codex app-server report-mode `PreToolUse` events defer plugin approval requests
+to the matching app-server approval. If an OpenClaw `before_tool_call` hook
+returns `requireApproval` while the native payload sets report approval mode
+(`openclaw_approval_mode` is `"report"`), the native hook relay records the
+plugin approval requirement and returns no native decision. When Codex sends the
+app-server approval request for the same tool use, OpenClaw opens the plugin
+approval prompt and maps the decision back to Codex. Codex `PermissionRequest`
+events are a separate approval path and can still route through OpenClaw
+approvals when the runtime is configured for that bridge.
 
 Codex app-server item notifications also provide async `after_tool_call`
 observations for native tool completions that are not already covered by the

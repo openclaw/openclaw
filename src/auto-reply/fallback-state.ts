@@ -1,7 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatRawAssistantErrorForUi } from "../agents/embedded-agent-helpers.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { FallbackNoticeState } from "../status/fallback-notice-state.js";
 import { formatProviderModelRef } from "./model-runtime.js";
 import type { RuntimeFallbackAttempt } from "./reply/agent-runner-execution.js";
@@ -166,15 +166,20 @@ export function resolveFallbackTransition(params: {
     fallbackActive &&
     (previousState.selectedModel !== selectedModelRef ||
       previousState.activeModel !== activeModelRef);
-  const previousStateWasRealFallback = Boolean(
-    previousState.selectedModel &&
-    previousState.activeModel &&
-    !areRuntimeModelRefsEquivalent(
-      previousState.selectedModel,
-      previousState.activeModel,
-      comparisonOptions,
-    ),
-  );
+  const previousStateMatchesCurrent =
+    previousState.selectedModel === selectedModelRef &&
+    previousState.activeModel === activeModelRef;
+  const previousStateWasRealFallback = previousStateMatchesCurrent
+    ? fallbackActive
+    : Boolean(
+        previousState.selectedModel &&
+        previousState.activeModel &&
+        !areRuntimeModelRefsEquivalent(
+          previousState.selectedModel,
+          previousState.activeModel,
+          comparisonOptions,
+        ),
+      );
   const fallbackCleared = !fallbackActive && previousStateWasRealFallback;
   const reasonSummary = buildFallbackReasonSummary(params.attempts);
   const attemptSummaries = buildFallbackAttemptSummaries(params.attempts);

@@ -1,14 +1,17 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
+import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
   resolveContextEngineOwnerPluginId,
 } from "../../context-engine/registry.js";
-import { emitAgentPlanEvent } from "../../infra/agent-events.js";
+import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-events.js";
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -17,9 +20,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
-import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -86,11 +87,11 @@ import {
 } from "../model-auth.js";
 import { ensureOpenClawModelsJson } from "../models-config.js";
 import {
-  OPENAI_CODEX_PROVIDER_ID,
+  OPENAI_PROVIDER_ID,
   listOpenAIAuthProfileProvidersForAgentRuntime,
   resolveContextConfigProviderForRuntime,
   resolveSelectedOpenAIRuntimeProvider,
-} from "../openai-codex-routing.js";
+} from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -133,7 +134,7 @@ import { forgetPromptBuildDrainCacheForRun } from "./run/attempt.prompt-helpers.
 import { createEmbeddedRunAuthController } from "./run/auth-controller.js";
 import { resolveAuthProfileFailureReason } from "./run/auth-profile-failure-policy.js";
 import { runEmbeddedAttemptWithBackend } from "./run/backend.js";
-import { resolveCodexAppServerClientCloseRetry } from "./run/codex-app-server-recovery.js";
+import { resolveCodexAppServerRecoveryRetry } from "./run/codex-app-server-recovery.js";
 import { createFailoverDecisionLogger } from "./run/failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./run/failover-policy.js";
 import { hasEmbeddedRunConfiguredModelFallbacks } from "./run/fallbacks.js";
@@ -173,6 +174,7 @@ import {
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
+  shouldRetryMissingAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
 import type { RunEmbeddedAgentParams } from "./run/params.js";
@@ -206,7 +208,57 @@ const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
   "Continue from the current transcript after the latest tool result. Do not repeat the original user request, and do not rerun completed tools unless the transcript shows they are still needed.";
 const COMPACTION_CONTINUATION_RETRY_INSTRUCTION =
   "The previous attempt compacted the conversation context before producing a final user-visible answer. Continue from the compacted transcript and produce the final answer now. Do not restart from scratch, do not repeat completed work, and do not rerun tools unless the transcript clearly lacks required evidence.";
+const NO_REAL_CONVERSATION_MESSAGES_REASON = "no real conversation messages";
+const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX =
+  "Before accepting the previous final answer, apply this revision request and produce the revised final answer. Do not repeat completed work or rerun tools unless the request explicitly requires it.";
+const MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3;
 type EmbeddedRunAttemptForRunner = Awaited<ReturnType<typeof runEmbeddedAttemptWithBackend>>;
+
+function isNoRealConversationCompactionNoop(params: {
+  ok?: boolean;
+  compacted?: boolean;
+  reason?: string;
+}): boolean {
+  return (
+    params.ok === true &&
+    params.compacted === false &&
+    params.reason === NO_REAL_CONVERSATION_MESSAGES_REASON
+  );
+}
+
+async function resetNoRealConversationTokenSnapshot(params: {
+  config?: RunEmbeddedAgentParams["config"];
+  sessionKey?: string;
+  agentId?: string;
+}): Promise<void> {
+  if (!params.sessionKey) {
+    return;
+  }
+  const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  try {
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: params.sessionKey,
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      update: async () => ({
+        totalTokens: 0,
+        totalTokensFresh: true,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cacheRead: undefined,
+        cacheWrite: undefined,
+        contextBudgetStatus: undefined,
+        updatedAt: Date.now(),
+      }),
+    });
+  } catch (err) {
+    log.warn(
+      `[context-overflow-precheck] failed to reset stale context snapshot for ` +
+        `${params.sessionKey}: ${String(err)}`,
+    );
+  }
+}
 
 function resolveAttemptDispatchApiKey(params: {
   apiKeyInfo: ApiKeyInfo | null;
@@ -216,6 +268,10 @@ function resolveAttemptDispatchApiKey(params: {
     return undefined;
   }
   return params.apiKeyInfo?.apiKey;
+}
+
+function buildBeforeAgentFinalizeRetryPrompt(reason: string): string {
+  return `${BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX}\n\n${reason}`;
 }
 
 function resolveEmbeddedRunLaneTimeoutMs(timeoutMs: number): number | undefined {
@@ -311,7 +367,7 @@ function createScopedAuthProfileStore(
   const profiles = store.profiles ?? {};
   const normalizedProfileIds = (Array.isArray(profileIds) ? profileIds : [profileIds])
     .map((profileId) => profileId?.trim())
-    .filter((profileId): profileId is string => !!profileId);
+    .filter((profileId): profileId is string => Boolean(profileId));
   const scopedProfiles = Object.fromEntries(
     normalizedProfileIds.flatMap((profileId) => {
       const credential = profiles[profileId];
@@ -407,8 +463,9 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
 }
 
 export async function runEmbeddedAgent(
-  params: RunEmbeddedAgentParams,
+  paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
+  let params = paramsInput;
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
@@ -655,7 +712,10 @@ export async function runEmbeddedAgent(
             // first generating OpenClaw models.json. This keeps one-shot model runs from
             // blocking on unrelated provider discovery.
             skipAgentDiscovery: true,
+            allowBundledStaticCatalogFallback: pluginHarnessOwnsTransport,
+            preferBundledStaticCatalogTransport: pluginHarnessOwnsTransport,
             workspaceDir: resolvedWorkspace,
+            authProfileId: params.authProfileId,
           },
         );
         firstModelResolution ??= candidateResolution;
@@ -666,7 +726,7 @@ export async function runEmbeddedAgent(
         }
       }
       if (!modelResolution && pluginHarnessOwnsTransport) {
-        modelResolution = firstModelResolution;
+        modelResolution ??= firstModelResolution;
       }
       if (!modelResolution) {
         await ensureOpenClawModelsJson(params.config, agentDir, {
@@ -680,6 +740,7 @@ export async function runEmbeddedAgent(
             params.config,
             {
               workspaceDir: resolvedWorkspace,
+              authProfileId: params.authProfileId,
             },
           );
           firstModelResolution ??= candidateResolution;
@@ -719,6 +780,7 @@ export async function runEmbeddedAgent(
         contextConfigProvider: resolveContextConfigProviderForRuntime({
           provider: modelConfigProvider,
           runtimeId: agentHarness.id,
+          config: params.config,
         }),
         modelId,
         runtimeModel,
@@ -730,19 +792,28 @@ export async function runEmbeddedAgent(
 
       const pluginHarnessNeedsOpenClawAuthBootstrap =
         pluginHarnessOwnsTransport &&
-        provider === OPENAI_CODEX_PROVIDER_ID &&
-        effectiveModel.api === "openai-codex-responses";
+        provider === OPENAI_PROVIDER_ID &&
+        effectiveModel.api === "openai-chatgpt-responses";
+      const openClawNativeCodexResponsesNeedsAuthBootstrap =
+        !pluginHarnessOwnsTransport &&
+        provider === OPENAI_PROVIDER_ID &&
+        effectiveModel.api === "openai-chatgpt-responses";
       let piExternalCliAuthScope = pluginHarnessOwnsTransport
         ? { ignoreAutoPreferredProfile: false }
-        : resolveExternalCliAuthOverlayScopeFromSelection({
-            provider,
-            cfg: params.config,
-            agentId: params.agentId,
-            modelId,
-            workspaceDir: resolvedWorkspace,
-            userLockedAuthProfileId:
-              params.authProfileIdSource === "user" ? params.authProfileId : undefined,
-          });
+        : openClawNativeCodexResponsesNeedsAuthBootstrap
+          ? {
+              providerIds: [OPENAI_PROVIDER_ID],
+              ignoreAutoPreferredProfile: false,
+            }
+          : resolveExternalCliAuthOverlayScopeFromSelection({
+              provider,
+              cfg: params.config,
+              agentId: params.agentId,
+              modelId,
+              workspaceDir: resolvedWorkspace,
+              userLockedAuthProfileId:
+                params.authProfileIdSource === "user" ? params.authProfileId : undefined,
+            });
       let noExternalAuthStore: AuthProfileStore | undefined;
       if (
         !pluginHarnessOwnsTransport &&
@@ -768,7 +839,7 @@ export async function runEmbeddedAgent(
           ? createEmptyAuthProfileStore()
           : pluginHarnessNeedsOpenClawAuthBootstrap
             ? ensureAuthProfileStore(agentDir, {
-                externalCliProviderIds: [OPENAI_CODEX_PROVIDER_ID],
+                externalCliProviderIds: [OPENAI_PROVIDER_ID],
                 allowKeychainPrompt: false,
               })
             : piExternalCliAuthScope.providerIds
@@ -1061,6 +1132,8 @@ export async function runEmbeddedAgent(
               : lastProfileId,
           )
         : attemptAuthProfileStore;
+      const harnessBuildsOpenClawTools =
+        agentHarness.id === "codex" || agentHarness.id === "copilot";
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -1106,6 +1179,7 @@ export async function runEmbeddedAgent(
       let reasoningOnlyRetryAttempts = 0;
       let emptyResponseRetryAttempts = 0;
       let compactionContinuationRetryAttempts = 0;
+      let beforeAgentFinalizeRevisionAttempts = 0;
       let sameModelIdleTimeoutRetries = 0;
       // Cost-runaway breaker for #76293. State lives at the run-loop level
       // on purpose so it survives across attempt boundaries and across
@@ -1149,7 +1223,7 @@ export async function runEmbeddedAgent(
       });
       let rateLimitProfileRotations = 0;
       let timeoutCompactionAttempts = 0;
-      let codexAppServerClientCloseRetries = 0;
+      let codexAppServerRecoveryRetries = 0;
       // Silent-error retry: non-strict-agentic models (e.g. ollama/glm-5.1) can
       // end a turn with stopReason="error" + zero output tokens, producing no
       // user-visible text. This is an orthogonal, model-agnostic resubmission
@@ -1157,6 +1231,8 @@ export async function runEmbeddedAgent(
       // visible-answer retry instruction instead.
       const MAX_EMPTY_ERROR_RETRIES = 3;
       let emptyErrorRetries = 0;
+      const MAX_MISSING_ASSISTANT_RETRIES = 1;
+      let missingAssistantRetryAttempts = 0;
       const overloadFailoverBackoffMs = resolveOverloadFailoverBackoffMs(params.config);
       const overloadProfileRotationLimit = resolveOverloadProfileRotationLimit(params.config);
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
@@ -1179,7 +1255,7 @@ export async function runEmbeddedAgent(
         nextAttemptPromptOverride = MID_TURN_PRECHECK_CONTINUATION_PROMPT;
         suppressNextUserMessagePersistence = true;
       };
-      const maybeEscalateRateLimitProfileFallback = (params: {
+      const maybeEscalateRateLimitProfileFallback = (paramsLocal: {
         failoverProvider: string;
         failoverModel: string;
         logFallbackDecision: (decision: "fallback_model", extra?: { status?: number }) => void;
@@ -1192,13 +1268,13 @@ export async function runEmbeddedAgent(
         log.warn(
           `rate-limit profile rotation cap reached for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${rateLimitProfileRotations} rotations; escalating to model fallback`,
         );
-        params.logFallbackDecision("fallback_model", { status });
+        paramsLocal.logFallbackDecision("fallback_model", { status });
         throw new FailoverError(
           "The AI service is temporarily rate-limited. Please try again in a moment.",
           {
             reason: "rate_limit",
-            provider: params.failoverProvider,
-            model: params.failoverModel,
+            provider: paramsLocal.failoverProvider,
+            model: paramsLocal.failoverModel,
             profileId: lastProfileId,
             sessionId: activeSessionId,
             lane: globalLane,
@@ -1266,7 +1342,7 @@ export async function runEmbeddedAgent(
         agentDir,
         workspaceDir: resolvedWorkspace,
       });
-      const contextEnginePluginId = resolveContextEngineOwnerPluginId(contextEngine);
+      const resolveContextEnginePluginId = () => resolveContextEngineOwnerPluginId(contextEngine);
       startupStages.mark("context-engine");
       notifyExecutionPhase("context_engine", { provider, model: modelId });
       try {
@@ -1281,6 +1357,10 @@ export async function runEmbeddedAgent(
           const nextSessionFile = compactResult.result?.sessionFile;
           if (nextSessionId && nextSessionId !== activeSessionId) {
             activeSessionId = nextSessionId;
+            // Keep the run context's sessionId tracking the live session so
+            // lifecycle persistence isn't treated as stale after a legitimate
+            // mid-run compaction rotation (#88538).
+            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
           }
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
@@ -1495,6 +1575,7 @@ export async function runEmbeddedAgent(
             currentChannelId: params.currentChannelId,
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
+            currentInboundAudio: params.currentInboundAudio,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             sessionFile: activeSessionFile,
@@ -1545,9 +1626,9 @@ export async function runEmbeddedAgent(
             initialReplayState: accumulatedReplayState,
             authStorage,
             authProfileStore: runAttemptAuthProfileStore,
-            // Codex builds OpenClaw tools inside its harness. Keep transport
-            // auth scoped while letting tool construction see plugin creds.
-            toolAuthProfileStore: agentHarness.id === "codex" ? attemptAuthProfileStore : undefined,
+            // These harnesses build OpenClaw tools internally. Keep transport auth
+            // scoped while letting tool construction see plugin/provider creds.
+            toolAuthProfileStore: harnessBuildsOpenClawTools ? attemptAuthProfileStore : undefined,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             beforeAgentStartResult,
@@ -1602,6 +1683,8 @@ export async function runEmbeddedAgent(
             bootstrapPromptWarningSignature:
               bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1],
             suppressNextUserMessagePersistence,
+            beforeAgentFinalizeRevisionAttempts,
+            maxBeforeAgentFinalizeRevisions: MAX_BEFORE_AGENT_FINALIZE_REVISIONS,
             suppressTranscriptOnlyAssistantPersistence:
               params.suppressTranscriptOnlyAssistantPersistence,
             suppressAssistantErrorPersistence: params.suppressAssistantErrorPersistence,
@@ -1639,6 +1722,8 @@ export async function runEmbeddedAgent(
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
+            // Track the live session for lifecycle persistence identity (#88538).
+            registerAgentRunContext(params.runId, { sessionId: activeSessionId });
           }
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
@@ -1843,6 +1928,7 @@ export async function runEmbeddedAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
+                    harnessRuntime: agentHarness.id,
                     modelFallbacksOverride: params.modelFallbacksOverride,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
@@ -1862,7 +1948,7 @@ export async function runEmbeddedAgent(
                     config: params.config,
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
-                    contextEnginePluginId,
+                    contextEnginePluginId: resolveContextEnginePluginId(),
                     purpose: "context-engine.timeout-compaction",
                   }),
                   onCompactionHookMessages,
@@ -1919,6 +2005,7 @@ export async function runEmbeddedAgent(
                   await runPostCompactionSideEffects({
                     config: params.config,
                     sessionKey: params.sessionKey,
+                    agentId: sessionAgentId,
                     sessionFile: activeSessionFile,
                   });
                 }
@@ -2033,6 +2120,7 @@ export async function runEmbeddedAgent(
                     senderId: params.senderId,
                     provider,
                     modelId,
+                    harnessRuntime: agentHarness.id,
                     thinkLevel,
                     reasoningLevel: params.reasoningLevel,
                     bashElevated: params.bashElevated,
@@ -2051,7 +2139,7 @@ export async function runEmbeddedAgent(
                     config: params.config,
                     sessionKey: params.sessionKey,
                     agentId: sessionAgentId,
-                    contextEnginePluginId,
+                    contextEnginePluginId: resolveContextEnginePluginId(),
                     purpose: "context-engine.overflow-compaction",
                   }),
                   onCompactionHookMessages,
@@ -2111,6 +2199,23 @@ export async function runEmbeddedAgent(
                 };
               }
               await runOwnsCompactionAfterHook("overflow recovery", compactResult);
+              if (preflightRecovery && isNoRealConversationCompactionNoop(compactResult)) {
+                lastCompactionTokensAfter = undefined;
+                lastContextBudgetStatus = undefined;
+                await resetNoRealConversationTokenSnapshot({
+                  config: params.config,
+                  sessionKey: params.sessionKey,
+                  agentId: sessionAgentId,
+                });
+                log.info(
+                  `[context-overflow-precheck] stale token state had no real conversation messages for ` +
+                    `${provider}/${modelId}; resetting the context snapshot and retrying prompt`,
+                );
+                if (preflightRecovery.source === "mid-turn") {
+                  continueFromCurrentTranscript();
+                }
+                continue;
+              }
               if (compactResult.compacted) {
                 adoptCompactionTranscript(compactResult);
                 if (
@@ -2131,6 +2236,7 @@ export async function runEmbeddedAgent(
                     }),
                     sessionId: activeSessionId,
                     sessionKey: params.sessionKey,
+                    agentId: sessionAgentId,
                     config: params.config,
                   });
                   if (truncResult.truncated) {
@@ -2193,6 +2299,7 @@ export async function runEmbeddedAgent(
                   maxCharsOverride: toolResultMaxChars,
                   sessionId: activeSessionId,
                   sessionKey: params.sessionKey,
+                  agentId: sessionAgentId,
                   config: params.config,
                 });
                 if (truncResult.truncated) {
@@ -2296,26 +2403,47 @@ export async function runEmbeddedAgent(
             };
           }
 
-          if (promptError && !aborted && promptErrorSource !== "compaction") {
-            const codexClientCloseRetry = resolveCodexAppServerClientCloseRetry({
+          const hasRecoverableCodexAppServerTimeoutOutcome = Boolean(
+            attempt.codexAppServerFailure && attempt.promptTimeoutOutcome,
+          );
+          let shouldSurfaceCodexCompletionTimeout = false;
+          if (promptError && promptErrorSource !== "compaction" && attempt.codexAppServerFailure) {
+            // Retry replay-safe Codex app-server failures.
+            const codexAppServerRecoveryRetry = resolveCodexAppServerRecoveryRetry({
               attempt,
-              alreadyRetried: codexAppServerClientCloseRetries > 0,
+              alreadyRetried: codexAppServerRecoveryRetries > 0,
             });
-            if (codexClientCloseRetry.retry) {
-              codexAppServerClientCloseRetries += 1;
+            if (codexAppServerRecoveryRetry.retry) {
+              codexAppServerRecoveryRetries += 1;
               suppressNextUserMessagePersistence = true;
               log.warn(
-                `codex app-server stdio client closed before turn completion; retrying once ` +
+                `codex app-server replay-safe failure; retrying once ` +
+                  `failureKind=${attempt.codexAppServerFailure?.kind} ` +
                   `runId=${params.runId} sessionId=${params.sessionId}`,
               );
               continue;
             }
-            if (attempt.codexAppServerFailure) {
-              throw promptError;
+            // Completion-idle timeouts are timeout outcomes even when the
+            // app-server transport is not retryable, or the retry was exhausted.
+            shouldSurfaceCodexCompletionTimeout =
+              attempt.codexAppServerFailure?.kind === "turn_completion_idle_timeout" &&
+              attempt.timedOut;
+            if (
+              attempt.codexAppServerFailure &&
+              !hasRecoverableCodexAppServerTimeoutOutcome &&
+              !shouldSurfaceCodexCompletionTimeout
+            ) {
+              throw toLintErrorObject(promptError, "Prompt failed");
             }
           }
 
-          if (promptError && !aborted && promptErrorSource !== "compaction") {
+          if (
+            promptError &&
+            !aborted &&
+            promptErrorSource !== "compaction" &&
+            !hasRecoverableCodexAppServerTimeoutOutcome &&
+            !shouldSurfaceCodexCompletionTimeout
+          ) {
             // Normalize wrapped errors (e.g. abort-wrapped RESOURCE_EXHAUSTED) into
             // FailoverError so rate-limit classification works even for nested shapes.
             //
@@ -2477,7 +2605,7 @@ export async function runEmbeddedAgent(
                   profileId: failedPromptProfileId,
                   reason: promptProfileFailureReason,
                   modelId,
-                }).catch((err) => {
+                }).catch((err: unknown) => {
                   log.warn(`prompt profile failure mark failed: ${String(err)}`);
                 });
               }
@@ -2569,7 +2697,7 @@ export async function runEmbeddedAgent(
               });
               logPromptFailoverDecision("surface_error");
             }
-            throw promptError;
+            throw toLintErrorObject(promptError, "Prompt failed");
           }
 
           const assistantForFailover = currentAttemptAssistant ?? sessionAssistantForCandidate;
@@ -2879,7 +3007,7 @@ export async function runEmbeddedAgent(
           if (
             timedOutDuringPrompt &&
             !hasSuccessfulFinalAssistantAfterPromptTimeout &&
-            !hasMessagingToolDeliveryEvidence(attempt)
+            (shouldSurfaceCodexCompletionTimeout || !hasMessagingToolDeliveryEvidence(attempt))
           ) {
             const defaultTimeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
@@ -3062,6 +3190,24 @@ export async function runEmbeddedAgent(
             nextReasoningOnlyRetryInstruction &&
             reasoningOnlyRetryAttempts >= maxReasoningOnlyRetryAttempts;
           if (
+            !emptyAssistantReplyIsSilent &&
+            shouldRetryMissingAssistantTurn({
+              payloadCount,
+              aborted,
+              promptError,
+              timedOut,
+              attempt,
+            }) &&
+            missingAssistantRetryAttempts < MAX_MISSING_ASSISTANT_RETRIES
+          ) {
+            missingAssistantRetryAttempts += 1;
+            log.warn(
+              `missing assistant terminal message detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} — retrying ${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} with same prompt`,
+            );
+            continue;
+          }
+          if (
             !nextPlanningOnlyRetryInstruction &&
             !nextReasoningOnlyRetryInstruction &&
             nextEmptyResponseRetryInstruction &&
@@ -3081,6 +3227,7 @@ export async function runEmbeddedAgent(
             : resolveIncompleteTurnPayloadText({
                 payloadCount,
                 aborted,
+                externalAbort,
                 timedOut,
                 attempt,
               });
@@ -3188,6 +3335,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
+                modelId,
               });
             }
             return {
@@ -3288,9 +3436,17 @@ export async function runEmbeddedAgent(
               livenessState,
             });
             const incompleteStopReason = attempt.lastAssistant?.stopReason;
+            const replayMetadata = resolveAttemptReplayMetadata(attempt);
             log.warn(
               `incomplete turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
-                `stopReason=${incompleteStopReason} payloads=${payloadCount} — surfacing error to user`,
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} ` +
+                `stopReason=${incompleteStopReason ?? "missing"} hasLastAssistant=${attempt.lastAssistant ? "yes" : "no"} ` +
+                `hasCurrentAttemptAssistant=${attempt.currentAttemptAssistant ? "yes" : "no"} payloads=${payloadCount} ` +
+                `tools=${attempt.toolMetas?.length ?? 0} replaySafe=${replayMetadata.replaySafe ? "yes" : "no"} ` +
+                `compactions=${attemptCompactionCount} planningRetries=${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} ` +
+                `reasoningRetries=${reasoningOnlyRetryAttempts}/${maxReasoningOnlyRetryAttempts} ` +
+                `emptyRetries=${emptyResponseRetryAttempts}/${maxEmptyResponseRetryAttempts} ` +
+                `missingAssistantRetries=${missingAssistantRetryAttempts}/${MAX_MISSING_ASSISTANT_RETRIES} — surfacing error to user`,
             );
 
             // Mark the failing profile for cooldown so multi-profile setups
@@ -3299,6 +3455,7 @@ export async function runEmbeddedAgent(
               await maybeMarkAuthProfileFailure({
                 profileId: lastProfileId,
                 reason: assistantProfileFailureReason,
+                modelId,
               });
             }
 
@@ -3333,6 +3490,32 @@ export async function runEmbeddedAgent(
               successfulCronAdds: attempt.successfulCronAdds,
               acceptedSessionSpawns: attempt.acceptedSessionSpawns,
             };
+          }
+
+          const beforeAgentFinalizeRevisionReason = attempt.beforeAgentFinalizeRevisionReason;
+          const shouldHonorBeforeAgentFinalizeRevision =
+            !aborted &&
+            !promptError &&
+            !timedOut &&
+            !attempt.clientToolCalls &&
+            !attempt.yieldDetected &&
+            !emptyAssistantReplyIsSilent;
+          if (beforeAgentFinalizeRevisionReason && shouldHonorBeforeAgentFinalizeRevision) {
+            beforeAgentFinalizeRevisionAttempts += 1;
+            nextAttemptPromptOverride = buildBeforeAgentFinalizeRetryPrompt(
+              beforeAgentFinalizeRevisionReason,
+            );
+            suppressNextUserMessagePersistence = true;
+            planningOnlyRetryInstruction = null;
+            reasoningOnlyRetryInstruction = null;
+            emptyResponseRetryInstruction = null;
+            compactionContinuationRetryInstruction = null;
+            log.warn(
+              `before_agent_finalize requested one more pass: ` +
+                `runId=${params.runId} sessionId=${params.sessionId} ` +
+                `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
+            );
+            continue;
           }
 
           log.debug(
@@ -3470,9 +3653,9 @@ export async function runEmbeddedAgent(
             step: "bundle-mcp-retire",
             log,
             cleanup: async () => {
-              const onError = (error: unknown, sessionId: string) => {
+              const onError = (errorLocal: unknown, sessionId: string) => {
                 log.warn(
-                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(error)}`,
+                  `bundle-mcp cleanup failed after run for ${sessionId}: ${formatErrorMessage(errorLocal)}`,
                 );
               };
               const retiredBySessionKey = await retireSessionMcpRuntimeForSessionKey({
@@ -3506,4 +3689,18 @@ function resolveAuthProfileStateProvider(
   }
   const idProvider = profileId.split(":", 1)[0]?.trim();
   return idProvider || fallbackProvider;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

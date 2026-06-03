@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -461,6 +462,36 @@ describe("handleControlUiHttpRequest", () => {
         expect(Date.parse(payload.mediaTicketExpiresAt ?? "")).not.toBeNaN();
       },
     });
+  });
+
+  it("reports assistant media metadata when the process clock is outside the Date range", async () => {
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
+    try {
+      await withAllowedAssistantMediaRoot({
+        prefix: "ui-media-bad-clock-",
+        fn: async (tmpRoot) => {
+          const filePath = path.join(tmpRoot, "photo.png");
+          await fs.writeFile(filePath, Buffer.from("not-a-real-png"));
+          const { res, handled, end } = await runAssistantMediaRequest({
+            url: `/__openclaw__/assistant-media?meta=1&source=${encodeURIComponent(filePath)}&token=test-token`,
+            method: "GET",
+            auth: { mode: "token", token: "test-token", allowTailscale: false },
+          });
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          const payload = responseJson(end) as {
+            available?: boolean;
+            mediaTicket?: string;
+            mediaTicketExpiresAt?: string;
+          };
+          expect(payload.available).toBe(true);
+          expect(payload.mediaTicket).toBeUndefined();
+          expect(payload.mediaTicketExpiresAt).toBeUndefined();
+        },
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
   });
 
   it("serves assistant local media with a scoped media ticket after metadata auth", async () => {
@@ -1070,6 +1101,30 @@ describe("handleControlUiHttpRequest", () => {
     });
   });
 
+  it("serves static assets without synchronous file reads", async () => {
+    await withControlUiRoot({
+      fn: async (tmp) => {
+        await writeAssetFile(tmp, "actual.txt", "inside-ok\n");
+        const readFileSync = vi.spyOn(fsSync, "readFileSync").mockImplementation(() => {
+          throw new Error("readFileSync should not run on Control UI request path");
+        });
+        try {
+          const { res, end, handled } = await runControlUiRequest({
+            url: "/assets/actual.txt",
+            method: "GET",
+            rootPath: tmp,
+          });
+
+          expect(handled).toBe(true);
+          expect(res.statusCode).toBe(200);
+          expect(responseBody(end)).toBe("inside-ok\n");
+        } finally {
+          readFileSync.mockRestore();
+        }
+      },
+    });
+  });
+
   it("serves HEAD for in-root assets without writing a body", async () => {
     await withControlUiRoot({
       fn: async (tmp) => {
@@ -1193,7 +1248,7 @@ describe("handleControlUiHttpRequest", () => {
 
           expect(handled, `expected ${url} to be handled`).toBe(true);
           expect(res.statusCode, `expected ${url} to be served`).toBe(200);
-          expect(res.setHeader).toHaveBeenCalledWith("Content-Type", expectedType);
+          expect(res["setHeader"]).toHaveBeenCalledWith("Content-Type", expectedType);
           expect(end, `expected ${url} to write a body`).toHaveBeenCalled();
         }
       },

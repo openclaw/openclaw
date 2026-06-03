@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { readBoundedResponseText } from "./bounded-response.ts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
 import {
   collectPublishablePluginPackages,
@@ -46,6 +47,7 @@ type WorkflowRunSummary = {
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
 const CLAWHUB_REQUEST_TIMEOUT_MS = 20_000;
+const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -222,7 +224,9 @@ async function fetchWithRetry(
       lastError = error;
     }
     if (attempt < attempts) {
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, attempt * 1000));
+      await new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, attempt * 1000);
+      });
     }
   }
   const message = lastError instanceof Error ? lastError.message : String(lastError);
@@ -234,7 +238,15 @@ async function fetchJsonWithRetry(url: string): Promise<unknown> {
   if (!response.ok) {
     throw new Error(`${url} returned HTTP ${response.status}.`);
   }
-  return response.json() as Promise<unknown>;
+  return await readBoundedJsonResponse(response, url);
+}
+
+export async function readBoundedJsonResponse(
+  response: Response,
+  label: string,
+  maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+): Promise<unknown> {
+  return parseJson(await readBoundedResponseText(response, label, maxBytes), label);
 }
 
 async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {

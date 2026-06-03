@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { colorize } from "../../../packages/terminal-core/src/theme.js";
 import { buildNodeInstallPlan } from "../../commands/node-daemon-install-helpers.js";
 import {
   DEFAULT_NODE_DAEMON_RUNTIME,
@@ -16,8 +18,6 @@ import {
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { loadNodeHostConfig } from "../../node-host/config.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { colorize } from "../../terminal/theme.js";
 import { formatCliCommand } from "../command-format.js";
 import {
   runServiceRestart,
@@ -111,7 +111,7 @@ export async function runNodeDaemonInstall(opts: NodeDaemonInstallOptions) {
   }
 
   const service = resolveNodeService();
-  let loaded = false;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -219,7 +219,7 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
     service.readCommand(process.env).catch(() => null),
     service
       .readRuntime(process.env)
-      .catch((err): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
+      .catch((err: unknown): GatewayServiceRuntime => ({ status: "unknown", detail: String(err) })),
   ]);
 
   const payload = {

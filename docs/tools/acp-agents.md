@@ -183,7 +183,7 @@ Quick `/acp` flow from chat:
 
   </Accordion>
   <Accordion title="Model / provider / runtime selection cheat sheet">
-    - `openai-codex/*` - legacy Codex OAuth/subscription model route repaired by doctor.
+    - legacy Codex model refs - legacy Codex OAuth/subscription model route repaired by doctor.
     - `openai/*` - native Codex app-server embedded runtime for OpenAI agent turns.
     - `/codex ...` - native Codex conversation control.
     - `/acp ...` or `runtime: "acp"` - explicit ACP/acpx control.
@@ -549,17 +549,20 @@ Two ways to start an ACP session:
   `streamLogPath` pointing to a session-scoped JSONL log
   (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
 </ParamField>
-<ParamField path="runTimeoutSeconds" type="number">
-  Aborts the ACP child turn after N seconds. `0` keeps the turn on the
-  gateway's no-timeout path. The same value is applied to the Gateway
-  run and ACP runtime so stalled/quota-exhausted harnesses do not
-  occupy the parent agent lane indefinitely.
-</ParamField>
+
+ACP `sessions_spawn` runs use `agents.defaults.subagents.runTimeoutSeconds` for
+their default child turn limit. The tool does not accept per-call timeout
+overrides.
+
 <ParamField path="model" type="string">
   Explicit model override for the ACP child session. Codex ACP spawns
-  normalize OpenClaw Codex refs such as `openai-codex/gpt-5.4` to Codex
-  ACP startup config before `session/new`; slash forms such as
-  `openai-codex/gpt-5.4/high` also set Codex ACP reasoning effort.
+  normalize OpenAI refs such as `openai/gpt-5.4` to Codex ACP startup
+  config before `session/new`; slash forms such as `openai/gpt-5.4/high`
+  also set Codex ACP reasoning effort.
+  When omitted, `sessions_spawn({ runtime: "acp" })` uses existing
+  subagent model defaults (`agents.defaults.subagents.model` or
+  `agents.list[].subagents.model`) when configured; otherwise it lets the
+  ACP harness use its own default model.
   Other harnesses must advertise ACP `models` and support
   `session/set_model`; otherwise OpenClaw/acpx fails clearly instead of
   silently falling back to the target agent default.
@@ -568,6 +571,9 @@ Two ways to start an ACP session:
   Explicit thinking/reasoning effort. For Codex ACP, `minimal` maps to
   low effort, `low`/`medium`/`high`/`xhigh` map directly, and `off`
   omits the reasoning-effort startup override.
+  When omitted, ACP spawns use existing subagent thinking defaults and
+  per-model `agents.defaults.models["provider/model"].params.thinking`
+  for the selected model.
 </ParamField>
 
 ## Spawn bind and thread modes
@@ -792,7 +798,7 @@ operations:
 
 | Command                      | Maps to                              | Notes                                                                                                                                                                                                      |
 | ---------------------------- | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai-codex/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai-codex/gpt-5.4/high` to `reasoning_effort`.                             |
+| `/acp model <id>`            | runtime config key `model`           | For Codex ACP, OpenClaw normalizes `openai/<model>` to the adapter model id and maps slash reasoning suffixes such as `openai/gpt-5.4/high` to `reasoning_effort`.                                         |
 | `/acp set thinking <level>`  | canonical option `thinking`          | OpenClaw sends the backend-advertised equivalent when present, preferring `thinking`, then `effort`, `reasoning_effort`, or `thought_level`. For Codex ACP, the adapter maps values to `reasoning_effort`. |
 | `/acp permissions <profile>` | canonical option `permissionProfile` | OpenClaw sends the backend-advertised equivalent when present, such as `approval_policy`, `permission_profile`, `permissions`, or `permission_mode`.                                                       |
 | `/acp timeout <seconds>`     | canonical option `timeoutSeconds`    | OpenClaw sends the backend-advertised equivalent when present, such as `timeout` or `timeout_seconds`.                                                                                                     |
@@ -837,8 +843,9 @@ permission modes, see
 <Note>
 `Command blocked by PreToolUse hook: Native hook relay unavailable` belongs to
 the native Codex hook relay, not ACP/acpx. In a bound Codex chat, start a fresh
-session with `/new` or `/reset`; if it persists, restart the Codex app-server or
-OpenClaw Gateway. See [Codex harness troubleshooting](/plugins/codex-harness#troubleshooting).
+session with `/new` or `/reset`; if it works once and then returns on the next
+native tool call, restart the Codex app-server or OpenClaw Gateway instead of
+repeating `/new`. See [Codex harness troubleshooting](/plugins/codex-harness#troubleshooting).
 </Note>
 
 ## Related

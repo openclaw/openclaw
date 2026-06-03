@@ -40,11 +40,14 @@ import {
 } from "./agent.shared.js";
 import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
+import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;
@@ -175,7 +178,7 @@ async function runExistingSessionActionWithNavigationGuard<T>(params: {
   }
 
   if (actionError) {
-    throw actionError;
+    throw toLintErrorObject(actionError, "Non-Error thrown");
   }
 
   return result as T;
@@ -697,8 +700,14 @@ export function registerBrowserAgentActRoutes(
       const body = readBody(req);
       const targetId = resolveTargetIdFromBody(body);
       const url = toStringOrEmpty(body.url);
-      const timeoutMs = toNumber(body.timeoutMs);
-      const maxChars = toNumber(body.maxChars);
+      let timeoutMs: number | undefined;
+      let maxChars: number | undefined;
+      try {
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+        maxChars = readRoutePositiveInteger(body.maxChars, "maxChars");
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
       if (!url) {
         return jsonError(res, 400, "url is required");
       }
@@ -799,4 +808,18 @@ export function registerBrowserAgentActRoutes(
       });
     }),
   );
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

@@ -1,3 +1,4 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import {
@@ -34,6 +35,7 @@ describe("provider usage fetch shared helpers", () => {
   it.each([
     { value: 12, expected: 12 },
     { value: "12.5", expected: 12.5 },
+    { value: "12.5 credits", expected: undefined },
     { value: "not-a-number", expected: undefined },
   ])("parses finite numbers for %j", ({ value, expected }) => {
     expect(parseFiniteNumber(value)).toBe(expected);
@@ -91,15 +93,28 @@ describe("provider usage fetch shared helpers", () => {
     }
   });
 
+  it("caps oversized request timeouts before scheduling", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const fetchFnMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    const fetchFn = withFetchPreconnect(fetchFnMock);
+
+    await fetchJson("https://example.com/usage", {}, MAX_TIMER_TIMEOUT_MS + 1_000_000, fetchFn);
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
   it("maps configured status codes to token expired", () => {
     const snapshot = buildUsageHttpErrorSnapshot({
-      provider: "openai-codex",
+      provider: "openai",
       status: 401,
       tokenExpiredStatuses: [401, 403],
     });
 
     expect(snapshot.error).toBe("Token expired");
-    expect(snapshot.provider).toBe("openai-codex");
+    expect(snapshot.provider).toBe("openai");
     expect(snapshot.windows).toHaveLength(0);
   });
 
