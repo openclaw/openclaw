@@ -1,3 +1,7 @@
+import { createSubsystemLogger } from "../logging/subsystem.js";
+
+const log = createSubsystemLogger("memory/rerankers");
+
 export type RerankDocument = {
   id: string;
   content: string;
@@ -37,6 +41,10 @@ function getMemoryRerankers(): Map<string, MemoryRerankerPlugin> {
 
 export function registerMemoryReranker(impl: MemoryRerankerPlugin): void {
   getMemoryRerankers().set(impl.id, impl);
+  log.debug("memory rerankers: registered", { id: impl.id });
+  log.debug("memory rerankers: priority list", {
+    rerankers: [...getMemoryRerankers().keys()],
+  });
 }
 
 export function getRegisteredMemoryReranker(id: string): MemoryRerankerPlugin | undefined {
