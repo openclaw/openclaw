@@ -550,9 +550,18 @@ function isSessionSummaryContainedInRange(
   startMs: number,
   endMs: number,
 ): boolean {
+  if (summary.firstActivity === undefined || summary.lastActivity === undefined) {
+    return false;
+  }
+  return summary.firstActivity >= startMs && summary.lastActivity <= endMs;
+}
+
+function hasUntimestampedCachedTranscriptEntry(
+  entry: UsageCostCacheFileEntry | undefined,
+): boolean {
   return (
-    (summary.firstActivity === undefined || summary.firstActivity >= startMs) &&
-    (summary.lastActivity === undefined || summary.lastActivity <= endMs)
+    entry?.transcriptEntries?.some((transcriptEntry) => transcriptEntry.timestamp === undefined) ??
+    false
   );
 }
 
@@ -590,9 +599,13 @@ function buildSessionCostSummaryFromCacheEntry(params: {
   let lastActivity: number | undefined;
   let lastUserTimestamp: number | undefined;
   const maxLatencyMs = 12 * 60 * 60 * 1000;
+  const requiresTimestamp = Number.isFinite(params.startMs) || Number.isFinite(params.endMs);
 
   for (const entry of params.entry.transcriptEntries) {
     const ts = entry.timestamp;
+    if (ts === undefined && requiresTimestamp) {
+      continue;
+    }
     if (ts !== undefined && ts < params.startMs) {
       continue;
     }
@@ -1748,7 +1761,8 @@ export async function loadSessionCostSummaryFromCache(params: {
     summary &&
     params.startMs !== undefined &&
     params.endMs !== undefined &&
-    !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+    (!isSessionSummaryContainedInRange(summary, params.startMs, params.endMs) ||
+      hasUntimestampedCachedTranscriptEntry(entry))
   ) {
     summary = entry
       ? buildSessionCostSummaryFromCacheEntry({
@@ -2120,6 +2134,7 @@ export async function loadSessionCostSummary(params: {
   let lastUserTimestamp: number | undefined;
   const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
   const resolveCost = createUsageCostResolver(params.config);
+  const requiresTimestamp = params.startMs !== undefined || params.endMs !== undefined;
 
   await scanTranscriptFile({
     filePath: sessionFile,
@@ -2127,6 +2142,9 @@ export async function loadSessionCostSummary(params: {
     resolveCost,
     onEntry: (entry) => {
       const ts = entry.timestamp?.getTime();
+      if (ts === undefined && requiresTimestamp) {
+        return;
+      }
 
       // Filter by date range if specified
       if (params.startMs !== undefined && ts !== undefined && ts < params.startMs) {
