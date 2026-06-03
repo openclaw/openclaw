@@ -148,6 +148,34 @@ export function collectGatewayConfigFindings(
         "If you keep host-FS read enabled, keep gateway.bind loopback-only (or tailnet-only) and restrict network exposure.",
     });
   }
+
+  // Host-FS write opt-in finding. Same dual-key gating pattern as hostFsRead:
+  // only fires when `directInvoke.hostFsWrite: true` is set AND at least one
+  // write tool name appears in `tools.allow`. write-class is materially more
+  // dangerous than read so the finding is always critical when both gates
+  // are set + bind is non-loopback (escalated to critical even on tailnet),
+  // and warn on loopback.
+  const hostFsWriteOptIn = cfg.gateway?.tools?.directInvoke?.hostFsWrite === true;
+  const WRITE_CLASS_TOOLS = ["write", "edit", "apply_patch"] as const;
+  const writeToolsInAllow = WRITE_CLASS_TOOLS.filter((name) => gatewayToolsAllow.has(name));
+  if (hostFsWriteOptIn && writeToolsInAllow.length > 0) {
+    const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    findings.push({
+      checkId: "gateway.tools_invoke_http.host_write_allow",
+      severity: extraRisk ? "critical" : "warn",
+      title: "Gateway HTTP /tools/invoke exposes host filesystem writes",
+      detail:
+        `gateway.tools.directInvoke.hostFsWrite is true and gateway.tools.allow includes ${writeToolsInAllow.join(", ")}, ` +
+        "which exposes write-class coding tools over both HTTP `POST /tools/invoke` and SDK RPC `tools.invoke`. " +
+        "Without `tools.fs.workspaceOnly: true`, this grants writes/edits/patch-applies on any file the gateway process can open " +
+        "(outside the configured workspace) — destructive blast radius if the gateway token leaks.",
+      remediation:
+        "Confine writes to the workspace by setting `tools.fs.workspaceOnly: true` (strongly recommended). " +
+        "Or remove `gateway.tools.directInvoke.hostFsWrite` to disable host-FS writes over direct-invoke entirely. " +
+        "If you keep host-FS writes enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, " +
+        "and treat the gateway token/password as full-admin.",
+    });
+  }
   if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
     findings.push({
       checkId: "gateway.bind_no_auth",

@@ -228,9 +228,33 @@ export function resolveGatewayScopedTools(params: {
   // Construction plan limits the factory to just the base coding tool family
   // (read/write/edit/apply_patch) — no shell (exec/process), no channel,
   // OpenClaw, or plugin tools. Then we filter to `read`.
+  // Materialize coding tools (read + optionally write/edit/apply_patch) into
+  // the candidate set when the per-category direct-invoke opt-in is set.
+  // Each tool's opt-in is independent; the policy filter (gateway.tools.allow
+  // + DEFAULT_GATEWAY_HTTP_TOOL_DENY) gates which specific tools survive.
+  //
+  // `exec`/`process`/`spawn`/`shell` are intentionally NOT materialized here.
+  // They are RCE-class and require owner/admin enforcement, deferred to a
+  // separate PR.
   const allowHostFsReadOverDirectInvoke =
     surface === "http" && params.cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
-  const codingTools = allowHostFsReadOverDirectInvoke
+  const allowHostFsWriteOverDirectInvoke =
+    surface === "http" && params.cfg.gateway?.tools?.directInvoke?.hostFsWrite === true;
+  const anyCodingToolOptInActive =
+    allowHostFsReadOverDirectInvoke || allowHostFsWriteOverDirectInvoke;
+  const directInvokeCodingToolNames = new Set<string>();
+  if (allowHostFsReadOverDirectInvoke) {
+    directInvokeCodingToolNames.add("read");
+  }
+  if (allowHostFsWriteOverDirectInvoke) {
+    // `write` + `edit` are produced by the base coding tool factory. `apply_patch`
+    // is currently a host-tool name that lives only in DEFAULT_GATEWAY_HTTP_TOOL_DENY
+    // (no factory entry yet) so adding it here would be a no-op for now; deferred
+    // until upstream adds the factory entry.
+    directInvokeCodingToolNames.add("write");
+    directInvokeCodingToolNames.add("edit");
+  }
+  const codingTools = anyCodingToolOptInActive
     ? createOpenClawCodingToolsRaw({
         agentId: agentId ?? resolveDefaultAgentId(params.cfg),
         sessionKey: params.sessionKey,
@@ -244,7 +268,7 @@ export function resolveGatewayScopedTools(params: {
           includeOpenClawTools: false,
           includePluginTools: false,
         },
-      }).filter((tool) => tool.name === "read")
+      }).filter((tool) => directInvokeCodingToolNames.has(tool.name))
     : [];
 
   // Gateway tools take precedence on name collision.

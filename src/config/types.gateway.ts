@@ -492,6 +492,25 @@ export type GatewayDirectInvokeOptIns = {
    * `tools.fs.workspaceOnly` is also enabled.
    */
   hostFsRead?: boolean;
+  /**
+   * Allow the host-filesystem write coding tools (`write`, `edit`,
+   * `apply_patch`) to be materialized for the gateway direct-invoke surfaces.
+   * Defaults to `false`.
+   *
+   * Even when set to `true`, the operator MUST also include the specific
+   * write tool name(s) in `gateway.tools.allow` (e.g. `["write", "edit"]`)
+   * for each one to actually be reachable. Operators can enable any subset
+   * of write tools by including only those names in `allow`.
+   *
+   * Exposes host filesystem writes outside the workspace unless
+   * `tools.fs.workspaceOnly` is also enabled. STRONGLY recommend
+   * `tools.fs.workspaceOnly: true` whenever this opt-in is set.
+   *
+   * `exec`/`process`/`spawn`/`shell` (RCE-class) are intentionally NOT
+   * controlled by this flag — they need a separate owner/admin enforcement
+   * model and are deferred to a follow-up PR.
+   */
+  hostFsWrite?: boolean;
 };
 
 export type GatewayConfig = {
