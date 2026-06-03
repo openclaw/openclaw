@@ -863,6 +863,55 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     });
   });
 
+  it("skips cron fallback delivery when the message tool sends to a resolved Slack channel alias", async () => {
+    mockRunCronFallbackPassthrough();
+    resolveCronDeliveryPlanMock.mockReturnValue(
+      makeAnnounceDeliveryPlan({ channel: "slack", to: "#abel-channel" }),
+    );
+    resolveDeliveryTargetMock.mockResolvedValue(
+      makeResolvedAnnounceTarget({
+        channel: "slack",
+        to: "channel:C0AHNV28LQJ",
+        aliases: ["#abel-channel", "C0AHNV28LQJ"],
+      }),
+    );
+    runEmbeddedAgentMock.mockResolvedValue(
+      makeMessageToolRunResult([{ tool: "message", provider: "message", to: "#abel-channel" }]),
+    );
+
+    const result = await runCronIsolatedAgentTurn({
+      ...makeParams(),
+      job: makeAnnounceMessageToolJob({
+        id: "message-tool-slack-alias",
+        name: "Message Tool Slack Alias",
+        delivery: { channel: "slack", to: "#abel-channel" },
+      }),
+    });
+
+    expectDispatchFields({
+      deliveryRequested: true,
+      sourceDeliveryOutcome: {
+        visibleDeliveries: [
+          {
+            via: "message_tool",
+            verifiedTarget: true,
+            target: { tool: "message", provider: "message", to: "#abel-channel" },
+          },
+        ],
+        verifiedMessageToolDelivery: true,
+        satisfiesSourceDelivery: true,
+        unverifiedMessageToolDelivery: false,
+      },
+    });
+    expectDeliveryFields(result.delivery, {
+      intended: { channel: "slack", to: "#abel-channel", source: "explicit" },
+      resolved: { ok: true, channel: "slack", to: "channel:C0AHNV28LQJ", source: "explicit" },
+      messageToolSentTo: [{ channel: "slack", to: "#abel-channel" }],
+      fallbackUsed: false,
+      delivered: true,
+    });
+  });
+
   it("rewrites generic message provider to resolved channel in delivery trace", async () => {
     mockRunCronFallbackPassthrough();
     resolveCronDeliveryPlanMock.mockReturnValue(makeAnnounceDeliveryPlan());
