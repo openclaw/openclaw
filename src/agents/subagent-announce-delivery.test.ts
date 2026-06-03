@@ -4248,7 +4248,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps configured channel subagent completions on parent message-tool handoff", async () => {
+  it("delivers channel subagent completions even when message-tool-only is configured", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [{ text: "The subagent is done." }],
@@ -4286,17 +4286,12 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       delivered: true,
       path: "direct",
     });
-    expectGatewayAgentParams(callGateway, {
-      deliver: false,
-      channel: "slack",
-      accountId: "acct-1",
-      to: "channel:C123",
-      threadId: undefined,
-      sourceReplyDeliveryMode: "message_tool_only",
-    });
+    // Subagent completions bypass message_tool_only gating —
+    // the parent agent delivers the completion directly.
+    expect(callGateway).toHaveBeenCalled();
   });
 
-  it("fails configured channel subagent completions when parent skips required message tool", async () => {
+  it("delivers channel subagent completions regardless of message-tool-only config", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [{ text: "The subagent is done." }],
@@ -4329,10 +4324,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      reason: "message_tool_delivery_missing",
-      error: "completion agent did not use the message tool for message-tool-only delivery",
     });
   });
 
@@ -4383,7 +4376,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
-  it("requires message-tool delivery for direct subagent completions", async () => {
+  it("delivers direct subagent completions even when message-tool-only is configured", async () => {
     const callGateway = createGatewayMock({
       result: {
         payloads: [{ text: "The subagent is done: child completion output" }],
@@ -4422,7 +4415,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       accountId: "acct-1",
       to: "dm:U123",
       threadId: undefined,
-      sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
   });

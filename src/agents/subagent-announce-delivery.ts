@@ -1243,6 +1243,7 @@ async function sendSubagentAnnounceDirectly(params: {
     const expectedMediaUrls = collectExpectedMediaFromInternalEvents(params.internalEvents);
     const completionRouteRequiresMessageToolDelivery =
       params.expectsCompletionMessage &&
+      !isSubagentCompletion &&
       completionRequiresMessageToolDelivery({
         cfg,
         requesterSessionKey: params.requesterSessionKey,
