@@ -1,3 +1,4 @@
+import type { GatewayRestartIntent } from "../infra/restart.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 export type GatewayServiceEnv = Record<string, string | undefined>;
@@ -23,6 +24,10 @@ export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
+  // Optional restart hint propagated from CLI callers (gateway tool, daemon
+  // restart). Used by restart implementations that send SIGTERM to the live
+  // gateway so its SIGTERM handler routes to restart rather than stop (#88309).
+  restartIntent?: GatewayRestartIntent;
 };
 
 export type GatewayServiceRestartResult = { outcome: "completed" } | { outcome: "scheduled" };

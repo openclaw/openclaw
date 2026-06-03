@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
@@ -1423,7 +1426,10 @@ describe("launchd install", () => {
     const serviceId = `${domain}/${label}`;
     expect(result).toEqual({ outcome: "completed" });
     expect(cleanStaleGatewayProcessesSync).toHaveBeenCalledWith(18789);
+    // The leading `print` is the runtime probe that resolves the live gateway
+    // pid before stamping the restart intent (#88309).
     expect(state.launchctlCalls).toEqual([
+      ["print", serviceId],
       ["enable", serviceId],
       ["kickstart", "-k", serviceId],
     ]);
@@ -1466,7 +1472,7 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>StandardInPath</key>");
     expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<string>/Users/test/Library/Logs/openclaw/gateway.log</string>");
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap"]);
+    expect(launchctlCommandNames()).toEqual(["print", "enable", "bootout", "enable", "bootstrap"]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -1504,7 +1510,14 @@ describe("launchd install", () => {
       stdout: new PassThrough(),
     });
 
-    expect(launchctlCommandNames()).toEqual(["enable", "bootout", "enable", "bootstrap", "print"]);
+    expect(launchctlCommandNames()).toEqual([
+      "print",
+      "enable",
+      "bootout",
+      "enable",
+      "bootstrap",
+      "print",
+    ]);
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -1673,7 +1686,10 @@ describe("launchd install", () => {
     const env = createDefaultLaunchdEnv();
     state.kickstartError = "Input/output error";
     state.kickstartFailuresRemaining = 1;
-    state.printNotLoadedRemaining = 1;
+    // Two probes return "not loaded": the runtime-pid lookup we added for
+    // #88309 (skips the intent write when the service has no pid) and the
+    // recovery probe after the kickstart fault.
+    state.printNotLoadedRemaining = 2;
 
     await expectRestartLaunchAgentKickstartFailure(env);
 
@@ -1900,5 +1916,43 @@ describe("resolveLaunchAgentPlistPath", () => {
         OPENCLAW_LAUNCHD_LABEL: "../evil/label",
       }),
     ).toThrow("Invalid launchd label");
+  });
+});
+
+// CLI restart entry points (configure, doctor, update retry, ...) call
+// `service.restart()` from a process distinct from the gateway. On darwin that
+// resolves to `restartLaunchAgent`, which kicks the running gateway with
+// `launchctl kickstart -k`, delivering SIGTERM. The gateway run-loop SIGTERM
+// handler routes to `restart` only when a gateway restart intent file is
+// present; otherwise it routes to `stop` and falls through to a full shutdown
+// (#88309). The contract this test pins: any CLI-initiated restart that will
+// send SIGTERM to the existing gateway must leave a parseable intent file
+// targeting that gateway's pid before the kickstart is issued.
+describe("restartLaunchAgent restart-intent contract (#88309)", () => {
+  it("writes a gateway-restart intent targeting the existing gateway before kickstart", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-88309-"));
+    try {
+      const fakeGatewayPid = 12345;
+      state.printOutput = `\tstate = running\n\tpid = ${fakeGatewayPid}\n\tlast exit status = 0\n`;
+      state.printCode = 0;
+      state.kickstartCode = 0;
+      state.serviceLoaded = true;
+
+      await restartLaunchAgent({
+        env: { ...createDefaultLaunchdEnv(), OPENCLAW_STATE_DIR: stateDir },
+        stdout: new PassThrough(),
+      });
+
+      const intentPath = path.join(stateDir, "gateway-restart-intent.json");
+      expect(fs.existsSync(intentPath)).toBe(true);
+      const payload = JSON.parse(fs.readFileSync(intentPath, "utf8")) as Record<string, unknown>;
+      expect(payload).toMatchObject({
+        kind: "gateway-restart",
+        pid: fakeGatewayPid,
+      });
+      expect(typeof payload.reason).toBe("string");
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
   });
 });

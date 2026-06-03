@@ -6,6 +6,7 @@ import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { writeGatewayRestartIntentSync } from "../infra/restart.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
@@ -1026,6 +1027,7 @@ async function ensureLaunchAgentLoadedAfterFailure(params: {
 export async function restartLaunchAgent({
   stdout,
   env,
+  restartIntent,
 }: GatewayServiceControlArgs): Promise<GatewayServiceRestartResult> {
   const serviceEnv = env ?? (process.env as GatewayServiceEnv);
   const domain = resolveGuiDomain();
@@ -1037,6 +1039,15 @@ export async function restartLaunchAgent({
   // detached handoff. A direct `kickstart -k` would terminate the caller before
   // it can finish the restart command.
   if (isCurrentProcessLaunchdServiceLabel(label)) {
+    // The caller IS the gateway; the handoff kickstart will SIGTERM this
+    // process. Stamp restart intent first so the run-loop SIGTERM handler
+    // routes to restart rather than stop (#88309).
+    writeGatewayRestartIntentSync({
+      env: serviceEnv,
+      targetPid: process.pid,
+      reason: restartIntent?.reason ?? "gateway.restart",
+      ...(restartIntent ? { intent: restartIntent } : {}),
+    });
     const plistReloadNeeded = await rewriteLaunchAgentPlistForRestart({
       env: serviceEnv,
       label,
@@ -1052,6 +1063,19 @@ export async function restartLaunchAgent({
     }
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
+  }
+
+  // CLI-side restart: the live gateway is a different process. Discover its
+  // pid via launchctl print so the restart intent we drop on disk targets the
+  // process that will receive SIGTERM from kickstart/bootout below (#88309).
+  const runtime = await readLaunchAgentRuntime(serviceEnv).catch(() => null);
+  if (runtime?.pid !== undefined) {
+    writeGatewayRestartIntentSync({
+      env: serviceEnv,
+      targetPid: runtime.pid,
+      reason: restartIntent?.reason ?? "gateway.restart",
+      ...(restartIntent ? { intent: restartIntent } : {}),
+    });
   }
 
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
