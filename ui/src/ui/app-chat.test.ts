@@ -52,6 +52,7 @@ let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQue
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
 let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
+let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -66,6 +67,7 @@ async function loadChatHelpers(): Promise<void> {
     removeQueuedMessage,
     markQueuedChatSendsWaitingForReconnect,
     retryReconnectableQueuedChatSends,
+    recordChatSendServerTiming,
   } = await import("./app-chat.ts"));
 }
 
@@ -1372,6 +1374,57 @@ describe("handleSendChat", () => {
       serverLoadSessionMs: 4,
       serverPrepareAttachmentsMs: 0.5,
     });
+  });
+
+  it("records Gateway post-ACK server timing milestones for a chat send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "measure server milestone",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+
+    await handleSendChat(host);
+
+    const ack = eventPayloads(host, "control-ui.chat.send").find(
+      (payload) => payload.phase === "ack",
+    );
+    const runId = typeof ack?.runId === "string" ? ack.runId : "";
+    expect(runId).toMatch(uuidPattern);
+
+    recordChatSendServerTiming(host, {
+      phase: "agent-run-started",
+      runId,
+      sessionKey: "agent:main",
+      agentId: "main",
+      ackToPhaseMs: 12,
+      receivedToPhaseMs: 25,
+      dispatchStartedToPhaseMs: 8,
+      agentRunId: "agent-run-1",
+    });
+
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "server-agent-run-started",
+          runId,
+          sessionKey: "agent:main",
+          agentId: "main",
+          ackStatus: "started",
+          serverPhase: "agent-run-started",
+          serverAckToPhaseMs: 12,
+          serverReceivedToPhaseMs: 25,
+          serverDispatchStartedToPhaseMs: 8,
+          agentRunId: "agent-run-1",
+        }),
+      ]),
+    );
   });
 
   it("records pending send paint timing before a delayed chat.send ACK", async () => {

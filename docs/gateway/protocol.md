@@ -621,6 +621,9 @@ terminal summary, and sanitized error text.
     `{ agentId?, name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host for
     the selected agent workspace.
+    Older clients may still send `dangerouslyForceUnsafeInstall`; this field is
+    deprecated, accepted only for protocol compatibility, and ignored. Use
+    `security.installPolicy` for operator-owned install decisions.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
   - ClawHub mode accepts optional `agentId`; omit it to update tracked ClawHub
     installs in the default agent workspace, or pass a configured agent id to

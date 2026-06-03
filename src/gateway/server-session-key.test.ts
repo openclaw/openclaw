@@ -25,6 +25,14 @@ vi.mock("./session-utils.js", async () => {
 const { resolveSessionKeyForRun, resetResolvedSessionKeyForRunCacheForTest } =
   await import("./server-session-key.js");
 
+function mockCombinedSessionStore(cfg: OpenClawConfig, store: Record<string, unknown>) {
+  hoisted.loadConfigMock.mockReturnValue(cfg);
+  hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+    storePath: "(multiple)",
+    store,
+  });
+}
+
 describe("resolveSessionKeyForRun", () => {
   beforeEach(() => {
     hoisted.loadConfigMock.mockReset();
@@ -45,12 +53,8 @@ describe("resolveSessionKeyForRun", () => {
         store: "/custom/root/agents/{agentId}/sessions/sessions.json",
       },
     };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-      },
+    mockCombinedSessionStore(cfg, {
+      "agent:main:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
     });
 
     expect(resolveSessionKeyForRun("run-1")).toBe("acp:run-1");
@@ -67,12 +71,8 @@ describe("resolveSessionKeyForRun", () => {
         store: "/custom/root/agents/{agentId}/sessions/sessions.json",
       },
     };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-      },
+    mockCombinedSessionStore(cfg, {
+      "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
     });
 
     expect(resolveSessionKeyForRun("run-1", { agentId: "retired" })).toBe("acp:run-1");
@@ -87,12 +87,8 @@ describe("resolveSessionKeyForRun", () => {
         store: "/custom/root/agents/{agentId}/sessions/sessions.json",
       },
     };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
-      },
+    mockCombinedSessionStore(cfg, {
+      "agent:retired:acp:run-1": { sessionId: "run-1", updatedAt: 123 },
     });
 
     expect(resolveSessionKeyForRun("run-1")).toBeUndefined();
@@ -127,12 +123,8 @@ describe("resolveSessionKeyForRun", () => {
         scope: "global",
       },
     };
-    hoisted.loadConfigMock.mockReturnValue(cfg);
-    hoisted.loadCombinedSessionStoreForGatewayMock.mockReturnValue({
-      storePath: "(multiple)",
-      store: {
-        global: { sessionId: "run-global", updatedAt: 123 },
-      },
+    mockCombinedSessionStore(cfg, {
+      global: { sessionId: "run-global", updatedAt: 123 },
     });
 
     expect(resolveSessionKeyForRun("run-global", { agentId: "work" })).toBe("global");

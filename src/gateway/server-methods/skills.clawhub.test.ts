@@ -262,6 +262,7 @@ describe("skills gateway handlers (clawhub)", () => {
       slug: "calendar",
       version: "1.2.3",
       force: false,
+      config: {},
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();
@@ -316,7 +317,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(installSkillFromClawHubMock).not.toHaveBeenCalled();
   });
 
-  it("forwards dangerous override for local skill installs", async () => {
+  it("accepts deprecated unsafe override without forwarding it to skill installs", async () => {
     installSkillMock.mockResolvedValue({
       ok: true,
       message: "Installed",
@@ -336,7 +337,6 @@ describe("skills gateway handlers (clawhub)", () => {
       workspaceDir: "/tmp/workspace",
       skillName: "calendar",
       installId: "deps",
-      dangerouslyForceUnsafeInstall: true,
       timeoutMs: 120_000,
       config: {},
     });
@@ -410,6 +410,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace",
       slug: "calendar",
+      config: {},
     });
     expect(ok).toBe(true);
     expect(error).toBeUndefined();

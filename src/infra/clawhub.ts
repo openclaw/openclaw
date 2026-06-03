@@ -769,6 +769,10 @@ export function resolveClawHubBaseUrl(baseUrl?: string): string {
   return normalizeBaseUrl(baseUrl);
 }
 
+export function isDefaultClawHubBaseUrl(baseUrl?: string): boolean {
+  return normalizeBaseUrl(baseUrl) === normalizeBaseUrl(DEFAULT_CLAWHUB_URL);
+}
+
 function buildVersionOrTagSearch(params: {
   version?: string;
   tag?: string;

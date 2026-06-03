@@ -22,6 +22,9 @@ import {
 } from "./plugins-update-selection.js";
 import { promptYesNo } from "./prompt.js";
 
+const DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING =
+  "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
+
 export async function runPluginUpdateCommand(params: {
   id?: string;
   opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
@@ -36,6 +39,9 @@ export async function runPluginUpdateCommand(params: {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
   };
+  if (params.opts.dangerouslyForceUnsafeInstall) {
+    defaultRuntime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING));
+  }
   const pluginSelection = resolvePluginUpdateSelection({
     installs: pluginInstallRecords,
     rawId: params.id,

@@ -26,6 +26,25 @@ function runAssert(home: string, channel: string, ...tokens: string[]) {
   );
 }
 
+function runStatusAssert(channel: string, channelsStatus: unknown, statusText: string) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-assertions-"));
+  try {
+    const channelsStatusPath = path.join(tempDir, "channels-status.json");
+    const statusTextPath = path.join(tempDir, "status.txt");
+    fs.writeFileSync(channelsStatusPath, JSON.stringify(channelsStatus));
+    fs.writeFileSync(statusTextPath, statusText);
+    return spawnSync(
+      process.execPath,
+      [assertionsPath, "assert-status-surfaces", channel, channelsStatusPath, statusTextPath],
+      {
+        encoding: "utf8",
+      },
+    );
+  } finally {
+    fs.rmSync(tempDir, { force: true, recursive: true });
+  }
+}
+
 describe("npm onboard channel agent assertions", () => {
   it("validates channel tokens in their canonical config fields", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
@@ -58,5 +77,51 @@ describe("npm onboard channel agent assertions", () => {
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it("validates configured channels in the plain status Channels section", () => {
+    const result = runStatusAssert(
+      "telegram",
+      { configuredChannels: ["telegram"] },
+      [
+        "# OpenClaw status",
+        "",
+        "# Overview",
+        "OS macOS",
+        "",
+        "# Channels",
+        "Channel State Detail",
+        "telegram ok configured",
+        "",
+        "# Sessions",
+        "No sessions",
+      ].join("\n"),
+    );
+
+    expect(result.status).toBe(0);
+  });
+
+  it("rejects plain status output that mentions the channel outside the Channels section", () => {
+    const result = runStatusAssert(
+      "telegram",
+      { configuredChannels: ["telegram"] },
+      [
+        "# OpenClaw status",
+        "",
+        "# Overview",
+        "OS macOS",
+        "",
+        "# Channels",
+        "No channels configured",
+        "",
+        "# Sessions",
+        "telegram appeared in an unrelated session note",
+      ].join("\n"),
+    );
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "plain status output did not mention telegram in the Channels section",
+    );
   });
 });
