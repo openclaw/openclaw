@@ -1,3 +1,7 @@
+/**
+ * Shared reaction-level resolver for channel plugins that expose ACK and agent reaction controls.
+ * Channel adapters supply defaults/fallbacks; this helper owns the common flag expansion.
+ */
 /** User-configurable reaction behavior level for channel delivery. */
 export type ReactionLevel = "off" | "ack" | "minimal" | "extensive";
 
