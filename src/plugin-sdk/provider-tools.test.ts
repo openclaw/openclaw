@@ -144,6 +144,38 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ).toStrictEqual([]);
   });
 
+  it("reports unreadable schema children without aborting provider inspection", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("gemini");
+    const tool = {
+      name: "fuzzplugin_unreadable_child",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          safe: { type: "string" },
+          get broken(): unknown {
+            throw new Error("schema child getter exploded");
+          },
+        },
+      },
+    } as never;
+
+    expect(
+      hooks.inspectToolSchemas({
+        provider: "google",
+        modelId: "gemini-2.5-pro",
+        modelApi: "google-gemini",
+        tools: [tool],
+      }),
+    ).toEqual([
+      {
+        toolName: "fuzzplugin_unreadable_child",
+        toolIndex: 0,
+        violations: ["fuzzplugin_unreadable_child.parameters.properties.broken is unreadable"],
+      },
+    ]);
+  });
+
   it("preserves string-const unions as a flat enum for the deepseek family", () => {
     // Regression for https://github.com/openclaw/openclaw/issues/86468 —
     // Typebox `Type.Union([Type.Literal(...)])` collapses to anyOf of consts;

@@ -28,31 +28,64 @@ export function findUnsupportedSchemaKeywords(
   }
   const record = schema as Record<string, unknown>;
   const violations: string[] = [];
+  const propertiesRead = readSchemaProperty(record, "properties", `${path}.properties`);
+  if (!propertiesRead.ok) {
+    violations.push(propertiesRead.violation);
+  }
   const properties =
-    record.properties && typeof record.properties === "object" && !Array.isArray(record.properties)
-      ? (record.properties as Record<string, unknown>)
+    propertiesRead.ok &&
+    propertiesRead.value &&
+    typeof propertiesRead.value === "object" &&
+    !Array.isArray(propertiesRead.value)
+      ? (propertiesRead.value as Record<string, unknown>)
       : undefined;
   if (properties) {
-    for (const [key, value] of Object.entries(properties)) {
+    for (const key of Object.keys(properties)) {
+      const value = readSchemaProperty(properties, key, `${path}.properties.${key}`);
+      if (!value.ok) {
+        violations.push(value.violation);
+        continue;
+      }
       violations.push(
-        ...findUnsupportedSchemaKeywords(value, `${path}.properties.${key}`, unsupportedKeywords),
+        ...findUnsupportedSchemaKeywords(
+          value.value,
+          `${path}.properties.${key}`,
+          unsupportedKeywords,
+        ),
       );
     }
   }
-  for (const [key, value] of Object.entries(record)) {
+  for (const key of Object.keys(record)) {
     if (key === "properties") {
       continue;
     }
     if (unsupportedKeywords.has(key)) {
       violations.push(`${path}.${key}`);
     }
-    if (value && typeof value === "object") {
+    const value = readSchemaProperty(record, key, `${path}.${key}`);
+    if (!value.ok) {
+      violations.push(value.violation);
+      continue;
+    }
+    if (value.value && typeof value.value === "object") {
       violations.push(
-        ...findUnsupportedSchemaKeywords(value, `${path}.${key}`, unsupportedKeywords),
+        ...findUnsupportedSchemaKeywords(value.value, `${path}.${key}`, unsupportedKeywords),
       );
     }
   }
   return violations;
+}
+
+function readSchemaProperty(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+): { ok: true; value: unknown } | { ok: false; violation: string } {
+  try {
+    return { ok: true, value: record[key] };
+  } catch {
+    return { ok: false, violation: `${path} is unreadable` };
+  }
 }
 
 export function normalizeGeminiToolSchemas(
