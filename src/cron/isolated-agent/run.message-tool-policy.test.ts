@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { SkillSnapshot } from "../../agents/skills.js";
 import { createSourceDeliveryPlan } from "../../infra/outbound/source-delivery-plan.js";
-import type { SkillSnapshot } from "../../skills/types.js";
 import type { CronDeliveryMode } from "../types.js";
 import type { MutableCronSession } from "./run-session-state.js";
 import {
@@ -906,7 +906,7 @@ describe("runCronIsolatedAgentTurn message tool policy", () => {
     expectDeliveryFields(result.delivery, {
       intended: { channel: "slack", to: "#abel-channel", source: "explicit" },
       resolved: { ok: true, channel: "slack", to: "channel:C0AHNV28LQJ", source: "explicit" },
-      messageToolSentTo: [{ channel: "slack", to: "#abel-channel" }],
+      messageToolSentTo: [{ channel: "slack", to: "channel:C0AHNV28LQJ" }],
       fallbackUsed: false,
       delivered: true,
     });
