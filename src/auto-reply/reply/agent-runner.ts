@@ -1802,8 +1802,12 @@ export async function runReplyAgent(params: {
           // Provider subscription/limit windows for the 📊 readout. Non-blocking
           // (stale-while-revalidate): returns cached windows or undefined on a
           // cold cache and refreshes in the background, so it never delays the
-          // reply. Undefined for api-key / unmapped providers.
-          limits: getProviderUsageLimitsCached(providerUsed),
+          // reply. Credential-aware: the turn's authMode is threaded through so an
+          // api-key OpenAI turn resolves to no provider (undefined limits) instead
+          // of borrowing OAuth/ChatGPT windows. Undefined for api-key / unmapped.
+          limits: getProviderUsageLimitsCached(providerUsed, {
+            credentialType: runResult.meta?.requestShaping?.authMode ?? undefined,
+          }),
         },
       );
     }

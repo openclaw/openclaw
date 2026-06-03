@@ -26,8 +26,12 @@ export async function getProviderUsageLimits(
   provider: string | undefined | null,
   options?: { credentialType?: string | null; timeoutMs?: number; now?: number },
 ): Promise<ReplyUsageLimits | undefined> {
+  // Pass the turn's real credential type through unchanged. Do NOT default to
+  // "oauth": resolveUsageProviderId only returns the OpenAI usage provider for
+  // oauth/token, so defaulting would attach OAuth/ChatGPT windows to an API-key
+  // turn. A missing credential type ⇒ no OpenAI limits (correct, not OAuth).
   const usageId = resolveUsageProviderId(provider, {
-    credentialType: options?.credentialType ?? "oauth",
+    credentialType: options?.credentialType ?? null,
   });
   if (!usageId) {
     return undefined;
@@ -103,8 +107,12 @@ export function getProviderUsageLimitsCached(
   provider: string | undefined | null,
   options?: { credentialType?: string | null; timeoutMs?: number },
 ): ReplyUsageLimits | undefined {
+  // Pass the turn's real credential type through unchanged. Do NOT default to
+  // "oauth": resolveUsageProviderId only returns the OpenAI usage provider for
+  // oauth/token, so defaulting would attach OAuth/ChatGPT windows to an API-key
+  // turn. A missing credential type ⇒ no OpenAI limits (correct, not OAuth).
   const usageId = resolveUsageProviderId(provider, {
-    credentialType: options?.credentialType ?? "oauth",
+    credentialType: options?.credentialType ?? null,
   });
   if (!usageId) {
     return undefined;
