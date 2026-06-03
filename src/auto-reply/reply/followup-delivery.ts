@@ -31,6 +31,7 @@ export function resolveFollowupDeliveryPayloads(params: {
   originatingChannel?: string;
   originatingChatType?: string | null;
   originatingTo?: string;
+  originatingThreadId?: string | number;
   sentMediaUrls?: string[];
   sentTargets?: MessagingToolSend[];
   sentTexts?: string[];
@@ -74,6 +75,7 @@ export function resolveFollowupDeliveryPayloads(params: {
     accountId: resolveOriginAccountId({
       originatingAccountId: params.originatingAccountId,
     }),
+    originatingThreadId: params.originatingThreadId,
   });
   const sentMediaUrlFallback = params.sentMediaUrls ?? [];
   const sentTextFallback = params.sentTexts ?? [];

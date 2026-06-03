@@ -177,6 +177,49 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toStrictEqual([]);
   });
 
+  it("keeps top-level Slack replies when the messaging tool only sent into a thread", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "hello world!" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        sentTexts: ["hello world!"],
+        sentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "171.222",
+            text: "hello world!",
+          },
+        ],
+      }),
+    ).toEqual([{ text: "hello world!" }]);
+  });
+
+  it("dedupes Slack replies only when the messaging tool sent into the same thread", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [{ text: "hello world!" }],
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "171.222",
+        sentTexts: ["hello world!"],
+        sentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "171.222",
+            text: "hello world!",
+          },
+        ],
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("delivers distinct replies when originating channel resolves the provider", () => {
     expect(
       resolveFollowupDeliveryPayloads({

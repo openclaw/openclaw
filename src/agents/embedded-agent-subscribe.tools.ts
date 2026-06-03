@@ -612,6 +612,7 @@ function resolveMessageToolTarget(args: Record<string, unknown>): string | undef
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
+  options?: { currentThreadId?: string },
 ): MessagingToolSend | undefined {
   // Provider docking: new provider tools must implement plugin.actions.extractToolSend.
   const action = normalizeOptionalString(args.action) ?? "";
@@ -636,13 +637,16 @@ export function extractMessagingToolSend(
       !threadId &&
       !threadSuppressed &&
       Boolean(providerId && getChannelPlugin(providerId)?.threading?.resolveAutoThreadId);
+    const currentThreadId = threadImplicit
+      ? normalizeOptionalString(options?.currentThreadId)
+      : undefined;
     return to
       ? {
           tool: toolName,
           provider,
           accountId,
           to,
-          ...(threadId ? { threadId } : {}),
+          ...((threadId ?? currentThreadId) ? { threadId: threadId ?? currentThreadId } : {}),
           ...(threadImplicit ? { threadImplicit: true } : {}),
           ...(threadSuppressed ? { threadSuppressed: true } : {}),
         }

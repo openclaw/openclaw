@@ -349,6 +349,64 @@ describe("resolveMessagingToolPayloadDedupe", () => {
     });
   });
 
+  it("does not treat a Slack thread send as matching a top-level route", () => {
+    expect(
+      resolveMessagingToolPayloadDedupe({
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "171.222",
+            text: "thread text",
+          },
+        ],
+      }),
+    ).toEqual({
+      shouldDedupePayloads: false,
+      matchingRoute: false,
+      routeSentTexts: [],
+      routeSentMediaUrls: [],
+      useGlobalSentTextEvidenceFallback: false,
+      useGlobalSentMediaUrlEvidenceFallback: false,
+    });
+  });
+
+  it("matches only the same Slack thread route", () => {
+    expect(
+      resolveMessagingToolPayloadDedupe({
+        messageProvider: "slack",
+        originatingTo: "channel:C1",
+        originatingThreadId: "171.222",
+        messagingToolSentTargets: [
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "171.222",
+            text: "thread text",
+          },
+          {
+            tool: "message",
+            provider: "slack",
+            to: "channel:C1",
+            threadId: "171.333",
+            text: "other thread",
+          },
+        ],
+      }),
+    ).toEqual({
+      shouldDedupePayloads: true,
+      matchingRoute: true,
+      routeSentTexts: ["thread text"],
+      routeSentMediaUrls: [],
+      useGlobalSentTextEvidenceFallback: false,
+      useGlobalSentMediaUrlEvidenceFallback: true,
+    });
+  });
+
   it("keeps final payloads intact when a messaging tool sent to another route", () => {
     expect(
       resolveMessagingToolPayloadDedupe({

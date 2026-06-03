@@ -144,6 +144,22 @@ describe("extractMessagingToolSend", () => {
     expect(result?.threadImplicit).toBe(true);
   });
 
+  it("captures the active session thread for implicit threaded sends", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        provider: "telegram",
+        to: "123",
+        content: "done",
+      },
+      { currentThreadId: "456" },
+    );
+
+    expect(result?.threadImplicit).toBe(true);
+    expect(result?.threadId).toBe("456");
+  });
+
   it("keeps provider-tool extracted thread id evidence", () => {
     const result = extractMessagingToolSend("slack", {
       action: "sendMessage",

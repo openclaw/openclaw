@@ -2215,6 +2215,52 @@ describe("runReplyAgent messaging tool dedupe", () => {
 
     expectReplyText(result, "hello world!");
   });
+
+  it("keeps threaded Slack replies when the messaging tool sent to another thread", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "171.333",
+          text: "hello world!",
+        },
+      ],
+      meta: {},
+    });
+
+    const result = await createRun("slack", {
+      sessionKey: "agent:main:slack:channel:C1:thread:171.222",
+    });
+
+    expectReplyText(result, "hello world!");
+  });
+
+  it("drops threaded Slack duplicates only when the messaging tool sent to the same thread", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "hello world!" }],
+      messagingToolSentTexts: ["hello world!"],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "slack",
+          to: "channel:C1",
+          threadId: "171.222",
+          text: "hello world!",
+        },
+      ],
+      meta: {},
+    });
+
+    const result = await createRun("slack", {
+      sessionKey: "agent:main:slack:channel:C1:thread:171.222",
+    });
+
+    expect(result).toBeUndefined();
+  });
 });
 
 describe("runReplyAgent reminder commitment guard", () => {

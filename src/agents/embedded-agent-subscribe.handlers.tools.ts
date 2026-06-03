@@ -10,6 +10,7 @@ import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
+import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type {
   AgentApprovalEventData,
   AgentCommandOutputEventData,
@@ -1023,7 +1024,9 @@ export function handleToolExecutionStart(
       const argsRecord = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const isMessagingSend = isMessagingToolSendAction(toolName, argsRecord);
       if (isMessagingSend) {
-        const sendTarget = extractMessagingToolSend(toolName, argsRecord);
+        const sendTarget = extractMessagingToolSend(toolName, argsRecord, {
+          currentThreadId: parseSessionThreadInfoFast(ctx.params.sessionKey).threadId,
+        });
         if (sendTarget) {
           ctx.state.pendingMessagingTargets.set(toolCallId, sendTarget);
         }
