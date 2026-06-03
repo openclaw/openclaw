@@ -1,0 +1,28 @@
+{
+  "dependencies_to_add": {
+    "choreo-3d": "^1.0.0",
+    "@fal-ai/client": "^1.10.0",
+    "@fal-ai/server-proxy": "^1.2.0",
+    "framer-motion": "^12.0.0",
+    "gsap": "^3.12.0",
+    "lenis": "^1.3.23"
+  },
+  "dependencies_forbidden": {
+    "@studio-freight/lenis": "Package renamed to lenis. Latest old scope version is 1.0.42 only — do NOT use ^1.0.45 or any invented version."
+  },
+  "env_required": [
+    "FAL_KEY"
+  ],
+  "env_optional": [
+    "FAL_IMAGE_MODEL",
+    "FAL_VIDEO_MODEL",
+    "NEXT_PUBLIC_SITE_NAME"
+  ],
+  "fal_model_defaults": {
+    "image": "fal-ai/flux-2-pro",
+    "image_draft": "fal-ai/flux-2/turbo",
+    "image_max": "fal-ai/flux-2-max",
+    "image_budget": "fal-ai/flux-pro/v1.1",
+    "image_dev_only": "fal-ai/flux/dev (NON-COMMERCIAL - never use in production)"
+  }
+}
