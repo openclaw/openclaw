@@ -106,7 +106,9 @@ export function collectGatewayConfigFindings(
   // dedicated `host_read_allow` / `host_write_allow` findings handle the
   // actual exposure when both gates are set. See ClawSweeper [P2] on PR
   // #85664: "Keep inert read allow entries out of dangerous_allow".
-  const DUAL_KEY_GATED_TOOLS = new Set<string>(["read"]);
+  // PR #85664: `read` gated by hostFsRead.
+  // PR #63919: `write`, `edit`, `apply_patch` gated by hostFsWrite.
+  const DUAL_KEY_GATED_TOOLS = new Set<string>(["read", "write", "edit", "apply_patch"]);
   const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
     (name) => gatewayToolsAllow.has(name) && !DUAL_KEY_GATED_TOOLS.has(name),
   );

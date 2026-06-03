@@ -1077,6 +1077,11 @@ export const OpenClawSchema = z
               .object({
                 /** Gates the `read` coding tool on the direct-invoke surface. */
                 hostFsRead: z.boolean().optional(),
+                /**
+                 * Gates the write-class coding tools (`write`, `edit`,
+                 * `apply_patch`) on the direct-invoke surface. PR #63919.
+                 */
+                hostFsWrite: z.boolean().optional(),
               })
               .strict()
               .optional(),
