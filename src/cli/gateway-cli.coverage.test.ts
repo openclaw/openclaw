@@ -11,7 +11,7 @@ type DiscoveredBeacon = Awaited<
   ReturnType<typeof import("../infra/bonjour-discovery.js").discoverGatewayBeacons>
 >[number];
 
-const callGateway = vi.fn<(opts: unknown) => Promise<{ ok: true }>>(async () => ({ ok: true }));
+const callGateway = vi.fn<(opts: unknown) => Promise<unknown>>(async () => ({ ok: true }));
 const formatGatewayTransportErrorJson = vi.fn();
 const startGatewayServer = vi.fn<
   (port: number, opts?: unknown) => Promise<{ close: () => Promise<void> }>
@@ -186,6 +186,74 @@ describe("gateway-cli coverage", () => {
       limit: 5,
       type: "payload.large",
     });
+  });
+
+  it("prints channel turn delivery SLA failures in gateway stability output", async () => {
+    callGateway.mockClear();
+    callGateway.mockResolvedValueOnce({
+      generatedAt: "2026-06-03T12:00:00.000Z",
+      capacity: 1000,
+      count: 4,
+      dropped: 0,
+      firstSeq: 1,
+      lastSeq: 4,
+      events: [
+        {
+          seq: 4,
+          ts: Date.parse("2026-06-03T12:00:03.000Z"),
+          type: "channel.turn.event",
+          channel: "telegram",
+          turnId: "turn-test",
+          messageId: "msg-test",
+          action: "delivery.failed",
+          reason: "missing_visible_delivery",
+          visibleDeliveryRequired: true,
+          visibleDeliverySent: false,
+          completionAllowed: false,
+        },
+      ],
+      summary: {
+        byType: { "channel.turn.event": 4 },
+        channelTurns: {
+          totalEvents: 4,
+          deliveryRequired: 1,
+          deliverySent: 0,
+          deliveryFailed: 1,
+          invalidCompletions: 1,
+          missingVisibleDelivery: 1,
+          byChannel: {
+            telegram: {
+              deliveryRequired: 1,
+              deliverySent: 0,
+              deliveryFailed: 1,
+              invalidCompletions: 1,
+              missingVisibleDelivery: 1,
+            },
+          },
+          recentFailures: [
+            {
+              seq: 4,
+              ts: Date.parse("2026-06-03T12:00:03.000Z"),
+              channel: "telegram",
+              turnId: "turn-test",
+              messageId: "msg-test",
+              reason: "missing_visible_delivery",
+            },
+          ],
+        },
+      },
+    });
+
+    await runGatewayCommand(["gateway", "stability"]);
+
+    const output = runtimeLogs.join("\n");
+    expect(output).toContain("Channel turns");
+    expect(output).toContain("required=1");
+    expect(output).toContain("failed=1");
+    expect(output).toContain("missingVisible=1");
+    expect(output).toContain("telegram=required:1/sent:0/failed:1/missing:1");
+    expect(output).toContain("reason=missing_visible_delivery");
+    expect(output).not.toContain("chat text");
   });
 
   it("writes JSON for gateway health transport failures in JSON mode", async () => {

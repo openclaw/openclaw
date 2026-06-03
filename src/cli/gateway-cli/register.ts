@@ -224,6 +224,56 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
   return parts.join(" ");
 }
 
+function formatChannelTurnSlaSummary(
+  channelTurns: NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>,
+  rich: boolean,
+): string[] {
+  const lines = [
+    `${colorize(rich, theme.muted, "Channel turns:")} events=${
+      channelTurns.totalEvents
+    } required=${channelTurns.deliveryRequired} sent=${channelTurns.deliverySent} failed=${
+      channelTurns.deliveryFailed
+    } invalid=${channelTurns.invalidCompletions} missingVisible=${
+      channelTurns.missingVisibleDelivery
+    }`,
+  ];
+
+  const channelBreakdown = Object.entries(channelTurns.byChannel)
+    .toSorted((a, b) => {
+      const missingDelta = b[1].missingVisibleDelivery - a[1].missingVisibleDelivery;
+      if (missingDelta !== 0) {
+        return missingDelta;
+      }
+      return a[0].localeCompare(b[0]);
+    })
+    .slice(0, 5)
+    .map(
+      ([channel, counts]) =>
+        `${channel}=required:${counts.deliveryRequired}/sent:${counts.deliverySent}/failed:${counts.deliveryFailed}/missing:${counts.missingVisibleDelivery}`,
+    )
+    .join(", ");
+  if (channelBreakdown) {
+    lines.push(`  ${channelBreakdown}`);
+  }
+
+  if (channelTurns.recentFailures.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Recent delivery failures:")}`);
+    for (const failure of channelTurns.recentFailures.slice(-3)) {
+      const parts = [
+        new Date(failure.ts).toISOString(),
+        `#${failure.seq}`,
+        failure.channel ? `channel=${failure.channel}` : "",
+        failure.turnId ? `turn=${failure.turnId}` : "",
+        failure.messageId ? `message=${failure.messageId}` : "",
+        failure.reason ? `reason=${failure.reason}` : "",
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")}`);
+    }
+  }
+
+  return lines;
+}
+
 function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boolean): string[] {
   const lines = [
     colorize(rich, theme.heading, "Gateway Stability"),
@@ -265,6 +315,11 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
         surfaces ? ` · ${surfaces}` : ""
       }`,
     );
+  }
+
+  const channelTurns = snapshot.summary.channelTurns;
+  if (channelTurns) {
+    lines.push(...formatChannelTurnSlaSummary(channelTurns, rich));
   }
 
   if (snapshot.events.length > 0) {
