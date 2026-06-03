@@ -51,7 +51,9 @@ describe("proxy upstream response error handling", () => {
       res.write("partial");
       res.socket?.destroy();
     });
-    await new Promise<void>((resolve) => origin!.listen(0, "127.0.0.1", resolve));
+    await new Promise<void>((resolve) => {
+      origin!.listen(0, "127.0.0.1", resolve);
+    });
     const originAddr = origin.address() as AddressInfo;
     const originUrl = `http://127.0.0.1:${originAddr.port}/test`;
 
@@ -80,7 +82,7 @@ describe("proxy upstream response error handling", () => {
     let data = "";
     socket.setEncoding("utf8");
     socket.on("data", (chunk) => {
-      data += chunk;
+      data += String(chunk);
     });
     await new Promise<void>((resolve, reject) => {
       socket.once("error", reject);
@@ -89,7 +91,9 @@ describe("proxy upstream response error handling", () => {
     socket.write(
       `GET ${originUrl} HTTP/1.1\r\nHost: 127.0.0.1:${originAddr.port}\r\nConnection: close\r\n\r\n`,
     );
-    await new Promise<void>((resolve) => socket.once("end", resolve));
+    await new Promise<void>((resolve) => {
+      socket.once("end", resolve);
+    });
     socket.destroy();
 
     // The proxy should NOT crash. The response may contain partial data
