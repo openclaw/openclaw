@@ -529,12 +529,20 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
     noteMacStaleOpenClawUpdateLaunchdJobs,
   } = await import("../commands/doctor-platform-notes.js");
   await maybeScanExtraGatewayServices(ctx.options, ctx.runtime, ctx.prompter);
-  await maybeRepairGatewayServiceConfig(
+  const updateDoctorRun = isUpdateDoctorRun(ctx.env ?? process.env);
+  ctx.cfg = await maybeRepairGatewayServiceConfig(
     ctx.cfg,
     resolveDoctorMode(ctx.cfg),
     ctx.runtime,
     ctx.prompter,
-    { allowExecSecretRefs: ctx.options.allowExec === true },
+    {
+      allowExecSecretRefs: ctx.options.allowExec === true,
+      allowConfigSizeDrop: ctx.configResult.shouldWriteConfig === true || updateDoctorRun,
+      skipPluginValidation:
+        ctx.configResult.skipPluginValidationOnWrite === true || updateDoctorRun,
+      preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
+      ...resolveLegacyParentVersionOverride(ctx),
+    },
   );
   await noteMacLaunchAgentOverrides();
   await noteMacStaleOpenClawUpdateLaunchdJobs();
@@ -877,11 +885,8 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
       ctx.runtime.log("Skipping doctor config write during legacy update handoff.");
       return;
     }
-    const legacyParentVersionOverride = isLegacyParentWritableUpdateDoctorPass(
-      ctx.env ?? process.env,
-    )
-      ? ctx.configResult.sourceLastTouchedVersion?.trim() || ctx.cfg.meta?.lastTouchedVersion
-      : undefined;
+    const legacyParentVersionOverride =
+      resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
     await replaceConfigFile({
       nextConfig: ctx.cfg,
       afterWrite: { mode: "auto" },
@@ -911,6 +916,17 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
   if (!ctx.prompter.shouldRepair) {
     ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
+}
+
+function resolveLegacyParentVersionOverride(ctx: DoctorHealthFlowContext): {
+  lastTouchedVersionOverride?: string;
+} {
+  if (!isLegacyParentWritableUpdateDoctorPass(ctx.env ?? process.env)) {
+    return {};
+  }
+  const version =
+    ctx.configResult.sourceLastTouchedVersion?.trim() || ctx.cfg.meta?.lastTouchedVersion;
+  return version ? { lastTouchedVersionOverride: version } : {};
 }
 
 async function runWorkspaceSuggestionsHealth(ctx: DoctorHealthFlowContext): Promise<void> {

@@ -31,6 +31,11 @@ const mocks = vi.hoisted(() => ({
   logConfigUpdated: vi.fn(),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
+  maybeRepairGatewayServiceConfig: vi.fn(async (cfg: unknown) => cfg),
+  maybeScanExtraGatewayServices: vi.fn().mockResolvedValue(undefined),
+  noteMacLaunchAgentOverrides: vi.fn().mockResolvedValue(undefined),
+  noteMacLaunchctlGatewayEnvOverrides: vi.fn().mockResolvedValue(undefined),
+  noteMacStaleOpenClawUpdateLaunchdJobs: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
@@ -99,6 +104,17 @@ vi.mock("../cli/command-format.js", () => ({
   formatCliCommand: mocks.formatCliCommand,
 }));
 
+vi.mock("../commands/doctor-gateway-services.js", () => ({
+  maybeRepairGatewayServiceConfig: mocks.maybeRepairGatewayServiceConfig,
+  maybeScanExtraGatewayServices: mocks.maybeScanExtraGatewayServices,
+}));
+
+vi.mock("../commands/doctor-platform-notes.js", () => ({
+  noteMacLaunchAgentOverrides: mocks.noteMacLaunchAgentOverrides,
+  noteMacLaunchctlGatewayEnvOverrides: mocks.noteMacLaunchctlGatewayEnvOverrides,
+  noteMacStaleOpenClawUpdateLaunchdJobs: mocks.noteMacStaleOpenClawUpdateLaunchdJobs,
+}));
+
 function requireDoctorContribution(id: string) {
   const contribution = resolveDoctorHealthContributions().find((entry) => entry.id === id);
   if (!contribution) {
@@ -106,6 +122,10 @@ function requireDoctorContribution(id: string) {
   }
   return contribution;
 }
+
+type DoctorContributionRunContext = Parameters<
+  ReturnType<typeof requireDoctorContribution>["run"]
+>[0];
 
 function buildDoctorPrompter(shouldRepair: boolean): DoctorPrompter {
   return {
@@ -176,6 +196,20 @@ describe("doctor health contributions", () => {
       config: {},
       issues: [],
     });
+    mocks.replaceConfigFile.mockReset();
+    mocks.replaceConfigFile.mockResolvedValue(undefined);
+    mocks.applyWizardMetadata.mockReset();
+    mocks.applyWizardMetadata.mockImplementation((cfg: unknown) => cfg);
+    mocks.maybeRepairGatewayServiceConfig.mockReset();
+    mocks.maybeRepairGatewayServiceConfig.mockImplementation(async (cfg: unknown) => cfg);
+    mocks.maybeScanExtraGatewayServices.mockReset();
+    mocks.maybeScanExtraGatewayServices.mockResolvedValue(undefined);
+    mocks.noteMacLaunchAgentOverrides.mockReset();
+    mocks.noteMacLaunchAgentOverrides.mockResolvedValue(undefined);
+    mocks.noteMacLaunchctlGatewayEnvOverrides.mockReset();
+    mocks.noteMacLaunchctlGatewayEnvOverrides.mockResolvedValue(undefined);
+    mocks.noteMacStaleOpenClawUpdateLaunchdJobs.mockReset();
+    mocks.noteMacStaleOpenClawUpdateLaunchdJobs.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -201,7 +235,7 @@ describe("doctor health contributions", () => {
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(false),
       env: {},
-    } as Parameters<(typeof contribution)["run"]>[0];
+    } as DoctorContributionRunContext;
 
     await contribution.run(ctx);
 
@@ -222,7 +256,7 @@ describe("doctor health contributions", () => {
       sourceConfigValid: true,
       prompter: buildDoctorPrompter(true),
       env: {},
-    } as Parameters<(typeof contribution)["run"]>[0];
+    } as DoctorContributionRunContext;
 
     await contribution.run(ctx);
 
@@ -258,7 +292,7 @@ describe("doctor health contributions", () => {
         OPENCLAW_UPDATE_IN_PROGRESS: "1",
         OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
       },
-    } as Parameters<(typeof contribution)["run"]>[0];
+    } as DoctorContributionRunContext;
 
     await contribution.run(ctx);
 
@@ -292,7 +326,7 @@ describe("doctor health contributions", () => {
     const ctx = {
       cfg,
       options: {},
-    } as Parameters<(typeof contribution)["run"]>[0];
+    } as DoctorContributionRunContext;
 
     await contribution.run(ctx);
 
@@ -332,7 +366,7 @@ describe("doctor health contributions", () => {
       cfgForPersistence: {},
       configPath: "/tmp/fake-openclaw.json",
       env: {},
-    } as Parameters<(typeof contribution)["run"]>[0];
+    } as DoctorContributionRunContext;
 
     await contribution.run(ctx);
 
@@ -369,7 +403,7 @@ describe("doctor health contributions", () => {
       cfgForPersistence: {},
       configPath: "/tmp/fake-openclaw.json",
       env: {},
-    } as Parameters<(typeof contribution)["run"]>[0];
+    } as DoctorContributionRunContext;
 
     await contribution.run(ctx);
 
@@ -464,6 +498,59 @@ describe("doctor health contributions", () => {
     ).toBe(false);
   });
 
+  it("preserves gateway service config repairs for later doctor writes", async () => {
+    const gatewayServicesContribution = requireDoctorContribution("doctor:gateway-services");
+    const writeConfigContribution = requireDoctorContribution("doctor:write-config");
+    const originalCfg = { gateway: {} };
+    const repairedCfg = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "recovered-token",
+        },
+      },
+    };
+    mocks.maybeRepairGatewayServiceConfig.mockResolvedValueOnce(repairedCfg);
+
+    const ctx = {
+      cfg: originalCfg,
+      cfgForPersistence: originalCfg,
+      configResult: {
+        cfg: originalCfg,
+        preservedLegacyRootKeys: ["defaultModel"],
+        shouldWriteConfig: true,
+        skipPluginValidationOnWrite: true,
+      },
+      configPath: "/tmp/fake-openclaw.json",
+      sourceConfigValid: true,
+      prompter: buildDoctorPrompter(true),
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      options: {},
+      env: {},
+    } as DoctorContributionRunContext;
+
+    await gatewayServicesContribution.run(ctx);
+    await writeConfigContribution.run(ctx);
+
+    expect(ctx.cfg).toBe(repairedCfg);
+    expect(mocks.maybeRepairGatewayServiceConfig).toHaveBeenCalledWith(
+      originalCfg,
+      "local",
+      ctx.runtime,
+      ctx.prompter,
+      expect.objectContaining({
+        allowConfigSizeDrop: true,
+        preservedLegacyRootKeys: ["defaultModel"],
+        skipPluginValidation: true,
+      }),
+    );
+    expect(mocks.replaceConfigFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        nextConfig: repairedCfg,
+      }),
+    );
+  });
+
   describe("config size drops during update", () => {
     beforeEach(() => {
       mocks.replaceConfigFile.mockReset();
@@ -488,7 +575,7 @@ describe("doctor health contributions", () => {
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: {},
         env,
-      } as Parameters<(typeof writeConfigContribution)["run"]>[0];
+      } as DoctorContributionRunContext;
     }
 
     const writeConfigContribution = resolveDoctorHealthContributions().find(
@@ -603,7 +690,7 @@ describe("doctor health contributions", () => {
         env: {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
         },
-      } as Parameters<(typeof contribution)["run"]>[0]);
+      } as DoctorContributionRunContext);
 
       expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({
         skipPluginValidation: true,
@@ -623,7 +710,7 @@ describe("doctor health contributions", () => {
         runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: {},
         env: {},
-      } as Parameters<(typeof contribution)["run"]>[0]);
+      } as DoctorContributionRunContext);
 
       expect(mocks.readConfigFileSnapshot).toHaveBeenCalledWith({
         skipPluginValidation: false,

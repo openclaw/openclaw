@@ -3,11 +3,16 @@ import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { runGatewayUpdate } from "../infra/update-runner.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
+import {
+  EXTERNAL_SERVICE_REPAIR_NOTE,
+  isServiceRepairExternallyManaged,
+} from "./doctor-service-repair-policy.js";
 
 async function resolveComparablePath(target: string): Promise<string> {
   return await fs.realpath(target).catch(() => path.resolve(target));
@@ -32,6 +37,35 @@ async function detectOpenClawGitCheckout(root: string): Promise<"git" | "not-git
   return (await resolveComparablePath(gitRoot)) === (await resolveComparablePath(root))
     ? "git"
     : "not-git";
+}
+
+async function restartRunningGatewayServiceAfterUpdate(runtime: RuntimeEnv): Promise<boolean> {
+  if (isServiceRepairExternallyManaged()) {
+    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Update");
+    return true;
+  }
+  let service: ReturnType<typeof resolveGatewayService>;
+  let state: Awaited<ReturnType<typeof readGatewayServiceState>>;
+  try {
+    service = resolveGatewayService();
+    state = await readGatewayServiceState(service, { env: process.env });
+  } catch {
+    return true;
+  }
+  if (!state.installed || !state.running) {
+    return true;
+  }
+  try {
+    await service.restart({
+      env: state.env,
+      stdout: process.stdout,
+    });
+    note("Restarted the running gateway service after updating OpenClaw.", "Update");
+    return true;
+  } catch (err) {
+    runtime.error(`Update completed, but gateway service restart failed: ${String(err)}`);
+    return false;
+  }
 }
 
 export async function maybeOfferUpdateBeforeDoctor(params: {
@@ -78,6 +112,11 @@ export async function maybeOfferUpdateBeforeDoctor(params: {
       "Update result",
     );
     if (result.status === "ok") {
+      const restarted = await restartRunningGatewayServiceAfterUpdate(params.runtime);
+      if (!restarted) {
+        params.outro("Update completed, but gateway service restart failed.");
+        return { updated: true, handled: true };
+      }
       params.outro("Update completed (doctor already ran as part of the update).");
       return { updated: true, handled: true };
     }

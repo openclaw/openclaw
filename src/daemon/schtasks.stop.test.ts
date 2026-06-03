@@ -211,6 +211,8 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Run", "/TN", "OpenClaw Gateway"],
         ["/Query"],
         ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Gateway", "/V", "/FO", "LIST"],
       ]);
     });
   });
@@ -235,6 +237,8 @@ describe("Scheduled Task stop/restart cleanup", () => {
         ["/Query", "/TN", "OpenClaw Node"],
         ["/End", "/TN", "OpenClaw Node"],
         ["/Run", "/TN", "OpenClaw Node"],
+        ["/Query"],
+        ["/Query", "/TN", "OpenClaw Node", "/V", "/FO", "LIST"],
         ["/Query"],
         ["/Query", "/TN", "OpenClaw Node", "/V", "/FO", "LIST"],
       ]);

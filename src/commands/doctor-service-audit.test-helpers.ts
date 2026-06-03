@@ -8,6 +8,7 @@ export const testServiceAuditCodes = {
   gatewayManagedEnvEmbedded: "gateway-managed-env-embedded",
   gatewayPortMismatch: "gateway-port-mismatch",
   gatewayProxyEnvEmbedded: "gateway-proxy-env-embedded",
+  gatewayVersionMismatch: "gateway-version-mismatch",
   gatewayTokenMismatch: "gateway-token-mismatch",
 } as const;
 

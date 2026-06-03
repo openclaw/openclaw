@@ -85,8 +85,8 @@ function resolveStartupEntryPath(env: Record<string, string>, extension = "cmd")
   );
 }
 
-async function writeStartupFallbackEntry(env: Record<string, string>) {
-  const startupEntryPath = resolveStartupEntryPath(env);
+async function writeStartupFallbackEntry(env: Record<string, string>, extension = "cmd") {
+  const startupEntryPath = resolveStartupEntryPath(env, extension);
   await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
   await fs.writeFile(startupEntryPath, "@echo off\r\n", "utf8");
   return startupEntryPath;
@@ -248,6 +248,15 @@ function notYetRunTaskQueryOutput() {
   ].join("\r\n");
 }
 
+function runningTaskQueryOutput() {
+  return [
+    "Status: Running",
+    "Last Run Time: 4/15/2026 11:42:31 PM",
+    "Last Run Result: 267009",
+    "",
+  ].join("\r\n");
+}
+
 beforeEach(() => {
   resetSchtasksBaseMocks();
   findVerifiedGatewayListenerPidsOnPortSync.mockReset();
@@ -317,6 +326,76 @@ describe("Windows startup fallback", () => {
       expect(startupScript).toContain("gateway.cmd");
       expect(startupScript).toContain(`Run """${result.scriptPath}""", 0, False`);
       expectStartupFallbackSpawn();
+    });
+  });
+
+  it("removes an old Startup-folder launcher after migrating to a Scheduled Task", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      const hiddenStartupEntryPath = await writeStartupFallbackEntry(env, "vbs");
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+      ]);
+
+      const stdout = new PassThrough();
+      let printed = "";
+      stdout.on("data", (chunk) => {
+        printed += String(chunk);
+      });
+
+      await installGatewayScheduledTask(env, stdout);
+
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
+      await expect(fs.access(hiddenStartupEntryPath)).rejects.toThrow();
+      expect(printed).toContain("Installed Scheduled Task");
+      expect(printed).toContain("Removed Windows login item");
+    });
+  });
+
+  it("keeps the Startup-folder launcher when task launch evidence is only the old listener", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4242]);
+      addStartupFallbackMissingResponses([
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: notYetRunTaskQueryOutput(), stderr: "" },
+      ]);
+
+      await installGatewayScheduledTask(env);
+
+      await expect(fs.access(startupEntryPath)).resolves.toBeUndefined();
+    });
+  });
+
+  it("removes an old Startup-folder launcher after Scheduled Task restart is proven", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      const startupEntryPath = await writeStartupFallbackEntry(env);
+      const hiddenStartupEntryPath = await writeStartupFallbackEntry(env, "vbs");
+      await writeGatewayScript(env);
+      schtasksResponses.push(
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+        { code: 0, stdout: "", stderr: "" },
+        { code: 0, stdout: runningTaskQueryOutput(), stderr: "" },
+      );
+
+      await restartScheduledTask({ env, stdout: new PassThrough() });
+
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
+      await expect(fs.access(hiddenStartupEntryPath)).rejects.toThrow();
     });
   });
 
