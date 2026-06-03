@@ -534,11 +534,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         return false;
       }
       if (result.suppressed) {
+        // Suppression means the route-reply hook cancelled the actual send, so
+        // nothing reached the user. Treat it as a handled final reply for
+        // reply-tracking, but leave deliveredFinalTtsMedia false: no media was
+        // delivered, so the downstream text fallback must still be able to fire.
         if (kind === "final") {
           state.deliveredFinalReply = true;
-          if (hasFinalMedia) {
-            state.deliveredFinalTtsMedia = true;
-          }
         }
         if (tracksVisibleText) {
           state.deliveredVisibleText = true;

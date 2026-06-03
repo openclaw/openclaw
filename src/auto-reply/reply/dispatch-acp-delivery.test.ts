@@ -1099,6 +1099,43 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 
+  it("does not mark final TTS media as delivered when a routed final media reply is hook-suppressed", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({
+      ok: true,
+      suppressed: true,
+      reason: "cancelled_by_reply_payload_sending_hook",
+    });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "final",
+      {
+        text: "spoken caption",
+        mediaUrls: ["https://example.com/audio.ogg"],
+      },
+      { skipTts: true },
+    );
+
+    // The hook cancelled the send, so nothing reached the user: the final reply
+    // is still "handled", but no TTS media was delivered, so the text fallback
+    // downstream must remain eligible to fire.
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+    expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
+  });
+
   it("delivers media blocks with text stripped when suppressBlockUserDelivery is set", async () => {
     deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true });
     const coordinator = createAcpDispatchDeliveryCoordinator({
@@ -1116,10 +1153,14 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       originatingTo: "telegram:chat-1",
     });
 
-    const delivered = await coordinator.deliver("block", {
-      text: "caption text",
-      mediaUrls: ["https://example.com/image.png"],
-    }, { skipTts: true });
+    const delivered = await coordinator.deliver(
+      "block",
+      {
+        text: "caption text",
+        mediaUrls: ["https://example.com/image.png"],
+      },
+      { skipTts: true },
+    );
 
     expect(delivered).toBe(true);
     expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
