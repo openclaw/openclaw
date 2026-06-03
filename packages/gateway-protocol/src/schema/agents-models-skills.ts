@@ -1,6 +1,16 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+/**
+ * Agent, model, skill, and tool catalog schemas.
+ *
+ * These contracts back dashboard selectors, agent management, model catalogs,
+ * skill upload/install flows, skill workshop proposals, and effective tool
+ * discovery. Keep public request/result schemas documented because they are
+ * shared by gateway RPC, CLI, and UI clients.
+ */
+
+/** Model option shown in selectors and model catalog results. */
 export const ModelChoiceSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -13,6 +23,7 @@ export const ModelChoiceSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Condensed agent record returned by list APIs. */
 export const AgentSummarySchema = Type.Object(
   {
     id: NonEmptyString,
@@ -73,8 +84,10 @@ export const AgentSummarySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Empty request payload for listing configured agents. */
 export const AgentsListParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Agent list result including the default agent and session scoping mode. */
 export const AgentsListResultSchema = Type.Object(
   {
     defaultId: NonEmptyString,
@@ -85,6 +98,7 @@ export const AgentsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Creates a configured agent with workspace, identity, and optional model. */
 export const AgentsCreateParamsSchema = Type.Object(
   {
     name: NonEmptyString,
@@ -96,6 +110,7 @@ export const AgentsCreateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result returned after creating an agent. */
 export const AgentsCreateResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -107,6 +122,7 @@ export const AgentsCreateResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Updates mutable agent identity, workspace, and model fields. */
 export const AgentsUpdateParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -119,6 +135,7 @@ export const AgentsUpdateParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result returned after updating an agent. */
 export const AgentsUpdateResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -127,6 +144,7 @@ export const AgentsUpdateResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Deletes an agent and optionally its workspace/config files. */
 export const AgentsDeleteParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -135,6 +153,7 @@ export const AgentsDeleteParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result returned after deleting an agent and unbinding sessions. */
 export const AgentsDeleteResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -144,6 +163,7 @@ export const AgentsDeleteResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** File metadata and optional content for agent-local editable files. */
 export const AgentsFileEntrySchema = Type.Object(
   {
     name: NonEmptyString,
@@ -156,6 +176,7 @@ export const AgentsFileEntrySchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Lists editable files for one agent. */
 export const AgentsFilesListParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -163,6 +184,7 @@ export const AgentsFilesListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Editable file list for an agent workspace. */
 export const AgentsFilesListResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -172,6 +194,7 @@ export const AgentsFilesListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads one editable agent file by name. */
 export const AgentsFilesGetParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -180,6 +203,7 @@ export const AgentsFilesGetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result for reading one editable agent file. */
 export const AgentsFilesGetResultSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -189,6 +213,7 @@ export const AgentsFilesGetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Writes one editable agent file. */
 export const AgentsFilesSetParamsSchema = Type.Object(
   {
     agentId: NonEmptyString,
@@ -198,6 +223,7 @@ export const AgentsFilesSetParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Result returned after writing an editable agent file. */
 export const AgentsFilesSetResultSchema = Type.Object(
   {
     ok: Type.Literal(true),
@@ -208,6 +234,7 @@ export const AgentsFilesSetResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Model catalog request with optional visibility scope. */
 export const ModelsListParamsSchema = Type.Object(
   {
     view: Type.Optional(
@@ -217,6 +244,7 @@ export const ModelsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Model catalog result. */
 export const ModelsListResultSchema = Type.Object(
   {
     models: Type.Array(ModelChoiceSchema),
@@ -224,6 +252,7 @@ export const ModelsListResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads installed skill status, optionally for a selected agent. */
 export const SkillsStatusParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -231,8 +260,10 @@ export const SkillsStatusParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Empty request payload for listing available skill bins. */
 export const SkillsBinsParamsSchema = Type.Object({}, { additionalProperties: false });
 
+/** Skill bin names available to the gateway. */
 export const SkillsBinsResultSchema = Type.Object(
   {
     bins: Type.Array(NonEmptyString),
@@ -254,6 +285,7 @@ const SkillUploadDataBase64String = Type.String({
   maxLength: 5_592_408,
 });
 
+/** Starts a chunked skill archive upload. */
 export const SkillsUploadBeginParamsSchema = Type.Object(
   {
     kind: Type.Literal("skill-archive"),
@@ -266,6 +298,7 @@ export const SkillsUploadBeginParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Uploads one base64-encoded chunk for a skill archive. */
 export const SkillsUploadChunkParamsSchema = Type.Object(
   {
     uploadId: NonEmptyString,
@@ -275,6 +308,7 @@ export const SkillsUploadChunkParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Commits a completed skill archive upload. */
 export const SkillsUploadCommitParamsSchema = Type.Object(
   {
     uploadId: NonEmptyString,
@@ -283,6 +317,7 @@ export const SkillsUploadCommitParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Installs a skill from legacy install id, ClawHub, or uploaded archive. */
 export const SkillsInstallParamsSchema = Type.Union([
   Type.Object(
     {
@@ -316,6 +351,7 @@ export const SkillsInstallParamsSchema = Type.Union([
   ),
 ]);
 
+/** Updates installed skill settings or refreshes ClawHub-installed skills. */
 export const SkillsUpdateParamsSchema = Type.Union([
   Type.Object(
     {
@@ -336,6 +372,7 @@ export const SkillsUpdateParamsSchema = Type.Union([
   ),
 ]);
 
+/** Searches the skill registry. */
 export const SkillsSearchParamsSchema = Type.Object(
   {
     query: Type.Optional(NonEmptyString),
@@ -344,6 +381,7 @@ export const SkillsSearchParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Ranked skill registry search results. */
 export const SkillsSearchResultSchema = Type.Object(
   {
     results: Type.Array(
@@ -363,6 +401,7 @@ export const SkillsSearchResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads registry detail for one skill slug. */
 export const SkillsDetailParamsSchema = Type.Object(
   {
     slug: NonEmptyString,
@@ -370,6 +409,7 @@ export const SkillsDetailParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads current security verdicts for configured skills. */
 export const SkillsSecurityVerdictsParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -377,6 +417,7 @@ export const SkillsSecurityVerdictsParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Skill registry detail, latest version, metadata, and owner info. */
 export const SkillsDetailResultSchema = Type.Object(
   {
     skill: Type.Union([
@@ -435,6 +476,7 @@ export const SkillsDetailResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Security verdict report for installed/requested skills. */
 export const SkillsSecurityVerdictsResultSchema = Type.Object(
   {
     schema: Type.Literal("openclaw.skills.security-verdicts.v1"),
@@ -475,6 +517,7 @@ export const SkillsSecurityVerdictsResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Reads the rendered skill card for one installed skill. */
 export const SkillsSkillCardParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
@@ -483,6 +526,7 @@ export const SkillsSkillCardParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Rendered skill card content and file metadata. */
 export const SkillsSkillCardResultSchema = Type.Object(
   {
     schema: Type.Literal("openclaw.skills.skill-card.v1"),
