@@ -66,6 +66,8 @@ const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 6 * 1024 * 1024;
 // Keep the dependency scan bounded while allowing headroom for generated root chunks.
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 10_000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
+const INSTALLED_FACADE_ACTIVATION_RUNTIME_RELATIVE_PATH_RE =
+  /^facade-activation-check\.runtime\.(?:c|m)?js$/u;
 const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
   // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
   // package and falls back when the optional renderer is unavailable.
@@ -660,6 +662,15 @@ function listInstalledRootDistJavaScriptFiles(packageRoot: string): DistJavaScri
   });
 }
 
+function listInstalledFacadeActivationRuntimeFiles(packageRoot: string): string[] {
+  const distRoot = join(packageRoot, "dist");
+  return listInstalledRootDistJavaScriptFiles(packageRoot).filter((filePath) =>
+    INSTALLED_FACADE_ACTIVATION_RUNTIME_RELATIVE_PATH_RE.test(
+      relative(distRoot, filePath).replaceAll("\\", "/"),
+    ),
+  );
+}
+
 type ParsedImportSpecifiersResult =
   | { ok: true; specifiers: Set<string> }
   | { ok: false; error: string };
@@ -835,7 +846,7 @@ function isSafeBundledRuntimeFacadeDirName(value: string): boolean {
 
 export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
   const errors: string[] = [];
-  for (const filePath of listInstalledRootDistJavaScriptFiles(packageRoot)) {
+  for (const filePath of listInstalledFacadeActivationRuntimeFiles(packageRoot)) {
     const fileStat = lstatSync(filePath);
     const relativePath = relative(packageRoot, filePath).replaceAll("\\", "/");
     if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {

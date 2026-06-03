@@ -504,6 +504,18 @@ describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
       expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
     });
   });
+
+  it("ignores oversized non-facade root dist files", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/typescript-compiler.js",
+        "x".repeat(6 * 1024 * 1024 + 1),
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
+    });
+  });
 });
 
 describe("collectInstalledContextEngineRuntimeErrors", () => {
