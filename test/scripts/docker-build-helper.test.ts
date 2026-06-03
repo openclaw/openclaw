@@ -115,7 +115,7 @@ describe("docker build helper", () => {
     expect(helper).toContain("docker_build_transient_failure()");
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_RETRIES");
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_TIMEOUT");
-    expect(helper).toContain('docker_build_run_command "$timeout_value" "${command[@]}"');
+    expect(helper).toContain('docker_build_run_logged "$label" "$timeout_value" "$log_file"');
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_REQUIRE_TIMEOUT");
     expect(helper).toContain("frontend grpc server closed unexpectedly");
   });
@@ -239,6 +239,120 @@ grep -q '^build -t demo-image .$' "$TMPDIR/docker-seen"
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
+  });
+
+  it("prints heartbeat progress for long successful centralized Docker builds", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-heartbeat-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/sh
+printf "captured docker build log\\n"
+/bin/sleep 2
+`,
+      );
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=1
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+output="$(docker_build_run e2e-build -t demo-image .)"
+[[ "$output" = *"Docker build e2e-build still running ("* ]]
+[[ "$output" = *"log bytes captured"* ]]
+[[ "$output" != *"captured docker build log"* ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delay fast successful centralized Docker builds until the next heartbeat", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-fast-heartbeat-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/sh
+printf "quick docker build log\\n"
+`,
+      );
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=30
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+output="$(docker_build_run e2e-build -t demo-image .)"
+[[ -z "$output" ]]
+`;
+      const startedAt = Date.now();
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes zero-padded centralized Docker build heartbeat intervals", () => {
+    const rootDir = process.cwd();
+    const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+export ROOT_DIR
+export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=08
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+[[ "$(docker_build_heartbeat_seconds)" = "8" ]]
+`;
+
+    execFileSync("bash", ["-lc", script], { encoding: "utf8" });
   });
 
   it("fails centralized Docker builds fast when timeout is unavailable", () => {
@@ -1455,6 +1569,82 @@ test -f "$TMPDIR/docker-cmd-seen"
     expect(helper).toContain("OPENCLAW_DOCKER_E2E_LOG_HEARTBEAT_SECONDS");
     expect(runner).toContain("docker_e2e_run_logged_print_with_harness \\");
     expect(runner).not.toContain("docker_e2e_run_logged_with_harness plugins-run");
+  });
+
+  it("prints heartbeat progress for long successful Docker E2E log captures", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-heartbeat-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+output="$(run_logged_print_heartbeat plugins-run 1 bash -c 'printf "captured container log\\\\n"; /bin/sleep 2')"
+[[ "$output" = *"still running plugins-run ("* ]]
+[[ "$output" = *"log bytes captured"* ]]
+[[ "$output" = *"captured container log"* ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delay fast successful Docker E2E log captures until the next heartbeat", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-fast-heartbeat-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+output="$(run_logged_print_heartbeat plugins-run 30 bash -c 'printf "quick container log\\\\n"')"
+[[ "$output" = "quick container log" ]]
+`;
+      const startedAt = Date.now();
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("normalizes zero-padded Docker E2E log heartbeat intervals", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-e2e-log-zero-heartbeat-"));
+
+    try {
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+
+source "$ROOT_DIR/scripts/lib/docker-e2e-logs.sh"
+
+output="$(run_logged_print_heartbeat plugins-run 08 bash -c 'printf "captured container log\\\\n"; /bin/sleep 9')"
+[[ "$output" = *"still running plugins-run (8s elapsed,"* ]]
+[[ "$output" = *"log bytes captured"* ]]
+[[ "$output" = *"captured container log"* ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
   });
 
   it("includes procps in the shared Docker E2E image for process watchdogs", () => {
