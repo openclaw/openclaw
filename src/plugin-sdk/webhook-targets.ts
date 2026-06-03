@@ -7,11 +7,13 @@ import {
   type WebhookInFlightLimiter,
 } from "./webhook-request-guards.js";
 
+/** Registration handle returned for one live webhook target. */
 export type RegisteredWebhookTarget<T> = {
   target: T;
   unregister: () => void;
 };
 
+/** Lifecycle hooks for path-level webhook target registration. */
 export type RegisterWebhookTargetOptions<T extends { path: string }> = {
   onFirstPathTarget?: (params: { path: string; target: T }) => void | (() => void);
   onLastPathTargetRemoved?: (params: { path: string }) => void;
@@ -21,6 +23,7 @@ type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[
 
 export { registerPluginHttpRoute };
 
+/** Plugin HTTP route options supplied when webhook paths are registered lazily. */
 export type RegisterWebhookPluginRouteOptions = Omit<
   RegisterPluginHttpRouteParams,
   "path" | "fallbackPath"
@@ -53,6 +56,7 @@ function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () 
     return existing;
   }
   const created = new Map<string, () => void>();
+  // Teardown is scoped to the caller-owned registry map so independent plugins do not share routes.
   pathTeardownByTargetMap.set(mapKey, created);
   return created;
 }
@@ -167,6 +171,7 @@ export async function withResolvedWebhookRequestPipeline<T>(params: {
   }
 }
 
+/** Result of matching a request against zero, one, or multiple webhook targets. */
 export type WebhookTargetMatchResult<T> =
   | { kind: "none" }
   | { kind: "single"; target: T }
