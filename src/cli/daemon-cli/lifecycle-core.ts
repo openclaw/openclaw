@@ -588,7 +588,11 @@ export async function runServiceRestart(params: {
         });
       }
       try {
-        restartResult = await params.service.restart({ env: process.env, stdout });
+        restartResult = await params.service.restart({
+          env: process.env,
+          stdout,
+          ...(restartIntent ? { restartIntent } : {}),
+        });
       } catch (err) {
         if (wroteRestartIntent) {
           clearGatewayRestartIntentSync();

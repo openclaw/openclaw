@@ -1955,4 +1955,70 @@ describe("restartLaunchAgent restart-intent contract (#88309)", () => {
       fs.rmSync(stateDir, { force: true, recursive: true });
     }
   });
+
+  // If the busy-port precondition rejects the restart before any SIGTERM is
+  // delivered, an intent file left behind would be consumed by the next
+  // legitimate `openclaw gateway stop` within the 60s TTL and silently flip
+  // stop to restart. The intent write must therefore live behind that check.
+  it("leaves no intent file when restartLaunchAgent aborts on busy port before SIGTERM", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-88309-busy-"));
+    try {
+      const env = {
+        ...createDefaultLaunchdEnv(),
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_GATEWAY_PORT: "19003",
+      };
+      state.printOutput = `\tstate = running\n\tpid = 99999\n\tlast exit status = 0\n`;
+      state.printCode = 0;
+      inspectPortUsage.mockResolvedValueOnce({
+        port: 19003,
+        status: "busy",
+        listeners: [],
+        hints: [],
+      });
+      formatPortDiagnostics.mockReturnValueOnce(["Port 19003 is held by pid 4242."]);
+
+      await expect(restartLaunchAgent({ env, stdout: new PassThrough() })).rejects.toThrow(
+        "gateway port 19003 is still busy before LaunchAgent restart",
+      );
+
+      const intentPath = path.join(stateDir, "gateway-restart-intent.json");
+      expect(fs.existsSync(intentPath)).toBe(false);
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
+  });
+
+  // restartIntent carried through GatewayServiceControlArgs (from lifecycle-core's
+  // --force/--wait-ms flags) must reach the on-disk payload that the SIGTERM
+  // handler consumes. Without forwarding, force/waitMs silently degrade on
+  // darwin.
+  it("preserves caller-supplied restartIntent (force, waitMs, reason) in the on-disk payload", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-88309-intent-"));
+    try {
+      const fakeGatewayPid = 7777;
+      state.printOutput = `\tstate = running\n\tpid = ${fakeGatewayPid}\n\tlast exit status = 0\n`;
+      state.printCode = 0;
+      state.kickstartCode = 0;
+      state.serviceLoaded = true;
+
+      await restartLaunchAgent({
+        env: { ...createDefaultLaunchdEnv(), OPENCLAW_STATE_DIR: stateDir },
+        stdout: new PassThrough(),
+        restartIntent: { reason: "gateway.tool.restart", force: true, waitMs: 30_000 },
+      });
+
+      const intentPath = path.join(stateDir, "gateway-restart-intent.json");
+      const payload = JSON.parse(fs.readFileSync(intentPath, "utf8")) as Record<string, unknown>;
+      expect(payload).toMatchObject({
+        kind: "gateway-restart",
+        pid: fakeGatewayPid,
+        reason: "gateway.tool.restart",
+        force: true,
+        waitMs: 30_000,
+      });
+    } finally {
+      fs.rmSync(stateDir, { force: true, recursive: true });
+    }
+  });
 });

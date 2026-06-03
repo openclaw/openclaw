@@ -21,13 +21,13 @@ import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
 import { recoverInstalledLaunchAgent } from "./launchd-recovery.js";
-import { createNullWriter } from "./response.js";
 import {
   runServiceRestart,
   runServiceStart,
   runServiceStop,
   runServiceUninstall,
 } from "./lifecycle-core.js";
+import { createNullWriter } from "./response.js";
 import {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
@@ -399,7 +399,11 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         }
 
         await terminateStaleGatewayPids(health.staleGatewayPids);
-        const retryRestart = await service.restart({ env: process.env, stdout });
+        const retryRestart = await service.restart({
+          env: process.env,
+          stdout,
+          ...(restartIntent ? { restartIntent } : {}),
+        });
         if (retryRestart.outcome === "scheduled") {
           return retryRestart;
         }

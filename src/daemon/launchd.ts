@@ -6,7 +6,7 @@ import { normalizeEnvVarKey } from "../infra/host-env-security.js";
 import { parseStrictInteger, parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
-import { writeGatewayRestartIntentSync } from "../infra/restart.js";
+import { clearGatewayRestartIntentSync, writeGatewayRestartIntentSync } from "../infra/restart.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import {
   GATEWAY_LAUNCH_AGENT_LABEL,
@@ -1035,47 +1035,40 @@ export async function restartLaunchAgent({
   const plistPath = resolveLaunchAgentPlistPath(serviceEnv);
   const serviceTarget = `${domain}/${label}`;
 
+  const stampRestartIntent = (targetPid: number): void => {
+    writeGatewayRestartIntentSync({
+      env: serviceEnv,
+      targetPid,
+      reason: restartIntent?.reason ?? "gateway.restart",
+      ...(restartIntent ? { intent: restartIntent } : {}),
+    });
+  };
+
   // Restart requests issued from inside the managed gateway process tree need a
   // detached handoff. A direct `kickstart -k` would terminate the caller before
   // it can finish the restart command.
   if (isCurrentProcessLaunchdServiceLabel(label)) {
-    // The caller IS the gateway; the handoff kickstart will SIGTERM this
-    // process. Stamp restart intent first so the run-loop SIGTERM handler
-    // routes to restart rather than stop (#88309).
-    writeGatewayRestartIntentSync({
-      env: serviceEnv,
-      targetPid: process.pid,
-      reason: restartIntent?.reason ?? "gateway.restart",
-      ...(restartIntent ? { intent: restartIntent } : {}),
-    });
     const plistReloadNeeded = await rewriteLaunchAgentPlistForRestart({
       env: serviceEnv,
       label,
       plistPath,
     });
+    // Stamp restart intent right before scheduling the handoff so the
+    // run-loop SIGTERM handler routes to restart rather than stop (#88309).
+    // If scheduling fails no SIGTERM is delivered — clear so a later
+    // legitimate stop within the 60s intent TTL is not misread as restart.
+    stampRestartIntent(process.pid);
     const handoff = scheduleDetachedLaunchdRestartHandoff({
       env: serviceEnv,
       mode: plistReloadNeeded ? "reload" : "kickstart",
       waitForPid: process.pid,
     });
     if (!handoff.ok) {
+      clearGatewayRestartIntentSync(serviceEnv);
       throw new Error(`launchd restart handoff failed: ${handoff.detail ?? "unknown error"}`);
     }
     writeLaunchAgentActionLine(stdout, "Scheduled LaunchAgent restart", serviceTarget);
     return { outcome: "scheduled" };
-  }
-
-  // CLI-side restart: the live gateway is a different process. Discover its
-  // pid via launchctl print so the restart intent we drop on disk targets the
-  // process that will receive SIGTERM from kickstart/bootout below (#88309).
-  const runtime = await readLaunchAgentRuntime(serviceEnv).catch(() => null);
-  if (runtime?.pid !== undefined) {
-    writeGatewayRestartIntentSync({
-      env: serviceEnv,
-      targetPid: runtime.pid,
-      reason: restartIntent?.reason ?? "gateway.restart",
-      ...(restartIntent ? { intent: restartIntent } : {}),
-    });
   }
 
   const cleanupPort = await resolveLaunchAgentGatewayPort(serviceEnv);
@@ -1097,11 +1090,25 @@ export async function restartLaunchAgent({
     plistPath,
   });
 
+  // CLI-side restart: the live gateway is a different process. Resolve its
+  // pid via launchctl print so the restart intent we drop on disk before
+  // bootout/kickstart targets the pid that will receive SIGTERM (#88309).
+  const runtime = await readLaunchAgentRuntime(serviceEnv).catch(() => null);
+  const targetGatewayPid = runtime?.pid;
+
   // `openclaw gateway restart` is an explicit operator request to bring the
   // LaunchAgent back, so clear any persisted disabled state before restart.
   await execLaunchctl(["enable", serviceTarget]);
 
   if (plistReloadNeeded) {
+    // bootout sends SIGTERM to the existing gateway. Stamp restart intent
+    // immediately beforehand so the gateway's SIGTERM handler routes to
+    // restart rather than stop (#88309). On launchctl failure SIGTERM may
+    // still have been delivered, so the intent stays — it either gets
+    // consumed by the dying gateway or expires (TTL) without effect.
+    if (targetGatewayPid !== undefined) {
+      stampRestartIntent(targetGatewayPid);
+    }
     const bootout = await execLaunchctl(["bootout", serviceTarget]);
     if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
       throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
@@ -1116,6 +1123,11 @@ export async function restartLaunchAgent({
     return { outcome: "completed" };
   }
 
+  // kickstart -k SIGTERMs the existing gateway. Stamp restart intent
+  // immediately beforehand (#88309).
+  if (targetGatewayPid !== undefined) {
+    stampRestartIntent(targetGatewayPid);
+  }
   const start = await execLaunchctl(["kickstart", "-k", serviceTarget]);
   if (start.code === 0) {
     writeLaunchAgentActionLine(stdout, "Restarted LaunchAgent", serviceTarget);
