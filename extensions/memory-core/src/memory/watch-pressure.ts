@@ -17,15 +17,14 @@ export function countChokidarWatchedEntries(watcher: FSWatcher): number {
   return count;
 }
 
-export function warnIfMemoryWatchPressureHigh(params: {
-  state: MemoryWatchPressureWarningState;
-  count: number;
-  unit: MemoryWatchPressureUnit;
-  pressureDetail: string;
-  remediation: string;
-  warn: (message: string) => void;
-}): boolean {
-  const { state, count, unit, pressureDetail, remediation, warn } = params;
+export function warnIfMemoryWatchPressureHigh(
+  state: MemoryWatchPressureWarningState,
+  count: number,
+  unit: MemoryWatchPressureUnit,
+  pressureDetail: string,
+  remediation: string,
+  warn: (message: string) => void,
+): boolean {
   if (state.shown || count <= MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD) {
     return false;
   }

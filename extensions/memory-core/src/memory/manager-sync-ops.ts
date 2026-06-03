@@ -622,7 +622,7 @@ export abstract class MemoryManagerSyncOps {
           log.warn(`memory watcher error: ${message}`);
         });
         watcher.once("ready", () => {
-          this.warnIfChokidarMemoryWatchPressure(watcher);
+          this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
         });
       }
     }
@@ -643,39 +643,29 @@ export abstract class MemoryManagerSyncOps {
       if (this.closed || this.memoryWatchPressureWarning.shown) {
         return;
       }
-      this.warnIfChokidarMemoryWatchPressure(this.watcher);
-      if (!this.memoryWatchPressureWarning.shown) {
-        this.warnIfLinuxMemoryWatchPressure();
+      if (this.watcher) {
+        this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(this.watcher), "paths");
       }
+      if (this.memoryWatchPressureWarning.shown) {
+        return;
+      }
+      let directoryCount = 0;
+      for (const pair of this.nativeMemoryWatchPairs) {
+        directoryCount += pair.treeWatchers?.size ?? 0;
+      }
+      this.warnIfMemoryWatchPressure(directoryCount, "directories");
     }, MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS);
   }
 
-  private warnIfLinuxMemoryWatchPressure(): void {
-    let watcherCount = 0;
-    for (const pair of this.nativeMemoryWatchPairs) {
-      watcherCount += pair.treeWatchers?.size ?? 0;
-    }
-    this.warnIfMemoryWatchPressure(watcherCount, "directories");
-  }
-
-  private warnIfChokidarMemoryWatchPressure(watcher: FSWatcher | null): void {
-    if (!watcher) {
-      return;
-    }
-    this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
-  }
-
   private warnIfMemoryWatchPressure(count: number, unit: MemoryWatchPressureUnit): void {
-    warnIfMemoryWatchPressureHigh({
-      state: this.memoryWatchPressureWarning,
+    warnIfMemoryWatchPressureHigh(
+      this.memoryWatchPressureWarning,
       count,
       unit,
-      pressureDetail:
-        "Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files.",
-      remediation:
-        "Remove large extraPaths, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
-      warn: (message) => log.warn(message),
-    });
+      "Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files.",
+      "Remove large extraPaths, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      (message) => log.warn(message),
+    );
   }
 
   private currentMemoryChokidarWatcher(): FSWatcher | null {
@@ -1152,7 +1142,7 @@ export abstract class MemoryManagerSyncOps {
         log.warn(`memory watcher error: ${message}`);
       });
       watcher.once("ready", () => {
-        this.warnIfChokidarMemoryWatchPressure(watcher);
+        this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
       });
     } catch (err) {
       log.warn(`failed to attach chokidar fallback for ${dir}: ${String(err)}`);

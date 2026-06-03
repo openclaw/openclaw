@@ -1632,16 +1632,14 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private warnIfWatchPressure(count: number): void {
-    warnIfMemoryWatchPressureHigh({
-      state: this.watchPressureWarning,
+    warnIfMemoryWatchPressureHigh(
+      this.watchPressureWarning,
       count,
-      unit: "paths",
-      pressureDetail:
-        "Large QMD collections can make OpenClaw run out of file watchers or open files.",
-      remediation:
-        "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
-      warn: (message) => log.warn(message),
-    });
+      "paths",
+      "Large QMD collections can make OpenClaw run out of file watchers or open files.",
+      "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      (message) => log.warn(message),
+    );
   }
 
   private resolveCollectionWatchPath(collection: ManagedCollection): string {
