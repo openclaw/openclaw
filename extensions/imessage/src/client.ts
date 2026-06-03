@@ -110,7 +110,9 @@ export class IMessageRpcClient {
       while ((idx = this.stdoutBuffer.indexOf("\n")) !== -1) {
         const line = this.stdoutBuffer.slice(0, idx).trim();
         this.stdoutBuffer = this.stdoutBuffer.slice(idx + 1);
-        if (!line) continue;
+        if (!line) {
+          continue;
+        }
         this.handleLine(line);
       }
     });
