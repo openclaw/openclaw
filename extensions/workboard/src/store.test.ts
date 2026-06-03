@@ -421,6 +421,38 @@ describe("WorkboardStore", () => {
     }
   });
 
+  it("does not let one stale bulk lifecycle patch strip later card updates", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(1000);
+      const store = new WorkboardStore(createMemoryStore());
+      const staleCard = await store.create({ title: "Stale bulk target" });
+      const freshCard = await store.create({ title: "Fresh bulk target" });
+      vi.setSystemTime(3000);
+      await store.move(staleCard.id, "running", 1000);
+
+      const patch = {
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 2000 },
+      } as const;
+      const result = await store.bulkUpdate({
+        ids: [staleCard.id, freshCard.id],
+        patch,
+      });
+
+      expect(result.cards[0]).toMatchObject({ id: staleCard.id, status: "running" });
+      expect(result.cards[0]?.metadata?.lifecycleStatusSourceUpdatedAt).toBeUndefined();
+      expect(result.cards[1]).toMatchObject({ id: freshCard.id, status: "review" });
+      expect(result.cards[1]?.metadata?.lifecycleStatusSourceUpdatedAt).toBe(2000);
+      expect(patch).toEqual({
+        status: "review",
+        metadata: { lifecycleStatusSourceUpdatedAt: 2000 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps non-status fields from stale lifecycle patches", async () => {
     const store = new WorkboardStore(createMemoryStore());
     const card = await store.create({
