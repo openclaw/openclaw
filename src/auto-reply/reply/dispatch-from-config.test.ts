@@ -2208,6 +2208,8 @@ describe("dispatchReplyFromConfig", () => {
       },
     });
 
+    // Channel-owned native progress callbacks drive embeds/typing/progress UIs;
+    // /verbose off must still let them fire so groups get live tool progress.
     expect(onToolStart).toHaveBeenCalledWith({ name: "exec", phase: "start" });
     expect(onItemEvent).toHaveBeenCalledWith({
       itemId: "1",
@@ -2228,6 +2230,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(onPatchSummary).toHaveBeenCalledWith({ phase: "end", summary: "1 modified" });
     expect(onCompactionStart).toHaveBeenCalledTimes(1);
     expect(onCompactionEnd).toHaveBeenCalledTimes(1);
+    // Message-level tool summary text stays silenced by /verbose off.
     expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);

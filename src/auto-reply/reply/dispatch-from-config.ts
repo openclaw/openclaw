@@ -2371,6 +2371,10 @@ export async function dispatchReplyFromConfig(
     const onPatchSummaryFromReplyOptions = params.replyOptions?.onPatchSummary;
     const allowSuppressedSourceProgressCallbacks =
       params.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed === true;
+    // Channel-owned native progress callbacks (onToolStart/onItemEvent/onPlanUpdate/
+    // onApprovalEvent/onCommandOutput/onPatchSummary/onCompaction*) drive embeds,
+    // typing indicators, and progress bars. /verbose off only silences message-level
+    // tool summary text; channels still need these regardless of chatType.
     const shouldAllowQuietChannelOwnedProgressCallbacks = (options?: {
       requiresToolSummaryVisibility?: boolean;
     }) =>
