@@ -812,6 +812,15 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
     : { checked: false, ready: false, skipped: healthOk };
 }
 
+async function runGatewayStabilityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteGatewayChannelTurnHealth } = await import("../commands/doctor-gateway-stability.js");
+  await noteGatewayChannelTurnHealth({
+    cfg: ctx.cfg,
+    timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
+    gatewayHealthy: ctx.healthOk === true,
+  });
+}
+
 async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { noteWhatsappResponsivenessHealth } =
     await import("../commands/doctor-whatsapp-responsiveness.js");
@@ -1209,6 +1218,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-health",
       label: "Gateway health",
       run: runGatewayHealthChecks,
+    }),
+    createDoctorHealthContribution({
+      id: "doctor:gateway-stability",
+      label: "Gateway stability",
+      run: runGatewayStabilityHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:whatsapp-responsiveness",
