@@ -1322,6 +1322,80 @@ function readOptionalSessionAttentionSummary(
   };
 }
 
+function readOptionalQueueSummary(
+  value: unknown,
+): DiagnosticStabilitySnapshot["summary"]["queues"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const queues = readObject(value, "snapshot.summary.queues");
+  const byLaneRaw = readObject(queues.byLane, "snapshot.summary.queues.byLane");
+  const byLane: NonNullable<DiagnosticStabilitySnapshot["summary"]["queues"]>["byLane"] = {};
+  for (const [lane, entry] of Object.entries(byLaneRaw)) {
+    if (!SAFE_REASON_CODE.test(lane)) {
+      continue;
+    }
+    const laneSummary = readObject(entry, `snapshot.summary.queues.byLane.${lane}`);
+    byLane[lane] = {
+      enqueued: readNumber(laneSummary.enqueued, `snapshot.summary.queues.byLane.${lane}.enqueued`),
+      dequeued: readNumber(laneSummary.dequeued, `snapshot.summary.queues.byLane.${lane}.dequeued`),
+      slowDequeues: readNumber(
+        laneSummary.slowDequeues,
+        `snapshot.summary.queues.byLane.${lane}.slowDequeues`,
+      ),
+      ...(laneSummary.maxWaitMs !== undefined
+        ? {
+            maxWaitMs: readNumber(
+              laneSummary.maxWaitMs,
+              `snapshot.summary.queues.byLane.${lane}.maxWaitMs`,
+            ),
+          }
+        : {}),
+      ...(laneSummary.maxQueueSize !== undefined
+        ? {
+            maxQueueSize: readNumber(
+              laneSummary.maxQueueSize,
+              `snapshot.summary.queues.byLane.${lane}.maxQueueSize`,
+            ),
+          }
+        : {}),
+    };
+  }
+  const recentRaw = queues.recentSlow;
+  const recentSlow = Array.isArray(recentRaw)
+    ? recentRaw.map((entry, index) => {
+        const item = readObject(entry, `snapshot.summary.queues.recentSlow[${index}]`);
+        return {
+          seq: readNumber(item.seq, `snapshot.summary.queues.recentSlow[${index}].seq`),
+          ts: readTimestampMs(item.ts, `snapshot.summary.queues.recentSlow[${index}].ts`),
+          lane: readCodeString(item.lane, `snapshot.summary.queues.recentSlow[${index}].lane`),
+          waitMs: readNumber(item.waitMs, `snapshot.summary.queues.recentSlow[${index}].waitMs`),
+          ...(item.queueSize !== undefined
+            ? {
+                queueSize: readNumber(
+                  item.queueSize,
+                  `snapshot.summary.queues.recentSlow[${index}].queueSize`,
+                ),
+              }
+            : {}),
+        };
+      })
+    : [];
+  return {
+    enqueued: readNumber(queues.enqueued, "snapshot.summary.queues.enqueued"),
+    dequeued: readNumber(queues.dequeued, "snapshot.summary.queues.dequeued"),
+    slowDequeues: readNumber(queues.slowDequeues, "snapshot.summary.queues.slowDequeues"),
+    ...(queues.maxWaitMs !== undefined
+      ? { maxWaitMs: readNumber(queues.maxWaitMs, "snapshot.summary.queues.maxWaitMs") }
+      : {}),
+    ...(queues.maxQueueSize !== undefined
+      ? { maxQueueSize: readNumber(queues.maxQueueSize, "snapshot.summary.queues.maxQueueSize") }
+      : {}),
+    byLane,
+    recentSlow,
+  };
+}
+
 function readStabilityEventRecord(
   value: unknown,
   label: string,
@@ -1575,6 +1649,7 @@ function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
       ...(summary.sessions !== undefined
         ? { sessions: readOptionalSessionAttentionSummary(summary.sessions) }
         : {}),
+      ...(summary.queues !== undefined ? { queues: readOptionalQueueSummary(summary.queues) } : {}),
     },
   };
 }

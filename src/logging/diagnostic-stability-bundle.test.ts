@@ -451,6 +451,65 @@ describe("diagnostic stability bundles", () => {
     expect(JSON.stringify(readResult.bundle)).not.toContain("call-secret");
   });
 
+  it("preserves queue lane summaries in bundles without raw session lanes", async () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "queue.lane.enqueue",
+      lane: "session:agent:main:telegram:direct:owner",
+      queueSize: 3,
+    });
+    emitDiagnosticEvent({
+      type: "queue.lane.dequeue",
+      lane: "session:agent:main:telegram:direct:owner",
+      queueSize: 2,
+      waitMs: 12_500,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const result = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.restart_startup_failed",
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readResult = readDiagnosticStabilityBundleFileSync(result.path);
+    if (readResult.status !== "found") {
+      throw new Error(`expected readable bundle, got ${readResult.status}`);
+    }
+
+    expect(readResult.bundle.snapshot.summary.queues).toMatchObject({
+      enqueued: 1,
+      dequeued: 1,
+      slowDequeues: 1,
+      maxWaitMs: 12_500,
+      maxQueueSize: 3,
+      byLane: {
+        session: {
+          enqueued: 1,
+          dequeued: 1,
+          slowDequeues: 1,
+          maxWaitMs: 12_500,
+          maxQueueSize: 3,
+        },
+      },
+      recentSlow: [
+        {
+          seq: expect.any(Number),
+          ts: expect.any(Number),
+          lane: "session",
+          waitMs: 12_500,
+          queueSize: 2,
+        },
+      ],
+    });
+    expect(JSON.stringify(readResult.bundle.snapshot.summary.queues)).not.toContain(
+      "telegram:direct:owner",
+    );
+  });
+
   it("skips empty recorder snapshots by default", () => {
     const result = writeDiagnosticStabilityBundleSync({
       reason: "uncaught_exception",

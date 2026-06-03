@@ -218,6 +218,68 @@ describe("diagnostic stability recorder", () => {
     expect(JSON.stringify(snapshot)).not.toContain("private message body");
   });
 
+  it("summarizes queue lane waits without exposing session lanes", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "queue.lane.enqueue",
+      lane: "session:agent:main:telegram:direct:owner",
+      queueSize: 3,
+    });
+    emitDiagnosticEvent({
+      type: "queue.lane.dequeue",
+      lane: "session:agent:main:telegram:direct:owner",
+      queueSize: 2,
+      waitMs: 12_500,
+    });
+    emitDiagnosticEvent({
+      type: "queue.lane.enqueue",
+      lane: "main",
+      queueSize: 1,
+    });
+    emitDiagnosticEvent({
+      type: "queue.lane.dequeue",
+      lane: "main",
+      queueSize: 0,
+      waitMs: 250,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.queues).toMatchObject({
+      enqueued: 2,
+      dequeued: 2,
+      slowDequeues: 1,
+      maxWaitMs: 12_500,
+      maxQueueSize: 3,
+      byLane: {
+        session: {
+          enqueued: 1,
+          dequeued: 1,
+          slowDequeues: 1,
+          maxWaitMs: 12_500,
+          maxQueueSize: 3,
+        },
+        main: {
+          enqueued: 1,
+          dequeued: 1,
+          slowDequeues: 0,
+          maxWaitMs: 250,
+          maxQueueSize: 1,
+        },
+      },
+      recentSlow: [
+        expect.objectContaining({
+          lane: "session",
+          waitMs: 12_500,
+          queueSize: 2,
+        }),
+      ],
+    });
+    expect(JSON.stringify(snapshot.summary.queues)).not.toContain("telegram:direct:owner");
+  });
+
   it("keeps stable reason codes but drops free-form reason text", () => {
     startDiagnosticStabilityRecorder();
 

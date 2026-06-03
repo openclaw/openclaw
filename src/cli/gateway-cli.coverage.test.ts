@@ -245,6 +245,38 @@ describe("gateway-cli coverage", () => {
             ],
           },
         },
+        queues: {
+          enqueued: 2,
+          dequeued: 2,
+          slowDequeues: 1,
+          maxWaitMs: 12_500,
+          maxQueueSize: 3,
+          byLane: {
+            session: {
+              enqueued: 1,
+              dequeued: 1,
+              slowDequeues: 1,
+              maxWaitMs: 12_500,
+              maxQueueSize: 3,
+            },
+            main: {
+              enqueued: 1,
+              dequeued: 1,
+              slowDequeues: 0,
+              maxWaitMs: 250,
+              maxQueueSize: 1,
+            },
+          },
+          recentSlow: [
+            {
+              seq: 2,
+              ts: Date.parse("2026-06-03T12:00:01.000Z"),
+              lane: "session",
+              waitMs: 12_500,
+              queueSize: 2,
+            },
+          ],
+        },
         channelTurns: {
           totalEvents: 4,
           deliveryRequired: 1,
@@ -363,6 +395,11 @@ describe("gateway-cli coverage", () => {
     expect(output).toContain(
       "session.stalled session=agent:main:telegram:direct:owner classification=blocked_tool_call reason=blocked_tool_call activeWork=tool_call tool=home_assistant age=90000ms queueDepth=1",
     );
+    expect(output).toContain("Queues: enqueued=2 dequeued=2 slow=1 maxWait=12500ms maxQueue=3");
+    expect(output).toContain("session=enq:1/deq:1/slow:1/maxWait:12500ms/maxQueue:3");
+    expect(output).toContain("main=enq:1/deq:1/slow:0/maxWait:250ms/maxQueue:1");
+    expect(output).toContain("Recent slow queue waits:");
+    expect(output).toContain("lane=session wait=12500ms queueSize=2");
     expect(output).not.toContain("chat text");
   });
 

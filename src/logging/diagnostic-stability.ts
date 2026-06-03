@@ -126,6 +126,30 @@ type DiagnosticStabilitySessionAttentionSummary = {
   }>;
 };
 
+type DiagnosticStabilityQueueLaneSummary = {
+  enqueued: number;
+  dequeued: number;
+  slowDequeues: number;
+  maxWaitMs?: number;
+  maxQueueSize?: number;
+};
+
+type DiagnosticStabilityQueueSummary = {
+  enqueued: number;
+  dequeued: number;
+  slowDequeues: number;
+  maxWaitMs?: number;
+  maxQueueSize?: number;
+  byLane: Record<string, DiagnosticStabilityQueueLaneSummary>;
+  recentSlow: Array<{
+    seq: number;
+    ts: number;
+    lane: string;
+    waitMs: number;
+    queueSize?: number;
+  }>;
+};
+
 export type DiagnosticStabilityHealthStatus = "ok" | "warning" | "degraded";
 
 export type DiagnosticStabilityChannelTurnHealthIssue = {
@@ -303,6 +327,7 @@ export type DiagnosticStabilitySnapshot = {
     sessions?: {
       attention: DiagnosticStabilitySessionAttentionSummary;
     };
+    queues?: DiagnosticStabilityQueueSummary;
   };
 };
 
@@ -812,6 +837,13 @@ function summarizeRecords(
     chunked: 0,
     bySurface: {} as Record<string, number>,
   };
+  const queues: DiagnosticStabilityQueueSummary = {
+    enqueued: 0,
+    dequeued: 0,
+    slowDequeues: 0,
+    byLane: {},
+    recentSlow: [],
+  };
   const sessionAttention: DiagnosticStabilitySessionAttentionSummary = {
     longRunning: 0,
     stalled: 0,
@@ -892,6 +924,84 @@ function summarizeRecords(
       channelTurns.health.status = "degraded";
     } else if (channelTurns.health.status === "ok") {
       channelTurns.health.status = "warning";
+    }
+  }
+
+  function summarizeQueueLane(lane: string | undefined): string {
+    if (!lane) {
+      return "unknown";
+    }
+    if (lane === "main") {
+      return "main";
+    }
+    if (lane.startsWith("session:probe-")) {
+      return "session-probe";
+    }
+    if (lane.startsWith("session:")) {
+      return "session";
+    }
+    if (lane.startsWith("auth-probe:")) {
+      return "auth-probe";
+    }
+    const prefix = lane.split(":", 1)[0] || "other";
+    return SAFE_REASON_CODE.test(prefix) ? prefix : "other";
+  }
+
+  function resolveQueueLaneSummary(lane: string): DiagnosticStabilityQueueLaneSummary {
+    queues.byLane[lane] ??= {
+      enqueued: 0,
+      dequeued: 0,
+      slowDequeues: 0,
+    };
+    return queues.byLane[lane];
+  }
+
+  function recordQueueLaneEvent(record: DiagnosticStabilityEventRecord): void {
+    if (record.type !== "queue.lane.enqueue" && record.type !== "queue.lane.dequeue") {
+      return;
+    }
+    const lane = summarizeQueueLane(record.source);
+    const laneSummary = resolveQueueLaneSummary(lane);
+    if (record.type === "queue.lane.enqueue") {
+      queues.enqueued += 1;
+      laneSummary.enqueued += 1;
+    } else {
+      queues.dequeued += 1;
+      laneSummary.dequeued += 1;
+      if (typeof record.waitMs === "number" && Number.isFinite(record.waitMs)) {
+        queues.maxWaitMs =
+          queues.maxWaitMs === undefined
+            ? record.waitMs
+            : Math.max(queues.maxWaitMs, record.waitMs);
+        laneSummary.maxWaitMs =
+          laneSummary.maxWaitMs === undefined
+            ? record.waitMs
+            : Math.max(laneSummary.maxWaitMs, record.waitMs);
+        if (record.waitMs >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+          queues.slowDequeues += 1;
+          laneSummary.slowDequeues += 1;
+          queues.recentSlow.push({
+            seq: record.seq,
+            ts: record.ts,
+            lane,
+            waitMs: record.waitMs,
+            queueSize: record.queueSize,
+          });
+          if (queues.recentSlow.length > 10) {
+            queues.recentSlow.shift();
+          }
+        }
+      }
+    }
+    if (typeof record.queueSize === "number" && Number.isFinite(record.queueSize)) {
+      queues.maxQueueSize =
+        queues.maxQueueSize === undefined
+          ? record.queueSize
+          : Math.max(queues.maxQueueSize, record.queueSize);
+      laneSummary.maxQueueSize =
+        laneSummary.maxQueueSize === undefined
+          ? record.queueSize
+          : Math.max(laneSummary.maxQueueSize, record.queueSize);
     }
   }
 
@@ -1196,6 +1306,7 @@ function summarizeRecords(
       const surface = record.surface ?? "unknown";
       payloadLarge.bySurface[surface] = (payloadLarge.bySurface[surface] ?? 0) + 1;
     }
+    recordQueueLaneEvent(record);
     recordSessionAttention(record);
     if (record.type === "channel.turn.event") {
       channelTurns.totalEvents += 1;
@@ -1385,6 +1496,7 @@ function summarizeRecords(
     sessionAttention.recoveryCompleted > 0
       ? { sessions: { attention: sessionAttention } }
       : {}),
+    ...(queues.enqueued > 0 || queues.dequeued > 0 ? { queues } : {}),
   };
 }
 

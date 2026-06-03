@@ -289,6 +289,54 @@ function formatSessionAttentionSummary(
   return lines;
 }
 
+function formatQueueSummary(
+  queues: NonNullable<DiagnosticStabilitySnapshot["summary"]["queues"]>,
+  rich: boolean,
+): string[] {
+  const lines = [
+    `${colorize(rich, theme.muted, "Queues:")} enqueued=${queues.enqueued} dequeued=${
+      queues.dequeued
+    } slow=${queues.slowDequeues} maxWait=${formatChannelTurnLatencyMs(
+      queues.maxWaitMs,
+    )} maxQueue=${queues.maxQueueSize ?? "unknown"}`,
+  ];
+  const lanes = Object.entries(queues.byLane)
+    .toSorted((a, b) => {
+      const slowDelta = b[1].slowDequeues - a[1].slowDequeues;
+      if (slowDelta !== 0) {
+        return slowDelta;
+      }
+      return (b[1].maxWaitMs ?? 0) - (a[1].maxWaitMs ?? 0);
+    })
+    .slice(0, 5)
+    .map(
+      ([lane, summary]) =>
+        `${lane}=enq:${summary.enqueued}/deq:${summary.dequeued}/slow:${
+          summary.slowDequeues
+        }/maxWait:${formatChannelTurnLatencyMs(summary.maxWaitMs)}/maxQueue:${
+          summary.maxQueueSize ?? "unknown"
+        }`,
+    )
+    .join(", ");
+  if (lanes) {
+    lines.push(`  ${colorize(rich, theme.muted, "Lanes:")} ${lanes}`);
+  }
+  if (queues.recentSlow.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Recent slow queue waits:")}`);
+    for (const slow of queues.recentSlow.slice(-3)) {
+      const parts = [
+        new Date(slow.ts).toISOString(),
+        `#${slow.seq}`,
+        `lane=${slow.lane}`,
+        `wait=${slow.waitMs}ms`,
+        slow.queueSize !== undefined ? `queueSize=${slow.queueSize}` : "",
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")}`);
+    }
+  }
+  return lines;
+}
+
 function formatChannelTurnSlaSummary(
   channelTurns: NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>,
   rich: boolean,
@@ -488,6 +536,11 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   const sessions = snapshot.summary.sessions;
   if (sessions) {
     lines.push(...formatSessionAttentionSummary(sessions, rich));
+  }
+
+  const queues = snapshot.summary.queues;
+  if (queues) {
+    lines.push(...formatQueueSummary(queues, rich));
   }
 
   if (snapshot.events.length > 0) {
