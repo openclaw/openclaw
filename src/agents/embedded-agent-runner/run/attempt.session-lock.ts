@@ -1233,8 +1233,11 @@ export function installEmbeddedPromptRetryDefault(session: unknown): void {
     return;
   }
   const innerStreamFn = agent.streamFn;
-  agent.streamFn = (model: unknown, context: unknown, options?: { maxRetries?: number }) =>
-    innerStreamFn(model, context, { maxRetries: 0, ...options });
+  agent.streamFn = (...args: unknown[]) => {
+    const [model, context, options] = args;
+    const requestOptions = options as { maxRetries?: number } | undefined;
+    return innerStreamFn(model, context, { maxRetries: 0, ...requestOptions });
+  };
 }
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
