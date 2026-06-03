@@ -244,5 +244,19 @@ describe("command-startup-policy", () => {
       loadPlugins: false,
       pluginRegistry: { scope: "channels" },
     });
+
+    expect(
+      resolveCliStartupPolicy({
+        commandPath: ["mcp", "serve"],
+        jsonOutputMode: false,
+        env: {},
+      }),
+    ).toEqual({
+      suppressDoctorStdout: true,
+      hideBanner: false,
+      skipConfigGuard: false,
+      loadPlugins: false,
+      pluginRegistry: { scope: "all" },
+    });
   });
 });
