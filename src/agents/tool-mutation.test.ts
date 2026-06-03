@@ -70,10 +70,16 @@ describe("tool mutation helpers", () => {
     ["exec", "git grep --open-files-in-pager=vim pattern"],
     ["exec", "gh pr create --title fix --body body"],
     ["exec", "gh pr view 123 --web"],
+    ["exec", "gh pr view 123 --web=true"],
+    ["exec", "gh pr view 123 --web=false"],
     ["exec", "gh pr view 123 -w"],
+    ["exec", "gh pr view 123 -w=true"],
+    ["exec", "gh pr view 123 -w=false"],
     ["exec", "gh issue comment 123 --body fixed"],
     ["exec", "gh search prs bug --web"],
+    ["exec", "gh search prs bug --web=true"],
     ["exec", "gh search prs bug -w"],
+    ["exec", "gh search prs bug -w=true"],
     ["exec", "gh api --method POST repos/openclaw/openclaw/issues"],
   ])("keeps ambiguous or mutating shell command mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(true);

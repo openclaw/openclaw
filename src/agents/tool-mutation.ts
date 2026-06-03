@@ -250,7 +250,11 @@ function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
   if (
     tokens.some((token) => {
       const normalized = normalizeLowercaseStringOrEmpty(token);
-      return normalized === "--web" || /^-[a-z]*w[a-z]*$/.test(normalized);
+      return (
+        normalized === "--web" ||
+        normalized.startsWith("--web=") ||
+        /^-[a-z]*w[a-z]*(?:=.*)?$/.test(normalized)
+      );
     })
   ) {
     return false;
