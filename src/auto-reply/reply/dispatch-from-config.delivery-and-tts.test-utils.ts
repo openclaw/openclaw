@@ -2206,5 +2206,87 @@ describe("dispatchReplyFromConfig", () => {
     expect(delivered.text).toBe("Searching...");
   });
 
+
+  it("delivers accumulated block text when captioned final TTS media send fails", async () => {
+    setNoAbort();
+    // TTS succeeds (the final payload carries a voice mediaUrl) but the
+    // captioned voice note fails to send. The accumulated block text must
+    // still reach delivery so the reply content is not silently dropped.
+    ttsMocks.state.synthesizeFinalAudio = true;
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    const dispatcher = createDispatcher();
+    (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mockImplementation(
+      (payload: ReplyPayload) => !payload.mediaUrl,
+    );
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:final-media-fail",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Block speech content." });
+      return { text: "Final caption." };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const finalPayloads = (dispatcher.sendFinalReply as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([payload]) => payload as ReplyPayload,
+    );
+    // The captioned voice note was attempted with media...
+    expect(finalPayloads.some((payload) => payload.mediaUrl)).toBe(true);
+    // ...and after it failed, the accumulated block text reached delivery.
+    const textFallback = finalPayloads.find(
+      (payload) => payload.text === "Block speech content." && !payload.mediaUrl,
+    );
+    expect(textFallback).toBeDefined();
+  });
+
+  it("delivers accumulated block text when captioned final TTS media route fails", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    // The route delivers text-only payloads but rejects the captioned voice
+    // note, mirroring a transport that dropped the media final.
+    mocks.routeReply.mockReset();
+    mocks.routeReply.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload?: ReplyPayload };
+      return params.payload?.mediaUrl
+        ? { ok: false as boolean, error: "media rejected", messageId: "" }
+        : { ok: true as boolean, messageId: "mock" };
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:main:slack:channel:route-media-fail",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Routed block speech." });
+      return { text: "Routed caption." };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const routedPayloads = mocks.routeReply.mock.calls.map(
+      ([params]) => (params as { payload?: ReplyPayload }).payload,
+    );
+    // Captioned voice note was routed with media...
+    expect(routedPayloads.some((payload) => payload?.mediaUrl)).toBe(true);
+    // ...and the accumulated block text was routed as a text-only fallback.
+    const textFallback = routedPayloads.find(
+      (payload) => payload?.text === "Routed block speech." && !payload?.mediaUrl,
+    );
+    expect(textFallback).toBeDefined();
+  });
+
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
