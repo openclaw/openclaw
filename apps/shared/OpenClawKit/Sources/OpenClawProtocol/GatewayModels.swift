@@ -4252,6 +4252,46 @@ public struct AgentsUpdateResult: Codable, Sendable {
     }
 }
 
+public struct AgentsSubagentsPatchParams: Codable, Sendable {
+    public let agentid: String
+    public let addallowagents: [String]
+
+    public init(
+        agentid: String,
+        addallowagents: [String])
+    {
+        self.agentid = agentid
+        self.addallowagents = addallowagents
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case agentid = "agentId"
+        case addallowagents = "addAllowAgents"
+    }
+}
+
+public struct AgentsSubagentsPatchResult: Codable, Sendable {
+    public let ok: Bool
+    public let agentid: String
+    public let allowagents: [String]
+
+    public init(
+        ok: Bool,
+        agentid: String,
+        allowagents: [String])
+    {
+        self.ok = ok
+        self.agentid = agentid
+        self.allowagents = allowagents
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case ok
+        case agentid = "agentId"
+        case allowagents = "allowAgents"
+    }
+}
+
 public struct AgentsDeleteParams: Codable, Sendable {
     public let agentid: String
     public let deletefiles: Bool?

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { FsSafeError } from "../../infra/fs-safe.js";
+import { normalizeAgentId } from "../../routing/session-key.js";
 /* ------------------------------------------------------------------ */
 /* Mocks                                                              */
 /* ------------------------------------------------------------------ */
@@ -207,7 +208,7 @@ beforeEach(() => {
   mocks.listAgentEntries.mockImplementation((cfg: unknown) => getAgentList(cfg));
   mocks.findAgentEntryIndex.mockImplementation((list: unknown, agentId?: string) =>
     (Array.isArray(list) ? (list as MockAgentEntry[]) : []).findIndex(
-      (entry) => entry.id === agentId,
+      (entry) => normalizeAgentId(entry.id) === normalizeAgentId(agentId),
     ),
   );
   mocks.applyAgentConfig.mockImplementation((cfg: unknown, opts: unknown) =>
@@ -373,10 +374,19 @@ type MockAgentEntry = {
   agentDir?: string;
   model?: string;
   identity?: MockIdentity;
+  subagents?: {
+    allowAgents?: string[];
+    requireAgentId?: boolean;
+  };
 };
 
 type MockConfig = {
   agents?: {
+    defaults?: {
+      subagents?: {
+        allowAgents?: string[];
+      };
+    };
     list?: MockAgentEntry[];
   };
 };
@@ -1098,6 +1108,123 @@ describe("agents.update", () => {
       relativePath: "IDENTITY.md",
       nonBlockingRead: true,
     });
+  });
+});
+
+describe("agents.subagents.patch", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [
+          {
+            id: "leader",
+            subagents: { allowAgents: ["existing-worker", " "], requireAgentId: true },
+          },
+          { id: "existing-worker" },
+          { id: "worker-a" },
+          { id: "worker-b" },
+        ],
+      },
+    };
+  });
+
+  it("adds target agents while preserving and deduping the existing allowlist", async () => {
+    const { respond, promise } = makeCall("agents.subagents.patch", {
+      agentId: "Leader",
+      addAllowAgents: ["worker-a", "worker-b", "worker-a"],
+    });
+    await promise;
+
+    const allowAgents = ["existing-worker", "worker-a", "worker-b"];
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, agentId: "leader", allowAgents },
+      undefined,
+    );
+    expect(mocks.writeConfigFile).toHaveBeenCalled();
+    const nextConfig = mockCallArg(mocks.writeConfigFile);
+    const leader = getAgentList(nextConfig).find((entry) => entry.id === "leader");
+    expect(leader?.subagents).toEqual({ allowAgents, requireAgentId: true });
+  });
+
+  it("preserves inherited default allowlist entries when creating an agent override", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        defaults: { subagents: { allowAgents: ["existing-worker", " "] } },
+        list: [{ id: "leader" }, { id: "existing-worker" }, { id: "worker-a" }],
+      },
+    };
+    const { respond, promise } = makeCall("agents.subagents.patch", {
+      agentId: "leader",
+      addAllowAgents: ["worker-a"],
+    });
+    await promise;
+
+    const allowAgents = ["existing-worker", "worker-a"];
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, agentId: "leader", allowAgents },
+      undefined,
+    );
+    const nextConfig = mockCallArg(mocks.writeConfigFile);
+    const leader = getAgentList(nextConfig).find((entry) => entry.id === "leader");
+    expect(leader?.subagents).toEqual({ allowAgents });
+  });
+
+  it("rejects patching a nonexistent requester agent", async () => {
+    const { respond, promise } = makeCall("agents.subagents.patch", {
+      agentId: "missing",
+      addAllowAgents: ["worker-a"],
+    });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
+  });
+
+  it("rejects adding a target that is not configured", async () => {
+    const { respond, promise } = makeCall("agents.subagents.patch", {
+      agentId: "leader",
+      addAllowAgents: ["missing-worker"],
+    });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
+  });
+
+  it("rejects blank target ids instead of normalizing them to main", async () => {
+    const { respond, promise } = makeCall("agents.subagents.patch", {
+      agentId: "leader",
+      addAllowAgents: ["   "],
+    });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
+  });
+
+  it("rejects malformed target ids instead of sanitizing them to main", async () => {
+    const { respond, promise } = makeCall("agents.subagents.patch", {
+      agentId: "leader",
+      addAllowAgents: ["!!!"],
+    });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
+  });
+
+  it("rejects malformed requester ids instead of normalizing them to main", async () => {
+    mocks.loadConfigReturn = {
+      agents: {
+        list: [{ id: "main" }, { id: "worker-a" }],
+      },
+    };
+    const { respond, promise } = makeCall("agents.subagents.patch", {
+      agentId: "!!!",
+      addAllowAgents: ["worker-a"],
+    });
+    await promise;
+
+    expectNotFoundResponseAndNoWrite(respond);
   });
 });
 

@@ -108,8 +108,9 @@ describe("admin-http-rpc plugin handler", () => {
   it.each([
     ["web.login.start", { force: true, timeoutMs: 1000 }],
     ["web.login.wait", { timeoutMs: 1000 }],
+    ["agents.subagents.patch", { agentId: "leader", addAllowAgents: ["worker-a"] }],
   ] as const)(
-    "allows web QR login method %s through the authenticated plugin request scope",
+    "allows method %s through the authenticated plugin request scope",
     async (method, params) => {
       dispatchGatewayMethod.mockResolvedValueOnce({
         ok: true,
