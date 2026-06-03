@@ -20,6 +20,7 @@ export function buildStatusJsonPayload(params: {
   health?: unknown;
   usage?: unknown;
   lastHeartbeat?: unknown;
+  runtimeRecommendations?: unknown;
   pluginCompatibility?: Array<Record<string, unknown>> | null | undefined;
 }) {
   const channelInfo = resolveStatusUpdateChannelInfo({
@@ -56,6 +57,9 @@ export function buildStatusJsonPayload(params: {
           usage: params.usage,
           lastHeartbeat: params.lastHeartbeat,
         }
+      : {}),
+    ...(params.runtimeRecommendations
+      ? { runtimeRecommendations: params.runtimeRecommendations }
       : {}),
   };
 }

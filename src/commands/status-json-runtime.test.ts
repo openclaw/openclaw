@@ -64,6 +64,20 @@ describe("status-json-runtime", () => {
       securityAudit: { summary: { critical: 1 } },
       usage: { providers: [] },
       health: { ok: true },
+      gatewayDiagnostics: {
+        summary: {
+          recommendations: [
+            {
+              code: "send_early_ack",
+              priority: "high",
+              source: "channel_turns",
+              reason: "slow_tool_before_visible_delivery",
+              count: 1,
+              guidance: "Send a short visible acknowledgement before long tool work.",
+            },
+          ],
+        },
+      },
       lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
@@ -100,6 +114,16 @@ describe("status-json-runtime", () => {
     expect(payloadInput.securityAudit).toStrictEqual({ summary: { critical: 1 } });
     expect(payloadInput.usage).toStrictEqual({ providers: [] });
     expect(payloadInput.health).toStrictEqual({ ok: true });
+    expect(payloadInput.runtimeRecommendations).toStrictEqual([
+      {
+        code: "send_early_ack",
+        priority: "high",
+        source: "channel_turns",
+        reason: "slow_tool_before_visible_delivery",
+        count: 1,
+        guidance: "Send a short visible acknowledgement before long tool work.",
+      },
+    ]);
     expect(payloadInput.lastHeartbeat).toStrictEqual({ status: "ok" });
     expect(payloadInput.pluginCompatibility).toStrictEqual([
       {
@@ -120,6 +144,7 @@ describe("status-json-runtime", () => {
       securityAudit: undefined,
       usage: undefined,
       health: undefined,
+      gatewayDiagnostics: null,
       lastHeartbeat: null,
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
@@ -148,6 +173,7 @@ describe("status-json-runtime", () => {
     expect(payloadInput.securityAudit).toBeUndefined();
     expect(payloadInput.usage).toBeUndefined();
     expect(payloadInput.health).toBeUndefined();
+    expect(payloadInput.runtimeRecommendations).toBeUndefined();
     expect(payloadInput.lastHeartbeat).toBeNull();
     expect(payloadInput.pluginCompatibility).toBeUndefined();
   });
@@ -157,6 +183,7 @@ describe("status-json-runtime", () => {
       securityAudit: undefined,
       usage: undefined,
       health: undefined,
+      gatewayDiagnostics: null,
       lastHeartbeat: { status: "ok" },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },

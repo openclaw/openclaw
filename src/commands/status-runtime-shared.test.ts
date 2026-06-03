@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveStatusGatewayHealth,
   resolveStatusGatewayHealthSafe,
+  resolveStatusGatewayDiagnosticsSafe,
   resolveStatusLastHeartbeat,
   resolveStatusRuntimeDetails,
   resolveStatusRuntimeSnapshot,
@@ -193,6 +194,61 @@ describe("status-runtime-shared", () => {
     });
   });
 
+  it("returns null for gateway diagnostics when the gateway is unreachable", async () => {
+    await expect(
+      resolveStatusGatewayDiagnosticsSafe({
+        config: { gateway: {} },
+        gatewayReachable: false,
+      }),
+    ).resolves.toBeNull();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+
+  it("resolves gateway diagnostics through the stability RPC", async () => {
+    mocks.callGateway.mockResolvedValueOnce({
+      summary: {
+        recommendations: [
+          {
+            code: "inspect_missing_delivery",
+            priority: "high",
+            source: "channel_turns",
+            reason: "missing_visible_delivery",
+            count: 1,
+            guidance: "Inspect delivery.",
+          },
+        ],
+      },
+    });
+
+    await expect(
+      resolveStatusGatewayDiagnosticsSafe({
+        config: { gateway: {} },
+        timeoutMs: 4321,
+        gatewayReachable: true,
+        callOverrides: {
+          url: "ws://127.0.0.1:18789",
+          token: "tok",
+        },
+      }),
+    ).resolves.toMatchObject({
+      summary: {
+        recommendations: [
+          {
+            code: "inspect_missing_delivery",
+          },
+        ],
+      },
+    });
+    expect(mocks.callGateway).toHaveBeenCalledWith({
+      method: "diagnostics.stability",
+      params: { limit: 1000 },
+      timeoutMs: 4321,
+      config: { gateway: {} },
+      url: "ws://127.0.0.1:18789",
+      token: "tok",
+    });
+  });
+
   it("returns null for heartbeat when the gateway is unreachable", async () => {
     expect(
       await resolveStatusLastHeartbeat({
@@ -241,6 +297,7 @@ describe("status-runtime-shared", () => {
     ).resolves.toEqual({
       usage: { providers: [] },
       health: { ok: true },
+      gatewayDiagnostics: { ok: true },
       lastHeartbeat: { ok: true },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
@@ -256,6 +313,12 @@ describe("status-runtime-shared", () => {
       config: { gateway: {} },
     });
     expect(mocks.callGateway).toHaveBeenNthCalledWith(2, {
+      method: "diagnostics.stability",
+      params: { limit: 1000 },
+      timeoutMs: 1234,
+      config: { gateway: {} },
+    });
+    expect(mocks.callGateway).toHaveBeenNthCalledWith(3, {
       method: "last-heartbeat",
       params: {},
       timeoutMs: 1234,
@@ -275,6 +338,7 @@ describe("status-runtime-shared", () => {
     ).resolves.toEqual({
       usage: undefined,
       health: undefined,
+      gatewayDiagnostics: null,
       lastHeartbeat: null,
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
@@ -297,6 +361,7 @@ describe("status-runtime-shared", () => {
     ).resolves.toEqual({
       usage: undefined,
       health: undefined,
+      gatewayDiagnostics: null,
       lastHeartbeat: null,
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
@@ -318,6 +383,7 @@ describe("status-runtime-shared", () => {
       securityAudit: { summary: { critical: 0 }, findings: [] },
       usage: { providers: [] },
       health: { ok: true },
+      gatewayDiagnostics: { ok: true },
       lastHeartbeat: { ok: true },
       gatewayService: { label: "LaunchAgent" },
       nodeService: { label: "node" },
