@@ -1,0 +1,170 @@
+#!/usr/bin/env node
+/**
+ * Interactive setup wizard — run with `npm run setup`.
+ *
+ * Walks a brand-new buyer through the entire fal.ai bootstrap in ~2 minutes:
+ *   1. Detects whether .env.local already exists
+ *   2. Asks if they want to wire up fal.ai now or stay in demo mode
+ *   3. If yes: opens the fal.ai key dashboard in their default browser
+ *   4. Captures the pasted key, validates the shape, writes .env.local
+ *   5. Offers to generate one test image to prove the round-trip works
+ *
+ * Zero dependencies — pure Node + readline.
+ */
+
+import { createInterface } from 'node:readline/promises';
+import { stdin, stdout, env, platform, exit } from 'node:process';
+import { readFile, writeFile, access } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { resolve, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const projectRoot = resolve(__dirname, '..');
+const envPath = resolve(projectRoot, '.env.local');
+const envExamplePath = resolve(projectRoot, '.env.example');
+
+const rl = createInterface({ input: stdin, output: stdout });
+const ask = (q) => rl.question(q);
+const log = (s) => stdout.write(s + '\n');
+const hr = () => log('\n────────────────────────────────────────────────────────\n');
+
+const FAL_DASHBOARD = 'https://fal.ai/dashboard/keys';
+
+async function fileExists(p) {
+  try { await access(p); return true; } catch { return false; }
+}
+
+function openInBrowser(url) {
+  const cmd = platform === 'darwin' ? 'open' : platform === 'win32' ? 'start' : 'xdg-open';
+  try {
+    spawn(cmd, [url], { stdio: 'ignore', detached: true }).unref();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function main() {
+  log('\nEditions Scroll Generator — setup wizard\n');
+  log('This wizard wires up fal.ai for AI-generated chapter images.');
+  log('You can skip it and the page still renders beautifully with CSS-only visuals.\n');
+
+  // ── Step 1: existing .env.local? ────────────────────────────────────────
+  if (await fileExists(envPath)) {
+    const overwrite = (await ask('  .env.local already exists. Overwrite? [y/N] ')).trim().toLowerCase();
+    if (overwrite !== 'y' && overwrite !== 'yes') {
+      log('\n  Keeping existing .env.local. Run `npm run dev` to start.\n');
+      rl.close();
+      return;
+    }
+  }
+
+  hr();
+  log('  Choose your mode:\n');
+  log('    [1] Demo mode      — no fal.ai needed, CSS-only chapter visuals (default)');
+  log('    [2] Real images    — set up fal.ai now and generate AI chapter heroes');
+  log('');
+  const mode = (await ask('  Pick 1 or 2 [1]: ')).trim() || '1';
+
+  if (mode === '1') {
+    // Write a minimal demo-mode .env.local so Next.js boots clean
+    const example = (await fileExists(envExamplePath)) ? await readFile(envExamplePath, 'utf8') : '';
+    const minimal = [
+      '# Demo mode — no fal.ai key required.',
+      '# To enable real AI image generation, re-run `npm run setup` and choose option 2.',
+      'NEXT_PUBLIC_SITE_NAME="Editions Demo"',
+      '',
+    ].join('\n');
+    await writeFile(envPath, example.includes('NEXT_PUBLIC_SITE_NAME') ? minimal : minimal);
+    hr();
+    log('  Demo mode is ready. Now run:\n');
+    log('    npm run dev\n');
+    log('  Open http://localhost:3000 to see your 8-chapter page.\n');
+    rl.close();
+    return;
+  }
+
+  // ── Step 2: fal.ai key flow ─────────────────────────────────────────────
+  hr();
+  log('  Step 1 of 3: Get a fal.ai API key\n');
+  log(`  Opening ${FAL_DASHBOARD} in your browser...`);
+  log('  (If it doesn\'t open, copy the URL above manually.)\n');
+  openInBrowser(FAL_DASHBOARD);
+  log('  On the fal.ai dashboard:');
+  log('    1. Sign in (GitHub or email)');
+  log('    2. Click "Create API Key"');
+  log('    3. Copy the key — format is  key_id:key_secret  (two parts, separated by ":")\n');
+
+  let key = '';
+  while (!key) {
+    key = (await ask('  Paste your fal.ai key here: ')).trim();
+    if (!key.includes(':') || key.length < 20) {
+      log('  ! That doesn\'t look right. The key has the format  key_id:key_secret\n');
+      key = '';
+    }
+  }
+
+  hr();
+  log('  Step 2 of 3: Pick a default model\n');
+  log('    [1] fal-ai/flux-2-pro              (recommended — best balance, ~$0.06/img, ~4s)');
+  log('    [2] fal-ai/flux-2/turbo            (fast drafts, ~$0.02/img, ~2s)');
+  log('    [3] fal-ai/gemini-3-pro-image-preview  (Nano Banana Pro, best at text-in-image, ~$0.15/img)');
+  log('    [4] Other (I\'ll pick from MODELS.md later — defaults to flux-2-pro)\n');
+  const m = (await ask('  Pick 1–4 [1]: ')).trim() || '1';
+  const modelMap = {
+    1: 'fal-ai/flux-2-pro',
+    2: 'fal-ai/flux-2/turbo',
+    3: 'fal-ai/gemini-3-pro-image-preview',
+    4: 'fal-ai/flux-2-pro',
+  };
+  const model = modelMap[m] ?? 'fal-ai/flux-2-pro';
+
+  // ── Step 3: write .env.local ────────────────────────────────────────────
+  const contents = [
+    '# Generated by `npm run setup`',
+    `FAL_KEY="${key}"`,
+    `FAL_IMAGE_MODEL="${model}"`,
+    'NEXT_PUBLIC_SITE_NAME="Editions Demo"',
+    '',
+  ].join('\n');
+  await writeFile(envPath, contents);
+
+  hr();
+  log('  .env.local written. FAL_KEY stays on the server (never sent to the browser).\n');
+
+  // ── Step 4: test image ──────────────────────────────────────────────────
+  log('  Step 3 of 3: Generate one test image to verify everything works');
+  log('  This costs roughly $0.06 in fal.ai credits.\n');
+  const test = (await ask('  Generate one test image now? [Y/n] ')).trim().toLowerCase();
+
+  if (test === '' || test === 'y' || test === 'yes') {
+    log('\n  Running: node scripts/generate-chapter-assets.mjs --only prologue\n');
+    env.FAL_KEY = key;
+    env.FAL_IMAGE_MODEL = model;
+    await new Promise((res) => {
+      const child = spawn('node', ['scripts/generate-chapter-assets.mjs', '--only', 'prologue'], {
+        cwd: projectRoot,
+        stdio: 'inherit',
+        env,
+      });
+      child.on('close', res);
+    });
+  }
+
+  hr();
+  log('  Setup complete. Run:\n');
+  log('    npm run dev\n');
+  log('  Open http://localhost:3000\n');
+  log('  To generate the remaining 7 chapter images:');
+  log('    node scripts/generate-chapter-assets.mjs\n');
+  log('  To swap models later, just edit FAL_IMAGE_MODEL in .env.local — no code changes needed.\n');
+
+  rl.close();
+}
+
+main().catch((err) => {
+  console.error('\n  setup failed:', err.message);
+  rl.close();
+  exit(1);
+});
