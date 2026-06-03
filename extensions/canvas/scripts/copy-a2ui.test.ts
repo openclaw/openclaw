@@ -78,4 +78,30 @@ describe("canvas a2ui copy", () => {
       );
     });
   });
+
+  it("preserves provider assets and the legacy granola compatibility image", async () => {
+    await withA2uiFixture(async (dir) => {
+      const srcDir = path.join(dir, "src");
+      const outDir = path.join(dir, "dist");
+      const providerAssetDir = path.join(srcDir, "assets", "providers");
+      await fs.mkdir(providerAssetDir, { recursive: true });
+      await fs.writeFile(path.join(srcDir, "index.html"), "<html></html>", "utf8");
+      await fs.writeFile(path.join(srcDir, "a2ui.bundle.js"), "console.log(1);", "utf8");
+      await fs.writeFile(path.join(providerAssetDir, "google.png"), "google-asset", "utf8");
+      await fs.writeFile(path.join(providerAssetDir, "x.png"), "x-asset", "utf8");
+      await fs.writeFile(path.join(srcDir, "granola.png"), "legacy-granola-asset", "utf8");
+
+      await copyA2uiAssets({ srcDir, outDir });
+
+      await expect(
+        fs.readFile(path.join(outDir, "assets", "providers", "google.png"), "utf8"),
+      ).resolves.toBe("google-asset");
+      await expect(
+        fs.readFile(path.join(outDir, "assets", "providers", "x.png"), "utf8"),
+      ).resolves.toBe("x-asset");
+      await expect(fs.readFile(path.join(outDir, "granola.png"), "utf8")).resolves.toBe(
+        "legacy-granola-asset",
+      );
+    });
+  });
 });

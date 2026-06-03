@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 type StartGatewayDiscovery = typeof import("./server-discovery-runtime.js").startGatewayDiscovery;
 
@@ -39,7 +40,6 @@ vi.mock("../tasks/task-registry.maintenance.js", () => ({
   getInspectableActiveTaskRestartBlockers: mocks.getInspectableActiveTaskRestartBlockers,
 }));
 
-import { createChatRunState } from "./server-chat-state.js";
 import { startGatewayEarlyRuntime, startGatewayPluginDiscovery } from "./server-startup-early.js";
 
 type StartGatewayEarlyRuntimeInput = Parameters<typeof startGatewayEarlyRuntime>[0];
@@ -52,7 +52,11 @@ const log = {
 function earlyRuntimeInput(
   overrides: Partial<StartGatewayEarlyRuntimeInput> = {},
 ): StartGatewayEarlyRuntimeInput {
-  const chatRunState = createChatRunState();
+  const maintenanceState = createGatewayMaintenanceStateForTest({
+    healthSummary: {} as never,
+    healthVersion: 0,
+    presenceVersion: 0,
+  });
   return {
     minimalTestGateway: true,
     cfgAtStart: {} as never,
@@ -63,21 +67,7 @@ function earlyRuntimeInput(
     log,
     logDiscovery: log,
     nodeRegistry: {} as never,
-    broadcast: () => {},
-    nodeSendToAllSubscribed: () => {},
-    getPresenceVersion: () => 0,
-    getHealthVersion: () => 0,
-    refreshGatewayHealthSnapshot: async () => ({}) as never,
-    logHealth: { error: () => {} },
-    dedupe: new Map(),
-    chatAbortControllers: new Map(),
-    chatRunState,
-    chatRunBuffers: chatRunState.buffers,
-    chatDeltaSentAt: chatRunState.deltaSentAt,
-    chatDeltaLastBroadcastLen: chatRunState.deltaLastBroadcastLen,
-    removeChatRun: () => undefined,
-    agentRunSeq: new Map(),
-    nodeSendToSession: () => {},
+    ...maintenanceState,
     skillsRefreshDelayMs: 30_000,
     getSkillsRefreshTimer: () => null,
     setSkillsRefreshTimer: () => {},
