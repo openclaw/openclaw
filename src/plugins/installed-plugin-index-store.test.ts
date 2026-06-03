@@ -593,6 +593,238 @@ describe("installed plugin index persistence", () => {
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
   });
 
+  it("rebuilds policy refreshes when install records are missing from plugins", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "demo");
+    const bundledDir = path.join(stateDir, "empty-bundled");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(bundledDir, { recursive: true });
+    createCandidate(pluginDir);
+    const installRecord = {
+      source: "path" as const,
+      sourcePath: pluginDir,
+      installPath: pluginDir,
+    };
+    const env = {
+      HOME: stateDir,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      installRecords: {
+        demo: installRecord,
+      },
+      env,
+    });
+    expectPluginIds(baseline, ["demo"]);
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+    });
+
+    expectPluginIds(refreshed, ["demo"]);
+    expectInstallRecord(refreshed, "demo", installRecord);
+    await expectPersistedIndex(stateDir, {
+      pluginIds: ["demo"],
+      installRecords: {
+        demo: installRecord,
+      },
+    });
+  });
+
+  it("rebuilds policy refreshes when npm install records are missing from plugins", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "npm-demo");
+    const bundledDir = path.join(stateDir, "empty-bundled");
+    fs.mkdirSync(path.join(pluginDir, "dist"), { recursive: true });
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/npm-demo",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "npm-demo",
+        name: "NPM Demo",
+        configSchema: { type: "object" },
+        providers: ["npm-demo"],
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "dist", "index.js"), "export default {};\n", "utf8");
+    const installRecord = {
+      source: "npm" as const,
+      spec: "@openclaw/npm-demo@1.0.0",
+      installPath: pluginDir,
+    };
+    const env = {
+      HOME: stateDir,
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      installRecords: {
+        "npm-demo": installRecord,
+      },
+      env,
+    });
+    expectPluginIds(baseline, ["npm-demo"]);
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+    });
+
+    expectPluginIds(refreshed, ["npm-demo"]);
+    expectInstallRecord(refreshed, "npm-demo", installRecord);
+  });
+
+  it("keeps policy refreshes on the fast path for missing records without plugin entries", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "stale");
+    const bundledDir = path.join(stateDir, "bundled");
+    const bundledPluginDir = path.join(bundledDir, "bundled-demo");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.mkdirSync(bundledPluginDir, { recursive: true });
+    createCandidate(bundledPluginDir, { id: "bundled-demo" });
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          stale: {
+            source: "path",
+            sourcePath: pluginDir,
+            installPath: pluginDir,
+          },
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+    });
+
+    expectPluginIds(refreshed, []);
+    expect(refreshed.refreshReason).toBe("policy-changed");
+    expectInstallRecord(refreshed, "stale", {
+      source: "path",
+      sourcePath: pluginDir,
+      installPath: pluginDir,
+    });
+  });
+
+  it("keeps policy refreshes on the fast path for missing package records without built runtime", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "extensions", "source-only");
+    const bundledDir = path.join(stateDir, "bundled");
+    const bundledPluginDir = path.join(bundledDir, "bundled-demo");
+    fs.mkdirSync(path.join(pluginDir, "src"), { recursive: true });
+    fs.mkdirSync(bundledPluginDir, { recursive: true });
+    createCandidate(bundledPluginDir, { id: "bundled-demo" });
+    fs.writeFileSync(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/source-only",
+        openclaw: {
+          extensions: ["./src/index.ts"],
+        },
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(pluginDir, "openclaw.plugin.json"),
+      JSON.stringify({
+        id: "source-only",
+        name: "Source Only",
+        configSchema: { type: "object" },
+        providers: ["source-only"],
+      }),
+      "utf8",
+    );
+    fs.writeFileSync(path.join(pluginDir, "src", "index.ts"), "export default {};\n", "utf8");
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: bundledDir,
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    const installRecord = {
+      source: "npm" as const,
+      spec: "@openclaw/source-only@1.0.0",
+      installPath: pluginDir,
+    };
+    const baseline = await refreshPersistedInstalledPluginIndex({
+      reason: "manual",
+      stateDir,
+      candidates: [],
+      env,
+    });
+    await writePersistedInstalledPluginIndex(
+      {
+        ...baseline,
+        installRecords: {
+          "source-only": installRecord,
+        },
+        plugins: [],
+      },
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+    });
+
+    expectPluginIds(refreshed, []);
+    expect(refreshed.refreshReason).toBe("policy-changed");
+    expectInstallRecord(refreshed, "source-only", installRecord);
+  });
+
   it("preserves existing install records when refreshing the manifest cache", async () => {
     const stateDir = makeTempDir();
     await writePersistedInstalledPluginIndex(

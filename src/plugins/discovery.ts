@@ -505,6 +505,46 @@ function collectManagedPluginRecordPaths(
   return paths;
 }
 
+export function hasDiscoverableInstalledPluginRecordPath(params: {
+  record: PluginInstallRecord;
+  env?: NodeJS.ProcessEnv;
+  ownershipUid?: number | null;
+}): boolean {
+  const env = params.env ?? process.env;
+  const realpathCache = new Map<string, string>();
+  const packageManifestCache = new Map<string, PackageManifest | null>();
+  const installRecords = { __installRecordProbe: params.record };
+  const installedPaths = collectInstalledPluginRecordPaths(installRecords, env, realpathCache);
+  if (installedPaths.length === 0) {
+    return false;
+  }
+  const managedPluginDirs = collectManagedPluginDirKeys(
+    collectManagedPluginRecordPaths(installRecords, env),
+    realpathCache,
+  );
+  for (const installedPath of installedPaths) {
+    const result = createDiscoveryResult();
+    discoverFromPath({
+      rawPath: installedPath.path,
+      origin: "global",
+      ownershipUid: params.ownershipUid,
+      requireBuiltRuntimeEntry: installedPath.requireBuiltRuntimeEntry,
+      managedPluginDirs,
+      scanFiles: true,
+      env,
+      candidates: result.candidates,
+      diagnostics: result.diagnostics,
+      seen: new Set<string>(),
+      realpathCache,
+      packageManifestCache,
+    });
+    if (result.candidates.length > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function resolveManagedPluginDirKey(
   installedPath: string,
   realpathCache: Map<string, string>,
