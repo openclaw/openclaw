@@ -64,6 +64,7 @@ const FAILURE_REASON_PRIORITY: AuthProfileFailureReason[] = [
   "auth_permanent",
   "auth",
   "billing",
+  "quota_exhausted",
   "format",
   "model_not_found",
   "overloaded",
@@ -418,7 +419,10 @@ type ResolvedAuthCooldownConfig = {
   failureWindowMs: number;
 };
 
-type DisabledFailureReason = Extract<AuthProfileFailureReason, "billing" | "auth_permanent">;
+type DisabledFailureReason = Extract<
+  AuthProfileFailureReason,
+  "billing" | "auth_permanent" | "quota_exhausted"
+>;
 
 type DisabledFailureBackoffPolicy = {
   baseMs: (cfg: ResolvedAuthCooldownConfig) => number;
@@ -426,6 +430,10 @@ type DisabledFailureBackoffPolicy = {
 };
 
 const DISABLED_FAILURE_BACKOFF_POLICIES = {
+  quota_exhausted: {
+    baseMs: (cfg) => cfg.billingBackoffMs,
+    maxMs: (cfg) => cfg.billingMaxMs,
+  },
   billing: {
     baseMs: (cfg) => cfg.billingBackoffMs,
     maxMs: (cfg) => cfg.billingMaxMs,
@@ -615,7 +623,11 @@ function computeNextProfileUsageStats(params: {
   };
 
   const disabledFailureReason =
-    params.reason === "billing" || params.reason === "auth_permanent" ? params.reason : null;
+    params.reason === "billing" ||
+    params.reason === "auth_permanent" ||
+    params.reason === "quota_exhausted"
+      ? params.reason
+      : null;
 
   if (disabledFailureReason) {
     const disableCount = failureCounts[disabledFailureReason] ?? 1;

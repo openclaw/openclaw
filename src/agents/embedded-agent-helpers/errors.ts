@@ -706,6 +706,9 @@ function classifyFailoverClassificationFromHttpStatus(
     return toReasonClassification(classify402Message(message));
   }
   if (status === 429) {
+    if (messageReason === "quota_exhausted") {
+      return toReasonClassification("quota_exhausted");
+    }
     if (messageReason === "billing" && !isAmbiguousGeneric429BalanceMessage(message ?? "")) {
       return toReasonClassification("billing");
     }
@@ -933,7 +936,7 @@ function classifyFailoverClassificationFromMessage(
     return toReasonClassification("billing");
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {
-    return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
+    return toReasonClassification("quota_exhausted");
   }
   if (isRateLimitErrorMessage(raw)) {
     return toReasonClassification("rate_limit");

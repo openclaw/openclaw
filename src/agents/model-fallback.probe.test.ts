@@ -240,7 +240,7 @@ describe("runWithModelFallback – probe logic", () => {
     });
 
   function resolveOpenAiCooldownDecision(params: {
-    reason: "rate_limit" | "overloaded" | "timeout" | "auth" | "billing";
+    reason: "rate_limit" | "overloaded" | "timeout" | "auth" | "billing" | "quota_exhausted";
     soonest: number | null;
     isPrimary?: boolean;
     hasFallbackCandidates?: boolean;
@@ -283,7 +283,9 @@ describe("runWithModelFallback – probe logic", () => {
     });
   }
 
-  async function expectPrimarySkippedAfterLongCooldown(reason: "billing") {
+  async function expectPrimarySkippedAfterLongCooldown(
+    reason: "billing" | "quota_exhausted" | "rate_limit",
+  ) {
     const cfg = makeCfg();
     const expiresIn30Min = NOW + 30 * 60 * 1000;
     mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
@@ -746,5 +748,57 @@ describe("runWithModelFallback – probe logic", () => {
       }),
       "billing",
     );
+  });
+
+  it("does not use billing's 30-second single-provider probe for quota exhaustion", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-4.1-mini",
+            fallbacks: [],
+          },
+        },
+      },
+    } as Partial<OpenClawConfig>);
+
+    const expiresIn30Min = NOW + 30 * 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn30Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("quota_exhausted");
+
+    const run = vi.fn().mockResolvedValue("quota-probe");
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        fallbacksOverride: [],
+        run,
+      }),
+    ).rejects.toMatchObject({
+      name: "FallbackSummaryError",
+      attempts: [
+        expect.objectContaining({
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          reason: "quota_exhausted",
+        }),
+      ],
+    });
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("probes quota-exhausted primary only near disabled-window expiry", async () => {
+    const cfg = makeCfg();
+    const expiresIn1Min = NOW + 60 * 1000;
+    mockedGetSoonestCooldownExpiry.mockReturnValue(expiresIn1Min);
+    mockedResolveProfilesUnavailableReason.mockReturnValue("quota_exhausted");
+
+    const run = vi.fn().mockResolvedValue("quota-probe-ok");
+
+    const result = await runPrimaryCandidate(cfg, run);
+
+    expectPrimaryProbeSuccess(result, run, "quota-probe-ok");
   });
 });
