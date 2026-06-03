@@ -27,6 +27,7 @@ import {
 } from "../../plugins/memory-state.js";
 import { GatewayDrainingError } from "../../process/command-queue.js";
 import type { TemplateContext } from "../templating.js";
+import type { VerboseLevel } from "../thinking.shared.js";
 import { enqueueFollowupRun } from "./queue.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { scheduleFollowupDrain } from "./queue.js";
@@ -3187,7 +3188,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     finalAssistantText?: string;
     payloadText?: string;
     successfulCronAdds?: number;
-    resolvedVerboseLevel?: string;
+    resolvedVerboseLevel?: VerboseLevel;
     isNewSession?: boolean;
     inboundEventKind?: string;
     transcriptPrompt?: string;
