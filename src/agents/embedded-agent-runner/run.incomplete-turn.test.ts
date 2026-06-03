@@ -1247,13 +1247,22 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       { command: shellGroupCommand },
       { detailMode: "explain" },
     );
+    const scopedSleepMeta = inferToolMetaFromArgs(
+      "bash",
+      { command: "sleep 0.1", workdir: "/tmp", host: "node", node: "builder-1" },
+      { detailMode: "explain" },
+    );
 
     expect(sleepMeta).toBe("sleep 0.1");
     expect(ordinaryMeta).toBe("run tests");
     expect(shellGroupMeta).toBe(shellGroupCommand);
+    expect(scopedSleepMeta).toBe("sleep 0.1 (in /tmp), node: builder-1");
     expect(resolveStrictAgenticBashRetryInstruction("sleep 0.1")).toContain("Act now");
     expect(
       resolveStrictAgenticBashRetryInstruction("sleep 0.1", { meta: `${sleepMeta} · pty` }),
+    ).toContain("Act now");
+    expect(
+      resolveStrictAgenticBashRetryInstruction("sleep 0.1", { meta: scopedSleepMeta }),
     ).toContain("Act now");
     expect(resolveStrictAgenticBashRetryInstruction("pnpm test")).toBeNull();
     expect(resolveStrictAgenticBashRetryInstruction(shellGroupCommand)).toBeNull();
