@@ -1,4 +1,7 @@
-import { createDurableInboundReceiveJournal } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  createDurableInboundReceiveJournal,
+  type DurableInboundReceivePendingRecord,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { resolveGlobalDedupeCache } from "openclaw/plugin-sdk/dedupe-runtime";
 import { getOptionalSlackRuntime } from "../runtime.js";
 import type { SlackMessageEvent } from "../types.js";
@@ -47,6 +50,16 @@ type SlackInboundIngressCompletedMetadata = SlackInboundIngressMetadata & {
   outcome: "delivered" | "dropped" | "duplicate-delivered" | "error";
   reason?: string;
 };
+
+export type SlackInboundIngressAcceptResult = {
+  kind: "accepted" | "pending" | "completed" | "unavailable";
+  id?: string;
+};
+
+export type SlackInboundIngressPendingRecord = DurableInboundReceivePendingRecord<
+  SlackInboundIngressPayload,
+  SlackInboundIngressMetadata
+>;
 
 const deliveredMessages = resolveGlobalDedupeCache(SLACK_INBOUND_DELIVERIES_KEY, {
   ttlMs: TTL_MS,
@@ -243,16 +256,16 @@ export async function acceptSlackInboundMessageIngress(params: {
     source: "message" | "app_mention";
     wasMentioned?: boolean;
   };
-}): Promise<{ accepted: boolean; id?: string }> {
+}): Promise<SlackInboundIngressAcceptResult> {
   const metadata = makeIngressMetadata(params);
   if (!metadata) {
-    return { accepted: false };
+    return { kind: "unavailable" };
   }
   const journal = getPersistentInboundIngressJournal();
-  if (!journal) {
-    return { accepted: false, id: makeKey(metadata.accountId, metadata.channelId, metadata.ts) };
-  }
   const id = makeKey(metadata.accountId, metadata.channelId, metadata.ts);
+  if (!journal) {
+    return { kind: "unavailable", id };
+  }
   try {
     const receivedAt = Date.now();
     const result = await journal.accept(
@@ -267,10 +280,25 @@ export async function acceptSlackInboundMessageIngress(params: {
         receivedAt,
       },
     );
-    return { accepted: result.kind === "accepted", id };
+    return { kind: result.kind, id };
   } catch (error) {
     disablePersistentIngressJournal(error);
-    return { accepted: false, id };
+    return { kind: "unavailable", id };
+  }
+}
+
+export async function listPendingSlackInboundMessageIngress(): Promise<
+  SlackInboundIngressPendingRecord[]
+> {
+  const journal = getPersistentInboundIngressJournal();
+  if (!journal) {
+    return [];
+  }
+  try {
+    return await journal.pending();
+  } catch (error) {
+    disablePersistentIngressJournal(error);
+    return [];
   }
 }
 
