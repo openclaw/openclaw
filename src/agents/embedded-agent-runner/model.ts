@@ -369,6 +369,21 @@ function resolveConfiguredProviderDefaultApi(params: {
   return normalized.api ?? "openai-completions";
 }
 
+/**
+ * Map well-known provider names to their native API transport type.
+ * This ensures that manually-configured models under a provider like
+ * "google-vertex" use the correct transport without requiring an explicit
+ * "api" field in the provider or model config.
+ */
+function resolveProviderNameDefaultApi(provider: string): Api | undefined {
+  switch (provider) {
+    case "google-vertex":
+      return "google-vertex";
+    default:
+      return undefined;
+  }
+}
+
 function resolveProviderRequestTimeoutMs(timeoutSeconds: unknown): number | undefined {
   return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds, { floorSeconds: true });
 }
@@ -726,6 +741,7 @@ function applyConfiguredProviderOverrides(params: {
       resolvedTransport.api ??
       normalizeResolvedTransportApi(discoveredModel.api) ??
       providerDefaultApi ??
+      resolveProviderNameDefaultApi(params.provider) ??
       "openai-responses",
     baseUrl: resolvedTransport.baseUrl ?? discoveredModel.baseUrl,
     discoveredHeaders,
@@ -1076,6 +1092,7 @@ function resolveConfiguredFallbackModel(params: {
         workspaceDir,
         runtimeHooks,
       }) ??
+      resolveProviderNameDefaultApi(provider) ??
       normalizeResolvedTransportApi(staticCatalogModel?.api) ??
       "openai-responses",
     baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl ?? staticCatalogModel?.baseUrl,
@@ -1681,5 +1698,9 @@ function buildMissingProviderModelRegistrationHint(params: {
   if (hasProviderModel) {
     return undefined;
   }
-  return `Found agents.defaults.models["${agentModelKey}"], but no matching models.providers["${params.provider}"].models[] entry. Add { "id": "${params.modelId}" } to models.providers["${params.provider}"].models[] to register this provider model.`;
+  const humanName = params.modelId
+    .split("-")
+    .map((w) => (/^\d/.test(w) ? w : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(" ");
+  return `Found agents.defaults.models["${agentModelKey}"], but no matching models.providers["${params.provider}"].models[] entry. Add { "id": "${params.modelId}", "name": "${humanName}" } to models.providers["${params.provider}"].models[] to register this provider model.`;
 }

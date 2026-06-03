@@ -224,15 +224,22 @@ export function getEnvApiKey(provider: string): string | undefined {
   }
 
   // Vertex AI supports either an explicit API key or Application Default Credentials.
-  // Auth is configured via `gcloud auth application-default login`.
+  // ADC sources include: gcloud auth application-default login, service account key
+  // files (GOOGLE_APPLICATION_CREDENTIALS), GCE/GKE/Cloud Run metadata server, and
+  // Workload Identity Federation. We gate on any signal of GCP intent and let the
+  // downstream transport (vertex-adc.ts) resolve actual credentials at request time.
   if (provider === "google-vertex") {
     const hasCredentials = hasVertexAdcCredentials();
     const hasProject = Boolean(
       getEnvValue("GOOGLE_CLOUD_PROJECT") || getEnvValue("GCLOUD_PROJECT"),
     );
-    const hasLocation = Boolean(getEnvValue("GOOGLE_CLOUD_LOCATION"));
+    const hasCredentialsEnv = Boolean(getEnvValue("GOOGLE_APPLICATION_CREDENTIALS"));
 
-    if (hasCredentials && hasProject && hasLocation) {
+    // Intentionally permissive: any signal of GCP intent passes the gate.
+    // Actual credential resolution happens at request time in vertex-adc.ts.
+    // Invalid setups (e.g. stale GOOGLE_APPLICATION_CREDENTIALS path with
+    // project env) will fail with a GoogleAuth error, not "No API key found."
+    if (hasProject || hasCredentials || hasCredentialsEnv) {
       return "<authenticated>";
     }
   }
