@@ -9,6 +9,7 @@ import {
 } from "../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { hasManifestToolAvailability } from "../plugins/manifest-tool-availability.js";
+import { sanitizeServerName, TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { DeclaredToolAllowlistContext } from "./tool-policy.js";
 import { normalizeToolName } from "./tool-policy.js";
@@ -22,6 +23,36 @@ function normalizeToolDenylist(list?: string[]): ToolDenylist {
 function denylistBlocksName(name: string, denylist: ToolDenylist): boolean {
   const normalized = normalizeToolName(name);
   return normalized ? matchesAnyGlobPattern(normalized, denylist) : false;
+}
+
+function denylistContainsMcpServerEntry(params: {
+  serverName: string;
+  rawDenylist?: string[];
+}): boolean {
+  const serverPrefix = normalizeToolName(
+    sanitizeServerName(params.serverName, new Set<string>()) + TOOL_NAME_SEPARATOR,
+  );
+  if (!serverPrefix) {
+    return false;
+  }
+  return (params.rawDenylist ?? []).some((entry) => {
+    const normalized = normalizeToolName(entry);
+    return normalized === "bundle-mcp" || normalized.startsWith(serverPrefix);
+  });
+}
+
+function denylistBlocksMcpServer(params: {
+  serverName: string;
+  rawDenylist?: string[];
+  denylist: ToolDenylist;
+}): boolean {
+  return (
+    denylistBlocksName("bundle-mcp", params.denylist) ||
+    denylistContainsMcpServerEntry({
+      serverName: params.serverName,
+      rawDenylist: params.rawDenylist,
+    })
+  );
 }
 
 function denylistBlocksPlugin(params: { pluginId: string; denylist: ToolDenylist }): boolean {
@@ -42,10 +73,22 @@ function denylistBlocksPluginTool(params: {
   );
 }
 
-function collectConfiguredMcpServerNames(config?: OpenClawConfig): string[] {
-  const servers = normalizeConfiguredMcpServers(config?.mcp?.servers);
+function collectConfiguredMcpServerNames(params: {
+  config?: OpenClawConfig;
+  toolDenylist?: string[];
+}): string[] {
+  const servers = normalizeConfiguredMcpServers(params.config?.mcp?.servers);
+  const denylist = normalizeToolDenylist(params.toolDenylist);
   return Object.entries(servers)
     .filter(([, value]) => isRecord(value) && value.enabled !== false)
+    .filter(
+      ([name]) =>
+        !denylistBlocksMcpServer({
+          serverName: name,
+          rawDenylist: params.toolDenylist,
+          denylist,
+        }),
+    )
     .map(([name]) => name.trim())
     .filter(Boolean);
 }
@@ -132,7 +175,12 @@ export function buildDeclaredToolAllowlistContext(params: {
   toolDenylist?: string[];
   env?: NodeJS.ProcessEnv;
 }): DeclaredToolAllowlistContext | undefined {
-  const mcpServerNames = uniqueStrings(collectConfiguredMcpServerNames(params.config));
+  const mcpServerNames = uniqueStrings(
+    collectConfiguredMcpServerNames({
+      config: params.config,
+      toolDenylist: params.toolDenylist,
+    }),
+  );
   const pluginContext = collectDeclaredPluginContext(params);
   const pluginIds = uniqueStrings(pluginContext.pluginIds ?? []);
   const pluginToolNames = uniqueStrings(pluginContext.pluginToolNames ?? []);
