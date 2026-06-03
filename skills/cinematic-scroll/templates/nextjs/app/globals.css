@@ -1,0 +1,80 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+  /* Fluid type scale — clamp(min, fluid, max) */
+  --fluid-eyebrow: clamp(0.65rem, 0.55rem + 0.3vw, 0.78rem);
+  --fluid-body: clamp(1rem, 0.92rem + 0.45vw, 1.25rem);
+  --fluid-headline: clamp(2.25rem, 1.2rem + 5vw, 5rem);
+  --fluid-display: clamp(3rem, 1.4rem + 9vw, 9.5rem);
+}
+
+html,
+body {
+  background: #0b0907;
+  color: #fff;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Prevent horizontal bounce / overscroll color flash on iOS */
+html {
+  background-color: #0b0907;
+  overscroll-behavior-y: none;
+}
+
+/* Reserve scrollbar gutter so pin/release doesn't shift layout */
+@media (min-width: 1024px) {
+  html { scrollbar-gutter: stable; }
+}
+
+/* ─── Fluid typography utilities ─────────────────────────────────────── */
+
+.text-fluid-eyebrow { font-size: var(--fluid-eyebrow); }
+.text-fluid-body { font-size: var(--fluid-body); }
+.text-fluid-headline { font-size: var(--fluid-headline); }
+.text-fluid-display { font-size: var(--fluid-display); }
+
+/* ─── Reduced motion: kill animations + neutralise pinned sections ───── */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  /* Snap any pinned section into a stable readable state */
+  [data-pin],
+  .scrollchoreography-pin {
+    position: static !important;
+    height: auto !important;
+    min-height: 100vh;
+  }
+}
+
+/* ─── Touch / coarse-pointer adjustments ─────────────────────────────── */
+
+@media (hover: none) and (pointer: coarse) {
+  /* Touch devices: ensure tap targets meet WCAG / HIG 44px minimum */
+  a, button, [role='button'] {
+    min-height: 44px;
+  }
+  /* Disable hover-only transforms */
+  *:hover {
+    transform: none !important;
+  }
+}
+
+/* ─── iOS Safari momentum scroll preservation ─────────────────────────── */
+
+@supports (-webkit-touch-callout: none) {
+  body {
+    -webkit-overflow-scrolling: touch;
+  }
+}
