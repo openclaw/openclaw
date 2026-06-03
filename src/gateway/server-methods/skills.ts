@@ -550,7 +550,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const results = await updateSkillsFromClawHub({
         workspaceDir: resolved.workspaceDir,
         slug: p.slug,
-        config: cfg,
+        config: resolved.cfg,
       });
       const errors = results.filter((result) => !result.ok);
       respond(
