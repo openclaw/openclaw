@@ -39,6 +39,25 @@ type PendingUserInput = ControlScope & {
   token: string;
   questions: UserInputQuestion[];
   selectedAnswers: Record<string, string>;
+  /**
+   * Index of the question currently shown to the user. Always 0 for the
+   * legacy one-shot path; advances after each partial answer on the
+   * sequential path. Drives which question's freeform "Other" answer
+   * is consumed and which question's button row gets posted next.
+   *
+   * Ownership boundary: chat-controls advances this when a button click
+   * records a partial answer; the bridge observes the new value the
+   * next time the user responds, never the other way around.
+   */
+  currentQuestionIndex: number;
+  /**
+   * Posts the next question as a brand-new reply on the channel. The
+   * closure is built once at request time in the user-input bridge so
+   * chat-controls.ts does not need to know the channel surface; it
+   * just calls this with the next index after recording a partial
+   * answer. Sequential path only; undefined for one-shot.
+   */
+  emitNextPrompt?: (nextIndex: number) => Promise<void>;
   createdAt: number;
   resolveText: (text: string) => void;
 };
@@ -185,6 +204,61 @@ export function createCodexUserInputPromptControl(params: {
   };
 }
 
+export function createCodexUserInputSequentialControl(params: {
+  questions: UserInputQuestion[];
+  scope: ControlScope;
+  resolveText: (text: string) => void;
+  emitNextPrompt: (nextIndex: number) => Promise<void>;
+}): { token: string; payload: ReplyPayload } {
+  const token = createPendingUserInput({ ...params, currentQuestionIndex: 0 });
+  const firstQuestion = params.questions[0];
+  if (!firstQuestion) {
+    return {
+      token,
+      payload: {
+        text: "",
+        channelData: { codex: { userInputControlToken: token } },
+      },
+    };
+  }
+  return {
+    token,
+    payload: buildCodexUserInputSequentialPrompt({
+      token,
+      questions: params.questions,
+      questionIndex: 0,
+    }),
+  };
+}
+
+export function buildCodexUserInputSequentialPrompt(params: {
+  token: string;
+  questions: UserInputQuestion[];
+  questionIndex: number;
+}): ReplyPayload {
+  const question = params.questions[params.questionIndex];
+  if (!question) {
+    return {
+      text: "",
+      channelData: { codex: { userInputControlToken: params.token } },
+    };
+  }
+  const presentation = buildUserInputInteractiveForQuestion(
+    question,
+    params.token,
+    params.questionIndex,
+  );
+  return {
+    text: formatUserInputPrompt([question]),
+    ...(presentation ? { presentation } : {}),
+    channelData: {
+      codex: {
+        userInputControlToken: params.token,
+      },
+    },
+  };
+}
+
 export function answerCodexUserInput(params: {
   token: string;
   answerText: string;
@@ -272,6 +346,36 @@ export function answerCodexUserInputFreeform(params: {
   const pending = matches[0];
   if (!pending) {
     return { matched: false };
+  }
+  // Sequential pending entries (created via
+  // createCodexUserInputSequentialControl) have an emitNextPrompt closure
+  // and render one question at a time. Freeform text answers only the
+  // currently-shown question, then the next question is posted as a
+  // brand-new reply. Legacy one-shot pending entries fall through to
+  // the multi-line merge below.
+  if (pending.emitNextPrompt && pending.questions.length > 1) {
+    const currentQuestion = pending.questions[pending.currentQuestionIndex];
+    if (!currentQuestion) {
+      return { matched: false };
+    }
+    pending.selectedAnswers[currentQuestion.id] = answerText;
+    const complete = pending.questions.every((entry) => pending.selectedAnswers[entry.id]);
+    if (!complete) {
+      const nextIndex = pending.currentQuestionIndex + 1;
+      pending.currentQuestionIndex = nextIndex;
+      void pending.emitNextPrompt(nextIndex).catch(() => undefined);
+      return { matched: true, consumed: true, message: "" };
+    }
+    // All questions answered by this freeform. Build the merged
+    // response directly from selectedAnswers; the legacy freeform
+    // merge helper bails when nothing is unselected.
+    const merged = pending.questions
+      .map((question) => `${question.id}: ${pending.selectedAnswers[question.id]}`)
+      .join("\n");
+    pendingUserInputs.delete(pending.token);
+    pending.resolveText(merged);
+    void resolveCodexControlDelivery(pending.token).catch(() => undefined);
+    return { matched: true, consumed: true, message: "Sent answer to Codex." };
   }
   const mergedAnswerText = buildCodexMergedFreeformAnswerText(pending, answerText);
   if (!mergedAnswerText) {
@@ -375,6 +479,8 @@ function createPendingUserInput(params: {
   questions: UserInputQuestion[];
   scope: ControlScope;
   resolveText: (text: string) => void;
+  currentQuestionIndex?: number;
+  emitNextPrompt?: (nextIndex: number) => Promise<void>;
 }): string {
   pruneExpiredControls();
   const token = createToken();
@@ -383,6 +489,8 @@ function createPendingUserInput(params: {
     token,
     questions: params.questions,
     selectedAnswers: {},
+    currentQuestionIndex: params.currentQuestionIndex ?? 0,
+    ...(params.emitNextPrompt ? { emitNextPrompt: params.emitNextPrompt } : {}),
     resolveText: params.resolveText,
     createdAt: Date.now(),
   });
@@ -414,6 +522,21 @@ function consumeCodexUserInput(params: {
     return { consumed: false, message: mismatch };
   }
   if (params.questionIndex != null && pending.questions.length > 1) {
+    // Sequential pending entries render one question at a time. Only
+    // the currently-shown question accepts button clicks; any other
+    // question index is from an already-answered row (a stale button
+    // kept around by the channel until it is fully replaced) or a
+    // not-yet-shown row. Legacy one-shot entries accept any order
+    // because the user is reading the combined button card.
+    if (pending.emitNextPrompt && params.questionIndex !== pending.currentQuestionIndex) {
+      const shown = pending.questions[pending.currentQuestionIndex];
+      return {
+        consumed: false,
+        message: shown
+          ? `Awaiting answer for ${shown.header}.`
+          : "No pending Codex input request was found. The request may have expired.",
+      };
+    }
     const question = pending.questions[params.questionIndex];
     const optionIndex = /^\d+$/.test(params.answerText.trim())
       ? Number(params.answerText.trim()) - 1
@@ -428,7 +551,27 @@ function consumeCodexUserInput(params: {
     pending.selectedAnswers[question.id] = answer;
     const complete = pending.questions.every((entry) => pending.selectedAnswers[entry.id]);
     if (!complete) {
-      return { consumed: false, message: `Recorded answer for ${question.header}.` };
+      // Sequential path: advance the index and ask the bridge to post
+      // the next question as a new reply. The next reply is the visible
+      // feedback; we do not also surface a "Recorded answer for X"
+      // status message because that would put two replies on top of a
+      // single click. The Discord adapter treats "consumed" as
+      // "disable the used row" so the user cannot double-click the
+      // just-answered button before the next question is posted.
+      // Legacy one-shot path: the user is reading the combined button
+      // card and can click one button per question, so we keep
+      // consumed=false (do not disable the row) and surface the
+      // recorded answer in a follow-up message.
+      if (pending.emitNextPrompt) {
+        const nextIndex = pending.currentQuestionIndex + 1;
+        pending.currentQuestionIndex = nextIndex;
+        void pending.emitNextPrompt(nextIndex).catch(() => undefined);
+        return { consumed: true, message: "" };
+      }
+      return {
+        consumed: false,
+        message: `Recorded answer for ${question.header}.`,
+      };
     }
     pendingUserInputs.delete(params.token);
     pending.resolveText(
@@ -472,6 +615,29 @@ function buildUserInputInteractive(
       style: index === 0 ? ("primary" as const) : ("secondary" as const),
     }));
   });
+  if (buttons.length === 0) {
+    return undefined;
+  }
+  return { blocks: [{ type: "buttons", buttons }] };
+}
+
+function buildUserInputInteractiveForQuestion(
+  question: UserInputQuestion,
+  token: string,
+  questionIndex: number,
+): MessagePresentation | undefined {
+  if (question.isSecret || !question.options?.length) {
+    return undefined;
+  }
+  const buttons = question.options.slice(0, 8).map((option, index) => ({
+    label: option.label,
+    value: buildCodexUserInputQuestionCallbackValue({
+      token,
+      questionIndex,
+      answerIndex: index + 1,
+    }),
+    style: index === 0 ? ("primary" as const) : ("secondary" as const),
+  }));
   if (buttons.length === 0) {
     return undefined;
   }

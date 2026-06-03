@@ -3,7 +3,9 @@ import {
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  buildCodexUserInputSequentialPrompt,
   createCodexUserInputPromptControl,
+  createCodexUserInputSequentialControl,
   resolveCodexUserInputControlDelivery,
 } from "../conversation-chat-controls.js";
 import {
@@ -220,18 +222,47 @@ async function deliverUserInputPrompt(
   resolveText: (text: string) => void,
 ): Promise<string | undefined> {
   if (params.onBlockReply) {
+    const scope = {
+      sessionFile: params.sessionFile,
+      threadId,
+      channel: params.messageChannel ?? params.messageProvider,
+      senderId: params.senderId ?? undefined,
+      accountId: params.agentAccountId,
+      sessionKey: params.sessionKey,
+      messageThreadId: params.messageThreadId ?? params.currentThreadTs,
+    };
+    // Multi-question requests render one question at a time on channels
+    // that support presentation actions. Posting Q[i+1] only after Q[i]
+    // is answered keeps the chat surface from showing two button rows
+    // on a single message, which users read as "Codex asked twice at
+    // once". The wire protocol still treats this as one request ->
+    // one merged response.
+    const sequentialEligible =
+      questions.length > 1 &&
+      questions.every((question) => !question.isSecret && (question.options?.length ?? 0) > 0);
+    if (sequentialEligible) {
+      const onBlockReply = params.onBlockReply;
+      const { token, payload } = createCodexUserInputSequentialControl({
+        questions,
+        resolveText,
+        scope,
+        emitNextPrompt: async (nextIndex) => {
+          await onBlockReply(
+            buildCodexUserInputSequentialPrompt({
+              token,
+              questions,
+              questionIndex: nextIndex,
+            }),
+          );
+        },
+      });
+      await onBlockReply(payload);
+      return token;
+    }
     const { token, payload } = createCodexUserInputPromptControl({
       questions,
       resolveText,
-      scope: {
-        sessionFile: params.sessionFile,
-        threadId,
-        channel: params.messageChannel ?? params.messageProvider,
-        senderId: params.senderId ?? undefined,
-        accountId: params.agentAccountId,
-        sessionKey: params.sessionKey,
-        messageThreadId: params.messageThreadId ?? params.currentThreadTs,
-      },
+      scope,
     });
     await params.onBlockReply(payload);
     return token;

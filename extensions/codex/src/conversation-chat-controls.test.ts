@@ -3,9 +3,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   answerCodexUserInputFreeform,
   answerCodexUserInputCallback,
+  buildCodexUserInputSequentialPrompt,
   buildCodexPlanDecisionReply,
   consumeCodexPlanDecision,
   createCodexUserInputPrompt,
+  createCodexUserInputSequentialControl,
   hasCodexProposedPlan,
   parseCodexPlanDecisionCallback,
   resolveCodexUserInputCallback,
@@ -254,6 +256,10 @@ describe("codex conversation chat controls", () => {
     ]);
     expect(normalizeMessagePresentation(reply.presentation)).toBeDefined();
 
+    // Legacy one-shot path: click the first button and the second click
+    // finishes the request. Partial click is "consumed: false" so the
+    // user can still click buttons for the remaining question; the
+    // merged answer is sent only when the final answer is recorded.
     expect(
       resolveCodexUserInputCallback({ payload: buttons[0]?.value?.slice(6) ?? "", ctx }),
     ).toEqual({
@@ -306,6 +312,10 @@ describe("codex conversation chat controls", () => {
     });
     const buttons = readButtons(reply);
 
+    // Legacy one-shot path: first click records but does not resolve
+    // (consumed=false so the user can still answer the second question);
+    // the typed other answer for the second question completes the
+    // request.
     expect(
       resolveCodexUserInputCallback({ payload: buttons[0]?.value?.slice(6) ?? "", ctx }),
     ).toEqual({
@@ -509,6 +519,359 @@ describe("codex conversation chat controls", () => {
     });
 
     expect(mixed.presentation).toBeUndefined();
+  });
+
+  it("renders only the first question's buttons in sequential mode and posts the next question after each answer", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const emittedPayloads: Array<{ text: string; labels: string[] }> = [];
+    const { token, payload } = createCodexUserInputSequentialControl({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Small Patch", description: "Narrow" },
+            { label: "Feature Slice", description: "Broad" },
+          ],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Approve", description: "Proceed" },
+            { label: "Hold", description: "Wait" },
+          ],
+        },
+      ],
+      emitNextPrompt: async (nextIndex) => {
+        const nextPayload = buildCodexUserInputSequentialPrompt({
+          token,
+          questions: [
+            {
+              id: "shape",
+              header: "Plan",
+              question: "Which plan shape?",
+              isOther: false,
+              isSecret: false,
+              options: [
+                { label: "Small Patch", description: "Narrow" },
+                { label: "Feature Slice", description: "Broad" },
+              ],
+            },
+            {
+              id: "approval",
+              header: "Approval",
+              question: "Approve?",
+              isOther: false,
+              isSecret: false,
+              options: [
+                { label: "Approve", description: "Proceed" },
+                { label: "Hold", description: "Wait" },
+              ],
+            },
+          ],
+          questionIndex: nextIndex,
+        });
+        emittedPayloads.push({
+          text: nextPayload.text,
+          labels: readButtons(nextPayload).map((button) => button.label),
+        });
+      },
+    });
+    emittedPayloads.push({
+      text: payload.text,
+      labels: readButtons(payload).map((button) => button.label),
+    });
+
+    // First prompt must show only Q1's buttons (no Plan: prefix).
+    expect(emittedPayloads[0]?.labels).toEqual(["Small Patch", "Feature Slice"]);
+    expect(emittedPayloads[0]?.text).toContain("Codex needs input:");
+    expect(emittedPayloads[0]?.text).toContain("Plan");
+
+    // Click Q1 button 0 -> emitNextPrompt(1) should fire and post Q2.
+    const q1Callback = readButtons(payload)[0]?.value?.slice(6) ?? "";
+    expect(resolveCodexUserInputCallback({ payload: q1Callback, ctx })).toEqual({
+      matched: true,
+      consumed: true,
+      message: "",
+    });
+
+    expect(emittedPayloads).toHaveLength(2);
+    expect(emittedPayloads[1]?.labels).toEqual(["Approve", "Hold"]);
+    expect(emittedPayloads[1]?.text).toContain("Approval");
+
+    // Click Q2 button 0 -> final resolution.
+    const q2Payload = buildCodexUserInputSequentialPrompt({
+      token,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Small Patch", description: "Narrow" },
+            { label: "Feature Slice", description: "Broad" },
+          ],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Approve", description: "Proceed" },
+            { label: "Hold", description: "Wait" },
+          ],
+        },
+      ],
+      questionIndex: 1,
+    });
+    const q2Callback = readButtons(q2Payload)[0]?.value?.slice(6) ?? "";
+    expect(resolveCodexUserInputCallback({ payload: q2Callback, ctx })).toEqual({
+      matched: true,
+      consumed: true,
+      message: "Sent answer to Codex.",
+    });
+
+    await expect(answered).resolves.toBe("shape: Small Patch\napproval: Approve");
+    expect(emittedPayloads).toHaveLength(2);
+  });
+
+  it("rejects out-of-order button clicks in sequential mode", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const { payload, token } = createCodexUserInputSequentialControl({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Small Patch", description: "Narrow" }],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Approve", description: "Proceed" }],
+        },
+      ],
+      emitNextPrompt: async () => undefined,
+    });
+    const q1Callback = readButtons(payload)[0]?.value?.slice(6) ?? "";
+
+    // Build a Q2 callback manually (the user clicked the stale Q2 row
+    // before Q1 was answered; in practice Q2 is not yet posted, but the
+    // callback value is still parseable).
+    const q2Payload = buildCodexUserInputSequentialPrompt({
+      token,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Small Patch", description: "Narrow" }],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Approve", description: "Proceed" }],
+        },
+      ],
+      questionIndex: 1,
+    });
+    const q2Callback = readButtons(q2Payload)[0]?.value?.slice(6) ?? "";
+
+    // First, the Q2 click before Q1 is rejected as "awaiting Plan".
+    expect(resolveCodexUserInputCallback({ payload: q2Callback, ctx })).toEqual({
+      matched: true,
+      consumed: false,
+      message: "Awaiting answer for Plan.",
+    });
+    expect(await Promise.race([answered, Promise.resolve("unresolved")])).toBe("unresolved");
+
+    // Then Q1 click is accepted and advances the index; the merge is
+    // completed by the Q2 click that follows.
+    expect(resolveCodexUserInputCallback({ payload: q1Callback, ctx })).toEqual({
+      matched: true,
+      consumed: true,
+      message: "",
+    });
+    expect(resolveCodexUserInputCallback({ payload: q2Callback, ctx })).toEqual({
+      matched: true,
+      consumed: true,
+      message: "Sent answer to Codex.",
+    });
+    await expect(answered).resolves.toBe("shape: Small Patch\napproval: Approve");
+  });
+
+  it("answers the currently-shown question via freeform text in sequential mode", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const emittedPayloads: Array<{ labels: string[] }> = [];
+    const { token, payload } = createCodexUserInputSequentialControl({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Small Patch", description: "Narrow" }],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: true,
+          isSecret: false,
+          options: [{ label: "Approve", description: "Proceed" }],
+        },
+      ],
+      emitNextPrompt: async (nextIndex) => {
+        const next = buildCodexUserInputSequentialPrompt({
+          token,
+          questions: [
+            {
+              id: "shape",
+              header: "Plan",
+              question: "Which plan shape?",
+              isOther: false,
+              isSecret: false,
+              options: [{ label: "Small Patch", description: "Narrow" }],
+            },
+            {
+              id: "approval",
+              header: "Approval",
+              question: "Approve?",
+              isOther: true,
+              isSecret: false,
+              options: [{ label: "Approve", description: "Proceed" }],
+            },
+          ],
+          questionIndex: nextIndex,
+        });
+        emittedPayloads.push({ labels: readButtons(next).map((b) => b.label) });
+      },
+    });
+    emittedPayloads.push({ labels: readButtons(payload).map((b) => b.label) });
+
+    // Q1 has no isOther, so a freeform reply is rejected (no matching
+    // pending input with the currently-shown question set to other).
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "anything",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: false });
+
+    // Click Q1 -> emitNextPrompt(1) -> Q2 with isOther becomes active.
+    const q1Callback = readButtons(payload)[0]?.value?.slice(6) ?? "";
+    expect(resolveCodexUserInputCallback({ payload: q1Callback, ctx })).toEqual({
+      matched: true,
+      consumed: true,
+      message: "",
+    });
+    expect(emittedPayloads).toHaveLength(2);
+    expect(emittedPayloads[1]?.labels).toEqual(["Approve"]);
+
+    // Freeform text now answers Q2 and resolves the request.
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "approve after revising the plan",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: true, consumed: true, message: "Sent answer to Codex." });
+    await expect(answered).resolves.toBe(
+      "shape: Small Patch\napproval: approve after revising the plan",
+    );
+  });
+
+  it("discards partial answers when a sequential control is cancelled before completion", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    let rejectText: (error: Error) => void = () => undefined;
+    const answered = new Promise<string>((resolve, reject) => {
+      resolveText = resolve;
+      rejectText = reject;
+    });
+    const { payload } = createCodexUserInputSequentialControl({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Small Patch", description: "Narrow" }],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Approve", description: "Proceed" }],
+        },
+      ],
+      emitNextPrompt: async () => undefined,
+    });
+    const q1Callback = readButtons(payload)[0]?.value?.slice(6) ?? "";
+    expect(resolveCodexUserInputCallback({ payload: q1Callback, ctx })).toEqual({
+      matched: true,
+      consumed: true,
+      message: "",
+    });
+
+    // Simulate the request being cancelled before Q2 was answered.
+    // The bridge calls cancelCodexUserInput on abort/notification paths.
+    // The Q1 answer is dropped, matching the "discard answers, send empty"
+    // contract chosen for this PR.
+    const emptyText = "no_pending_input";
+    rejectText(new Error(emptyText));
+    await expect(answered).rejects.toThrow(emptyText);
+
+    // Q2 click is now an orphan and must return the standard "not found"
+    // message, not a stale "awaiting" message.
+    const q2Callback = `input:invalid-token:2:1`;
+    expect(resolveCodexUserInputCallback({ payload: q2Callback, ctx })).toEqual({
+      matched: true,
+      consumed: false,
+      message: "No pending Codex input request was found. The request may have expired.",
+    });
   });
 });
 

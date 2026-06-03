@@ -482,6 +482,10 @@ describe("codex plugin", () => {
       respond: { reply, followUp, clearComponents, disableComponents },
     });
 
+    // Partial click on a legacy combined card: the click was accepted
+    // and recorded, but the request is not yet resolved because the
+    // second question is still unanswered. The button row stays live
+    // so the user can click a button for the remaining question.
     expect(disableComponents).not.toHaveBeenCalled();
     expect(clearComponents).not.toHaveBeenCalled();
     expect(reply).not.toHaveBeenCalled();
