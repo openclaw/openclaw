@@ -1,10 +1,14 @@
 /** Minimal fixed-window limiter interface used by memory and request guard helpers. */
 export type FixedWindowRateLimiter = {
   consume: () => {
+    /** Whether the current call consumed quota successfully. */
     allowed: boolean;
+    /** Milliseconds until the next fixed window when quota is exhausted. */
     retryAfterMs: number;
+    /** Requests left in the current window after this consume call. */
     remaining: number;
   };
+  /** Clears the current fixed-window count and starts fresh on the next consume call. */
   reset: () => void;
 };
 
