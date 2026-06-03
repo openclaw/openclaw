@@ -2,6 +2,7 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import { formatChannelTurnLatencyMetrics } from "../../commands/channel-turn-latency-format.js";
 import type { HealthSummary } from "../../commands/health.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
@@ -266,20 +267,10 @@ function formatChannelTurnSlaSummary(
 
   const latency = channelTurns.latency;
   if (latency) {
-    const latencyParts = [
-      latency.messageAgeMs
-        ? `messageAge latest:${latency.messageAgeMs.latestMs}ms/max:${latency.messageAgeMs.maxMs}ms/slow:${latency.messageAgeMs.slowCount}/${latency.messageAgeMs.count}`
-        : "",
-      latency.receivedToTurnStartMs
-        ? `receivedToStart latest:${latency.receivedToTurnStartMs.latestMs}ms/max:${latency.receivedToTurnStartMs.maxMs}ms/slow:${latency.receivedToTurnStartMs.slowCount}/${latency.receivedToTurnStartMs.count}`
-        : "",
-      latency.startToDeliveryMs
-        ? `startToDelivery latest:${latency.startToDeliveryMs.latestMs}ms/max:${latency.startToDeliveryMs.maxMs}ms/slow:${latency.startToDeliveryMs.slowCount}/${latency.startToDeliveryMs.count}`
-        : "",
-      latency.startToCompletionMs
-        ? `startToCompletion latest:${latency.startToCompletionMs.latestMs}ms/max:${latency.startToCompletionMs.maxMs}ms/slow:${latency.startToCompletionMs.slowCount}/${latency.startToCompletionMs.count}`
-        : "",
-    ].filter(Boolean);
+    const latencyParts = formatChannelTurnLatencyMetrics(latency, {
+      assign: ":",
+      separator: "/",
+    });
     if (latencyParts.length > 0) {
       lines.push(`  ${colorize(rich, theme.muted, "Latency:")} ${latencyParts.join(", ")}`);
     }

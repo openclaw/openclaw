@@ -3,6 +3,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGatewayLeastPrivilege } from "../gateway/call.js";
 import { readLatestDiagnosticStabilityBundleSync } from "../logging/diagnostic-stability-bundle.js";
 import type { DiagnosticStabilitySnapshot } from "../logging/diagnostic-stability.js";
+import {
+  formatChannelTurnLatencyMetrics,
+  formatChannelTurnLatencyMs,
+} from "./channel-turn-latency-format.js";
 
 type ChannelTurnSummary = NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>;
 
@@ -11,32 +15,13 @@ export type GatewayChannelTurnHealthDoctorNote = {
   body: string;
 };
 
-function formatMilliseconds(value: number | undefined): string {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return "unknown";
-  }
-  return `${Math.round(value)}ms`;
-}
-
-function formatLatencyMetric(
-  label: string,
-  metric: NonNullable<ChannelTurnSummary["latency"]>["messageAgeMs"] | undefined,
-): string {
-  if (!metric) {
-    return "";
-  }
-  return `${label} latest=${formatMilliseconds(metric.latestMs)} max=${formatMilliseconds(
-    metric.maxMs,
-  )} slow=${metric.slowCount}/${metric.count}`;
-}
-
 function formatChannelTurnIssueLine(issue: ChannelTurnSummary["health"]["issues"][number]): string {
   const parts = [`- ${issue.level}: ${issue.code}`];
   if (typeof issue.count === "number") {
     parts.push(`count=${issue.count}`);
   }
   if (issue.metric) {
-    parts.push(`${issue.metric}=${formatMilliseconds(issue.valueMs)}`);
+    parts.push(`${issue.metric}=${formatChannelTurnLatencyMs(issue.valueMs)}`);
   }
   return parts.join(" ");
 }
@@ -45,12 +30,7 @@ function formatChannelTurnLatencyLine(latency: ChannelTurnSummary["latency"]): s
   if (!latency) {
     return null;
   }
-  const parts = [
-    formatLatencyMetric("messageAge", latency.messageAgeMs),
-    formatLatencyMetric("receivedToStart", latency.receivedToTurnStartMs),
-    formatLatencyMetric("startToDelivery", latency.startToDeliveryMs),
-    formatLatencyMetric("startToCompletion", latency.startToCompletionMs),
-  ].filter(Boolean);
+  const parts = formatChannelTurnLatencyMetrics(latency, { assign: "=", separator: " " });
   if (parts.length === 0) {
     return null;
   }
@@ -89,7 +69,7 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
       const details = [
         `seq=${slow.seq}`,
         slow.channel ? `channel=${slow.channel}` : "",
-        slow.metric ? `${slow.metric}=${formatMilliseconds(slow.valueMs)}` : "",
+        slow.metric ? `${slow.metric}=${formatChannelTurnLatencyMs(slow.valueMs)}` : "",
         slow.turnId ? `turn=${slow.turnId}` : "",
       ].filter(Boolean);
       lines.push(`- ${details.join(" ")}`);
