@@ -80,9 +80,22 @@ export type McpConfig = {
   /** Named MCP server definitions managed by OpenClaw. */
   servers?: Record<string, McpServerConfig>;
   /**
-   * Idle TTL for session-scoped bundled MCP runtimes, in milliseconds.
+   * Idle TTL for bundled MCP runtimes, in milliseconds.
    *
    * Defaults to 10 minutes. Set to 0 to disable idle eviction.
    */
   sessionIdleTtlMs?: number;
+  /**
+   * Scope for the bundled MCP runtime cache.
+   *
+   * - `"session"` (default): one runtime per session. Per-session disposal
+   *   tears the runtime down. Matches behavior prior to the introduction of
+   *   this flag.
+   * - `"shared"`: one runtime per `(workspaceDir, configFingerprint)` tuple.
+   *   Multiple sessions can attach to the same runtime; per-session disposal
+   *   only detaches the session and disposes the runtime when the last
+   *   session detaches. Suitable for single-tenant deployments where every
+   *   session shares one workspace and the same MCP server config.
+   */
+  runtimeScope?: "session" | "shared";
 };

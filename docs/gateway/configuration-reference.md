@@ -98,6 +98,9 @@ target server during config edits.
   mcp: {
     // Optional. Default: 600000 ms (10 minutes). Set 0 to disable idle eviction.
     sessionIdleTtlMs: 600000,
+    // Optional. Default: "session". Set "shared" to let multiple sessions on
+    // the same workspace and config reuse one bundled MCP runtime.
+    runtimeScope: "session",
     servers: {
       docs: {
         command: "npx",
@@ -170,9 +173,15 @@ target server during config edits.
   block before passing native `mcp_servers` config to Codex. Omit the block to
   keep the server projected for every Codex app-server agent with Codex's
   default MCP approval behavior.
-- `mcp.sessionIdleTtlMs`: idle TTL for session-scoped bundled MCP runtimes.
-  One-shot embedded runs request run-end cleanup; this TTL is the backstop for
-  long-lived sessions and future callers.
+- `mcp.sessionIdleTtlMs`: idle TTL for bundled MCP runtimes. One-shot embedded
+  runs request run-end cleanup; this TTL is the backstop for long-lived
+  sessions and future callers.
+- `mcp.runtimeScope`: bundled MCP runtime sharing policy. `"session"` (default)
+  gives every gateway session its own runtime, so each session pays a cold
+  start (spawn each MCP child, connect, list tools) on its first turn.
+  `"shared"` keys the runtime cache on `(workspaceDir, configFingerprint)` and
+  ref-counts across attached sessions, so two sessions on the same workspace reuse
+  one runtime.
 - Changes under `mcp.*` hot-apply by disposing cached session MCP runtimes.
   The next tool discovery/use recreates them from the new config, so removed
   `mcp.servers` entries are reaped immediately instead of waiting for idle TTL.

@@ -1625,6 +1625,56 @@ process.on("SIGINT", shutdown);`,
     expect(manager.resolveSessionId("agent:test:session-idle")).toBeUndefined();
   });
 
+  it("applies the caller's new TTL before the pre-getOrCreate sweep", async () => {
+    let now = 1_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      let lastUsedAt = now;
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        markUsed: () => {
+          lastUsedAt = now;
+        },
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    const first = await manager.getOrCreate({
+      sessionId: "session-ttl-bump",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 50 } },
+    });
+
+    // Idle past the original TTL so the sweep would evict under it.
+    now += 200;
+
+    // Caller raises TTL to 0 (disabled). Sweep must see the new TTL, keep the
+    // runtime, and the same instance must come back — no cold-start respawn.
+    const second = await manager.getOrCreate({
+      sessionId: "session-ttl-bump",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, sessionIdleTtlMs: 0 } },
+    });
+
+    expect(second).toBe(first);
+    expect(disposed).toStrictEqual([]);
+    expect(manager.listSessionIds()).toEqual(["session-ttl-bump"]);
+  });
+
   it("keeps idle runtime eviction disabled when the TTL is zero", async () => {
     let now = 1_000;
     const disposed: string[] = [];
@@ -1653,6 +1703,300 @@ process.on("SIGINT", shutdown);`,
     await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
     expect(manager.listSessionIds()).toEqual(["session-no-ttl"]);
     expect(disposed).toStrictEqual([]);
+  });
+
+  it("resolves runtime scope from cfg, defaulting to session", () => {
+    expect(testing.resolveSessionMcpRuntimeScope(undefined)).toBe("session");
+    expect(testing.resolveSessionMcpRuntimeScope({})).toBe("session");
+    expect(testing.resolveSessionMcpRuntimeScope({ mcp: { servers: {} } })).toBe("session");
+    expect(
+      testing.resolveSessionMcpRuntimeScope({ mcp: { servers: {}, runtimeScope: "session" } }),
+    ).toBe("session");
+    expect(
+      testing.resolveSessionMcpRuntimeScope({ mcp: { servers: {}, runtimeScope: "shared" } }),
+    ).toBe("shared");
+  });
+
+  it("shares a single runtime across sessions when scope is 'shared'", async () => {
+    const created: string[] = [];
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push(params.sessionId);
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    const cfg = {
+      mcp: {
+        servers: { probe: { command: "node", args: ["probe.mjs"] } },
+        runtimeScope: "shared" as const,
+      },
+    };
+
+    const runtimeA = await manager.getOrCreate({
+      sessionId: "session-shared-a",
+      sessionKey: "agent:test:shared-a",
+      workspaceDir: "/workspace",
+      cfg,
+    });
+    const runtimeB = await manager.getOrCreate({
+      sessionId: "session-shared-b",
+      sessionKey: "agent:test:shared-b",
+      workspaceDir: "/workspace",
+      cfg,
+    });
+
+    expect(runtimeA).toBe(runtimeB);
+    expect(created).toHaveLength(1);
+    // The runtime's internal sessionId is the shared-runtime key, not either caller's sessionId,
+    // so log lines unambiguously identify the shared runtime.
+    expect(runtimeA.sessionId.startsWith("__mcp-shared__::")).toBe(true);
+    expect(manager.listSessionIds().toSorted()).toEqual(["session-shared-a", "session-shared-b"]);
+
+    // Disposing one attached session must not tear the shared runtime down.
+    await manager.disposeSession("session-shared-a");
+    expect(disposed).toEqual([]);
+    expect(manager.listSessionIds()).toEqual(["session-shared-b"]);
+
+    // Disposing the last attached session disposes the runtime.
+    await manager.disposeSession("session-shared-b");
+    expect(disposed).toHaveLength(1);
+    expect(disposed[0].startsWith("__mcp-shared__::")).toBe(true);
+    expect(manager.listSessionIds()).toEqual([]);
+  });
+
+  it("creates separate shared runtimes per (workspaceDir, fingerprint)", async () => {
+    const created: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push(params.sessionId);
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({ createRuntime });
+
+    const cfgOne = {
+      mcp: {
+        servers: { probe: { command: "node", args: ["one.mjs"] } },
+        runtimeScope: "shared" as const,
+      },
+    };
+    const cfgTwo = {
+      mcp: {
+        servers: { probe: { command: "node", args: ["two.mjs"] } },
+        runtimeScope: "shared" as const,
+      },
+    };
+
+    const runtimeOneA = await manager.getOrCreate({
+      sessionId: "session-one-a",
+      workspaceDir: "/workspace",
+      cfg: cfgOne,
+    });
+    const runtimeOneB = await manager.getOrCreate({
+      sessionId: "session-one-b",
+      workspaceDir: "/workspace",
+      cfg: cfgOne,
+    });
+    const runtimeTwo = await manager.getOrCreate({
+      sessionId: "session-two",
+      workspaceDir: "/workspace",
+      cfg: cfgTwo,
+    });
+    const runtimeAlt = await manager.getOrCreate({
+      sessionId: "session-alt-workspace",
+      workspaceDir: "/other-workspace",
+      cfg: cfgOne,
+    });
+
+    expect(runtimeOneA).toBe(runtimeOneB);
+    expect(runtimeOneA).not.toBe(runtimeTwo);
+    expect(runtimeOneA).not.toBe(runtimeAlt);
+    expect(runtimeTwo).not.toBe(runtimeAlt);
+    // Three distinct runtimes — the duplicate (workspace,/workspace, fingerprint=cfgOne) reused.
+    expect(created).toHaveLength(3);
+  });
+
+  it("idle sweep does not evict a shared runtime while any session is leased", async () => {
+    let now = 1_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      let lastUsedAt = now;
+      let activeLeases = 0;
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        get activeLeases() {
+          return activeLeases;
+        },
+        markUsed: () => {
+          lastUsedAt = now;
+        },
+        acquireLease: () => {
+          activeLeases += 1;
+          return () => {
+            activeLeases -= 1;
+            lastUsedAt = now;
+          };
+        },
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    const cfg = {
+      mcp: {
+        servers: { probe: { command: "node", args: ["probe.mjs"] } },
+        runtimeScope: "shared" as const,
+        sessionIdleTtlMs: 50,
+      },
+    };
+
+    const runtime = await manager.getOrCreate({
+      sessionId: "session-leased",
+      workspaceDir: "/workspace",
+      cfg,
+    });
+    await manager.getOrCreate({
+      sessionId: "session-idle",
+      workspaceDir: "/workspace",
+      cfg,
+    });
+    const releaseLease = runtime.acquireLease?.();
+
+    now += 60;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
+    expect(manager.listSessionIds().toSorted()).toEqual(["session-idle", "session-leased"]);
+    expect(disposed).toEqual([]);
+
+    releaseLease?.();
+    now += 60;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(1);
+    expect(disposed).toHaveLength(1);
+    expect(disposed[0].startsWith("__mcp-shared__::")).toBe(true);
+    // Both sessions are detached when the shared runtime is evicted.
+    expect(manager.listSessionIds()).toEqual([]);
+  });
+
+  it("preserves a disabled TTL when another session attaches with a finite TTL", async () => {
+    let now = 1_000;
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      let lastUsedAt = now;
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        get lastUsedAt() {
+          return lastUsedAt;
+        },
+        markUsed: () => {
+          lastUsedAt = now;
+        },
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    // First attacher disables idle eviction (TTL=0).
+    await manager.getOrCreate({
+      sessionId: "session-zero-ttl",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, runtimeScope: "shared", sessionIdleTtlMs: 0 } },
+    });
+    // Second attacher has a finite TTL. The shared runtime must keep TTL=0
+    // (unbounded) so the disabling session's expectation is honored.
+    await manager.getOrCreate({
+      sessionId: "session-finite-ttl",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, runtimeScope: "shared", sessionIdleTtlMs: 60 } },
+    });
+
+    now += 60_000_000;
+    await expect(manager.sweepIdleRuntimes()).resolves.toBe(0);
+    expect(disposed).toEqual([]);
+  });
+
+  it("disposes a previous in-flight runtime when a session moves to a new key", async () => {
+    const now = 1_000;
+    const created: string[] = [];
+    const disposed: string[] = [];
+    const createRuntime: RuntimeFactory = (params) => {
+      created.push(params.sessionId);
+      return {
+        ...makeRuntime([{ toolName: "bundle_probe", description: "Bundle MCP probe" }]),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        workspaceDir: params.workspaceDir,
+        configFingerprint: params.configFingerprint ?? "fingerprint",
+        dispose: async () => {
+          disposed.push(params.sessionId);
+        },
+      };
+    };
+    const manager = testing.createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => now,
+      enableIdleSweepTimer: false,
+    });
+
+    // Concurrent calls for the same sessionId across different scopes. The
+    // session-scope call sets an in-flight runtime under sessionId="A"; the
+    // shared-scope call moves the session to a new runtimeKey before that
+    // in-flight has landed. The previous in-flight runtime must be awaited
+    // and disposed, not orphaned in runtimesByKey.
+    const sessionScopeCall = manager.getOrCreate({
+      sessionId: "A",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {} } },
+    });
+    const sharedScopeCall = manager.getOrCreate({
+      sessionId: "A",
+      workspaceDir: "/workspace",
+      cfg: { mcp: { servers: {}, runtimeScope: "shared" } },
+    });
+
+    await Promise.all([sessionScopeCall, sharedScopeCall]);
+
+    // Two runtimes were created (one per scope). The session-scoped one,
+    // identified by sessionId="A", was awaited and disposed by the shared call.
+    expect(created).toHaveLength(2);
+    expect(disposed).toEqual(["A"]);
+    // Only the shared runtime remains attached to the session.
+    expect(manager.listSessionIds()).toEqual(["A"]);
   });
 });
 

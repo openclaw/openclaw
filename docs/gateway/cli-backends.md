@@ -418,9 +418,12 @@ When bundle MCP is enabled, OpenClaw:
 If no MCP servers are enabled, OpenClaw still injects a strict config when a
 backend opts into bundle MCP so background runs stay isolated.
 
-Session-scoped bundled MCP runtimes are cached for reuse within a session, then
-reaped after `mcp.sessionIdleTtlMs` milliseconds of idle time (default 10
-minutes; set `0` to disable). One-shot embedded runs such as auth probes,
+Bundled MCP runtimes are cached for reuse and reaped after
+`mcp.sessionIdleTtlMs` milliseconds of idle time (default 10 minutes; set `0`
+to disable). By default each session gets its own runtime
+(`mcp.runtimeScope: "session"`); single-tenant deployments can opt into
+`"shared"` to let sessions on the same workspace and `mcp.servers` config
+reuse one ref-counted runtime. One-shot embedded runs such as auth probes,
 slug generation, and active-memory recall request cleanup at run end so stdio
 children and Streamable HTTP/SSE streams do not outlive the run.
 
