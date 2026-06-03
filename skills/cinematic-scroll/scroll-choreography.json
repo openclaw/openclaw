@@ -1,0 +1,1512 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "cinematic-scroll-choreography",
+  "title": "Cinematic Scroll Choreography",
+  "description": "Declarative scroll animation choreography that compiles to GSAP ScrollTrigger. Maps scroll position to cinematic camera moves through a typed, validatable schema.",
+  "version": "2.0.0",
+  "type": "object",
+  "required": [
+    "metadata",
+    "globals",
+    "chapters"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "Metadata": {
+      "type": "object",
+      "required": [
+        "title",
+        "version",
+        "targetDevice",
+        "totalScrollRange"
+      ],
+      "properties": {
+        "title": {
+          "type": "string",
+          "description": "Human-readable choreography title"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "description": "Schema version this doc conforms to"
+        },
+        "targetDevice": {
+          "type": "string",
+          "enum": [
+            "desktop",
+            "tablet",
+            "mobile"
+          ],
+          "description": "Primary device target"
+        },
+        "totalScrollRange": {
+          "type": "integer",
+          "minimum": 500,
+          "maximum": 10000,
+          "description": "Total scroll height in vh units"
+        },
+        "author": {
+          "type": "string"
+        },
+        "created": {
+          "type": "string",
+          "format": "date"
+        },
+        "performanceTier": {
+          "type": "string",
+          "enum": [
+            "desktop",
+            "flagship",
+            "mid-range",
+            "budget",
+            "reduced"
+          ]
+        }
+      }
+    },
+    "Globals": {
+      "type": "object",
+      "description": "Default values applied to all chapters unless overridden.",
+      "properties": {
+        "defaultEasing": {
+          "type": "string",
+          "default": "power2.inOut",
+          "description": "GSAP easing name or cubic-bezier() string"
+        },
+        "defaultDuration": {
+          "type": "number",
+          "default": 1.0,
+          "minimum": 0.1,
+          "maximum": 5.0
+        },
+        "snapBehavior": {
+          "type": "string",
+          "enum": [
+            "none",
+            "section",
+            "progressive"
+          ],
+          "default": "none",
+          "description": "none=no snapping, section=snap to chapter centers, progressive=weighted snap based on scroll velocity"
+        },
+        "scrollSmoothing": {
+          "type": "number",
+          "default": 0.5,
+          "minimum": 0.1,
+          "maximum": 1.0,
+          "description": "Lenis/GSAP lerp factor"
+        },
+        "reducedMotionFallback": {
+          "type": "string",
+          "enum": [
+            "static",
+            "instant",
+            "minimal"
+          ],
+          "default": "static"
+        }
+      }
+    },
+    "PinConfig": {
+      "type": "object",
+      "description": "Pinning configuration.",
+      "required": [
+        "enabled"
+      ],
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "pinDuration": {
+          "type": "integer",
+          "minimum": 150,
+          "maximum": 400,
+          "description": "Pin duration in vh. Range: 150-400 per taste-guardrails.md"
+        },
+        "pinSpacing": {
+          "type": "boolean",
+          "default": true
+        },
+        "anticipatorySettle": {
+          "type": "number",
+          "default": 0.05,
+          "minimum": 0.0,
+          "maximum": 0.15,
+          "description": "Fraction of pin duration before first animation starts"
+        }
+      }
+    },
+    "Layer": {
+      "type": "object",
+      "required": [
+        "id",
+        "depth",
+        "content"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-zA-Z0-9_-]*$"
+        },
+        "depth": {
+          "type": "number",
+          "minimum": 0.15,
+          "maximum": 1.4,
+          "description": "Parallax depth multiplier. 0.15=far background, 1.40=foreground overlay."
+        },
+        "content": {
+          "type": "object",
+          "required": [
+            "type"
+          ],
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "image",
+                "text",
+                "svg",
+                "video"
+              ]
+            },
+            "src": {
+              "type": "string",
+              "description": "Asset URL or inline SVG string"
+            },
+            "alt": {
+              "type": "string",
+              "description": "Accessibility alt text (required for images)"
+            },
+            "text": {
+              "type": "string",
+              "description": "Text content for type=text layers"
+            },
+            "fontSize": {
+              "type": "string",
+              "description": "CSS font-size. Min 48px for display type."
+            }
+          }
+        },
+        "animation": {
+          "$ref": "#/definitions/Animation"
+        },
+        "mobileDegradation": {
+          "type": "string",
+          "enum": [
+            "full",
+            "reduce",
+            "static"
+          ],
+          "default": "reduce"
+        },
+        "willChange": {
+          "type": "boolean",
+          "default": false,
+          "description": "Max 3 per viewport enforced at compile time."
+        }
+      }
+    },
+    "AnimatedProperty": {
+      "type": "object",
+      "required": [
+        "property",
+        "from",
+        "to"
+      ],
+      "properties": {
+        "property": {
+          "type": "string",
+          "enum": [
+            "translateX",
+            "translateY",
+            "translateZ",
+            "scale",
+            "rotateX",
+            "rotateY",
+            "rotateZ",
+            "opacity"
+          ],
+          "description": "Only transform and opacity allowed per performance-budget.md"
+        },
+        "from": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "to": {
+          "type": [
+            "number",
+            "string"
+          ]
+        },
+        "easing": {
+          "type": "string"
+        },
+        "relativeTo": {
+          "type": "string",
+          "enum": [
+            "viewport",
+            "parent",
+            "self"
+          ],
+          "default": "self"
+        },
+        "unit": {
+          "type": "string",
+          "enum": [
+            "px",
+            "vh",
+            "vw",
+            "deg",
+            "em",
+            ""
+          ],
+          "default": "px"
+        }
+      }
+    },
+    "ScrollTrigger": {
+      "type": "object",
+      "description": "GSAP ScrollTrigger configuration.",
+      "properties": {
+        "start": {
+          "type": "string",
+          "default": "top top"
+        },
+        "end": {
+          "type": "string",
+          "default": "bottom top"
+        },
+        "scrub": {
+          "type": [
+            "boolean",
+            "number"
+          ],
+          "default": 0.5,
+          "description": "0.3-0.8 recommended per performance-budget.md"
+        },
+        "markers": {
+          "type": "boolean",
+          "default": false,
+          "description": "NEVER true in production"
+        },
+        "pin": {
+          "type": "boolean",
+          "default": false
+        },
+        "fastScrollEnd": {
+          "type": "boolean",
+          "default": true
+        },
+        "invalidateOnRefresh": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "Animation": {
+      "type": "object",
+      "description": "Animation config for a layer. Properties animate in parallel.",
+      "properties": {
+        "properties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AnimatedProperty"
+          }
+        },
+        "trigger": {
+          "$ref": "#/definitions/ScrollTrigger"
+        },
+        "stagger": {
+          "type": "object",
+          "properties": {
+            "offset": {
+              "type": "number",
+              "minimum": 0.01,
+              "maximum": 0.2
+            },
+            "maxElements": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            }
+          }
+        }
+      }
+    },
+    "Chapter": {
+      "type": "object",
+      "required": [
+        "id",
+        "title",
+        "pattern",
+        "scrollRange",
+        "layers"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-zA-Z0-9_-]*$"
+        },
+        "title": {
+          "type": "string"
+        },
+        "pattern": {
+          "type": "string",
+          "enum": [
+            "pinnedHero",
+            "scrubbedTimeline",
+            "velocityReactive",
+            "stickyNarrative",
+            "chapteredRelease",
+            "parallaxGallery",
+            "3dProductOrbit",
+            "editorialLongread",
+            "dataStory",
+            "landingSequence",
+            "portfolioReveal",
+            "archiveExplorer"
+          ],
+          "description": "Reference to scroll-patterns.md pattern."
+        },
+        "scrollRange": {
+          "type": "object",
+          "required": [
+            "start",
+            "end"
+          ],
+          "properties": {
+            "start": {
+              "type": "integer",
+              "description": "Start position in vh from page top"
+            },
+            "end": {
+              "type": "integer",
+              "description": "End position in vh from page top"
+            }
+          }
+        },
+        "pin": {
+          "$ref": "#/definitions/PinConfig"
+        },
+        "layers": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/Layer"
+          },
+          "minItems": 1,
+          "maxItems": 7
+        },
+        "titleReveal": {
+          "$ref": "#/definitions/TitleReveal"
+        },
+        "atmosphere": {
+          "$ref": "#/definitions/Atmosphere"
+        },
+        "velocityNodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/VelocityNode"
+          }
+        }
+      }
+    },
+    "TitleReveal": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "maskReveal",
+            "wordStagger",
+            "letterStagger",
+            "clipPathWipe",
+            "letterSpacingScrub",
+            "verticalMask",
+            "scaleDownEntrance",
+            "blurCrossfade",
+            "typewriterReveal",
+            "splitLineRise"
+          ],
+          "description": "From taste-guardrails.md. Each chapter MUST use a different type."
+        },
+        "scrollRange": {
+          "type": "object",
+          "description": "As fraction of pin duration (0.0-1.0). Title must finish by 0.70.",
+          "properties": {
+            "start": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "end": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            }
+          }
+        },
+        "stagger": {
+          "type": "object",
+          "properties": {
+            "offset": {
+              "type": "number",
+              "minimum": 0.01,
+              "maximum": 0.15
+            },
+            "maxElements": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 5
+            }
+          }
+        },
+        "easing": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        }
+      }
+    },
+    "Atmosphere": {
+      "type": "object",
+      "description": "Background and ambient effects. No filter animations allowed.",
+      "properties": {
+        "backgroundColor": {
+          "type": "string"
+        },
+        "backgroundGradient": {
+          "type": "object",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "angle": {
+              "type": "number",
+              "default": 180
+            }
+          }
+        },
+        "colorMorph": {
+          "type": "object",
+          "description": "Background color interpolation. Uses CSS custom properties, NOT filter.",
+          "properties": {
+            "from": {
+              "type": "string"
+            },
+            "to": {
+              "type": "string"
+            },
+            "scrollStart": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "scrollEnd": {
+              "type": "number",
+              "minimum": 0.0,
+              "maximum": 1.0
+            },
+            "easing": {
+              "type": "string",
+              "default": "none"
+            }
+          }
+        },
+        "ambientDrift": {
+          "type": "object",
+          "description": "Subtle background movement. Max 2-3% of viewport.",
+          "properties": {
+            "translateX": {
+              "type": "number",
+              "description": "Max horizontal drift in vh"
+            },
+            "translateY": {
+              "type": "number",
+              "description": "Max vertical drift in vh"
+            },
+            "scale": {
+              "type": "number",
+              "description": "Scale range, e.g. 1.02 = 2% zoom drift"
+            }
+          }
+        }
+      }
+    },
+    "Transition": {
+      "type": "object",
+      "description": "Transition between chapters. Adjacent chapters MUST use different types per taste-guardrails.md.",
+      "required": [
+        "from",
+        "to",
+        "type"
+      ],
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "craneShot",
+            "whipPan",
+            "matchCut",
+            "dissolve",
+            "pushIn",
+            "hardCut"
+          ]
+        },
+        "duration": {
+          "type": "integer",
+          "minimum": 20,
+          "maximum": 200,
+          "description": "Transition duration in vh"
+        },
+        "overlap": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Chapter overlap during transition in vh"
+        },
+        "easing": {
+          "type": "string"
+        },
+        "properties": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/AnimatedProperty"
+          }
+        }
+      }
+    },
+    "VelocityNode": {
+      "type": "object",
+      "description": "Velocity-aware animation override.",
+      "required": [
+        "threshold"
+      ],
+      "properties": {
+        "threshold": {
+          "type": "number",
+          "minimum": 0.1,
+          "description": "Scroll velocity threshold in px/ms"
+        },
+        "comparison": {
+          "type": "string",
+          "enum": [
+            "above",
+            "below",
+            "equals"
+          ],
+          "default": "above"
+        },
+        "above": {
+          "type": "object",
+          "properties": {
+            "easing": {
+              "type": "string"
+            },
+            "opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "scale": {
+              "type": "number"
+            },
+            "skewX": {
+              "type": "number"
+            },
+            "letterSpacing": {
+              "type": "string"
+            }
+          }
+        },
+        "below": {
+          "type": "object",
+          "properties": {
+            "easing": {
+              "type": "string"
+            },
+            "opacity": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "scale": {
+              "type": "number"
+            },
+            "skewX": {
+              "type": "number"
+            },
+            "letterSpacing": {
+              "type": "string"
+            }
+          }
+        },
+        "lerpFactor": {
+          "type": "number",
+          "default": 0.1,
+          "minimum": 0.01,
+          "maximum": 0.5
+        }
+      }
+    }
+  },
+  "properties": {
+    "metadata": {
+      "$ref": "#/definitions/Metadata"
+    },
+    "globals": {
+      "$ref": "#/definitions/Globals"
+    },
+    "chapters": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Chapter"
+      },
+      "minItems": 1
+    },
+    "transitions": {
+      "type": "array",
+      "items": {
+        "$ref": "#/definitions/Transition"
+      }
+    }
+  },
+  "examples": [
+    {
+      "metadata": {
+        "title": "Maison Voss - Quiet Luxury Brand Launch",
+        "version": "2.0.0",
+        "targetDevice": "desktop",
+        "totalScrollRange": 2200,
+        "author": "cinematic-scroll-skill",
+        "created": "2025-01-15",
+        "performanceTier": "desktop"
+      },
+      "globals": {
+        "defaultEasing": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "defaultDuration": 1.2,
+        "snapBehavior": "section",
+        "scrollSmoothing": 0.6,
+        "reducedMotionFallback": "static"
+      },
+      "chapters": [
+        {
+          "id": "hero-manifesto",
+          "title": "The Quiet Manifesto",
+          "pattern": "pinnedHero",
+          "scrollRange": {
+            "start": 0,
+            "end": 500
+          },
+          "pin": {
+            "enabled": true,
+            "pinDuration": 250,
+            "pinSpacing": true,
+            "anticipatorySettle": 0.08
+          },
+          "layers": [
+            {
+              "id": "hero-bg-gradient",
+              "depth": 0.15,
+              "content": {
+                "type": "svg",
+                "src": "<radialGradient id='hg'><stop offset='0%' stop-color='#1a1a1a'/><stop offset='100%' stop-color='#0d0d0d'/></radialGradient>",
+                "alt": "Dark radial gradient background"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "scale",
+                    "from": 1.0,
+                    "to": 1.05,
+                    "easing": "none",
+                    "relativeTo": "self",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top top",
+                  "end": "bottom top",
+                  "scrub": 0.5,
+                  "markers": false,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "static",
+              "willChange": true
+            },
+            {
+              "id": "hero-texture-dust",
+              "depth": 0.3,
+              "content": {
+                "type": "image",
+                "src": "/assets/noise-texture.webp",
+                "alt": "Subtle grain texture overlay"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "opacity",
+                    "from": 0.0,
+                    "to": 0.08,
+                    "easing": "power2.out",
+                    "unit": ""
+                  },
+                  {
+                    "property": "translateY",
+                    "from": 0,
+                    "to": -15,
+                    "easing": "none",
+                    "unit": "px"
+                  }
+                ],
+                "trigger": {
+                  "start": "top top",
+                  "end": "bottom top",
+                  "scrub": 0.8,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "reduce",
+              "willChange": false
+            },
+            {
+              "id": "hero-product-hero",
+              "depth": 0.6,
+              "content": {
+                "type": "image",
+                "src": "/assets/voss-bottle-hero.webp",
+                "alt": "Maison Voss signature fragrance bottle on marble pedestal"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "translateY",
+                    "from": 80,
+                    "to": -40,
+                    "easing": "none",
+                    "relativeTo": "viewport",
+                    "unit": "vh"
+                  },
+                  {
+                    "property": "scale",
+                    "from": 0.85,
+                    "to": 1.0,
+                    "easing": "power2.out",
+                    "unit": ""
+                  },
+                  {
+                    "property": "rotateY",
+                    "from": -8,
+                    "to": 0,
+                    "easing": "power2.out",
+                    "unit": "deg"
+                  }
+                ],
+                "trigger": {
+                  "start": "top top",
+                  "end": "bottom top",
+                  "scrub": 0.5,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "reduce",
+              "willChange": true
+            },
+            {
+              "id": "hero-title-manifesto",
+              "depth": 1.0,
+              "content": {
+                "type": "text",
+                "text": "Quiet is the new luxury.",
+                "fontSize": "clamp(3rem, 8vw, 7rem)"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "translateY",
+                    "from": 60,
+                    "to": 0,
+                    "easing": "power3.out",
+                    "unit": "px"
+                  },
+                  {
+                    "property": "opacity",
+                    "from": 0.0,
+                    "to": 1.0,
+                    "easing": "power2.out",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top 80%",
+                  "end": "top 30%",
+                  "scrub": 0.3,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "static",
+              "willChange": true
+            },
+            {
+              "id": "hero-cta-scroll",
+              "depth": 1.2,
+              "content": {
+                "type": "text",
+                "text": "Scroll to discover",
+                "fontSize": "0.875rem"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "opacity",
+                    "from": 1.0,
+                    "to": 0.0,
+                    "easing": "power2.in",
+                    "unit": ""
+                  },
+                  {
+                    "property": "translateY",
+                    "from": 0,
+                    "to": -30,
+                    "easing": "power2.in",
+                    "unit": "px"
+                  }
+                ],
+                "trigger": {
+                  "start": "top 60%",
+                  "end": "top 40%",
+                  "scrub": 0.5,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "static",
+              "willChange": false
+            }
+          ],
+          "titleReveal": {
+            "type": "maskReveal",
+            "scrollRange": {
+              "start": 0.08,
+              "end": 0.45
+            },
+            "stagger": {
+              "offset": 0.06,
+              "maxElements": 5
+            },
+            "easing": "cubic-bezier(0.16, 1, 0.3, 1)",
+            "text": "Quiet is the new luxury."
+          },
+          "atmosphere": {
+            "backgroundColor": "#0d0d0d",
+            "backgroundGradient": {
+              "from": "#0d0d0d",
+              "to": "#1a1a1a",
+              "angle": 160
+            },
+            "ambientDrift": {
+              "translateX": 0,
+              "translateY": 2,
+              "scale": 1.02
+            }
+          },
+          "velocityNodes": [
+            {
+              "threshold": 1.5,
+              "comparison": "above",
+              "above": {
+                "opacity": 0.6,
+                "scale": 0.98,
+                "letterSpacing": "-0.02em"
+              },
+              "below": {
+                "opacity": 1.0,
+                "scale": 1.0,
+                "letterSpacing": "0em"
+              },
+              "lerpFactor": 0.1
+            }
+          ]
+        },
+        {
+          "id": "editorial-philosophy",
+          "title": "The Philosophy of Restraint",
+          "pattern": "editorialLongread",
+          "scrollRange": {
+            "start": 500,
+            "end": 1300
+          },
+          "pin": {
+            "enabled": false,
+            "pinDuration": 150,
+            "pinSpacing": true,
+            "anticipatorySettle": 0.0
+          },
+          "layers": [
+            {
+              "id": "ed-chapter-marker",
+              "depth": 0.2,
+              "content": {
+                "type": "text",
+                "text": "I",
+                "fontSize": "12rem"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "translateY",
+                    "from": 40,
+                    "to": -20,
+                    "easing": "none",
+                    "unit": "px"
+                  },
+                  {
+                    "property": "opacity",
+                    "from": 0.04,
+                    "to": 0.12,
+                    "easing": "none",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top bottom",
+                  "end": "bottom top",
+                  "scrub": 0.5,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "static",
+              "willChange": false
+            },
+            {
+              "id": "ed-inline-image-1",
+              "depth": 0.4,
+              "content": {
+                "type": "image",
+                "src": "/assets/atelier-workbench.webp",
+                "alt": "Artisan's workbench with raw fragrance materials arranged in golden light"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "translateY",
+                    "from": 60,
+                    "to": -30,
+                    "easing": "none",
+                    "relativeTo": "parent",
+                    "unit": "px"
+                  },
+                  {
+                    "property": "scale",
+                    "from": 1.0,
+                    "to": 1.03,
+                    "easing": "none",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top 90%",
+                  "end": "bottom 10%",
+                  "scrub": 0.6,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "reduce",
+              "willChange": true
+            },
+            {
+              "id": "ed-pull-quote",
+              "depth": 0.7,
+              "content": {
+                "type": "text",
+                "text": "\"We do not perfume the body. We compose silence around it.\"",
+                "fontSize": "clamp(1.5rem, 3vw, 2.5rem)"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "translateY",
+                    "from": 30,
+                    "to": -15,
+                    "easing": "none",
+                    "unit": "px"
+                  },
+                  {
+                    "property": "scale",
+                    "from": 0.98,
+                    "to": 1.0,
+                    "easing": "power2.out",
+                    "unit": ""
+                  },
+                  {
+                    "property": "opacity",
+                    "from": 0.5,
+                    "to": 1.0,
+                    "easing": "power2.out",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top 85%",
+                  "end": "top 30%",
+                  "scrub": 0.4,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "reduce",
+              "willChange": true
+            },
+            {
+              "id": "ed-full-bleed-chapter",
+              "depth": 0.9,
+              "content": {
+                "type": "image",
+                "src": "/assets/ingredients-raw.webp",
+                "alt": "Raw ingredients: bergamot, amber resin, and sandalwood shavings"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "translateY",
+                    "from": 0,
+                    "to": -80,
+                    "easing": "none",
+                    "relativeTo": "parent",
+                    "unit": "px"
+                  },
+                  {
+                    "property": "scale",
+                    "from": 1.08,
+                    "to": 1.0,
+                    "easing": "none",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top bottom",
+                  "end": "bottom top",
+                  "scrub": 0.5,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "reduce",
+              "willChange": true
+            }
+          ],
+          "titleReveal": {
+            "type": "wordStagger",
+            "scrollRange": {
+              "start": 0.0,
+              "end": 0.35
+            },
+            "stagger": {
+              "offset": 0.05,
+              "maxElements": 5
+            },
+            "easing": "cubic-bezier(0.16, 1, 0.3, 1)",
+            "text": "The Philosophy of Restraint"
+          },
+          "atmosphere": {
+            "backgroundColor": "#f5f0e8",
+            "backgroundGradient": {
+              "from": "#f5f0e8",
+              "to": "#ebe4d6",
+              "angle": 180
+            },
+            "ambientDrift": {
+              "translateX": 0.5,
+              "translateY": 1.5,
+              "scale": 1.01
+            }
+          },
+          "velocityNodes": [
+            {
+              "threshold": 1.2,
+              "comparison": "above",
+              "above": {
+                "opacity": 0.85,
+                "letterSpacing": "-0.01em"
+              },
+              "below": {
+                "opacity": 1.0,
+                "letterSpacing": "0.01em"
+              },
+              "lerpFactor": 0.15
+            }
+          ]
+        },
+        {
+          "id": "finale-collection",
+          "title": "The Collection",
+          "pattern": "chapteredRelease",
+          "scrollRange": {
+            "start": 1300,
+            "end": 2200
+          },
+          "pin": {
+            "enabled": true,
+            "pinDuration": 300,
+            "pinSpacing": true,
+            "anticipatorySettle": 0.05
+          },
+          "layers": [
+            {
+              "id": "finale-bg-morph",
+              "depth": 0.15,
+              "content": {
+                "type": "svg",
+                "src": "<linearGradient id='gm'><stop offset='0%' stop-color='#c9a962'/><stop offset='100%' stop-color='#f5f0e8'/></linearGradient>",
+                "alt": "Background gradient that morphs from gold to cream"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "scale",
+                    "from": 1.0,
+                    "to": 1.08,
+                    "easing": "none",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top top",
+                  "end": "bottom top",
+                  "scrub": 0.5,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "static",
+              "willChange": true
+            },
+            {
+              "id": "finale-ambient-texture",
+              "depth": 0.3,
+              "content": {
+                "type": "image",
+                "src": "/assets/gold-vein-texture.webp",
+                "alt": "Subtle gold vein texture overlay"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "opacity",
+                    "from": 0.15,
+                    "to": 0.05,
+                    "easing": "power2.inOut",
+                    "unit": ""
+                  },
+                  {
+                    "property": "translateY",
+                    "from": 0,
+                    "to": -25,
+                    "easing": "none",
+                    "unit": "px"
+                  }
+                ],
+                "trigger": {
+                  "start": "top top",
+                  "end": "bottom top",
+                  "scrub": 0.7,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "static",
+              "willChange": false
+            },
+            {
+              "id": "finale-product-trio",
+              "depth": 0.6,
+              "content": {
+                "type": "image",
+                "src": "/assets/voss-collection-trio.webp",
+                "alt": "Three fragrance bottles arranged in ascending composition"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "translateY",
+                    "from": 100,
+                    "to": -30,
+                    "easing": "none",
+                    "relativeTo": "viewport",
+                    "unit": "vh"
+                  },
+                  {
+                    "property": "scale",
+                    "from": 0.9,
+                    "to": 1.0,
+                    "easing": "power2.out",
+                    "unit": ""
+                  },
+                  {
+                    "property": "rotateX",
+                    "from": 6,
+                    "to": 0,
+                    "easing": "power2.out",
+                    "unit": "deg"
+                  }
+                ],
+                "trigger": {
+                  "start": "top top",
+                  "end": "bottom top",
+                  "scrub": 0.5,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "reduce",
+              "willChange": true
+            },
+            {
+              "id": "finale-title-collection",
+              "depth": 1.0,
+              "content": {
+                "type": "text",
+                "text": "The Collection",
+                "fontSize": "clamp(3rem, 7vw, 6rem)"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "translateX",
+                    "from": -40,
+                    "to": 0,
+                    "easing": "power3.out",
+                    "unit": "px"
+                  },
+                  {
+                    "property": "opacity",
+                    "from": 0.0,
+                    "to": 1.0,
+                    "easing": "power2.out",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top 75%",
+                  "end": "top 35%",
+                  "scrub": 0.3,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "static",
+              "willChange": true
+            },
+            {
+              "id": "finale-product-labels",
+              "depth": 1.15,
+              "content": {
+                "type": "text",
+                "text": "Silence | Whisper | Presence",
+                "fontSize": "1rem"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "translateY",
+                    "from": 20,
+                    "to": 0,
+                    "easing": "power2.out",
+                    "unit": "px"
+                  },
+                  {
+                    "property": "opacity",
+                    "from": 0.0,
+                    "to": 0.8,
+                    "easing": "power2.out",
+                    "unit": ""
+                  },
+                  {
+                    "property": "letterSpacing",
+                    "from": "0.3em",
+                    "to": "0.15em",
+                    "easing": "power2.out",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top 60%",
+                  "end": "top 40%",
+                  "scrub": 0.4,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "static",
+              "willChange": false
+            },
+            {
+              "id": "finale-nav-dots",
+              "depth": 1.3,
+              "content": {
+                "type": "svg",
+                "src": "<svg width='60' height='200'><circle cx='30' cy='20' r='6' fill='currentColor'/><circle cx='30' cy='60' r='4' fill='currentColor' opacity='0.5'/><circle cx='30' cy='100' r='4' fill='currentColor' opacity='0.5'/></svg>",
+                "alt": "Chapter navigation dots"
+              },
+              "animation": {
+                "properties": [
+                  {
+                    "property": "opacity",
+                    "from": 0.0,
+                    "to": 0.6,
+                    "easing": "power2.out",
+                    "unit": ""
+                  }
+                ],
+                "trigger": {
+                  "start": "top 50%",
+                  "end": "top 30%",
+                  "scrub": 0.5,
+                  "fastScrollEnd": true,
+                  "invalidateOnRefresh": true
+                }
+              },
+              "mobileDegradation": "static",
+              "willChange": false
+            }
+          ],
+          "titleReveal": {
+            "type": "letterSpacingScrub",
+            "scrollRange": {
+              "start": 0.05,
+              "end": 0.55
+            },
+            "stagger": {
+              "offset": 0.02,
+              "maxElements": 3
+            },
+            "easing": "none",
+            "text": "The Collection"
+          },
+          "atmosphere": {
+            "backgroundColor": "#c9a962",
+            "backgroundGradient": {
+              "from": "#c9a962",
+              "to": "#f5f0e8",
+              "angle": 145
+            },
+            "colorMorph": {
+              "from": "#c9a962",
+              "to": "#f5f0e8",
+              "scrollStart": 0.2,
+              "scrollEnd": 0.8,
+              "easing": "power2.inOut"
+            },
+            "ambientDrift": {
+              "translateX": 1,
+              "translateY": 2.5,
+              "scale": 1.03
+            }
+          },
+          "velocityNodes": [
+            {
+              "threshold": 2.0,
+              "comparison": "above",
+              "above": {
+                "opacity": 0.7,
+                "scale": 0.97,
+                "skewX": 1.5,
+                "letterSpacing": "-0.03em"
+              },
+              "below": {
+                "opacity": 1.0,
+                "scale": 1.0,
+                "skewX": 0,
+                "letterSpacing": "0.05em"
+              },
+              "lerpFactor": 0.08
+            },
+            {
+              "threshold": 0.5,
+              "comparison": "below",
+              "below": {
+                "opacity": 1.0,
+                "scale": 1.01,
+                "letterSpacing": "0.08em"
+              },
+              "above": {
+                "opacity": 0.95,
+                "scale": 1.0,
+                "letterSpacing": "0.03em"
+              },
+              "lerpFactor": 0.12
+            }
+          ]
+        }
+      ],
+      "transitions": [
+        {
+          "from": "hero-manifesto",
+          "to": "editorial-philosophy",
+          "type": "craneShot",
+          "duration": 100,
+          "overlap": 30,
+          "easing": "power4.inOut",
+          "properties": [
+            {
+              "property": "translateY",
+              "from": 0,
+              "to": -100,
+              "relativeTo": "viewport",
+              "unit": "vh"
+            },
+            {
+              "property": "rotateX",
+              "from": 0,
+              "to": 4,
+              "unit": "deg"
+            }
+          ]
+        },
+        {
+          "from": "editorial-philosophy",
+          "to": "finale-collection",
+          "type": "dissolve",
+          "duration": 80,
+          "overlap": 20,
+          "easing": "power2.inOut",
+          "properties": [
+            {
+              "property": "opacity",
+              "from": 1.0,
+              "to": 0.0,
+              "unit": ""
+            },
+            {
+              "property": "scale",
+              "from": 1.0,
+              "to": 0.97,
+              "unit": ""
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
