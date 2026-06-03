@@ -5,7 +5,6 @@
   "activation": {
     "onStartup": false
   },
-  "kind": "memory",
   "contracts": {
     "tools": [],
     "memoryRerankers": ["memory-external-reranker"]

@@ -46,6 +46,10 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
     const endpointPath = this.cfg.endpointPath ?? "/v1/rerank";
     const topN = this.cfg.topN ?? limit;
 
+    console.debug(
+      `[memory-external-reranker] reranking with model=${this.cfg.model} fallbacks=${this.cfg.modelFallbacks?.join(",") ?? "none"} topN=${topN} documents=${documents.length}`,
+    );
+
     const errors: Error[] = [];
 
     for (const candidate of candidates) {
@@ -79,10 +83,14 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
         }
 
         const data = (await response.json()) as CohereRerankResponse;
-        return data.results.map((r) => ({
+        const results = data.results.map((r) => ({
           id: documents[r.index]?.id ?? String(r.index),
           score: r.relevance_score,
         }));
+        console.debug(
+          `[memory-external-reranker] reranking results: ${results.length} documents reranked`,
+        );
+        return results;
       } catch (err) {
         errors.push(err instanceof Error ? err : new Error(String(err)));
       }

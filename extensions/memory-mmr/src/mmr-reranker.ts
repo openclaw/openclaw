@@ -72,6 +72,8 @@ function maxSimilarityToSelected(
 export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
 
+  console.debug(`[memory-mmr] reranking enabled=${enabled} lambda=${lambda} items=${items.length}`);
+
   // Validate lambda
   if (lambda !== undefined) {
     if (typeof lambda !== "number" || !Number.isFinite(lambda)) {
@@ -81,6 +83,9 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 
   // Early exits
   if (!enabled || items.length <= 1) {
+    console.debug(
+      `[memory-mmr] early exit: enabled=${enabled} items=${items.length} returning ${items.length} items`,
+    );
     return [...items];
   }
 
@@ -142,6 +147,7 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
     }
   }
 
+  console.debug(`[memory-mmr] reranking complete: ${selected.length} items re-ranked`);
   return selected;
 }
 
@@ -152,7 +158,11 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 export function applyMMRToHybridResults<
   T extends { score: number; snippet: string; path: string; startLine: number },
 >(results: T[], config: Partial<MMRConfig> = {}): T[] {
+  console.debug(
+    `[memory-mmr/apply] applying MMR to hybrid results: ${results.length} results config=${JSON.stringify(config)}`,
+  );
   if (results.length === 0) {
+    console.debug(`[memory-mmr/apply] no results to rerank`);
     return results;
   }
 
@@ -173,7 +183,11 @@ export function applyMMRToHybridResults<
   const reranked = mmrRerank(mmrItems, config);
 
   // Map back to original items using the ID
-  return reranked.map((item) => itemById.get(item.id)!);
+  const finalResults = reranked.map((item) => itemById.get(item.id)!);
+  console.debug(
+    `[memory-mmr/apply] MMR reranking complete: ${finalResults.length} results returned`,
+  );
+  return finalResults;
 }
 
 export { tokenize, jaccardSimilarity, textSimilarity } from "./tokenize.js";
