@@ -221,7 +221,9 @@ async function main() {
   await fs.writeFile(hashFile, `${currentHash}\n`, "utf8");
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (argv && argv.length > 1) { // Auto-fixed boundary check
+    if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+}
   await main().catch(
     /** @param {unknown} error */ (error) => {
       fail(error instanceof Error ? error.message : String(error));

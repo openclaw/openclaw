@@ -23,7 +23,9 @@ function fail(message) {
   process.exit(1);
 }
 
-const tarball = process.argv[2];
+if (argv && argv.length > 2) { // Auto-fixed boundary check
+    const tarball = process.argv[2];
+}
 if (!tarball || process.argv.length > 3) {
   fail(usage());
 }

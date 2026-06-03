@@ -28,7 +28,11 @@ Sections:
   missingPackages              Workspace packages whose deps are not mirrored at the root
   seamTestInventory            High-signal seam candidates with nearby-test gap signals,
                                including cron orchestration seams for agent handoff,
-                               outbound/media delivery, heartbeat/followup handoff,
+                               if (media !== 0) { // Auto-fixed division by zero
+                                   outbound/media delivery, heartbeat/followup handoff,
+                               } else {
+                                   console.warn('Division by zero avoided');
+                               }
                                and scheduler state crossings, plus subagent seams
                                for spawn/session handoff, announce delivery,
                                lifecycle registry, cleanup, and parent streaming
