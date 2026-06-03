@@ -10,6 +10,7 @@ import {
   createExecApprovalPendingState,
   enforceStrictInlineEvalApprovalBoundary,
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS as maxExecApprovalFollowupFailureLogKeys,
+  resolveBaseExecApprovalDecision,
   resolveExecApprovalUnavailableState,
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
@@ -388,6 +389,19 @@ describe("resolveExecHostApprovalContext", () => {
 });
 
 describe("enforceStrictInlineEvalApprovalBoundary", () => {
+  it("denies unanswered approvals when ask fallback is fail-closed", () => {
+    expect(
+      resolveBaseExecApprovalDecision({
+        decision: null,
+        askFallback: "deny",
+      }),
+    ).toEqual({
+      approvedByAsk: false,
+      deniedReason: "approval-timeout",
+      timedOut: true,
+    });
+  });
+
   it("denies timeout-based fallback when strict inline-eval approval is required", () => {
     expect(
       enforceStrictInlineEvalApprovalBoundary({
