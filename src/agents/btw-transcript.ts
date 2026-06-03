@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
@@ -24,13 +25,66 @@ export function resolveBtwSessionTranscriptPath(params: {
       agentId,
       storePath: params.storePath,
     });
-    return resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
+    const sessionFile = resolveSessionFilePath(params.sessionId, params.sessionEntry, pathOpts);
+    return (
+      resolvePostCompactionSessionTranscriptPath({
+        sessionFile,
+        sessionEntry: params.sessionEntry,
+        pathOpts,
+      }) ?? sessionFile
+    );
   } catch (error) {
     diag.debug(
       `resolveSessionTranscriptPath failed: sessionId=${params.sessionId} err=${String(error)}`,
     );
     return undefined;
   }
+}
+
+/**
+ * When the stored session file points at a pre-compaction checkpoint transcript
+ * (e.g. `session-1.checkpoint.<id>.jsonl`), map it back to the matching
+ * checkpoint's post-compaction transcript so downstream harness hooks (such as
+ * the Codex `/btw` app-server binding lookup) read the active sidecar instead
+ * of a checkpoint sidecar that was never written. Returns `undefined` when the
+ * stored session file already matches an active transcript or no matching
+ * checkpoint is recorded.
+ */
+function resolvePostCompactionSessionTranscriptPath(params: {
+  sessionFile: string;
+  sessionEntry?: StoredSessionEntry;
+  pathOpts: ReturnType<typeof resolveSessionFilePathOptions>;
+}): string | undefined {
+  const checkpoints = params.sessionEntry?.compactionCheckpoints;
+  if (!Array.isArray(checkpoints) || checkpoints.length === 0) {
+    return undefined;
+  }
+  const resolvedSessionFile = path.resolve(params.sessionFile);
+  for (let index = checkpoints.length - 1; index >= 0; index -= 1) {
+    const checkpoint = checkpoints[index];
+    const preSessionId = checkpoint?.preCompaction?.sessionId?.trim();
+    if (!preSessionId) {
+      continue;
+    }
+    const preSessionFile = resolveSessionFilePath(
+      preSessionId,
+      { sessionFile: checkpoint.preCompaction.sessionFile },
+      params.pathOpts,
+    );
+    if (path.resolve(preSessionFile) !== resolvedSessionFile) {
+      continue;
+    }
+    const postSessionId = checkpoint.postCompaction?.sessionId?.trim();
+    if (!postSessionId) {
+      return undefined;
+    }
+    return resolveSessionFilePath(
+      postSessionId,
+      { sessionFile: checkpoint.postCompaction.sessionFile },
+      params.pathOpts,
+    );
+  }
+  return undefined;
 }
 
 function readSessionEntryId(entry: AgentSessionEntry): string | undefined {
