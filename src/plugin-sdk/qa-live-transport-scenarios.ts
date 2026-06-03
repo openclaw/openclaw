@@ -10,9 +10,13 @@ export type LiveTransportStandardScenarioId =
   | "help-command";
 
 export type LiveTransportScenarioDefinition<TId extends string = string> = {
+  /** Transport-specific scenario id accepted by CLI scenario filters. */
   id: TId;
+  /** Optional standard coverage bucket this transport-specific scenario proves. */
   standardId?: LiveTransportStandardScenarioId;
+  /** Per-scenario timeout for live transport execution. */
   timeoutMs: number;
+  /** Human-readable label used in QA output. */
   title: string;
 };
 
@@ -70,6 +74,7 @@ const LIVE_TRANSPORT_STANDARD_SCENARIOS: readonly LiveTransportStandardScenarioD
   },
 ] as const;
 
+/** Minimum standard scenarios expected from baseline live transport suites. */
 export const LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS: readonly LiveTransportStandardScenarioId[] =
   [
     "canary",
@@ -91,6 +96,7 @@ function assertKnownStandardScenarioIds(ids: readonly LiveTransportStandardScena
   }
 }
 
+/** Selects requested live transport scenarios and fails fast on unknown ids. */
 export function selectLiveTransportScenarios<TDefinition extends { id: string }>(params: {
   ids?: string[];
   laneLabel: string;
@@ -110,6 +116,7 @@ export function selectLiveTransportScenarios<TDefinition extends { id: string }>
   return selected;
 }
 
+/** Collects unique standard coverage ids from always-on coverage and scenario metadata. */
 export function collectLiveTransportStandardScenarioCoverage<TId extends string>(params: {
   alwaysOnStandardScenarioIds?: readonly LiveTransportStandardScenarioId[];
   scenarios: readonly LiveTransportScenarioDefinition<TId>[];
@@ -137,6 +144,7 @@ export function collectLiveTransportStandardScenarioCoverage<TId extends string>
   return coverage;
 }
 
+/** Returns expected standard scenario ids that are not covered by the supplied suite. */
 export function findMissingLiveTransportStandardScenarios(params: {
   coveredStandardScenarioIds: readonly LiveTransportStandardScenarioId[];
   expectedStandardScenarioIds: readonly LiveTransportStandardScenarioId[];
