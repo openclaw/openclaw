@@ -38,6 +38,10 @@ import { info } from "../globals.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
+import {
+  getDiagnosticStabilitySnapshot,
+  MAX_DIAGNOSTIC_STABILITY_LIMIT,
+} from "../logging/diagnostic-stability.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -196,6 +200,26 @@ export function formatContextEngineHealthLine(summary: HealthSummary): string | 
   }
   const engines = quarantined.map((entry) => entry.engineId).join(", ");
   return `Context engine: warning (${quarantined.length} quarantined; downgraded to legacy: ${engines})`;
+}
+
+function buildControlLaneHealthSummary(): HealthSummary["controlLane"] {
+  return getDiagnosticStabilitySnapshot({ limit: MAX_DIAGNOSTIC_STABILITY_LIMIT }).summary
+    .controlLane;
+}
+
+export function formatControlLaneHealthLine(summary: HealthSummary): string | null {
+  const controlLane = summary.controlLane;
+  if (!controlLane || controlLane.status === "ok") {
+    return null;
+  }
+  const reasons = controlLane.reasons.length > 0 ? ` reasons=${controlLane.reasons.join(",")}` : "";
+  const metrics = [
+    `missing=${controlLane.missingVisibleDelivery}`,
+    `slowQueue=${controlLane.slowQueue}`,
+    `slowVisible=${controlLane.slowVisibleDelivery}`,
+    `blockedSessions=${controlLane.blockedSessions}`,
+  ].join(" ");
+  return `Control lane: ${controlLane.status}${reasons} ${metrics}`;
 }
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>
@@ -607,11 +631,13 @@ export async function getHealthSnapshot(params?: {
 
   const pluginHealth = buildPluginHealthSummary();
   const contextEngineHealth = buildContextEngineHealthSummary();
+  const controlLaneHealth = buildControlLaneHealthSummary();
   const summary: HealthSummary = {
     ok: true,
     ts: Date.now(),
     durationMs: Date.now() - start,
     ...(params?.eventLoop ? { eventLoop: params.eventLoop } : {}),
+    ...(controlLaneHealth ? { controlLane: controlLaneHealth } : {}),
     ...(pluginHealth ? { plugins: pluginHealth } : {}),
     ...(contextEngineHealth ? { contextEngines: contextEngineHealth } : {}),
     modelPricing: getGatewayModelPricingHealth({ enabled: isGatewayModelPricingEnabled(cfg) }),
@@ -845,6 +871,10 @@ export async function healthCommand(
     const eventLoopLine = formatEventLoopHealthLine(summary);
     if (eventLoopLine) {
       runtime.log(styleHealthChannelLine(eventLoopLine, rich));
+    }
+    const controlLaneLine = formatControlLaneHealthLine(summary);
+    if (controlLaneLine) {
+      runtime.log(styleHealthChannelLine(controlLaneLine, rich));
     }
     const modelPricingLine = formatModelPricingHealthLine(summary);
     if (modelPricingLine) {
