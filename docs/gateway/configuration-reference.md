@@ -620,6 +620,7 @@ See [Inferred commitments](/concepts/commitments).
   callers into owner/admin access; `cron`, `gateway`, and `nodes` remain
   unavailable to non-owner callers even when allowlisted.
 - `gateway.tools.directInvoke.hostFsRead`: boolean opt-in (default `false`) gating the `read` coding tool on the gateway direct-invoke surfaces (HTTP `POST /tools/invoke` AND SDK RPC `tools.invoke`). MUST be paired with `"read"` in `gateway.tools.allow` for the tool to actually be reachable — this dual-key gating prevents pre-existing configs that already list `"read"` in `allow` (for unrelated surfaces) from silently granting host-FS read on upgrade. Exposes host-FS reads outside the workspace unless `tools.fs.workspaceOnly: true` is also set. Triggers the `gateway.tools_invoke_http.host_read_allow` audit warning (critical when bind is non-loopback).
+- `gateway.tools.directInvoke.hostFsWrite`: boolean opt-in (default `false`) gating the host-FS write coding tools (`write`, `edit`) on the gateway direct-invoke surfaces. Same dual-key gating pattern as `hostFsRead`: each tool name (`"write"`, `"edit"`) must ALSO appear in `gateway.tools.allow`. Strongly recommend pairing with `tools.fs.workspaceOnly: true`. Triggers the `gateway.tools_invoke_http.host_write_allow` audit warning (critical when bind is non-loopback). `apply_patch` is NOT controlled by this flag yet (no factory entry); RCE-class tools (`exec`/`process`/`spawn`/`shell`) are intentionally NOT controlled either and remain unavailable on the direct-invoke surface.
 
 </Accordion>
 

@@ -158,7 +158,12 @@ export function collectGatewayConfigFindings(
   // are set + bind is non-loopback (escalated to critical even on tailnet),
   // and warn on loopback.
   const hostFsWriteOptIn = cfg.gateway?.tools?.directInvoke?.hostFsWrite === true;
-  const WRITE_CLASS_TOOLS = ["write", "edit", "apply_patch"] as const;
+  // Only includes tool names the coding tool factory currently produces for
+  // the direct-invoke surface. `apply_patch` is intentionally NOT included
+  // (the factory does not produce it yet) so the audit does not falsely
+  // claim host-write exposure for an inert `allow: ["apply_patch"]` entry.
+  // Addresses ClawSweeper [P2] on #63919: docs/audit/resolver must agree.
+  const WRITE_CLASS_TOOLS = ["write", "edit"] as const;
   const writeToolsInAllow = WRITE_CLASS_TOOLS.filter((name) => gatewayToolsAllow.has(name));
   if (hostFsWriteOptIn && writeToolsInAllow.length > 0) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";

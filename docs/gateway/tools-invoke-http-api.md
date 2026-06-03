@@ -189,19 +189,19 @@ whenever both keys are set — regardless of `tools.fs.workspaceOnly` — so the
 exposure is always visible in audit output; workspace confinement is the
 recommended remediation, not a condition that silences the warning.
 
-### Opt-in: coding tools `write` / `edit` / `apply_patch` over direct-invoke
+### Opt-in: coding tools `write` / `edit` over direct-invoke
 
 The host-filesystem write coding tools follow the same dual-key gating pattern
 as `read`. Each tool name must appear in `gateway.tools.allow` AND the
-`directInvoke.hostFsWrite: true` opt-in must be set; either alone leaves all
-three write tools unreachable.
+`directInvoke.hostFsWrite: true` opt-in must be set; either alone leaves both
+write tools unreachable.
 
 ```json5
 {
   gateway: {
     tools: {
-      // (1) Per-tool names you want enabled (subset of write/edit/apply_patch).
-      allow: ["write", "edit", "apply_patch"],
+      // (1) Per-tool names you want enabled (subset of write/edit).
+      allow: ["write", "edit"],
       // (2) Single class-level opt-in for the entire write family.
       directInvoke: {
         hostFsWrite: true,
@@ -211,7 +211,7 @@ three write tools unreachable.
 }
 ```
 
-Truth table (per tool name `T` ∈ `{write, edit, apply_patch}`):
+Truth table (per tool name `T` ∈ `{write, edit}`):
 
 | `tools.allow` includes `T` | `directInvoke.hostFsWrite` | `T` reachable on direct-invoke |
 | -------------------------- | -------------------------- | ------------------------------ |
@@ -219,6 +219,13 @@ Truth table (per tool name `T` ∈ `{write, edit, apply_patch}`):
 | yes                        | no                         | ❌ (tool not materialized)     |
 | no                         | yes                        | ❌ (filtered by HTTP deny)     |
 | yes                        | yes                        | ✅                             |
+
+**`apply_patch` is NOT in this set.** Although `apply_patch` is in
+`DEFAULT_GATEWAY_HTTP_TOOL_DENY` for future-proofing, the coding tool factory
+does not currently produce an `apply_patch` entry for the direct-invoke surface.
+Operators including `"apply_patch"` in `gateway.tools.allow` will see no effect
+on the direct-invoke surface; the entry remains inert until a future PR adds
+the factory wiring.
 
 **Security:** When enabled, write-class tools can mutate any file the gateway
 process can open, **outside the configured workspace** unless
