@@ -2,8 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   appendTranscriptEvent,
@@ -419,6 +424,28 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       });
       if (adapter.name === "sqlite") {
         expect(fs.existsSync(cleanupStorePath)).toBe(false);
+        const database = openOpenClawAgentDatabase({
+          agentId: "main",
+          env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
+          path: path.join(paths.stateDir, "agents", "main", "agent", "openclaw-agent.sqlite"),
+        });
+        const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+        const removedRoute = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("session_routes")
+            .select("session_id")
+            .where("session_key", "=", "agent:main:lifecycle-cleanup-removed"),
+        );
+        expect(removedRoute).toBeUndefined();
+        const freshRoute = executeSqliteQueryTakeFirstSync(
+          database.db,
+          db
+            .selectFrom("session_routes")
+            .select("session_id")
+            .where("session_key", "=", "agent:main:lifecycle-cleanup-fresh"),
+        );
+        expect(freshRoute).toEqual({ session_id: "fresh-lifecycle" });
         await expect(
           adapter.loadTranscriptEvents(scopedTranscript("agent:main:regular", "referenced")),
         ).resolves.not.toEqual([]);
@@ -727,3 +754,119 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
     });
   },
 );
+
+describe("sqlite session normalization", () => {
+  let paths: TestPaths;
+
+  beforeEach(() => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-sqlite-norm-"));
+    paths = {
+      sqlitePath: path.join(tempDir, "openclaw-agent.sqlite"),
+      stateDir: path.join(tempDir, "state"),
+      storePath: path.join(tempDir, "sessions.json"),
+      tempDir,
+      transcriptPath: path.join(tempDir, "session.jsonl"),
+    };
+  });
+
+  afterEach(() => {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    fs.rmSync(paths.tempDir, { recursive: true, force: true });
+  });
+
+  it("maintains normalized session root and route rows", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env,
+        sessionKey: "agent:main:group:example",
+        storePath: paths.sqlitePath,
+      },
+      {
+        agentHarnessId: "codex",
+        chatType: "group",
+        channel: "discord",
+        deliveryContext: {
+          accountId: "acct-1",
+          channel: "discord",
+          threadId: "thread-1",
+          to: "group-1",
+        },
+        displayName: "Example group",
+        endedAt: 90,
+        model: "gpt-5.5",
+        modelProvider: "openai",
+        parentSessionKey: "agent:main:parent",
+        sessionId: "normalized-session",
+        sessionStartedAt: 50,
+        spawnedBy: "agent:main:spawner",
+        startedAt: 60,
+        status: "done",
+        updatedAt: 100,
+      },
+    );
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env,
+      path: paths.sqlitePath,
+    });
+    const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+    const session = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("sessions")
+        .select([
+          "account_id",
+          "agent_harness_id",
+          "channel",
+          "chat_type",
+          "created_at",
+          "display_name",
+          "ended_at",
+          "model",
+          "model_provider",
+          "parent_session_key",
+          "session_key",
+          "session_scope",
+          "spawned_by",
+          "started_at",
+          "status",
+          "updated_at",
+        ])
+        .where("session_id", "=", "normalized-session"),
+    );
+    expect(session).toEqual({
+      account_id: "acct-1",
+      agent_harness_id: "codex",
+      channel: "discord",
+      chat_type: "group",
+      created_at: 50,
+      display_name: "Example group",
+      ended_at: 90,
+      model: "gpt-5.5",
+      model_provider: "openai",
+      parent_session_key: "agent:main:parent",
+      session_key: "agent:main:group:example",
+      session_scope: "group",
+      spawned_by: "agent:main:spawner",
+      started_at: 60,
+      status: "done",
+      updated_at: expect.any(Number),
+    });
+
+    const route = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_routes")
+        .select(["session_id", "updated_at"])
+        .where("session_key", "=", "agent:main:group:example"),
+    );
+    expect(route).toEqual({
+      session_id: "normalized-session",
+      updated_at: expect.any(Number),
+    });
+  });
+});

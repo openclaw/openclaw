@@ -31,6 +31,22 @@ export interface CacheEntries {
   value_json: string | null;
 }
 
+export interface Conversations {
+  account_id: string;
+  channel: string;
+  conversation_id: string;
+  created_at: number;
+  kind: string;
+  label: string | null;
+  metadata_json: string | null;
+  native_channel_id: string | null;
+  native_direct_user_id: string | null;
+  parent_conversation_id: string | null;
+  peer_id: string;
+  thread_id: string | null;
+  updated_at: number;
+}
+
 export interface MemoryEmbeddingCache {
   dims: number | null;
   embedding: string;
@@ -82,6 +98,14 @@ export interface SchemaMeta {
   updated_at: number;
 }
 
+export interface SessionConversations {
+  conversation_id: string;
+  first_seen_at: number;
+  last_seen_at: number;
+  role: Generated<string>;
+  session_id: string;
+}
+
 export interface SessionEntries {
   entry_json: string;
   session_id: string;
@@ -89,10 +113,30 @@ export interface SessionEntries {
   updated_at: number;
 }
 
-export interface Sessions {
-  created_at: number;
+export interface SessionRoutes {
   session_id: string;
   session_key: string;
+  updated_at: number;
+}
+
+export interface Sessions {
+  account_id: string | null;
+  agent_harness_id: string | null;
+  channel: string | null;
+  chat_type: string | null;
+  created_at: number;
+  display_name: string | null;
+  ended_at: number | null;
+  model: string | null;
+  model_provider: string | null;
+  parent_session_key: string | null;
+  primary_conversation_id: string | null;
+  session_id: string;
+  session_key: string;
+  session_scope: Generated<string>;
+  spawned_by: string | null;
+  started_at: number | null;
+  status: string | null;
   updated_at: number;
 }
 
@@ -117,13 +161,16 @@ export interface DB {
   auth_profile_state: AuthProfileState;
   auth_profile_store: AuthProfileStore;
   cache_entries: CacheEntries;
+  conversations: Conversations;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunks: MemoryIndexChunks;
   memory_index_meta: MemoryIndexMeta;
   memory_index_sources: MemoryIndexSources;
   memory_index_state: MemoryIndexState;
   schema_meta: SchemaMeta;
+  session_conversations: SessionConversations;
   session_entries: SessionEntries;
+  session_routes: SessionRoutes;
   sessions: Sessions;
   transcript_event_identities: TranscriptEventIdentities;
   transcript_events: TranscriptEvents;
