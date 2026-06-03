@@ -1730,6 +1730,52 @@ describe("channel turn kernel", () => {
     expect(materializeTurnState(events).completionAllowed).toBe(true);
   });
 
+  it("includes turn state in finalize error logs", async () => {
+    const log = vi.fn();
+    const finalizeError = new Error("finalize failed");
+
+    await expect(
+      runChannelTurn({
+        channel: "telegram",
+        raw: {},
+        log,
+        adapter: {
+          ingest: () => ({ id: "msg-1", rawText: "hello" }),
+          resolveTurn: () => ({
+            channel: "telegram",
+            routeSessionKey: "agent:main:telegram:peer",
+            storePath: "/tmp/sessions.json",
+            ctxPayload: createCtx({
+              ChatType: "direct",
+              SessionKey: "agent:main:telegram:peer",
+              To: "sebastian",
+            }),
+            recordInboundSession: createRecordInboundSession(),
+            runDispatch: async () => ({
+              queuedFinal: true,
+              counts: { tool: 0, block: 0, final: 1 },
+            }),
+          }),
+          onFinalize: () => {
+            throw finalizeError;
+          },
+        },
+      }),
+    ).rejects.toThrow(finalizeError);
+
+    expect(loggedEvents(log).at(-1)).toMatchObject({
+      stage: "finalize",
+      event: "error",
+      messageId: "msg-1",
+      turnState: {
+        visibleDeliveryRequired: true,
+        visibleDeliverySent: true,
+        completionAllowed: true,
+        errors: [],
+      },
+    });
+  });
+
   it("finalizes failed dispatches before rethrowing", async () => {
     const onFinalize = vi.fn();
     const dispatchError = new Error("dispatch failed");
