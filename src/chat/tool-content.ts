@@ -36,6 +36,8 @@ export function resolveToolBlockArgs(block: ToolContentBlock): unknown {
 export function resolveToolUseId(block: ToolContentBlock): string | undefined {
   const id =
     (typeof block.id === "string" && block.id.trim()) ||
+    (typeof block.tool_call_id === "string" && block.tool_call_id.trim()) ||
+    (typeof block.toolCallId === "string" && block.toolCallId.trim()) ||
     (typeof block.tool_use_id === "string" && block.tool_use_id.trim()) ||
     (typeof block.toolUseId === "string" && block.toolUseId.trim());
   return id || undefined;

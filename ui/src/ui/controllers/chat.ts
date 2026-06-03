@@ -6,6 +6,7 @@ import {
 } from "../chat/heartbeat-display.ts";
 import { extractText } from "../chat/message-extract.ts";
 import { reconcileChatRunLifecycle } from "../chat/run-lifecycle.ts";
+import { extractToolMessageRefs } from "../chat/tool-message-refs.ts";
 import { buildUserChatMessageContentBlocks } from "../chat/user-message-content.ts";
 import { formatConnectError } from "../connect-error.ts";
 import {
@@ -95,73 +96,6 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
   return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
-function isPersistedToolHistoryMessage(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  const role = normalizeLowercaseStringOrEmpty(entry.role);
-  if (role === "toolresult" || role === "tool_result" || role === "tool" || role === "function") {
-    return true;
-  }
-  if (
-    typeof entry.toolCallId === "string" ||
-    typeof entry.tool_call_id === "string" ||
-    typeof entry.toolName === "string" ||
-    typeof entry.tool_name === "string"
-  ) {
-    return true;
-  }
-  return (
-    Array.isArray(entry.content) &&
-    entry.content.some((block) => {
-      if (!block || typeof block !== "object") {
-        return false;
-      }
-      const type = normalizeLowercaseStringOrEmpty((block as Record<string, unknown>).type);
-      return (
-        type === "toolresult" ||
-        type === "tool_result" ||
-        type === "toolcall" ||
-        type === "tool_call" ||
-        type === "tooluse" ||
-        type === "tool_use"
-      );
-    })
-  );
-}
-
-function collectToolCallIds(message: unknown): string[] {
-  if (!message || typeof message !== "object") {
-    return [];
-  }
-  const entry = message as Record<string, unknown>;
-  const ids = [entry.toolCallId, entry.tool_call_id, entry.toolUseId, entry.tool_use_id, entry.id]
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
-    .map((value) => value.trim());
-  if (!Array.isArray(entry.content)) {
-    return ids;
-  }
-  for (const block of entry.content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const contentEntry = block as Record<string, unknown>;
-    for (const value of [
-      contentEntry.toolCallId,
-      contentEntry.tool_call_id,
-      contentEntry.toolUseId,
-      contentEntry.tool_use_id,
-      contentEntry.id,
-    ]) {
-      if (typeof value === "string" && value.trim()) {
-        ids.push(value.trim());
-      }
-    }
-  }
-  return ids;
-}
-
 function currentLiveToolCallIds(state: ChatState): string[] {
   const toolHost = state as ChatState & { toolStreamOrder?: unknown };
   return Array.isArray(toolHost.toolStreamOrder)
@@ -180,11 +114,8 @@ function persistedCurrentToolStreamIds(messages: unknown[], state: ChatState): S
   const liveToolIdSet = new Set(liveToolIds);
   const persistedToolIds = new Set<string>();
   for (const message of messages.slice(lastUserMessageIndex(messages) + 1)) {
-    if (!isPersistedToolHistoryMessage(message)) {
-      continue;
-    }
-    for (const id of collectToolCallIds(message)) {
-      persistedToolIds.add(id);
+    for (const ref of extractToolMessageRefs(message)) {
+      persistedToolIds.add(ref.id);
     }
   }
   for (const id of persistedToolIds) {
@@ -505,11 +436,7 @@ function currentToolStreamMessageIndex(
   }
   const startIndex = lastUserMessageIndex(messages) + 1;
   for (let index = startIndex; index < messages.length; index++) {
-    const message = messages[index];
-    if (!isPersistedToolHistoryMessage(message)) {
-      continue;
-    }
-    if (collectToolCallIds(message).some((id) => liveToolIds.has(id))) {
+    if (extractToolMessageRefs(messages[index]).some((ref) => liveToolIds.has(ref.id))) {
       return index;
     }
   }
@@ -916,8 +843,8 @@ function prunePersistedToolStreamMessages(state: ChatState, persistedToolIds: Se
   }
   if (Array.isArray(toolHost.chatToolMessages)) {
     toolHost.chatToolMessages = toolHost.chatToolMessages.filter((message) => {
-      const ids = collectToolCallIds(message);
-      return ids.every((id) => !persistedToolIds.has(id));
+      const refs = extractToolMessageRefs(message);
+      return refs.every((ref) => !persistedToolIds.has(ref.id));
     });
   }
   if (!Array.isArray(toolHost.chatStreamSegments)) {
