@@ -2,9 +2,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueMock = vi.fn(async (_entry: unknown) => {});
 const flushKeyMock = vi.fn(async (_key: string) => {});
-const acceptIngressMock = vi.fn(async () => ({ accepted: true, id: "default:D1:123.456" }));
+const acceptIngressMock = vi.fn(async () => ({ kind: "accepted", id: "default:D1:123.456" }));
 const completeIngressMock = vi.fn(async () => {});
 const releaseIngressMock = vi.fn(async () => {});
+const listPendingIngressMock = vi.fn(async () => []);
 const hasDeliveryMock = vi.fn(async () => false);
 const recordDeliveriesMock = vi.fn(async () => {});
 const resolveThreadTsMock = vi.fn(async ({ message }: { message: Record<string, unknown> }) => ({
@@ -36,11 +37,12 @@ vi.mock("./thread-resolution.js", () => ({
 }));
 
 vi.mock("./inbound-delivery-state.js", () => ({
-  acceptSlackInboundMessageIngress: (...args: unknown[]) => acceptIngressMock(...args),
-  completeSlackInboundMessageIngress: (...args: unknown[]) => completeIngressMock(...args),
-  releaseSlackInboundMessageIngress: (...args: unknown[]) => releaseIngressMock(...args),
-  hasSlackInboundMessageDelivery: (...args: unknown[]) => hasDeliveryMock(...args),
-  recordSlackInboundMessageDeliveries: (...args: unknown[]) => recordDeliveriesMock(...args),
+  acceptSlackInboundMessageIngress: (args: unknown) => acceptIngressMock(args),
+  completeSlackInboundMessageIngress: (args: unknown) => completeIngressMock(args),
+  releaseSlackInboundMessageIngress: (args: unknown) => releaseIngressMock(args),
+  listPendingSlackInboundMessageIngress: () => listPendingIngressMock(),
+  hasSlackInboundMessageDelivery: (args: unknown) => hasDeliveryMock(args),
+  recordSlackInboundMessageDeliveries: (args: unknown) => recordDeliveriesMock(args),
 }));
 
 function createContext(overrides?: {
@@ -95,11 +97,13 @@ describe("createSlackMessageHandler", () => {
     acceptIngressMock.mockClear();
     completeIngressMock.mockClear();
     releaseIngressMock.mockClear();
+    listPendingIngressMock.mockClear();
     hasDeliveryMock.mockClear();
     recordDeliveriesMock.mockClear();
     resolveThreadTsMock.mockClear();
     hasDeliveryMock.mockResolvedValue(false);
-    acceptIngressMock.mockResolvedValue({ accepted: true, id: "default:D1:123.456" });
+    acceptIngressMock.mockResolvedValue({ kind: "accepted", id: "default:D1:123.456" });
+    listPendingIngressMock.mockResolvedValue([]);
   });
 
   it("does not track invalid non-message events from the message stream", async () => {
@@ -169,6 +173,56 @@ describe("createSlackMessageHandler", () => {
       enqueueMock.mock.invocationCallOrder[0],
     );
     expect(completeIngressMock).not.toHaveBeenCalled();
+  });
+
+  it("does not queue durable pending duplicates from live Slack events", async () => {
+    acceptIngressMock.mockResolvedValueOnce({ kind: "pending", id: "default:D1:123.456" });
+    const { handler, trackEvent } = createHandlerWithTracker();
+
+    await handleDirectMessage(handler);
+
+    expect(trackEvent).not.toHaveBeenCalled();
+    expect(resolveThreadTsMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
+  it("does not queue durable completed duplicates from live Slack events", async () => {
+    acceptIngressMock.mockResolvedValueOnce({ kind: "completed", id: "default:D1:123.456" });
+    const { handler, trackEvent } = createHandlerWithTracker();
+
+    await handleDirectMessage(handler);
+
+    expect(trackEvent).not.toHaveBeenCalled();
+    expect(resolveThreadTsMock).not.toHaveBeenCalled();
+    expect(enqueueMock).not.toHaveBeenCalled();
+  });
+
+  it("replays pending durable Slack ingress records when the handler starts", async () => {
+    const message = {
+      type: "message",
+      channel: "D1",
+      ts: "123.456",
+      text: "hello after restart",
+    };
+    listPendingIngressMock.mockResolvedValueOnce([
+      {
+        id: "default:D1:123.456",
+        payload: {
+          message,
+          opts: { source: "message" },
+          receivedAt: 1,
+        },
+        receivedAt: 1,
+        updatedAt: 1,
+        attempts: 1,
+      },
+    ]);
+
+    createHandlerWithTracker();
+
+    await vi.waitFor(() => expect(enqueueMock).toHaveBeenCalledTimes(1));
+    expect(acceptIngressMock).not.toHaveBeenCalled();
+    expect(enqueueMock).toHaveBeenCalledWith({ message, opts: { source: "message" } });
   });
 
   it("accepts thread_broadcast messages from the message stream", async () => {
