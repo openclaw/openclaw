@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
 import {
   buildLiveModelProviderConfig,
   fetchLiveProviderModelIds,
@@ -21,15 +21,16 @@ function buildModel(id: string): ModelDefinitionConfig {
 
 function buildFetchGuard(body: unknown): {
   fetchGuard: LiveModelCatalogFetchGuard;
+  fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard>;
   release: ReturnType<typeof vi.fn>;
 } {
   const release = vi.fn(async () => undefined);
-  const fetchGuard = vi.fn(async () => ({
+  const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
     response: new Response(JSON.stringify(body)),
     finalUrl: "https://provider.example.test/v1/models",
     release,
-  })) as unknown as LiveModelCatalogFetchGuard;
-  return { fetchGuard, release };
+  }));
+  return { fetchGuard: fetchGuardMock, fetchGuardMock, release };
 }
 
 describe("provider-catalog-live-runtime", () => {
@@ -38,7 +39,7 @@ describe("provider-catalog-live-runtime", () => {
   });
 
   it("fetches and dedupes OpenAI-style live model ids with resolved discovery auth", async () => {
-    const { fetchGuard, release } = buildFetchGuard({
+    const { fetchGuard, fetchGuardMock, release } = buildFetchGuard({
       data: [
         { id: "model-a", object: "model" },
         { id: "model-b", object: "model" },
@@ -46,6 +47,7 @@ describe("provider-catalog-live-runtime", () => {
         { id: "model-a", object: "model" },
       ],
     });
+    const controller = new AbortController();
 
     await expect(
       fetchLiveProviderModelIds({
@@ -54,19 +56,22 @@ describe("provider-catalog-live-runtime", () => {
         apiKey: "PROVIDER_API_KEY",
         discoveryApiKey: "resolved-provider-key",
         fetchGuard,
+        signal: controller.signal,
         timeoutMs: 1234,
       }),
     ).resolves.toEqual(["model-a", "model-b"]);
 
-    expect(fetchGuard).toHaveBeenCalledTimes(1);
-    expect(fetchGuard.mock.calls[0]?.[0]).toMatchObject({
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+    const request = fetchGuardMock.mock.calls[0]?.[0];
+    expect(request).toMatchObject({
       url: "https://provider.example.test/v1/models",
       auditContext: "provider-model-discovery",
       timeoutMs: 1234,
+      signal: controller.signal,
     });
-    expect(fetchGuard.mock.calls[0]?.[0]?.init?.headers).toMatchObject({
-      Authorization: "Bearer resolved-provider-key",
-    });
+    const headers = request?.init?.headers;
+    expect(headers).toBeInstanceOf(Headers);
+    expect((headers as Headers).get("authorization")).toBe("Bearer resolved-provider-key");
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -91,7 +96,7 @@ describe("provider-catalog-live-runtime", () => {
   });
 
   it("caches live provider configs and falls back to static rows on failure", async () => {
-    const { fetchGuard } = buildFetchGuard([
+    const { fetchGuard, fetchGuardMock } = buildFetchGuard([
       { id: "model-b", object: "model" },
       { id: "unknown-model", object: "model" },
     ]);
@@ -122,13 +127,13 @@ describe("provider-catalog-live-runtime", () => {
       ttlMs: 60_000,
     });
 
-    expect(fetchGuard).toHaveBeenCalledTimes(1);
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("PROVIDER_API_KEY");
     expect(first.models.map((model) => model.id)).toEqual(["model-b"]);
     expect(second.models.map((model) => model.id)).toEqual(["model-b"]);
 
     clearLiveCatalogCacheForTests();
-    vi.mocked(fetchGuard).mockRejectedValueOnce(new Error("network unavailable"));
+    fetchGuardMock.mockRejectedValueOnce(new Error("network unavailable"));
     const fallback = await buildLiveModelProviderConfig({
       providerId: "provider",
       endpoint: "https://provider.example.test/v1/models",

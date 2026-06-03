@@ -90,9 +90,9 @@ export async function fetchLiveProviderModelIds(
     url: params.endpoint,
     init: {
       headers: buildHeaders(params),
-      signal: params.signal ?? AbortSignal.timeout(params.timeoutMs ?? 5_000),
     },
-    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+    timeoutMs: params.timeoutMs ?? 5_000,
     policy: params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
     auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,
   });
