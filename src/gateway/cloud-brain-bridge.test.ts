@@ -77,8 +77,11 @@ describe("Bench cloud bridge agent aliases", () => {
       },
     });
 
-    const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined;
-    expect(JSON.parse(String(requestInit?.body))).toMatchObject({
+    const requestBody = fetchMock.mock.calls[0]?.[1]?.body;
+    if (typeof requestBody !== "string") {
+      throw new Error("expected JSON request body");
+    }
+    expect(JSON.parse(requestBody)).toMatchObject({
       agentId: "sage",
       instanceId: "bench-01",
     });
