@@ -941,14 +941,19 @@ function buildParams(
   options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
-  const systemCacheControlCount = !cacheControl
-    ? 0
-    : isOAuthTokenResult
-      ? 1 + (context.systemPrompt ? 1 : 0)
-      : context.systemPrompt
-        ? 1
-        : 0;
-  const toolCacheControlCount = cacheControl && context.tools?.length ? 1 : 0;
+  const system = buildAnthropicSystemBlocks(context.systemPrompt, isOAuthTokenResult, cacheControl);
+  const compat = context.tools?.length ? getAnthropicCompat(model) : undefined;
+  const tools =
+    context.tools && compat
+      ? convertTools(
+          context.tools,
+          isOAuthTokenResult,
+          compat.supportsEagerToolInputStreaming,
+          compat.supportsCacheControlOnTools ? cacheControl : undefined,
+        )
+      : undefined;
+  const systemCacheControlCount = countNativeCacheControlMarkers(system);
+  const toolCacheControlCount = countNativeCacheControlMarkers(tools);
   const messageCacheControlLimit = Math.max(
     0,
     ANTHROPIC_CACHE_CONTROL_LIMIT - systemCacheControlCount - toolCacheControlCount,
@@ -966,20 +971,8 @@ function buildParams(
     stream: true,
   };
 
-  // For OAuth tokens, we MUST include Claude Code identity
-  if (isOAuthTokenResult) {
-    params.system = [
-      {
-        type: "text",
-        text: "You are Claude Code, Anthropic's official CLI for Claude.",
-        ...(cacheControl ? { cache_control: cacheControl } : {}),
-      },
-    ];
-    if (context.systemPrompt) {
-      params.system.push(...buildSystemPromptBlocks(context.systemPrompt, cacheControl));
-    }
-  } else if (context.systemPrompt) {
-    params.system = buildSystemPromptBlocks(context.systemPrompt, cacheControl);
+  if (system) {
+    params.system = system;
   }
 
   // Temperature is incompatible with extended thinking (adaptive or budget-based).
@@ -991,14 +984,8 @@ function buildParams(
     params.stop_sequences = options.stop;
   }
 
-  if (context.tools && context.tools.length > 0) {
-    const compat = getAnthropicCompat(model);
-    params.tools = convertTools(
-      context.tools,
-      isOAuthTokenResult,
-      compat.supportsEagerToolInputStreaming,
-      compat.supportsCacheControlOnTools ? cacheControl : undefined,
-    );
+  if (tools && tools.length > 0) {
+    params.tools = tools;
   }
 
   // Configure thinking mode: adaptive (Opus 4.6+ and Sonnet 4.6),
@@ -1256,6 +1243,33 @@ function convertMessages(
   return params;
 }
 
+function applyContentBlockCacheControl(
+  block: ContentBlockParam,
+  cacheControl: CacheControlEphemeral,
+): void {
+  (block as ContentBlockParam & { cache_control?: CacheControlEphemeral }).cache_control =
+    cacheControl;
+}
+
+function buildAnthropicSystemBlocks(
+  systemPrompt: string | undefined,
+  isOAuthTokenResult: boolean,
+  cacheControl: CacheControlEphemeral | undefined,
+): TextBlockParam[] | undefined {
+  const blocks: TextBlockParam[] = [];
+  if (isOAuthTokenResult) {
+    blocks.push({
+      type: "text",
+      text: "You are Claude Code, Anthropic's official CLI for Claude.",
+      ...(cacheControl ? { cache_control: cacheControl } : {}),
+    });
+  }
+  if (systemPrompt) {
+    blocks.push(...buildSystemPromptBlocks(systemPrompt, cacheControl));
+  }
+  return blocks.length > 0 ? blocks : undefined;
+}
+
 function buildSystemPromptBlocks(
   systemPrompt: string,
   cacheControl: CacheControlEphemeral | undefined,
@@ -1291,12 +1305,18 @@ function buildSystemPromptBlocks(
   return blocks.length > 0 ? blocks : [{ type: "text", text: "" }];
 }
 
-function applyContentBlockCacheControl(
-  block: ContentBlockParam,
-  cacheControl: CacheControlEphemeral,
-): void {
-  (block as ContentBlockParam & { cache_control?: CacheControlEphemeral }).cache_control =
-    cacheControl;
+function countNativeCacheControlMarkers(blocks: unknown): number {
+  if (!Array.isArray(blocks)) {
+    return 0;
+  }
+
+  let count = 0;
+  for (const block of blocks) {
+    if (block && typeof block === "object" && "cache_control" in block) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function shouldUseFineGrainedToolStreamingBeta(
