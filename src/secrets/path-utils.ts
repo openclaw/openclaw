@@ -47,6 +47,7 @@ function traverseToLeafParent(params: {
     const segment = params.segments[index] ?? "";
     if (Array.isArray(cursor)) {
       const arrayIndex = requireArrayIndexSegment(segment, params.segments.join("."));
+      // Existing-path mutations must fail before the leaf so callers do not create partial config.
       if (params.requireExistingSegment && (arrayIndex < 0 || arrayIndex >= cursor.length)) {
         throw new Error(
           `Path segment does not exist at ${params.segments.slice(0, index + 1).join(".")}.`,
@@ -71,6 +72,9 @@ function traverseToLeafParent(params: {
   return cursor;
 }
 
+/**
+ * Reads a config path from object/array containers, returning undefined for missing or invalid paths.
+ */
 export function getPath(root: unknown, segments: string[]): unknown {
   if (segments.length === 0) {
     return undefined;
@@ -93,6 +97,9 @@ export function getPath(root: unknown, segments: string[]): unknown {
   return cursor;
 }
 
+/**
+ * Sets a config path, creating missing object or array containers from the next path segment.
+ */
 export function setPathCreateStrict(
   root: Record<string, unknown>,
   segments: string[],
@@ -154,6 +161,9 @@ export function setPathCreateStrict(
   return changed;
 }
 
+/**
+ * Sets an existing config path and throws if any parent or leaf segment is missing.
+ */
 export function setPathExistingStrict(
   root: Record<string, unknown>,
   segments: string[],
@@ -186,6 +196,9 @@ export function setPathExistingStrict(
   return false;
 }
 
+/**
+ * Deletes an existing config path, returning whether anything was removed.
+ */
 export function deletePathStrict(root: Record<string, unknown>, segments: string[]): boolean {
   const cursor = traverseToLeafParent({ root, segments, requireExistingSegment: false });
 
