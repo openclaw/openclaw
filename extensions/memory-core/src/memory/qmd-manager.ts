@@ -61,6 +61,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
+import { countChokidarWatchedEntries, MemoryWatchPressureWarning } from "./watch-pressure.js";
 import {
   recordMemoryWatchEventPath,
   settleMemoryWatchEventPaths,
@@ -80,8 +81,6 @@ const QMD_EMBED_BACKOFF_BASE_MS = 60_000;
 const QMD_EMBED_BACKOFF_MAX_MS = 60 * 60 * 1000;
 const QMD_EMBED_LOCK_MIN_WAIT_MS = 15 * 60 * 1000;
 const QMD_WRITE_LOCK_MIN_WAIT_MS = 5 * 60 * 1000;
-// Warn when QMD watcher state is large enough to risk FD pressure.
-const QMD_WATCH_PRESSURE_WARNING_THRESHOLD = 2_000;
 const QMD_EMBED_LOCK_RETRY_TEMPLATE = {
   factor: 1.2,
   minTimeout: 250,
@@ -236,15 +235,6 @@ function shouldIgnoreMemoryWatchPath(watchPath: string): boolean {
   return parts.some((segment) => IGNORED_MEMORY_WATCH_DIR_NAMES.has(segment));
 }
 
-function countQmdWatchedEntries(watcher: FSWatcher): number {
-  const watched = watcher.getWatched();
-  let count = Object.keys(watched).length;
-  for (const entries of Object.values(watched)) {
-    count += entries.length;
-  }
-  return count;
-}
-
 type CollectionRoot = {
   path: string;
   kind: MemorySource;
@@ -375,7 +365,9 @@ export class QmdMemoryManager implements MemorySearchManager {
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
   private readonly pendingWatchPaths: MemoryWatchSettleQueue = new Map();
-  private watchPressureWarningShown = false;
+  private readonly watchPressureWarning = new MemoryWatchPressureWarning((message) =>
+    log.warn(message),
+  );
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
   private queuedForcedRuns = 0;
@@ -1630,7 +1622,7 @@ export class QmdMemoryManager implements MemorySearchManager {
     watcher.on("change", markDirty);
     watcher.on("unlink", markDirty);
     watcher.once("ready", () => {
-      this.warnIfWatchPressure(countQmdWatchedEntries(watcher));
+      this.warnIfWatchPressure(countChokidarWatchedEntries(watcher));
       log.info(
         `qmd watcher ready for agent "${this.agentId}" paths=${watchPathList.length} durationMs=${Date.now() - startTime}`,
       );
@@ -1638,14 +1630,11 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private warnIfWatchPressure(count: number): void {
-    if (this.watchPressureWarningShown || count <= QMD_WATCH_PRESSURE_WARNING_THRESHOLD) {
-      return;
-    }
-    this.watchPressureWarningShown = true;
-    log.warn(
-      `Memory file watching is tracking ${count} paths. ` +
-        "Large QMD collections can make OpenClaw run out of file watchers or open files. " +
-        "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+    this.watchPressureWarning.warnIfHigh(
+      count,
+      "paths",
+      "Large QMD collections can make OpenClaw run out of file watchers or open files.",
+      "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
     );
   }
 
