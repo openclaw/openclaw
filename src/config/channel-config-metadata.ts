@@ -1,3 +1,7 @@
+/**
+ * Converts plugin manifest metadata into deterministic config UI metadata for docs, validation, and runtime schema.
+ * When multiple plugin origins expose the same id/channel, the closest origin owns the surfaced schema.
+ */
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import type { ChannelUiMetadata, PluginUiMetadata } from "./schema.js";
@@ -7,6 +11,7 @@ type ChannelMetadataRecord = ChannelUiMetadata & {
 };
 
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
+  // Lower ranks are closer to the operator and should override farther bundled/global metadata.
   config: 0,
   workspace: 1,
   global: 2,
