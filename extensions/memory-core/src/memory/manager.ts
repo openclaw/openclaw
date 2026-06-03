@@ -10,10 +10,7 @@ import {
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
-import {
-  getRegisteredMemoryReranker,
-  type MemoryRerankerPlugin,
-} from "openclaw/plugin-sdk/memory-core-host-engine-reranker";
+import { getRegisteredMemoryReranker } from "openclaw/plugin-sdk/memory-core-host-engine-reranker";
 import {
   readMemoryFile,
   type MemoryEmbeddingProbeResult,

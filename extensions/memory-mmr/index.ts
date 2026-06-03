@@ -24,18 +24,9 @@ export function createMMRRerankerProvider() {
 
 export default definePluginEntry({
   id: "memory-mmr",
-  activation: {
-    onStartup: false,
-  },
-  kind: "memory",
-  contracts: {
-    tools: [],
-  },
-  configSchema: {
-    type: "object",
-    additionalProperties: false,
-    properties: {},
-  },
+  name: "Memory MMR Reranker",
+  description:
+    "Bundled OpenClaw MMR (Maximal Marginal Relevance) reranker for memory hybrid search diversity.",
   register() {
     registerMemoryReranker(createMMRRerankerProvider());
   },

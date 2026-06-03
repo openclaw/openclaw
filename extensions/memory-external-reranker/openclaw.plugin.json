@@ -3,7 +3,13 @@
   "name": "Memory External Reranker",
   "description": "OpenClaw memory reranker plugin that proxies to a Cohere-compatible /v1/rerank endpoint (Cohere, Jina, Voyage, llama.cpp).",
   "activation": {
-    "onStartup": false
+    "onStartup": false,
+    "onConfigPaths": [
+      "agents.defaults.memorySearch.query.hybrid.mmr.provider",
+      "agents.*.memorySearch.query.hybrid.mmr.provider",
+      "agents.defaults.memorySearch.query.hybrid.mmr.fallback",
+      "agents.*.memorySearch.query.hybrid.mmr.fallback"
+    ]
   },
   "contracts": {
     "tools": [],

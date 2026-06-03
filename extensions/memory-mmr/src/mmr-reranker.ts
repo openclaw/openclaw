@@ -1,4 +1,4 @@
-import { tokenize, jaccardSimilarity, textSimilarity } from "./tokenize.js";
+import { tokenize, jaccardSimilarity } from "./tokenize.js";
 
 /**
  * Maximal Marginal Relevance (MMR) re-ranking.

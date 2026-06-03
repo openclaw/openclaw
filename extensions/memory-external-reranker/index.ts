@@ -4,6 +4,9 @@ import { ExternalMmrReranker, type ExternalRerankerConfig } from "./src/reranker
 
 export default definePluginEntry({
   id: "memory-external-reranker",
+  name: "Memory External Reranker",
+  description:
+    "OpenClaw memory reranker plugin that proxies to a Cohere-compatible /v1/rerank endpoint (Cohere, Jina, Voyage, llama.cpp).",
   register(api) {
     const cfg = (api.pluginConfig ?? {}) as Partial<ExternalRerankerConfig>;
     registerMemoryReranker(
