@@ -86,7 +86,7 @@ const MAX_MARKDOWN_BYTES = 512 * 1024;
 
 // ─── Logging ─────────────────────────────────────────────────────────
 
-async function log(level, message, extra = undefined) {
+async function log(level, message, extra) {
   const line = JSON.stringify({
     ts: new Date().toISOString(),
     level,

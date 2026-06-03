@@ -286,7 +286,7 @@ function filterSearchResultByManifest(payload) {
   if (Array.isArray(data.items)) {
     next.items = filtered;
   }
-  next._harnessManifest = {
+  next.harnessManifest = {
     version: harnessManifestVersion,
     filteredOut: filteredCount,
     ceiling: HARNESS_MANIFEST_CEILING,
