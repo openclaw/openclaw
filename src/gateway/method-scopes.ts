@@ -1,4 +1,8 @@
 import { normalizeOptionalString as normalizeSessionActionParam } from "@openclaw/normalization-core/string-coerce";
+import type {
+  PluginRegistry,
+  PluginSessionActionRegistryRegistration,
+} from "../plugins/registry-types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
 import { resolveReservedGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import {
@@ -37,6 +41,82 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
   PAIRING_SCOPE,
   TALK_SECRETS_SCOPE,
 ];
+
+type ReadResult<T> = { ok: true; value: T } | { ok: false };
+
+function readField<T>(read: () => T): ReadResult<T> {
+  try {
+    return { ok: true, value: read() };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readArrayLength(value: readonly unknown[]): number | null {
+  const length = readField(() => value.length);
+  return length.ok && Number.isInteger(length.value) && length.value >= 0 ? length.value : null;
+}
+
+function listSessionActionRegistrations(
+  registry: PluginRegistry | null | undefined,
+): readonly unknown[] {
+  const entries = readField(() => registry?.sessionActions);
+  return entries.ok && Array.isArray(entries.value) ? entries.value : [];
+}
+
+function findSessionActionRegistration(params: {
+  actionId: string;
+  pluginId: string;
+  registry: PluginRegistry | null | undefined;
+}): PluginSessionActionRegistryRegistration | undefined {
+  const entries = listSessionActionRegistrations(params.registry);
+  const length = readArrayLength(entries);
+  if (length === null) {
+    return undefined;
+  }
+  let index = 0;
+  while (index < length) {
+    const registration = readField(() => entries[index] as PluginSessionActionRegistryRegistration);
+    const pluginId: ReadResult<string> = registration.ok
+      ? readField(() => registration.value.pluginId)
+      : { ok: false };
+    const action: ReadResult<PluginSessionActionRegistryRegistration["action"]> = registration.ok
+      ? readField(() => registration.value.action)
+      : { ok: false };
+    const actionId: ReadResult<string> = action.ok
+      ? readField(() => action.value.id)
+      : { ok: false };
+    if (
+      pluginId.ok &&
+      pluginId.value === params.pluginId &&
+      actionId.ok &&
+      actionId.value === params.actionId
+    ) {
+      return registration.value;
+    }
+    index += 1;
+  }
+  return undefined;
+}
+
+function resolveSessionActionRequiredScopes(
+  registration: PluginSessionActionRegistryRegistration,
+): OperatorScope[] {
+  const action = readField(() => registration.action);
+  const requiredScopes: ReadResult<unknown> = action.ok
+    ? readField(() => action.value.requiredScopes)
+    : { ok: false };
+  if (!requiredScopes.ok || requiredScopes.value === undefined) {
+    return [WRITE_SCOPE];
+  }
+  if (!Array.isArray(requiredScopes.value) || requiredScopes.value.length === 0) {
+    return [WRITE_SCOPE];
+  }
+  const scopes = requiredScopes.value.filter((scope): scope is OperatorScope =>
+    isOperatorScope(scope),
+  );
+  return scopes.length > 0 ? scopes : [WRITE_SCOPE];
+}
 
 function resolveScopedMethod(method: string): OperatorScope | undefined {
   // Core descriptors are authoritative, then reserved namespace policy, then active plugin
@@ -100,14 +180,15 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
   if (!pluginId || !actionId) {
     return undefined;
   }
-  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
-    (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
-  );
+  const registration = findSessionActionRegistration({
+    actionId,
+    pluginId,
+    registry: getPluginRegistryState()?.activeRegistry,
+  });
   if (!registration) {
     return undefined;
   }
-  const requiredScopes = registration.action.requiredScopes;
-  return requiredScopes && requiredScopes.length > 0 ? [...requiredScopes] : [WRITE_SCOPE];
+  return resolveSessionActionRequiredScopes(registration);
 }
 
 function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScope[] {

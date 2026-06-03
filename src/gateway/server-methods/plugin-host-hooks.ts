@@ -11,6 +11,10 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
+import type {
+  PluginRegistry,
+  PluginSessionActionRegistryRegistration,
+} from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   validateJsonSchemaValue,
@@ -21,6 +25,108 @@ import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
+
+type ReadResult<T> = { ok: true; value: T } | { ok: false };
+
+type MatchedSessionAction = {
+  action: PluginSessionActionRegistryRegistration["action"];
+  handler: PluginSessionActionRegistryRegistration["action"]["handler"];
+  requiredScopes: string[] | null;
+  schema: PluginSessionActionRegistryRegistration["action"]["schema"];
+};
+
+function readField<T>(read: () => T): ReadResult<T> {
+  try {
+    return { ok: true, value: read() };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readArrayLength(value: readonly unknown[]): number | null {
+  const length = readField(() => value.length);
+  return length.ok && Number.isInteger(length.value) && length.value >= 0 ? length.value : null;
+}
+
+function listSessionActionRegistrations(registry: PluginRegistry | null): readonly unknown[] {
+  const entries = readField(() => registry?.sessionActions);
+  return entries.ok && Array.isArray(entries.value) ? entries.value : [];
+}
+
+function readRequiredScopes(
+  action: PluginSessionActionRegistryRegistration["action"],
+): string[] | null {
+  const requiredScopes = readField(() => action.requiredScopes);
+  if (!requiredScopes.ok) {
+    return null;
+  }
+  if (requiredScopes.value === undefined) {
+    return [WRITE_SCOPE];
+  }
+  if (!Array.isArray(requiredScopes.value)) {
+    return null;
+  }
+  const length = readArrayLength(requiredScopes.value);
+  if (length === null) {
+    return null;
+  }
+  const scopes: string[] = [];
+  let index = 0;
+  while (index < length) {
+    const scope = readField(() => requiredScopes.value?.[index]);
+    if (!scope.ok || typeof scope.value !== "string") {
+      return null;
+    }
+    scopes.push(scope.value);
+    index += 1;
+  }
+  return scopes.length > 0 ? scopes : [WRITE_SCOPE];
+}
+
+function findSessionActionRegistration(params: {
+  actionId: string;
+  pluginId: string;
+  registry: PluginRegistry | null;
+}): MatchedSessionAction | null {
+  const entries = listSessionActionRegistrations(params.registry);
+  const length = readArrayLength(entries);
+  if (length === null) {
+    return null;
+  }
+  let index = 0;
+  while (index < length) {
+    const entry = readField(() => entries[index] as PluginSessionActionRegistryRegistration);
+    const pluginId: ReadResult<string> = entry.ok
+      ? readField(() => entry.value.pluginId)
+      : { ok: false };
+    const action: ReadResult<PluginSessionActionRegistryRegistration["action"]> = entry.ok
+      ? readField(() => entry.value.action)
+      : { ok: false };
+    const actionId: ReadResult<string> = action.ok
+      ? readField(() => action.value.id)
+      : { ok: false };
+    if (
+      pluginId.ok &&
+      pluginId.value === params.pluginId &&
+      action.ok &&
+      actionId.ok &&
+      actionId.value === params.actionId
+    ) {
+      const handler = readField(() => action.value.handler);
+      const schema = readField(() => action.value.schema);
+      return handler.ok && schema.ok
+        ? {
+            action: action.value,
+            handler: handler.value,
+            requiredScopes: readRequiredScopes(action.value),
+            schema: schema.value,
+          }
+        : null;
+    }
+    index += 1;
+  }
+  return null;
+}
 
 function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationError[]): string {
   return errors.map((error) => error.text).join("; ");
@@ -90,9 +196,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     const pluginLoaded = Boolean(
       registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
     );
-    const registration = (registry?.sessionActions ?? []).find(
-      (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
-    );
+    const registration = findSessionActionRegistration({ actionId, pluginId, registry });
     if (!registration || !pluginLoaded) {
       respond(
         false,
@@ -106,10 +210,15 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     }
     const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
     const hasAdmin = scopes.includes(ADMIN_SCOPE);
-    const requiredScopes =
-      registration.action.requiredScopes && registration.action.requiredScopes.length > 0
-        ? registration.action.requiredScopes
-        : [WRITE_SCOPE];
+    const requiredScopes = registration.requiredScopes;
+    if (!requiredScopes) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "plugin session action metadata unavailable"),
+      );
+      return;
+    }
     // Plugin actions default to write access, while read-only actions can opt
     // down. Admin bypasses all checks and write includes read for UI callers.
     const missingScope = requiredScopes.find(
@@ -138,11 +247,8 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         );
         return;
       }
-      if (registration.action.schema !== undefined) {
-        if (
-          typeof registration.action.schema !== "boolean" &&
-          !isRecord(registration.action.schema)
-        ) {
+      if (registration.schema !== undefined) {
+        if (typeof registration.schema !== "boolean" && !isRecord(registration.schema)) {
           respond(
             false,
             undefined,
@@ -156,7 +262,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
         // Schemas are plugin-provided data; validate their shape before passing
         // them into the shared schema evaluator so malformed plugins fail cleanly.
         const validation = validateJsonSchemaValue({
-          schema: registration.action.schema as JsonSchemaValue,
+          schema: registration.schema as JsonSchemaValue,
           cacheKey: `plugin-session-action:${pluginId}:${actionId}`,
           value: params.payload,
         });
@@ -172,16 +278,18 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
           return;
         }
       }
-      const result = await registration.action.handler({
-        pluginId,
-        actionId,
-        ...(sessionKey ? { sessionKey } : {}),
-        ...(params.payload !== undefined ? { payload: params.payload } : {}),
-        client: {
-          ...(client?.connId ? { connId: client.connId } : {}),
-          scopes: [...scopes],
+      const result = await Reflect.apply(registration.handler, registration.action, [
+        {
+          pluginId,
+          actionId,
+          ...(sessionKey ? { sessionKey } : {}),
+          ...(params.payload !== undefined ? { payload: params.payload } : {}),
+          client: {
+            ...(client?.connId ? { connId: client.connId } : {}),
+            scopes: [...scopes],
+          },
         },
-      });
+      ]);
       if (result !== undefined && !isRecord(result)) {
         respond(
           false,

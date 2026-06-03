@@ -651,6 +651,139 @@ describe("plugin session actions", () => {
     expect(originalScopes).toEqual([READ_SCOPE]);
   });
 
+  it("skips unreadable session action siblings while dispatching a healthy match", async () => {
+    const handler = vi.fn(() => ({ result: { ok: true } }));
+    const registry = createEmptyPluginRegistry();
+    registry.sessionActions = [
+      {
+        pluginId: "session-action-fixture",
+        pluginName: "Session Action Fixture",
+        source: "test",
+        get action() {
+          throw new Error("session action getter exploded");
+        },
+      } as NonNullable<typeof registry.sessionActions>[number],
+      {
+        pluginId: "session-action-fixture",
+        pluginName: "Session Action Fixture",
+        source: "test",
+        action: {
+          id: "healthy",
+          requiredScopes: [READ_SCOPE],
+          handler,
+        },
+      },
+    ];
+    registry.plugins = [
+      createPluginRecord({
+        id: "session-action-fixture",
+        name: "Session Action Fixture",
+        status: "loaded",
+      }),
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      callPluginSessionActionThroughGatewayForTest({
+        body: {
+          pluginId: "session-action-fixture",
+          actionId: "healthy",
+        },
+        scopes: [READ_SCOPE],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { ok: true, result: { ok: true } },
+      error: undefined,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when matching session action required scopes are unreadable", async () => {
+    const handler = vi.fn(() => ({ result: { ok: true } }));
+    const registry = createEmptyPluginRegistry();
+    registry.sessionActions = [
+      {
+        pluginId: "session-action-fixture",
+        pluginName: "Session Action Fixture",
+        source: "test",
+        action: {
+          id: "unreadable-scope",
+          get requiredScopes() {
+            throw new Error("session action scopes getter exploded");
+          },
+          handler,
+        },
+      },
+    ];
+    registry.plugins = [
+      createPluginRecord({
+        id: "session-action-fixture",
+        name: "Session Action Fixture",
+        status: "loaded",
+      }),
+    ];
+    setActivePluginRegistry(registry);
+
+    const response = await callPluginSessionActionThroughGatewayForTest({
+      body: {
+        pluginId: "session-action-fixture",
+        actionId: "unreadable-scope",
+      },
+      scopes: [WRITE_SCOPE],
+    });
+    const error = requireHookError(response);
+    expect(error.code).toBe("UNAVAILABLE");
+    expect(error.message).toBe("plugin session action metadata unavailable");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it("preserves method-style session action handler receivers", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = function (this: { receiverPayload: { ok: boolean } }) {
+      return { result: this.receiverPayload };
+    };
+    Object.defineProperty(handler, "call", {
+      value: () => {
+        throw new Error("handler call property should not be used");
+      },
+    });
+    registry.sessionActions = [
+      {
+        pluginId: "session-action-fixture",
+        pluginName: "Session Action Fixture",
+        source: "test",
+        action: {
+          id: "receiver",
+          receiverPayload: { ok: true },
+          handler,
+        },
+      } as NonNullable<typeof registry.sessionActions>[number],
+    ];
+    registry.plugins = [
+      createPluginRecord({
+        id: "session-action-fixture",
+        name: "Session Action Fixture",
+        status: "loaded",
+      }),
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      callPluginSessionActionForTest({
+        body: {
+          pluginId: "session-action-fixture",
+          actionId: "receiver",
+        },
+        scopes: [WRITE_SCOPE],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { ok: true, result: { ok: true } },
+      error: undefined,
+    });
+  });
+
   it("does not dispatch session actions for plugins that are not loaded", async () => {
     const handler = vi.fn(() => ({ result: { stale: true } }));
     const registry = createEmptyPluginRegistry();
