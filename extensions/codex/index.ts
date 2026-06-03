@@ -17,7 +17,10 @@ import {
   handleCodexConversationBindingResolved,
   handleCodexConversationInboundClaim,
 } from "./src/conversation-binding.js";
-import { resolveCodexUserInputCallback } from "./src/conversation-chat-controls.js";
+import {
+  answerCodexUserInputFreeform,
+  resolveCodexUserInputCallback,
+} from "./src/conversation-chat-controls.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import {
   createCodexCliSessionNodeHostCommands,
@@ -176,6 +179,22 @@ export default definePluginEntry({
         },
       }),
     );
+    api.on("before_dispatch", (event, ctx) => {
+      const result = answerCodexUserInputFreeform({
+        answerText: (event.body ?? event.content).trim(),
+        ctx: {
+          channel: event.channel ?? ctx.channelId,
+          accountId: event.accountId ?? ctx.accountId,
+          senderId: event.senderId ?? ctx.senderId,
+          sessionKey: event.sessionKey ?? ctx.sessionKey,
+          messageThreadId: event.threadId ?? ctx.threadId,
+        },
+      });
+      if (!result.matched) {
+        return undefined;
+      }
+      return { handled: true, text: result.message };
+    });
     api.onConversationBindingResolved?.(handleCodexConversationBindingResolved);
   },
 });

@@ -129,6 +129,86 @@ describe("codex plugin", () => {
     expect(typeof bindingResolvedRegistration?.[0]).toBe("function");
   });
 
+  it.each(["discord", "telegram"])(
+    "resolves typed Codex input answers before %s dispatch",
+    async (channel) => {
+      const on = vi.fn();
+      plugin.register(
+        createTestPluginApi({
+          id: "codex",
+          name: "Codex",
+          source: "test",
+          config: {},
+          pluginConfig: {},
+          runtime: {} as never,
+          registerAgentHarness: vi.fn(),
+          registerCommand: vi.fn(),
+          registerInteractiveHandler: vi.fn(),
+          registerMediaUnderstandingProvider: vi.fn(),
+          registerMigrationProvider: vi.fn(),
+          registerProvider: vi.fn(),
+          on,
+        }),
+      );
+
+      let resolveText: (text: string) => void = () => undefined;
+      const answered = new Promise<string>((resolve) => {
+        resolveText = resolve;
+      });
+      createCodexUserInputPrompt({
+        scope: {
+          sessionFile: "/tmp/session.jsonl",
+          threadId: "thread-1",
+          channel,
+          senderId: "user-1",
+          accountId: "default",
+          sessionKey: "session-key",
+          messageThreadId: "chat-1",
+        },
+        resolveText,
+        questions: [
+          {
+            id: "approval",
+            header: "Approval",
+            question: "Approve?",
+            isOther: true,
+            isSecret: false,
+            options: [
+              { label: "Approve", description: "Continue" },
+              { label: "Reject", description: "Stop" },
+            ],
+          },
+        ],
+      });
+      const beforeDispatchRegistration = on.mock.calls.find(
+        (call) => call[0] === "before_dispatch",
+      );
+
+      const result = await beforeDispatchRegistration?.[1]?.(
+        {
+          content: "Approve",
+          body: "Approve",
+          channel,
+          accountId: "default",
+          sessionKey: "session-key",
+          senderId: "user-1",
+          threadId: "chat-1",
+          isGroup: channel === "discord",
+        },
+        {
+          channelId: channel,
+          accountId: "default",
+          sessionKey: "session-key",
+          senderId: "user-1",
+          threadId: "chat-1",
+        },
+      );
+
+      expect(result).toEqual({ handled: true, text: "Sent answer to Codex." });
+      await expect(answered).resolves.toBe("Approve");
+    },
+  );
+
   it("registers with capture APIs that do not expose conversation binding hooks yet", () => {
     const registerProvider = vi.fn();
     const api = createTestPluginApi({

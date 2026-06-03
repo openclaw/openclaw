@@ -410,11 +410,13 @@ export type PluginHookBeforeDispatchEvent = {
   content: string;
   body?: string;
   channel?: string;
+  accountId?: string;
   sessionKey?: string;
   senderId?: string;
   replyToId?: string;
   replyToBody?: string;
   replyToSender?: string;
+  threadId?: string | number;
   isGroup?: boolean;
   timestamp?: number;
 };
@@ -428,6 +430,7 @@ export type PluginHookBeforeDispatchContext = {
   replyToId?: string;
   replyToBody?: string;
   replyToSender?: string;
+  threadId?: string | number;
 };
 
 export type PluginHookBeforeDispatchResult = {

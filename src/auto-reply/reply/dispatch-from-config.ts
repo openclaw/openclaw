@@ -2087,11 +2087,13 @@ export async function dispatchReplyFromConfig(
               content: hookContext.content,
               body: hookContext.bodyForAgent ?? hookContext.body,
               channel: hookContext.channelId,
+              accountId: hookContext.accountId,
               sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
               senderId: hookContext.senderId,
               replyToId: hookContext.replyToId,
               replyToBody: hookContext.replyToBody,
               replyToSender: hookContext.replyToSender,
+              threadId: routeThreadId,
               isGroup: hookContext.isGroup,
               timestamp: hookContext.timestamp,
             },
@@ -2104,10 +2106,10 @@ export async function dispatchReplyFromConfig(
               replyToId: hookContext.replyToId,
               replyToBody: hookContext.replyToBody,
               replyToSender: hookContext.replyToSender,
+              threadId: routeThreadId,
             },
           ),
-        ),
-      );
+        );
       if (beforeDispatchResult?.handled) {
         const text = beforeDispatchResult.text;
         let queuedFinal = false;

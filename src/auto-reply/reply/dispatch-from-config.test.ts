@@ -6895,6 +6895,8 @@ describe("before_dispatch hook", () => {
       Surface: "slack",
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
+      AccountId: "work",
+      TransportThreadId: "transport-thread",
       From: "signal:group:ops-room",
       SenderId: "signal:user:alice",
       GroupChannel: "ops-room",
@@ -6912,22 +6914,28 @@ describe("before_dispatch hook", () => {
           {
             body?: unknown;
             channel?: unknown;
+            accountId?: unknown;
             content?: unknown;
             isGroup?: unknown;
             senderId?: unknown;
+            threadId?: unknown;
             timestamp?: unknown;
           },
-          { channelId?: unknown; senderId?: unknown },
+          { accountId?: unknown; channelId?: unknown; senderId?: unknown; threadId?: unknown },
         ]
       | undefined;
     expect(beforeDispatchCall?.[0]?.content).toBe("command body");
     expect(beforeDispatchCall?.[0]?.body).toBe("agent body");
     expect(beforeDispatchCall?.[0]?.channel).toBe("telegram");
+    expect(beforeDispatchCall?.[0]?.accountId).toBe("work");
     expect(beforeDispatchCall?.[0]?.senderId).toBe("signal:user:alice");
+    expect(beforeDispatchCall?.[0]?.threadId).toBe("transport-thread");
     expect(beforeDispatchCall?.[0]?.isGroup).toBe(true);
     expect(beforeDispatchCall?.[0]?.timestamp).toBe(123);
     expect(beforeDispatchCall?.[1]?.channelId).toBe("telegram");
+    expect(beforeDispatchCall?.[1]?.accountId).toBe("work");
     expect(beforeDispatchCall?.[1]?.senderId).toBe("signal:user:alice");
+    expect(beforeDispatchCall?.[1]?.threadId).toBe("transport-thread");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     const routeCall = firstRouteReplyCall() as
       | { channel?: unknown; payload?: ReplyPayload; to?: unknown }
