@@ -67,6 +67,66 @@ describe("buildChatItems", () => {
     expect(groups.map((group) => group.senderLabel)).toEqual(["Iris", "Joaquin De Rojas"]);
   });
 
+  it("keeps differently cased user roles in one group", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "user",
+          content: "first",
+          timestamp: 1000,
+        },
+        {
+          role: "User",
+          content: "second",
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].role).toBe("user");
+    expect(groups[0].messages).toHaveLength(2);
+  });
+
+  it("keeps forwarded assistant display messages separate from local assistant replies", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: "local reply",
+          timestamp: 1000,
+        },
+        {
+          role: "assistant",
+          content: "forwarded report",
+          senderLabel: "Forwarded from main",
+          timestamp: 1001,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.senderLabel)).toEqual([null, "Forwarded from main"]);
+  });
+
+  it("keeps empty forwarded assistant display groups", () => {
+    const groups = messageGroups({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+          senderLabel: "Forwarded from main",
+          timestamp: 1000,
+        },
+      ],
+    });
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].role).toBe("assistant");
+    expect(groups[0].senderLabel).toBe("Forwarded from main");
+    expect(groups[0].messages).toHaveLength(1);
+  });
+
   it("collapses consecutive duplicate text messages into one rendered item with a count", () => {
     const groups = messageGroups({
       messages: [
@@ -257,6 +317,27 @@ describe("buildChatItems", () => {
     expect(noticeMessage.content).toBe("Showing last 100 messages (5 hidden).");
     expect(groups).toHaveLength(101);
     expect(messageRecord(groups[1]).content).toBe("message 5");
+    expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
+  });
+
+  it("honors a smaller history render window and preserves the hidden-count notice", () => {
+    const items = buildChatItems(
+      createProps({
+        historyRenderLimit: 30,
+        messages: Array.from({ length: 105 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message ${index}`,
+          timestamp: index,
+        })),
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+
+    const noticeGroup = requireGroup(items[0]);
+    expect(messageRecord(noticeGroup).content).toBe("Showing last 30 messages (75 hidden).");
+    expect(groups).toHaveLength(31);
+    expect(messageRecord(groups[1]).content).toBe("message 75");
     expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
   });
 

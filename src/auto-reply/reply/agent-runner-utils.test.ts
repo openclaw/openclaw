@@ -25,6 +25,7 @@ const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
+  buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
   resolveEnforceFinalTag,
   resolveProviderScopedAuthProfile,
@@ -138,6 +139,7 @@ describe("agent-runner-utils", () => {
       provider: "openai",
       model: "gpt-4.1-mini",
       runId: "run-1",
+      promptCacheKey: "webchat-cache-key",
       authProfile,
     });
 
@@ -160,6 +162,24 @@ describe("agent-runner-utils", () => {
     expect(resolved.bashElevated).toBe(run.bashElevated);
     expect(resolved.timeoutMs).toBe(run.timeoutMs);
     expect(resolved.runId).toBe("run-1");
+    expect(resolved.promptCacheKey).toBe("webchat-cache-key");
+  });
+
+  it("threads prompt cache affinity through embedded execution params", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: { Provider: "webchat" },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      promptCacheKey: "stable-session-cache-key",
+    });
+
+    expect(resolved.runBaseParams.runId).toBe("run-1");
+    expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
   });
 
   it("passes through recovered auto fallback provenance for embedded run params", () => {

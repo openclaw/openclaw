@@ -1004,6 +1004,17 @@ describe("gateway server chat", () => {
         },
       ]);
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      const dispatchOptions = dispatchInboundMessageMock.mock.calls.map(([params]) => {
+        return (params as { replyOptions?: GetReplyOptions }).replyOptions;
+      });
+      expect(dispatchOptions[0]?.runId).toBe("idem-sequential-a");
+      expect(dispatchOptions[1]?.runId).toBe("idem-sequential-b");
+      expect(dispatchOptions[0]?.promptCacheKey).toEqual(
+        expect.stringMatching(/^openclaw-webchat-[a-f0-9]{32}$/u),
+      );
+      expect(dispatchOptions[1]?.promptCacheKey).toBe(dispatchOptions[0]?.promptCacheKey);
+      expect(dispatchOptions[0]?.promptCacheKey).not.toContain("main");
+      expect(dispatchOptions[0]?.promptCacheKey).not.toContain("sess-main");
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
     } finally {
       dispatchInboundMessageMock.mockReset();
