@@ -38,4 +38,14 @@ describe("shared/text-chunking", () => {
       "def",
     ]);
   });
+
+  it("trims trailing whitespace from the final chunk (regression #64036)", () => {
+    expect(chunkTextByBreakResolver("abc def  ", 6, (window) => window.lastIndexOf(" "))).toEqual([
+      "abc",
+      "def",
+    ]);
+    expect(
+      chunkTextByBreakResolver("hello world   ", 8, (window) => window.lastIndexOf(" ")),
+    ).toEqual(["hello", "world"]);
+  });
 });
