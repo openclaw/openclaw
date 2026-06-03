@@ -30,9 +30,13 @@ pnpm format:check       # Format check only
 pnpm test               # Run test suite (vitest)
 pnpm test:coverage      # Run tests with coverage
 pnpm test <path>        # Run a specific test file
-pnpm openclaw ...       # Run CLI in dev mode
+pnpm openclaw ...       # Run CLI from TS source (via tsx, no build needed)
 pnpm dev                # Development mode
+pnpm gateway:watch      # Gateway dev loop, auto-reload on source/config changes
+pnpm ui:build           # Build the web UI (auto-installs UI deps on first run)
 ```
+
+`pnpm openclaw ...` runs TypeScript directly; `pnpm build` produces `dist/` for Node/the packaged binary. Runtime baseline is Node 22.16+ (Node 24 recommended).
 
 ### Single test
 
@@ -44,6 +48,14 @@ pnpm test src/commands/onboard-search.test.ts -t "shows registered plugin provid
 ### Pre-commit
 
 Pre-commit hook runs `pnpm format` then `pnpm check`. Use `FAST_COMMIT=1` to skip these for fast commit loops (only when you've manually verified the touched surface).
+
+### Verification Gates
+
+- **Local dev gate**: `pnpm check` (lint + format + type + import-cycle checks). The default edit-loop gate.
+- **CI architecture gate**: `check-additional` enforces boundary/architecture policy guards intentionally kept *out* of the local `pnpm check`. A green local `pnpm check` does not guarantee CI passes.
+- **Landing gate for `main`**: `pnpm check` + `pnpm test`; add `pnpm build` whenever the change can affect build output, packaging, lazy-loading/module boundaries, or published surfaces (this is a hard gate, not optional).
+- **Generated baselines (drift checks)**: if you change config schema/help, regenerate with `pnpm config:docs:gen`; if you change the public Plugin SDK surface, regenerate with `pnpm plugin-sdk:api:gen`. Commit the updated `.sha256` hash file. CI fails on drift via the matching `:check` command.
+- **Dynamic imports**: after refactors touching lazy-loading/module boundaries, run `pnpm build` and check for `[INEFFECTIVE_DYNAMIC_IMPORT]` warnings. Keep `pnpm check:import-cycles` and `pnpm check:madge-import-cycles` green.
 
 ## Architecture Overview
 
@@ -72,10 +84,18 @@ docs/               # Documentation site (Mintlify)
 
 ### Key Architectural Boundaries
 
-- **Plugin SDK** (`src/plugin-sdk/*`) is the only public cross-package contract. Extensions must import from `openclaw/plugin-sdk/*`, never from `src/**` directly.
-- **Core** (`src/`) must stay extension-agnostic. Adding a bundled extension should not require core edits.
-- **Extensions** (`extensions/`) are self-contained workspace packages. Plugin deps go in the extension's `package.json`, not root.
-- **Gateway protocol** (`src/gateway/protocol/*`) changes are contract changes requiring versioned evolution.
+- **Plugin SDK** (`src/plugin-sdk/*`) is the only public cross-package contract. Extensions import via subpaths (`openclaw/plugin-sdk/<subpath>`), never from `src/**` directly. Within an extension, route internal imports through a local `./api.ts` / `./runtime-api.ts` barrel — do not self-import via `openclaw/plugin-sdk/<that-extension>`. Adding a new cross-package seam means adding a public subpath first.
+- **Core** (`src/`) must stay extension-agnostic. Adding a bundled extension should not require core edits, hardcoded extension id lists, or named special cases — express that behavior through manifest metadata, registries, or capabilities instead.
+- **Extensions** (`extensions/`) are self-contained workspace packages. Plugin deps go in the extension's `package.json`, not root. Runtime deps must live in `dependencies` (install runs `npm install --omit=dev`); avoid `workspace:*` there — put `openclaw` in `devDependencies`/`peerDependencies`.
+- **Gateway protocol** (`src/gateway/protocol/*`) changes are contract changes requiring versioned, additive evolution (third-party plugins depend on it).
+- **Config contract**: when retiring a legacy config key, remove it from all public surfaces (types, zod schema, help/labels, baselines); keep backward compatibility only through `legacy.migrations.*`, config ingest, or `openclaw doctor --fix` — never re-add legacy aliases to public types "for convenience".
+
+### Runtime Layout (`~/.openclaw/`)
+
+- `workspace/` — agent workspace root (configurable via `agents.defaults.workspace`); injected prompt files `AGENTS.md`, `SOUL.md`, `TOOLS.md`; skills at `workspace/skills/<skill>/SKILL.md`.
+- `sessions/` — Pi sessions; per-agent logs at `agents/<agentId>/sessions/*.jsonl`.
+- `credentials/` — web provider creds (rerun `openclaw login` if logged out).
+- `openclaw.json` — user config. Run `openclaw doctor` to surface misconfig/legacy issues.
 
 ## Anti-Redundancy Rules
 
