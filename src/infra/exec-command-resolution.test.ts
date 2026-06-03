@@ -2,11 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import {
-  compileSafeRegex,
-  compileSafeRegexDetailed,
-  hasNestedRepetition,
-} from "../security/safe-regex.js";
+import { compileSafeRegex, compileSafeRegexDetailed } from "../security/safe-regex.js";
 import { makePathEnv, makeTempDir } from "./exec-approvals-test-helpers.js";
 import {
   evaluateExecAllowlist,
