@@ -14,6 +14,7 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
+import { resolveMemoryRoleSlot } from "../plugins/slot-resolution.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveTailscalePublishedHost } from "../shared/tailscale-status.js";
@@ -183,11 +184,21 @@ export function resolveMemoryPluginStatus(cfg: OpenClawConfig): MemoryPluginStat
   if (!pluginsEnabled) {
     return { enabled: false, slot: null, reason: "plugins disabled" };
   }
-  const raw = normalizeOptionalString(cfg.plugins?.slots?.memory) ?? "";
+  const resolvedRecall = resolveMemoryRoleSlot({ cfg, role: "recall" });
+  const rawRecall = normalizeOptionalString(cfg.plugins?.slots?.["memory.recall"]);
+  const rawLegacyMemory = normalizeOptionalString(cfg.plugins?.slots?.memory);
+  const raw = normalizeOptionalString(resolvedRecall) ?? rawRecall ?? rawLegacyMemory ?? "";
   if (normalizeOptionalLowercaseString(raw) === "none") {
-    return { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' };
+    return {
+      enabled: false,
+      slot: null,
+      reason:
+        rawRecall !== undefined
+          ? 'plugins.slots.memory.recall="none"'
+          : 'plugins.slots.memory="none"',
+    };
   }
-  return { enabled: true, slot: raw || defaultSlotIdForKey("memory") };
+  return { enabled: true, slot: raw || defaultSlotIdForKey("memory.recall") };
 }
 
 export async function resolveGatewayProbeSnapshot(params: {
@@ -311,7 +322,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   }
   const agentId = agentStatus.defaultId ?? "main";
 
-  if (memoryPlugin.slot !== defaultSlotIdForKey("memory")) {
+  if (memoryPlugin.slot !== defaultSlotIdForKey("memory.recall")) {
     return await resolveMemoryManagerStatusSnapshot(params, agentId);
   }
 

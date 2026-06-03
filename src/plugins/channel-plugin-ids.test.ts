@@ -1131,6 +1131,28 @@ describe("resolveGatewayStartupPluginIds", () => {
     });
   });
 
+  it("starts memory plugins selected only by per-agent role slot overrides", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        channels: {},
+        plugins: {
+          slots: { "memory.recall": "none" },
+        },
+        agents: {
+          list: [
+            {
+              id: "research",
+              plugins: {
+                slots: { "memory.capture": "memory-lancedb" },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-lancedb"],
+    });
+  });
+
   it("skips startup when activation.onStartup is false", () => {
     expectStartupPluginIdsCase({
       config: createStartupConfig({
@@ -1724,6 +1746,99 @@ describe("resolveGatewayStartupPluginIds", () => {
         index,
       }),
     ).toEqual(["browser", "demo-channel", "openai"]);
+  });
+
+  it("scopes config-validation metadata to global and per-agent memory role slots", () => {
+    const baseRegistry = createManifestRegistryFixture();
+    const memorySlotPluginIds = [
+      "legacy-memory",
+      "global-recall",
+      "global-compaction",
+      "global-dreaming",
+      "global-user-model",
+      "agent-recall",
+      "agent-compaction",
+      "agent-capture",
+      "agent-user-model",
+      "agent-legacy-memory",
+    ];
+    const registry: PluginManifestRegistry = {
+      ...baseRegistry,
+      plugins: [
+        ...baseRegistry.plugins,
+        ...memorySlotPluginIds.map((id) =>
+          withManifestLoadPaths({
+            id,
+            kind: "memory",
+            channels: [],
+            origin: "installed",
+            enabledByDefault: undefined,
+            providers: [],
+            cliBackends: [],
+          }),
+        ),
+      ] as PluginManifestRecord[],
+    };
+    const index = createInstalledPluginIndexFixture(registry);
+
+    expect(
+      resolveConfigValidationMetadataPluginIds({
+        config: {
+          channels: {},
+          plugins: {
+            slots: {
+              memory: "legacy-memory",
+              "memory.recall": "global-recall",
+              "memory.compaction": "global-compaction",
+              "memory.capture": "none",
+              "memory.dreaming": "global-dreaming",
+              "memory.userModel": "global-user-model",
+              contextEngine: "lossless-claw",
+            },
+          },
+          agents: {
+            list: [
+              {
+                id: "alpha",
+                plugins: {
+                  slots: {
+                    "memory.recall": "agent-recall",
+                    "memory.compaction": "agent-compaction",
+                    "memory.capture": "agent-capture",
+                    "memory.dreaming": "none",
+                    "memory.userModel": "Agent-User-Model",
+                  },
+                },
+              },
+              {
+                id: "legacy",
+                plugins: {
+                  slots: {
+                    memory: "agent-legacy-memory",
+                  },
+                },
+              },
+            ],
+          },
+        } as OpenClawConfig,
+        env: createPluginPlanningTestEnv(),
+        index,
+      }),
+    ).toEqual(
+      [
+        "agent-capture",
+        "agent-compaction",
+        "agent-legacy-memory",
+        "agent-recall",
+        "agent-user-model",
+        "global-compaction",
+        "global-dreaming",
+        "global-recall",
+        "global-user-model",
+        "legacy-memory",
+        "lossless-claw",
+      ].toSorted((left, right) => left.localeCompare(right)),
+    );
   });
 
   it("uses installed-index provider contracts to scope config-validation provider owners", () => {

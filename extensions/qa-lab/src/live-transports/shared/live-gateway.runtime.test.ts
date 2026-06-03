@@ -147,7 +147,7 @@ describe("startQaLiveLaneGateway", () => {
 
     expect(cfg?.plugins?.allow).toEqual(["acpx", "qa-channel"]);
     expect(cfg?.plugins?.entries).not.toHaveProperty("memory-core");
-    expect(cfg?.plugins?.slots?.memory).toBe("none");
+    expect(cfg?.plugins?.slots?.["memory.recall"]).toBe("none");
     expect(cfg?.plugins?.slots?.contextEngine).toBe("qmd");
     expect(cfg?.agents?.defaults?.memorySearch?.enabled).toBe(false);
     expect(cfg?.agents?.defaults?.memorySearch?.sync?.onSearch).toBe(false);

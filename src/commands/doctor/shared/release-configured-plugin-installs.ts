@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../../../config/version.js";
 import { getOfficialExternalPluginCatalogEntry } from "../../../plugins/official-external-plugin-catalog.js";
 import { resolveProviderInstallCatalogEntries } from "../../../plugins/provider-install-catalog.js";
+import { listConfiguredMemoryRolePluginIds } from "../../../plugins/slot-resolution.js";
 import { resolveWebSearchInstallCatalogEntry } from "../../../plugins/web-search-install-catalog.js";
 import { VERSION } from "../../../version.js";
 import { repairMissingPluginInstallsForIds } from "./missing-configured-plugin-install.js";
@@ -102,12 +103,12 @@ function collectMaterialPluginEntryIds(cfg: OpenClawConfig): string[] {
 
 function collectSlotPluginIds(cfg: OpenClawConfig): string[] {
   const slots = asObjectRecord(cfg.plugins?.slots);
-  return ["memory", "contextEngine"]
-    .map((key) => normalizeId(slots?.[key]))
-    .filter(
-      (pluginId): pluginId is string =>
-        typeof pluginId === "string" && pluginId.toLowerCase() !== "none",
-    );
+  const ids = new Set(listConfiguredMemoryRolePluginIds({ cfg }));
+  const contextEngineId = normalizeId(slots?.contextEngine);
+  if (contextEngineId && contextEngineId.toLowerCase() !== "none") {
+    ids.add(contextEngineId);
+  }
+  return [...ids].toSorted((left, right) => left.localeCompare(right));
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): string[] {

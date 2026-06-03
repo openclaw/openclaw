@@ -111,8 +111,10 @@ import {
 import {
   clearMemoryPluginState,
   getMemoryCapabilityRegistration,
+  listMemoryCapabilityRegistrations,
   listMemoryCorpusSupplements,
   listMemoryPromptSupplements,
+  listMemoryRuntimeRegistrations,
   restoreMemoryPluginState,
 } from "./memory-state.js";
 import { unwrapDefaultModuleExport } from "./module-export.js";
@@ -137,7 +139,8 @@ import { ensureOpenClawPluginSdkAlias } from "./plugin-sdk-dist-alias.js";
 import { installOpenClawPluginSdkNativeResolver } from "./plugin-sdk-native-resolver.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistryParams } from "./registry-types.js";
-import { createPluginRegistry, type PluginRecord, type PluginRegistry } from "./registry.js";
+import type { PluginRecord, PluginRegistry } from "./registry.js";
+import { createPluginRegistry } from "./registry.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
@@ -163,7 +166,13 @@ import {
   resolvePluginSdkScopedAliasMap,
   shouldPreferNativeModuleLoad,
 } from "./sdk-alias.js";
-import { hasKind, kindsEqual } from "./slots.js";
+import {
+  listConfiguredMemoryRolePluginIds,
+  listMemoryRoleSlotDecisionValues,
+  listMemoryRolesSelectedForPlugin,
+  resolveMemoryRoleSlots,
+} from "./slot-resolution.js";
+import { MEMORY_PLUGIN_SLOT_KEYS, hasKind, kindsEqual } from "./slots.js";
 import { encodeStartupTraceSegment } from "./startup-trace-segment.js";
 import type {
   OpenClawPluginApi,
@@ -263,6 +272,58 @@ function resolveDreamingSidecarEngineId(params: {
   return dreamingConfig.enabled ? DEFAULT_MEMORY_DREAMING_PLUGIN_ID : null;
 }
 
+function isAllowedMemoryRoleSlotSelection(params: {
+  pluginId: string;
+  normalized: NormalizedPluginsConfig;
+}): boolean {
+  if (!params.normalized.enabled) {
+    return false;
+  }
+  if (params.normalized.deny.includes(params.pluginId)) {
+    return false;
+  }
+  if (params.normalized.entries[params.pluginId]?.enabled === false) {
+    return false;
+  }
+  return true;
+}
+
+function applyMemoryRoleSlotActivation(params: {
+  pluginId: string;
+  normalized: NormalizedPluginsConfig;
+  selectedMemoryRolePluginIds: ReadonlySet<string>;
+  activationState: ReturnType<typeof resolveEffectivePluginActivationState>;
+  enableState: ReturnType<typeof resolveEffectiveEnableState>;
+}): {
+  activationState: ReturnType<typeof resolveEffectivePluginActivationState>;
+  enableState: ReturnType<typeof resolveEffectiveEnableState>;
+} {
+  if (
+    params.enableState.enabled ||
+    !params.selectedMemoryRolePluginIds.has(params.pluginId) ||
+    !isAllowedMemoryRoleSlotSelection({
+      pluginId: params.pluginId,
+      normalized: params.normalized,
+    })
+  ) {
+    return {
+      activationState: params.activationState,
+      enableState: params.enableState,
+    };
+  }
+  const selectedState = {
+    enabled: true,
+    activated: true,
+    explicitlyEnabled: true,
+    source: "explicit" as const,
+    reason: "selected memory slot",
+  };
+  return {
+    activationState: selectedState,
+    enableState: selectedState,
+  };
+}
+
 export class PluginLoadFailureError extends Error {
   readonly pluginIds: string[];
   readonly registry: PluginRegistry;
@@ -285,7 +346,9 @@ type CachedPluginState = {
   commands?: ReturnType<typeof listRegisteredPluginCommands>;
   interactiveHandlers?: ReturnType<typeof listPluginInteractiveHandlers>;
   memoryCapability: ReturnType<typeof getMemoryCapabilityRegistration>;
+  memoryCapabilities: ReturnType<typeof listMemoryCapabilityRegistrations>;
   memoryCorpusSupplements: ReturnType<typeof listMemoryCorpusSupplements>;
+  memoryRuntimes: ReturnType<typeof listMemoryRuntimeRegistrations>;
   agentHarnesses: ReturnType<typeof listRegisteredAgentHarnesses>;
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
@@ -1016,6 +1079,7 @@ function resolveRuntimeSubagentMode(
 }
 
 function buildActivationMetadataHash(params: {
+  config: OpenClawConfig;
   activationSource: PluginActivationConfigSource;
   autoEnabledReasons: Readonly<Record<string, string[]>>;
 }): string {
@@ -1043,7 +1107,18 @@ function buildActivationMetadataHash(params: {
         enabled: params.activationSource.plugins.enabled,
         allow: params.activationSource.plugins.allow,
         deny: params.activationSource.plugins.deny,
-        memorySlot: params.activationSource.plugins.slots.memory,
+        memorySlots: {
+          memory: params.activationSource.plugins.slots.memory,
+          "memory.recall": params.activationSource.plugins.slots["memory.recall"],
+          "memory.compaction": params.activationSource.plugins.slots["memory.compaction"],
+          "memory.capture": params.activationSource.plugins.slots["memory.capture"],
+          "memory.dreaming": params.activationSource.plugins.slots["memory.dreaming"],
+          "memory.userModel": params.activationSource.plugins.slots["memory.userModel"],
+        },
+        agentMemorySlots: collectAgentMemorySlotCacheEntries(params.config),
+        activationAgentMemorySlots: collectAgentMemorySlotCacheEntries(
+          params.activationSource.rootConfig,
+        ),
         entries: pluginEntryStates,
         enabledChannels: enabledSourceChannels,
         autoEnabledReasons: autoEnableReasonEntries,
@@ -1060,6 +1135,36 @@ function redactPluginConfigForCacheKey(plugins: NormalizedPluginsConfig): Normal
     ]),
   );
   return { ...plugins, entries };
+}
+
+function collectAgentMemorySlotCacheEntries(config?: OpenClawConfig) {
+  return (config?.agents?.list ?? [])
+    .map((agent, index) => {
+      const rawSlots = agent.plugins?.slots;
+      if (!rawSlots || typeof rawSlots !== "object" || Array.isArray(rawSlots)) {
+        return null;
+      }
+      const normalizedSlots = normalizePluginsConfig({ slots: rawSlots }).slots;
+      const slots: Partial<Record<(typeof MEMORY_PLUGIN_SLOT_KEYS)[number], string | null>> = {};
+      for (const slotKey of MEMORY_PLUGIN_SLOT_KEYS) {
+        if (Object.hasOwn(rawSlots, slotKey)) {
+          slots[slotKey] = normalizedSlots[slotKey] ?? null;
+        }
+      }
+      if (Object.keys(slots).length === 0) {
+        return null;
+      }
+      return {
+        agentId: agent.id?.trim() ?? "",
+        index,
+        slots,
+      };
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => entry !== null)
+    .toSorted((left, right) => {
+      const agentOrder = left.agentId.localeCompare(right.agentId);
+      return agentOrder === 0 ? left.index - right.index : agentOrder;
+    });
 }
 
 function hasExplicitCompatibilityInputs(options: PluginLoadOptions): boolean {
@@ -1310,6 +1415,7 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       ? redactPluginConfigForCacheKey(trustNormalized)
       : trustNormalized,
     activationMetadataKey: buildActivationMetadataHash({
+      config: cfg,
       activationSource,
       autoEnabledReasons: options.autoEnabledReasons ?? {},
     }),
@@ -1773,7 +1879,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
         restoreMemoryPluginState({
           capability: cached.state.memoryCapability,
+          capabilities: cached.state.memoryCapabilities,
           corpusSupplements: cached.state.memoryCorpusSupplements,
+          runtimes: cached.state.memoryRuntimes,
           promptSupplements: cached.state.memoryPromptSupplements,
         });
         activatePluginRegistry(
@@ -1968,7 +2076,14 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
     });
 
     const seenIds = new Map<string, PluginRecord["origin"]>();
-    const memorySlot = normalized.slots.memory;
+    const memoryRoleSlots = resolveMemoryRoleSlots({ cfg });
+    const selectedMemoryRolePluginIds = new Set(listConfiguredMemoryRolePluginIds({ cfg }));
+    const memorySlots = listMemoryRoleSlotDecisionValues({
+      cfg,
+      slotValues: Object.values(memoryRoleSlots),
+      includeConfiguredAgentSlots: true,
+    });
+    const memorySlot = memoryRoleSlots.recall;
     let selectedMemoryPluginId: string | null = null;
     let memorySlotMatched = false;
     const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
@@ -1990,7 +2105,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       if (!matchesRequestedScope) {
         continue;
       }
-      const activationState = resolveEffectivePluginActivationState({
+      const rawActivationState = resolveEffectivePluginActivationState({
         id: pluginId,
         origin: candidate.origin,
         config: normalized,
@@ -2017,7 +2132,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
           enabled: false,
           compat: collectPluginManifestCompatCodes(manifestRecord),
-          activationState,
+          activationState: rawActivationState,
           syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
           channelIds: manifestRecord.channels,
           providerIds: manifestRecord.providers,
@@ -2031,13 +2146,20 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         continue;
       }
 
-      const enableState = resolveEffectiveEnableState({
+      const rawEnableState = resolveEffectiveEnableState({
         id: pluginId,
         origin: candidate.origin,
         config: normalized,
         rootConfig: cfg,
         enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
         activationSource,
+      });
+      const { activationState, enableState } = applyMemoryRoleSlotActivation({
+        pluginId,
+        normalized,
+        selectedMemoryRolePluginIds,
+        activationState: rawActivationState,
+        enableState: rawEnableState,
       });
       const entry = normalized.entries[pluginId];
       const record = createPluginRecord({
@@ -2212,7 +2334,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           const earlyMemoryDecision = resolveMemorySlotDecision({
             id: record.id,
             kind: manifestRecord.kind,
-            slot: memorySlot,
+            slot: memorySlots,
             selectedId: selectedMemoryPluginId,
           });
           if (!earlyMemoryDecision.enabled) {
@@ -2236,7 +2358,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         const memoryDecision = resolveMemorySlotDecision({
           id: record.id,
           kind: record.kind,
-          slot: memorySlot,
+          slot: memorySlots,
           selectedId: selectedMemoryPluginId,
         });
 
@@ -2254,6 +2376,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           selectedMemoryPluginId = record.id;
           memorySlotMatched = true;
           record.memorySlotSelected = true;
+          record.memoryRolesSelected = listMemoryRolesSelectedForPlugin({
+            cfg,
+            pluginId: record.id,
+            includeConfiguredAgentSlots: true,
+          });
         }
       }
 
@@ -2620,7 +2747,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           const memoryDecision = resolveMemorySlotDecision({
             id: record.id,
             kind: record.kind,
-            slot: memorySlot,
+            slot: memorySlots,
             selectedId: selectedMemoryPluginId,
           });
 
@@ -2637,6 +2764,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           if (memoryDecision.selected && hasKind(record.kind, "memory")) {
             selectedMemoryPluginId = record.id;
             record.memorySlotSelected = true;
+            record.memoryRolesSelected = listMemoryRolesSelectedForPlugin({
+              cfg,
+              pluginId: record.id,
+              includeConfiguredAgentSlots: true,
+            });
           }
         }
       }
@@ -2685,9 +2817,11 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousDetachedTaskRuntimeRegistration = getDetachedTaskLifecycleRuntimeRegistration();
       const previousEmbeddingProviders = listRegisteredEmbeddingProviders();
       const previousMemoryCapability = getMemoryCapabilityRegistration();
+      const previousMemoryCapabilities = listMemoryCapabilityRegistrations();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
+      const previousMemoryRuntimes = listMemoryRuntimeRegistrations();
 
       const beforeRegister = performance.now();
       let registerFailed = false;
@@ -2706,7 +2840,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
           restoreMemoryPluginState({
             capability: previousMemoryCapability,
+            capabilities: previousMemoryCapabilities,
             corpusSupplements: previousMemoryCorpusSupplements,
+            runtimes: previousMemoryRuntimes,
             promptSupplements: previousMemoryPromptSupplements,
           });
         }
@@ -2722,7 +2858,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
         restoreMemoryPluginState({
           capability: previousMemoryCapability,
+          capabilities: previousMemoryCapabilities,
           corpusSupplements: previousMemoryCorpusSupplements,
+          runtimes: previousMemoryRuntimes,
           promptSupplements: previousMemoryPromptSupplements,
         });
         recordPluginError({
@@ -2794,7 +2932,9 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           detachedTaskRuntimeRegistration: getDetachedTaskLifecycleRuntimeRegistration(),
           interactiveHandlers: listPluginInteractiveHandlers(),
           memoryCapability: getMemoryCapabilityRegistration(),
+          memoryCapabilities: listMemoryCapabilityRegistrations(),
           memoryCorpusSupplements: listMemoryCorpusSupplements(),
+          memoryRuntimes: listMemoryRuntimeRegistrations(),
           registry,
           agentHarnesses: listRegisteredAgentHarnesses(),
           compactionProviders: listRegisteredCompactionProviders(),
@@ -2898,7 +3038,14 @@ export async function loadOpenClawPluginCliRegistry(
   });
 
   const seenIds = new Map<string, PluginRecord["origin"]>();
-  const memorySlot = normalized.slots.memory;
+  const memoryRoleSlots = resolveMemoryRoleSlots({ cfg });
+  const selectedMemoryRolePluginIds = new Set(listConfiguredMemoryRolePluginIds({ cfg }));
+  const memorySlots = listMemoryRoleSlotDecisionValues({
+    cfg,
+    slotValues: Object.values(memoryRoleSlots),
+    includeConfiguredAgentSlots: true,
+  });
+  const memorySlot = memoryRoleSlots.recall;
   let selectedMemoryPluginId: string | null = null;
   const dreamingEngineId = resolveDreamingSidecarEngineId({ cfg, memorySlot });
 
@@ -2916,7 +3063,7 @@ export async function loadOpenClawPluginCliRegistry(
     ) {
       continue;
     }
-    const activationState = resolveEffectivePluginActivationState({
+    const rawActivationState = resolveEffectivePluginActivationState({
       id: pluginId,
       origin: candidate.origin,
       config: normalized,
@@ -2943,7 +3090,7 @@ export async function loadOpenClawPluginCliRegistry(
         trustedOfficialInstall: manifestRecord.trustedOfficialInstall,
         enabled: false,
         compat: collectPluginManifestCompatCodes(manifestRecord),
-        activationState,
+        activationState: rawActivationState,
         syntheticAuthRefs: manifestRecord.syntheticAuthRefs,
         channelIds: manifestRecord.channels,
         providerIds: manifestRecord.providers,
@@ -2957,13 +3104,20 @@ export async function loadOpenClawPluginCliRegistry(
       continue;
     }
 
-    const enableState = resolveEffectiveEnableState({
+    const rawEnableState = resolveEffectiveEnableState({
       id: pluginId,
       origin: candidate.origin,
       config: normalized,
       rootConfig: cfg,
       enabledByDefault: isPluginEnabledByDefaultForPlatform(manifestRecord),
       activationSource,
+    });
+    const { activationState, enableState } = applyMemoryRoleSlotActivation({
+      pluginId,
+      normalized,
+      selectedMemoryRolePluginIds,
+      activationState: rawActivationState,
+      enableState: rawEnableState,
     });
     const entry = normalized.entries[pluginId];
     const record = createPluginRecord({
@@ -3123,7 +3277,7 @@ export async function loadOpenClawPluginCliRegistry(
       const memoryDecision = resolveMemorySlotDecision({
         id: record.id,
         kind: record.kind,
-        slot: memorySlot,
+        slot: memorySlots,
         selectedId: selectedMemoryPluginId,
       });
       if (!memoryDecision.enabled) {
@@ -3138,6 +3292,11 @@ export async function loadOpenClawPluginCliRegistry(
       if (memoryDecision.selected && hasKind(record.kind, "memory")) {
         selectedMemoryPluginId = record.id;
         record.memorySlotSelected = true;
+        record.memoryRolesSelected = listMemoryRolesSelectedForPlugin({
+          cfg,
+          pluginId: record.id,
+          includeConfiguredAgentSlots: true,
+        });
       }
     }
 

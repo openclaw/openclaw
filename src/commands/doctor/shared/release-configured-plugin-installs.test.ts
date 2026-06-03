@@ -180,6 +180,47 @@ describe("configured plugin install release step", () => {
     expect(result.channelIds).toEqual(["wecom"]);
   });
 
+  it("collects global and agent-scoped memory role slot plugin ids", async () => {
+    const { collectReleaseConfiguredPluginIds } =
+      await import("./release-configured-plugin-installs.js");
+    const result = collectReleaseConfiguredPluginIds({
+      cfg: {
+        plugins: {
+          deny: ["blocked-memory"],
+          slots: {
+            memory: "legacy-recall",
+            "memory.recall": "openclaw-honcho",
+            "memory.compaction": "memory-core",
+            "memory.capture": "none",
+            contextEngine: "lossless-claw",
+          },
+        },
+        agents: {
+          list: [
+            {
+              id: "dreamer",
+              plugins: {
+                slots: {
+                  "memory.dreaming": "dreaming-plugin",
+                  "memory.userModel": "blocked-memory",
+                },
+              },
+            },
+          ],
+        },
+      },
+      env: {},
+    });
+
+    expect(result.pluginIds).toEqual([
+      "dreaming-plugin",
+      "lossless-claw",
+      "memory-core",
+      "openclaw-honcho",
+    ]);
+    expect(result.channelIds).toStrictEqual([]);
+  });
+
   it("collects Codex from the configured agent runtime even without integration discovery", async () => {
     const { collectReleaseConfiguredPluginIds } =
       await import("./release-configured-plugin-installs.js");
