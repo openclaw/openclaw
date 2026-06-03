@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>VANTASCOPE — HOLLOW STAR · cinematic-scroll example</title>
+<meta name="description" content="A cinematic sci-fi noir scroll page — near-black + deep teal atmosphere, crimson edge-light, heavy film grain, a figure-in-fog parallax still with a scroll-driven 3D camera. A flagship example for the cinematic-scroll Agent Skill." />
+
+<!-- Open Graph -->
+<meta property="og:title" content="VANTASCOPE — HOLLOW STAR" />
+<meta property="og:description" content="Cinematic sci-fi noir scroll — teal fog, crimson edge-light, film grain, 3D camera. Built with the cinematic-scroll Agent Skill." />
+<meta property="og:type" content="website" />
+<meta name="theme-color" content="#0A0C0F" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Oswald (condensed film-poster display) + Archivo (UI) + JetBrains Mono (labels) -->
+<link href="https://fonts.googleapis.com/css2?family=Oswald:wght@300;500;600;700&family=Archivo:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<!-- GSAP + ScrollTrigger (now 100% free) — powers the dedicated "Approach" showcase:
+     a DOLLY-ZOOM (Vertigo) + a SCRUBBED SIGNAL DRAW. Deferred + feature-detected:
+     if the CDN fails, the hand-rolled rAF cinematic engine below still runs. -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
+
+<style>
+  /* ───────────────────────────────────────────────────────────────
+     cinematic-scroll · CINEMATIC SCI-FI NOIR example
+     Visual system: Atmospheric Sublime — vast negative space, atmospheric
+     haze, slow revelation — with Temporal Monument chiaroscuro contrast.
+     Single-file, no build, GitHub-Pages friendly. Only external resource:
+     Google Fonts. Motion is COMPOSITOR-ONLY (transform + opacity).
+     Title treatment = vertical clip-path MASK WIPE (not a cross-fade).
+     Reduced-motion + touch + mobile all degrade to a clean static mid-state.
+     ─────────────────────────────────────────────────────────────── */
+
+  :root{
+    --black:#0A0C0F;            /* near-black base */
+    --teal-deep:#0B1A1F;        /* deep teal atmosphere floor */
+    --teal:#14343C;             /* teal mid */
+    --teal-lit:#1E5460;         /* teal highlight */
+    --crimson:#E23A4E;          /* the single accent — edge-light */
+    --crimson-2:#FF566B;        /* brighter crimson for glow cores */
+    --ink:#E9ECEE;             /* off-white type */
+    --muted:#7E8C92;           /* muted teal-grey body */
+    --line:rgba(233,236,238,.14);
+
+    --display:'Oswald',Impact,'Haettenschweiler','Arial Narrow Bold',sans-serif;
+    --ui:'Archivo',system-ui,sans-serif;
+    --mono:'JetBrains Mono',ui-monospace,Menlo,monospace;
+
+    --bg:var(--black);
+    --fg:var(--ink);
+    --fg-muted:var(--muted);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--fg);
+    font-family:var(--ui); font-weight:400;
+    -webkit-font-smoothing:antialiased; overflow-x:hidden;
+    transition:background .9s cubic-bezier(.22,1,.36,1);
+  }
+  a{color:inherit}
+  ::selection{ background:var(--crimson); color:#fff; }
+
+  /* ── fixed atmosphere: deep-teal vignette + grain (lowest depth) ──── */
+  .atmos{
+    position:fixed; inset:0; z-index:-2; pointer-events:none;
+    background:
+      radial-gradient(130% 100% at 78% 8%,  rgba(30,84,96,.34), rgba(30,84,96,0) 55%),
+      radial-gradient(120% 90%  at 18% 100%, rgba(20,52,60,.42), rgba(11,26,31,0) 60%),
+      radial-gradient(80% 60%   at 92% 88%,  rgba(226,58,78,.10), rgba(226,58,78,0) 55%),
+      linear-gradient(180deg, var(--black) 0%, var(--teal-deep) 58%, var(--black) 100%);
+    transition:background .9s cubic-bezier(.22,1,.36,1);
+  }
+  /* heavy film grain overlay (inline SVG noise — animation-free, GPU-cheap) */
+  .grain{
+    position:fixed; inset:-50%; z-index:-1; pointer-events:none; opacity:.16;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    animation:grainshift 5.2s steps(6) infinite;
+  }
+  @keyframes grainshift{
+    0%{transform:translate(0,0)} 16%{transform:translate(-3%,2%)}
+    33%{transform:translate(2%,-3%)} 50%{transform:translate(-2%,-2%)}
+    66%{transform:translate(3%,1%)} 83%{transform:translate(-1%,3%)} 100%{transform:translate(0,0)}
+  }
+  /* thin crimson edge-light hairline framing the whole viewport */
+  .edge{ position:fixed; inset:0; z-index:45; pointer-events:none;
+    box-shadow:inset 0 0 0 1px rgba(226,58,78,.10), inset 0 0 120px rgba(8,10,14,.7); }
+
+  /* ── fixed masthead ───────────────────────────────────────────── */
+  .masthead{
+    position:fixed; inset:0 0 auto 0; z-index:50;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:max(20px,env(safe-area-inset-top)) clamp(18px,4vw,56px) 20px;
+  }
+  .masthead .mark{ display:flex; align-items:baseline; gap:12px; pointer-events:auto; }
+  .masthead .mark b{ font-family:var(--display); font-weight:700; font-size:18px; letter-spacing:.26em; color:var(--ink); }
+  .masthead .mark span{ font-family:var(--mono); font-size:9px; letter-spacing:.3em; text-transform:uppercase; color:var(--crimson); }
+  .masthead nav{ display:flex; gap:clamp(14px,2.4vw,34px); font-family:var(--mono); font-size:10px; letter-spacing:.22em; text-transform:uppercase; pointer-events:auto; }
+  .masthead nav a{ color:var(--muted); text-decoration:none; transition:color .3s; }
+  .masthead nav a:hover{ color:var(--ink); }
+  @media (max-width:680px){ .masthead nav{ display:none; } }
+
+  /* ── progress + index rail ────────────────────────────────────── */
+  .rail{
+    position:fixed; right:clamp(12px,2vw,28px); top:50%; transform:translateY(-50%);
+    z-index:40; display:flex; flex-direction:column; gap:14px;
+    font-family:var(--mono); font-size:10px; color:var(--muted);
+  }
+  .rail .r{ display:flex; align-items:center; gap:10px; justify-content:flex-end; opacity:.55; transition:opacity .35s, color .35s; }
+  .rail .r .num{ letter-spacing:.12em; }
+  .rail .r .ln{ width:20px; height:1px; background:currentColor; transition:width .35s, background .35s; }
+  .rail .r.on{ opacity:1; color:var(--ink); }
+  .rail .r.on .ln{ width:46px; height:2px; background:var(--crimson); }
+  /* top-of-page scroll progress bar */
+  .scrollbar{ position:fixed; top:0; left:0; height:2px; width:0%; z-index:60;
+    background:linear-gradient(90deg, var(--crimson), var(--crimson-2)); box-shadow:0 0 12px rgba(226,58,78,.6); }
+  @media (max-width:680px){ .rail{ display:none; } }
+
+  /* ── chapter section ──────────────────────────────────────────── */
+  section{ position:relative; min-height:230vh; }     /* pin room */
+  .stage{
+    position:sticky; top:0; height:100vh; overflow:hidden;
+    display:grid; grid-template-columns:1fr; align-content:center;
+    padding:0 clamp(18px,5vw,80px);
+    perspective:1500px; perspective-origin:62% 48%;   /* scroll-driven 3D camera */
+  }
+  .figwrap,.copytext,.cuewrap{ transform-style:preserve-3d; }
+  .figwrap .frame{ transform-style:preserve-3d; }
+
+  /* oversized Roman-numeral watermark — deepest ghost layer */
+  .roman{
+    position:absolute; z-index:1; font-family:var(--display); font-weight:700;
+    font-size:clamp(14rem,52vw,46rem); line-height:.7; letter-spacing:-.02em;
+    color:var(--ink); opacity:.045; white-space:nowrap; pointer-events:none;
+    top:50%; left:46%; transform:translate(-50%,-50%); will-change:transform;
+    -webkit-user-select:none; user-select:none;
+  }
+
+  /* figure-in-fog framed parallax still */
+  .figwrap{ position:absolute; z-index:3; right:clamp(18px,5vw,80px); top:50%;
+    width:clamp(280px,40vw,580px); aspect-ratio:4/5; transform:translateY(-50%);
+    will-change:transform,opacity; }
+  .frame{ position:relative; width:100%; height:100%; }
+  .pic{
+    position:absolute; inset:0; background-size:cover; background-position:center 35%;
+    background-color:var(--teal-deep);
+    box-shadow:0 40px 90px rgba(0,0,0,.6), 0 0 1px rgba(226,58,78,.5);
+    transition:transform .25s ease-out;
+  }
+  /* CSS-only placeholder visual — figure-in-fog, teal + crimson edge-light */
+  .pic.placeholder{
+    background-image:
+      /* crimson rim along the right edge of the "figure" */
+      radial-gradient(60% 120% at 88% 50%, rgba(226,58,78,.55) 0%, rgba(226,58,78,0) 42%),
+      /* the silhouetted figure mass, lit from teal behind */
+      radial-gradient(46% 78% at 50% 64%, rgba(8,10,13,.96) 0%, rgba(8,10,13,.7) 40%, rgba(8,10,13,0) 70%),
+      /* teal atmospheric backlight / fog */
+      radial-gradient(90% 80% at 38% 22%, rgba(30,84,96,.7) 0%, rgba(20,52,60,.3) 45%, rgba(11,26,31,0) 75%),
+      /* fog banding */
+      repeating-linear-gradient(8deg, rgba(20,52,60,.10) 0 7px, rgba(11,26,31,.04) 7px 20px),
+      linear-gradient(160deg, var(--teal) 0%, var(--teal-deep) 55%, var(--black) 100%);
+  }
+  .pic::after{ /* grain locked to the still */
+    content:""; position:absolute; inset:0; opacity:.4; mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)' opacity='0.4'/%3E%3C/svg%3E");
+    pointer-events:none;
+  }
+  /* crimson edge-light streak baked over the frame */
+  .frame .rim{ position:absolute; top:8%; right:-1px; width:2px; height:84%;
+    background:linear-gradient(180deg, rgba(226,58,78,0), var(--crimson) 40%, var(--crimson-2) 55%, rgba(226,58,78,0));
+    box-shadow:0 0 18px rgba(226,58,78,.8); pointer-events:none; }
+  .figcap{ position:absolute; left:0; bottom:-26px; display:flex; justify-content:space-between; width:100%;
+    font-family:var(--mono); font-size:10px; letter-spacing:.18em; color:var(--muted); }
+  .figcap .n{ color:var(--crimson); }
+  /* corner brackets */
+  .frame .br{ position:absolute; width:26px; height:26px; border:1.5px solid var(--crimson); opacity:.85; }
+  .frame .br.tl{ top:-1px; left:-1px; border-right:0; border-bottom:0; }
+  .frame .br.tr{ top:-1px; right:-1px; border-left:0; border-bottom:0; }
+  .frame .br.bl{ bottom:-1px; left:-1px; border-right:0; border-top:0; }
+  .frame .br.brc{ bottom:-1px; right:-1px; border-left:0; border-top:0; }
+
+  /* copy / title — the film-poster type */
+  .copytext{ position:relative; z-index:6; max-width:min(92vw,1180px); will-change:transform,opacity; }
+  .eyebrow{ font-family:var(--mono); font-size:clamp(10px,1vw,12px); letter-spacing:.36em; text-transform:uppercase; color:var(--crimson); margin-bottom:clamp(16px,2.4vw,28px); display:flex; align-items:center; gap:12px; }
+  .eyebrow::before{ content:""; width:34px; height:1px; background:var(--crimson); display:inline-block; }
+  h2.title{
+    font-family:var(--display); font-weight:700; line-height:.88;
+    letter-spacing:.005em; text-transform:uppercase; color:var(--ink);
+    font-size:clamp(3rem,12vw,11rem);
+  }
+  /* each line wears a vertical clip-path MASK WIPE (top→bottom reveal) */
+  h2.title .ln{ display:block; overflow:hidden; }
+  h2.title .ln .t{ display:inline-block; will-change:transform,clip-path; }
+  h2.title .accent{ color:var(--crimson); }
+  .lede{ margin-top:clamp(22px,2.8vw,36px); max-width:48ch; font-size:clamp(1rem,1.5vw,1.28rem);
+    line-height:1.62; color:var(--fg-muted); font-weight:400; }
+  .lede .reveal{ display:inline; }
+  .meta{ margin-top:clamp(18px,2.4vw,30px); font-family:var(--mono); font-size:10px; letter-spacing:.2em;
+    text-transform:uppercase; color:var(--muted); }
+  .cta{ margin-top:clamp(26px,3vw,40px); display:inline-flex; align-items:center; gap:12px;
+    padding:14px 28px; background:var(--crimson); color:#0A0C0F;
+    font-family:var(--mono); font-size:11px; letter-spacing:.2em; text-transform:uppercase;
+    text-decoration:none; box-shadow:0 0 30px rgba(226,58,78,.45); transition:transform .3s, box-shadow .3s; }
+  .cta:hover{ transform:translateY(-2px); box-shadow:0 0 44px rgba(226,58,78,.7); }
+
+  /* scroll-cue badge (hero only) */
+  .cuewrap{ position:absolute; z-index:7; left:50%; bottom:clamp(26px,5vh,52px); transform:translateX(-50%);
+    display:flex; flex-direction:column; align-items:center; gap:9px; will-change:transform,opacity; }
+  .cue{ font-family:var(--mono); font-size:9px; letter-spacing:.3em; text-transform:uppercase; color:var(--muted);
+    border:1px solid var(--line); border-radius:999px; padding:8px 16px;
+    display:flex; align-items:center; gap:9px; background:rgba(10,12,15,.4); backdrop-filter:blur(4px); }
+  .cue .dot{ width:6px; height:6px; border-radius:50%; background:var(--crimson); box-shadow:0 0 10px var(--crimson); animation:pulse 1.9s ease-in-out infinite; }
+  .cuewrap .bar{ width:1px; height:34px; background:linear-gradient(var(--crimson), transparent); transform-origin:top; animation:cuebar 2.2s ease-in-out infinite; }
+  @keyframes pulse{ 0%,100%{opacity:1} 50%{opacity:.3} }
+  @keyframes cuebar{ 0%,100%{transform:scaleY(1)} 50%{transform:scaleY(.4)} }
+
+  /* ── footer / colophon ────────────────────────────────────────── */
+  footer{ position:relative; z-index:2; padding:16vh clamp(18px,5vw,80px) 14vh; }
+  footer .vine{ width:120px; height:1px; margin-bottom:30px; background:linear-gradient(90deg, var(--crimson), transparent); }
+  footer .big{ font-family:var(--display); font-weight:600; text-transform:uppercase;
+    font-size:clamp(2rem,8vw,5.6rem); line-height:.92; letter-spacing:.01em; color:var(--ink); }
+  footer .big a{ color:var(--crimson); text-decoration:none; }
+  footer .meta{ margin-top:28px; font-family:var(--mono); font-size:11px; letter-spacing:.16em; color:var(--muted); text-transform:uppercase; max-width:62ch; line-height:1.8; }
+  footer .meta a{ color:var(--crimson); text-decoration:none; border-bottom:1px solid rgba(226,58,78,.3); }
+
+  /* ── mobile (<=680px): clean static mid-state, no pin / no scrolljack ── */
+  @media (max-width:680px){
+    .grain{ display:none; }
+    section{ min-height:auto; padding:13vh 0; }
+    .stage{ position:static; height:auto; display:block; padding:0 22px; perspective:none; }
+    .roman{ position:static; transform:none!important; opacity:.06; font-size:32vw; line-height:.8; margin:0 0 -6vh -2vw; display:block; }
+    .figwrap{ position:static; width:100%; transform:none!important; margin:30px 0 44px; aspect-ratio:16/11; opacity:1!important; }
+    .copytext{ transform:none!important; opacity:1!important; }
+    h2.title{ font-size:15vw; }
+    h2.title .ln .t{ transform:none!important; clip-path:none!important; opacity:1!important; }
+    .cuewrap{ position:static; transform:none!important; margin:34px auto 0; opacity:1!important; }
+    .reveal{ opacity:0; transform:translateY(22px); transition:opacity .7s ease, transform .7s cubic-bezier(.16,1,.3,1); }
+    .reveal.in{ opacity:1; transform:none; }
+  }
+
+  /* ── reduced motion: snap to a readable mid-state, no scroll-driven motion ── */
+  @media (prefers-reduced-motion:reduce){
+    html{ scroll-behavior:auto; }
+    .grain,.cue .dot,.cuewrap .bar{ animation:none; }
+    section{ min-height:auto; padding:11vh 0; }
+    .stage{ position:static; height:auto; display:block; perspective:none; }
+    .roman{ position:static; transform:none!important; opacity:.06; font-size:clamp(8rem,26vw,18rem); line-height:.8; display:block; margin-bottom:-4vh; }
+    .figwrap{ position:static; width:min(560px,92vw); transform:none!important; margin:30px 0 44px; opacity:1!important; }
+    .copytext{ transform:none!important; opacity:1!important; }
+    h2.title .ln .t{ transform:none!important; clip-path:none!important; opacity:1!important; }
+    .cuewrap{ position:static; transform:none!important; margin-top:30px; opacity:1!important; }
+    .reveal{ opacity:1!important; transform:none!important; }
+  }
+
+  /* ── GSAP SHOWCASE — "THE APPROACH" ─────────────────────────────────
+     A dedicated viewport that demonstrates two techniques the hand-rolled
+     engine doesn't: a DOLLY-ZOOM (Vertigo — taste-guardrails §2) on the
+     backdrop and a SCRUBBED SIGNAL DRAW (stroke-dashoffset, pattern #2).
+     GSAP pins .show-stage; static defaults below keep it whole when GSAP is
+     absent / reduced-motion / mobile (dolly at rest, waveform fully drawn). */
+  section.showcase{ min-height:0; }                 /* GSAP pin owns the scroll room */
+  .show-stage{ position:relative; height:100vh; overflow:hidden; display:grid; place-items:center; }
+  .show-stage .dolly{
+    position:absolute; inset:-12%; z-index:0; transform-origin:60% 46%; will-change:transform;
+    background:
+      radial-gradient(56% 88% at 50% 60%, rgba(8,10,13,0) 0%, rgba(8,10,13,.55) 72%),
+      radial-gradient(72% 60% at 50% 28%, rgba(30,84,96,.50), rgba(11,26,31,0) 70%),
+      radial-gradient(40% 78% at 50% 54%, rgba(226,58,78,.16), rgba(226,58,78,0) 60%),
+      linear-gradient(180deg, var(--black) 0%, var(--teal-deep) 60%, var(--black) 100%);
+  }
+  .show-stage .waveform{ position:relative; z-index:2; width:min(80vw,1120px); height:140px; overflow:visible; }
+  .show-stage .waveform path{ fill:none; stroke:var(--crimson); stroke-width:2; stroke-linecap:round;
+    filter:drop-shadow(0 0 6px rgba(226,58,78,.5)); }   /* static (non-animated) glow — allowed */
+  .show-cap{ position:absolute; z-index:3; bottom:14vh; left:0; right:0; text-align:center;
+    font-family:var(--mono); color:var(--muted); }
+  .show-cap b{ display:block; font-family:var(--display); font-weight:700; letter-spacing:.28em;
+    color:var(--ink); font-size:clamp(1.4rem,4vw,2.4rem); margin-bottom:10px; }
+  .show-cap span{ font-size:11px; letter-spacing:.22em; text-transform:uppercase; }
+  @media (max-width:680px){
+    .show-stage{ height:auto; padding:16vh 22px; }
+    .show-stage .dolly{ inset:0; }
+    .show-cap{ position:static; margin-top:30px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="atmos" id="atmos" aria-hidden="true"></div>
+<div class="grain" aria-hidden="true"></div>
+<div class="edge" aria-hidden="true"></div>
+<div class="scrollbar" id="scrollbar" aria-hidden="true"></div>
+
+<header class="masthead">
+  <div class="mark">
+    <b>VANTASCOPE</b>
+    <span>Pictures · Interactive</span>
+  </div>
+  <nav aria-label="Primary">
+    <a href="#signal">Signal</a>
+    <a href="#descent">Descent</a>
+    <a href="#witness">Witness</a>
+    <a href="#access">Request Access</a>
+  </nav>
+</header>
+
+<nav class="rail" id="rail" aria-label="Chapters"></nav>
+
+<main id="reel"></main>
+
+<footer id="access">
+  <div class="vine"></div>
+  <div class="big">A signal was sent.<br>Something <a href="mailto:transmission@example.com">answered →</a></div>
+  <div class="meta">
+    Built with the <a href="https://github.com/MustBeSimo/cinematic-scroll-skill">cinematic-scroll</a> Agent Skill ·
+    VANTASCOPE is a fictional studio — no real titles, people, or brands ·
+    one of many possible aesthetics this skill can direct.
+  </div>
+</footer>
+
+<script>
+/* ───────────────────────────────────────────────────────────────
+   Manifest — single source of truth. Edit this array to retheme;
+   the DOM and the motion are generated from it. Fictional studio.
+   Each chapter:
+     id        slug → asset filename (assets/<id>.jpg) + section anchor
+     roman     oversized watermark numeral (ghost layer)
+     eyebrow   small mono label
+     fig/figLabel  bottom caption on the framed still
+     title     array of LINES; each line = [text, accent?]  (accent → crimson)
+     lede      supporting paragraph (sci-fi noir voice)
+     morph     teal-atmosphere gradient this chapter morphs TO
+     cue       true → render the scroll-cue badge (hero only)
+     cta       optional CTA label (final chapter)
+     prompt    image-generation prompt (noir still; NO baked-in text)
+   ─────────────────────────────────────────────────────────────── */
+const CHAPTERS = [
+  {
+    id:'0-signal', roman:'I', eyebrow:'VANTASCOPE · TRANSMISSION MMXXVI',
+    fig:'PLATE I', figLabel:'STANDING FIGURE, IN FOG',
+    title:[['HOLLOW',0],['STAR',1]],
+    lede:'Forty years after the last carrier went dark, a single coherent pulse climbs out of the noise floor. It is not a beacon. It is a name — and it is calling one of us back.',
+    morph:'radial-gradient(130% 100% at 78% 8%, rgba(30,84,96,.40), rgba(30,84,96,0) 55%), radial-gradient(120% 90% at 18% 100%, rgba(20,52,60,.46), rgba(11,26,31,0) 60%), linear-gradient(180deg, #0A0C0F 0%, #0B1A1F 58%, #0A0C0F 100%)',
+    cue:true,
+    prompt:'Cinematic sci-fi noir still: a lone figure in a long coat seen from behind, standing in thick teal volumetric fog, lit by a single hard crimson rim-light along one edge, vast empty hangar receding into darkness, anamorphic lens, heavy film grain, near-black shadows, no text, no logos, Atmospheric Sublime mood, 4:5'
+  },
+  {
+    id:'1-descent', roman:'II', eyebrow:'CHAPTER II · THE DESCENT',
+    fig:'PLATE II', figLabel:'CORRIDOR, EMERGENCY AMBER',
+    title:[['INTO THE',0],['QUIET DARK',1]],
+    lede:'The derelict has no power, no heat, no record of ever having launched. Yet the corridors are warm where a body has just passed. We go down because the pulse is below us — and because turning back was never an option that survived the briefing.',
+    morph:'radial-gradient(120% 100% at 20% 12%, rgba(20,52,60,.50), rgba(11,26,31,0) 58%), radial-gradient(90% 70% at 88% 92%, rgba(226,58,78,.14), rgba(226,58,78,0) 55%), linear-gradient(180deg, #090B0E 0%, #0A1418 60%, #08090C 100%)',
+    prompt:'Cinematic sci-fi noir still: a narrow derelict-spaceship corridor descending into blackness, faint emergency crimson strip-lighting, teal cold haze drifting through the frame, a silhouetted figure small at the far end, wet metal reflections, extreme contrast, heavy grain, no text, no logos, anamorphic, 4:5'
+  },
+  {
+    id:'2-witness', roman:'III', eyebrow:'CHAPTER III · THE WITNESS',
+    fig:'PLATE III', figLabel:'FACE, HALF-LIT',
+    title:[['IT REMEMBERS',0],['YOUR NAME',1]],
+    lede:'Whatever answered the signal was not built and was not born. It wears the architecture like a held breath, and when it finally turns toward the light it is wearing a face you buried four decades ago — patient, unhurried, almost kind.',
+    morph:'radial-gradient(130% 100% at 70% 10%, rgba(30,84,96,.30), rgba(30,84,96,0) 52%), radial-gradient(100% 80% at 30% 96%, rgba(226,58,78,.22), rgba(226,58,78,0) 58%), linear-gradient(180deg, #0A0C0F 0%, #120A0E 64%, #08090C 100%)',
+    prompt:'Cinematic sci-fi noir still: extreme close portrait of a face half-lit, one side in deep teal shadow, the other catching a thin crimson edge-light, fog particles suspended in the air, unreadable expression, anamorphic, ultra high contrast chiaroscuro, heavy film grain, no text, no logos, 4:5'
+  },
+  {
+    id:'3-access', roman:'IV', eyebrow:'CHAPTER IV · THE OFFER',
+    fig:'PLATE IV', figLabel:'OPEN AIRLOCK, BACKLIT',
+    title:[['STAY OR',0],['ANSWER IT',1]],
+    lede:'The airlock is open. On one side, the long cold ride home and a report no one will believe. On the other, the thing wearing your past, holding the door, asking only that you walk through it of your own accord. VANTASCOPE invites you to decide on the descent.',
+    morph:'radial-gradient(130% 100% at 80% 8%, rgba(30,84,96,.36), rgba(30,84,96,0) 55%), radial-gradient(110% 90% at 22% 100%, rgba(226,58,78,.18), rgba(226,58,78,0) 58%), linear-gradient(180deg, #0A0C0F 0%, #0B1A1F 56%, #0A0C0F 100%)',
+    cta:'Request early access',
+    prompt:'Cinematic sci-fi noir still: a backlit open airlock doorway, blinding teal-white light pouring through fog, a silhouetted figure standing in the threshold framed by crimson edge-light, vast darkness around the frame, anamorphic flares, heavy grain, ultra contrast, no text, no logos, 4:5'
+  },
+];
+
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const smooth=(e0,e1,x)=>{ if(x<=e0)return 0; if(x>=e1)return 1; const t=(x-e0)/(e1-e0); return t*t*(3-2*t); };
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isTouch = matchMedia('(hover: none) and (pointer: coarse)').matches;
+const isMobile = () => innerWidth <= 680;
+
+const reel = document.getElementById('reel');
+const rail = document.getElementById('rail');
+const atmos = document.getElementById('atmos');
+const bar = document.getElementById('scrollbar');
+
+/* preflight: which real images exist? → fall back to CSS placeholder */
+function probe(src){ return new Promise(res=>{ const i=new Image(); i.onload=()=>res(true); i.onerror=()=>res(false); i.src=src; }); }
+
+(async () => {
+  for (const ch of CHAPTERS){
+    const sec = document.createElement('section');
+    sec.id = ch.id.replace(/^\d+-/,'');
+    sec.dataset.morph = ch.morph;
+
+    /* title: one block per LINE, each line a vertical clip-path mask wipe */
+    const titleHTML = ch.title.map(([txt,acc]) =>
+      `<span class="ln"><span class="t${acc?' accent':''}">${txt}</span></span>`
+    ).join('');
+
+    const imgPath = `assets/${ch.id}.jpg`;
+    const hasImg = await probe(imgPath);
+    const picStyle = hasImg ? `background-image:url('${imgPath}')` : '';
+    const picClass = hasImg ? 'pic' : 'pic placeholder';
+
+    sec.innerHTML = `
+      <div class="stage">
+        <div class="roman" data-depth="0.22" aria-hidden="true">${ch.roman}</div>
+        <div class="figwrap" data-depth="0.75">
+          <div class="frame">
+            <span class="br tl"></span><span class="br tr"></span><span class="br bl"></span><span class="br brc"></span>
+            <div class="${picClass}" style="${picStyle}" role="img" aria-label="${ch.figLabel}"></div>
+            <span class="rim"></span>
+            <div class="figcap"><span class="n">${ch.fig}</span><span>${ch.figLabel}</span></div>
+          </div>
+        </div>
+        <div class="copytext" data-depth="1.0">
+          <div class="eyebrow reveal">${ch.eyebrow}</div>
+          <h2 class="title">${titleHTML}</h2>
+          <p class="lede"><span class="reveal">${ch.lede}</span></p>
+          ${ch.cta
+            ? `<a class="cta reveal" href="mailto:transmission@example.com?subject=VANTASCOPE%20access">${ch.cta} →</a>`
+            : `<p class="meta reveal">${ch.fig} · ${ch.figLabel}</p>`}
+        </div>
+        ${ch.cue ? `<div class="cuewrap" data-depth="1.4">
+          <div class="cue"><span class="dot"></span>Begin the descent</div>
+          <span class="bar"></span>
+        </div>` : ''}
+      </div>`;
+    reel.appendChild(sec);
+
+    const r = document.createElement('div');
+    r.className='r'; r.dataset.id = sec.id;
+    r.innerHTML = `<span class="num">${ch.roman}</span><span class="ln"></span>`;
+    rail.appendChild(r);
+  }
+
+  /* ── APPEND THE GSAP SHOWCASE BEAT ("THE APPROACH") ──────────────────
+     Inserted right after the hero so it reads: signal → the approach →
+     descent. Built BEFORE sections/rails are collected so the centre-spy
+     and index rail stay aligned. Pure markup here; motion is wired at the
+     end (desktop-only, only if GSAP loaded). */
+  const show = document.createElement('section');
+  show.className = 'showcase'; show.id = 'approach';
+  show.dataset.morph = 'radial-gradient(120% 100% at 50% 0%, rgba(30,84,96,.42), rgba(11,26,31,0) 60%), linear-gradient(180deg, #0A0C0F 0%, #0B1A1F 60%, #08090C 100%)';
+  show.innerHTML = `
+    <div class="show-stage">
+      <div class="dolly" aria-hidden="true"></div>
+      <svg class="waveform" viewBox="0 0 1120 140" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <path d="M0,70 L150,70 L180,70 L196,30 L212,110 L228,52 L244,88 L260,70 L440,70 L470,70 L486,18 L502,122 L518,44 L534,96 L550,70 L760,70 L790,70 L806,40 L822,100 L838,70 L1120,70"/>
+      </svg>
+      <div class="show-cap">
+        <b>THE APPROACH</b>
+        <span>A single coherent pulse climbs out of the noise floor</span>
+      </div>
+    </div>`;
+  reel.insertBefore(show, reel.children[1] || null);   // after hero (index 0)
+  const sr = document.createElement('div');
+  sr.className = 'r'; sr.dataset.id = 'approach';
+  sr.innerHTML = `<span class="num">&#8767;</span><span class="ln"></span>`;
+  rail.insertBefore(sr, rail.children[1] || null);
+
+  const sections = [...document.querySelectorAll('section')];
+  const rails = [...rail.querySelectorAll('.r')];
+
+  /* rail click → smooth scroll to chapter */
+  rails.forEach(r => r.addEventListener('click', () => {
+    document.getElementById(r.dataset.id)?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth' });
+  }));
+
+  /* background morph + active rail via whichever section crosses screen-center.
+     Sections are 230vh (taller than the viewport), so a threshold observer can
+     never fire — collapse the root to a 1px band at the vertical center via
+     rootMargin: the section straddling the middle of the screen is active. */
+  function applyActive(sec){
+    const idx = sections.indexOf(sec);
+    atmos.style.background = sec.dataset.morph;
+    rails.forEach((r,i)=> r.classList.toggle('on', i===idx));
+  }
+  const spy = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{ if (e.isIntersecting) applyActive(e.target); });
+  },{ rootMargin:'-50% 0px -50% 0px', threshold:0 });
+  sections.forEach(s=>spy.observe(s));
+  applyActive(sections[0]); // paint initial state immediately
+
+  /* top scroll-progress bar (cheap, transform/width-free: scaleX on a 0%-wide bar
+     would need width; instead drive `width` only here — NOT in the parallax loop —
+     this runs on a throttled handler and never touches layout of other elements). */
+  let pTick=false;
+  function progress(){
+    const max = document.documentElement.scrollHeight - innerHeight;
+    bar.style.transform = `scaleX(${max>0 ? clamp(scrollY/max,0,1):0})`;
+    pTick=false;
+  }
+  bar.style.width='100%'; bar.style.transformOrigin='left center'; bar.style.transform='scaleX(0)';
+
+  /* mobile / reduced-motion: static mid-state + simple fade-up; skip rAF engine */
+  if (reduce || isMobile()){
+    const up=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');up.unobserve(e.target);}});},{threshold:.18});
+    document.querySelectorAll('.reveal').forEach(el=>up.observe(el));
+    addEventListener('scroll',()=>{ if(!pTick){pTick=true;requestAnimationFrame(progress);} },{passive:true});
+    progress();
+    return; // no pinned scrolljack, no parallax
+  }
+
+  /* ── desktop parallax — COMPOSITOR-ONLY cinematic engine ───────────────
+     Cinematic grammar (taste-guardrails §2):
+       • CRANE SHOT  — figure translateY + rotateX swing as the camera cranes in
+       • TRACKING    — Roman watermark drifts on a deep counter-axis plane
+       • MASK WIPE   — each title line revealed via vertical clip-path (NOT cross-fade)
+     Unified approach→pin→exit timeline T∈[0,1]; never starts invisible.
+     Only transform + opacity (+ clip-path on the title wipe, which is NOT animated
+     continuously per-frame — it snaps through discrete reveal steps via smooth()).
+     3D camera disabled on touch / reduced-motion (taste-guardrails §1.9). */
+  let mx=0,my=0;  // pointer blend for the live 3D camera
+  if(!isTouch && !reduce){
+    addEventListener('pointermove',e=>{ mx=(e.clientX/innerWidth-0.5); my=(e.clientY/innerHeight-0.5); },{passive:true});
+  }
+
+  let ticking=false;
+  function parallax(){
+    const vh=innerHeight;
+    for(const sec of sections){
+      const rect=sec.getBoundingClientRect();
+      const total=sec.offsetHeight+vh;
+      const T=clamp((vh-rect.top)/total,0,1);
+      const enter=smooth(0.06,0.32,T);
+      const exit=1-smooth(0.66,0.90,T);
+      const live=enter*exit;
+      const drift=0.46-T;                  // signed, ~0 at hold
+      const onStage = T>0.04 && T<0.96;    // only drive 3D while in view (perf)
+
+      /* figure-in-fog — crane-in with 3D camera swing (depth 0.75) */
+      const fig=sec.querySelector('.figwrap');
+      if(fig){ const d=+fig.dataset.depth;
+        const z = -120*(1-enter) + drift*110*d;          // translateZ dolly
+        const y = drift*300*d;
+        const sc = 0.92 + 0.08*enter;
+        const ry = drift*8 + (onStage ? mx*2.4 : 0);      // rotateY ±2° spec
+        const rx = -drift*10 + (onStage ? -my*4 : 0);     // rotateX ±4° spec
+        fig.style.transform =
+          `translateY(calc(-50% + ${y.toFixed(1)}px)) translateZ(${z.toFixed(1)}px) `+
+          `rotateX(${clamp(rx,-4,4).toFixed(2)}deg) rotateY(${clamp(ry,-2,2).toFixed(2)}deg) scale(${sc.toFixed(3)})`;
+        fig.style.opacity=(0.08+0.92*live).toFixed(3);
+      }
+
+      /* Roman watermark — deep tracking drift, counter-axis to the type */
+      const roman=sec.querySelector('.roman');
+      if(roman){ const d=+roman.dataset.depth;
+        roman.style.transform=
+          `translate(calc(-50% + ${(drift*480*d).toFixed(0)}px),-50%) translateZ(-420px) scale(${(1.05-0.05*enter).toFixed(3)})`;
+      }
+
+      /* copy block + per-line MASK WIPE (vertical clip-path top→bottom) */
+      const copy=sec.querySelector('.copytext');
+      if(copy){
+        copy.style.transform=`translateY(${(drift*84).toFixed(1)}px) rotateX(${(drift*5).toFixed(2)}deg)`;
+        copy.style.opacity=(0.06+0.94*live).toFixed(3);
+        const lines=copy.querySelectorAll('h2 .ln .t'); const n=lines.length;
+        lines.forEach((t,k)=>{
+          const t0=0.06+(k/n)*0.20; const wp=smooth(t0,t0+0.18,T);
+          // vertical mask wipe: clip-path inset shrinks from bottom 100% → 0
+          t.style.clipPath=`inset(0 0 ${((1-wp)*100).toFixed(1)}% 0)`;
+          t.style.transform=`translateY(${((1-wp)*16).toFixed(1)}px)`;
+          t.style.opacity=(0.15+0.85*wp).toFixed(3);
+        });
+        const rev=copy.querySelectorAll('.reveal');
+        rev.forEach((el,k)=>{ el.style.opacity=(smooth(0.16+k*0.03,0.40+k*0.03,T)*exit).toFixed(3); });
+      }
+
+      /* scroll-cue badge — faster drift, fades out as the hero releases */
+      const cue=sec.querySelector('.cuewrap');
+      if(cue){ const d=+cue.dataset.depth;
+        cue.style.transform=`translate(-50%, ${(drift*120*d).toFixed(1)}px) translateZ(60px)`;
+        cue.style.opacity=(1-smooth(0.10,0.34,T)).toFixed(3);
+      }
+    }
+    if(!pTick){ progress(); }
+    ticking=false;
+  }
+  function onScroll(){ if(!ticking){ ticking=true; requestAnimationFrame(parallax); } }
+  addEventListener('scroll',onScroll,{passive:true});
+  addEventListener('resize',()=>{ticking=true;requestAnimationFrame(parallax);},{passive:true});
+  if(!isTouch && !reduce) addEventListener('pointermove',onScroll,{passive:true});
+  parallax(); // initial paint so nothing starts invisible
+
+  /* second-order micro-tilt on the still itself (pointer, non-touch) — adds
+     depth over the figure's scroll camera; lives on .pic so it doesn't fight .figwrap */
+  if(!isTouch && !reduce){
+    document.querySelectorAll('.frame').forEach(frame=>{
+      const pic=frame.querySelector('.pic');
+      frame.addEventListener('pointermove',ev=>{
+        const r=frame.getBoundingClientRect();
+        const px=(ev.clientX-r.left)/r.width-0.5, py=(ev.clientY-r.top)/r.height-0.5;
+        pic.style.transform=`translateZ(30px) rotateY(${(px*6).toFixed(2)}deg) rotateX(${(-py*4).toFixed(2)}deg)`;
+      });
+      frame.addEventListener('pointerleave',()=>{ pic.style.transform='translateZ(0) rotateY(0) rotateX(0)'; });
+    });
+  }
+
+  /* ── GSAP SHOWCASE WIRING — desktop & non-reduced (guarded by the early
+     return above, then matchMedia again so it auto-kills on resize into a
+     small/reduced context). Two cinematic techniques (taste-guardrails §2):
+       • DOLLY-ZOOM (Vertigo) — the backdrop pushes in while the caption holds
+       • SCRUBBED SIGNAL DRAW — the waveform draws via stroke-dashoffset (pattern #2)
+     If GSAP never loads, #approach simply stays at its complete static state. */
+  (function wireShowcase(tries){
+    if(!window.gsap || !window.ScrollTrigger){
+      if(tries>0) requestAnimationFrame(()=>wireShowcase(tries-1));
+      return;
+    }
+    gsap.registerPlugin(ScrollTrigger);
+    ScrollTrigger.defaults({ scrub:0.5, fastScrollEnd:true, invalidateOnRefresh:true });
+    const mm = gsap.matchMedia();
+    mm.add('(min-width:769px) and (prefers-reduced-motion:no-preference)', () => {
+      const stage = document.querySelector('#approach .show-stage');
+      if(!stage) return;
+      const dolly = stage.querySelector('.dolly');
+      const path  = stage.querySelector('.waveform path');
+      const cap   = stage.querySelector('.show-cap');
+      const len   = path.getTotalLength();
+      gsap.set(path, { strokeDasharray:len, strokeDashoffset:len, willChange:'stroke-dashoffset' });
+      const tl = gsap.timeline({ scrollTrigger:{
+        trigger:'#approach', start:'top top', end:'+=130%', pin:stage, anticipatePin:1 } });
+      tl.fromTo(dolly, { scale:1 },         { scale:1.26, ease:'none' }, 0)                              // dolly-zoom
+        .to(path,      { strokeDashoffset:0, ease:'none' }, 0)                                           // signal draw
+        .fromTo(cap,   { opacity:0, y:22 }, { opacity:1, y:0, ease:'power2.out', duration:0.4 }, 0.08);
+      return () => gsap.set([dolly, path, cap], { clearProps:'all' });
+    });
+  })(120);
+})();
+</script>
+</body>
+</html>
