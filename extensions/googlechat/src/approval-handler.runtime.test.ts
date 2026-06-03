@@ -160,10 +160,10 @@ describe("googleChatApprovalNativeRuntime", () => {
     expect(sendGoogleChatMessage).toHaveBeenCalledWith({
       account,
       space: "spaces/AAA",
-      text: expect.stringContaining("Reply with: /approve approval-1 allow-once|deny"),
       cardsV2: expect.any(Array),
       thread: "threads/T1",
     });
+    expect(sendGoogleChatMessage.mock.calls[0]?.[0]).not.toHaveProperty("text");
     expect(entry).toEqual({
       accountId: "default",
       spaceName: "spaces/AAA",
@@ -213,9 +213,9 @@ describe("googleChatApprovalNativeRuntime", () => {
     expect(updateGoogleChatMessage).toHaveBeenCalledWith({
       account,
       messageName: "spaces/AAA/messages/msg-1",
-      text: expect.stringContaining("approval allowed once"),
       cardsV2: expect.any(Array),
     });
+    expect(updateGoogleChatMessage.mock.calls[0]?.[0]).not.toHaveProperty("text");
     expect(JSON.stringify(final.payload)).not.toContain("buttonList");
   });
 

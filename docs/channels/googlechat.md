@@ -162,7 +162,7 @@ Configure your tunnel's ingress rules to only route the webhook path:
 4. DM access is pairing by default. Unknown senders receive a pairing code; approve with:
    - `openclaw pairing approve googlechat <code>`
 5. Group spaces require @-mention by default. Use `botUser` if mention detection needs the app's user name.
-6. When an exec or plugin approval request starts from Google Chat and a stable `users/<id>` approver is configured, OpenClaw posts a native Google Chat approval card in the originating space or thread. The card buttons use opaque callback tokens; the visible text still includes the `/approve <id> <decision>` command as a manual fallback.
+6. When an exec or plugin approval request starts from Google Chat and a stable `users/<id>` approver is configured, OpenClaw posts a native Google Chat approval card in the originating space or thread. The card buttons use opaque callback tokens, and the manual `/approve <id> <decision>` prompt is only shown when native approval delivery is unavailable.
 
 ## Targets
 

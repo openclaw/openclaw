@@ -927,6 +927,37 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     ]);
   });
 
+  it("does not emit a deterministic fallback prompt after native approval delivery", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-native-approval",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            host: "gateway",
+            command: "npm view diver name version description",
+            nativeApprovalDelivered: true,
+          },
+        },
+      } as never,
+    );
+
+    expect(onToolResult).not.toHaveBeenCalled();
+    expect(ctx.state.deterministicApprovalPromptPending).toBe(false);
+    expect(ctx.state.deterministicApprovalPromptSent).toBe(true);
+  });
+
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();

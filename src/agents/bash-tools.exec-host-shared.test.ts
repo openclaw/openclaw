@@ -490,6 +490,39 @@ describe("buildExecApprovalPendingToolResult", () => {
     expect(text).not.toContain("native chat exec approvals are not configured on Discord");
   });
 
+  it("marks native-capable initiating surfaces as already delivered", () => {
+    const result = buildExecApprovalPendingToolResult({
+      host: "gateway",
+      command: "npm view diver name version description",
+      cwd: process.cwd(),
+      warningText: "",
+      approvalId: "approval-id",
+      approvalSlug: "approval-slug",
+      expiresAtMs: Date.now() + 60_000,
+      initiatingSurface: {
+        kind: "enabled",
+        channel: "googlechat",
+        channelLabel: "Google Chat",
+        accountId: "default",
+        nativeApproval: true,
+      },
+      sentApproverDms: false,
+      unavailableReason: null,
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    expect(result.details.status).toBe("approval-pending");
+    if (result.details.status !== "approval-pending") {
+      throw new Error("expected approval-pending details");
+    }
+    expect(result.details.nativeApprovalDelivered).toBe(true);
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(text).toContain("native approval UI");
+    expect(text).toContain("Do not send approval instructions");
+    expect(text).not.toContain("/approve");
+    expect(text).not.toContain("Reply with");
+  });
+
   it("returns an unavailable reply when Discord exec approvals are disabled", () => {
     const result = buildDisabledSurfaceApprovalResult({
       channel: "discord",

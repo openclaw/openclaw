@@ -39,7 +39,6 @@ type GoogleChatApprovalActionToken = {
 };
 
 type GoogleChatPendingDelivery = {
-  text: string;
   cardsV2: GoogleChatCardV2[];
   actionTokens: GoogleChatApprovalActionToken[];
   allowedDecisions: readonly ExecApprovalDecision[];
@@ -59,7 +58,6 @@ type GoogleChatPendingEntry = {
 };
 
 type GoogleChatFinalDelivery = {
-  text: string;
   cardsV2: GoogleChatCardV2[];
 };
 
@@ -101,17 +99,6 @@ function formatDecision(decision: ExecApprovalDecision): string {
     : decision === "allow-always"
       ? "Allowed always"
       : "Denied";
-}
-
-function buildPendingFallbackText(view: PendingApprovalView): string {
-  const decisions = view.actions.map((action) => action.decision).join("|");
-  const lines = [
-    view.approvalKind === "plugin" ? "Plugin approval required" : "Exec approval required",
-    view.description ?? "Approval required.",
-    `ID: ${view.approvalId}`,
-    `Reply with: /approve ${view.approvalId} ${decisions}`,
-  ];
-  return lines.join("\n");
 }
 
 function buildMainTextWidget(text: string) {
@@ -243,7 +230,6 @@ function buildPendingPayload(params: {
     },
   };
   return {
-    text: buildPendingFallbackText(view),
     cardsV2: [card],
     actionTokens,
     allowedDecisions: view.actions.map((action) => action.decision),
@@ -274,9 +260,6 @@ function buildResolvedPayload(view: ResolvedApprovalView): GoogleChatFinalDelive
     },
   };
   return {
-    text: `${view.approvalKind === "plugin" ? "Plugin" : "Exec"} approval ${formatDecision(
-      view.decision,
-    ).toLowerCase()}. ID: ${view.approvalId}`,
     cardsV2: [card],
   };
 }
@@ -293,9 +276,6 @@ function buildExpiredPayload(view: ExpiredApprovalView): GoogleChatFinalDelivery
     },
   };
   return {
-    text: `${view.approvalKind === "plugin" ? "Plugin" : "Exec"} approval expired. ID: ${
-      view.approvalId
-    }`,
     cardsV2: [card],
   };
 }
@@ -345,7 +325,6 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
       const sent = await sendGoogleChatMessage({
         account,
         space: spaceName,
-        text: pendingPayload.text,
         cardsV2: pendingPayload.cardsV2,
         thread: preparedTarget.threadName,
       });
@@ -368,7 +347,6 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
       await updateGoogleChatMessage({
         account,
         messageName: entry.messageName,
-        text: payload.text,
         cardsV2: payload.cardsV2,
       });
     },

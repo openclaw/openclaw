@@ -14,7 +14,13 @@ import {
 
 /** Native approval availability for the channel/account that initiated an approval. */
 export type ExecApprovalInitiatingSurfaceState =
-  | { kind: "enabled"; channel: string | undefined; channelLabel: string; accountId?: string }
+  | {
+      kind: "enabled";
+      channel: string | undefined;
+      channelLabel: string;
+      accountId?: string;
+      nativeApproval?: boolean;
+    }
   | { kind: "disabled"; channel: string; channelLabel: string; accountId?: string }
   | { kind: "unsupported"; channel: string; channelLabel: string; accountId?: string };
 
@@ -83,7 +89,13 @@ export function resolveApprovalInitiatingSurfaceState(params: {
       approvalKind: params.approvalKind,
     });
   if (state) {
-    return { ...state, channel, channelLabel, accountId };
+    return {
+      ...state,
+      channel,
+      channelLabel,
+      accountId,
+      ...(state.kind === "enabled" && capability?.native ? { nativeApproval: true } : {}),
+    };
   }
   if (isDeliverableMessageChannel(channel)) {
     return { kind: "enabled", channel, channelLabel, accountId };
