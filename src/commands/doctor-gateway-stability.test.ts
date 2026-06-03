@@ -145,6 +145,7 @@ describe("doctor gateway stability", () => {
               message: "Direct message ingress was slow.",
               metric: "receivedToTurnStartMs",
               valueMs: 15_000,
+              count: 1,
               guidance:
                 "Keep direct DM ingress and turn creation clear of background work; inspect queue pressure and timeout sources.",
             },
@@ -155,6 +156,7 @@ describe("doctor gateway stability", () => {
 
     expect(note?.body).toContain("slow_receive_to_turn_start");
     expect(note?.body).toContain("receivedToTurnStartMs=15000ms");
+    expect(note?.body).toContain("count=1");
     expect(note?.body).toContain("Latency: receivedToStart latest=15000ms max=15000ms slow=1/1.");
     expect(note?.body).toContain("Recent slow turns:");
     expect(note?.body).toContain(

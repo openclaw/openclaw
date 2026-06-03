@@ -283,6 +283,7 @@ describe("gateway-cli coverage", () => {
                 message: "A received channel message waited too long before a turn started.",
                 metric: "receivedToTurnStartMs",
                 valueMs: 12_000,
+                count: 1,
                 guidance:
                   "Inspect queue/session pressure and background work; direct control messages should get a fast turn or cancellation path.",
               },
@@ -304,6 +305,9 @@ describe("gateway-cli coverage", () => {
     expect(output).toContain("Health issues:");
     expect(output).toContain("degraded:missing_visible_delivery");
     expect(output).toContain("warning:slow_receive_to_turn_start");
+    expect(output).toContain(
+      "warning:slow_receive_to_turn_start receivedToTurnStartMs=12000ms count=1",
+    );
     expect(output).toContain("Latency:");
     expect(output).toContain("receivedToStart latest:12000ms/max:12000ms/slow:1/1");
     expect(output).toContain("receivedToTurnStartMs=12000ms");

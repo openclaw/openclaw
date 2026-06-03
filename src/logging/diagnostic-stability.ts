@@ -863,38 +863,56 @@ function summarizeRecords(
         "Treat direct DM delivery as unhealthy; inspect message(action=send) dispatch before declaring the turn complete.",
     });
   }
-  const messageAgeMax = channelTurns.latency.messageAgeMs?.maxMs;
-  if (messageAgeMax !== undefined && messageAgeMax >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+  const messageAge = channelTurns.latency.messageAgeMs;
+  const messageAgeMax = messageAge?.maxMs;
+  if (
+    messageAge !== undefined &&
+    messageAgeMax !== undefined &&
+    messageAgeMax >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS
+  ) {
     pushChannelTurnHealthIssue({
       code: "stale_message_at_receive",
       level: messageAgeMax >= 60_000 ? "degraded" : "warning",
       message: "A channel message was already stale when the runtime recorded it.",
       metric: "messageAgeMs",
       valueMs: messageAgeMax,
+      count: messageAge.slowCount,
       guidance:
         "Compare native channel send time with runtime receive time; investigate webhook/polling/gateway ingress before blaming the agent turn.",
     });
   }
-  const receiveToStartMax = channelTurns.latency.receivedToTurnStartMs?.maxMs;
-  if (receiveToStartMax !== undefined && receiveToStartMax >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+  const receiveToStart = channelTurns.latency.receivedToTurnStartMs;
+  const receiveToStartMax = receiveToStart?.maxMs;
+  if (
+    receiveToStart !== undefined &&
+    receiveToStartMax !== undefined &&
+    receiveToStartMax >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS
+  ) {
     pushChannelTurnHealthIssue({
       code: "slow_receive_to_turn_start",
       level: receiveToStartMax >= 60_000 ? "degraded" : "warning",
       message: "A received channel message waited too long before a turn started.",
       metric: "receivedToTurnStartMs",
       valueMs: receiveToStartMax,
+      count: receiveToStart.slowCount,
       guidance:
         "Inspect queue/session pressure and background work; direct control messages should get a fast turn or cancellation path.",
     });
   }
-  const startToDeliveryMax = channelTurns.latency.startToDeliveryMs?.maxMs;
-  if (startToDeliveryMax !== undefined && startToDeliveryMax >= 20_000) {
+  const startToDelivery = channelTurns.latency.startToDeliveryMs;
+  const startToDeliveryMax = startToDelivery?.maxMs;
+  if (
+    startToDelivery !== undefined &&
+    startToDeliveryMax !== undefined &&
+    startToDeliveryMax >= 20_000
+  ) {
     pushChannelTurnHealthIssue({
       code: "slow_start_to_delivery",
       level: "warning",
       message: "A channel turn took too long to produce visible delivery after starting.",
       metric: "startToDeliveryMs",
       valueMs: startToDeliveryMax,
+      count: startToDelivery.slowCount,
       guidance:
         "Use an early visible acknowledgement before long tool work; keep final delivery after verification.",
     });
