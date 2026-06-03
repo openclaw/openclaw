@@ -236,6 +236,7 @@ type CodexInteractiveConversationBindingHelpers = {
 };
 
 type DiscordCodexControlResponder = {
+  reply?: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
   clearComponents?: (params?: { text?: string }) => Promise<void>;
   disableComponents?: () => Promise<void>;
 };
@@ -249,6 +250,17 @@ async function resolveDiscordCodexControls(respond: DiscordCodexControlResponder
     await respond.clearComponents?.();
   } catch {
     // The Codex answer is already accepted; a stale message edit should not fail the interaction.
+  }
+}
+
+async function acknowledgeDiscordCodexControlConsumed(
+  respond: DiscordCodexControlResponder,
+): Promise<void> {
+  await resolveDiscordCodexControls(respond);
+  try {
+    await respond.reply?.({ text: "Sent answer to Codex.", ephemeral: true });
+  } catch {
+    // The one-shot Codex decision is already consumed; a stale Discord ack must not block execution.
   }
 }
 
@@ -357,8 +369,7 @@ function registerCodexUserInputInteractiveHandlers(
         pluginConfig: options.resolveCurrentPluginConfig?.(),
         payload: ctx.interaction.payload,
         onConsumed: async () => {
-          await resolveDiscordCodexControls(ctx.respond);
-          await ctx.respond.reply({ text: "Sent answer to Codex.", ephemeral: true });
+          await acknowledgeDiscordCodexControlConsumed(ctx.respond);
         },
       });
       if (!planResult.handled) {

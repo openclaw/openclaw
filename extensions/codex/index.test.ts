@@ -603,6 +603,65 @@ describe("codex plugin", () => {
     expect(reply).toHaveBeenLastCalledWith({ text: "implemented", ephemeral: true });
   });
 
+  it("keeps Discord Codex plan execution running when early acknowledgement fails", async () => {
+    const registerInteractiveHandler = vi.fn();
+    handleCodexPlanDecisionCallbackMock.mockImplementationOnce(async (params) => {
+      await params.onConsumed?.();
+      return {
+        handled: true,
+        consumed: true,
+        reply: { text: "implemented" },
+      };
+    });
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: { config: { current: () => ({}) } } as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler,
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+    const discordRegistration = registerInteractiveHandler.mock.calls
+      .map((call) => call[0])
+      .find((registration) => registration?.channel === "discord");
+
+    const reply = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("ack expired"))
+      .mockResolvedValueOnce(undefined);
+    const clearComponents = vi.fn(async () => undefined);
+    const disableComponents = vi.fn(async () => undefined);
+
+    await expect(
+      discordRegistration.handler({
+        accountId: "default",
+        senderId: "user-1",
+        auth: { isAuthorizedSender: true },
+        interaction: { payload: "plan:token-1:approve-clean" },
+        respond: { reply, clearComponents, disableComponents },
+        requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+        detachConversationBinding: async () => ({ removed: false }),
+        getCurrentConversationBinding: async () => null,
+      }),
+    ).resolves.toEqual({ handled: true });
+
+    expect(disableComponents).toHaveBeenCalledTimes(1);
+    expect(reply).toHaveBeenNthCalledWith(1, {
+      text: "Sent answer to Codex.",
+      ephemeral: true,
+    });
+    expect(reply).toHaveBeenNthCalledWith(2, { text: "implemented", ephemeral: true });
+  });
+
   it("renders progress reply presentations before channel payload delivery", async () => {
     const renderPresentation = vi.fn(async ({ payload }) => ({
       ...payload,
