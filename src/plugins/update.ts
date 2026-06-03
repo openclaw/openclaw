@@ -1768,7 +1768,9 @@ export async function updateNpmInstalledPlugins(params: {
           spec: resolveNpmInstallRecordSpec({
             requestedSpec: usedOfficialNpmFallback ? officialNpmFallbackRecordSpec : recordSpec,
             resolution: npmResult.npmResolution,
-            pinResolvedRegistrySpec: trustedSourceLinkedOfficialInstall || usedOfficialNpmFallback,
+            pinResolvedRegistrySpec:
+              (params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall) ||
+              usedOfficialNpmFallback,
           }),
           installPath: result.targetDir,
           version: nextVersion,

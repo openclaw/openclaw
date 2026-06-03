@@ -619,6 +619,7 @@ describe("updateNpmInstalledPlugins", () => {
         resolvedVersion: "2026.5.2-beta.1",
       }),
       pluginIds: ["acpx"],
+      syncOfficialPluginInstalls: true,
     });
 
     expect(npmInstallCall()?.spec).toBe("@openclaw/acpx");
@@ -2294,6 +2295,54 @@ describe("updateNpmInstalledPlugins", () => {
       });
     },
   );
+
+  it("preserves explicit official npm tag overrides during manual updates", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.5.2",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.3-beta.1",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "acpx",
+        targetDir: installPath,
+        version: "2026.5.3-beta.1",
+        npmResolution: {
+          name: "@openclaw/acpx",
+          version: "2026.5.3-beta.1",
+          resolvedSpec: "@openclaw/acpx@2026.5.3-beta.1",
+        },
+      }),
+    );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.5.2",
+        resolvedVersion: "2026.5.2",
+      }),
+      pluginIds: ["acpx"],
+      specOverrides: {
+        acpx: "@openclaw/acpx@beta",
+      },
+    });
+
+    expectNpmUpdateCall({
+      spec: "@openclaw/acpx@beta",
+      expectedPluginId: "acpx",
+    });
+    expectRecordFields(result.config.plugins?.installs?.acpx, {
+      spec: "@openclaw/acpx@beta",
+      version: "2026.5.3-beta.1",
+      resolvedSpec: "@openclaw/acpx@2026.5.3-beta.1",
+    });
+  });
 
   it("tries npm beta for default npm specs on beta channel and preserves the default selector", async () => {
     installPluginFromNpmSpecMock.mockResolvedValue(
