@@ -130,6 +130,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
       authProfileId: params.authProfileId,
       authStorage: params.authStorage,
       providerId: params.model.provider,
+      sessionId: params.sessionId,
       promptCacheKey: params.promptCacheKey,
       transformContext: (context) =>
         context.systemPrompt
@@ -190,6 +191,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
         authProfileId: params.authProfileId,
         authStorage: params.authStorage,
         providerId: params.model.provider,
+        sessionId: params.sessionId,
         promptCacheKey: params.promptCacheKey,
       });
     }
@@ -205,6 +207,7 @@ export function resolveEmbeddedAgentStreamFn(params: {
     authProfileId: undefined,
     authStorage: undefined,
     providerId: params.model.provider,
+    sessionId: params.sessionId,
     promptCacheKey,
   });
 }

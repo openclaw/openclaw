@@ -1108,6 +1108,68 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("gates OpenAI-compatible session affinity headers without overriding caller headers", () => {
+    const model = {
+      id: "accounts/fireworks/models/kimi-k2p6",
+      name: "Kimi K2.6",
+      api: "openai-completions",
+      provider: "fireworks",
+      baseUrl: "https://api.fireworks.ai/inference/v1",
+      compat: { sendSessionAffinityHeaders: true },
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 262144,
+    } satisfies Model<"openai-completions">;
+    const context = { systemPrompt: "system", messages: [], tools: [] } as never;
+    const cacheSessionId = testing.resolveAffinityHeadersValue({
+      sessionId: "session-123",
+      promptCacheKey: "cron-cache-key",
+      cacheRetention: "short",
+    });
+
+    const headers = testing.buildOpenAICompletionsClientConfig(
+      model,
+      context,
+      undefined,
+      cacheSessionId,
+    ).defaultHeaders;
+    const callerHeaders = testing.buildOpenAICompletionsClientConfig(
+      model,
+      context,
+      {
+        session_id: "caller-session",
+        "x-client-request-id": "caller-request",
+        "x-session-affinity": "caller-affinity",
+      },
+      cacheSessionId,
+    ).defaultHeaders;
+    const disabledHeaders = testing.buildOpenAICompletionsClientConfig(
+      model,
+      context,
+      undefined,
+      testing.resolveAffinityHeadersValue({
+        sessionId: "session-123",
+        cacheRetention: "none",
+      }),
+    ).defaultHeaders;
+
+    expectRecordFields(headers, {
+      session_id: "cron-cache-key",
+      "x-client-request-id": "cron-cache-key",
+      "x-session-affinity": "cron-cache-key",
+    });
+    expectRecordFields(callerHeaders, {
+      session_id: "caller-session",
+      "x-client-request-id": "caller-request",
+      "x-session-affinity": "caller-affinity",
+    });
+    expect(disabledHeaders).not.toHaveProperty("session_id");
+    expect(disabledHeaders).not.toHaveProperty("x-client-request-id");
+    expect(disabledHeaders).not.toHaveProperty("x-session-affinity");
+  });
+
   it("refuses ModelStudio chat streams with no user or assistant payload turns", async () => {
     const model = {
       id: "qwen-coder-plus",
