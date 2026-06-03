@@ -259,7 +259,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(result?.version).toBe("1.2.3");
   });
 
-  it("forwards dangerous override for local skill installs", async () => {
+  it("tolerates legacy false-valued dangerous override via gateway", async () => {
     installSkillMock.mockResolvedValue({
       ok: true,
       message: "Installed",
@@ -271,7 +271,7 @@ describe("skills gateway handlers (clawhub)", () => {
     const { ok, response, error } = await callSkillsHandler("skills.install", {
       name: "calendar",
       installId: "deps",
-      dangerouslyForceUnsafeInstall: true,
+      dangerouslyForceUnsafeInstall: false,
       timeoutMs: 120_000,
     });
 
@@ -279,7 +279,7 @@ describe("skills gateway handlers (clawhub)", () => {
       workspaceDir: "/tmp/workspace",
       skillName: "calendar",
       installId: "deps",
-      dangerouslyForceUnsafeInstall: true,
+      dangerouslyForceUnsafeInstall: false,
       timeoutMs: 120_000,
       config: {},
     });
@@ -288,6 +288,27 @@ describe("skills gateway handlers (clawhub)", () => {
     const result = response as { ok?: boolean; message?: string } | undefined;
     expect(result?.ok).toBe(true);
     expect(result?.message).toBe("Installed");
+  });
+
+  it("rejects true-valued dangerous override via gateway", async () => {
+    installSkillMock.mockResolvedValue({
+      ok: true,
+      message: "Installed",
+      stdout: "",
+      stderr: "",
+      code: 0,
+    });
+
+    const { ok, error } = await callSkillsHandler("skills.install", {
+      name: "calendar",
+      installId: "deps",
+      dangerouslyForceUnsafeInstall: true,
+      timeoutMs: 120_000,
+    });
+
+    expect(installSkillMock).not.toHaveBeenCalled();
+    expect(ok).toBe(false);
+    expect((error as { message?: string })?.message).toContain("must be equal to constant");
   });
 
   it("updates ClawHub skills through skills.update", async () => {

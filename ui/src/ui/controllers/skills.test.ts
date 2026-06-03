@@ -513,7 +513,6 @@ describe("skill mutations", () => {
         {
           name: "GitHub",
           installId: "install-123",
-          dangerouslyForceUnsafeInstall: true,
           timeoutMs: 120000,
         },
       ],

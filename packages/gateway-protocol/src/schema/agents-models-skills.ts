@@ -288,7 +288,7 @@ export const SkillsInstallParamsSchema = Type.Union([
     {
       name: NonEmptyString,
       installId: NonEmptyString,
-      dangerouslyForceUnsafeInstall: Type.Optional(Type.Boolean()),
+      dangerouslyForceUnsafeInstall: Type.Optional(Type.Literal(false)),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },
