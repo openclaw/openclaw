@@ -21,6 +21,8 @@ import {
 } from "./send-result.js";
 import type { ActiveWebSendOptions } from "./types.js";
 
+export const WHATSAPP_SEND_TIMEOUT_MS = 30_000;
+
 function recordWhatsAppOutbound(accountId: string) {
   recordChannelActivity({
     channel: "whatsapp",
@@ -31,6 +33,30 @@ function recordWhatsAppOutbound(accountId: string) {
 
 function supportsForcedDocumentMediaType(mediaType: string): boolean {
   return mediaType.startsWith("image/") || mediaType.startsWith("video/");
+}
+
+function createWhatsAppSendTimeoutError(operation: string): Error {
+  const error = new Error(`${operation} timed out after ${WHATSAPP_SEND_TIMEOUT_MS}ms`);
+  error.name = "WhatsAppSendTimeoutError";
+  return error;
+}
+
+async function withWhatsAppSendTimeout<T>(operation: string, promise: Promise<T>): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_, reject) => {
+        timeout = setTimeout(() => {
+          reject(createWhatsAppSendTimeoutError(operation));
+        }, WHATSAPP_SEND_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 export function createWebSendApi(params: {
@@ -57,6 +83,21 @@ export function createWebSendApi(params: {
     params.authDir
       ? toWhatsappJidWithLid(recipient, { authDir: params.authDir })
       : toWhatsappJid(recipient);
+  const sendSocketMessage = async (
+    jid: string,
+    content: AnyMessageContent,
+    options?: MiscMessageGenerationOptions,
+  ): Promise<WAMessage | undefined> => {
+    const sendPromise = options
+      ? params.sock.sendMessage(jid, content, options)
+      : params.sock.sendMessage(jid, content);
+    return await withWhatsAppSendTimeout("WhatsApp sendMessage", sendPromise);
+  };
+  const sendSocketPresenceUpdate = async (presence: WAPresence, jid?: string): Promise<unknown> =>
+    await withWhatsAppSendTimeout(
+      "WhatsApp sendPresenceUpdate",
+      params.sock.sendPresenceUpdate(presence, jid),
+    );
   const resolveMentions = async (
     jid: string,
     text: string,
@@ -136,9 +177,7 @@ export function createWebSendApi(params: {
         participant: sendOptions?.quotedMessageKey?.participant,
         messageText: sendOptions?.quotedMessageKey?.messageText,
       });
-      const result = quotedOpts
-        ? await params.sock.sendMessage(jid, payload, quotedOpts)
-        : await params.sock.sendMessage(jid, payload);
+      const result = await sendSocketMessage(jid, payload, quotedOpts);
       const results = [normalizeWhatsAppSendResult(result, mediaBuffer ? "media" : "text")];
       if (shouldSendAudioText) {
         const resolvedAudioText = await resolveMentions(jid, text);
@@ -146,9 +185,7 @@ export function createWebSendApi(params: {
           { text: resolvedAudioText.text },
           resolvedAudioText.mentionedJids,
         );
-        const textResult = quotedOpts
-          ? await params.sock.sendMessage(jid, textPayload, quotedOpts)
-          : await params.sock.sendMessage(jid, textPayload);
+        const textResult = await sendSocketMessage(jid, textPayload, quotedOpts);
         results.push(normalizeWhatsAppSendResult(textResult, "text"));
       }
       const accountId = sendOptions?.accountId ?? params.defaultAccountId;
@@ -160,7 +197,7 @@ export function createWebSendApi(params: {
       poll: { question: string; options: string[]; maxSelections?: number },
     ): Promise<WhatsAppSendResult> => {
       const jid = resolveOutboundJid(to);
-      const result = await params.sock.sendMessage(jid, {
+      const result = await sendSocketMessage(jid, {
         poll: {
           name: poll.question,
           values: poll.options,
@@ -180,7 +217,7 @@ export function createWebSendApi(params: {
       // Resolve DM targets through the same LID-aware path as normal sends so
       // reactions land on the delivered WhatsApp message key.
       const jid = resolveOutboundJid(chatJid);
-      const result = await params.sock.sendMessage(jid, {
+      const result = await sendSocketMessage(jid, {
         react: {
           text: emoji,
           key: {
@@ -198,7 +235,7 @@ export function createWebSendApi(params: {
       if (isWhatsAppNewsletterJid(jid)) {
         return;
       }
-      await params.sock.sendPresenceUpdate("composing", jid);
+      await sendSocketPresenceUpdate("composing", jid);
     },
   } as const;
 }
