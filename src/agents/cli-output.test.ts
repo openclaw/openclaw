@@ -4,6 +4,7 @@ import {
   extractCliErrorMessage,
   parseCliJson,
   parseCliJsonl,
+  type CliThinkingDelta,
   type CliToolUseStartDelta,
 } from "./cli-output.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
@@ -891,5 +892,149 @@ describe("createCliJsonlStreamingParser", () => {
         result: { type: "web_search_tool_result_error", error_code: "unavailable" },
       },
     ]);
+  });
+
+  it("emits onThinkingDelta for streaming thinking_delta chunks with accumulating text", () => {
+    const thinking: Array<CliThinkingDelta> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    // Streaming-delta path mirrors onAssistantDelta: each chunk emits
+    // {text: cumulative, delta: this chunk}.
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking", thinking: "" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "Let me " },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "consider " },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            index: 0,
+            delta: { type: "thinking_delta", thinking: "this." },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "Let me ", delta: "Let me " },
+      { text: "Let me consider ", delta: "consider " },
+      { text: "Let me consider this.", delta: "this." },
+    ]);
+  });
+
+  it("emits a single onThinkingDelta when a thinking block arrives fully-formed at content_block_start with no subsequent deltas", () => {
+    const thinking: Array<CliThinkingDelta> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    // Adaptive models can return redacted thinking as a single block at
+    // content_block_start with the content already populated under
+    // `thinking` (or `text`) and no following thinking_delta events.
+    // Without the single-block detection the consumer would silently
+    // drop this content.
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking", thinking: "preformed thought block" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([
+      { text: "preformed thought block", delta: "preformed thought block" },
+    ]);
+  });
+
+  it("does not emit onThinkingDelta when a thinking block has no seed content and receives no deltas", () => {
+    const thinking: Array<CliThinkingDelta> = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "local-cli",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onThinkingDelta: (delta) => thinking.push(delta),
+    });
+
+    // Encrypted-only redacted thinking: nothing useful to render, so
+    // emit nothing rather than spurious empty events.
+    parser.push(
+      [
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 0,
+            content_block: { type: "thinking" },
+          },
+        }),
+        JSON.stringify({
+          type: "stream_event",
+          event: { type: "content_block_stop", index: 0 },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(thinking).toEqual([]);
   });
 });
