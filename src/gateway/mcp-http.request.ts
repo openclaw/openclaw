@@ -169,34 +169,13 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  if (params.req.method === "DELETE") {
-    const deleteAuthHeader = getHeader(params.req, "authorization") ?? "";
-    if (
-      !safeEqualSecret(deleteAuthHeader, `Bearer ${params.ownerToken}`) &&
-      !safeEqualSecret(deleteAuthHeader, `Bearer ${params.nonOwnerToken}`)
-    ) {
-      params.res.writeHead(401, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "unauthorized" }));
-      return null;
-    }
-    if (rejectsBrowserLoopbackRequest(params.req)) {
-      params.res.writeHead(403, { "Content-Type": "application/json" });
-      params.res.end(JSON.stringify({ error: "forbidden" }));
-      return null;
-    }
-    logMcpLoopbackHttp("session-delete", { method: "DELETE", path: url.pathname });
-    params.res.writeHead(200);
-    params.res.end();
-    return null;
-  }
-
   if (params.req.method !== "POST") {
     logMcpLoopbackHttp("reject", {
       reason: "method_not_allowed",
       method: params.req.method ?? "",
       path: url.pathname,
     });
-    params.res.writeHead(405, { Allow: "POST, GET, DELETE" });
+    params.res.writeHead(405, { Allow: "GET, POST" });
     params.res.end();
     return null;
   }
