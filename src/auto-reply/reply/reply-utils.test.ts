@@ -1041,7 +1041,7 @@ describe("block reply coalescer", () => {
     }>((payload) => ({
       text: payload.text,
       mediaUrls: payload.mediaUrls,
-      replyToId: payload.replyToId,
+      replyToId: payload.replyToId ?? undefined,
     }));
 
     coalescer.enqueue({ text: "Hello", replyToId: "thread-1" });
@@ -1093,7 +1093,7 @@ describe("block reply coalescer", () => {
     }>((payload) => ({
       text: payload.text,
       mediaUrls: payload.mediaUrls,
-      replyToId: payload.replyToId,
+      replyToId: payload.replyToId ?? undefined,
     }));
 
     coalescer.enqueue({ text: "Unthreaded caption" });
