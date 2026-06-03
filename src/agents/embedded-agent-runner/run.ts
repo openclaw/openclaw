@@ -174,6 +174,7 @@ import {
   STRICT_AGENTIC_BLOCKED_TEXT,
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
+  resolveTurnBudgetTimeoutNotice,
   shouldRetryMissingAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
 } from "./run/incomplete-turn.js";
@@ -3516,6 +3517,71 @@ export async function runEmbeddedAgent(
                 `attempt=${beforeAgentFinalizeRevisionAttempts}/${MAX_BEFORE_AGENT_FINALIZE_REVISIONS}`,
             );
             continue;
+          }
+
+          // A turn that exhausts its time budget (`agents.defaults.timeoutSeconds`)
+          // or a run-level deadline without producing a visible reply would
+          // otherwise fall through to the terminal path below with no payloads —
+          // returning `undefined` and going completely silent on the channel
+          // (indistinguishable from a hung process). Surface a recoverable notice
+          // instead, mirroring the prompt-level timeout copy above. `timedOut` is
+          // distinct from a user cancel (`aborted`); the notice is suppressed for
+          // compaction timeouts (paused/resumable, not abandoned), for
+          // intentionally-silent (cron/heartbeat) turns, and when a messaging tool
+          // or a deterministic approval prompt already delivered out-of-band.
+          const turnBudgetTimeoutNotice = resolveTurnBudgetTimeoutNotice({
+            timedOut,
+            idleTimedOut,
+            timedOutDuringCompaction,
+            payloadCount,
+            allowSilentReply: params.allowEmptyAssistantReplyAsSilent === true,
+            hasMessagingDelivery: hasMessagingToolDeliveryEvidence(attempt),
+            hasDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt === true,
+          });
+          if (turnBudgetTimeoutNotice) {
+            const replayInvalid = resolveReplayInvalidForAttempt(turnBudgetTimeoutNotice);
+            const livenessState = resolveRunLivenessState({
+              payloadCount: 0,
+              aborted,
+              timedOut,
+              attempt,
+              incompleteTurnText: turnBudgetTimeoutNotice,
+            });
+            attempt.setTerminalLifecycleMeta?.({
+              replayInvalid,
+              livenessState,
+            });
+            return {
+              payloads: [
+                {
+                  text: turnBudgetTimeoutNotice,
+                  isError: true,
+                },
+              ],
+              meta: {
+                durationMs: Date.now() - started,
+                agentMeta,
+                aborted,
+                systemPromptReport: attempt.systemPromptReport,
+                finalPromptText: attempt.finalPromptText,
+                finalAssistantVisibleText,
+                finalAssistantRawText,
+                replayInvalid,
+                livenessState,
+                toolSummary: attemptToolSummary,
+                ...(failureSignal ? { failureSignal } : {}),
+                agentHarnessResultClassification: attempt.agentHarnessResultClassification,
+              },
+              didSendViaMessagingTool: attempt.didSendViaMessagingTool,
+              didSendDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt,
+              messagingToolSentTexts: attempt.messagingToolSentTexts,
+              messagingToolSentMediaUrls: attempt.messagingToolSentMediaUrls,
+              messagingToolSentTargets: attempt.messagingToolSentTargets,
+              messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
+              heartbeatToolResponse: attempt.heartbeatToolResponse,
+              successfulCronAdds: attempt.successfulCronAdds,
+              acceptedSessionSpawns: attempt.acceptedSessionSpawns,
+            };
           }
 
           log.debug(

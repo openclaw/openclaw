@@ -588,6 +588,69 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
+// User-facing notice emitted when an agent turn exhausts its time budget
+// (`agents.defaults.timeoutSeconds`) or a run-level deadline and ends without
+// producing any visible reply. Without this the turn returns no payload and the
+// channel goes completely silent — indistinguishable from a hung process to the
+// user. Mirrors the prompt-level timeout copy already surfaced in run.ts.
+export const TURN_BUDGET_TIMEOUT_NOTICE =
+  "⚠️ I hit my time budget on this request and stopped before finishing. " +
+  "Ask me to continue, or simplify the request. " +
+  "If this happens often, raise `agents.defaults.timeoutSeconds` in your config.";
+
+// Variant for an idle (no-output) model timeout that ends the turn with no
+// visible reply, pointing at the provider-level timeout knob in addition to the
+// agent run ceiling.
+export const IDLE_MODEL_TIMEOUT_NOTICE =
+  "⚠️ The model didn't respond before its idle timeout, so I stopped before finishing. " +
+  "Ask me to try again, or use a faster model. " +
+  "For slow local or self-hosted providers, raise `models.providers.<id>.timeoutSeconds` " +
+  "(and `agents.defaults.timeoutSeconds` too if that ceiling is lower).";
+
+/**
+ * Decide whether a terminating agent turn should surface a user-visible
+ * turn-timeout notice. Returns the notice text when the turn timed out and is
+ * about to deliver nothing visible to a real (non-silent) conversation, or
+ * `null` when a notice would be wrong:
+ * - the turn did not time out (`timedOut` is false — e.g. a user cancel, which
+ *   is a distinct signal),
+ * - the timeout happened during compaction (`timedOutDuringCompaction`): that
+ *   turn is paused/resumable, not abandoned — emitting a notice would both
+ *   nag the user and override the `paused` liveness state the terminal path
+ *   otherwise preserves,
+ * - some visible payload is already being returned (`payloadCount > 0`),
+ * - an empty reply is acceptable here (cron/heartbeat contexts that set
+ *   `allowEmptyAssistantReplyAsSilent`). NOTE: gate on the raw flag, not the
+ *   derived `shouldTreatEmptyAssistantReplyAsSilent` result — that helper short-
+ *   circuits to `false` for any timed-out attempt (via `shouldSkipPlanningOnlyRetry`),
+ *   so it can never protect the very case handled here,
+ * - a messaging tool already delivered a reply out-of-band, or
+ * - a deterministic approval prompt was already delivered out-of-band (payload
+ *   building intentionally suppresses assistant artifacts in that case) — both
+ *   avoid a double / spurious notice.
+ */
+export function resolveTurnBudgetTimeoutNotice(params: {
+  timedOut: boolean;
+  idleTimedOut: boolean;
+  timedOutDuringCompaction: boolean;
+  payloadCount: number;
+  allowSilentReply: boolean;
+  hasMessagingDelivery: boolean;
+  hasDeterministicApprovalPrompt: boolean;
+}): string | null {
+  if (
+    !params.timedOut ||
+    params.timedOutDuringCompaction ||
+    params.payloadCount > 0 ||
+    params.allowSilentReply ||
+    params.hasMessagingDelivery ||
+    params.hasDeterministicApprovalPrompt
+  ) {
+    return null;
+  }
+  return params.idleTimedOut ? IDLE_MODEL_TIMEOUT_NOTICE : TURN_BUDGET_TIMEOUT_NOTICE;
+}
+
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
