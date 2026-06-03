@@ -435,6 +435,28 @@ function createMinimalRunAgentTurnParams(overrides?: {
   };
 }
 
+const NON_DIRECT_FAILURE_SURFACE_CASES = [
+  { label: "Discord group", provider: "discord", chatType: "group" },
+  { label: "Discord channel", provider: "discord", chatType: "channel" },
+  { label: "Slack channel", provider: "slack", chatType: "channel" },
+  { label: "Telegram group", provider: "telegram", chatType: "group" },
+  { label: "WhatsApp group", provider: "whatsapp", chatType: "group" },
+  { label: "Microsoft Teams channel", provider: "msteams", chatType: "channel" },
+] as const;
+
+function createNonDirectFailureSessionCtx(
+  testCase: (typeof NON_DIRECT_FAILURE_SURFACE_CASES)[number],
+): TemplateContext {
+  return {
+    Provider: testCase.provider,
+    Surface: testCase.provider,
+    ChatType: testCase.chatType,
+    GroupSubject: `${testCase.label} fixture`,
+    GroupChannel: "#general",
+    MessageSid: "msg",
+  } as unknown as TemplateContext;
+}
+
 describe("computeContextAwareReserveTokensFloor", () => {
   it("returns 100000 for 1M context windows", () => {
     expect(computeContextAwareReserveTokensFloor(1_000_000)).toBe(100_000);
@@ -5119,9 +5141,9 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
-  it.each(["group", "channel"] as const)(
-    "keeps raw runner failure boilerplate out of Discord %s chats",
-    async (chatType) => {
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "keeps raw runner failure boilerplate out of $label chats",
+    async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(
         new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
       );
@@ -5129,14 +5151,7 @@ describe("runAgentTurnWithFallback", () => {
       const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
       const result = await runAgentTurnWithFallback(
         createMinimalRunAgentTurnParams({
-          sessionCtx: {
-            Provider: "discord",
-            Surface: "discord",
-            ChatType: chatType,
-            GroupSubject: "agent group",
-            GroupChannel: "#general",
-            MessageSid: "msg",
-          } as unknown as TemplateContext,
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
       );
 
@@ -5226,9 +5241,9 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
-  it.each(["group", "channel"] as const)(
-    "keeps default silent behavior in Discord %s chats when silentReply policy is unset",
-    async (chatType) => {
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "keeps default silent behavior in $label chats when silentReply policy is unset",
+    async (testCase) => {
       // Sanity check: explicit `{}` config (no silentReply) must still resolve
       // to the documented default `group: "allow"` and produce a silent payload
       // — the new policy hookup must not regress the default behavior.
@@ -5243,14 +5258,7 @@ describe("runAgentTurnWithFallback", () => {
       const result = await runAgentTurnWithFallback(
         createMinimalRunAgentTurnParams({
           followupRun,
-          sessionCtx: {
-            Provider: "discord",
-            Surface: "discord",
-            ChatType: chatType,
-            GroupSubject: "agent group",
-            GroupChannel: "#general",
-            MessageSid: "msg",
-          } as unknown as TemplateContext,
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
       );
 
@@ -5261,9 +5269,9 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
-  it.each(["group", "channel"] as const)(
-    "keeps classified non-transient failures visible in Discord %s chats",
-    async (chatType) => {
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "keeps classified non-transient failures visible in $label chats",
+    async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(
         new Error('No API key found for provider "openai"'),
       );
@@ -5271,14 +5279,7 @@ describe("runAgentTurnWithFallback", () => {
       const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
       const result = await runAgentTurnWithFallback(
         createMinimalRunAgentTurnParams({
-          sessionCtx: {
-            Provider: "discord",
-            Surface: "discord",
-            ChatType: chatType,
-            GroupSubject: "agent group",
-            GroupChannel: "#general",
-            MessageSid: "msg",
-          } as unknown as TemplateContext,
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
       );
 
@@ -5290,22 +5291,15 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
-  it.each(["group", "channel"] as const)(
-    "surfaces rate-limit fallback copy in Discord %s chats",
-    async (chatType) => {
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "surfaces rate-limit fallback copy in $label chats",
+    async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
 
       const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
       const result = await runAgentTurnWithFallback(
         createMinimalRunAgentTurnParams({
-          sessionCtx: {
-            Provider: "discord",
-            Surface: "discord",
-            ChatType: chatType,
-            GroupSubject: "agent group",
-            GroupChannel: "#general",
-            MessageSid: "msg",
-          } as unknown as TemplateContext,
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
       );
 
@@ -5318,22 +5312,15 @@ describe("runAgentTurnWithFallback", () => {
     },
   );
 
-  it.each(["group", "channel"] as const)(
-    "surfaces overloaded fallback copy in Discord %s chats",
-    async (chatType) => {
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "surfaces overloaded fallback copy in $label chats",
+    async (testCase) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("model is overloaded"));
 
       const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
       const result = await runAgentTurnWithFallback(
         createMinimalRunAgentTurnParams({
-          sessionCtx: {
-            Provider: "discord",
-            Surface: "discord",
-            ChatType: chatType,
-            GroupSubject: "agent group",
-            GroupChannel: "#general",
-            MessageSid: "msg",
-          } as unknown as TemplateContext,
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
         }),
       );
 
