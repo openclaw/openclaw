@@ -238,10 +238,33 @@ describe("ensureConfigReady", () => {
     ["iMessage reply short-id cache", "imessage/reply-cache.jsonl"],
     ["iMessage sent echo cache", "imessage/sent-echoes.jsonl"],
     ["iMessage catchup cursor", "imessage/catchup/default.json"],
+    ["QQBot legacy credential backup", "qqbot/data/credential-backup.json"],
+    ["QQBot per-account credential backup", "qqbot/data/credential-backup-default.json"],
     ["WhatsApp root auth", "credentials/creds.json"],
   ])("runs doctor flow for bundled channel legacy state: %s", async (_label, relativePath) => {
     const root = useTempOpenClawHome();
     writeStateMarker(root, relativePath);
+
+    await runEnsureConfigReady(["status"]);
+
+    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
+  });
+
+  it("runs doctor flow for QQBot credential backups in the OS-home legacy tree", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-config-guard-home-"));
+    tempRoots.push(root);
+    process.env.HOME = root;
+    process.env.OPENCLAW_HOME = path.join(root, "svc");
+    delete process.env.OPENCLAW_STATE_DIR;
+    const markerPath = path.join(
+      root,
+      ".openclaw",
+      "qqbot",
+      "data",
+      "credential-backup-default.json",
+    );
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, "{}");
 
     await runEnsureConfigReady(["status"]);
 

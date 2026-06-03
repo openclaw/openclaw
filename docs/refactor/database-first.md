@@ -1584,10 +1584,9 @@ Move these into the global database:
   `voice-call` / `calls` namespace instead of `calls.jsonl`; the plugin CLI
   tails and summarizes SQLite-backed call history.
 - QQBot gateway sessions, known-user records, and ref-index quote cache now use
-  SQLite plugin state under `qqbot` namespaces (`sessions`, `known-users`,
-  `ref-index`) instead of `session-*.json`, `known-users.json`, and
-  `ref-index.jsonl`; the QQBot doctor/setup migration imports and removes the
-  legacy files.
+  SQLite plugin state under `qqbot` namespaces (`gateway-sessions`,
+  `known-users`, `ref-index`) instead of `session-*.json`, `known-users.json`,
+  and `ref-index.jsonl`. Those legacy files are caches and are not migrated.
 - Discord model-picker preferences, command-deploy hashes, and thread bindings
   now use SQLite plugin state under `discord` namespaces
   (`model-picker-preferences`, `command-deploy-hashes`, `thread-bindings`)

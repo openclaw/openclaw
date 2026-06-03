@@ -66,12 +66,29 @@ function isLegacyTelegramStateFile(name: string): boolean {
   );
 }
 
+function isLegacyQQBotCredentialBackupFile(name: string): boolean {
+  return (
+    name === "credential-backup.json" ||
+    (name.startsWith("credential-backup-") && name.endsWith(".json"))
+  );
+}
+
 function hasLegacyIMessageStateFiles(stateDir: string): boolean {
   return (
     fileOrDirExists(path.join(stateDir, "imessage", "reply-cache.jsonl")) ||
     fileOrDirExists(path.join(stateDir, "imessage", "sent-echoes.jsonl")) ||
     dirHasFile(path.join(stateDir, "imessage", "catchup"), (name) => name.endsWith(".json"))
   );
+}
+
+function hasLegacyQQBotCredentialBackups(stateDir: string): boolean {
+  if (dirHasFile(path.join(stateDir, "qqbot", "data"), isLegacyQQBotCredentialBackupFile)) {
+    return true;
+  }
+  const home = process.env.HOME || process.env.USERPROFILE;
+  return home
+    ? dirHasFile(path.join(home, ".openclaw", "qqbot", "data"), isLegacyQQBotCredentialBackupFile)
+    : false;
 }
 
 function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir: string): boolean {
@@ -85,6 +102,9 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
     return true;
   }
   if (hasLegacyIMessageStateFiles(stateDir)) {
+    return true;
+  }
+  if (hasLegacyQQBotCredentialBackups(stateDir)) {
     return true;
   }
   if (
