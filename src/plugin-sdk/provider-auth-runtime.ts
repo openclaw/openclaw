@@ -1,5 +1,3 @@
-// Public runtime auth helpers for provider plugins.
-
 import crypto from "node:crypto";
 import fs from "node:fs";
 import { createServer } from "node:http";
@@ -22,14 +20,14 @@ export {
 export type { ProviderPreparedRuntimeAuth } from "../plugins/types.js";
 export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-types.js";
 
+/**
+ * OAuth authorization code and state captured by the local callback listener.
+ */
 export type OAuthCallbackResult = { code: string; state: string };
 
-// IdP-host allowlist for CORS echo on the loopback OAuth callback. Plugins
-// pass the hosts that may legitimately issue preflights against the redirect
-// URI; everything else gets a 204 with no `Access-Control-Allow-*` headers,
-// which is safe for normal browser navigation but blocks cross-origin script
-// reads. The empty allowlist (default) leaves the legacy permissive SDK
-// behavior in place for existing callers.
+/**
+ * Builds the CORS origin resolver for loopback OAuth callbacks.
+ */
 export function buildOAuthCallbackOriginResolver(
   allowedHosts: readonly string[] | undefined,
 ): (originHeader: string | string[] | undefined) => string | undefined {
@@ -59,10 +57,16 @@ export function buildOAuthCallbackOriginResolver(
   };
 }
 
+/**
+ * Generates a high-entropy OAuth state token for local callback validation.
+ */
 export function generateOAuthState(): string {
   return crypto.randomBytes(32).toString("hex");
 }
 
+/**
+ * Parses a pasted OAuth redirect URL into callback code/state fields.
+ */
 export function parseOAuthCallbackInput(
   input: string,
   messages: {
@@ -91,6 +95,9 @@ export function parseOAuthCallbackInput(
   }
 }
 
+/**
+ * Starts a temporary loopback HTTP listener and waits for a validated OAuth callback.
+ */
 export async function waitForLocalOAuthCallback(params: {
   expectedState: string;
   timeoutMs: number;
@@ -101,10 +108,9 @@ export async function waitForLocalOAuthCallback(params: {
   progressMessage?: string;
   hostname?: string;
   onProgress?: (message: string) => void;
-  // IdP host allowlist for CORS preflight echo. Pass the canonical authority
-  // host(s) (e.g. `["auth.example.com"]`) that may issue an `OPTIONS` against
-  // the redirect URI. When omitted, legacy permissive SDK behavior is
-  // preserved for existing provider login flows.
+  /**
+   * IdP hosts allowed to receive CORS echo on loopback callback preflights.
+   */
   corsOriginAllowlist?: readonly string[];
 }): Promise<OAuthCallbackResult> {
   const hostname = params.hostname ?? "localhost";
@@ -238,6 +244,8 @@ function applyOAuthCallbackCorsHeaders(
     res.setHeader("Vary", "Origin, Access-Control-Request-Method, Access-Control-Request-Headers");
   }
   if (resolveOrigin !== undefined && !origin) {
+    // With an allowlist present, untrusted origins receive a bare 204 preflight
+    // response so browser navigation still works but scripts cannot read it.
     return;
   }
 
@@ -298,6 +306,9 @@ async function loadRuntimeModelAuthModule(): Promise<RuntimeModelAuthModule> {
   return (await import(resolveRuntimeModelAuthModuleHref())) as RuntimeModelAuthModule;
 }
 
+/**
+ * Resolves provider API-key auth through the runtime auth module when available.
+ */
 export async function resolveApiKeyForProvider(
   params: Parameters<ResolveApiKeyForProvider>[0],
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
@@ -309,6 +320,9 @@ export async function resolveApiKeyForProvider(
   return resolveApiKeyForProviderLocal(params);
 }
 
+/**
+ * Resolves the prepared runtime auth payload for a concrete model request.
+ */
 export async function getRuntimeAuthForModel(
   params: Parameters<GetRuntimeAuthForModel>[0],
 ): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
