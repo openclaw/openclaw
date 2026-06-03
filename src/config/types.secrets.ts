@@ -1,5 +1,6 @@
 import { isRecord } from "../utils.js";
 
+/** Supported secret reference backends in config. */
 export type SecretRefSource = "env" | "file" | "exec"; // pragma: allowlist secret
 
 /**
@@ -15,21 +16,31 @@ export type SecretRef = {
   id: string;
 };
 
+/** Secret-bearing config input: either a literal string or a structured SecretRef. */
 export type SecretInput = string | SecretRef;
+/** Provider alias used when a SecretRef omits a source-specific provider. */
 export const DEFAULT_SECRET_PROVIDER_ALIAS = "default"; // pragma: allowlist secret
+/** Strict env-var id shape accepted for env-backed SecretRefs. */
 export const ENV_SECRET_REF_ID_RE = /^[A-Z][A-Z0-9_]{0,127}$/;
+/** Legacy env SecretRef marker retained for config migration/read compatibility. */
 export const LEGACY_SECRETREF_ENV_MARKER_PREFIX = "secretref-env:"; // pragma: allowlist secret
+/** Older env SecretRef marker retained for migration/read compatibility. */
 export const LEGACY_DOUBLE_UNDERSCORE_ENV_MARKER_PREFIX = "__env__:"; // pragma: allowlist secret
 const ENV_SECRET_TEMPLATE_RE = /^\$\{([A-Z][A-Z0-9_]{0,127})\}$/;
 const ENV_SECRET_SHORTHAND_RE = /^\$([A-Z][A-Z0-9_]{0,127})$/;
+/** Secret string read mode: throw on unresolved refs or inspect without resolving. */
 export type SecretInputStringResolutionMode = "strict" | "inspect";
+/** Result of reading a secret input without necessarily materializing the secret value. */
 export type SecretInputStringResolution =
   | { status: "available"; value: string; ref: null }
   | { status: "configured_unavailable"; value: undefined; ref: SecretRef }
   | { status: "missing"; value: undefined; ref: null };
 type SecretDefaults = {
+  /** Default provider alias for env SecretRefs. */
   env?: string;
+  /** Default provider alias for file SecretRefs. */
   file?: string;
+  /** Default provider alias for exec SecretRefs. */
   exec?: string;
 };
 
