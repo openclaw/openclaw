@@ -9,6 +9,7 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { ReplyUsageLimits } from "../infra/provider-usage.types.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
@@ -353,6 +354,14 @@ export type PluginHookLlmOutputEvent = {
     cacheWrite?: number;
     total?: number;
   };
+  /**
+   * Requested reasoning/think effort for this call (provider think level, e.g.
+   * "off" | "low" | "medium" | "high"). Lets a passive footer show the mode the
+   * user is actually running without re-deriving it.
+   */
+  reasoningEffort?: string;
+  /** Whether fast mode was active for this call. */
+  fastMode?: boolean;
 };
 
 export type PluginHookAgentEndEvent = {
@@ -494,12 +503,64 @@ export type PluginHookReplyDispatchResult = {
   counts: Record<ReplyDispatchKind, number>;
 };
 
+/**
+ * Per-turn execution state for the outbound reply, available to every harness
+ * (embedded, CLI, Codex app-server) — sourced from the unified `runResult.meta`
+ * at dispatch, not from the harness-specific `llm_output` hook. Lets a plugin
+ * render a passive per-response footer without re-deriving run state.
+ */
+export type PluginHookReplyUsageState = {
+  provider?: string;
+  model?: string;
+  /** Resolved provider/model ref actually used (keeps the provider prefix). */
+  resolvedRef?: string;
+  /** Requested reasoning/think effort (e.g. "off" | "low" | "medium" | "high"). */
+  reasoningEffort?: string;
+  fastMode?: boolean;
+  /** True when a model fallback was used for this turn. */
+  fallbackUsed?: boolean;
+  /** Owning agent + session for this reply. */
+  agentId?: string;
+  sessionId?: string;
+  /** Chat surface kind (e.g. "direct" | "group"). */
+  chatType?: string;
+  /** Credential mode the turn ran under (e.g. "oauth" | "api_key"). */
+  authMode?: string;
+  /** Session model-override source, when a non-default model was pinned. */
+  overrideSource?: string;
+  /** Provider/model ref requested for the turn (vs resolvedRef actually used). */
+  requested?: string;
+  /** Estimated cost of this turn in USD, when a cost table is configured. */
+  turnUsd?: number;
+  /** Wall-clock duration of the turn in milliseconds. */
+  durationMs?: number;
+  /** Owning agent's configured identity (name/emoji/avatar), when set. */
+  identity?: { name?: string; emoji?: string; avatar?: string };
+  compactionCount?: number;
+  /** Effective context-token budget after model/config/agent caps. */
+  contextTokenBudget?: number;
+  usage?: {
+    input?: number;
+    output?: number;
+    cacheRead?: number;
+    cacheWrite?: number;
+    total?: number;
+  };
+  /**
+   * Provider subscription/usage-limit windows for the active provider, attached
+   * by core when it records the snapshot. Absent for api-key / unmapped
+   * providers (and on the first turn before the background refresh lands).
+   */
+  limits?: ReplyUsageLimits;
+};
+
 export type PluginHookReplyPayloadSendingEvent = {
   payload: PluginHookReplyPayload;
   kind: ReplyDispatchKind;
   channel?: string;
   sessionKey?: string;
   runId?: string;
+  usageState?: PluginHookReplyUsageState;
 };
 
 export type PluginHookReplyPayload = Omit<ReplyPayload, "trustedLocalMedia">;

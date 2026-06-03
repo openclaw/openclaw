@@ -35,6 +35,7 @@ import {
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 import { runReplyPayloadSendingHook } from "./reply/reply-payload-sending-hook.js";
+import { consumeReplyUsageState } from "./reply/reply-usage-state.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
 import type { GetReplyOptions, ReplyPayload } from "./types.js";
 
@@ -360,6 +361,7 @@ function buildReplyPayloadSendingBeforeDeliver(
       channel: finalized.Surface ?? finalized.Provider,
       sessionKey: finalized.SessionKey,
       runId: opts?.runId,
+      usageState: consumeReplyUsageState(opts?.runId, finalized.SessionKey),
       context: {
         ...toPluginMessageContext(hookCtx),
         runId: opts?.runId,
