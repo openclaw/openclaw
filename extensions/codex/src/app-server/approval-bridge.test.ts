@@ -408,6 +408,17 @@ describe("Codex app-server approval bridge", () => {
       },
     },
     {
+      name: "provider key casing with custom base URL",
+      reviewerModel: "openai/gpt-5.5-mini",
+      models: {
+        providers: {
+          OpenAI: {
+            baseUrl: "http://localhost:8080/v1",
+          },
+        },
+      },
+    },
+    {
       name: "provider local service",
       reviewerModel: "openai/gpt-5.5-mini",
       models: {

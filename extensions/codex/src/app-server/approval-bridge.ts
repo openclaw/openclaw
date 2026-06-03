@@ -16,6 +16,7 @@ import {
   type NativeHookRelayRegistrationHandle,
   runBeforeToolCallHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { resolveProviderIdForAuth } from "openclaw/plugin-sdk/agent-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
@@ -592,11 +593,40 @@ function configuredOpenAIProviderIsTrustedForExecReview(params: {
   if (!isNativeOpenAIBaseUrl(params.env?.OPENAI_BASE_URL ?? params.env?.OPENAI_API_BASE)) {
     return false;
   }
-  const providers = readUnknownRecord(readUnknownRecord(params.config)?.models)?.providers;
-  const openAIProvider = readUnknownRecord(readUnknownRecord(providers)?.openai);
-  if (!openAIProvider) {
+  const openAIProviders = readConfiguredOpenAIProvidersForExecReview(params.config);
+  if (openAIProviders.length === 0) {
     return true;
   }
+  return openAIProviders.every((openAIProvider) =>
+    configuredOpenAIProviderIsTrustedForExecReviewModel(openAIProvider, params.modelId)
+  );
+}
+
+function readConfiguredOpenAIProvidersForExecReview(
+  config: EmbeddedRunAttemptParams["config"] | undefined,
+): Array<Record<string, unknown>> {
+  const providers = readUnknownRecord(readUnknownRecord(config)?.models)?.providers;
+  const providerRecords = readUnknownRecord(providers);
+  if (!providerRecords) {
+    return [];
+  }
+  const openAIProviders: Array<Record<string, unknown>> = [];
+  for (const [providerId, providerConfig] of Object.entries(providerRecords)) {
+    if (resolveProviderIdForAuth(providerId, { config }) !== "openai") {
+      continue;
+    }
+    const record = readUnknownRecord(providerConfig);
+    if (record) {
+      openAIProviders.push(record);
+    }
+  }
+  return openAIProviders;
+}
+
+function configuredOpenAIProviderIsTrustedForExecReviewModel(
+  openAIProvider: Record<string, unknown>,
+  modelIdInput: string,
+): boolean {
   if (readUnknownRecord(openAIProvider.localService)) {
     return false;
   }
@@ -607,7 +637,7 @@ function configuredOpenAIProviderIsTrustedForExecReview(params: {
   if (!Array.isArray(models)) {
     return true;
   }
-  const modelId = params.modelId.trim();
+  const modelId = modelIdInput.trim();
   if (!modelId) {
     return false;
   }
