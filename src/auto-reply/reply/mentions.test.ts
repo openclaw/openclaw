@@ -53,39 +53,39 @@ describe("stripStructuralPrefixes", () => {
 describe("CJK single-char mention matching (regression #87303)", () => {
   const cfgWithCjkName = {
     agents: {
-      default: { identity: { name: "包" } },
+      list: [{ id: "cjk-agent", identity: { name: "包" } }],
     },
   } as Parameters<typeof buildMentionRegexes>[0];
 
   const cfgWithCjkTwoChar = {
     agents: {
-      default: { identity: { name: "苏苏" } },
+      list: [{ id: "cjk-two", identity: { name: "苏苏" } }],
     },
   } as Parameters<typeof buildMentionRegexes>[0];
 
   it("matches single-char CJK name with @ prefix in Chinese text", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkName, "default");
+    const regexes = buildMentionRegexes(cfgWithCjkName, "cjk-agent");
     expect(regexes.length).toBeGreaterThan(0);
     expect(matchesMentionPatterns("@包 你好", regexes)).toBe(true);
   });
 
   it("matches single-char CJK name without @ prefix", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkName, "default");
+    const regexes = buildMentionRegexes(cfgWithCjkName, "cjk-agent");
     expect(matchesMentionPatterns("包 你好", regexes)).toBe(true);
   });
 
   it("does not match single-char CJK name inside a longer CJK word", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkName, "default");
+    const regexes = buildMentionRegexes(cfgWithCjkName, "cjk-agent");
     expect(matchesMentionPatterns("面包好吃", regexes)).toBe(false);
   });
 
   it("matches two-char CJK name with @ prefix", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkTwoChar, "default");
+    const regexes = buildMentionRegexes(cfgWithCjkTwoChar, "cjk-two");
     expect(matchesMentionPatterns("@苏苏 你好", regexes)).toBe(true);
   });
 
   it("does not match two-char CJK name as substring", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkTwoChar, "default");
+    const regexes = buildMentionRegexes(cfgWithCjkTwoChar, "cjk-two");
     expect(matchesMentionPatterns("紫苏苏叶", regexes)).toBe(false);
   });
 });
