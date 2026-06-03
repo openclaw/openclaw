@@ -314,6 +314,15 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_PLUGIN_SEED_DIR");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_REMOTE");
     expect(backend.config.clearEnv).toContain("CLAUDE_CODE_USE_COWORK_PLUGINS");
+    // Claude Code's own nesting guard (issue #57858): when OpenClaw itself
+    // runs inside a Claude Code session these inherited markers make the
+    // managed CLI child silently exit instead of running the dispatched task.
+    expect(backend.config.clearEnv).toContain("CLAUDECODE");
+    expect(backend.config.clearEnv).toContain("CLAUDE_CODE_ENTRYPOINT");
+    // CLAUDE_CODE_SESSION_ID is the marker current Claude Code actually
+    // exports; CLAUDE_CODE_SESSION (no _ID) is kept as a harmless no-op guard.
+    expect(backend.config.clearEnv).toContain("CLAUDE_CODE_SESSION_ID");
+    expect(backend.config.clearEnv).toContain("CLAUDE_CODE_SESSION");
     expect(backend.config.clearEnv).toContain("OTEL_METRICS_EXPORTER");
     expect(backend.config.clearEnv).toContain("OTEL_EXPORTER_OTLP_PROTOCOL");
     expect(backend.config.clearEnv).toContain("OTEL_SDK_DISABLED");
