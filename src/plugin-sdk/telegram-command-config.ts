@@ -50,6 +50,8 @@ function resolveTelegramCustomCommandsImpl(params: {
   commands: Array<{ command: string; description: string }>;
   issues: TelegramCustomCommandIssue[];
 } {
+  // Keep the deprecated SDK subpath on the shared command validator so config,
+  // doctor, and plugin-local Telegram flows report the same normalized issues.
   return resolveCustomCommands({
     ...params,
     config: TELEGRAM_CUSTOM_COMMAND_CONFIG,
