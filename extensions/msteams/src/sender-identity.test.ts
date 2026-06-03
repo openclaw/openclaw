@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { GraphUser } from "./graph.js";
-import { buildSenderIdentityBlock, formatSenderIdentityContext } from "./sender-identity.js";
+import { buildSenderIdentityContext, buildSenderIdentityPayload } from "./sender-identity.js";
 
-describe("buildSenderIdentityBlock", () => {
-  it("returns structured block for a full profile", () => {
+describe("buildSenderIdentityPayload", () => {
+  it("returns structured payload for a full profile", () => {
     const profile: GraphUser = {
       id: "aad-123",
       displayName: "Jane Doe",
@@ -12,8 +12,8 @@ describe("buildSenderIdentityBlock", () => {
       department: "Engineering",
       jobTitle: "Staff Engineer",
     };
-    const block = buildSenderIdentityBlock(profile);
-    expect(block).toEqual({
+    const payload = buildSenderIdentityPayload(profile);
+    expect(payload).toEqual({
       aadId: "aad-123",
       displayName: "Jane Doe",
       email: "jane@contoso.com",
@@ -28,14 +28,14 @@ describe("buildSenderIdentityBlock", () => {
       displayName: "Bob",
       userPrincipalName: "bob@contoso.onmicrosoft.com",
     };
-    const block = buildSenderIdentityBlock(profile);
-    expect(block?.email).toBe("bob@contoso.onmicrosoft.com");
+    const payload = buildSenderIdentityPayload(profile);
+    expect(payload?.email).toBe("bob@contoso.onmicrosoft.com");
   });
 
   it("returns null fields for missing optional properties", () => {
     const profile: GraphUser = { id: "aad-789" };
-    const block = buildSenderIdentityBlock(profile);
-    expect(block).toEqual({
+    const payload = buildSenderIdentityPayload(profile);
+    expect(payload).toEqual({
       aadId: "aad-789",
       displayName: null,
       email: null,
@@ -46,12 +46,12 @@ describe("buildSenderIdentityBlock", () => {
 
   it("returns null when profile has no id", () => {
     const profile: GraphUser = { displayName: "No ID" };
-    expect(buildSenderIdentityBlock(profile)).toBeNull();
+    expect(buildSenderIdentityPayload(profile)).toBeNull();
   });
 });
 
-describe("formatSenderIdentityContext", () => {
-  it("produces a markdown block with JSON", () => {
+describe("buildSenderIdentityContext", () => {
+  it("produces an untrusted structured context entry", () => {
     const identity = {
       aadId: "aad-123",
       displayName: "Jane Doe",
@@ -59,11 +59,10 @@ describe("formatSenderIdentityContext", () => {
       department: "Engineering",
       jobTitle: "Staff Engineer",
     };
-    const formatted = formatSenderIdentityContext(identity);
-    expect(formatted).toContain("## Sender Identity");
-    expect(formatted).toContain("Microsoft AAD");
-    expect(formatted).toContain("```json");
-    expect(formatted).toContain('"aadId": "aad-123"');
-    expect(formatted).toContain('"department": "Engineering"');
+    const entry = buildSenderIdentityContext(identity);
+    expect(entry.label).toBe("Microsoft Teams sender identity");
+    expect(entry.source).toBe("msteams");
+    expect(entry.type).toBe("sender_identity");
+    expect(entry.payload).toEqual(identity);
   });
 });

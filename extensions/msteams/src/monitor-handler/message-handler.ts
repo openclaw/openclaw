@@ -47,7 +47,7 @@ import {
   translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
-import { buildSenderIdentityBlock, formatSenderIdentityContext } from "../sender-identity.js";
+import { buildSenderIdentityContext, buildSenderIdentityPayload } from "../sender-identity.js";
 import {
   fetchParentMessageCached,
   formatParentContextEvent,
@@ -759,14 +759,15 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             }).allowed
         : true;
     // Prepend thread history to the agent body so the agent has full thread context.
-    let bodyForAgent = threadContext
+    const bodyForAgent = threadContext
       ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${rawBody}`
       : rawBody;
 
-    // AAD sender identity enrichment: fetch the sender's Azure AD profile and
-    // prepend a trusted identity block so the agent can use persona-aware
-    // routing/responses (department, title, email).
+    // AAD sender identity enrichment: fetch the sender's Azure AD profile
+    // and pass it as untrusted structured context so the agent receives
+    // identity metadata without treating it as trusted prompt authority.
     let senderIdentityName: string | undefined;
+    let senderIdentityContext: ReturnType<typeof buildSenderIdentityContext> | undefined;
     const aadObjectId = from.aadObjectId;
     if (msteamsCfg?.senderIdentity?.enabled && aadObjectId) {
       try {
@@ -779,16 +780,12 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             cacheTtlMs: msteamsCfg.senderIdentity.cacheTtlMs,
           });
           if (profile) {
-            const identity = buildSenderIdentityBlock(profile);
+            const identity = buildSenderIdentityPayload(profile);
             if (identity) {
-              const identityBlock = formatSenderIdentityContext(identity);
-              bodyForAgent = `${identityBlock}\n\n${bodyForAgent}`;
-              combinedBody = `${identityBlock}\n\n${combinedBody}`;
+              senderIdentityContext = buildSenderIdentityContext(identity);
               senderIdentityName = profile.displayName ?? undefined;
               log.debug?.("aad sender identity enriched", {
-                aadId: profile.id,
-                displayName: profile.displayName,
-                department: profile.department,
+                sender: senderId,
               });
             }
           }
@@ -865,6 +862,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
         GroupSubject: !isDirectMessage ? conversationType : undefined,
         ReplyToIsQuote: quoteInfo ? true : undefined,
         ...mediaPayload,
+        ...(senderIdentityContext ? { UntrustedStructuredContext: [senderIdentityContext] } : {}),
       },
     });
 

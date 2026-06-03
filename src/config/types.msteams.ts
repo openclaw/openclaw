@@ -207,11 +207,12 @@ export type MSTeamsConfig = {
   /**
    * Enrich inbound messages with the sender's Azure AD profile (displayName,
    * email, department, jobTitle) fetched from Microsoft Graph. The profile is
-   * prepended to the agent body as a trusted `## Sender Identity` block so
-   * the agent can use persona-aware routing and responses.
+   * passed as untrusted structured metadata (UntrustedStructuredContext) so
+   * the agent can use persona-aware routing and responses without treating
+   * directory fields as trusted prompt authority.
    *
    * Requires the bot's Azure AD app to have `User.Read.All` (application)
-   * permission granted in the Azure portal.
+   * permission granted in the Azure portal. Not supported for cloud=China.
    */
   senderIdentity?: {
     /** Enable AAD sender identity enrichment. Default: false. */

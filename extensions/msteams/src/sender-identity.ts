@@ -1,6 +1,6 @@
 import type { GraphUser } from "./graph.js";
 
-export type SenderIdentityBlock = {
+export type SenderIdentityPayload = {
   aadId: string;
   displayName: string | null;
   email: string | null;
@@ -8,7 +8,7 @@ export type SenderIdentityBlock = {
   jobTitle: string | null;
 };
 
-export function buildSenderIdentityBlock(profile: GraphUser): SenderIdentityBlock | null {
+export function buildSenderIdentityPayload(profile: GraphUser): SenderIdentityPayload | null {
   if (!profile.id) {
     return null;
   }
@@ -21,7 +21,22 @@ export function buildSenderIdentityBlock(profile: GraphUser): SenderIdentityBloc
   };
 }
 
-export function formatSenderIdentityContext(identity: SenderIdentityBlock): string {
-  const json = JSON.stringify(identity, null, 2);
-  return `## Sender Identity (trusted \u2014 Microsoft AAD)\n\`\`\`json\n${json}\n\`\`\``;
+/**
+ * Build an untrusted structured context entry for the sender's AAD profile.
+ * This follows the same pattern as Discord channel metadata and WhatsApp
+ * contacts: identity data flows through UntrustedStructuredContext so the
+ * model receives it as metadata, not as trusted prompt authority.
+ */
+export function buildSenderIdentityContext(identity: SenderIdentityPayload): {
+  label: string;
+  source: string;
+  type: string;
+  payload: SenderIdentityPayload;
+} {
+  return {
+    label: "Microsoft Teams sender identity",
+    source: "msteams",
+    type: "sender_identity",
+    payload: identity,
+  };
 }
