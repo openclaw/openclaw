@@ -13,8 +13,10 @@ import {
   type SkillUploadStore,
 } from "./upload-store.js";
 
+/** Error classes exposed by uploaded skill archive install attempts. */
 export type UploadedSkillInstallErrorKind = "invalid-request" | "unavailable";
 
+/** User-facing disabled message for archive upload installs. */
 export const UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE =
   "Uploaded skill archive installs are disabled by skills.install.allowUploadedArchives";
 
@@ -39,6 +41,7 @@ export type UploadedSkillInstallResult =
       errorKind: UploadedSkillInstallErrorKind;
     };
 
+// Preserve invalid-request failures for caller feedback; other install failures are unavailable.
 function uploadInstallFailureErrorKind(
   failureKind: SkillArchiveInstallFailureKind,
 ): UploadedSkillInstallErrorKind {
