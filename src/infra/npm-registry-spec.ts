@@ -11,6 +11,7 @@ const OPENCLAW_BETA_VERSION_RE =
   /^(?<year>\d{4})\.(?<month>[1-9]\d?)\.(?<day>[1-9]\d?)-beta\.(?<beta>[1-9]\d*)$/;
 const DIST_TAG_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
+/** Parsed date-based OpenClaw release version used for channel-aware ordering. */
 type OpenClawReleaseVersion = {
   channel: "alpha" | "beta" | "stable";
   dateTime: number;
@@ -142,6 +143,7 @@ export function isExactSemverVersion(value: string): boolean {
   return EXACT_SEMVER_VERSION_RE.test(value.trim());
 }
 
+/** Parses OpenClaw's date-based stable/alpha/beta/correction version format. */
 function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | null {
   const trimmed = value.trim();
   const candidates = [
@@ -174,6 +176,8 @@ function parseOpenClawReleaseVersion(value: string): OpenClawReleaseVersion | nu
     candidate.channel === "stable" && candidate.match.groups.correction
       ? Number.parseInt(candidate.match.groups.correction, 10)
       : undefined;
+  // Stable correction releases share the stable channel rank; the optional
+  // correction number is compared later so base stable sorts before fixes.
   const alphaNumber =
     candidate.channel === "alpha"
       ? Number.parseInt(candidate.match.groups.alpha ?? "", 10)
