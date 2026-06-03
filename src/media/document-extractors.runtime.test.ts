@@ -84,4 +84,51 @@ describe("extractDocumentContent", () => {
     expect(extractionError.message).toBe("Document extraction failed for application/pdf");
     expect(extractionError.cause).toBe(cause);
   });
+
+  it("keeps trying healthy document extractors after unreadable metadata", async () => {
+    const extract = vi.fn(function (this: { prefix: string }) {
+      return Promise.resolve({ text: `${this.prefix} text`, images: [] });
+    });
+    const brokenExtractor = {
+      id: "broken",
+      pluginId: "broken-doc",
+      label: "Broken",
+      extract: vi.fn(),
+    };
+    Object.defineProperty(brokenExtractor, "mimeTypes", {
+      get() {
+        throw new Error("document extractor mimeTypes getter exploded");
+      },
+    });
+    resolvePluginDocumentExtractorsMock.mockReturnValue([
+      brokenExtractor,
+      {
+        id: "pdf",
+        pluginId: "document-extract",
+        label: "PDF",
+        prefix: "pdf",
+        mimeTypes: ["application/pdf"],
+        extract,
+      },
+    ]);
+
+    await expect(
+      extractDocumentContent({
+        buffer: Buffer.from("pdf"),
+        mimeType: "application/pdf",
+        maxPages: 1,
+        maxPixels: 100,
+        minTextChars: 10,
+        config: {
+          env: {
+            vars: {
+              TEST_CASE: "unreadable-document-extractor-metadata",
+            },
+          },
+        },
+      }),
+    ).resolves.toStrictEqual({ text: "pdf text", images: [], extractor: "pdf" });
+
+    expect(extract).toHaveBeenCalledTimes(1);
+  });
 });

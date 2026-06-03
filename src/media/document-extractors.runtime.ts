@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   DocumentExtractionRequest,
   DocumentExtractionResult,
+  PluginDocumentExtractorEntry,
 } from "../plugins/document-extractor-types.js";
 import { resolvePluginDocumentExtractors } from "../plugins/document-extractors.runtime.js";
 import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primitives.js";
@@ -10,6 +11,31 @@ import { createConfigScopedPromiseLoader } from "../plugins/plugin-cache-primiti
 const documentExtractorLoader = createConfigScopedPromiseLoader((config?: OpenClawConfig) =>
   resolvePluginDocumentExtractors(config ? { config } : undefined),
 );
+
+type ReadableDocumentExtractor = {
+  id: string;
+  mimeTypes: string[];
+  extract: PluginDocumentExtractorEntry["extract"];
+  receiver: unknown;
+};
+
+function readDocumentExtractor(entry: unknown): ReadableDocumentExtractor | undefined {
+  try {
+    const extractor = entry as Partial<PluginDocumentExtractorEntry>;
+    const id = typeof extractor.id === "string" && extractor.id.trim() ? extractor.id.trim() : "";
+    if (!id || !Array.isArray(extractor.mimeTypes) || typeof extractor.extract !== "function") {
+      return undefined;
+    }
+    return {
+      id,
+      mimeTypes: extractor.mimeTypes.map((mimeType) => normalizeLowercaseStringOrEmpty(mimeType)),
+      extract: extractor.extract,
+      receiver: entry,
+    };
+  } catch {
+    return undefined;
+  }
+}
 
 export async function extractDocumentContent(
   params: DocumentExtractionRequest & {
@@ -33,17 +59,16 @@ export async function extractDocumentContent(
   const errors: unknown[] = [];
 
   for (const extractor of extractors) {
-    if (
-      !extractor.mimeTypes.map((entry) => normalizeLowercaseStringOrEmpty(entry)).includes(mimeType)
-    ) {
+    const readableExtractor = readDocumentExtractor(extractor);
+    if (!readableExtractor?.mimeTypes.includes(mimeType)) {
       continue;
     }
     try {
-      const result = await extractor.extract(request);
+      const result = await readableExtractor.extract.call(readableExtractor.receiver, request);
       if (result) {
         return {
           ...result,
-          extractor: extractor.id,
+          extractor: readableExtractor.id,
         };
       }
     } catch (error) {
