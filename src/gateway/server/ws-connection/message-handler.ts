@@ -253,12 +253,15 @@ function resolvePinnedClientMetadata(params: {
     }
   }
 
-  function normalizeMobileAppPlatformPin(clientId: string | undefined, value: string): string {
+  function normalizeNativeAppPlatformPin(clientId: string | undefined, value: string): string {
     if (clientId === GATEWAY_CLIENT_IDS.IOS_APP && /^(?:ios|ipados)(?:\s|$)/.test(value)) {
       return "ios-family";
     }
     if (clientId === GATEWAY_CLIENT_IDS.ANDROID_APP && /^android(?:\s|$)/.test(value)) {
       return "android";
+    }
+    if (clientId === GATEWAY_CLIENT_IDS.MACOS_APP && /^macos(?:\s|$)/.test(value)) {
+      return "macos";
     }
     return value;
   }
@@ -276,24 +279,24 @@ function resolvePinnedClientMetadata(params: {
     claimedPlatform !== "" &&
     normalizeLegacyNodeHostPlatformPin(claimedPlatform) ===
       normalizeLegacyNodeHostPlatformPin(pairedPlatform);
-  const isMobileAppPlatformVersionRefresh =
+  const isNativeAppPlatformVersionRefresh =
     hasPinnedPlatform &&
     claimedPlatform !== "" &&
     claimedPlatform !== pairedPlatform &&
-    normalizeMobileAppPlatformPin(params.clientId, claimedPlatform) ===
-      normalizeMobileAppPlatformPin(params.clientId, pairedPlatform);
+    normalizeNativeAppPlatformPin(params.clientId, claimedPlatform) ===
+      normalizeNativeAppPlatformPin(params.clientId, pairedPlatform);
   const platformMismatch =
     hasPinnedPlatform &&
     claimedPlatform !== pairedPlatform &&
     !isLegacyNodeHostPlatformPin &&
-    !isMobileAppPlatformVersionRefresh;
+    !isNativeAppPlatformVersionRefresh;
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform =
     claimedPlatform === pairedPlatform
       ? params.pairedPlatform
       : isLegacyNodeHostPlatformPin
         ? normalizeLegacyNodeHostPlatformPin(pairedPlatform)
-        : isMobileAppPlatformVersionRefresh
+        : isNativeAppPlatformVersionRefresh
           ? params.claimedPlatform
           : undefined;
   return {
@@ -301,7 +304,7 @@ function resolvePinnedClientMetadata(params: {
     deviceFamilyMismatch,
     pinnedPlatform: hasPinnedPlatform ? pinnedPlatform : undefined,
     pinnedDeviceFamily: hasPinnedDeviceFamily ? params.pairedDeviceFamily : undefined,
-    ...(isMobileAppPlatformVersionRefresh ? { refreshPairedPlatform: params.claimedPlatform } : {}),
+    ...(isNativeAppPlatformVersionRefresh ? { refreshPairedPlatform: params.claimedPlatform } : {}),
   };
 }
 
