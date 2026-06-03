@@ -647,6 +647,20 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
   const nextSessionRow =
     state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
     state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
+  // Inject the target row into sessionsResult before the picker state is
+  // cleared, so label resolution does not fall back to raw key parsing
+  // while the async session refresh is in flight.
+  if (
+    nextSessionRow &&
+    state.sessionsResult &&
+    !state.sessionsResult.sessions.some((row) => row.key === nextSessionKey)
+  ) {
+    state.sessionsResult = {
+      ...state.sessionsResult,
+      sessions: [...state.sessionsResult.sessions, nextSessionRow],
+      count: state.sessionsResult.count + 1,
+    };
+  }
   const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
   resetChatStateForSessionSwitch(state, nextSessionKey);
   if (previousSessionKey !== nextSessionKey) {

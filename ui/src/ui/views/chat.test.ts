@@ -2370,6 +2370,48 @@ describe("chat session controls", () => {
     ]);
   });
 
+  it("preserves switched-to session label when the row only exists in the picker result", () => {
+    const { state } = createChatHeaderState();
+    const discordRow: GatewaySessionRow = {
+      key: "agent:main:discord:direct:12345",
+      kind: "direct",
+      label: "Discord DM Test",
+      updatedAt: Date.now(),
+    };
+    // The target session is only in chatSessionPickerResult, not in sessionsResult
+    state.chatSessionPickerResult = createSessionsResultFromRows([
+      ...state.sessionsResult!.sessions,
+      discordRow,
+    ]);
+    const before = state.sessionsResult!.sessions.length;
+
+    switchChatSession(state, discordRow.key);
+
+    // chatSessionPickerResult is cleared after switch
+    expect(state.chatSessionPickerResult).toBeNull();
+    // The row should now be in sessionsResult so label resolution works
+    expect(state.sessionsResult!.sessions.some((r) => r.key === discordRow.key)).toBe(true);
+    expect(state.sessionsResult!.sessions.length).toBe(before + 1);
+    expect(state.sessionKey).toBe(discordRow.key);
+
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+    const trigger = container.querySelector<HTMLButtonElement>(
+      'button[data-chat-session-select="true"]',
+    );
+    expect(trigger?.textContent).toContain("Discord DM Test");
+  });
+
+  it("does not duplicate a session row already in sessionsResult when switching", () => {
+    const { state } = createChatHeaderState();
+    const existingRow = state.sessionsResult!.sessions[0];
+    const before = state.sessionsResult!.sessions.length;
+
+    switchChatSession(state, existingRow.key);
+
+    expect(state.sessionsResult!.sessions.length).toBe(before);
+  });
+
   it("labels chat thinking default from session defaults when the row is absent", () => {
     const { state } = createChatHeaderState({
       defaultsThinkingDefault: "adaptive",
