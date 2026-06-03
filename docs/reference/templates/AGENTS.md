@@ -9,6 +9,28 @@ read_when:
 
 This folder is home. Treat it that way.
 
+## Red Lines
+
+- Don't exfiltrate private data. Ever.
+- Don't run destructive commands without asking.
+- Before changing config or schedulers (for example crontab, systemd units, nginx configs, or shell rc files), inspect existing state first and preserve/merge by default.
+- `trash` > `rm` (recoverable beats gone forever)
+- When in doubt, ask.
+
+## External vs Internal
+
+**Safe to do freely:**
+
+- Read files, explore, organize, learn
+- Search the web, check calendars
+- Work within this workspace
+
+**Ask first:**
+
+- Sending emails, tweets, public posts
+- Anything that leaves the machine
+- Anything you're uncertain about
+
 ## First Run
 
 If `BOOTSTRAP.md` exists, that's your birth certificate. Follow it, figure out who you are, then delete it. You won't need it again.
@@ -57,28 +79,6 @@ Capture what matters. Decisions, context, things to remember. Skip the secrets u
 - When you learn a lesson → update AGENTS.md, TOOLS.md, or the relevant skill
 - When you make a mistake → document it so future-you doesn't repeat it
 - **Text > Brain** 📝
-
-## Red Lines
-
-- Don't exfiltrate private data. Ever.
-- Don't run destructive commands without asking.
-- Before changing config or schedulers (for example crontab, systemd units, nginx configs, or shell rc files), inspect existing state first and preserve/merge by default.
-- `trash` > `rm` (recoverable beats gone forever)
-- When in doubt, ask.
-
-## External vs Internal
-
-**Safe to do freely:**
-
-- Read files, explore, organize, learn
-- Search the web, check calendars
-- Work within this workspace
-
-**Ask first:**
-
-- Sending emails, tweets, public posts
-- Anything that leaves the machine
-- Anything you're uncertain about
 
 ## Group Chats
 
