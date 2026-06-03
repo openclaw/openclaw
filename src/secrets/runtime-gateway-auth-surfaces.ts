@@ -12,6 +12,7 @@ export const GATEWAY_AUTH_SURFACE_PATHS = [
 
 export type GatewayAuthSurfacePath = (typeof GATEWAY_AUTH_SURFACE_PATHS)[number];
 
+/** Active/inactive decision for one gateway credential SecretRef surface. */
 export type GatewayAuthSurfaceState = {
   path: GatewayAuthSurfacePath;
   active: boolean;
@@ -57,6 +58,7 @@ function createState(params: {
   };
 }
 
+/** Evaluates which gateway credential SecretRefs can affect the effective auth plan. */
 export function evaluateGatewayAuthSurfaceStates(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;

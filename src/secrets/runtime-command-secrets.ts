@@ -19,6 +19,7 @@ import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
 export type { CommandSecretAssignment } from "./command-config.js";
 
+/** Provider selections applied only while resolving command-scoped web secrets. */
 export type CommandSecretProviderOverrides = {
   webSearch?: string;
   webFetch?: string;
@@ -179,6 +180,8 @@ function restoreInactiveWebCommandSecretTargets(params: {
     if (!isWebCommandSecretPath(target.path)) {
       continue;
     }
+    // Provider overrides can make a web SecretRef active for this command only. Other web refs
+    // must be restored from source config so assignment analysis keeps them inactive.
     const { ref } = resolveSecretInputRef({
       value: target.value,
       refValue: target.refValue,
@@ -260,6 +263,8 @@ function mirrorResolvedProviderCredentialToDirectPath(params: {
   if (directValue === undefined) {
     return;
   }
+  // Legacy direct provider targets still exist for command assignment discovery; mirror the
+  // plugin-owned resolved value only when the source config declares that direct path.
   const resolvedValue = getPath(params.resolvedConfig, [
     "plugins",
     "entries",
@@ -392,6 +397,10 @@ async function resolveForcedActiveCommandSecretTargets(params: {
   }
 }
 
+/**
+ * Resolves command-scoped SecretRef assignments from the active runtime snapshot.
+ * Provider overrides are evaluated against cloned snapshot config.
+ */
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
   commandName: string;
   targetIds: ReadonlySet<string>;
