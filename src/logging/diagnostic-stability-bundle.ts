@@ -1207,6 +1207,121 @@ function readOptionalChannelTurnsSummary(
   };
 }
 
+function readOptionalSessionAttentionSummary(
+  value: unknown,
+): DiagnosticStabilitySnapshot["summary"]["sessions"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const sessions = readObject(value, "snapshot.summary.sessions");
+  const attention = readObject(sessions.attention, "snapshot.summary.sessions.attention");
+  const recentRaw = attention.recent;
+  const recent = Array.isArray(recentRaw)
+    ? recentRaw.map((entry, index) => {
+        const item = readObject(entry, `snapshot.summary.sessions.attention.recent[${index}]`);
+        return {
+          seq: readNumber(item.seq, `snapshot.summary.sessions.attention.recent[${index}].seq`),
+          ts: readTimestampMs(item.ts, `snapshot.summary.sessions.attention.recent[${index}].ts`),
+          type: readCodeString(
+            item.type,
+            `snapshot.summary.sessions.attention.recent[${index}].type`,
+          ),
+          ...(item.sessionKey !== undefined
+            ? {
+                sessionKey: readOptionalCodeString(
+                  item.sessionKey,
+                  `snapshot.summary.sessions.attention.recent[${index}].sessionKey`,
+                ),
+              }
+            : {}),
+          ...(item.state !== undefined
+            ? {
+                state: readOptionalCodeString(
+                  item.state,
+                  `snapshot.summary.sessions.attention.recent[${index}].state`,
+                ),
+              }
+            : {}),
+          ...(item.reason !== undefined
+            ? {
+                reason: readOptionalCodeString(
+                  item.reason,
+                  `snapshot.summary.sessions.attention.recent[${index}].reason`,
+                ),
+              }
+            : {}),
+          ...(item.classification !== undefined
+            ? {
+                classification: readOptionalCodeString(
+                  item.classification,
+                  `snapshot.summary.sessions.attention.recent[${index}].classification`,
+                ),
+              }
+            : {}),
+          ...(item.activeWorkKind !== undefined
+            ? {
+                activeWorkKind: readOptionalCodeString(
+                  item.activeWorkKind,
+                  `snapshot.summary.sessions.attention.recent[${index}].activeWorkKind`,
+                ),
+              }
+            : {}),
+          ...(item.toolName !== undefined
+            ? {
+                toolName: readOptionalCodeString(
+                  item.toolName,
+                  `snapshot.summary.sessions.attention.recent[${index}].toolName`,
+                ),
+              }
+            : {}),
+          ...(item.ageMs !== undefined
+            ? {
+                ageMs: readNumber(
+                  item.ageMs,
+                  `snapshot.summary.sessions.attention.recent[${index}].ageMs`,
+                ),
+              }
+            : {}),
+          ...(item.queueDepth !== undefined
+            ? {
+                queueDepth: readNumber(
+                  item.queueDepth,
+                  `snapshot.summary.sessions.attention.recent[${index}].queueDepth`,
+                ),
+              }
+            : {}),
+        };
+      })
+    : [];
+  return {
+    attention: {
+      longRunning: readNumber(
+        attention.longRunning,
+        "snapshot.summary.sessions.attention.longRunning",
+      ),
+      stalled: readNumber(attention.stalled, "snapshot.summary.sessions.attention.stalled"),
+      stuck: readNumber(attention.stuck, "snapshot.summary.sessions.attention.stuck"),
+      recoveryRequested: readNumber(
+        attention.recoveryRequested,
+        "snapshot.summary.sessions.attention.recoveryRequested",
+      ),
+      recoveryCompleted: readNumber(
+        attention.recoveryCompleted,
+        "snapshot.summary.sessions.attention.recoveryCompleted",
+      ),
+      byClassification: readNumberMap(
+        attention.byClassification,
+        "snapshot.summary.sessions.attention.byClassification",
+      ),
+      byActiveWorkKind: readNumberMap(
+        attention.byActiveWorkKind,
+        "snapshot.summary.sessions.attention.byActiveWorkKind",
+      ),
+      recent,
+    },
+  };
+}
+
 function readStabilityEventRecord(
   value: unknown,
   label: string,
@@ -1235,6 +1350,12 @@ function readStabilityEventRecord(
   assignOptionalCodeString(sanitized, "level", record.level, `${label}.level`);
   assignOptionalCodeString(sanitized, "phase", record.phase, `${label}.phase`);
   assignOptionalCodeString(sanitized, "detector", record.detector, `${label}.detector`);
+  assignOptionalCodeString(
+    sanitized,
+    "classification",
+    record.classification,
+    `${label}.classification`,
+  );
   assignOptionalCodeString(sanitized, "toolName", record.toolName, `${label}.toolName`);
   assignOptionalCodeString(sanitized, "toolCallId", record.toolCallId, `${label}.toolCallId`);
   assignOptionalCodeString(
@@ -1450,6 +1571,9 @@ function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
         : {}),
       ...(summary.channelTurns !== undefined
         ? { channelTurns: readOptionalChannelTurnsSummary(summary.channelTurns) }
+        : {}),
+      ...(summary.sessions !== undefined
+        ? { sessions: readOptionalSessionAttentionSummary(summary.sessions) }
         : {}),
     },
   };

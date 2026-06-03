@@ -369,6 +369,88 @@ describe("diagnostic stability bundles", () => {
     expect(JSON.stringify(readResult.bundle)).not.toContain("raw diagnostic");
   });
 
+  it("preserves session attention summaries in bundles", async () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "session.stalled",
+      sessionKey: "agent:main:telegram:direct:owner",
+      state: "processing",
+      ageMs: 90_000,
+      queueDepth: 2,
+      reason: "blocked_tool_call",
+      classification: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      activeToolName: "home_assistant",
+      activeToolCallId: "call-secret",
+      activeToolAgeMs: 31_000,
+    });
+    emitDiagnosticEvent({
+      type: "session.recovery.requested",
+      sessionKey: "agent:main:telegram:direct:owner",
+      state: "processing",
+      ageMs: 91_000,
+      queueDepth: 2,
+      reason: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      allowActiveAbort: false,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const result = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.restart_startup_failed",
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readResult = readDiagnosticStabilityBundleFileSync(result.path);
+    if (readResult.status !== "found") {
+      throw new Error(`expected readable bundle, got ${readResult.status}`);
+    }
+
+    expect(readResult.bundle.snapshot.events[0]).toMatchObject({
+      type: "session.stalled",
+      classification: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      toolName: "home_assistant",
+    });
+    expect(readResult.bundle.snapshot.events[0]).not.toHaveProperty("sessionKey");
+    expect(readResult.bundle.snapshot.events[0]).not.toHaveProperty("activeToolCallId");
+    expect(readResult.bundle.snapshot.summary.sessions?.attention).toMatchObject({
+      longRunning: 0,
+      stalled: 1,
+      stuck: 0,
+      recoveryRequested: 1,
+      recoveryCompleted: 0,
+      byClassification: {
+        blocked_tool_call: 2,
+      },
+      byActiveWorkKind: {
+        tool_call: 2,
+      },
+      recent: [
+        expect.objectContaining({
+          type: "session.stalled",
+          classification: "blocked_tool_call",
+          activeWorkKind: "tool_call",
+          toolName: "home_assistant",
+          ageMs: 90_000,
+          queueDepth: 2,
+        }),
+        expect.objectContaining({
+          type: "session.recovery.requested",
+          reason: "blocked_tool_call",
+          activeWorkKind: "tool_call",
+          ageMs: 91_000,
+          queueDepth: 2,
+        }),
+      ],
+    });
+    expect(JSON.stringify(readResult.bundle)).not.toContain("call-secret");
+  });
+
   it("skips empty recorder snapshots by default", () => {
     const result = writeDiagnosticStabilityBundleSync({
       reason: "uncaught_exception",

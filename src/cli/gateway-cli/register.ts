@@ -215,6 +215,10 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
     record.channel ? `channel=${record.channel}` : "",
     record.pluginId ? `plugin=${record.pluginId}` : "",
     record.reason ? `reason=${record.reason}` : "",
+    record.classification ? `classification=${record.classification}` : "",
+    record.activeWorkKind ? `activeWork=${record.activeWorkKind}` : "",
+    record.toolName ? `tool=${record.toolName}` : "",
+    record.ageMs !== undefined ? `age=${record.ageMs}ms` : "",
     record.bytes !== undefined ? `bytes=${formatBytes(record.bytes)}` : "",
     record.limitBytes !== undefined ? `limit=${formatBytes(record.limitBytes)}` : "",
     record.queueDepth !== undefined ? `queueDepth=${record.queueDepth}` : "",
@@ -234,6 +238,55 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
     record.memory ? `heap=${formatBytes(record.memory.heapUsedBytes)}` : "",
   ].filter(Boolean);
   return parts.join(" ");
+}
+
+function formatSessionAttentionSummary(
+  sessions: NonNullable<DiagnosticStabilitySnapshot["summary"]["sessions"]>,
+  rich: boolean,
+): string[] {
+  const attention = sessions.attention;
+  const lines = [
+    `${colorize(rich, theme.muted, "Session attention:")} longRunning=${
+      attention.longRunning
+    } stalled=${attention.stalled} stuck=${attention.stuck} recoveryRequested=${
+      attention.recoveryRequested
+    } recoveryCompleted=${attention.recoveryCompleted}`,
+  ];
+  const classifications = Object.entries(attention.byClassification)
+    .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 5)
+    .map(([classification, count]) => `${classification}:${count}`)
+    .join(", ");
+  if (classifications) {
+    lines.push(`  ${colorize(rich, theme.muted, "Classifications:")} ${classifications}`);
+  }
+  const activeWork = Object.entries(attention.byActiveWorkKind)
+    .toSorted((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, 5)
+    .map(([kind, count]) => `${kind}:${count}`)
+    .join(", ");
+  if (activeWork) {
+    lines.push(`  ${colorize(rich, theme.muted, "Active work:")} ${activeWork}`);
+  }
+  if (attention.recent.length > 0) {
+    lines.push(`  ${colorize(rich, theme.muted, "Recent session attention:")}`);
+    for (const event of attention.recent.slice(-3)) {
+      const parts = [
+        new Date(event.ts).toISOString(),
+        `#${event.seq}`,
+        event.type,
+        event.sessionKey ? `session=${event.sessionKey}` : "",
+        event.classification ? `classification=${event.classification}` : "",
+        event.reason ? `reason=${event.reason}` : "",
+        event.activeWorkKind ? `activeWork=${event.activeWorkKind}` : "",
+        event.toolName ? `tool=${event.toolName}` : "",
+        event.ageMs !== undefined ? `age=${event.ageMs}ms` : "",
+        event.queueDepth !== undefined ? `queueDepth=${event.queueDepth}` : "",
+      ].filter(Boolean);
+      lines.push(`    ${parts.join(" ")}`);
+    }
+  }
+  return lines;
 }
 
 function formatChannelTurnSlaSummary(
@@ -430,6 +483,11 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   const channelTurns = snapshot.summary.channelTurns;
   if (channelTurns) {
     lines.push(...formatChannelTurnSlaSummary(channelTurns, rich));
+  }
+
+  const sessions = snapshot.summary.sessions;
+  if (sessions) {
+    lines.push(...formatSessionAttentionSummary(sessions, rich));
   }
 
   if (snapshot.events.length > 0) {

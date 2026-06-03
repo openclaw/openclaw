@@ -114,6 +114,110 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[2]).not.toHaveProperty("captureId");
   });
 
+  it("summarizes session attention without storing private context", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "session.long_running",
+      sessionKey: "agent:main:telegram:direct:owner",
+      state: "processing",
+      ageMs: 45_000,
+      queueDepth: 1,
+      reason: "queued_behind_active_work",
+      classification: "long_running",
+      activeWorkKind: "embedded_run",
+    });
+    emitDiagnosticEvent({
+      type: "session.stalled",
+      sessionKey: "agent:main:telegram:direct:owner",
+      state: "processing",
+      ageMs: 90_000,
+      queueDepth: 2,
+      reason: "blocked_tool_call",
+      classification: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      activeToolName: "home_assistant",
+      activeToolCallId: "call-secret",
+      activeToolAgeMs: 31_000,
+    });
+    emitDiagnosticEvent({
+      type: "session.stuck",
+      sessionKey: "agent:main:telegram:direct:owner",
+      state: "idle",
+      ageMs: 120_000,
+      queueDepth: 1,
+      reason: "queued_work_without_active_run",
+      classification: "stale_session_state",
+    });
+    emitDiagnosticEvent({
+      type: "session.recovery.completed",
+      sessionKey: "agent:main:telegram:direct:owner",
+      state: "idle",
+      ageMs: 121_000,
+      queueDepth: 0,
+      reason: "queued_work_without_active_run",
+      status: "released",
+      action: "recover",
+      released: 1,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.sessions?.attention).toMatchObject({
+      longRunning: 1,
+      stalled: 1,
+      stuck: 1,
+      recoveryRequested: 0,
+      recoveryCompleted: 1,
+      byClassification: {
+        long_running: 1,
+        blocked_tool_call: 1,
+        stale_session_state: 1,
+        queued_work_without_active_run: 1,
+      },
+      byActiveWorkKind: {
+        embedded_run: 1,
+        tool_call: 1,
+      },
+    });
+    expect(snapshot.summary.sessions?.attention.recent).toEqual([
+      expect.objectContaining({
+        type: "session.long_running",
+        classification: "long_running",
+        activeWorkKind: "embedded_run",
+        ageMs: 45_000,
+        queueDepth: 1,
+      }),
+      expect.objectContaining({
+        type: "session.stalled",
+        classification: "blocked_tool_call",
+        activeWorkKind: "tool_call",
+        toolName: "home_assistant",
+        ageMs: 90_000,
+        queueDepth: 2,
+      }),
+      expect.objectContaining({
+        type: "session.stuck",
+        classification: "stale_session_state",
+        reason: "queued_work_without_active_run",
+      }),
+      expect.objectContaining({
+        type: "session.recovery.completed",
+        reason: "queued_work_without_active_run",
+      }),
+    ]);
+    expect(snapshot.events.find((event) => event.type === "session.stalled")).toMatchObject({
+      classification: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      toolName: "home_assistant",
+    });
+    expect(snapshot.events.find((event) => event.type === "session.stalled")).not.toHaveProperty(
+      "sessionKey",
+    );
+    expect(JSON.stringify(snapshot)).not.toContain("private message body");
+  });
+
   it("keeps stable reason codes but drops free-form reason text", () => {
     startDiagnosticStabilityRecorder();
 

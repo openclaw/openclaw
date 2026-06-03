@@ -215,6 +215,36 @@ describe("gateway-cli coverage", () => {
       ],
       summary: {
         byType: { "channel.turn.event": 4 },
+        sessions: {
+          attention: {
+            longRunning: 0,
+            stalled: 1,
+            stuck: 0,
+            recoveryRequested: 0,
+            recoveryCompleted: 0,
+            byClassification: {
+              blocked_tool_call: 1,
+            },
+            byActiveWorkKind: {
+              tool_call: 1,
+            },
+            recent: [
+              {
+                seq: 3,
+                ts: Date.parse("2026-06-03T12:00:02.000Z"),
+                type: "session.stalled",
+                sessionKey: "agent:main:telegram:direct:owner",
+                state: "processing",
+                reason: "blocked_tool_call",
+                classification: "blocked_tool_call",
+                activeWorkKind: "tool_call",
+                toolName: "home_assistant",
+                ageMs: 90_000,
+                queueDepth: 1,
+              },
+            ],
+          },
+        },
         channelTurns: {
           totalEvents: 4,
           deliveryRequired: 1,
@@ -325,6 +355,14 @@ describe("gateway-cli coverage", () => {
     expect(output).toContain("receivedToTurnStartMs=12000ms");
     expect(output).toContain("receivedToStart=12000ms");
     expect(output).toContain("reason=missing_visible_delivery");
+    expect(output).toContain(
+      "Session attention: longRunning=0 stalled=1 stuck=0 recoveryRequested=0 recoveryCompleted=0",
+    );
+    expect(output).toContain("Classifications: blocked_tool_call:1");
+    expect(output).toContain("Active work: tool_call:1");
+    expect(output).toContain(
+      "session.stalled session=agent:main:telegram:direct:owner classification=blocked_tool_call reason=blocked_tool_call activeWork=tool_call tool=home_assistant age=90000ms queueDepth=1",
+    );
     expect(output).not.toContain("chat text");
   });
 

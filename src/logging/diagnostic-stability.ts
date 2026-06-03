@@ -103,6 +103,29 @@ type DiagnosticStabilityChannelTurnToolSummary = {
   }>;
 };
 
+type DiagnosticStabilitySessionAttentionSummary = {
+  longRunning: number;
+  stalled: number;
+  stuck: number;
+  recoveryRequested: number;
+  recoveryCompleted: number;
+  byClassification: Record<string, number>;
+  byActiveWorkKind: Record<string, number>;
+  recent: Array<{
+    seq: number;
+    ts: number;
+    type: string;
+    sessionKey?: string;
+    state?: string;
+    reason?: string;
+    classification?: string;
+    activeWorkKind?: string;
+    toolName?: string;
+    ageMs?: number;
+    queueDepth?: number;
+  }>;
+};
+
 export type DiagnosticStabilityHealthStatus = "ok" | "warning" | "degraded";
 
 export type DiagnosticStabilityChannelTurnHealthIssue = {
@@ -147,6 +170,7 @@ export type DiagnosticStabilityEventRecord = {
   level?: string;
   phase?: string;
   detector?: string;
+  classification?: string;
   deliveryKind?: string;
   talkEventType?: string;
   transport?: string;
@@ -275,6 +299,9 @@ export type DiagnosticStabilitySnapshot = {
       latency?: DiagnosticStabilityChannelTurnLatencySummary;
       tools?: DiagnosticStabilityChannelTurnToolSummary;
       health: DiagnosticStabilityChannelTurnHealth;
+    };
+    sessions?: {
+      attention: DiagnosticStabilitySessionAttentionSummary;
     };
   };
 };
@@ -495,6 +522,7 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       if (event.activeWorkKind) {
         record.activeWorkKind = event.activeWorkKind;
       }
+      record.classification = event.classification;
       if (event.activeToolName) {
         record.toolName = event.activeToolName;
       }
@@ -784,6 +812,16 @@ function summarizeRecords(
     chunked: 0,
     bySurface: {} as Record<string, number>,
   };
+  const sessionAttention: DiagnosticStabilitySessionAttentionSummary = {
+    longRunning: 0,
+    stalled: 0,
+    stuck: 0,
+    recoveryRequested: 0,
+    recoveryCompleted: 0,
+    byClassification: {},
+    byActiveWorkKind: {},
+    recent: [],
+  };
   const channelTurns: Omit<
     NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>,
     "latency" | "tools"
@@ -854,6 +892,54 @@ function summarizeRecords(
       channelTurns.health.status = "degraded";
     } else if (channelTurns.health.status === "ok") {
       channelTurns.health.status = "warning";
+    }
+  }
+
+  function recordSessionAttention(record: DiagnosticStabilityEventRecord): void {
+    if (
+      record.type !== "session.long_running" &&
+      record.type !== "session.stalled" &&
+      record.type !== "session.stuck" &&
+      record.type !== "session.recovery.requested" &&
+      record.type !== "session.recovery.completed"
+    ) {
+      return;
+    }
+    if (record.type === "session.long_running") {
+      sessionAttention.longRunning += 1;
+    } else if (record.type === "session.stalled") {
+      sessionAttention.stalled += 1;
+    } else if (record.type === "session.stuck") {
+      sessionAttention.stuck += 1;
+    } else if (record.type === "session.recovery.requested") {
+      sessionAttention.recoveryRequested += 1;
+    } else if (record.type === "session.recovery.completed") {
+      sessionAttention.recoveryCompleted += 1;
+    }
+    const classification = record.classification ?? record.reason;
+    if (classification) {
+      sessionAttention.byClassification[classification] =
+        (sessionAttention.byClassification[classification] ?? 0) + 1;
+    }
+    if (record.activeWorkKind) {
+      sessionAttention.byActiveWorkKind[record.activeWorkKind] =
+        (sessionAttention.byActiveWorkKind[record.activeWorkKind] ?? 0) + 1;
+    }
+    sessionAttention.recent.push({
+      seq: record.seq,
+      ts: record.ts,
+      type: record.type,
+      sessionKey: record.sessionKey,
+      state: record.outcome,
+      reason: record.reason,
+      classification,
+      activeWorkKind: record.activeWorkKind,
+      toolName: record.toolName,
+      ageMs: record.ageMs,
+      queueDepth: record.queueDepth,
+    });
+    if (sessionAttention.recent.length > 10) {
+      sessionAttention.recent.shift();
     }
   }
 
@@ -1110,6 +1196,7 @@ function summarizeRecords(
       const surface = record.surface ?? "unknown";
       payloadLarge.bySurface[surface] = (payloadLarge.bySurface[surface] ?? 0) + 1;
     }
+    recordSessionAttention(record);
     if (record.type === "channel.turn.event") {
       channelTurns.totalEvents += 1;
       const channel = record.channel ?? "unknown";
@@ -1291,6 +1378,13 @@ function summarizeRecords(
       : {}),
     ...(payloadLarge.count > 0 ? { payloadLarge } : {}),
     ...(channelTurns.totalEvents > 0 ? { channelTurns } : {}),
+    ...(sessionAttention.longRunning > 0 ||
+    sessionAttention.stalled > 0 ||
+    sessionAttention.stuck > 0 ||
+    sessionAttention.recoveryRequested > 0 ||
+    sessionAttention.recoveryCompleted > 0
+      ? { sessions: { attention: sessionAttention } }
+      : {}),
   };
 }
 
