@@ -530,6 +530,7 @@ function describeNpmChannelFallback(params: {
   requestedSpec: string | undefined;
   usedSpec: string;
   result: { ok: false; code?: string; error: string };
+  verb: "used" | "would use";
 }): PluginUpdateChannelFallback {
   const requestedSpec = params.requestedSpec ?? "unknown";
   const requestedLabel = formatNpmSpecSelectorLabel(params.requestedSpec);
@@ -537,8 +538,8 @@ function describeNpmChannelFallback(params: {
   const reason = isUnavailableNpmTarget(params.result) ? "unavailable" : "failed";
   const message =
     reason === "unavailable"
-      ? `plugin channel fallback: ${params.pluginId} used ${usedLabel} because ${requestedLabel} was unavailable`
-      : `plugin channel fallback: ${params.pluginId} used ${usedLabel} after ${requestedLabel} failed`;
+      ? `plugin channel fallback: ${params.pluginId} ${params.verb} ${usedLabel} because ${requestedLabel} was unavailable`
+      : `plugin channel fallback: ${params.pluginId} ${params.verb} ${usedLabel} after ${requestedLabel} failed`;
   return {
     requestedSpec,
     usedSpec: params.usedSpec,
@@ -1387,6 +1388,7 @@ export async function updateNpmInstalledPlugins(params: {
           requestedSpec: npmSpecs.fallbackLabel ?? effectiveSpec,
           usedSpec: npmSpecs.fallbackSpec,
           result: probe,
+          verb: "would use",
         });
         channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
           fallbackLabel: npmSpecs.fallbackLabel ?? effectiveSpec,
@@ -1647,6 +1649,7 @@ export async function updateNpmInstalledPlugins(params: {
         requestedSpec: npmSpecs.fallbackLabel ?? effectiveSpec,
         usedSpec: npmSpecs.fallbackSpec,
         result,
+        verb: "used",
       });
       channelFallbackSuffix = formatBetaChannelFallbackOutcomeSuffix({
         fallbackLabel: npmSpecs.fallbackLabel ?? effectiveSpec,

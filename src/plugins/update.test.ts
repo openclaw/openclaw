@@ -2199,6 +2199,43 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("reports npm beta fallback as tentative during dry-run checks", async () => {
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error:
+          "npm ERR! code ETARGET\nnpm ERR! No matching version found for openclaw-codex-app-server@beta.",
+      })
+      .mockResolvedValueOnce(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "openclaw-codex-app-server",
+          targetDir: "/tmp/openclaw-codex-app-server",
+          version: "0.2.6",
+          npmResolution: {
+            name: "openclaw-codex-app-server",
+            version: "0.2.6",
+            resolvedSpec: "openclaw-codex-app-server@0.2.6",
+          },
+        }),
+      );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
+      dryRun: true,
+    });
+
+    expect(result.outcomes[0]?.message).toBe(
+      "Would update openclaw-codex-app-server: unknown -> 0.2.6. (warning: beta channel fallback would use openclaw-codex-app-server because openclaw-codex-app-server@beta could not be used).",
+    );
+    expect(result.outcomes[0]?.channelFallback?.message).toBe(
+      "plugin channel fallback: openclaw-codex-app-server would use @latest because @beta was unavailable",
+    );
+  });
+
   it("falls back to the default npm spec when the beta package exists but is invalid", async () => {
     installPluginFromNpmSpecMock
       .mockResolvedValueOnce({
