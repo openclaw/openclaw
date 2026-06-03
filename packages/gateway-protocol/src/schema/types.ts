@@ -1,7 +1,15 @@
+/**
+ * Static TypeScript types derived from the canonical gateway protocol schemas.
+ *
+ * Keep aliases wired through `ProtocolSchemas` so validators, runtime schemas,
+ * and exported compile-time types cannot drift apart.
+ */
 import type { Static } from "typebox";
 import { ProtocolSchemas } from "./protocol-schemas.js";
 
+/** Stable schema names registered in the protocol schema registry. */
 type ProtocolSchemaName = keyof typeof ProtocolSchemas;
+/** Inferred TypeScript type for a named TypeBox protocol schema. */
 type SchemaType<TName extends ProtocolSchemaName> = Static<(typeof ProtocolSchemas)[TName]>;
 
 export type ConnectParams = SchemaType<"ConnectParams">;

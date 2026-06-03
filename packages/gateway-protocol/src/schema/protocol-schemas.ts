@@ -1,3 +1,10 @@
+/**
+ * Central registry for every gateway protocol schema.
+ *
+ * The keys in this object are the public schema names used by validators,
+ * generated static types, and protocol tooling. Add new entries here only after
+ * the owning schema module exports the canonical TypeBox schema.
+ */
 import type { TSchema } from "typebox";
 import {
   AgentEventSchema,
@@ -292,6 +299,7 @@ import {
   WizardStepSchema,
 } from "./wizard.js";
 
+/** Public schema registry keyed by stable protocol schema name. */
 export const ProtocolSchemas = {
   ConnectParams: ConnectParamsSchema,
   HelloOk: HelloOkSchema,
