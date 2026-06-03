@@ -1,8 +1,8 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { retireSessionMcpRuntime } from "../../agents/agent-bundle-mcp-tools.js";
 import { hasAnyAuthProfileStoreSource } from "../../agents/auth-profiles/source-check.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
+import type { SkillSnapshot } from "../../agents/skills.js";
 import { expandToolGroups, normalizeToolName } from "../../agents/tool-policy.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { CliDeps } from "../../cli/outbound-send-deps.js";
@@ -26,8 +26,7 @@ import { createDiagnosticMessageLifecycle } from "../../logging/message-lifecycl
 import { isCommandLaneTaskTimeoutError } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import { resolveCronSkillsSnapshot } from "../../skills/runtime/cron-snapshot.js";
-import type { SkillSnapshot } from "../../skills/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   hasExplicitCronDeliveryTarget,
   resolveCronDeliveryPlan,
@@ -55,7 +54,6 @@ import {
 } from "./helpers.js";
 import { resolveCronModelSelection } from "./model-selection.js";
 import { buildCronAgentDefaultsConfig } from "./run-config.js";
-import { resolveCronPreflightCandidates } from "./run-fallback-policy.js";
 import {
   adoptCronRunSessionMetadata,
   createPersistCronSessionEntry,
@@ -93,6 +91,7 @@ import {
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
 import { resolveCronSession } from "./session.js";
+import { resolveCronSkillsSnapshot } from "./skills-snapshot.js";
 
 const sessionStoreRuntimeLoader = createLazyImportLoader(
   () => import("../../config/sessions/store.runtime.js"),
@@ -226,9 +225,10 @@ function normalizeMessagingToolTarget(
     channel === "message" && resolvedDelivery.ok && delivery.verifiedTarget
       ? resolvedDelivery.channel
       : channel;
+  const traceTo = resolvedDelivery.ok && delivery.verifiedTarget ? resolvedDelivery.to : target.to;
   return {
     channel: traceChannel,
-    ...(target.to ? { to: target.to } : {}),
+    ...(traceTo ? { to: traceTo } : {}),
     ...(target.accountId ? { accountId: target.accountId } : {}),
     ...(target.threadId ? { threadId: target.threadId } : {}),
   };
@@ -479,7 +479,6 @@ type PreparedCronRunContext = {
   skillsSnapshot: SkillSnapshot;
   liveSelection: CronLiveSelection;
   useSubagentFallbacks: boolean;
-  modelFallbacksOverride?: string[];
   thinkLevel: ThinkLevel | undefined;
   timeoutMs: number;
   /**
@@ -641,67 +640,27 @@ async function prepareCronRunContext(params: {
   let model = resolvedModelSelection.model;
   const useSubagentFallbacks = resolvedModelSelection.modelSource === "subagent";
 
-  const modelPreflightRuntime = await loadCronModelPreflightRuntime();
-  const preflightCandidates = resolveCronPreflightCandidates({
+  const preflight = await (
+    await loadCronModelPreflightRuntime()
+  ).preflightCronModelProvider({
     cfg: cfgWithAgentDefaults,
-    job: input.job,
-    agentId,
     provider,
     model,
-    useSubagentFallbacks,
   });
-  let selectedPreflightCandidate: { provider: string; model: string } | undefined;
-  let selectedPreflightCandidateIndex = -1;
-  let firstUnavailablePreflight:
-    | Awaited<ReturnType<typeof modelPreflightRuntime.preflightCronModelProvider>>
-    | undefined;
-  for (const [index, candidate] of preflightCandidates.entries()) {
-    const candidatePreflight = await modelPreflightRuntime.preflightCronModelProvider({
-      cfg: cfgWithAgentDefaults,
-      provider: candidate.provider,
-      model: candidate.model,
-    });
-    if (candidatePreflight.status === "available") {
-      selectedPreflightCandidate = candidate;
-      selectedPreflightCandidateIndex = index;
-      break;
-    }
-    firstUnavailablePreflight ??= candidatePreflight;
-  }
-  if (!selectedPreflightCandidate && firstUnavailablePreflight?.status === "unavailable") {
-    logWarn(`[cron:${input.job.id}] ${firstUnavailablePreflight.reason}`);
+  if (preflight.status === "unavailable") {
+    logWarn(`[cron:${input.job.id}] ${preflight.reason}`);
     return {
       ok: false,
       result: withRunSession({
         status: "skipped",
-        error: firstUnavailablePreflight.reason,
-        diagnostics: createCronRunDiagnosticsFromError(
-          "model-preflight",
-          firstUnavailablePreflight.reason,
-          {
-            severity: "warn",
-          },
-        ),
+        error: preflight.reason,
+        diagnostics: createCronRunDiagnosticsFromError("model-preflight", preflight.reason, {
+          severity: "warn",
+        }),
         provider,
         model,
       }),
     };
-  }
-  const modelFallbacksOverride =
-    selectedPreflightCandidate &&
-    (selectedPreflightCandidate.provider !== provider || selectedPreflightCandidate.model !== model)
-      ? preflightCandidates
-          .slice(selectedPreflightCandidateIndex + 1)
-          .map((candidate) => `${candidate.provider}/${candidate.model}`)
-      : undefined;
-  if (selectedPreflightCandidate && modelFallbacksOverride) {
-    if (firstUnavailablePreflight?.status === "unavailable") {
-      logWarn(
-        `[cron:${input.job.id}] Local provider preflight failed for ${firstUnavailablePreflight.provider}/${firstUnavailablePreflight.model} at ${firstUnavailablePreflight.baseUrl}; continuing with fallback ${selectedPreflightCandidate.provider}/${selectedPreflightCandidate.model}.`,
-      );
-    }
-    provider = selectedPreflightCandidate.provider;
-    model = selectedPreflightCandidate.model;
   }
 
   const hooksGmailThinking = isGmailHook
@@ -893,7 +852,6 @@ async function prepareCronRunContext(params: {
       skillsSnapshot,
       liveSelection,
       useSubagentFallbacks,
-      modelFallbacksOverride,
       thinkLevel,
       timeoutMs,
       runTimeoutOverrideMs,
@@ -945,10 +903,7 @@ async function finalizeCronRun(params: {
   prepared.cronSession.sessionEntry.contextTokens = contextTokens;
   if (isCliProvider(providerUsed, prepared.cfgWithAgentDefaults)) {
     const cliSessionId = finalRunResult.meta?.agentMeta?.sessionId?.trim();
-    if (finalRunResult.meta?.agentMeta?.clearCliSessionBinding === true) {
-      const { clearCliSession } = await loadCliRunnerRuntime();
-      clearCliSession(prepared.cronSession.sessionEntry, providerUsed);
-    } else if (cliSessionId) {
+    if (cliSessionId) {
       const { setCliSessionId } = await loadCliRunnerRuntime();
       setCliSessionId(prepared.cronSession.sessionEntry, providerUsed, cliSessionId);
     }
@@ -1015,7 +970,17 @@ async function finalizeCronRun(params: {
       ...telemetry,
     });
   }
-  const cronPayloadOutcome = resolveCronPayloadOutcome({
+  let {
+    summary,
+    outputText,
+    synthesizedText,
+    deliveryPayloads,
+    deliveryPayloadHasStructuredContent,
+    hasFatalErrorPayload,
+    hasFatalStructuredErrorPayload,
+    embeddedRunError,
+    pendingPresentationWarningError,
+  } = resolveCronPayloadOutcome({
     payloads,
     runLevelError: finalRunResult.meta?.error,
     failureSignal: finalRunResult.meta?.failureSignal,
@@ -1024,14 +989,6 @@ async function finalizeCronRun(params: {
       await resolveCronChannelOutputPolicy(prepared.resolvedDelivery.channel)
     ).preferFinalAssistantVisibleText,
   });
-  const {
-    synthesizedText,
-    deliveryPayloads,
-    deliveryPayloadHasStructuredContent,
-    hasFatalStructuredErrorPayload,
-    pendingPresentationWarningError,
-  } = cronPayloadOutcome;
-  let { summary, outputText, hasFatalErrorPayload, embeddedRunError } = cronPayloadOutcome;
   const agentDiagnostics = createCronRunDiagnosticsFromAgentResult(finalRunResult, {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
@@ -1186,27 +1143,19 @@ async function finalizeCronRun(params: {
  * O(1) — nulls known large fields without deep traversal.  MUST run after the
  * final `persistSessionEntry()` and delivery construction, never before.
  */
-async function disposeCronRunContext(params: {
+function disposeCronRunContext(params: {
   sessionId: string;
   cronSession: MutableCronSession;
   ownsRunContext: boolean;
-}): Promise<void> {
+}): void {
   if (params.ownsRunContext) {
     clearAgentRunContext(params.sessionId);
-    await retireSessionMcpRuntime({
-      sessionId: params.sessionId,
-      reason: "isolated-cron-dispose",
-      onError: (error, sid) => {
-        logWarn(
-          `[cron] Failed to retire MCP runtime during isolated cron dispose ${sid}: ${String(error)}`,
-        );
-      },
-    }).catch(() => {});
   }
+  // Drop the in-memory store reference so GC can collect the session registry.
+  // The on-disk sessions.json is unaffected.
   (params.cronSession as { store?: unknown }).store = undefined;
 }
 
-/** Runs one isolated cron agent turn, including setup, execution, delivery, and persistence. */
 export async function runCronIsolatedAgentTurn(params: {
   cfg: OpenClawConfig;
   deps: CliDeps;
@@ -1299,7 +1248,6 @@ export async function runCronIsolatedAgentTurn(params: {
       skillsSnapshot: prepared.context.skillsSnapshot,
       agentPayload: prepared.context.agentPayload,
       useSubagentFallbacks: prepared.context.useSubagentFallbacks,
-      modelFallbacksOverride: prepared.context.modelFallbacksOverride,
       agentVerboseDefault: prepared.context.agentCfg?.verboseDefault,
       liveSelection: prepared.context.liveSelection,
       cronSession: prepared.context.cronSession,
@@ -1362,7 +1310,7 @@ export async function runCronIsolatedAgentTurn(params: {
     // Release runtime references after the run completes (success or failure).
     // The session entry has already been persisted to disk by this point,
     // so the in-memory store and run context can be safely dropped.
-    await disposeCronRunContext({
+    disposeCronRunContext({
       sessionId: initialSessionId,
       cronSession: prepared.context.cronSession,
       ownsRunContext: params.job.sessionTarget === "isolated",
