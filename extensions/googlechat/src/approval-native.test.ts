@@ -1,9 +1,44 @@
+import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it } from "vitest";
 import {
   googleChatApprovalCapability,
   shouldHandleGoogleChatNativeApprovalRequest,
+  shouldSuppressLocalGoogleChatExecApprovalPrompt,
 } from "./approval-native.js";
+
+const GOOGLE_CHAT_APPROVAL_ACCOUNT = {
+  serviceAccount: {
+    type: "service_account" as const,
+    client_email: "bot@example.com",
+    private_key: "test-key",
+    token_uri: "https://oauth2.googleapis.com/token",
+  },
+  audienceType: "app-url" as const,
+  audience: "https://chat-app.example.test/googlechat",
+  appPrincipal: "123456789012345678901",
+  dm: { allowFrom: ["users/123"] },
+};
+
+const execApprovalPayload: ReplyPayload = {
+  text: "I need approval to run this command.",
+  channelData: {
+    execApproval: {
+      approvalId: "12345678-1234-1234-1234-123456789012",
+      approvalSlug: "12345678",
+      approvalKind: "exec",
+      agentId: "dev",
+      sessionKey: "agent:dev:main",
+    },
+  },
+};
+
+const activeExecApprovalHint: ChannelOutboundPayloadHint = {
+  kind: "approval-pending",
+  approvalKind: "exec",
+  nativeRouteActive: true,
+};
 
 describe("googleChatApprovalCapability", () => {
   it("declares native exec and plugin approval runtime support", async () => {
@@ -278,6 +313,86 @@ describe("googleChatApprovalCapability", () => {
       shouldHandleGoogleChatNativeApprovalRequest({
         cfg,
         request,
+      }),
+    ).toBe(false);
+  });
+
+  it("suppresses the local exec prompt when a Google Chat native route is active", () => {
+    expect(
+      shouldSuppressLocalGoogleChatExecApprovalPrompt({
+        cfg: {
+          approvals: { exec: { enabled: true } },
+          channels: { googlechat: GOOGLE_CHAT_APPROVAL_ACCOUNT },
+        },
+        payload: execApprovalPayload,
+        hint: activeExecApprovalHint,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps the local exec prompt when native Google Chat delivery cannot own it", () => {
+    expect(
+      shouldSuppressLocalGoogleChatExecApprovalPrompt({
+        cfg: {
+          approvals: { exec: { enabled: true } },
+          channels: { googlechat: GOOGLE_CHAT_APPROVAL_ACCOUNT },
+        },
+        payload: execApprovalPayload,
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "exec",
+          nativeRouteActive: false,
+        },
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSuppressLocalGoogleChatExecApprovalPrompt({
+        cfg: {
+          approvals: { exec: { enabled: false } },
+          channels: { googlechat: GOOGLE_CHAT_APPROVAL_ACCOUNT },
+        },
+        payload: execApprovalPayload,
+        hint: activeExecApprovalHint,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSuppressLocalGoogleChatExecApprovalPrompt({
+        cfg: {
+          approvals: { exec: { enabled: true } },
+          channels: {
+            googlechat: {
+              ...GOOGLE_CHAT_APPROVAL_ACCOUNT,
+              audience: undefined,
+            },
+          },
+        },
+        payload: execApprovalPayload,
+        hint: activeExecApprovalHint,
+      }),
+    ).toBe(false);
+
+    expect(
+      shouldSuppressLocalGoogleChatExecApprovalPrompt({
+        cfg: {
+          approvals: { exec: { enabled: true } },
+          channels: { googlechat: GOOGLE_CHAT_APPROVAL_ACCOUNT },
+        },
+        payload: {
+          channelData: {
+            execApproval: {
+              approvalId: "12345678-1234-1234-1234-123456789012",
+              approvalSlug: "12345678",
+              approvalKind: "plugin",
+            },
+          },
+        },
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "plugin",
+          nativeRouteActive: true,
+        },
       }),
     ).toBe(false);
   });

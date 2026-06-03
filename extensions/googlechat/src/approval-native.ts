@@ -8,12 +8,18 @@ import {
   createChannelApproverDmTargetResolver,
   createChannelNativeOriginTargetResolver,
   createNativeApprovalChannelRouteGates,
+  shouldSuppressLocalNativeExecApprovalPrompt,
 } from "openclaw/plugin-sdk/approval-native-runtime";
 import type {
   ExecApprovalRequest,
   PluginApprovalRequest,
 } from "openclaw/plugin-sdk/approval-runtime";
-import type { ChannelApprovalCapability } from "openclaw/plugin-sdk/channel-contract";
+import type {
+  ChannelApprovalCapability,
+  ChannelOutboundPayloadHint,
+} from "openclaw/plugin-sdk/channel-contract";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -150,6 +156,18 @@ export function shouldHandleGoogleChatNativeApprovalRequest(params: {
     getGoogleChatApprovalApprovers(params).length > 0 &&
     Boolean(resolveTurnSourceGoogleChatOriginTarget(params.request))
   );
+}
+
+export function shouldSuppressLocalGoogleChatExecApprovalPrompt(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  payload: ReplyPayload;
+  hint?: ChannelOutboundPayloadHint;
+}): boolean {
+  return shouldSuppressLocalNativeExecApprovalPrompt({
+    ...params,
+    isNativeDeliveryEnabled: isGoogleChatNativeApprovalClientEnabled,
+  });
 }
 
 const resolveGoogleChatOriginTarget = createChannelNativeOriginTargetResolver({

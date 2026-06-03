@@ -8,7 +8,10 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
-import { googleChatApprovalCapability } from "./approval-native.js";
+import {
+  googleChatApprovalCapability,
+  shouldSuppressLocalGoogleChatExecApprovalPrompt,
+} from "./approval-native.js";
 import { createGoogleChatPluginBase, GOOGLECHAT_CHANNEL_ID } from "./channel-base.js";
 import {
   googlechatDirectoryAdapter,
@@ -195,5 +198,17 @@ export const googlechatPlugin = createChatChannelPlugin({
   },
   security: googlechatSecurityAdapter,
   threading: googlechatThreadingAdapter,
-  outbound: googlechatOutboundAdapter,
+  outbound: {
+    ...googlechatOutboundAdapter,
+    base: {
+      ...googlechatOutboundAdapter.base,
+      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
+        shouldSuppressLocalGoogleChatExecApprovalPrompt({
+          cfg,
+          accountId,
+          payload,
+          hint,
+        }),
+    },
+  },
 });

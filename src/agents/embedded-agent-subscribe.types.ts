@@ -42,6 +42,11 @@ export type SubscribeEmbeddedAgentSessionParams = {
   shouldEmitToolOutput?: () => boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  /**
+   * Shared with already-constructed message tools so they can no-op fallback sends
+   * after a deterministic/native approval surface has been emitted.
+   */
+  deterministicApprovalPromptSentRef?: { value: boolean };
   onReasoningStream?: (payload: {
     text?: string;
     mediaUrls?: string[];

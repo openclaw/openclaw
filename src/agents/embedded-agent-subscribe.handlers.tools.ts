@@ -656,7 +656,6 @@ function readExecApprovalPendingDetails(result: unknown): {
   cwd?: string;
   nodeId?: string;
   warningText?: string;
-  nativeApprovalDelivered?: boolean;
 } | null {
   if (!result || typeof result !== "object") {
     return null;
@@ -691,7 +690,6 @@ function readExecApprovalPendingDetails(result: unknown): {
     cwd: readStringValue(details.cwd),
     nodeId: readStringValue(details.nodeId),
     warningText: readStringValue(details.warningText),
-    nativeApprovalDelivered: details.nativeApprovalDelivered === true,
   };
 }
 
@@ -755,11 +753,6 @@ async function emitToolResultOutput(params: {
   );
   const approvalPending = readExecApprovalPendingDetails(result);
   if (!isToolError && approvalPending) {
-    if (approvalPending.nativeApprovalDelivered) {
-      ctx.state.deterministicApprovalPromptPending = false;
-      ctx.state.deterministicApprovalPromptSent = true;
-      return;
-    }
     if (!ctx.params.onToolResult) {
       return;
     }
@@ -774,14 +767,22 @@ async function emitToolResultOutput(params: {
           command: approvalPending.command,
           cwd: approvalPending.cwd,
           host: approvalPending.host,
+          agentId: ctx.params.agentId,
+          sessionKey: ctx.params.sessionKey,
           nodeId: approvalPending.nodeId,
           expiresAtMs: approvalPending.expiresAtMs,
           warningText: approvalPending.warningText,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
+      if (ctx.params.deterministicApprovalPromptSentRef) {
+        ctx.params.deterministicApprovalPromptSentRef.value = true;
+      }
     } catch {
       ctx.state.deterministicApprovalPromptSent = false;
+      if (ctx.params.deterministicApprovalPromptSentRef) {
+        ctx.params.deterministicApprovalPromptSentRef.value = false;
+      }
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }
@@ -807,8 +808,14 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
+      if (ctx.params.deterministicApprovalPromptSentRef) {
+        ctx.params.deterministicApprovalPromptSentRef.value = true;
+      }
     } catch {
       ctx.state.deterministicApprovalPromptSent = false;
+      if (ctx.params.deterministicApprovalPromptSentRef) {
+        ctx.params.deterministicApprovalPromptSentRef.value = false;
+      }
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }
