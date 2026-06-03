@@ -397,6 +397,17 @@ function isIncompleteAnnounceAgentResultError(error: unknown): boolean {
   return /(?:incomplete terminal response|code=incomplete_result)\b/i.test(message);
 }
 
+// `dispatchGatewayMethodInProcess` throws this when the AsyncLocalStorage plugin
+// runtime scope is gone AND the fallback gateway context resolver yielded
+// nothing — typically when a subagent completes after its requester's gateway
+// request has ended and the gateway is mid-shutdown / startup race. The
+// announce path retries the dispatch a few times then surfaces here; without
+// a sibling fallback the user sees no reply at all (#89718).
+function isGatewayScopeUnavailableError(error: unknown): boolean {
+  const message = summarizeDeliveryError(error);
+  return /In-process gateway dispatch requires a gateway request scope/i.test(message);
+}
+
 function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
   if (isSessionWriteLockAcquireError(error)) {
     return true;
@@ -1437,7 +1448,7 @@ async function sendSubagentAnnounceDirectly(params: {
         params.expectsCompletionMessage &&
         (shouldDeliverAgentFinal || subagentDirectMessageCompletionRequiresMessageTool) &&
         isSubagentCompletion &&
-        isIncompleteAnnounceAgentResultError(err)
+        (isIncompleteAnnounceAgentResultError(err) || isGatewayScopeUnavailableError(err))
       ) {
         const textDelivery = await deliverTextCompletionDirect({
           cfg,

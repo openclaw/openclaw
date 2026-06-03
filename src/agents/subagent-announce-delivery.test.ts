@@ -1430,6 +1430,53 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     );
   });
 
+  // #89718 — When `dispatchGatewayMethodInProcess` throws because no plugin
+  // runtime scope is active AND the fallback gateway context resolver returned
+  // nothing (gateway mid-shutdown / startup race / resolver disabled), the
+  // direct-announce catch must still route the completion via direct channel
+  // delivery so the user is not silently dropped.
+  it("directly delivers direct-message subagent text when in-process gateway dispatch has no scope", async () => {
+    const callGateway = vi.fn(async () => {
+      throw new Error(
+        "In-process gateway dispatch requires a gateway request scope (method: agent). No scope set and no fallback context available.",
+      );
+    }) as unknown as typeof runtimeCallGateway;
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "direct completion smoke",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "discord",
+        accountId: "acct-1",
+        to: "dm:U123",
+        content: "child completion output",
+        idempotencyKey: "announce-dm-fallback-empty:text-direct",
+      }),
+    );
+  });
+
   it("uses in-process agent dispatch for dormant completion requesters", async () => {
     const callGateway = createGatewayMock();
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
