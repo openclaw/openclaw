@@ -302,7 +302,7 @@ by Peter Steinberger and the community.
 
 ## Community
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines, maintainers, and how to submit PRs.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and how to submit PRs.
 AI/vibe-coded PRs welcome! 🤖
 
 Special thanks to [Mario Zechner](https://mariozechner.at/) for his support and for
