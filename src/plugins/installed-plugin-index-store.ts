@@ -451,7 +451,13 @@ function canRefreshPersistedPolicyState(
   }
   const installRecords =
     params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted);
-  if (hasRecoverableInstallRecordsMissingFromIndex(persisted, installRecords, env)) {
+  if (
+    hasRecoverableInstallRecordsMissingFromIndex(persisted, installRecords, env, {
+      configLoadPaths: params.config?.plugins?.load?.paths,
+      recoveryCandidates: [...(params.candidates ?? []), ...(params.discovery?.candidates ?? [])],
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    })
+  ) {
     return false;
   }
   return hasPolicyRefreshTargets(persisted, params.policyPluginIds);

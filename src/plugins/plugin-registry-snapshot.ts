@@ -478,6 +478,14 @@ export function loadPluginRegistrySnapshotWithMetadata(
           persistedIndex,
           loadSnapshotInstallRecords(params, env),
           env,
+          {
+            configLoadPaths: params.config?.plugins?.load?.paths,
+            recoveryCandidates: [
+              ...(params.candidates ?? []),
+              ...(params.discovery?.candidates ?? []),
+            ],
+            ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+          },
         )
       ) {
         diagnostics.push({
