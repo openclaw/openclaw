@@ -267,8 +267,9 @@ function messageDisplaySignature(message: unknown): string | null {
 function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
+  options?: { preserveUnanchoredTail?: boolean },
 ): unknown[] {
-  if (historyMessages.length === 0 || previousMessages.length === 0) {
+  if (previousMessages.length === 0) {
     return historyMessages;
   }
   const historySignatures = new Set(
@@ -285,20 +286,55 @@ function preserveOptimisticTailMessages(
     }
   }
   if (sharedPreviousIndex < 0) {
+    if (options?.preserveUnanchoredTail) {
+      const optimisticTail = collectLocalOptimisticSuffix(previousMessages, historySignatures);
+      return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
+    }
     return historyMessages;
   }
+
+  const optimisticTail = collectLocalOptimisticTail(
+    previousMessages.slice(sharedPreviousIndex + 1),
+    historySignatures,
+  );
+  return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
+}
+
+function collectLocalOptimisticTail(
+  messages: unknown[],
+  historySignatures: ReadonlySet<string>,
+): unknown[] {
   const optimisticTail: unknown[] = [];
-  for (const message of previousMessages.slice(sharedPreviousIndex + 1)) {
+  for (const message of messages) {
     if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
-      return historyMessages;
+      return [];
     }
     const signature = messageDisplaySignature(message);
     if (!signature || historySignatures.has(signature)) {
-      return historyMessages;
+      return [];
     }
     optimisticTail.push(message);
   }
-  return optimisticTail.length > 0 ? [...historyMessages, ...optimisticTail] : historyMessages;
+  return optimisticTail;
+}
+
+function collectLocalOptimisticSuffix(
+  messages: unknown[],
+  historySignatures: ReadonlySet<string>,
+): unknown[] {
+  const optimisticTail: unknown[] = [];
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
+    if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
+      break;
+    }
+    const signature = messageDisplaySignature(message);
+    if (!signature || historySignatures.has(signature)) {
+      break;
+    }
+    optimisticTail.unshift(message);
+  }
+  return optimisticTail;
 }
 
 function isRetryableStartupUnavailable(err: unknown, method: string): err is GatewayRequestError {
@@ -368,8 +404,10 @@ export async function loadChatHistory(state: ChatState) {
   }
   const sessionKey = state.sessionKey;
   const requestVersion = beginChatHistoryRequest(state);
+  const hadActiveRunAtStart = Boolean(
+    state.chatRunId || state.chatStreamStartedAt !== null || state.chatSending,
+  );
   const startedAt = Date.now();
-  const previousMessages = state.chatMessages;
   state.chatLoading = true;
   state.lastError = null;
   try {
@@ -405,13 +443,20 @@ export async function loadChatHistory(state: ChatState) {
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
-    state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    const hasActiveRunAtApply = Boolean(
+      state.chatRunId || state.chatStreamStartedAt !== null || state.chatSending,
+    );
+    state.chatMessages = preserveOptimisticTailMessages(visibleMessages, state.chatMessages, {
+      preserveUnanchoredTail: hadActiveRunAtStart || hasActiveRunAtApply,
+    });
     state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
-    maybeResetToolStream(state);
-    state.chatStream = null;
-    state.chatStreamStartedAt = null;
+    if (!hasActiveRunAtApply) {
+      // Clear all streaming state after terminal reloads. During an active run,
+      // history may lag behind live events, so keep the in-progress stream/tool UI.
+      maybeResetToolStream(state);
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+    }
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;

@@ -62,6 +62,9 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Control UI/chat: keep optimistic messages and in-progress response text
+  visible when refreshing chat history while a reply is still streaming, and
+  avoid losing a final reply that lands during the refresh. Thanks @gabri.
 - Hooks/Gmail: make `openclaw webhooks gmail setup` write
   `hooks.allowedSessionKeyPrefixes: ["hook:"]` alongside the gmail preset so the
   emitted config passes the gateway hooks validator on next start. Without

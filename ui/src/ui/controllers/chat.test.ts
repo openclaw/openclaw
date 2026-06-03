@@ -818,6 +818,74 @@ describe("loadChatHistory", () => {
     expect(state.chatStream).toBeNull();
   });
 
+  it("keeps a final reply that arrives while history reload is in flight", async () => {
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      timestamp: 10,
+    };
+    const historyUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      __openclaw: { seq: 1 },
+    };
+    const finalAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "latest answer" }],
+      timestamp: 11,
+    };
+    const historyRequest = createDeferred<{ messages: Array<unknown> }>();
+    const request = vi.fn().mockReturnValue(historyRequest.promise);
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [optimisticUser],
+      chatRunId: "run-1",
+      chatStream: "latest answer",
+      chatStreamStartedAt: 10,
+    });
+
+    const load = loadChatHistory(state);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(1));
+
+    handleChatEvent(state, {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "final",
+      message: finalAssistant,
+    });
+    historyRequest.resolve({ messages: [historyUser] });
+    await load;
+
+    expect(state.chatMessages).toEqual([historyUser, finalAssistant]);
+    expect(state.chatRunId).toBeNull();
+    expect(state.chatStream).toBeNull();
+  });
+
+  it("keeps the optimistic user message and stream when refreshing an active empty session", async () => {
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "first ask" }],
+      timestamp: 10,
+    };
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [optimisticUser],
+      chatRunId: "run-1",
+      chatStream: "partial answer",
+      chatStreamStartedAt: 10,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toEqual([optimisticUser]);
+    expect(state.chatRunId).toBe("run-1");
+    expect(state.chatStream).toBe("partial answer");
+    expect(state.chatStreamStartedAt).toBe(10);
+  });
+
   it("does not duplicate optimistic tail messages after history catches up", async () => {
     const optimisticUser = {
       role: "user",
