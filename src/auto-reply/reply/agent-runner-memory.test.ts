@@ -1662,6 +1662,78 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
+  it("does not treat ordinary transcript text echoing the refresh phrase as a compaction marker", async () => {
+    const sessionFile = path.join(rootDir, "phrase-echo-without-marker.jsonl");
+    // Same stale-usage shape as the marker tests, but the post-compaction phrases
+    // appear only as ordinary user/assistant message text — there is NO structured
+    // {type:"compaction"} record. The estimator must keep the stale usage active and
+    // still compact, instead of being fooled into dropping pressure.
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "pre-compaction giant turn" }],
+            usage: { input: 240_000, output: 120_000 },
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "tool",
+            content: `pre-compaction stale tool result ${"x".repeat(450_000)}`,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text: "[Post-compaction context refresh]\n\nSession was just compacted.",
+              },
+            ],
+          },
+        }),
+      ].join("\n"),
+      "utf8",
+    );
+
+    registerMemoryFlushPlanResolverForTest(() => ({
+      softThresholdTokens: 4_000,
+      forceFlushTranscriptBytes: 1_000_000_000,
+      reserveTokensFloor: 0,
+      prompt: "Pre-compaction memory flush.\nNO_REPLY",
+      systemPrompt: "Write memory to memory/YYYY-MM-DD.md.",
+      relativePath: "memory/2023-11-14.md",
+    }));
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile,
+      updatedAt: Date.now(),
+      totalTokensFresh: false,
+    };
+
+    await runPreflightCompactionIfNeeded({
+      cfg: { agents: { defaults: { compaction: { memoryFlush: {} } } } },
+      followupRun: createTestFollowupRun({
+        sessionId: "session",
+        sessionFile,
+        sessionKey: "main",
+      }),
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 100_000,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      sessionKey: "main",
+      storePath: path.join(rootDir, "sessions.json"),
+      isHeartbeat: false,
+      replyOperation: createReplyOperation(),
+    });
+
+    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalled();
+  });
+
   it("skips OpenClaw preflight compaction for persisted Codex runtime sessions", async () => {
     registerMemoryFlushPlanResolverForTest(() => ({
       softThresholdTokens: 4_000,

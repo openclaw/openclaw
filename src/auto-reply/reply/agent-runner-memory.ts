@@ -360,52 +360,27 @@ function parseUsageFromTranscriptLine(line: string): ReturnType<typeof normalize
   return undefined;
 }
 
-function collectTranscriptText(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  return value
-    .map((item) => {
-      if (!item || typeof item !== "object" || Array.isArray(item)) {
-        return "";
-      }
-      const text = (item as { text?: unknown }).text;
-      return typeof text === "string" ? text : "";
-    })
-    .filter(Boolean)
-    .join("\n");
-}
-
 function transcriptLineHasPostUsageCompactionMarker(line: string): boolean {
   const trimmed = line.trim();
   if (!trimmed) {
     return false;
   }
   try {
+    // Only trust structured compaction records (written by the runtime at
+    // compaction time, e.g. transcript-file-state / session-manager). The
+    // post-compaction refresh phrases are prompt-injected context, so matching
+    // them in free message text would let ordinary user/tool content that
+    // echoes the phrase masquerade as a marker and wrongly drop stale-usage
+    // pressure.
     const parsed = JSON.parse(trimmed) as {
       type?: unknown;
-      message?: { content?: unknown };
-      payload?: { type?: unknown; text?: unknown };
+      payload?: { type?: unknown };
     };
-    if (parsed.type === "compaction" || parsed.type === "session.compacted") {
-      return true;
-    }
-    const payloadType = parsed.payload?.type;
-    if (payloadType === "compaction" || payloadType === "session.compacted") {
-      return true;
-    }
-    const text = [
-      collectTranscriptText(parsed.message?.content),
-      collectTranscriptText(parsed.payload?.text),
-    ]
-      .filter(Boolean)
-      .join("\n");
     return (
-      text.includes("[Post-compaction context refresh]") ||
-      text.includes("Session was just compacted.")
+      parsed.type === "compaction" ||
+      parsed.type === "session.compacted" ||
+      parsed.payload?.type === "compaction" ||
+      parsed.payload?.type === "session.compacted"
     );
   } catch {
     return false;
