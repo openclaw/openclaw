@@ -1958,6 +1958,12 @@ export const dispatchTelegramMessage = async ({
                     await progressPromise;
                   },
                   onItemEvent: async (payload) => {
+                    if (payload.kind === "preamble") {
+                      await progressDraft.pushCommentaryProgress(payload.progressText, {
+                        itemId: payload.itemId,
+                      });
+                      return;
+                    }
                     await pushStreamToolProgress(
                       buildChannelProgressDraftLineForEntry(telegramCfg, {
                         event: "item",
