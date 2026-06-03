@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeEach } from "vitest";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isIsolatedCronSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 import { sweepCronRunSessions, resolveRetentionMs, resetReaperThrottle } from "./session-reaper.js";
 
@@ -61,6 +61,30 @@ describe("isCronRunSessionKey", () => {
   it("does not match non-canonical cron-like keys", () => {
     expect(isCronRunSessionKey("agent:main:slack:cron:job:run:uuid")).toBe(false);
     expect(isCronRunSessionKey("cron:job:run:uuid")).toBe(false);
+  });
+});
+
+describe("isIsolatedCronSessionKey", () => {
+  it("matches isolated cron session keys", () => {
+    expect(isIsolatedCronSessionKey("agent:main:cron:abc-123")).toBe(true);
+    expect(isIsolatedCronSessionKey("agent:debugger:cron:249ecf82")).toBe(true);
+  });
+
+  it("does not match cron run session keys", () => {
+    expect(isIsolatedCronSessionKey("agent:main:cron:abc-123:run:def-456")).toBe(false);
+    expect(isIsolatedCronSessionKey("agent:main:cron:abc-123:run:def-456:subagent:worker")).toBe(
+      false,
+    );
+  });
+
+  it("does not match regular session keys", () => {
+    expect(isIsolatedCronSessionKey("agent:main:telegram:dm:123")).toBe(false);
+    expect(isIsolatedCronSessionKey("main")).toBe(false);
+  });
+
+  it("does not match heartbeat or other extended cron keys", () => {
+    expect(isIsolatedCronSessionKey("agent:main:cron:abc-123:heartbeat")).toBe(false);
+    expect(isIsolatedCronSessionKey("agent:main:cron:abc-123:heartbeat:run:uuid")).toBe(false);
   });
 });
 
@@ -128,6 +152,63 @@ describe("sweepCronRunSessions", () => {
       "agent:main:cron:job1:run:recent-run:thread:reply": {
         sessionId: "recent-run-thread",
         updatedAt: now - 1 * 3_600_000,
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-session",
+        updatedAt: now - 100 * 3_600_000,
+      },
+    });
+  });
+
+  it("prunes expired isolated-target cron sessions", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+      "agent:main:cron:isolated-job": {
+        sessionId: "isolated-session-old",
+        updatedAt: now - 25 * 3_600_000, // 25h ago — expired
+      },
+      "agent:main:cron:isolated-job:subagent:worker": {
+        sessionId: "isolated-subagent-old",
+        updatedAt: now - 25 * 3_600_000, // expired descendant — not matched by isolated key helper
+      },
+      "agent:main:cron:fresh-isolated-job": {
+        sessionId: "isolated-session-fresh",
+        updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
+      },
+      "agent:main:cron:heartbeat-job:heartbeat": {
+        sessionId: "heartbeat-session-old",
+        updatedAt: now - 25 * 3_600_000, // old but heartbeat — not a cron session
+      },
+      "agent:main:telegram:dm:123": {
+        sessionId: "regular-session",
+        updatedAt: now - 100 * 3_600_000, // old but not a cron run
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.pruned).toBe(1);
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated).toEqual({
+      "agent:main:cron:isolated-job:subagent:worker": {
+        sessionId: "isolated-subagent-old",
+        updatedAt: now - 25 * 3_600_000,
+      },
+      "agent:main:cron:fresh-isolated-job": {
+        sessionId: "isolated-session-fresh",
+        updatedAt: now - 1 * 3_600_000,
+      },
+      "agent:main:cron:heartbeat-job:heartbeat": {
+        sessionId: "heartbeat-session-old",
+        updatedAt: now - 25 * 3_600_000,
       },
       "agent:main:telegram:dm:123": {
         sessionId: "regular-session",

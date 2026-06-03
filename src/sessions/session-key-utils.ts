@@ -266,6 +266,15 @@ export function isCronSessionKey(sessionKey: string | undefined | null): boolean
   return normalizeOptionalLowercaseString(parsed.rest)?.startsWith("cron:") === true;
 }
 
+/** Matches isolated cron session keys (`agent:*:cron:jobId` without `:run:`). */
+export function isIsolatedCronSessionKey(sessionKey: string | undefined | null): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return /^cron:[^:]+$/.test(parsed.rest);
+}
+
 export function isSubagentSessionKey(sessionKey: string | undefined | null): boolean {
   const raw = normalizeOptionalString(sessionKey);
   if (!raw) {
