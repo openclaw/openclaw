@@ -92,6 +92,23 @@ export function classifySessionAttention(params: {
     };
   }
 
+  // External runtimes (e.g. claude-cli) emit run.progress but do not register
+  // an embedded run handle, so activity.activeWorkKind stays undefined. Fresh
+  // progress is the authoritative signal that the session is still healthy;
+  // skipping this check would force-recover an actively streaming run while
+  // its lane has no command-queue task to release (released=0 no-op).
+  const lastProgressAgeMs = params.activity.lastProgressAgeMs;
+  if (typeof lastProgressAgeMs === "number" && lastProgressAgeMs <= params.staleMs) {
+    return {
+      eventType: "session.long_running",
+      reason:
+        params.queueDepth > 0
+          ? "queued_behind_untracked_active_progress"
+          : "untracked_active_progress",
+      classification: "long_running",
+      recoveryEligible: false,
+    };
+  }
   return {
     eventType: "session.stuck",
     reason: params.queueDepth > 0 ? "queued_work_without_active_run" : "stale_session_state",
