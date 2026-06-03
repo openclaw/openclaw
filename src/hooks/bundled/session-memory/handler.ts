@@ -24,7 +24,10 @@ import {
 import { resolveHookConfig } from "../../config.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
-import { findPreviousSessionFile, getRecentSessionContentWithResetFallback } from "./transcript.js";
+import {
+  findPreviousSessionFile,
+  getRecentSessionContentWithResetFallback,
+} from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
 
@@ -36,7 +39,7 @@ function pickDateTimePart(
 }
 
 function resolveLocalTimeZone(): string | undefined {
-  const timeZone = process.env.TZ?.trim();
+  const timeZone = process.env.TZ || ""?.trim();
   if (!timeZone) {
     return undefined;
   }
@@ -66,12 +69,22 @@ function formatLocalSessionTimestamp(date: Date): {
     timeZoneName: "short",
   }).formatToParts(date);
 
-  const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
-  const month = pickDateTimePart(parts, "month") ?? String(date.getMonth() + 1).padStart(2, "0");
-  const day = pickDateTimePart(parts, "day") ?? String(date.getDate()).padStart(2, "0");
-  const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
-  const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
-  const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
+  const year =
+    pickDateTimePart(parts, "year") ??
+    String(date.getFullYear()).padStart(4, "0");
+  const month =
+    pickDateTimePart(parts, "month") ??
+    String(date.getMonth() + 1).padStart(2, "0");
+  const day =
+    pickDateTimePart(parts, "day") ?? String(date.getDate()).padStart(2, "0");
+  const hour =
+    pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
+  const minute =
+    pickDateTimePart(parts, "minute") ??
+    String(date.getMinutes()).padStart(2, "0");
+  const second =
+    pickDateTimePart(parts, "second") ??
+    String(date.getSeconds()).padStart(2, "0");
   const timeZoneName = [...parts]
     .toReversed()
     .find((part) => part.type === "timeZoneName")
@@ -94,7 +107,8 @@ async function resolveAvailableMemoryFilename(params: {
   let suffix = 1;
 
   while (true) {
-    const filename = suffix === 1 ? `${basename}.md` : `${basename}-${suffix}.md`;
+    const filename =
+      suffix === 1 ? `${basename}.md` : `${basename}-${suffix}.md`;
     try {
       await fs.access(path.join(params.memoryDir, filename));
       suffix += 1;
@@ -115,7 +129,10 @@ function resolveDisplaySessionKey(params: {
   if (!params.cfg || !params.workspaceDir) {
     return params.sessionKey;
   }
-  const workspaceAgentId = resolveAgentIdByWorkspacePath(params.cfg, params.workspaceDir);
+  const workspaceAgentId = resolveAgentIdByWorkspacePath(
+    params.cfg,
+    params.workspaceDir,
+  );
   const parsed = parseAgentSessionKey(params.sessionKey);
   if (!workspaceAgentId || !parsed || workspaceAgentId === parsed.agentId) {
     return params.sessionKey;
@@ -135,14 +152,17 @@ export async function flushSessionMemoryWritesForTest(): Promise<void> {
   await Promise.allSettled(pendingSessionMemoryWrites);
 }
 
-async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<void> {
+async function saveSessionMemoryNow(
+  event: Parameters<HookHandler>[0],
+): Promise<void> {
   try {
     log.debug("Hook triggered for reset/new command", { action: event.action });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
     const contextWorkspaceDir =
-      typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
+      typeof context.workspaceDir === "string" &&
+      context.workspaceDir.trim().length > 0
         ? context.workspaceDir
         : undefined;
     const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
@@ -166,10 +186,9 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
 
     // Generate descriptive slug from session when explicitly enabled
     // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
-    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
-      string,
-      unknown
-    >;
+    const sessionEntry = (context.previousSessionEntry ||
+      context.sessionEntry ||
+      {}) as Record<string, unknown>;
     const currentSessionId = sessionEntry.sessionId as string;
     let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
 
@@ -216,7 +235,10 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
 
     if (sessionFile) {
       // Get recent conversation content, with fallback to rotated reset transcript.
-      sessionContent = await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+      sessionContent = await getRecentSessionContentWithResetFallback(
+        sessionFile,
+        messageCount,
+      );
       log.debug("Session content loaded", {
         length: sessionContent?.length ?? 0,
         messageCount,
@@ -224,10 +246,14 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
 
       // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
       const isTestEnv =
-        process.env.OPENCLAW_TEST_FAST === "1" ||
-        process.env.VITEST === "true" ||
-        process.env.VITEST === "1" ||
-        process.env.NODE_ENV === "test";
+        process.env.OPENCLAW_TEST_FAST ||
+        "" === "1" ||
+        process.env.VITEST ||
+        "" === "true" ||
+        process.env.VITEST ||
+        "" === "1" ||
+        process.env.NODE_ENV ||
+        "" === "test";
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
       if (sessionContent && cfg && allowLlmSlug) {
@@ -245,7 +271,11 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     }
 
     // Create filename with date and slug
-    const filename = await resolveAvailableMemoryFilename({ memoryDir, dateStr, slug });
+    const filename = await resolveAvailableMemoryFilename({
+      memoryDir,
+      dateStr,
+      slug,
+    });
     const memoryFilePath = path.join(memoryDir, filename);
     log.debug("Memory file path resolved", {
       filename,
@@ -253,7 +283,9 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     });
 
     const timeStr = localTimestamp.time;
-    const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
+    const timeZoneSuffix = localTimestamp.timeZoneName
+      ? ` ${localTimestamp.timeZoneName}`
+      : "";
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";

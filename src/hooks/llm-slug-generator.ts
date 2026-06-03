@@ -22,7 +22,10 @@ const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
 
 function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
   const configuredTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
-  if (typeof configuredTimeoutSeconds !== "number" || !Number.isFinite(configuredTimeoutSeconds)) {
+  if (
+    typeof configuredTimeoutSeconds !== "number" ||
+    !Number.isFinite(configuredTimeoutSeconds)
+  ) {
     return DEFAULT_SLUG_GENERATOR_TIMEOUT_MS;
   }
   return resolveAgentTimeoutMs({ cfg });
@@ -53,7 +56,7 @@ ${params.sessionContent.slice(0, 2000)}
 
 Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", "bug-fix"`;
 
-    const { provider, model } = resolveDefaultModelForAgent({
+    const { provider = "", model = "" } = resolveDefaultModelForAgent({
       cfg: params.cfg,
       agentId,
     });
@@ -95,14 +98,18 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
 
     return null;
   } catch (err) {
-    const message = err instanceof Error ? (err.stack ?? err.message) : String(err);
+    const message =
+      err instanceof Error ? (err.stack ?? err.message) : String(err);
     log.error(`Failed to generate slug: ${message}`);
     return null;
   } finally {
     // Clean up temporary session file
     if (tempSessionFile) {
       try {
-        await fs.rm(path.dirname(tempSessionFile), { recursive: true, force: true });
+        await fs.rm(path.dirname(tempSessionFile), {
+          recursive: true,
+          force: true,
+        });
       } catch {
         // Ignore cleanup errors
       }
