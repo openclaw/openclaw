@@ -48,6 +48,13 @@ type ToolCatalogGroup = {
   tools: ToolCatalogEntry[];
 };
 
+type PluginToolDescriptor = {
+  name: string;
+  label?: string;
+  description?: string;
+  displaySummary?: string;
+};
+
 function buildCoreGroups(): ToolCatalogGroup[] {
   // Core catalog rows come from static tool sections so profile chips remain
   // stable even before any runtime agent session exists.
@@ -106,6 +113,10 @@ function buildPluginGroups(params: {
   );
   const seenToolIds = new Set<string>();
   for (const tool of pluginTools) {
+    const descriptor = readPluginToolDescriptor(tool);
+    if (!descriptor) {
+      continue;
+    }
     const meta = getPluginToolMeta(tool);
     const pluginId = meta?.pluginId ?? "plugin";
     const groupId = `plugin:${pluginId}`;
@@ -119,19 +130,17 @@ function buildPluginGroups(params: {
         tools: [],
       } as ToolCatalogGroup);
     const ownedMetadata = meta?.pluginId
-      ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, tool.name))
+      ? pluginToolMetadata.get(buildPluginToolMetadataKey(meta.pluginId, descriptor.name))
       : undefined;
     existing.tools.push({
-      id: tool.name,
+      id: descriptor.name,
       label:
         normalizeOptionalString(ownedMetadata?.displayName) ??
-        normalizeOptionalString(tool.label) ??
-        tool.name,
+        normalizeOptionalString(descriptor.label) ??
+        descriptor.name,
       description: summarizeToolDescriptionText({
-        rawDescription:
-          ownedMetadata?.description ??
-          (typeof tool.description === "string" ? tool.description : undefined),
-        displaySummary: tool.displaySummary,
+        rawDescription: ownedMetadata?.description ?? descriptor.description,
+        displaySummary: descriptor.displaySummary,
       }),
       source: "plugin",
       pluginId,
@@ -140,7 +149,7 @@ function buildPluginGroups(params: {
       tags: ownedMetadata?.tags,
       defaultProfiles: [],
     });
-    seenToolIds.add(tool.name);
+    seenToolIds.add(descriptor.name);
     groups.set(groupId, existing);
   }
   for (const entry of activeRegistry?.tools ?? []) {
@@ -187,6 +196,41 @@ function buildPluginGroups(params: {
       Object.assign({}, group, { tools: group.tools.toSorted((a, b) => a.id.localeCompare(b.id)) }),
     )
     .toSorted((a, b) => a.label.localeCompare(b.label));
+}
+
+function readPluginToolDescriptor(tool: {
+  name: string;
+  label?: string;
+  description?: string;
+  displaySummary?: string;
+}): PluginToolDescriptor | undefined {
+  const name = readPluginToolString(tool, "name");
+  if (!name?.trim()) {
+    return undefined;
+  }
+  return {
+    name,
+    label: readPluginToolString(tool, "label"),
+    description: readPluginToolString(tool, "description"),
+    displaySummary: readPluginToolString(tool, "displaySummary"),
+  };
+}
+
+function readPluginToolString(
+  tool: {
+    name: string;
+    label?: string;
+    description?: string;
+    displaySummary?: string;
+  },
+  field: "description" | "displaySummary" | "label" | "name",
+): string | undefined {
+  try {
+    const value = tool[field];
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function buildToolsCatalogResult(params: {

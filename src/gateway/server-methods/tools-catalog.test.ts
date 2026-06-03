@@ -32,7 +32,13 @@ vi.mock("../../plugins/tools.js", () => ({
       description: "Matrix room helper\n\nACTIONS:\n- join\n- leave",
     },
   ]),
-  getPluginToolMeta: vi.fn((tool: { name: string }) => pluginToolMetaState.get(tool.name)),
+  getPluginToolMeta: vi.fn((tool: { name: string }) => {
+    try {
+      return pluginToolMetaState.get(tool.name);
+    } catch {
+      return undefined;
+    }
+  }),
 }));
 
 type RespondCall = [boolean, unknown?, { code: number; message: string }?];
@@ -164,6 +170,48 @@ describe("tools.catalog handler", () => {
       .flatMap((group) => group.tools)
       .find((tool) => tool.id === "matrix_room");
     expect(matrixRoom?.description).toBe("Summarized Matrix room helper.");
+  });
+
+  it("does not crash on unreadable plugin tool catalog descriptors", async () => {
+    vi.mocked(resolvePluginTools).mockReturnValueOnce([
+      {
+        name: "descriptor_probe",
+        get label(): string {
+          throw new Error("gateway catalog label getter exploded");
+        },
+        get description(): string {
+          throw new Error("gateway catalog description getter exploded");
+        },
+        get displaySummary(): string {
+          throw new Error("gateway catalog summary getter exploded");
+        },
+      },
+      {
+        get name(): string {
+          throw new Error("gateway catalog name getter exploded");
+        },
+        label: "Bad Name",
+        description: "bad",
+      },
+    ] as never);
+
+    const { respond, invoke } = createInvokeParams({});
+    await invoke();
+    const payload = expectCatalogPayload(respond);
+    const pluginTools = payload.groups
+      .filter((group) => group.source === "plugin")
+      .flatMap((group) => group.tools);
+
+    expect(pluginTools).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "descriptor_probe",
+          label: "descriptor_probe",
+          description: "Tool",
+        }),
+      ]),
+    );
+    expect(pluginTools.some((tool) => tool.label === "Bad Name")).toBe(false);
   });
 
   it("opts plugin tool catalog loads into gateway subagent binding", async () => {

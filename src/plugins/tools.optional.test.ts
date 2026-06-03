@@ -163,6 +163,36 @@ function createMalformedTool(name: string) {
   };
 }
 
+function createToolWithThrowingProperty(name: string, propertyName: string) {
+  const tool = makeTool(name);
+  Object.defineProperty(tool, propertyName, {
+    get() {
+      throw new Error(`${propertyName} getter exploded`);
+    },
+  });
+  return tool;
+}
+
+function createToolWithThrowingOptionalDescriptors(name: string) {
+  const tool = makeTool(name);
+  for (const propertyName of ["label", "displaySummary"]) {
+    Object.defineProperty(tool, propertyName, {
+      get() {
+        throw new Error(`${propertyName} getter exploded`);
+      },
+    });
+  }
+  return tool;
+}
+
+function createToolWithThrowingPrototype(name: string) {
+  return new Proxy(makeTool(name), {
+    getPrototypeOf() {
+      throw new Error("prototype getter exploded");
+    },
+  });
+}
+
 function installConsoleMethodSpy(method: "log" | "warn") {
   const spy = vi.fn();
   loggingState.rawConsole = {
@@ -1936,6 +1966,44 @@ describe("resolvePluginTools optional tools", () => {
       registry.diagnostics,
       "plugin tool is malformed (schema-bug): broken_tool missing parameters object",
     );
+  });
+
+  it("quarantines unreadable plugin tool descriptors before manifest policy checks", () => {
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: [
+          "bad_name",
+          "bad_description",
+          "bad_prepare",
+          "bad_execution_mode",
+          "bad_optional_descriptors",
+          "bad_prototype",
+          "valid_tool",
+        ],
+        factory: () => [
+          createToolWithThrowingProperty("bad_name", "name"),
+          createToolWithThrowingProperty("bad_description", "description"),
+          createToolWithThrowingProperty("bad_prepare", "prepareArguments"),
+          createToolWithThrowingProperty("bad_execution_mode", "executionMode"),
+          createToolWithThrowingOptionalDescriptors("bad_optional_descriptors"),
+          createToolWithThrowingPrototype("bad_prototype"),
+          makeTool("valid_tool"),
+        ],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["bad_optional_descriptors", "bad_prototype", "valid_tool"]);
+    expect(registry.diagnostics.map((diagnostic) => diagnostic.message)).toEqual([
+      "plugin tool is malformed (schema-bug): missing non-empty name",
+      "plugin tool is malformed (schema-bug): bad_description missing description string",
+      "plugin tool is malformed (schema-bug): bad_prepare unreadable prepareArguments",
+      "plugin tool is malformed (schema-bug): bad_execution_mode unreadable executionMode",
+    ]);
   });
 
   it("warns with plugin factory timing details when a factory is slow", () => {

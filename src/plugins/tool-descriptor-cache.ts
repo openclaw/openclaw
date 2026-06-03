@@ -141,23 +141,40 @@ function asJsonObject(value: unknown): JsonObject {
   return value as JsonObject;
 }
 
+function readToolProperty(tool: AnyAgentTool, key: string): unknown {
+  try {
+    return (tool as Record<string, unknown>)[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readToolString(tool: AnyAgentTool, key: string): string | undefined {
+  const value = readToolProperty(tool, key);
+  return typeof value === "string" ? value : undefined;
+}
+
 export function capturePluginToolDescriptor(params: {
   pluginId: string;
   tool: AnyAgentTool;
+  toolName: string;
   optional: boolean;
 }): CachedPluginToolDescriptor {
-  const label = (params.tool as { label?: unknown }).label;
+  const label = readToolString(params.tool, "label");
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
+  const description = readToolString(params.tool, "description") ?? "";
+  const displaySummary = readToolString(params.tool, "displaySummary");
+  const parameters = readToolProperty(params.tool, "parameters");
   return {
-    ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
+    ...(displaySummary ? { displaySummary } : {}),
     optional: params.optional,
     descriptor: {
-      name: params.tool.name,
+      name: params.toolName,
       ...(title ? { title } : {}),
-      description: params.tool.description,
-      inputSchema: asJsonObject(params.tool.parameters),
+      description,
+      inputSchema: asJsonObject(parameters),
       owner: { kind: "plugin", pluginId: params.pluginId },
-      executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.tool.name },
+      executor: { kind: "plugin", pluginId: params.pluginId, toolName: params.toolName },
     },
   };
 }
