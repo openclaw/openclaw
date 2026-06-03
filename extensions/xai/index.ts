@@ -14,7 +14,7 @@ import {
   createCodeExecutionToolDefinition,
 } from "./code-execution-tool-shared.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
-import { buildXaiProvider } from "./provider-catalog.js";
+import { buildLiveXaiProvider, buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
@@ -176,7 +176,23 @@ export default defineSingleProviderPluginEntry({
     ],
     extraAuth: [createXaiOAuthAuthMethod(), createXaiDeviceCodeAuthMethod()],
     catalog: {
-      buildProvider: buildXaiProvider,
+      order: "simple",
+      run: async (ctx) => {
+        const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        const apiKey = auth.apiKey ?? ctx.resolveProviderApiKey(PROVIDER_ID).apiKey;
+        if (!apiKey) {
+          return null;
+        }
+        return {
+          provider: await buildLiveXaiProvider({
+            apiKey,
+            discoveryApiKey: auth.discoveryApiKey,
+          }),
+        };
+      },
+      staticRun: async () => ({
+        provider: buildXaiProvider(),
+      }),
     },
     ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),

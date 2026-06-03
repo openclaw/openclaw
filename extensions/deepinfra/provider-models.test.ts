@@ -205,12 +205,11 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
       expect(mockFetch).toHaveBeenCalledOnce();
       const [fetchUrl, fetchInit] = requireFirstFetchCall(mockFetch);
       const fetchSignal = Reflect.get(fetchInit ?? {}, "signal");
+      const fetchHeaders = Reflect.get(fetchInit ?? {}, "headers");
       expect(fetchUrl).toBe(DEEPINFRA_MODELS_URL);
       expect(fetchSignal).toBeInstanceOf(AbortSignal);
-      expect(fetchInit).toEqual({
-        headers: { Accept: "application/json" },
-        signal: fetchSignal,
-      });
+      expect(fetchHeaders).toBeInstanceOf(Headers);
+      expect((fetchHeaders as Headers).get("Accept")).toBe("application/json");
       expect(models).toEqual(
         expectedLiveChatCatalog([
           {

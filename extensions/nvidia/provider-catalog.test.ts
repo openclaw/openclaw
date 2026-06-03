@@ -95,12 +95,14 @@ describe("nvidia provider catalog", () => {
       compat: { requiresStringContent: true },
     });
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
-      url: NVIDIA_FEATURED_MODELS_URL,
-      timeoutMs: 10_000,
-      requireHttps: true,
-      policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
-      lookupFn: expect.any(Function),
       auditContext: "nvidia-featured-model-catalog",
+      init: { headers: expect.any(Headers) },
+      lookupFn: expect.any(Function),
+      policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
+      signal: undefined,
+      timeoutMs: 10_000,
+      url: NVIDIA_FEATURED_MODELS_URL,
+      requireHttps: true,
     });
     expect(release).toHaveBeenCalledOnce();
   });

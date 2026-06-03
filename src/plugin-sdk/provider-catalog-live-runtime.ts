@@ -1,7 +1,11 @@
-import { getCachedLiveCatalogValue } from "./provider-catalog-shared.js";
+import {
+  clearLiveCatalogCacheForTests,
+  getCachedLiveCatalogValue,
+} from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 import {
   fetchWithSsrFGuard,
+  type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
   type SsrFPolicy,
 } from "./ssrf-runtime.js";
@@ -13,6 +17,8 @@ export type LiveModelCatalogHeaderContext = {
   discoveryApiKey?: string;
 };
 
+export { clearLiveCatalogCacheForTests };
+
 export type FetchLiveProviderModelIdsParams = {
   providerId: string;
   endpoint: string;
@@ -23,10 +29,29 @@ export type FetchLiveProviderModelIdsParams = {
   timeoutMs?: number;
   auditContext?: string;
   policy?: SsrFPolicy;
+  lookupFn?: LookupFn;
+  requireHttps?: boolean;
   readRows?: (body: unknown) => readonly unknown[];
   readModelId?: (row: unknown) => string | undefined;
   buildRequestHeaders?: (ctx: LiveModelCatalogHeaderContext) => HeadersInit;
 };
+
+export type FetchLiveProviderModelRowsParams = Omit<FetchLiveProviderModelIdsParams, "readModelId">;
+
+export type CachedLiveProviderModelRowsParams = FetchLiveProviderModelRowsParams & {
+  ttlMs?: number;
+  cacheKeyParts?: readonly unknown[];
+};
+
+export class LiveModelCatalogHttpError extends Error {
+  readonly status: number;
+
+  constructor(providerId: string, status: number) {
+    super(`${providerId} model discovery failed: HTTP ${status}`);
+    this.name = "LiveModelCatalogHttpError";
+    this.status = status;
+  }
+}
 
 export type BuildLiveModelProviderConfigParams<T extends ModelDefinitionConfig> =
   FetchLiveProviderModelIdsParams & {
@@ -82,9 +107,9 @@ function buildHeaders(params: FetchLiveProviderModelIdsParams): Headers {
   return headers;
 }
 
-export async function fetchLiveProviderModelIds(
-  params: FetchLiveProviderModelIdsParams,
-): Promise<string[]> {
+export async function fetchLiveProviderModelRows(
+  params: FetchLiveProviderModelRowsParams,
+): Promise<readonly unknown[]> {
   const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
   const { response, release } = await fetchGuard({
     url: params.endpoint,
@@ -94,28 +119,51 @@ export async function fetchLiveProviderModelIds(
     signal: params.signal,
     timeoutMs: params.timeoutMs ?? 5_000,
     policy: params.policy ?? ssrfPolicyFromHttpBaseUrlAllowedHostname(params.endpoint),
+    ...(params.lookupFn ? { lookupFn: params.lookupFn } : {}),
+    ...(params.requireHttps !== undefined ? { requireHttps: params.requireHttps } : {}),
     auditContext: params.auditContext ?? `${params.providerId}-model-discovery`,
   });
   try {
     if (!response.ok) {
-      throw new Error(`${params.providerId} model discovery failed: HTTP ${response.status}`);
+      throw new LiveModelCatalogHttpError(params.providerId, response.status);
     }
-    const rows = (params.readRows ?? readDefaultLiveModelCatalogRows)(await response.json());
-    const readModelId = params.readModelId ?? readDefaultLiveModelId;
-    const seen = new Set<string>();
-    const modelIds: string[] = [];
-    for (const row of rows) {
-      const modelId = readModelId(row);
-      if (!modelId || seen.has(modelId)) {
-        continue;
-      }
-      seen.add(modelId);
-      modelIds.push(modelId);
-    }
-    return modelIds;
+    return (params.readRows ?? readDefaultLiveModelCatalogRows)(await response.json());
   } finally {
     await release();
   }
+}
+
+export async function getCachedLiveProviderModelRows(
+  params: CachedLiveProviderModelRowsParams,
+): Promise<readonly unknown[]> {
+  return await getCachedLiveCatalogValue({
+    keyParts: params.cacheKeyParts ?? [
+      params.providerId,
+      "model-rows",
+      params.endpoint,
+      params.discoveryApiKey ?? params.apiKey,
+    ],
+    ttlMs: params.ttlMs,
+    load: async () => await fetchLiveProviderModelRows(params),
+  });
+}
+
+export async function fetchLiveProviderModelIds(
+  params: FetchLiveProviderModelIdsParams,
+): Promise<string[]> {
+  const rows = await fetchLiveProviderModelRows(params);
+  const readModelId = params.readModelId ?? readDefaultLiveModelId;
+  const seen = new Set<string>();
+  const modelIds: string[] = [];
+  for (const row of rows) {
+    const modelId = readModelId(row);
+    if (!modelId || seen.has(modelId)) {
+      continue;
+    }
+    seen.add(modelId);
+    modelIds.push(modelId);
+  }
+  return modelIds;
 }
 
 function buildProviderConfig<T extends ModelDefinitionConfig>(

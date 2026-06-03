@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
 import {
   buildLiveModelProviderConfig,
+  clearLiveCatalogCacheForTests,
   fetchLiveProviderModelIds,
+  getCachedLiveProviderModelRows,
+  LiveModelCatalogHttpError,
   type LiveModelCatalogFetchGuard,
 } from "./provider-catalog-live-runtime.js";
-import { clearLiveCatalogCacheForTests } from "./provider-catalog-shared.js";
 import type { ModelDefinitionConfig } from "./provider-model-shared.js";
 
 function buildModel(id: string): ModelDefinitionConfig {
@@ -93,6 +95,56 @@ describe("provider-catalog-live-runtime", () => {
             : undefined,
       }),
     ).resolves.toEqual(["custom-a", "custom-b"]);
+  });
+
+  it("caches raw live model rows for provider-specific projection", async () => {
+    const { fetchGuard, fetchGuardMock } = buildFetchGuard({
+      models: [{ slug: "custom-a" }, { slug: "custom-b" }],
+    });
+
+    const first = await getCachedLiveProviderModelRows({
+      providerId: "custom",
+      endpoint: "https://provider.example.test/v1/models",
+      fetchGuard,
+      ttlMs: 60_000,
+      readRows: (body) =>
+        body && typeof body === "object" && Array.isArray((body as { models?: unknown }).models)
+          ? (body as { models: unknown[] }).models
+          : [],
+    });
+    const second = await getCachedLiveProviderModelRows({
+      providerId: "custom",
+      endpoint: "https://provider.example.test/v1/models",
+      fetchGuard,
+      ttlMs: 60_000,
+      readRows: (body) =>
+        body && typeof body === "object" && Array.isArray((body as { models?: unknown }).models)
+          ? (body as { models: unknown[] }).models
+          : [],
+    });
+
+    expect(first).toEqual([{ slug: "custom-a" }, { slug: "custom-b" }]);
+    expect(second).toEqual(first);
+    expect(fetchGuardMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws structured HTTP errors after releasing guarded fetches", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuardMock: MockedFunction<LiveModelCatalogFetchGuard> = vi.fn(async () => ({
+      response: new Response("{}", { status: 401 }),
+      finalUrl: "https://provider.example.test/v1/models",
+      release,
+    }));
+
+    const error = await fetchLiveProviderModelIds({
+      providerId: "provider",
+      endpoint: "https://provider.example.test/v1/models",
+      fetchGuard: fetchGuardMock,
+    }).catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(LiveModelCatalogHttpError);
+    expect(error).toMatchObject({ status: 401 });
+    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("caches live provider configs and falls back to static rows on failure", async () => {

@@ -1,8 +1,12 @@
 // Openai tests cover openai provider plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
+import {
+  clearLiveCatalogCacheForTests,
+  type LiveModelCatalogFetchGuard,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { buildOpenAIProvider } from "./openai-provider.js";
+import { buildOpenAILiveProviderConfig, buildOpenAIProvider } from "./openai-provider.js";
 
 const mocks = vi.hoisted(() => ({
   refreshOpenAICodexToken: vi.fn(),
@@ -117,6 +121,7 @@ function expectNoCatalogEntry(entries: unknown, id: string): void {
 
 describe("buildOpenAIProvider", () => {
   beforeEach(() => {
+    clearLiveCatalogCacheForTests();
     mocks.openAIResponsesTransportStreamFn.mockReset();
     mocks.openAIResponsesTransportStreamFn.mockImplementation(() => {
       throw new Error("unexpected native OpenAI Responses transport call");
@@ -128,7 +133,7 @@ describe("buildOpenAIProvider", () => {
     const apiKey = provider.auth.find((method) => method.id === "api-key");
 
     expect(provider.hookAliases).toEqual(["azure-openai", "azure-openai-responses"]);
-    expect(provider.catalog).toBeUndefined();
+    expect(provider.catalog).toBeDefined();
     expectFields(apiKey?.wizard, {
       choiceLabel: "OpenAI API Key",
       choiceHint: "Use your OpenAI API key directly",
@@ -136,6 +141,48 @@ describe("buildOpenAIProvider", () => {
       groupLabel: "OpenAI",
       groupHint: "ChatGPT/Codex sign-in or API key",
     });
+  });
+
+  it("filters the OpenAI API-key catalog against live model ids", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: Response.json({
+        data: [
+          { id: "gpt-5.5", object: "model" },
+          { id: "not-in-manifest", object: "model" },
+        ],
+      }),
+      finalUrl: "https://api.openai.com/v1/models",
+      release,
+    }));
+
+    const provider = await buildOpenAILiveProviderConfig({
+      apiKey: "sk-openai",
+      fetchGuard,
+    });
+
+    expect(provider.apiKey).toBe("sk-openai");
+    expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
+    expect(provider.models.map((model) => model.id)).not.toContain("not-in-manifest");
+    const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
+    expect(fetchParams?.url).toBe("https://api.openai.com/v1/models");
+    expect(fetchParams?.init?.headers).toBeInstanceOf(Headers);
+    expect((fetchParams?.init?.headers as Headers).get("Authorization")).toBe("Bearer sk-openai");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("skips live OpenAI catalog discovery for non-API-key auth", async () => {
+    const provider = buildOpenAIProvider();
+
+    await expect(
+      provider.catalog?.run({
+        resolveProviderAuth: () => ({
+          mode: "oauth",
+          apiKey: "session-token",
+          source: "profile",
+        }),
+      } as never),
+    ).resolves.toBeNull();
   });
 
   it("keeps the deprecated Codex provider builder on the public API barrel", async () => {

@@ -4,13 +4,13 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { fetchLiveProviderModelRows } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
-  fetchWithSsrFGuard,
   type LookupFn,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
 } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -150,8 +150,9 @@ async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nul
 
 async function fetchNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | null> {
   try {
-    const { response, release } = await fetchWithSsrFGuard({
-      url: NVIDIA_FEATURED_MODELS_URL,
+    const rows = await fetchLiveProviderModelRows({
+      providerId: "nvidia",
+      endpoint: NVIDIA_FEATURED_MODELS_URL,
       timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
       requireHttps: true,
       policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
@@ -160,28 +161,21 @@ async function fetchNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nu
       // the guarded fixed-host fetch on the fast path.
       lookupFn: lookupNvidiaFeaturedModelHostname,
       auditContext: "nvidia-featured-model-catalog",
+      readRows: (payload) => {
+        if (!payload || typeof payload !== "object") {
+          return [];
+        }
+        const rows = (payload as { "featured-models"?: unknown })["featured-models"];
+        return Array.isArray(rows) ? rows : [];
+      },
     });
-    try {
-      if (!response.ok) {
-        return null;
-      }
-      return parseNvidiaFeaturedModels(await response.json());
-    } finally {
-      await release();
-    }
+    return parseNvidiaFeaturedModels(rows);
   } catch {
     return null;
   }
 }
 
-function parseNvidiaFeaturedModels(payload: unknown): ModelDefinitionConfig[] | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const rows = (payload as { "featured-models"?: unknown })["featured-models"];
-  if (!Array.isArray(rows)) {
-    return null;
-  }
+function parseNvidiaFeaturedModels(rows: readonly unknown[]): ModelDefinitionConfig[] | null {
   const models = rows
     .slice(0, FEATURED_MODEL_MAX_ROWS)
     .map(parseNvidiaFeaturedModel)

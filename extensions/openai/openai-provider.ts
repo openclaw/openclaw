@@ -5,6 +5,11 @@ import type {
 } from "openclaw/plugin-sdk/plugin-entry";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
+  buildLiveModelProviderConfig,
+  type LiveModelCatalogFetchGuard,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
   normalizeProviderId,
@@ -22,6 +27,7 @@ import {
   buildOpenAIChatGPTAuthMethods,
   buildOpenAICodexProviderHooks,
 } from "./openai-chatgpt-provider.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -32,6 +38,8 @@ import {
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "openai";
+const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
+const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CHAT_LATEST_MODEL_ID = "chat-latest";
 const OPENAI_GPT_55_MODEL_ID = "gpt-5.5";
 const OPENAI_GPT_55_PRO_MODEL_ID = "gpt-5.5-pro";
@@ -88,6 +96,36 @@ const OPENAI_MODERN_MODEL_IDS = [
   OPENAI_GPT_54_MINI_MODEL_ID,
   OPENAI_GPT_54_NANO_MODEL_ID,
 ] as const;
+
+const OPENAI_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
+  providerId: PROVIDER_ID,
+  catalog: manifest.modelCatalog.providers.openai,
+});
+
+type BuildOpenAILiveProviderConfigParams = {
+  apiKey: string;
+  discoveryApiKey?: string;
+  fetchGuard?: LiveModelCatalogFetchGuard;
+  signal?: AbortSignal;
+};
+
+export async function buildOpenAILiveProviderConfig(params: BuildOpenAILiveProviderConfigParams) {
+  return await buildLiveModelProviderConfig({
+    providerId: PROVIDER_ID,
+    endpoint: OPENAI_MODELS_ENDPOINT,
+    providerConfig: {
+      baseUrl: resolveOpenAIDefaultBaseUrl(),
+      api: "openai-responses",
+    },
+    models: OPENAI_MANIFEST_PROVIDER.models,
+    apiKey: params.apiKey,
+    discoveryApiKey: params.discoveryApiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    ttlMs: OPENAI_MODELS_CACHE_TTL_MS,
+    auditContext: "openai-model-discovery",
+  });
+}
 
 function shouldUseOpenAIResponsesTransport(params: {
   provider: string;
@@ -346,6 +384,21 @@ export function buildOpenAIProvider(): ProviderPlugin {
         },
       }),
     ],
+    catalog: {
+      order: "simple",
+      run: async (ctx) => {
+        const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        if (auth.mode !== "api_key" || !auth.apiKey) {
+          return null;
+        }
+        return {
+          provider: await buildOpenAILiveProviderConfig({
+            apiKey: auth.apiKey,
+            discoveryApiKey: auth.discoveryApiKey,
+          }),
+        };
+      },
+    },
     resolveDynamicModel: (ctx) =>
       shouldResolveDynamicModelThroughCodex(ctx)
         ? codexHooks.resolveDynamicModel?.(ctx)

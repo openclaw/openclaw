@@ -5,8 +5,13 @@ import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import {
+  clearLiveCatalogCacheForTests,
+  type LiveModelCatalogFetchGuard,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { buildLiveXaiProvider } from "./provider-catalog.js";
 import setupPlugin from "./setup-api.js";
 import {
   createXaiPayloadCaptureStream,
@@ -61,6 +66,10 @@ function requireEntry<T extends { id?: string }>(entries: T[], id: string): T {
 }
 
 describe("xai provider plugin", () => {
+  beforeEach(() => {
+    clearLiveCatalogCacheForTests();
+  });
+
   it("exposes OAuth and device-code auth choices", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
@@ -68,6 +77,33 @@ describe("xai provider plugin", () => {
     const deviceCode = provider.auth?.find((method) => method.id === "device-code");
     expect(deviceCode?.kind).toBe("device_code");
     expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
+  });
+
+  it("filters the xAI API-key catalog against live model ids", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
+      response: Response.json({
+        data: [
+          { id: "grok-4.3", object: "model" },
+          { id: "not-in-manifest", object: "model" },
+        ],
+      }),
+      finalUrl: "https://api.x.ai/v1/models",
+      release,
+    }));
+
+    const provider = await buildLiveXaiProvider({
+      apiKey: "xai-key",
+      fetchGuard,
+    });
+
+    expect(provider.apiKey).toBe("xai-key");
+    expect(provider.models.map((model) => model.id)).toContain("grok-4.3");
+    expect(provider.models.map((model) => model.id)).not.toContain("not-in-manifest");
+    const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
+    expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
+    expect((fetchParams?.init?.headers as Headers).get("Authorization")).toBe("Bearer xai-key");
+    expect(release).toHaveBeenCalledOnce();
   });
 
   it("classifies Grok usage and spending limit errors", async () => {
