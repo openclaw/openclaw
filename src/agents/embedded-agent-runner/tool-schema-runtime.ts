@@ -89,9 +89,9 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
     `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
     {
       provider: params.provider,
-      toolCount: params.tools.length,
+      toolCount: readToolListLength(params.tools),
       diagnosticCount: diagnostics.length,
-      tools: params.tools.map((tool, index) => `${index}:${tool.name}`),
+      tools: summarizeToolNames(params.tools),
       diagnostics: diagnostics.map((diagnostic) => ({
         index: diagnostic.toolIndex,
         tool: diagnostic.toolName,
@@ -100,6 +100,42 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       })),
     },
   );
+}
+
+function readToolListLength(tools: readonly unknown[]): number {
+  try {
+    return tools.length;
+  } catch {
+    return 0;
+  }
+}
+
+function readToolName(tool: unknown, index: number): string {
+  if (!tool || typeof tool !== "object") {
+    return `tool[${index}]`;
+  }
+  try {
+    const name = Reflect.get(tool, "name");
+    return typeof name === "string" && name ? name : `tool[${index}]`;
+  } catch {
+    return `tool[${index}]`;
+  }
+}
+
+function summarizeToolNames(tools: readonly unknown[]): string[] {
+  const length = readToolListLength(tools);
+  const names: string[] = [];
+  for (let index = 0; index < length; index += 1) {
+    let tool: unknown;
+    try {
+      tool = Reflect.get(tools, String(index));
+    } catch {
+      names.push(`${index}:tool[${index}]`);
+      continue;
+    }
+    names.push(`${index}:${readToolName(tool, index)}`);
+  }
+  return names;
 }
 
 function summarizeProviderToolSchemaDiagnostics(

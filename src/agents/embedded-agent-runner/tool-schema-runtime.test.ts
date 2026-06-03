@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   inspectProviderToolSchemasWithPlugin: vi.fn(),
@@ -22,6 +22,13 @@ const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } =
   await import("./tool-schema-runtime.js");
 
 describe("tool schema runtime diagnostics", () => {
+  beforeEach(() => {
+    mocks.inspectProviderToolSchemasWithPlugin.mockReset();
+    mocks.normalizeProviderToolSchemasWithPlugin.mockReset();
+    mocks.log.info.mockReset();
+    mocks.log.warn.mockReset();
+  });
+
   it("stays quiet when a provider reports no diagnostics", () => {
     mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([]);
 
@@ -80,6 +87,44 @@ describe("tool schema runtime diagnostics", () => {
         diagnostics: [
           { index: 0, tool: "alpha", violations: ["one", "two"], violationCount: 2 },
           { index: 1, tool: "beta", violations: ["one"], violationCount: 1 },
+        ],
+      },
+    );
+  });
+
+  it("logs provider diagnostics without rereading unreadable tool names", () => {
+    const unreadableName = {};
+    Object.defineProperty(unreadableName, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("tool name getter exploded");
+      },
+    });
+    mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([
+      { toolName: "tool[0]", toolIndex: 0, violations: ["tool[0].name is unreadable"] },
+    ]);
+
+    expect(() =>
+      logProviderToolSchemaDiagnostics({
+        provider: "example",
+        tools: [unreadableName] as never,
+      }),
+    ).not.toThrow();
+
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics: 1 tool for example: tool[0] (1 violation)",
+      {
+        provider: "example",
+        toolCount: 1,
+        diagnosticCount: 1,
+        tools: ["0:tool[0]"],
+        diagnostics: [
+          {
+            index: 0,
+            tool: "tool[0]",
+            violations: ["tool[0].name is unreadable"],
+            violationCount: 1,
+          },
         ],
       },
     );

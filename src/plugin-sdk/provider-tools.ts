@@ -3,6 +3,7 @@ import {
   cleanSchemaForGemini,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../agents/schema/clean-for-gemini.js";
+import { projectRuntimeToolInputSchema } from "../agents/tool-schema-projection.js";
 import { stripUnsupportedSchemaKeywords } from "../shared/schema-keyword-strip.js";
 import type {
   AnyAgentTool,
@@ -12,6 +13,166 @@ import type {
 
 // Shared provider-tool helpers for plugin-owned schema compatibility rewrites.
 export { cleanSchemaForGemini, GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS, stripUnsupportedSchemaKeywords };
+
+type ProviderToolSnapshot = {
+  readonly entries: readonly {
+    readonly source: AnyAgentTool;
+    readonly name: string;
+    readonly parameters: unknown;
+    readonly originalIndex: number;
+  }[];
+  readonly tools: AnyAgentTool[];
+  readonly diagnostics: ProviderToolSchemaDiagnostic[];
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function unreadableProviderToolDiagnostic(toolIndex: number): ProviderToolSchemaDiagnostic {
+  return {
+    toolName: `tool[${toolIndex}]`,
+    toolIndex,
+    violations: [`tool[${toolIndex}] is unreadable`],
+  };
+}
+
+function readProviderToolEntry(
+  tools: readonly AnyAgentTool[],
+  toolIndex: number,
+): { ok: true; tool: unknown } | { ok: false } {
+  try {
+    return { ok: true, tool: Reflect.get(tools, String(toolIndex)) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function readProviderToolField(
+  tool: Record<string, unknown>,
+  field: "name" | "parameters",
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: Reflect.get(tool, field) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function providerNormalizableProjectionViolations(violations: readonly string[]): string[] {
+  return violations.filter(
+    (violation) => !violation.endsWith(".$dynamicRef") && !violation.endsWith(".$dynamicAnchor"),
+  );
+}
+
+function cloneProviderToolWithParameters(
+  source: AnyAgentTool,
+  name: string,
+  parameters: unknown,
+): AnyAgentTool {
+  const clone = Object.create(Object.getPrototypeOf(source)) as AnyAgentTool;
+  const descriptors = Object.getOwnPropertyDescriptors(source);
+  Reflect.deleteProperty(descriptors, "name");
+  Reflect.deleteProperty(descriptors, "parameters");
+  Object.defineProperties(clone, descriptors);
+  Object.defineProperty(clone, "name", {
+    configurable: true,
+    enumerable: true,
+    value: name,
+    writable: true,
+  });
+  Object.defineProperty(clone, "parameters", {
+    configurable: true,
+    enumerable: true,
+    value: parameters,
+    writable: true,
+  });
+  return clone;
+}
+
+function replaceProviderToolParameters(
+  entry: ProviderToolSnapshot["entries"][number],
+  parameters: unknown,
+): AnyAgentTool {
+  return parameters === entry.parameters
+    ? entry.source
+    : cloneProviderToolWithParameters(entry.source, entry.name, parameters);
+}
+
+function snapshotProviderNormalizableTools(
+  ctx: ProviderNormalizeToolSchemasContext,
+): ProviderToolSnapshot {
+  let length: number;
+  try {
+    length = ctx.tools.length;
+  } catch {
+    return { entries: [], tools: [], diagnostics: [unreadableProviderToolDiagnostic(0)] };
+  }
+
+  const entries: ProviderToolSnapshot["entries"][number][] = [];
+  const tools: AnyAgentTool[] = [];
+  const diagnostics: ProviderToolSchemaDiagnostic[] = [];
+  for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
+    const entry = readProviderToolEntry(ctx.tools, toolIndex);
+    if (!entry.ok || !isRecord(entry.tool)) {
+      diagnostics.push(unreadableProviderToolDiagnostic(toolIndex));
+      continue;
+    }
+
+    const name = readProviderToolField(entry.tool, "name");
+    const toolName =
+      name.ok && typeof name.value === "string" && name.value ? name.value : `tool[${toolIndex}]`;
+    const descriptorViolations = name.ok ? [] : [`${toolName}.name is unreadable`];
+    if (!name.ok || typeof name.value !== "string" || !name.value) {
+      diagnostics.push({
+        toolName,
+        toolIndex,
+        violations:
+          descriptorViolations.length > 0
+            ? descriptorViolations
+            : [`${toolName}.name must be a non-empty string`],
+      });
+      continue;
+    }
+
+    const parameters = readProviderToolField(entry.tool, "parameters");
+    if (!parameters.ok) {
+      diagnostics.push({
+        toolName,
+        toolIndex,
+        violations: [`${toolName}.parameters is unreadable`],
+      });
+      continue;
+    }
+    if (parameters.value === undefined) {
+      const source = entry.tool as AnyAgentTool;
+      entries.push({ source, name: toolName, parameters: undefined, originalIndex: toolIndex });
+      tools.push(source);
+      continue;
+    }
+
+    const schemaProjection = projectRuntimeToolInputSchema(
+      parameters.value,
+      `${toolName}.parameters`,
+    );
+    const violations = providerNormalizableProjectionViolations(schemaProjection.violations);
+    if (violations.length > 0) {
+      diagnostics.push({ toolName, toolIndex, violations });
+      continue;
+    }
+
+    const source = entry.tool as AnyAgentTool;
+    entries.push({
+      source,
+      name: toolName,
+      parameters: schemaProjection.schema,
+      originalIndex: toolIndex,
+    });
+    tools.push(source);
+  }
+
+  return { entries, tools, diagnostics };
+}
 
 export function findUnsupportedSchemaKeywords(
   schema: unknown,
@@ -58,53 +219,52 @@ export function findUnsupportedSchemaKeywords(
 export function normalizeGeminiToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
+  return snapshotProviderNormalizableTools(ctx).entries.map((entry) => {
+    if (!entry.parameters || typeof entry.parameters !== "object") {
+      return entry.source;
     }
-    return {
-      ...tool,
-      parameters: cleanSchemaForGemini(tool.parameters),
-    };
+    return replaceProviderToolParameters(entry, cleanSchemaForGemini(entry.parameters));
   });
 }
 
 export function inspectGeminiToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
-      GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [{ toolName: tool.name, toolIndex, violations }];
-  });
+  const snapshot = snapshotProviderNormalizableTools(ctx);
+  return [
+    ...snapshot.diagnostics,
+    ...snapshot.entries.flatMap(({ name, parameters, originalIndex }) => {
+      const violations = findUnsupportedSchemaKeywords(
+        parameters,
+        `${name}.parameters`,
+        GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
+      );
+      if (violations.length === 0) {
+        return [];
+      }
+      return [{ toolName: name, toolIndex: originalIndex, violations }];
+    }),
+  ];
 }
 
 export function normalizeOpenAIToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
+  const snapshot = snapshotProviderNormalizableTools(ctx);
   if (!shouldApplyOpenAIToolCompat(ctx)) {
-    return ctx.tools;
+    return snapshot.diagnostics.length > 0 ? snapshot.tools : ctx.tools;
   }
-  return ctx.tools.map((tool) => {
-    if (tool.parameters == null) {
-      return {
-        ...tool,
-        parameters: normalizeOpenAIStrictCompatSchema({}),
-      };
+  return snapshot.entries.map((entry) => {
+    if (entry.parameters == null) {
+      return replaceProviderToolParameters(entry, normalizeOpenAIStrictCompatSchema({}));
     }
-    if (typeof tool.parameters !== "object") {
-      return tool;
+    if (typeof entry.parameters !== "object") {
+      return entry.source;
     }
-    return {
-      ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(tool.parameters),
-    };
+    return replaceProviderToolParameters(
+      entry,
+      normalizeOpenAIStrictCompatSchema(entry.parameters),
+    );
   });
 }
 
@@ -351,12 +511,10 @@ export function findOpenAIStrictSchemaViolations(
 export function inspectOpenAIToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  if (!shouldApplyOpenAIToolCompat(ctx)) {
-    return [];
-  }
+  const snapshot = snapshotProviderNormalizableTools(ctx);
   // Native OpenAI transports fall back to `strict: false` when any tool schema is not
   // strict-compatible, so these findings are expected for optional-heavy tool schemas.
-  return [];
+  return snapshot.diagnostics;
 }
 
 export const DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS = new Set(["anyOf", "oneOf"]);
@@ -465,34 +623,35 @@ function isStringConstVariant(entry: unknown): entry is { const: string } {
 export function normalizeDeepSeekToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): AnyAgentTool[] {
-  return ctx.tools.map((tool) => {
-    if (!tool.parameters || typeof tool.parameters !== "object") {
-      return tool;
+  return snapshotProviderNormalizableTools(ctx).entries.map((entry) => {
+    if (!entry.parameters || typeof entry.parameters !== "object") {
+      return entry.source;
     }
-    const parameters = normalizeDeepSeekSchema(tool.parameters);
-    return parameters === tool.parameters
-      ? tool
-      : {
-          ...tool,
-          parameters: parameters as TSchema,
-        };
+    return replaceProviderToolParameters(
+      entry,
+      normalizeDeepSeekSchema(entry.parameters) as TSchema,
+    );
   });
 }
 
 export function inspectDeepSeekToolSchemas(
   ctx: ProviderNormalizeToolSchemasContext,
 ): ProviderToolSchemaDiagnostic[] {
-  return ctx.tools.flatMap((tool, toolIndex) => {
-    const violations = findUnsupportedSchemaKeywords(
-      tool.parameters,
-      `${tool.name}.parameters`,
-      DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS,
-    );
-    if (violations.length === 0) {
-      return [];
-    }
-    return [{ toolName: tool.name, toolIndex, violations }];
-  });
+  const snapshot = snapshotProviderNormalizableTools(ctx);
+  return [
+    ...snapshot.diagnostics,
+    ...snapshot.entries.flatMap(({ name, parameters, originalIndex }) => {
+      const violations = findUnsupportedSchemaKeywords(
+        parameters,
+        `${name}.parameters`,
+        DEEPSEEK_UNSUPPORTED_SCHEMA_KEYWORDS,
+      );
+      if (violations.length === 0) {
+        return [];
+      }
+      return [{ toolName: name, toolIndex: originalIndex, violations }];
+    }),
+  ];
 }
 
 export type ProviderToolCompatFamily = "deepseek" | "gemini" | "openai";

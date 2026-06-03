@@ -56,6 +56,125 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     }
   });
 
+  it("quarantines unreadable provider hook tools before family normalization", () => {
+    const cases = [
+      {
+        family: "deepseek" as const,
+        provider: "deepseek",
+        modelApi: "openai-completions",
+      },
+      {
+        family: "gemini" as const,
+        provider: "google",
+        modelApi: "google",
+      },
+      {
+        family: "openai" as const,
+        provider: "openai",
+        modelApi: "openai-responses",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const hooks = buildProviderToolCompatFamilyHooks(testCase.family);
+      const unreadable = { name: "fuzzplugin_unreadable", description: "" };
+      Object.defineProperty(unreadable, "parameters", {
+        enumerable: true,
+        get() {
+          throw new Error(`${testCase.family} parameters getter exploded`);
+        },
+      });
+      const healthy = {
+        name: "healthy",
+        description: "",
+        parameters: { type: "object", properties: {} },
+      };
+      const context = {
+        provider: testCase.provider,
+        modelId: "model",
+        modelApi: testCase.modelApi,
+        model: {
+          provider: testCase.provider,
+          api: testCase.modelApi,
+          baseUrl: "https://api.openai.com/v1",
+          id: "model",
+        } as never,
+        tools: [unreadable, healthy],
+      } as never;
+
+      const normalized = hooks.normalizeToolSchemas(context);
+
+      expect(
+        normalized.map((tool) => tool.name),
+        `${testCase.family} normalized tools`,
+      ).toStrictEqual(["healthy"]);
+      expect(
+        hooks
+          .inspectToolSchemas(context)
+          .some(
+            (diagnostic) =>
+              diagnostic.toolName === "fuzzplugin_unreadable" &&
+              diagnostic.toolIndex === 0 &&
+              diagnostic.violations.includes("fuzzplugin_unreadable.parameters is unreadable"),
+          ),
+        `${testCase.family} diagnostics`,
+      ).toBe(true);
+    }
+  });
+
+  it("does not reread provider hook tool parameters while normalizing schemas", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("gemini");
+    let reads = 0;
+    const oneShot = { name: "oneshot", description: "" };
+    Object.defineProperty(oneShot, "parameters", {
+      enumerable: true,
+      get() {
+        reads += 1;
+        if (reads > 1) {
+          throw new Error("parameters getter was reread");
+        }
+        return {
+          type: "object",
+          properties: { value: { type: "string", minLength: 2 } },
+        };
+      },
+    });
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "google",
+      modelId: "gemini-2.5-pro",
+      modelApi: "google",
+      tools: [oneShot],
+    } as never);
+
+    expect(reads).toBe(1);
+    expect(normalized[0]?.parameters).toEqual({
+      type: "object",
+      properties: { value: { type: "string" } },
+    });
+  });
+
+  it("keeps provider hook tool identity when family normalization is a no-op", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const tool = {
+      name: "identity",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: { value: { type: "string" } },
+      },
+    } as never;
+
+    const normalized = hooks.normalizeToolSchemas({
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      tools: [tool],
+    } as never);
+
+    expect(normalized[0]).toBe(tool);
+  });
+
   it("normalizes canonical OpenAI Codex Responses tool schemas", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const tools = [{ name: "demo", description: "", parameters: {} }] as never;
