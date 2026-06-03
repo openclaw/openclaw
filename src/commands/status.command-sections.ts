@@ -339,6 +339,7 @@ export function buildStatusSessionsRows(params: {
     Model: sess.model ?? "unknown",
     Runtime: sess.runtime ?? "unknown",
     Tokens: params.formatTokensCompact(sess),
+    Cost: sess.estimatedCostUsd != null ? `$${sess.estimatedCostUsd.toFixed(2)}` : params.muted("—"),
     ...(params.verbose
       ? { Cache: params.formatPromptCacheCompact(sess) || params.muted("—") }
       : {}),

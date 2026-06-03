@@ -124,6 +124,7 @@ export async function buildStatusCommandReportData(
     { key: "Model", header: "Model", minWidth: 14 },
     { key: "Runtime", header: "Runtime", minWidth: 14 },
     { key: "Tokens", header: "Tokens", minWidth: 16 },
+    { key: "Cost", header: "Cost", minWidth: 10 },
     ...(params.opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
   ] satisfies TableColumn[];
   const securityAuditLines = params.securityAudit
