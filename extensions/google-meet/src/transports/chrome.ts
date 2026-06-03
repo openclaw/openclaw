@@ -416,11 +416,11 @@ function meetStatusScript(params: {
   const host = location.hostname.toLowerCase();
   const pageUrl = location.href;
   const permissionNeeded = /permission needed|microphone problem|speaker problem|allow.*(microphone|camera)|blocked.*(microphone|camera)|permission.*(microphone|camera|speaker)/i.test(permissionText);
-  let mic = findCallControlButton(/^\s*(?:(?:turn (?:off|on) microphone|(?:activar|desactivar) micrófono|(?:activer|désactiver) le micro|mikrofon (?:einschalten|ausschalten))\b|關閉麥克風|開啟麥克風|关闭麦克风|开启麦克风|マイクを(?:オン|オフ))/i);
+  let mic = findCallControlButton(/^\\s*(?:(?:turn (?:off|on) microphone|(?:activar|desactivar) micrófono|(?:activer|désactiver) le micro|mikrofon (?:einschalten|ausschalten))\\b|關閉麥克風|開啟麥克風|关闭麦克风|开启麦克风|マイクを(?:オン|オフ))/i);
   if (!mic) {
     const callControls = document.querySelector('[role="region"][aria-label="Call controls"]');
     mic = [...(callControls?.querySelectorAll('button') || [])].find((button) =>
-      /^\s*(?:(?:turn (?:off|on) microphone|(?:activar|desactivar) micrófono|(?:activer|désactiver) le micro|mikrofon (?:einschalten|ausschalten))\b|關閉麥克風|開啟麥克風|关闭麦克风|开启麦克风|マイクを(?:オン|オフ))/i.test(buttonLabel(button))
+      /^\\s*(?:(?:turn (?:off|on) microphone|(?:activar|desactivar) micrófono|(?:activer|désactiver) le micro|mikrofon (?:einschalten|ausschalten))\\b|關閉麥克風|開啟麥克風|关闭麦克风|开启麦克风|マイクを(?:オン|オフ))/i.test(buttonLabel(button))
     );
   }
   if (!readOnly && allowMicrophone && mic && /(?:turn on microphone|開啟麥克風|开启麦克风|マイクをオン|activar micrófono|activer le micro|mikrofon einschalten)/i.test(buttonLabel(mic))) {
