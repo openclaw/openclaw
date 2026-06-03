@@ -30,6 +30,10 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
     ["src/cli/models-cli.ts", "export const modelsHelp = 'models';\n"],
     ["src/cli/nodes-cli/register.ts", "export const nodesHelp = 'nodes';\n"],
     ["src/cli/program/register.maintenance.ts", "export const maintenanceHelp = 'maintenance';\n"],
+    [
+      "src/cli/program/register.status-health-sessions.ts",
+      "export const statusHealthSessionsHelp = 'sessions';\n",
+    ],
     ["src/cli/program/context.ts", "export const context = 'context';\n"],
     ["src/cli/program/help.ts", "export const help = 'help';\n"],
     ["src/cli/plugins-cli.ts", "export const pluginsHelp = 'plugins';\n"],
@@ -174,6 +178,8 @@ describe("write-cli-startup-metadata", () => {
         gateway: "Usage: openclaw gateway\n",
         models: "Usage: openclaw models\n",
         plugins: "Usage: openclaw plugins\n",
+        sessions: "Usage: openclaw sessions\n",
+        tasks: "Usage: openclaw tasks\n",
       }),
     });
 
@@ -189,6 +195,8 @@ describe("write-cli-startup-metadata", () => {
         gateway: string;
         models: string;
         plugins: string;
+        sessions: string;
+        tasks: string;
       };
     };
     expect(written.channelOptions).toContain("matrix");
@@ -205,6 +213,8 @@ describe("write-cli-startup-metadata", () => {
     expect(written.subcommandHelpText.gateway).toContain("openclaw gateway");
     expect(written.subcommandHelpText.models).toContain("openclaw models");
     expect(written.subcommandHelpText.plugins).toContain("openclaw plugins");
+    expect(written.subcommandHelpText.sessions).toContain("openclaw sessions");
+    expect(written.subcommandHelpText.tasks).toContain("openclaw tasks");
   });
 
   it("renders independent startup help snapshots concurrently", async () => {
@@ -262,6 +272,8 @@ describe("write-cli-startup-metadata", () => {
           gateway: "Usage: openclaw gateway\n",
           models: "Usage: openclaw models\n",
           plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
         };
       },
     });
@@ -310,6 +322,8 @@ describe("write-cli-startup-metadata", () => {
           gateway: "Usage: openclaw gateway\n",
           models: "Usage: openclaw models\n",
           plugins: "Usage: openclaw plugins\n",
+          sessions: "Usage: openclaw sessions\n",
+          tasks: "Usage: openclaw tasks\n",
         }),
       });
     };

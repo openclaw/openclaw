@@ -31,7 +31,14 @@ const COMMAND_HELP_RENDER_TIMEOUT_MS = 120_000;
 const COMMAND_HELP_RENDER_MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const COMMAND_HELP_RENDER_KILL_GRACE_MS = 5_000;
 const COMMAND_HELP_RENDER_CONCURRENCY = 2;
-const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = ["doctor", "gateway", "models", "plugins"] as const;
+const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = [
+  "doctor",
+  "gateway",
+  "models",
+  "plugins",
+  "sessions",
+  "tasks",
+] as const;
 const CORE_CHANNEL_ORDER = [
   "telegram",
   "whatsapp",
@@ -164,6 +171,7 @@ function resolveSubcommandHelpSourceSignature(sourceRootDir: string = rootDir): 
       path.join(sourceRootDir, "src/cli/help-format.ts"),
       path.join(sourceRootDir, "src/cli/daemon-cli/register-service-commands.ts"),
       path.join(sourceRootDir, "src/cli/program/register.maintenance.ts"),
+      path.join(sourceRootDir, "src/cli/program/register.status-health-sessions.ts"),
       path.join(sourceRootDir, "src/cli/gateway-cli.ts"),
       path.join(sourceRootDir, "src/cli/gateway-cli/register.ts"),
       path.join(sourceRootDir, "src/cli/gateway-cli/run-command.ts"),
@@ -568,18 +576,15 @@ async function renderSourceBrowserHelpText(
     `browser.outputHelp();`,
     "process.exit(0);",
   ].join("\n");
-  return await spawnText(
-    ["--import", "tsx", "--input-type=module", "--eval", inlineModule],
-    {
-      cwd: rootDir,
-      env: {
-        ...renderContext.env,
-        OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
-      },
-      failureMessage: "Failed to render source browser help",
-      timeoutMs: BROWSER_HELP_RENDER_TIMEOUT_MS,
+  return await spawnText(["--import", "tsx", "--input-type=module", "--eval", inlineModule], {
+    cwd: rootDir,
+    env: {
+      ...renderContext.env,
+      OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH: "1",
     },
-  );
+    failureMessage: "Failed to render source browser help",
+    timeoutMs: BROWSER_HELP_RENDER_TIMEOUT_MS,
+  });
 }
 
 async function renderSourceCommandHelpText(
