@@ -925,6 +925,8 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     if (detailLimit < 8) {
       return undefined;
     }
+    // Keep the stable tool label/icon visible while trimming volatile command
+    // detail; this reduces progress draft edit churn in chat UIs.
     return removeUnbalancedInlineBackticks(
       `${prefix}${compactProgressLineDetail(detail, detailLimit)}`,
     );
@@ -982,6 +984,7 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
 }
 
 export function normalizeChannelProgressDraftLineIdentity(
+  /** Progress line whose duplicate/update identity should be normalized. */
   line: string | ChannelProgressDraftLine | undefined,
 ): string {
   const text = typeof line === "string" ? line : line?.text;
@@ -989,8 +992,11 @@ export function normalizeChannelProgressDraftLineIdentity(
 }
 
 export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
+  /** Existing progress draft lines in display order. */
   lines: TLine[],
+  /** New or updated progress line. */
   line: TLine,
+  /** Merge limits for rolling progress drafts. */
   params: { maxLines: number },
 ): TLine[] {
   const normalized = normalizeChannelProgressDraftLineIdentity(line);
@@ -1020,11 +1026,17 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
 }
 
 export function formatChannelProgressDraftText(params: {
+  /** Channel streaming config source for progress label and bounds. */
   entry?: StreamingCompatEntry | null;
+  /** Ordered progress lines to render. */
   lines: Array<string | ChannelProgressDraftLine>;
+  /** Stable seed used when choosing automatic progress labels. */
   seed?: string;
+  /** Random source used when choosing automatic progress labels. */
   random?: () => number;
+  /** Optional formatter applied after line compaction. */
   formatLine?: (line: string) => string;
+  /** Prefix used for plain progress lines that lack their own icon. */
   bullet?: string;
 }): string {
   const rawLabel = resolveChannelProgressDraftLabel({
