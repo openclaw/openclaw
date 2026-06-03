@@ -137,8 +137,10 @@ openclaw models auth login --provider openai
 ```
 
 Use `--profile-id openai:<name>` for multiple ChatGPT/Codex OAuth accounts in
-one agent. Do not use `openai-codex:<name>` for new profiles; doctor migrates
-that older prefix to `openai:<name>`.
+one agent. Do not use `openai-codex:<name>` for new profiles. Doctor migrates
+that older prefix to a collision-free `openai:*` profile id; run
+`openclaw models auth list --provider openai` after repair before copying
+profile ids into `auth.order` or `/model ...@<profileId>`.
 
 Flow shape (PKCE):
 
