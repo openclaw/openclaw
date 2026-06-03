@@ -122,6 +122,34 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
   });
 
+  it("validates Skill Workshop revision request params", () => {
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        instructions: "Make the support files 5",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+      }),
+    ).toBe(true);
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        instructions: "",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+      }),
+    ).toBe(false);
+    expect(
+      protocol.validateSkillsProposalRequestRevisionParams({
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+        instructions: "Make the support files 5",
+        sessionKey: "agent:main:session:skill-workshop",
+        idempotencyKey: "revision-run-1",
+        hiddenPrompt: "do not accept caller-provided hidden prompts",
+      }),
+    ).toBe(false);
+  });
+
   it("can still compile every exported protocol validator", () => {
     const failures: string[] = [];
     const validators: Array<[string, ProtocolValidator]> = [];

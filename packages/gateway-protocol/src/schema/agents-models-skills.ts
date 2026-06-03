@@ -763,6 +763,28 @@ export const SkillsProposalReviseParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Starts an agent turn that revises a pending proposal from natural-language instructions. */
+export const SkillsProposalRequestRevisionParamsSchema = Type.Object(
+  {
+    agentId: Type.Optional(NonEmptyString),
+    proposalId: NonEmptyString,
+    instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
+    sessionKey: NonEmptyString,
+    sessionId: Type.Optional(NonEmptyString),
+    idempotencyKey: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+/** Chat-run acknowledgement returned after queueing a Skill Workshop revision request. */
+export const SkillsProposalRequestRevisionResultSchema = Type.Object(
+  {
+    runId: NonEmptyString,
+    status: Type.Union([Type.Literal("started"), Type.Literal("in_flight"), Type.Literal("ok")]),
+  },
+  { additionalProperties: true },
+);
+
 /** Shared approve/reject/quarantine action payload for one proposal. */
 export const SkillsProposalActionParamsSchema = Type.Object(
   {
