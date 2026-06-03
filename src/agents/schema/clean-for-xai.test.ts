@@ -123,4 +123,121 @@ describe("stripXaiUnsupportedKeywords", () => {
     expect(stripXaiUnsupportedKeywords("string")).toBe("string");
     expect(stripXaiUnsupportedKeywords(42)).toBe(42);
   });
+
+  it("does not trust source array traversal methods", () => {
+    const anyOf = [{ type: "string", maxLength: 10 }, { type: "null" }];
+    Object.defineProperty(anyOf, "map", {
+      value() {
+        throw new Error("fuzzplugin schema array map exploded");
+      },
+    });
+    const result = stripXaiUnsupportedKeywords({ anyOf }) as {
+      anyOf: Array<Record<string, unknown>>;
+    };
+
+    expect(result.anyOf).toEqual([{ type: "string" }, { type: "null" }]);
+  });
+
+  it("snapshots schema array length before reading entries", () => {
+    let lengthReads = 0;
+    const anyOf = new Proxy([{ type: "string", maxLength: 10 }, { type: "null" }], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          lengthReads += 1;
+          if (lengthReads > 1) {
+            throw new Error("fuzzplugin schema array length exploded");
+          }
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const result = stripXaiUnsupportedKeywords({ anyOf }) as {
+      anyOf: Array<Record<string, unknown>>;
+    };
+
+    expect(result.anyOf).toEqual([{ type: "string" }, { type: "null" }]);
+  });
+
+  it("preserves readable properties when a sibling schema is unreadable", () => {
+    const unreadableChild = new Proxy(
+      { type: "string", maxLength: 10 },
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin child schema ownKeys exploded");
+        },
+      },
+    );
+    const result = stripXaiUnsupportedKeywords({
+      type: "object",
+      properties: {
+        healthy: { type: "string", maxLength: 10 },
+        broken: unreadableChild,
+      },
+    }) as { properties: Record<string, unknown> };
+
+    expect(result.properties).toEqual({
+      healthy: { type: "string" },
+      broken: {},
+    });
+  });
+
+  it("preserves readable object fields when a sibling getter throws", () => {
+    const schema = {
+      type: "object",
+      maxLength: 10,
+      description: "A schema",
+    };
+    Object.defineProperty(schema, "broken", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin schema field getter exploded");
+      },
+    });
+
+    expect(stripXaiUnsupportedKeywords(schema)).toEqual({
+      type: "object",
+      description: "A schema",
+    });
+  });
+
+  it("omits unreadable scalar fields instead of replacing them with schemas", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        name: { type: "string" },
+      },
+    };
+    Object.defineProperty(schema, "required", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin required getter exploded");
+      },
+    });
+
+    expect(stripXaiUnsupportedKeywords(schema)).toEqual({
+      type: "object",
+      properties: {
+        name: { type: "string" },
+      },
+    });
+  });
+
+  it("omits unreadable schema maps without throwing", () => {
+    const properties = new Proxy(
+      {
+        healthy: { type: "string", maxLength: 10 },
+      },
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin properties ownKeys exploded");
+        },
+      },
+    );
+    const result = stripXaiUnsupportedKeywords({
+      type: "object",
+      properties,
+    }) as { properties: Record<string, unknown> };
+
+    expect(result.properties).toEqual({});
+  });
 });
