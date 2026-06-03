@@ -42,7 +42,9 @@
   min-width: 0;
   min-height: 0;
   border-left: 1px solid var(--border);
-  background: color-mix(in srgb, var(--panel) 84%, transparent);
+  background: color-mix(in srgb, var(--panel) 72%, transparent);
+  backdrop-filter: blur(16px) saturate(1.5);
+  -webkit-backdrop-filter: blur(16px) saturate(1.5);
 }
 
 .chat-workspace-rail__header {
