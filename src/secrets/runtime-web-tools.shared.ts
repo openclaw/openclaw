@@ -65,10 +65,12 @@ export type RuntimeWebProviderSelectionParams<
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
   defaults: SecretDefaults | undefined;
+  /** Defer keyless providers until credential-bearing auto-detect candidates are exhausted. */
   deferKeylessFallback: boolean;
   fallbackUsedCode: RuntimeWebWarningCode;
   noFallbackCode: RuntimeWebWarningCode;
   autoDetectSelectedCode: RuntimeWebWarningCode;
+  /** Reads the primary credential location for a provider from source config. */
   readConfiguredCredential: (params: {
     provider: TProvider;
     config: OpenClawConfig;
@@ -79,11 +81,13 @@ export type RuntimeWebProviderSelectionParams<
     config: OpenClawConfig;
     toolConfig: TToolConfig;
   }) => { path: string; value: unknown } | undefined;
+  /** Resolves inline/env/SecretRef credentials and reports the winning source. */
   resolveSecretInput: (params: {
     value: unknown;
     path: string;
     envVars: string[];
   }) => Promise<SecretResolutionResult<TSource>>;
+  /** Writes the selected credential into the resolved runtime config snapshot. */
   setResolvedCredential: (params: {
     resolvedConfig: OpenClawConfig;
     provider: TProvider;
@@ -232,6 +236,7 @@ export type ResolveRuntimeWebProviderSurfaceParams<
   invalidAutoDetectCode: RuntimeWebWarningCode;
   sourceConfig: OpenClawConfig;
   context: ResolverContext;
+  /** Bundled plugin id already known from caller context, avoiding duplicate manifest lookup. */
   configuredBundledPluginIdHint?: string;
   resolveProviders: (params: { configuredBundledPluginId?: string }) => Promise<TProvider[]>;
   sortProviders: (providers: TProvider[]) => TProvider[];
