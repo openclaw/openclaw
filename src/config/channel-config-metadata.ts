@@ -6,6 +6,10 @@ type ChannelMetadataRecord = ChannelUiMetadata & {
   originRank: number;
 };
 
+type PluginMetadataRecord = PluginUiMetadata & {
+  originRank: number;
+};
+
 const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   config: 0,
   workspace: 1,
@@ -13,28 +17,77 @@ const PLUGIN_ORIGIN_RANK: Readonly<Record<PluginOrigin, number>> = {
   bundled: 3,
 };
 
-export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
-  const deduped = new Map<
-    string,
-    PluginUiMetadata & {
-      originRank: number;
-    }
-  >();
+function collectPluginSchemaMetadataRecord(
+  record: PluginManifestRegistry["plugins"][number],
+  deduped: Map<string, PluginMetadataRecord>,
+): void {
+  const current = deduped.get(record.id);
+  const nextRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+  if (current && current.originRank <= nextRank) {
+    return;
+  }
+  deduped.set(record.id, {
+    id: record.id,
+    name: record.name,
+    description: record.description,
+    configUiHints: record.configUiHints,
+    configSchema: record.configSchema,
+    originRank: nextRank,
+  });
+}
 
-  for (const record of registry.plugins) {
-    const current = deduped.get(record.id);
-    const nextRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
-    if (current && current.originRank <= nextRank) {
+function collectChannelSchemaMetadataRecord(
+  record: PluginManifestRegistry["plugins"][number],
+  byChannelId: Map<string, ChannelMetadataRecord>,
+): void {
+  const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
+  const rootLabel = record.channelCatalogMeta?.label;
+  const rootDescription = record.channelCatalogMeta?.blurb;
+
+  for (const channelId of record.channels) {
+    const current = byChannelId.get(channelId);
+    if (!current || originRank <= current.originRank) {
+      byChannelId.set(channelId, {
+        id: channelId,
+        label: rootLabel ?? current?.label,
+        description: rootDescription ?? current?.description,
+        configSchema: current?.configSchema,
+        configUiHints: current?.configUiHints,
+        originRank,
+      });
+    }
+  }
+
+  for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
+    const current = byChannelId.get(channelId);
+    if (
+      current &&
+      current.originRank < originRank &&
+      (current.configSchema !== undefined || current.configUiHints !== undefined)
+    ) {
       continue;
     }
-    deduped.set(record.id, {
-      id: record.id,
-      name: record.name,
-      description: record.description,
-      configUiHints: record.configUiHints,
-      configSchema: record.configSchema,
-      originRank: nextRank,
+    byChannelId.set(channelId, {
+      id: channelId,
+      label: channelConfig.label ?? rootLabel ?? current?.label,
+      description: channelConfig.description ?? rootDescription ?? current?.description,
+      configSchema: channelConfig.schema,
+      configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
+      originRank,
     });
+  }
+}
+
+export function collectPluginSchemaMetadata(registry: PluginManifestRegistry): PluginUiMetadata[] {
+  const deduped = new Map<string, PluginMetadataRecord>();
+
+  for (const record of registry.plugins) {
+    try {
+      collectPluginSchemaMetadataRecord(record, deduped);
+    } catch {
+      // Treat manifest rows as plugin-owned input. One unreadable row must not
+      // block schema metadata for other configured plugins/channels.
+    }
   }
 
   return [...deduped.values()]
@@ -48,41 +101,11 @@ export function collectChannelSchemaMetadata(
   const byChannelId = new Map<string, ChannelMetadataRecord>();
 
   for (const record of registry.plugins) {
-    const originRank = PLUGIN_ORIGIN_RANK[record.origin] ?? Number.MAX_SAFE_INTEGER;
-    const rootLabel = record.channelCatalogMeta?.label;
-    const rootDescription = record.channelCatalogMeta?.blurb;
-
-    for (const channelId of record.channels) {
-      const current = byChannelId.get(channelId);
-      if (!current || originRank <= current.originRank) {
-        byChannelId.set(channelId, {
-          id: channelId,
-          label: rootLabel ?? current?.label,
-          description: rootDescription ?? current?.description,
-          configSchema: current?.configSchema,
-          configUiHints: current?.configUiHints,
-          originRank,
-        });
-      }
-    }
-
-    for (const [channelId, channelConfig] of Object.entries(record.channelConfigs ?? {})) {
-      const current = byChannelId.get(channelId);
-      if (
-        current &&
-        current.originRank < originRank &&
-        (current.configSchema !== undefined || current.configUiHints !== undefined)
-      ) {
-        continue;
-      }
-      byChannelId.set(channelId, {
-        id: channelId,
-        label: channelConfig.label ?? rootLabel ?? current?.label,
-        description: channelConfig.description ?? rootDescription ?? current?.description,
-        configSchema: channelConfig.schema,
-        configUiHints: channelConfig.uiHints as ChannelUiMetadata["configUiHints"],
-        originRank,
-      });
+    try {
+      collectChannelSchemaMetadataRecord(record, byChannelId);
+    } catch {
+      // Treat manifest rows as plugin-owned input. One unreadable row must not
+      // block schema metadata for other configured plugins/channels.
     }
   }
 
