@@ -1,3 +1,7 @@
+import {
+  readClientToolFunctionSnapshot,
+  type ClientToolFunctionSnapshot,
+} from "../agent-tool-definition-adapter.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { ClientToolDefinition } from "./run/params.js";
 
@@ -20,13 +24,20 @@ function addName(names: Set<string>, value: unknown): void {
 export function collectAllowedToolNames(params: {
   tools: AgentTool[];
   clientTools?: ClientToolDefinition[];
+  clientToolSnapshots?: readonly ClientToolFunctionSnapshot[];
 }): Set<string> {
   const names = new Set<string>();
   for (const tool of params.tools) {
     addName(names, tool.name);
   }
-  for (const tool of params.clientTools ?? []) {
-    addName(names, tool.function?.name);
+  const clientSnapshots =
+    params.clientToolSnapshots ??
+    (params.clientTools ?? []).flatMap((tool) => {
+      const snapshot = readClientToolFunctionSnapshot(tool);
+      return snapshot ? [snapshot] : [];
+    });
+  for (const tool of clientSnapshots) {
+    addName(names, tool.name);
   }
   return names;
 }

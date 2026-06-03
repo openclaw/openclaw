@@ -23,6 +23,11 @@ import { normalizeToolName } from "./tool-policy.js";
 import { jsonResult, payloadTextResult } from "./tools/common.js";
 
 type AnyAgentTool = AgentTool;
+export type ClientToolFunctionSnapshot = {
+  name: string;
+  description?: string;
+  parameters?: unknown;
+};
 type BeforeToolCallPreparingTool = AnyAgentTool & {
   prepareBeforeToolCallParams?: (
     params: unknown,
@@ -305,7 +310,8 @@ function finalizeToolParamsBeforeExecute(params: {
 export const CLIENT_TOOL_NAME_CONFLICT_PREFIX = "client tool name conflict:";
 
 export function findClientToolNameConflicts(params: {
-  tools: ClientToolDefinition[];
+  tools?: readonly ClientToolDefinition[];
+  toolSnapshots?: readonly ClientToolFunctionSnapshot[];
   existingToolNames?: Iterable<string>;
 }): string[] {
   const existingNormalized = new Set<string>();
@@ -318,11 +324,9 @@ export function findClientToolNameConflicts(params: {
 
   const conflicts = new Set<string>();
   const seenClientNames = new Map<string, string>();
-  for (const tool of params.tools) {
-    const rawName = (tool.function?.name ?? "").trim();
-    if (!rawName) {
-      continue;
-    }
+  const snapshots = params.toolSnapshots ?? snapshotClientToolDefinitions(params.tools ?? []);
+  for (const snapshot of snapshots) {
+    const rawName = snapshot.name.trim();
     const normalizedName = normalizeToolName(rawName);
     if (existingNormalized.has(normalizedName)) {
       conflicts.add(rawName);
@@ -477,15 +481,60 @@ function coerceParamsRecord(value: unknown): Record<string, unknown> {
   return {};
 }
 
+function readClientToolField<T>(read: () => T): { ok: true; value: T } | { ok: false } {
+  try {
+    return { ok: true, value: read() };
+  } catch {
+    return { ok: false };
+  }
+}
+
+export function readClientToolFunctionSnapshot(
+  tool: ClientToolDefinition,
+): ClientToolFunctionSnapshot | null {
+  const functionRead = readClientToolField(() => tool.function);
+  if (!functionRead.ok || !functionRead.value || typeof functionRead.value !== "object") {
+    return null;
+  }
+  const func = functionRead.value;
+  const nameRead = readClientToolField(() => func.name);
+  if (!nameRead.ok || typeof nameRead.value !== "string") {
+    return null;
+  }
+  if (!nameRead.value.trim()) {
+    return null;
+  }
+  const descriptionRead = readClientToolField(() => func.description);
+  const parametersRead = readClientToolField(() => func.parameters);
+  if (!parametersRead.ok) {
+    return null;
+  }
+  return {
+    name: nameRead.value,
+    ...(descriptionRead.ok && typeof descriptionRead.value === "string"
+      ? { description: descriptionRead.value }
+      : {}),
+    parameters: parametersRead.value,
+  };
+}
+
+export function snapshotClientToolDefinitions(
+  tools: readonly ClientToolDefinition[],
+): ClientToolFunctionSnapshot[] {
+  return tools.flatMap((tool) => {
+    const snapshot = readClientToolFunctionSnapshot(tool);
+    return snapshot ? [snapshot] : [];
+  });
+}
+
 // Convert client tools (OpenResponses hosted tools) to ToolDefinition format
 // These tools are intercepted to return a "pending" result instead of executing
-export function toClientToolDefinitions(
-  tools: ClientToolDefinition[],
+export function toClientToolDefinitionsFromSnapshots(
+  tools: readonly ClientToolFunctionSnapshot[],
   onClientToolCall?: ClientToolCallRecorder,
   hookContext?: HookContext,
 ): ToolDefinition[] {
-  return tools.map((tool) => {
-    const func = tool.function;
+  return tools.map((func) => {
     return {
       name: func.name,
       label: func.name,
@@ -544,4 +593,16 @@ export function toClientToolDefinitions(
       },
     } satisfies ToolDefinition;
   });
+}
+
+export function toClientToolDefinitions(
+  tools: readonly ClientToolDefinition[],
+  onClientToolCall?: ClientToolCallRecorder,
+  hookContext?: HookContext,
+): ToolDefinition[] {
+  return toClientToolDefinitionsFromSnapshots(
+    snapshotClientToolDefinitions(tools),
+    onClientToolCall,
+    hookContext,
+  );
 }

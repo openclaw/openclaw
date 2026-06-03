@@ -34,6 +34,31 @@ describe("tool name allowlists", () => {
     expect([...names]).toEqual(["read", "memory_search", "image_generate"]);
   });
 
+  it("skips unreadable client tool descriptors while collecting allowlists", () => {
+    const hostileTool = {
+      type: "function",
+      get function(): ClientToolDefinition["function"] {
+        throw new Error("client allowlist function getter exploded");
+      },
+    } as unknown as ClientToolDefinition;
+
+    const names = collectAllowedToolNames({
+      tools: [createStubTool("read")],
+      clientTools: [
+        hostileTool,
+        {
+          type: "function",
+          function: {
+            name: "client_pick_file",
+            parameters: { type: "object", properties: {} },
+          },
+        },
+      ],
+    });
+
+    expect([...names]).toEqual(["read", "client_pick_file"]);
+  });
+
   it("builds a stable agent session allowlist from custom tool names", () => {
     const allowlist = toSessionToolAllowlist(new Set(["write", "read", "read", "edit"]));
 

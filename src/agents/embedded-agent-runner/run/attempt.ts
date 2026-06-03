@@ -93,7 +93,8 @@ import {
 import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
-  toClientToolDefinitions,
+  snapshotClientToolDefinitions,
+  toClientToolDefinitionsFromSnapshots,
 } from "../../agent-tool-definition-adapter.js";
 import {
   createOpenClawCodingTools,
@@ -1441,6 +1442,7 @@ export async function runEmbeddedAttempt(
         }),
     });
     const clientTools = toolsEnabled && !isRawModelRun ? params.clientTools : undefined;
+    const clientToolSnapshots = clientTools ? snapshotClientToolDefinitions(clientTools) : [];
     const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.disableTools || isRawModelRun,
@@ -1459,7 +1461,7 @@ export async function runEmbeddedAttempt(
           runtime: bundleMcpSessionRuntime,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ...clientToolSnapshots.map((tool) => tool.name),
           ],
         })
       : undefined;
@@ -1474,7 +1476,7 @@ export async function runEmbeddedAttempt(
           cfg: params.config,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ...clientToolSnapshots.map((tool) => tool.name),
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
           ],
         })
@@ -1657,6 +1659,7 @@ export async function runEmbeddedAttempt(
       visibleTools: effectiveTools,
       uncompactedTools: uncompactedEffectiveTools,
       clientTools,
+      clientToolSnapshots,
       catalogRegistered: toolSearch.catalogRegistered,
       catalogToolCount: toolSearch.catalogToolCount,
       controlsEnabled: toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun,
@@ -2152,15 +2155,15 @@ export async function runEmbeddedAttempt(
           Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
       });
       const clientToolNameConflicts = findClientToolNameConflicts({
-        tools: clientTools ?? [],
+        toolSnapshots: clientToolSnapshots,
         existingToolNames: [...coreBuiltinToolNames, ...AGENT_RESERVED_TOOL_NAMES],
       });
       if (clientToolNameConflicts.length > 0) {
         throw createClientToolNameConflictError(clientToolNameConflicts);
       }
       let clientToolDefs = clientTools
-        ? toClientToolDefinitions(
-            clientTools,
+        ? toClientToolDefinitionsFromSnapshots(
+            clientToolSnapshots,
             {
               reserve: reserveClientToolCallSlot,
               complete: (toolCallId, toolName, toolParams) => {

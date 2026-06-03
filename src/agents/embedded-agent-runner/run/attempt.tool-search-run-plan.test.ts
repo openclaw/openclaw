@@ -92,10 +92,17 @@ describe("buildToolSearchRunPlan", () => {
   });
 
   it("counts explicitly allowlisted client tools before they are cataloged later", () => {
+    const hostileTool = {
+      type: "function",
+      get function(): { name: string; parameters: unknown } {
+        throw new Error("client Tool Search function getter exploded");
+      },
+    };
     const plan = buildToolSearchRunPlan({
       visibleTools: [{ name: "tool_search_code" }] as never,
       uncompactedTools: [{ name: "tool_search_code" }] as never,
       clientTools: [
+        hostileTool as never,
         {
           type: "function",
           function: {

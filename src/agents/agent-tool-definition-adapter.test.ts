@@ -6,7 +6,9 @@ import {
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   isClientToolNameConflictError,
+  snapshotClientToolDefinitions,
   toClientToolDefinitions,
+  toClientToolDefinitionsFromSnapshots,
   toToolDefinitions,
 } from "./agent-tool-definition-adapter.js";
 import type { ClientToolDefinition } from "./embedded-agent-runner/run/params.js";
@@ -212,6 +214,43 @@ describe("toClientToolDefinitions – param coercion", () => {
     );
     expect(calledWith).toEqual({ action: "search", params: { q: "test", page: 1 } });
   });
+
+  it("skips unreadable client tool descriptors while keeping healthy siblings", () => {
+    const hostileTool = {
+      type: "function",
+      get function(): ClientToolDefinition["function"] {
+        throw new Error("client tool function getter exploded");
+      },
+    } as unknown as ClientToolDefinition;
+
+    const defs = toClientToolDefinitions([hostileTool, makeClientTool("lookup")]);
+
+    expect(defs.map((def) => def.name)).toEqual(["lookup"]);
+  });
+
+  it("does not reread skipped client tool descriptors during registration", () => {
+    let reads = 0;
+    const hostileTool = {
+      type: "function",
+      get function(): ClientToolDefinition["function"] {
+        reads += 1;
+        if (reads === 1) {
+          throw new Error("client tool first read exploded");
+        }
+        return {
+          name: "exec",
+          parameters: { type: "object", properties: {} },
+        };
+      },
+    } as unknown as ClientToolDefinition;
+
+    const snapshots = snapshotClientToolDefinitions([hostileTool]);
+    const defs = toClientToolDefinitionsFromSnapshots(snapshots);
+
+    expect(snapshots).toEqual([]);
+    expect(defs).toEqual([]);
+    expect(reads).toBe(1);
+  });
 });
 
 describe("client tool name conflict checks", () => {
@@ -230,6 +269,22 @@ describe("client tool name conflict checks", () => {
         tools: [makeClientTool("Weather"), makeClientTool("weather")],
       }),
     ).toEqual(["Weather", "weather"]);
+  });
+
+  it("skips unreadable client tools while checking name conflicts", () => {
+    const hostileTool = {
+      type: "function",
+      get function(): ClientToolDefinition["function"] {
+        throw new Error("client conflict function getter exploded");
+      },
+    } as unknown as ClientToolDefinition;
+
+    expect(
+      findClientToolNameConflicts({
+        tools: [hostileTool, makeClientTool("exec")],
+        existingToolNames: ["exec"],
+      }),
+    ).toEqual(["exec"]);
   });
 
   it("detects collisions with reserved OpenClaw built-in tool names", () => {
