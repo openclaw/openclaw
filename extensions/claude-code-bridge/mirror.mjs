@@ -19,16 +19,36 @@
 //   - Deterministic (no random hash) so re-runs replace cleanly
 
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
 const HOME = os.homedir();
+const OPENCLAW_HOME = process.env.OPENCLAW_HOME ?? path.join(HOME, ".openclaw");
+const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
 const PROJECTS_DIR = path.join(HOME, ".claude", "projects");
-const VAULT_DIR = path.join(HOME, ".openclaw", "wiki", "main");
+const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+function readInstanceIdFromConfig() {
+  const override = process.env.BENCH_INSTANCE_ID;
+  if (typeof override === "string" && INSTANCE_ID_PATTERN.test(override)) {
+    return override;
+  }
+  try {
+    const raw = readFileSync(OPENCLAW_CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    const value = parsed?.instanceId;
+    return typeof value === "string" && INSTANCE_ID_PATTERN.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+const VAULT_NAME = readInstanceIdFromConfig() ?? "main";
+const VAULT_DIR = path.join(OPENCLAW_HOME, "wiki", VAULT_NAME);
 const SOURCES_DIR = path.join(VAULT_DIR, "sources");
 const LOCK_PATH = path.join(VAULT_DIR, ".openclaw-wiki", "locks", "claude-code-mirror.lock");
-const LOG_PATH = path.join(HOME, ".openclaw", "logs", "claude-code-mirror.log");
+const LOG_PATH = path.join(OPENCLAW_HOME, "logs", "claude-code-mirror.log");
 const FILE_PREFIX = "claude-code-";
 
 const MAX_FILE_BYTES = 256 * 1024; // skip giant memory files

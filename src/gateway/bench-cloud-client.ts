@@ -87,7 +87,14 @@ function trimTrailingSlash(value: string): string {
 }
 
 function resolveUrl(config: BenchCloudBridgeConfig, pathOrUrl: string): string {
-  return new URL(pathOrUrl, `${trimTrailingSlash(config.apiBaseUrl)}/`).toString();
+  const baseUrl = new URL(`${trimTrailingSlash(config.apiBaseUrl)}/`);
+  const resolved = new URL(pathOrUrl, baseUrl);
+  if (resolved.origin !== baseUrl.origin) {
+    throw new BenchCloudBridgeError("Bench cloud status URL must stay on the configured API origin", {
+      code: "status_url_origin",
+    });
+  }
+  return resolved.toString();
 }
 
 async function parseJsonResponse(response: Response): Promise<unknown> {
@@ -128,8 +135,13 @@ function assertTurnCreateResponse(body: unknown): BenchCloudCliTurnCreateRespons
   if (
     record.dispatch === "remote-brain" &&
     record.runtime === "remote-brain" &&
+    typeof record.cloudTurnId === "string" &&
     typeof record.directiveId === "string" &&
-    typeof record.statusUrl === "string"
+    typeof record.statusUrl === "string" &&
+    typeof record.status === "string" &&
+    typeof record.runId === "string" &&
+    typeof record.agentId === "string" &&
+    typeof record.instanceId === "string"
   ) {
     return record as BenchCloudCliTurnCreateResponse;
   }

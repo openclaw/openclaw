@@ -37,7 +37,8 @@ import os from "node:os";
 import path from "node:path";
 
 const HOME = os.homedir();
-const OPENCLAW_CONFIG_PATH = path.join(HOME, ".openclaw", "openclaw.json");
+const OPENCLAW_HOME = process.env.OPENCLAW_HOME ?? path.join(HOME, ".openclaw");
+const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
 
 const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
 
@@ -66,8 +67,8 @@ function readInstanceIdFromConfig() {
 
 const INSTANCE_ID = readInstanceIdFromConfig();
 const VAULT_NAME = INSTANCE_ID ?? "main";
-const VAULT_DIR = path.join(HOME, ".openclaw", "wiki", VAULT_NAME);
-const STATE_DIR = path.join(HOME, ".openclaw", "state");
+const VAULT_DIR = path.join(OPENCLAW_HOME, "wiki", VAULT_NAME);
+const STATE_DIR = path.join(OPENCLAW_HOME, "state");
 // State is keyed per-vault so switching instanceId doesn't re-POST the whole
 // previous vault; an unset-then-set transition looks like a fresh sync, which
 // is the correct behavior for the cloud-side `sourceInstanceId` tagging.
@@ -75,7 +76,7 @@ const STATE_PATH = path.join(
   STATE_DIR,
   INSTANCE_ID ? `wiki-mirror.${INSTANCE_ID}.json` : "wiki-mirror.json",
 );
-const LOG_DIR = path.join(HOME, ".openclaw", "logs");
+const LOG_DIR = path.join(OPENCLAW_HOME, "logs");
 const LOG_PATH = path.join(LOG_DIR, "wiki-mirror.log");
 
 const INGEST_URL = process.env.BENCH_WIKI_INGEST_URL ?? "https://benchagi.com/api/v1/wiki/ingest";

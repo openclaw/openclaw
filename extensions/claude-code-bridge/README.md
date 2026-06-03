@@ -9,7 +9,7 @@ Four hand-authored ESM files and one launchd template, no build step, no opencla
 | File                              | Role                                                                                                                                              |
 | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `serve.mjs`                       | Stdio MCP server. Registers 12 tools. Spawned by Claude Code via `mcpServers` config.                                                             |
-| `mirror.mjs`                      | One-shot local mirror: copies Claude Code project memory files into `~/.openclaw/wiki/main/sources/claude-code-*.md` as bridge-style source pages. |
+| `mirror.mjs`                      | One-shot local mirror: copies Claude Code project memory files into the active wiki vault (`~/.openclaw/wiki/{instanceId}` or `main`) as bridge-style source pages. |
 | `cloud-mirror.mjs`                | Long-running cloud mirror daemon: pushes local wiki deltas to the configured Bench ingest endpoint.                                                |
 | `statusline.mjs`                  | Fast (<100ms) filesystem-based status string for Claude Code's `statusLine` command. Never invokes the openclaw CLI.                              |
 | `ai.openclaw.wiki-mirror.plist.template` | LaunchAgent template for `cloud-mirror.mjs`.                                                                                               |
@@ -43,7 +43,7 @@ All prefixed `openclaw_`:
 | `skill_list`        | gateway `skills.status`                                                                |
 | `wiki_search`       | gateway `wiki.search`                                                                  |
 | `wiki_get`          | gateway `wiki.get`                                                                     |
-| `wiki_inbox_append` | direct filesystem append to `~/.openclaw/wiki/main/inbox.md` (60 s dedup window)       |
+| `wiki_inbox_append` | direct filesystem append to the active wiki vault inbox (60 s dedup window)            |
 | `wiki_status`       | gateway `wiki.status`                                                                  |
 | `agent_handoff`     | gateway `sessions.create` (new session + initial brief, with heartbeat-window warning) |
 | `agent_send`        | gateway `sessions.send` (follow-up to existing sessionKey)                             |

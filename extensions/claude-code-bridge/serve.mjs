@@ -5,7 +5,7 @@
 
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { promises as fs } from "node:fs";
+import { promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -20,6 +20,27 @@ const DEFAULT_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL ?? "http://127.0.0.
 const DEFAULT_AUTOSTART = process.env.OPENCLAW_BRIDGE_AUTOSTART !== "false";
 const DEFAULT_WARMUP_S = Number(process.env.OPENCLAW_BRIDGE_WARMUP_SECONDS ?? "5");
 const DEFAULT_OPENCLAW_BIN = process.env.OPENCLAW_BIN ?? "openclaw";
+const OPENCLAW_HOME = process.env.OPENCLAW_HOME ?? path.join(os.homedir(), ".openclaw");
+const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
+const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+function readInstanceIdFromConfig() {
+  const override = process.env.BENCH_INSTANCE_ID;
+  if (typeof override === "string" && INSTANCE_ID_PATTERN.test(override)) {
+    return override;
+  }
+  try {
+    const raw = readFileSync(OPENCLAW_CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw);
+    const value = parsed?.instanceId;
+    return typeof value === "string" && INSTANCE_ID_PATTERN.test(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+const BRIDGE_VAULT_NAME = readInstanceIdFromConfig() ?? "main";
+const BRIDGE_WIKI_DIR = path.join(OPENCLAW_HOME, "wiki", BRIDGE_VAULT_NAME);
 
 // -- LCM direct read access ------------------------------------------------
 // Read-only access to ~/.openclaw/lcm.db for lcm_grep / lcm_describe surfaces.
@@ -28,7 +49,7 @@ const DEFAULT_OPENCLAW_BIN = process.env.OPENCLAW_BIN ?? "openclaw";
 // to recall historical context. node:sqlite can safely open lcm.db read-only
 // alongside the gateway's own writer connection.
 
-const LCM_DB_PATH = process.env.LCM_DATABASE_PATH ?? path.join(os.homedir(), ".openclaw", "lcm.db");
+const LCM_DB_PATH = process.env.LCM_DATABASE_PATH ?? path.join(OPENCLAW_HOME, "lcm.db");
 
 let lcmDbConnection = null;
 
@@ -428,8 +449,7 @@ function spawnDetached(command, args) {
 // -- Inbox -----------------------------------------------------------------
 
 const INBOX_PATH =
-  process.env.OPENCLAW_BRIDGE_INBOX_PATH ??
-  path.join(os.homedir(), ".openclaw", "wiki", "main", "inbox.md");
+  process.env.OPENCLAW_BRIDGE_INBOX_PATH ?? path.join(BRIDGE_WIKI_DIR, "inbox.md");
 const DEDUPE_WINDOW_MS = Number(process.env.OPENCLAW_BRIDGE_DEDUPE_WINDOW_S ?? "60") * 1_000;
 const recentAppends = new Map();
 
@@ -485,11 +505,6 @@ async function appendToInbox({ note, source = "claude-code", tags = [], sessionI
 // advisory: agents will respond to user-initiated messages outside their
 // heartbeat window, but the wake-up may incur unexpected model cost.
 
-import { promises as fsPromises } from "node:fs";
-
-const OPENCLAW_HOME = process.env.OPENCLAW_HOME ?? path.join(os.homedir(), ".openclaw");
-const OPENCLAW_CONFIG_PATH = path.join(OPENCLAW_HOME, "openclaw.json");
-
 let cachedAgentSchedules = null;
 let cachedAgentSchedulesAt = 0;
 const AGENT_SCHEDULES_TTL_MS = 60_000;
@@ -499,7 +514,7 @@ async function loadAgentSchedules() {
     return cachedAgentSchedules;
   }
   try {
-    const raw = await fsPromises.readFile(OPENCLAW_CONFIG_PATH, "utf8");
+    const raw = await fs.readFile(OPENCLAW_CONFIG_PATH, "utf8");
     const cfg = JSON.parse(raw);
     const list = Array.isArray(cfg?.agents?.list) ? cfg.agents.list : [];
     const map = new Map();

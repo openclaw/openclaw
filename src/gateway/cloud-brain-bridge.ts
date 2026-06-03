@@ -60,9 +60,7 @@ function normalizeAgentIdAliases(value: unknown): Record<string, string> {
 }
 
 export function resolveBenchCloudBridgeConfig(cfg: OpenClawConfig): BenchCloudBridgeConfig {
-  const source: BenchCloudConfigSource =
-    (cfg as unknown as { gateway?: { benchCloud?: BenchCloudConfigSource } }).gateway?.benchCloud ??
-    {};
+  const source: BenchCloudConfigSource = cfg.gateway?.benchCloud ?? {};
   const enabled =
     source.enabled ??
     boolFromEnv(process.env.BENCH_CLOUD_BRIDGE_ENABLED) ??
@@ -121,6 +119,10 @@ export async function createCliRemoteBrainTurn(params: {
   request: Omit<BenchCloudCliTurnRequest, "instanceId" | "installId">;
   signal?: AbortSignal;
 }): Promise<BenchCloudCliTurnCreateResponse> {
+  const agentId = resolveBenchCloudAgentId({
+    config: params.config,
+    agentId: params.request.agentId,
+  });
   return createBenchCloudCliTurn({
     config: params.config,
     authToken: params.authToken,
@@ -129,6 +131,7 @@ export async function createCliRemoteBrainTurn(params: {
       instanceId: params.config.instanceId,
       ...(params.config.installId ? { installId: params.config.installId } : {}),
       ...params.request,
+      agentId,
     },
   });
 }

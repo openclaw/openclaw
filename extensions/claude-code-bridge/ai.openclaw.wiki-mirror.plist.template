@@ -3,7 +3,7 @@
   launchd plist template for the OpenClaw cloud-mirror daemon.
 
   Installs a LaunchAgent that keeps cloud-mirror.mjs running in the
-  background so the local ~/.openclaw/wiki/main vault is mirrored to
+  background so the active ~/.openclaw/wiki/{instanceId|main} vault is mirrored to
   benchagi.com in near-real-time.
 
   INSTALL:
