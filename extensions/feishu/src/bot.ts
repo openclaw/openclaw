@@ -50,6 +50,10 @@ import { createFeishuClient } from "./client.js";
 import { finalizeFeishuMessageProcessing, tryRecordMessagePersistent } from "./dedup.js";
 import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
+import {
+  applyFeishuGroupActivationOverride,
+  resolveFeishuGroupActivationOverride,
+} from "./group-activation.js";
 import { extractMentionTargets, isMentionForwardRequest } from "./mention.js";
 import {
   hasExplicitFeishuGroupConfig,
@@ -695,6 +699,40 @@ export async function handleFeishuMessage(params: {
       groupId: ctx.chatId,
       groupPolicy,
     }));
+
+    // Honor the session-level `/activation mention|always` override before
+    // gating non-mentioned messages. Without this the config-only
+    // `mentionRequired` decides admission and the runtime switch silently
+    // has no effect (#50490). Mirrors Telegram (`bot-core.ts`
+    // `resolveGroupActivation`) and WhatsApp (`group-activation.ts`
+    // `resolveGroupActivationFor`) / QQBot (`engine/group/activation.ts`).
+    const activationRuntime = getFeishuRuntime();
+    const activationRoute = activationRuntime.channel.routing.resolveAgentRoute({
+      cfg,
+      channel: "feishu",
+      accountId: account.accountId,
+      peer: {
+        kind: "group",
+        id: groupSession?.peerId ?? ctx.chatId,
+      },
+      parentPeer: groupSession?.parentPeer ?? null,
+    });
+    const activationStorePath = activationRuntime.channel.session.resolveStorePath(
+      cfg.session?.store,
+      { agentId: activationRoute.agentId },
+    );
+    const sessionGroupActivation = resolveFeishuGroupActivationOverride({
+      storePath: activationStorePath,
+      sessionKey: activationRoute.sessionKey,
+      onError: (err) =>
+        log(
+          `feishu[${account.accountId}]: failed to load session activation for ${activationRoute.sessionKey}: ${String(err)}`,
+        ),
+    });
+    requireMention = applyFeishuGroupActivationOverride({
+      configRequireMention: requireMention,
+      activation: sessionGroupActivation,
+    });
 
     const groupSenderActivationIngress = await resolveFeishuGroupSenderActivationIngressAccess({
       cfg,
