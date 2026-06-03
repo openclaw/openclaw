@@ -10,6 +10,10 @@ const IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION = Symbol(
   "openclaw.implicitSameChatApprovalAuthorization",
 );
 
+/**
+ * Marks an authorization result as the implicit same-chat fallback used when a
+ * channel has no configured approver allowlist.
+ */
 export function markImplicitSameChatApprovalAuthorization(
   result: ApprovalAuthorizationResult,
 ): ApprovalAuthorizationResult {
@@ -24,6 +28,10 @@ export function markImplicitSameChatApprovalAuthorization(
   return result;
 }
 
+/**
+ * Checks whether an authorization result came from the implicit same-chat
+ * fallback instead of an explicitly configured approver allowlist.
+ */
 export function isImplicitSameChatApprovalAuthorization(
   result: ApprovalAuthorizationResult | null | undefined,
 ): boolean {
@@ -37,6 +45,10 @@ export function isImplicitSameChatApprovalAuthorization(
   );
 }
 
+/**
+ * Builds the approval authorization adapter shared by channels that resolve
+ * approvers from account-scoped config.
+ */
 export function createResolvedApproverActionAuthAdapter(params: {
   channelLabel: string;
   resolveApprovers: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
