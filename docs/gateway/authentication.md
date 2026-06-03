@@ -193,6 +193,25 @@ key in the provider dashboard when you need provider-side invalidation.
 
 ## Controlling which credential is used
 
+### OpenAI and legacy `openai-codex` ids
+
+OpenAI API-key profiles and ChatGPT/Codex OAuth profiles both use the canonical
+provider id `openai`. New config should use `openai:*` profile ids and
+`auth.order.openai`.
+
+If you see `openai-codex` in older config, auth profile ids, or
+`auth.order.openai-codex`, treat it as legacy migration input. Do not create new
+`openai-codex` profiles. Run:
+
+```bash
+openclaw doctor --fix
+openclaw models auth list --provider openai
+```
+
+Doctor rewrites legacy `openai-codex:*` profile ids and
+`auth.order.openai-codex` entries to the canonical `openai` auth route. For
+OpenAI-specific model/runtime routing, see [OpenAI](/providers/openai).
+
 ### During login (CLI)
 
 Use `openclaw models auth login --provider <id> --profile-id <profileId>` for
