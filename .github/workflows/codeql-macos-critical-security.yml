@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   macos:
+    if: github.repository == 'openclaw/openclaw'
     name: Critical Security (macOS)
     runs-on: blacksmith-6vcpu-macos-latest
     timeout-minutes: 45
