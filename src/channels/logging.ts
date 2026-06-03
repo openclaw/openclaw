@@ -1,5 +1,7 @@
+/** Minimal logger callback shape exposed through channel SDK helpers. */
 export type LogFn = (message: string) => void;
 
+/** Emits a normalized inbound-drop diagnostic for channel plugins. */
 export function logInboundDrop(params: {
   log: LogFn;
   channel: string;
@@ -10,6 +12,7 @@ export function logInboundDrop(params: {
   params.log(`${params.channel}: drop ${params.reason}${target}`);
 }
 
+/** Emits a normalized typing-indicator failure diagnostic for channel plugins. */
 export function logTypingFailure(params: {
   log: LogFn;
   channel: string;
@@ -22,6 +25,7 @@ export function logTypingFailure(params: {
   params.log(`${params.channel} typing${action} failed${target}: ${String(params.error)}`);
 }
 
+/** Emits a normalized acknowledgement-cleanup failure diagnostic for channel plugins. */
 export function logAckFailure(params: {
   log: LogFn;
   channel: string;
