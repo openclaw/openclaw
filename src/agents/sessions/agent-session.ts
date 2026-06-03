@@ -2488,7 +2488,7 @@ export class AgentSession {
       ? Object.fromEntries(
           Object.entries(this.baseToolsOverride).map(([name, tool]) => [
             name,
-            createToolDefinitionFromAgentTool(tool),
+            createToolDefinitionFromAgentTool(tool, name),
           ]),
         )
       : createAllToolDefinitions(this.cwd, {
