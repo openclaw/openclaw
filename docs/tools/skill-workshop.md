@@ -171,6 +171,27 @@ Agents must use `skill_workshop` for generated skill work. They must not create
 or change proposal files through `write`, `edit`, `exec`, shell commands, or
 direct filesystem operations.
 
+### Tool visibility
+
+`tools.profile: "coding"` includes the built-in `skill_workshop` tool. If an
+agent uses `minimal`, `messaging`, `tools.deny`, or a narrower
+`tools.byProvider` / agent-specific policy, Skill Workshop can still be
+configured while the manual tool is hidden from that agent.
+
+Allow the exact tool for agents that need manual proposal review:
+
+```json5
+{
+  tools: {
+    profile: "minimal",
+    alsoAllow: ["skill_workshop"],
+  },
+}
+```
+
+Use `group:plugins` only when the agent should see loaded plugin-owned tools; it
+is not required for `skill_workshop`.
+
 ## Approval and autonomy
 
 ```json5
@@ -249,14 +270,15 @@ Default state directory: `~/.openclaw`.
 
 ## Troubleshooting
 
-| Problem                                        | Resolution                                                                                   |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                  |
-| `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                          |
-| `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                    |
-| `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                            |
-| `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`. |
-| Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                             |
+| Problem                                        | Resolution                                                                                                                                                                                                                                               |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                                                                                                                                                                              |
+| `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                                                                      |
+| `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                                                                |
+| `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                                                                        |
+| `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                                                             |
+| Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                                                                         |
+| `skill_workshop` is missing from agent tools   | Check the effective tool policy. `coding` includes `skill_workshop`; stricter profiles, provider or agent overrides, and `tools.deny` can hide it. Add `tools.alsoAllow: ["skill_workshop"]` or remove the deny rule for agents that need manual review. |
 
 ## Related
 
