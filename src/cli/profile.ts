@@ -16,15 +16,9 @@ type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
-const OPENCLAW_MANAGED_LAUNCHD_LABEL_PREFIX = "ai.openclaw.";
-
 function isCommandLocalProfileOption(out: string[]): boolean {
   const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
   return primary === "qa" && secondary === "matrix";
-}
-
-function isOpenClawManagedLaunchdLabel(label: string): boolean {
-  return label.startsWith(OPENCLAW_MANAGED_LAUNCHD_LABEL_PREFIX);
 }
 
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
@@ -103,6 +97,7 @@ export function applyCliProfileEnv(params: {
   }
 
   // Convenience only: fill defaults, never override explicit env values.
+  const previousProfileLabel = resolveGatewayLaunchAgentLabel(env.OPENCLAW_PROFILE);
   env.OPENCLAW_PROFILE = profile;
 
   const inheritedLabel = env.OPENCLAW_LAUNCHD_LABEL?.trim();
@@ -110,7 +105,7 @@ export function applyCliProfileEnv(params: {
   if (
     inheritedLabel &&
     inheritedLabel !== profileLabel &&
-    isOpenClawManagedLaunchdLabel(inheritedLabel)
+    inheritedLabel === previousProfileLabel
   ) {
     delete env.OPENCLAW_LAUNCHD_LABEL;
   }

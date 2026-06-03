@@ -202,9 +202,10 @@ describe("applyCliProfileEnv", () => {
     );
   });
 
-  it("clears conflicting OpenClaw-managed OPENCLAW_LAUNCHD_LABEL so --profile resolves correct plist", () => {
+  it("clears a conflicting previous-profile OPENCLAW_LAUNCHD_LABEL so --profile resolves correct plist", () => {
     const env: Record<string, string | undefined> = {
       HOME: "/Users/test",
+      OPENCLAW_PROFILE: "batch",
       OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.batch",
     };
     applyCliProfileEnv({
@@ -246,6 +247,21 @@ describe("applyCliProfileEnv", () => {
 
     expect(env.OPENCLAW_PROFILE).toBe("ops");
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("com.custom.openclaw");
+  });
+
+  it("preserves custom ai.openclaw.* OPENCLAW_LAUNCHD_LABEL overrides", () => {
+    const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "batch",
+      OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.update.2026.5.12",
+    };
+    applyCliProfileEnv({
+      profile: "interactive",
+      env,
+      homedir: () => "/home/peter",
+    });
+
+    expect(env.OPENCLAW_PROFILE).toBe("interactive");
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.update.2026.5.12");
   });
 
   it("leaves empty OPENCLAW_LAUNCHD_LABEL for launchd resolution fallback", () => {
