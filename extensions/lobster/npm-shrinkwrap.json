@@ -1,26 +1,25 @@
 {
   "name": "@openclaw/lobster",
-  "version": "2026.5.21",
+  "version": "2026.6.2",
   "lockfileVersion": 3,
   "requires": true,
   "packages": {
     "": {
       "name": "@openclaw/lobster",
-      "version": "2026.5.21",
+      "version": "2026.6.2",
       "dependencies": {
-        "@clawdbot/lobster": "2026.4.6",
-        "ajv": "8.20.0",
-        "typebox": "1.1.38"
+        "@clawdbot/lobster": "2026.5.22",
+        "typebox": "1.1.39"
       }
     },
     "node_modules/@clawdbot/lobster": {
-      "version": "2026.4.6",
-      "resolved": "https://registry.npmjs.org/@clawdbot/lobster/-/lobster-2026.4.6.tgz",
-      "integrity": "sha512-v8QQHAykISyiSIVBtdBKDSQtfigZ4mUoPkUFYVZjvn2LRQGvtnX6uDvhgXu3QaxLF3MDSGMphgzDpkLrh1xnbw==",
+      "version": "2026.5.22",
+      "resolved": "https://registry.npmjs.org/@clawdbot/lobster/-/lobster-2026.5.22.tgz",
+      "integrity": "sha512-lrUnsLLmo4sVFDNd7oTQiEnt4whGhy1bDHe3s/sQoInbTLJSN55WKxlUCfberZbzwOq8GSNnBkP0ZhZ3mKSBwg==",
       "license": "MIT",
       "dependencies": {
-        "ajv": "^8.17.1",
-        "yaml": "^2.8.2"
+        "ajv": "^8.20.0",
+        "yaml": "^2.8.4"
       },
       "bin": {
         "clawd.invoke": "bin/clawd.invoke.js",
@@ -85,9 +84,9 @@
       }
     },
     "node_modules/typebox": {
-      "version": "1.1.38",
-      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.38.tgz",
-      "integrity": "sha512-pZ0aQPmMmXoUvSbeuWf/Hzsc+avNw/Zd6VeE8CFgkVGWyuHPJvqeJJDeJqLve+K70LvjYIoleGcoJHPT17cWoA==",
+      "version": "1.1.39",
+      "resolved": "https://registry.npmjs.org/typebox/-/typebox-1.1.39.tgz",
+      "integrity": "sha512-vj0afVtOfLQvv0GR0VxVagYxsXN64btL7Z9XoaG0ZggH3mruMMkOO6hXdgMsjCY3shZgEvooAWVeznQVs5c43w==",
       "license": "MIT"
     },
     "node_modules/yaml": {

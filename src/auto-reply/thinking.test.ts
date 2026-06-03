@@ -93,21 +93,21 @@ describe("listThinkingLevels", () => {
   it("includes xhigh for provider-advertised models", () => {
     providerRuntimeMocks.resolveProviderXHighThinking.mockImplementation(({ provider, context }) =>
       (provider === "openai" && ["gpt-5.4", "gpt-5.4", "gpt-5.4-pro"].includes(context.modelId)) ||
-      (provider === "openai-codex" &&
+      (provider === "openai" &&
         ["gpt-5.4", "gpt-5.4-pro", "gpt-5.3-codex-spark"].includes(context.modelId)) ||
       (provider === "github-copilot" && ["gpt-5.4", "gpt-5.4"].includes(context.modelId))
         ? true
         : undefined,
     );
 
-    expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
-    expect(listThinkingLevels("openai-codex", "gpt-5.3-codex-spark")).toContain("xhigh");
-    expect(listThinkingLevels("openai-codex", "gpt-5.4-pro")).toContain("xhigh");
+    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
+    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
+    expect(listThinkingLevels("openai", "gpt-5.3-codex-spark")).toContain("xhigh");
+    expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("openai", "gpt-5.4-pro")).toContain("xhigh");
-    expect(listThinkingLevels("openai-codex", "gpt-5.4")).toContain("xhigh");
+    expect(listThinkingLevels("openai", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
     expect(listThinkingLevels("github-copilot", "gpt-5.4")).toContain("xhigh");
   });
@@ -255,6 +255,64 @@ describe("listThinkingLevels", () => {
     ).toBe("max");
   });
 
+  it("passes catalog compat into provider thinking profiles", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
+      context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
+        ? {
+            levels: [{ id: "off" }, { id: "low", label: "on" }],
+            defaultLevel: "off",
+          }
+        : undefined,
+    );
+    const catalog = [
+      {
+        provider: "vllm",
+        id: "Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+    ];
+
+    expect(listThinkingLevelLabels("vllm", "Qwen/Qwen3-8B", catalog)).toEqual(["off", "on"]);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "vllm",
+        model: "Qwen/Qwen3-8B",
+        level: "high",
+        catalog,
+      }),
+    ).toBe("low");
+  });
+
+  it("matches provider-qualified catalog ids for provider thinking profiles", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(({ context }) =>
+      context.reasoning === true && context.compat?.thinkingFormat === "qwen-chat-template"
+        ? {
+            levels: [{ id: "off" }, { id: "low", label: "on" }],
+            defaultLevel: "off",
+          }
+        : undefined,
+    );
+    const catalog = [
+      {
+        provider: "vllm",
+        id: "vllm/Qwen/Qwen3-8B",
+        reasoning: true,
+        compat: { thinkingFormat: "qwen-chat-template" },
+      },
+    ];
+
+    expect(listThinkingLevelLabels("vllm", "Qwen/Qwen3-8B", catalog)).toEqual(["off", "on"]);
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "vllm",
+        model: "Qwen/Qwen3-8B",
+        level: "high",
+        catalog,
+      }),
+    ).toBe("low");
+  });
+
   it("uses catalog compat reasoning efforts to expose xhigh for configured custom models", () => {
     const catalog = [
       {
@@ -377,7 +435,7 @@ describe("resolveThinkingDefaultForModel", () => {
     ).toBe("adaptive");
   });
 
-  it("uses provider-advertised adaptive defaults for Bedrock aliases", () => {
+  it("does not apply provider-advertised adaptive defaults across Bedrock id variants", () => {
     providerRuntimeMocks.resolveProviderDefaultThinkingLevel.mockImplementation(
       ({ provider, context }) =>
         provider === "amazon-bedrock" && context.modelId === "claude-sonnet-4-6"
@@ -387,7 +445,7 @@ describe("resolveThinkingDefaultForModel", () => {
 
     expect(
       resolveThinkingDefaultForModel({ provider: "aws-bedrock", model: "claude-sonnet-4-6" }),
-    ).toBe("adaptive");
+    ).toBe("off");
   });
 
   it("does not assume adaptive defaults without provider runtime", () => {

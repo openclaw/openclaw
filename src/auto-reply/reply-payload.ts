@@ -45,6 +45,8 @@ export type ReplyPayload = {
   /** Marks this payload as a reasoning/thinking block. Channels that do not
    *  have a dedicated reasoning lane (e.g. WhatsApp, web) should suppress it. */
   isReasoning?: boolean;
+  /** Reasoning stream text is a complete replacement snapshot, not a delta. */
+  isReasoningSnapshot?: boolean;
   /** Marks this payload as a compaction status notice (start/end).
    *  Should be excluded from TTS transcript accumulation so compaction
    *  status lines are not synthesised into the spoken assistant reply. */
@@ -182,6 +184,10 @@ export function setReplyPayloadMetadata<T extends object>(
 
 export function getReplyPayloadMetadata(payload: object): ReplyPayloadMetadata | undefined {
   return replyPayloadMetadata.get(payload);
+}
+
+export function isReplyPayloadNonTerminalToolErrorWarning(payload: object): boolean {
+  return getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
 }
 
 export function copyReplyPayloadMetadata<T extends object>(source: object, payload: T): T {

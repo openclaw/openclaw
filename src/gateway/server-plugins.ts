@@ -1,5 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  GATEWAY_CLIENT_IDS,
+  GATEWAY_CLIENT_MODES,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { ErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import { normalizeModelRef, parseModelRef } from "../agents/model-selection.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -17,9 +24,6 @@ import type { PluginLogger } from "../plugins/types.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { ADMIN_SCOPE, APPROVALS_SCOPE, WRITE_SCOPE } from "./method-scopes.js";
-import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "./protocol/client-info.js";
-import type { ErrorShape } from "./protocol/index.js";
-import { PROTOCOL_VERSION } from "./protocol/version.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -188,7 +192,7 @@ function authorizeFallbackModelOverride(params: {
       allowed: false,
       reason:
         `plugin "${pluginId}" is not trusted for fallback provider/model override requests. ` +
-        "See https://docs.openclaw.ai/gateway/configuration-reference#plugins and search for: " +
+        "See https://docs.openclaw.ai/plugins/sdk-runtime#api-runtime-subagent and search for: " +
         "plugins.entries.<id>.subagent.allowModelOverride",
     };
   }
@@ -244,6 +248,7 @@ function resolveRequestedFallbackModelRef(params: {
 
 function createSyntheticOperatorClient(params?: {
   allowModelOverride?: boolean;
+  agentRunTracking?: "plugin_subagent";
   pluginRuntimeOwnerId?: string;
   scopes?: string[];
 }): GatewayRequestOptions["client"] {
@@ -266,6 +271,7 @@ function createSyntheticOperatorClient(params?: {
     },
     internal: {
       allowModelOverride: params?.allowModelOverride === true,
+      ...(params?.agentRunTracking ? { agentRunTracking: params.agentRunTracking } : {}),
       ...(params?.scopes?.includes(APPROVALS_SCOPE) ? { approvalRuntime: true } : {}),
       ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     },
@@ -299,6 +305,7 @@ function mergeGatewayClientInternal(
 
 type DispatchGatewayMethodInProcessOptions = {
   allowSyntheticModelOverride?: boolean;
+  agentRunTracking?: "plugin_subagent";
   disableSyntheticClient?: boolean;
   expectFinal?: boolean;
   forceSyntheticClient?: boolean;
@@ -354,12 +361,18 @@ export async function dispatchGatewayMethodInProcessRaw(
       : undefined;
   const syntheticClient = createSyntheticOperatorClient({
     allowModelOverride: options?.allowSyntheticModelOverride === true,
+    agentRunTracking: options?.agentRunTracking,
     ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
     scopes: options?.syntheticScopes,
   });
   const scopedClient = mergeGatewayClientInternal(
     scope?.client,
-    pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : undefined,
+    pluginRuntimeOwnerId || options?.agentRunTracking
+      ? {
+          ...(options?.agentRunTracking ? { agentRunTracking: options.agentRunTracking } : {}),
+          ...(pluginRuntimeOwnerId ? { pluginRuntimeOwnerId } : {}),
+        }
+      : undefined,
   );
   if (options?.disableSyntheticClient === true && !scopedClient) {
     throw new Error(`In-process gateway dispatch requires a scoped client (method: ${method}).`);
@@ -499,6 +512,7 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
         },
         {
           allowSyntheticModelOverride,
+          agentRunTracking: "plugin_subagent",
           ...(pluginId ? { pluginRuntimeOwnerId: pluginId } : {}),
         },
       );
@@ -636,6 +650,7 @@ export function loadGatewayPlugins(params: {
           ...(params.pluginLookUpTable?.manifestRegistry
             ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
             : {}),
+          discovery: params.pluginLookUpTable?.discovery,
         })
       : undefined;
   const autoEnableMs = performance.now() - started;
@@ -659,6 +674,7 @@ export function loadGatewayPlugins(params: {
             ...(params.pluginLookUpTable?.manifestRegistry
               ? { manifestRegistry: params.pluginLookUpTable.manifestRegistry }
               : {}),
+            discovery: params.pluginLookUpTable?.discovery,
           });
   const resolvedConfigMs = performance.now() - started;
   const resolvedConfig = autoEnabled.config;
@@ -727,7 +743,7 @@ export function loadGatewayPlugins(params: {
   const loadMs = performance.now() - beforeLoad;
   const loaderStatsAfter = getPluginModuleLoaderStats();
   const pluginMethods = Object.keys(pluginRegistry.gatewayHandlers);
-  const gatewayMethods = Array.from(new Set([...params.baseMethods, ...pluginMethods]));
+  const gatewayMethods = uniqueStrings([...params.baseMethods, ...pluginMethods]);
   params.startupTrace?.detail("plugins.gateway-load", [
     ["autoEnableMs", autoEnableMs],
     ["resolvedConfigMs", resolvedConfigMs],

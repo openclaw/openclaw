@@ -34,13 +34,24 @@ import { wrapCopilotProviderStream } from "./stream.js";
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-4.7";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
-const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.3-codex", "gpt-5.2", "gpt-5.2-codex"] as const;
+const COPILOT_XHIGH_MODEL_IDS = ["gpt-5.4", "gpt-5.3-codex"] as const;
 
 type GithubCopilotPluginConfig = {
   discovery?: {
     enabled?: boolean;
   };
 };
+
+function compatSupportsXHigh(
+  compat: { supportedReasoningEfforts?: readonly string[] | null } | null | undefined,
+) {
+  return (
+    Array.isArray(compat?.supportedReasoningEfforts) &&
+    compat.supportedReasoningEfforts.some(
+      (effort) => normalizeOptionalLowercaseString(effort) === "xhigh",
+    )
+  );
+}
 
 async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
@@ -268,8 +279,7 @@ export default definePluginEntry({
       ctx: ProviderCatalogContext,
     ): Promise<ProviderCatalogResult> {
       const pluginConfig = resolveCurrentPluginConfig(ctx.config);
-      const discoveryEnabled =
-        pluginConfig.discovery?.enabled ?? ctx.config?.models?.copilotDiscovery?.enabled;
+      const discoveryEnabled = pluginConfig.discovery?.enabled;
       if (discoveryEnabled === false) {
         return null;
       }
@@ -451,20 +461,22 @@ export default definePluginEntry({
       resolveDynamicModel: (ctx) => resolveCopilotForwardCompatModel(ctx),
       wrapStreamFn: wrapCopilotProviderStream,
       buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
-      resolveThinkingProfile: ({ modelId }) => ({
-        levels: [
-          { id: "off" },
-          { id: "minimal" },
-          { id: "low" },
-          { id: "medium" },
-          { id: "high" },
-          ...(COPILOT_XHIGH_MODEL_IDS.includes(
+      resolveThinkingProfile: ({ modelId, compat }) => {
+        const modelSupportsXHigh =
+          COPILOT_XHIGH_MODEL_IDS.includes(
             (normalizeOptionalLowercaseString(modelId) ?? "") as never,
-          )
-            ? [{ id: "xhigh" as const }]
-            : []),
-        ],
-      }),
+          ) || compatSupportsXHigh(compat);
+        return {
+          levels: [
+            { id: "off" },
+            { id: "minimal" },
+            { id: "low" },
+            { id: "medium" },
+            { id: "high" },
+            ...(modelSupportsXHigh ? [{ id: "xhigh" as const }] : []),
+          ],
+        };
+      },
       prepareRuntimeAuth: async (ctx) => {
         const { resolveCopilotApiToken } = await loadGithubCopilotRuntime();
         const token = await resolveCopilotApiToken({

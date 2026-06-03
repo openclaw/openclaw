@@ -10,7 +10,9 @@ import {
   createBundleMcpTempHarness,
   createBundleProbePlugin,
   withBundleHomeEnv,
+  writeBundleTextFiles,
   writeClaudeBundleManifest,
+  resolveBundlePluginRoot,
 } from "./bundle-mcp.test-support.js";
 
 function getServerArgs(value: unknown): unknown[] | undefined {
@@ -126,6 +128,40 @@ describe("loadEnabledBundleMcpConfig", () => {
     );
   });
 
+  it("uses a provided manifest registry instead of rediscovering bundle plugins", async () => {
+    const homeDir = await tempHarness.createTempDir("openclaw-bundle-mcp-home-");
+    const workspaceDir = await tempHarness.createTempDir("openclaw-bundle-mcp-workspace-");
+    const { pluginRoot } = await createBundleProbePlugin(homeDir);
+
+    const loaded = loadEnabledBundleMcpConfig({
+      workspaceDir,
+      cfg: createEnabledBundleConfig(["bundle-probe"]),
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "bundle-probe",
+            origin: "global",
+            format: "bundle",
+            bundleFormat: "claude",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            skills: [],
+            hooks: [],
+            rootDir: await fs.realpath(pluginRoot),
+            source: "test",
+            manifestPath: path.join(pluginRoot, ".claude-plugin", "plugin.json"),
+          },
+        ],
+      },
+    });
+
+    expectNoDiagnostics(loaded.diagnostics);
+    expect(loaded.config.mcpServers.bundleProbe).toMatchObject({
+      command: "node",
+    });
+  });
+
   it("merges inline bundle MCP servers and skips disabled bundles", async () => {
     await withBundleHomeEnv(
       tempHarness,
@@ -223,6 +259,53 @@ describe("loadEnabledBundleMcpConfig", () => {
             normalizePathForAssertion("local-probe.mjs")!,
           ],
         });
+      },
+    );
+  });
+
+  it("loads Link-style Codex bundle MCP config", async () => {
+    await withBundleHomeEnv(
+      tempHarness,
+      "openclaw-bundle-link",
+      async ({ homeDir, workspaceDir }) => {
+        const pluginRoot = resolveBundlePluginRoot(homeDir, "link");
+        await writeBundleTextFiles(pluginRoot, {
+          ".codex-plugin/plugin.json": `${JSON.stringify(
+            {
+              name: "link",
+              skills: "./skills/",
+              mcpServers: "./.mcp.json",
+            },
+            null,
+            2,
+          )}\n`,
+          ".mcp.json": `${JSON.stringify(
+            {
+              mcpServers: {
+                link: {
+                  command: "pnpx",
+                  args: ["@stripe/link-cli", "--mcp"],
+                },
+              },
+            },
+            null,
+            2,
+          )}\n`,
+        });
+
+        const loaded = loadEnabledBundleMcpConfig({
+          workspaceDir,
+          cfg: createEnabledBundleConfig(["link"]),
+        });
+        const loadedServer = loaded.config.mcpServers.link;
+
+        expectNoDiagnostics(loaded.diagnostics);
+        expect(isRecord(loadedServer) ? loadedServer.command : undefined).toBe("pnpx");
+        expect(getServerArgs(loadedServer)).toEqual(["@stripe/link-cli", "--mcp"]);
+        await expectResolvedPathEqual(
+          isRecord(loadedServer) ? loadedServer.cwd : undefined,
+          pluginRoot,
+        );
       },
     );
   });

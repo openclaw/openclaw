@@ -1,21 +1,31 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
-  ExecSecretProviderConfig,
   FileSecretProviderConfig,
+  ManualExecSecretProviderConfig,
   SecretProviderConfig,
   SecretRef,
   SecretRefSource,
 } from "../config/types.secrets.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { FsSafeError, readSecureFile } from "../infra/fs-safe.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import {
+  loadPluginManifestRegistry,
+  type PluginManifestRegistry,
+} from "../plugins/manifest-registry.js";
 import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { readJsonPointer } from "./json-pointer.js";
+import {
+  isPluginIntegrationSecretProviderConfig,
+  resolveSecretProviderIntegrationConfig,
+} from "./provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
@@ -24,7 +34,12 @@ import {
   secretRefKey,
 } from "./ref-contract.js";
 import type { SecretRefResolveCache } from "./resolve-types.js";
-import { isNonEmptyString, isRecord, normalizePositiveInt } from "./shared.js";
+import {
+  isNonEmptyString,
+  isRecord,
+  normalizePositiveInt,
+  normalizePositiveTimerMs,
+} from "./shared.js";
 
 const DEFAULT_PROVIDER_CONCURRENCY = 4;
 const DEFAULT_MAX_REFS_PER_PROVIDER = 512;
@@ -42,6 +57,7 @@ type ResolveSecretRefOptions = {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   cache?: SecretRefResolveCache;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 };
 
 type ResolutionLimits = {
@@ -178,7 +194,13 @@ function toProviderKey(source: SecretRefSource, provider: string): string {
   return `${source}:${provider}`;
 }
 
-function resolveConfiguredProvider(ref: SecretRef, config: OpenClawConfig): SecretProviderConfig {
+function resolveConfiguredProvider(params: {
+  ref: SecretRef;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
+}): SecretProviderConfig {
+  const { ref, config } = params;
   const providerConfig = config.secrets?.providers?.[ref.provider];
   if (!providerConfig) {
     if (ref.source === "env" && ref.provider === resolveDefaultSecretProviderAlias(config, "env")) {
@@ -196,6 +218,34 @@ function resolveConfiguredProvider(ref: SecretRef, config: OpenClawConfig): Secr
       provider: ref.provider,
       message: `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
     });
+  }
+  if (isPluginIntegrationSecretProviderConfig(providerConfig)) {
+    const manifestRegistry =
+      params.manifestRegistry ??
+      getCurrentPluginMetadataSnapshot({
+        config,
+        env: params.env,
+        allowWorkspaceScopedSnapshot: true,
+      })?.manifestRegistry ??
+      loadPluginManifestRegistry({
+        config,
+        env: params.env,
+      });
+    const resolved = resolveSecretProviderIntegrationConfig({
+      manifestRegistry,
+      providerAlias: ref.provider,
+      providerConfig,
+      config,
+      env: params.env,
+    });
+    if (!resolved.ok) {
+      throw providerResolutionError({
+        source: ref.source,
+        provider: ref.provider,
+        message: `Secret provider "${ref.provider}" plugin integration is unavailable: ${resolved.reason}.`,
+      });
+    }
+    return resolved.providerConfig;
   }
   return providerConfig;
 }
@@ -284,7 +334,7 @@ async function readFileProviderPayload(params: {
 
   const filePath = resolveUserPath(params.providerConfig.path);
   const readPromise = (async () => {
-    const timeoutMs = normalizePositiveInt(
+    const timeoutMs = normalizePositiveTimerMs(
       params.providerConfig.timeoutMs,
       DEFAULT_FILE_TIMEOUT_MS,
     );
@@ -632,11 +682,11 @@ function parseExecValues(params: {
 async function resolveExecRefs(params: {
   refs: SecretRef[];
   providerName: string;
-  providerConfig: ExecSecretProviderConfig;
+  providerConfig: ManualExecSecretProviderConfig;
   env: NodeJS.ProcessEnv;
   limits: ResolutionLimits;
 }): Promise<ProviderResolutionOutput> {
-  const ids = [...new Set(params.refs.map((ref) => ref.id))];
+  const ids = uniqueStrings(params.refs.map((ref) => ref.id));
   if (ids.length > params.limits.maxRefsPerProvider) {
     throw providerResolutionError({
       source: "exec",
@@ -689,8 +739,11 @@ async function resolveExecRefs(params: {
     childEnv[key] = value;
   }
 
-  const timeoutMs = normalizePositiveInt(params.providerConfig.timeoutMs, DEFAULT_EXEC_TIMEOUT_MS);
-  const noOutputTimeoutMs = normalizePositiveInt(
+  const timeoutMs = normalizePositiveTimerMs(
+    params.providerConfig.timeoutMs,
+    DEFAULT_EXEC_TIMEOUT_MS,
+  );
+  const noOutputTimeoutMs = normalizePositiveTimerMs(
     params.providerConfig.noOutputTimeoutMs,
     timeoutMs,
   );
@@ -789,6 +842,13 @@ async function resolveProviderRefs(params: {
       });
     }
     if (params.providerConfig.source === "exec") {
+      if (isPluginIntegrationSecretProviderConfig(params.providerConfig)) {
+        throw providerResolutionError({
+          source: params.source,
+          provider: params.providerName,
+          message: `Secret provider "${params.providerName}" plugin integration was not materialized before exec resolution.`,
+        });
+      }
       return await resolveExecRefs({
         refs: params.refs,
         providerName: params.providerName,
@@ -856,7 +916,12 @@ export async function resolveSecretRefValues(
           message: `Secret provider "${group.providerName}" exceeded maxRefsPerProvider (${limits.maxRefsPerProvider}).`,
         });
       }
-      const providerConfig = resolveConfiguredProvider(group.refs[0], options.config);
+      const providerConfig = resolveConfiguredProvider({
+        ref: group.refs[0],
+        config: options.config,
+        env: options.env ?? process.env,
+        manifestRegistry: options.manifestRegistry,
+      });
       const values = await resolveProviderRefs({
         refs: group.refs,
         source: group.source,

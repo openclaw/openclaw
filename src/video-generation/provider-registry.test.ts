@@ -1,5 +1,7 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { VideoGenerationProviderPlugin } from "../plugins/types.js";
+
+type ProviderRegistryModule = typeof import("./provider-registry.js");
 
 const resolvePluginCapabilityProvidersMock = vi.hoisted(() =>
   vi.fn<() => VideoGenerationProviderPlugin[]>(() => []),
@@ -21,10 +23,8 @@ function createProvider(
   };
 }
 
-type VideoProviderRegistry = typeof import("./provider-registry.js");
-
 function requireVideoProvider(
-  registry: VideoProviderRegistry,
+  registry: ProviderRegistryModule,
   id: string,
 ): VideoGenerationProviderPlugin {
   const provider = registry.getVideoGenerationProvider(id);
@@ -34,26 +34,40 @@ function requireVideoProvider(
   return provider;
 }
 
-async function loadProviderRegistry(): Promise<VideoProviderRegistry> {
+async function loadProviderRegistry(): Promise<ProviderRegistryModule> {
   vi.resetModules();
-  return await import("./provider-registry.js");
+  return import("./provider-registry.js");
 }
 
 describe("video-generation provider registry", () => {
+  let delegationCase: {
+    calls: unknown[][];
+    providers: VideoGenerationProviderPlugin[];
+  };
+
+  beforeAll(async () => {
+    const { listVideoGenerationProviders } = await loadProviderRegistry();
+    const providers = listVideoGenerationProviders();
+    delegationCase = {
+      calls: [...resolvePluginCapabilityProvidersMock.mock.calls],
+      providers,
+    };
+  });
+
   beforeEach(() => {
     vi.resetModules();
     resolvePluginCapabilityProvidersMock.mockReset();
     resolvePluginCapabilityProvidersMock.mockReturnValue([]);
   });
 
-  it("delegates provider resolution to the capability provider boundary", async () => {
-    const { listVideoGenerationProviders } = await loadProviderRegistry();
-
-    expect(listVideoGenerationProviders()).toStrictEqual([]);
-    expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
-      key: "videoGenerationProviders",
-      cfg: undefined,
-    });
+  it("delegates provider resolution to the capability provider boundary", () => {
+    expect(delegationCase.providers).toStrictEqual([]);
+    expect(delegationCase.calls).toContainEqual([
+      {
+        key: "videoGenerationProviders",
+        cfg: undefined,
+      },
+    ]);
   });
 
   it("uses active plugin providers without loading from disk", async () => {
@@ -75,11 +89,12 @@ describe("video-generation provider registry", () => {
       createProvider({ id: "safe-video", aliases: ["safe-alias", "constructor"] }),
     ]);
     const registry = await loadProviderRegistry();
-    const { getVideoGenerationProvider, listVideoGenerationProviders } = registry;
 
-    expect(listVideoGenerationProviders().map((provider) => provider.id)).toEqual(["safe-video"]);
-    expect(getVideoGenerationProvider("__proto__")).toBeUndefined();
-    expect(getVideoGenerationProvider("constructor")).toBeUndefined();
+    expect(registry.listVideoGenerationProviders().map((provider) => provider.id)).toEqual([
+      "safe-video",
+    ]);
+    expect(registry.getVideoGenerationProvider("__proto__")).toBeUndefined();
+    expect(registry.getVideoGenerationProvider("constructor")).toBeUndefined();
     expect(requireVideoProvider(registry, "safe-alias").id).toBe("safe-video");
   });
 });

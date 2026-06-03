@@ -1,4 +1,4 @@
-import type { RenderTableOptions, TableColumn } from "../terminal/table.js";
+import type { RenderTableOptions, TableColumn } from "../../packages/terminal-core/src/table.js";
 import {
   buildStatusChannelsTableSection,
   buildStatusHealthSection,
@@ -17,6 +17,7 @@ export async function buildStatusCommandReportLines(params: {
   overviewRows: Array<{ Item: string; Value: string }>;
   showTaskMaintenanceHint: boolean;
   taskMaintenanceHint: string;
+  retainedLostTaskLine?: string | null;
   pluginCompatibilityLines: string[];
   pairingRecoveryLines: string[];
   modelSelectionLines: string[];
@@ -48,7 +49,16 @@ export async function buildStatusCommandReportLines(params: {
       },
       {
         kind: "raw",
-        body: params.showTaskMaintenanceHint ? ["", params.muted(params.taskMaintenanceHint)] : [],
+        body:
+          params.showTaskMaintenanceHint || params.retainedLostTaskLine
+            ? [
+                "",
+                ...(params.showTaskMaintenanceHint
+                  ? [params.muted(params.taskMaintenanceHint)]
+                  : []),
+                ...(params.retainedLostTaskLine ? [params.retainedLostTaskLine] : []),
+              ]
+            : [],
         skipIfEmpty: true,
       },
       {

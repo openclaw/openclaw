@@ -53,10 +53,10 @@ Use `channels.modelByChannel` to pin specific channel IDs to a model. Values acc
         "123456789012345678": "anthropic/claude-opus-4-6",
       },
       slack: {
-        C1234567890: "openai/gpt-4.1",
+        C1234567890: "openai/gpt-5.5",
       },
       telegram: {
-        "-1001234567890": "openai/gpt-4.1-mini",
+        "-1001234567890": "openai/gpt-5.4-mini",
         "-1001234567890:topic:99": "anthropic/claude-sonnet-4-6",
       },
     },
@@ -597,6 +597,8 @@ BlueBubbles support was removed. `channels.bluebubbles` is not a supported runti
 
 If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg "$@"` on that Mac. The default local `imsg` path is macOS-only.
 
+Before relying on an SSH wrapper for production sends, verify an outbound `imsg send` through that exact wrapper. Some macOS TCC states assign Messages Automation to `/usr/libexec/sshd-keygen-wrapper`, which can make reads and probes work while sends fail with AppleEvents `-1743`; see [SSH wrapper sends fail with AppleEvents -1743](/channels/imessage#ssh-wrapper-sends-fail-with-appleevents-1743).
+
 ```json5
 {
   channels: {
@@ -788,23 +790,19 @@ See the full channel index: [Channels](/channels).
 
 Group messages default to **require mention** (metadata mention or safe regex patterns). Applies to WhatsApp, Telegram, Discord, Google Chat, and iMessage group chats.
 
-Visible replies are controlled separately. Normal group and channel requests default to automatic final delivery: final assistant text posts through the legacy visible reply path. Some harnesses, including Codex, default direct/source chats to message-tool delivery so visible output only posts after the agent calls `message(action=send)`. If the model returns final text without calling the message tool, that final text stays private and the gateway verbose log records suppressed payload metadata.
+Visible replies are controlled separately. Normal group, channel, and internal WebChat direct requests default to automatic final delivery: final assistant text posts through the legacy visible reply path. Opt into `messages.visibleReplies: "message_tool"` or `messages.groupChat.visibleReplies: "message_tool"` when visible output should only post after the agent calls `message(action=send)`. If the model returns final text without calling the message tool in an opted-in tool-only mode, that final text stays private and the gateway verbose log records suppressed payload metadata.
 
-Tool-only visible replies require a model/runtime that reliably calls tools, and are recommended for shared ambient rooms on latest-generation models such as GPT 5.5. If
-the session log shows assistant text with `didSendViaMessagingTool: false`, the
-model produced private final text instead of calling the message tool. Switch
-to a stronger tool-calling model for that channel, inspect the gateway verbose
-log for the suppressed payload summary, or set
-`messages.groupChat.visibleReplies: "automatic"` to use visible final replies
-for every group/channel request.
+Tool-only visible replies require a model/runtime that reliably calls tools, and are recommended for shared ambient rooms on latest-generation models such as GPT 5.5. Some weaker models can answer final text but fail to understand that source-visible output must be sent with `message(action=send)`. For those models, use `"automatic"` so the final assistant turn is the visible reply path. If the session log shows assistant text with `didSendViaMessagingTool: false`, the model produced private final text instead of calling the message tool. Switch to a stronger tool-calling model for that channel, inspect the gateway verbose log for the suppressed payload summary, or set `messages.groupChat.visibleReplies: "automatic"` to use visible final replies for every group/channel request.
 
 If the message tool is unavailable under the active tool policy, OpenClaw falls back to automatic visible replies instead of silently suppressing the response. `openclaw doctor` warns about this mismatch.
+
+This rule applies to normal agent final text. Plugin-owned conversation bindings use the owning plugin's returned reply as the visible response for claimed bound-thread turns; the plugin does not need to call `message(action=send)` for those binding replies.
 
 **Troubleshooting: group @mention triggers typing then silence (no error)**
 
 Symptom: a group/channel @mention shows the typing indicator and the gateway log reports `dispatch complete (queuedFinal=false, replies=0)`, but no message lands in the room. DMs to the same agent reply normally.
 
-Cause: the group/channel visible-reply mode resolves to `"message_tool"`, so OpenClaw runs the turn but suppresses the final assistant text unless the agent calls `message(action=send)`. There is no error because suppression is the configured behavior. Normal group and channel turns default to `"automatic"`, so this symptom only appears when `messages.groupChat.visibleReplies` (or global `messages.visibleReplies`) is explicitly set to `"message_tool"`. Harness `defaultVisibleReplies` does not apply here — the group/channel resolver ignores it; it only affects direct/source chats (the Codex harness suppresses direct-chat finals that way).
+Cause: the group/channel visible-reply mode resolves to `"message_tool"`, so OpenClaw runs the turn but suppresses the final assistant text unless the agent calls `message(action=send)`. There is no `NO_REPLY` contract in this mode; no message-tool call means no source reply. There is no error because suppression is the configured behavior. Normal group and channel turns default to `"automatic"`, so this symptom only appears when `messages.groupChat.visibleReplies` (or global `messages.visibleReplies`) is explicitly set to `"message_tool"`. Harness `defaultVisibleReplies` does not apply here — the group/channel resolver ignores it; it only affects direct/source chats (the Codex harness suppresses direct-chat finals that way).
 
 Fix: either pick a stronger tool-calling model, remove the explicit `"message_tool"` override to fall back to the `"automatic"` default, or set `messages.groupChat.visibleReplies: "automatic"` to force visible replies for every group/channel request. The gateway hot-reloads `messages` config after the file is saved; only restart the gateway when file watching or config reload is disabled in the deployment.
 
@@ -834,7 +832,7 @@ Fix: either pick a stronger tool-calling model, remove the explicit `"message_to
 
 `messages.groupChat.unmentionedInbound: "room_event"` submits unmentioned always-on group/channel messages as quiet room context on supported channels. Mentioned messages, commands, and direct messages remain user requests. See [Ambient room events](/channels/ambient-room-events) for complete Discord, Slack, and Telegram examples.
 
-`messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, direct/source chats use the selected runtime or harness default. The Codex harness defaults direct/source chats to message-tool delivery; set `messages.visibleReplies: "automatic"` to use automatic final delivery. Channel allowlists and mention gating still decide whether an event is processed.
+`messages.visibleReplies` is the global source-event default; `messages.groupChat.visibleReplies` overrides it for group/channel source events. When `messages.visibleReplies` is unset, direct/source chats use the selected runtime or harness default, but internal WebChat direct turns use automatic final delivery for Pi/Codex prompt parity. Set `messages.visibleReplies: "message_tool"` to intentionally require `message(action=send)` for visible output. Channel allowlists and mention gating still decide whether an event is processed.
 
 #### DM history limits
 

@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCliArgvInvocation } from "../argv-invocation.js";
 import { resolveCliCommandPathPolicy } from "../command-path-policy.js";
 import {
@@ -29,11 +30,16 @@ export type SubCliRegistrationContext = {
   purpose?: "runtime" | "completion";
 };
 
+type PluginCliModule = typeof import("../../plugins/cli.js");
 type SubCliRegistrar = (
   program: Command,
   argv: string[],
   context: SubCliRegistrationContext,
 ) => Promise<void> | void;
+
+const pluginCliLoader = createLazyImportLoader<PluginCliModule>(
+  () => import("../../plugins/cli.js"),
+);
 
 function shouldRegisterGatewayRunOnly(name: string, argv: string[]): boolean {
   if (name !== "gateway") {
@@ -59,20 +65,21 @@ async function registerGatewayRunOnly(program: Command): Promise<void> {
 
 async function registerSubCliWithPluginCommands(
   program: Command,
+  argv: string[],
   registerSubCli: () => Promise<void>,
   pluginCliPosition: "before" | "after",
 ) {
-  const invocation = resolveCliArgvInvocation(process.argv);
+  const invocation = resolveCliArgvInvocation(argv);
   const shouldRegisterPluginCommands =
     !invocation.hasHelpOrVersion &&
     resolveCliCommandPathPolicy(invocation.commandPath).loadPlugins !== "never";
   if (pluginCliPosition === "before" && shouldRegisterPluginCommands) {
-    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+    const { registerPluginCliCommandsFromValidatedConfig } = await pluginCliLoader.load();
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
   await registerSubCli();
   if (pluginCliPosition === "after" && shouldRegisterPluginCommands) {
-    const { registerPluginCliCommandsFromValidatedConfig } = await import("../../plugins/cli.js");
+    const { registerPluginCliCommandsFromValidatedConfig } = await pluginCliLoader.load();
     await registerPluginCliCommandsFromValidatedConfig(program);
   }
 }
@@ -204,9 +211,10 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   ]),
   {
     commandNames: ["pairing"],
-    register: async (program) => {
+    register: async (program, argv) => {
       await registerSubCliWithPluginCommands(
         program,
+        argv,
         async () => {
           const mod = await import("../pairing-cli.js");
           mod.registerPairingCli(program);
@@ -217,9 +225,10 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
   },
   {
     commandNames: ["plugins"],
-    register: async (program) => {
+    register: async (program, argv) => {
       await registerSubCliWithPluginCommands(
         program,
+        argv,
         async () => {
           const mod = await import("../plugins-cli.js");
           mod.registerPluginsCli(program);
