@@ -360,6 +360,52 @@ describe("discordOutbound", () => {
     });
   });
 
+  it.each([
+    {
+      name: "visible text",
+      payload: {
+        text: "voice note",
+        mediaUrls: ["https://example.com/voice.ogg"],
+        audioAsVoice: true,
+      },
+      expectedText: "voice note",
+    },
+    {
+      name: "TTS supplement text",
+      payload: {
+        mediaUrls: ["https://example.com/voice.ogg"],
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "spoken answer",
+        },
+      },
+      expectedText: "spoken answer",
+    },
+  ])("falls back to $name when audioAsVoice delivery fails", async ({ payload, expectedText }) => {
+    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
+
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload,
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToMode: "first",
+    });
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(hoisted.sendMessageDiscordMock).toHaveBeenCalledOnce();
+    const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
+    expect(messageCall[0]).toBe("channel:123456");
+    expect(messageCall[1]).toBe(expectedText);
+    expect(result).toEqual({
+      channel: "discord",
+      messageId: "msg-1",
+      channelId: "ch-1",
+    });
+  });
+
   it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {
     await discordOutbound.sendPayload?.({
       cfg: {},
