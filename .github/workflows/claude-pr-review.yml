@@ -1,0 +1,133 @@
+name: Claude PR Review
+
+on:
+  pull_request:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: claude-pr-review-${{ github.event.pull_request.number || github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Auto-review new non-draft PRs, and re-run on demand via a `/cr` or
+    # `/claude-review` comment. Skip PRs opened by claude[bot]: those are
+    # mechanical bot PRs that don't warrant a full review and would otherwise
+    # trip the action's non-human-actor guard.
+    #
+    # The comment path needs two guards the PR-open path does not. This repo is
+    # public and issue_comment always runs in the base repo *with secrets*
+    # regardless of commenter (unlike fork pull_request events, which get no
+    # secret), so restrict /cr to trusted roles or any drive-by user could spend
+    # the ANTHROPIC_API_KEY budget. Match commands exactly (or `cmd `-prefixed
+    # to allow trailing args) so a comment merely mentioning `/claude-review`
+    # doesn't fire a run.
+    if: |
+      (github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
+       github.event.pull_request.user.login != 'claude[bot]') ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request &&
+       github.event.comment.user.type != 'Bot' &&
+       (github.event.comment.author_association == 'OWNER' ||
+        github.event.comment.author_association == 'MEMBER' ||
+        github.event.comment.author_association == 'COLLABORATOR') &&
+       (github.event.comment.body == '/cr' || github.event.comment.body == '/claude-review' ||
+        startsWith(github.event.comment.body, '/cr ') ||
+        startsWith(github.event.comment.body, '/claude-review ')))
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    # No id-token: the action authenticates with ANTHROPIC_API_KEY, so OIDC is
+    # not needed; withholding it shrinks the privileged surface of this job.
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Get PR head ref
+        id: pr-ref
+        if: github.event_name == 'issue_comment'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.issue.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The comment path is privileged (secrets + write token). Refuse fork
+          # PRs so we never check out untrusted code here; /cr on a fork PR would
+          # have no usable secret anyway. Same-repo branches are push-gated to
+          # collaborators, so their head is trusted.
+          CROSS=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json isCrossRepository -q '.isCrossRepository')
+          if [[ "$CROSS" == "true" ]]; then
+            echo "::notice::/cr is disabled for fork PRs to avoid untrusted checkout in a privileged context."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          HEAD_SHA=$(gh pr view "$PR_NUMBER" --repo "$REPO" --json headRefOid -q '.headRefOid')
+          if [[ -z "$HEAD_SHA" || ! "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Failed to resolve head SHA for PR #$PR_NUMBER. Got: '$HEAD_SHA'"
+            exit 1
+          fi
+          echo "sha=$HEAD_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        if: steps.pr-ref.outputs.skip != 'true'
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          ref: ${{ steps.pr-ref.outputs.sha || github.event.pull_request.head.sha }}
+
+      - name: Run Claude PR Review
+        if: steps.pr-ref.outputs.skip != 'true'
+        uses: anthropics/claude-code-action@787c5a0ce96a9a6cfb050ea0c8f4c05f2447c251 # v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Only human-authored PRs auto-review. Add fork automation bots here as
+          # needed; never use '*' — keep this an explicit allowlist.
+          allowed_bots: ""
+          track_progress: true
+          plugin_marketplaces: |
+            https://github.com/anthropics/claude-plugins-official.git
+          plugins: |
+            pr-review-toolkit@claude-plugins-official
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+
+            Run /pr-review-toolkit:review-pr to perform a comprehensive review of this pull request and post the comments.
+
+            Use `mcp__github_inline_comment__create_inline_comment` to highlight specific code issues with inline comments.
+            Only flag issues you are confident about — avoid false positives.
+
+            After all inline comments are posted, use `gh pr comment` to post a SINGLE consolidated summary comment.
+            The summary MUST follow this exact format:
+
+            ## 🔍 PR Review Summary
+
+            **Overview:** <1-2 sentence summary of the PR's purpose and overall assessment>
+
+            ### Findings
+
+            For EVERY finding (including those posted as inline comments), list them grouped by severity:
+
+            #### 🔴 Critical Issues
+            - **<Short title>** — `path/to/file.rb:123` — <Brief description>
+
+            #### 🟠 Important Issues
+            - **<Short title>** — `path/to/file.rb:45-52` — <Brief description>
+
+            #### 🟡 Suggestions
+            - **<Short title>** — `path/to/file.rb:78` — <Brief description>
+
+            If a severity category has no findings, omit it.
+            Every finding MUST include the file path and line number(s).
+            Use the format `path/to/file:LINE` or `path/to/file:START-END` for ranges.
+            End with a total count: "**X findings** (Y critical issues, Z important issues, W suggestions)"
+          claude_args: |
+            --max-turns 50
+            --model claude-sonnet-4-6
+            --allowedTools "Skill,mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr diff:*),Bash(gh pr view:*),Read,Glob,Grep,Task"
