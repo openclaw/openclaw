@@ -1,3 +1,6 @@
+/**
+ * Gateway server-agent integration tests for agent startup and session dispatch.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
