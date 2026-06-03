@@ -1533,6 +1533,11 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
         "utf8",
       );
       writeFileSync(join(packageRoot, "dist", "index.js"), "export {};\n", "utf8");
+      writeFileSync(
+        join(packageRoot, "dist", "postinstall-content-inventory.json"),
+        "stale\n",
+        "utf8",
+      );
       for (const relativePath of LOCAL_BUILD_METADATA_DIST_PATHS) {
         writeFileSync(join(packageRoot, relativePath), "{}\n", "utf8");
       }
@@ -1545,6 +1550,17 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       expect(
         JSON.parse(readFileSync(join(packageRoot, "dist", "postinstall-inventory.json"), "utf8")),
       ).toEqual(["dist/index.js"]);
+      expect(
+        JSON.parse(
+          readFileSync(join(packageRoot, "dist", "postinstall-content-inventory.json"), "utf8"),
+        ),
+      ).toMatchObject([
+        {
+          path: "dist/index.js",
+          sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
+          size: "export {};\n".length,
+        },
+      ]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }

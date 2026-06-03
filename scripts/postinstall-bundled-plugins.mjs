@@ -29,6 +29,8 @@ const DEFAULT_PACKAGE_ROOT = join(scriptDir, "..");
 const DISABLE_POSTINSTALL_ENV = "OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL";
 const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 const DIST_INVENTORY_PATH = "dist/postinstall-inventory.json";
+const DIST_CONTENT_INVENTORY_PATH = "dist/postinstall-content-inventory.json";
+const DIST_METADATA_PATHS = new Set([DIST_INVENTORY_PATH, DIST_CONTENT_INVENTORY_PATH]);
 const LEGACY_PLUGIN_RUNTIME_DEPS_DIR = "plugin-runtime-deps";
 const BAILEYS_MEDIA_FILE = join("node_modules", "baileys", "lib", "Utils", "messages-media.js");
 const BAILEYS_MEDIA_HOTFIX_NEEDLE = [
@@ -226,7 +228,7 @@ function listInstalledDistFiles(params = {}) {
         continue;
       }
       const relativePath = normalizeRelativePath(relative(packageRoot, entryPath));
-      if (relativePath === DIST_INVENTORY_PATH) {
+      if (DIST_METADATA_PATHS.has(relativePath)) {
         continue;
       }
       files.push(relativePath);

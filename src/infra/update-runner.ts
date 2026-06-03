@@ -12,6 +12,7 @@ import {
   resolveControlUiDistIndexPathForRoot,
 } from "./control-ui-assets.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
+import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import { normalizePackageTagInput } from "./package-tag.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
 import { trimLogTail } from "./restart-sentinel.js";
@@ -58,6 +59,7 @@ export type UpdateRunResult = {
   reason?: string;
   before?: { sha?: string | null; version?: string | null };
   after?: { sha?: string | null; version?: string | null };
+  localOverrides?: LocalPackageOverridesResult;
   steps: UpdateStepResult[];
   durationMs: number;
   postUpdate?: {
@@ -1549,6 +1551,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
         : undefined,
       before: { version: beforeVersion },
       after: { version: packageUpdate.afterVersion },
+      localOverrides: packageUpdate.localOverrides,
       steps: packageUpdate.steps,
       durationMs: Date.now() - startedAt,
     };

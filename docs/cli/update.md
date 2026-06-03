@@ -118,6 +118,13 @@ keeps packaged sidecars and channel-owned plugin records aligned with the
 installed OpenClaw build while leaving full plugin-command completion rebuilds to
 explicit `openclaw completion --write-state` runs.
 
+Package-manager updates also detect local edits to packaged `dist` files when
+the installed package includes OpenClaw's content inventory. The updater captures
+those edits before the package swap, verifies the new package first, and reapplies
+only changes whose target file did not change upstream. If an upstream update
+touches the same file, OpenClaw leaves the verified new package in place and
+prints the local override recovery directory instead of overwriting the update.
+
 When a local managed Gateway service is installed and restart is enabled,
 package-manager updates stop the running service before replacing the package
 tree, then refresh the service metadata from the updated install, restart the

@@ -1512,6 +1512,7 @@ async function runPackageInstallUpdate(params: {
     reason: packageUpdate.failedStep ? packageUpdate.failedStep.name : undefined,
     before: { version: beforeVersion },
     after: { version: packageUpdate.afterVersion ?? beforeVersion },
+    localOverrides: packageUpdate.localOverrides,
     steps: packageUpdate.steps,
     durationMs: Date.now() - params.startedAt,
   };

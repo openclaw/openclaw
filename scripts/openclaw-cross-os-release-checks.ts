@@ -3,6 +3,7 @@
 // Executed directly via Node.js + tsx in the release workflow.
 
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -145,6 +146,7 @@ function buildReleaseProviderConfigOverride(providerMeta) {
 }
 
 const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
+const PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH = "dist/postinstall-content-inventory.json";
 const INSTALL_STAGE_DEBRIS_DIR_PATTERN = /^\.openclaw-install-stage(?:-[^/]+)?$/iu;
 const OMITTED_QA_EXTENSION_PREFIXES = [
   "dist/extensions/qa-channel/",
@@ -761,6 +763,9 @@ function isPackagedDistPath(relativePath) {
   if (relativePath === PACKAGE_DIST_INVENTORY_RELATIVE_PATH) {
     return false;
   }
+  if (relativePath === PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH) {
+    return false;
+  }
   if (isLocalBuildMetadataDistPath(relativePath)) {
     return false;
   }
@@ -774,6 +779,24 @@ function isPackagedDistPath(relativePath) {
     return false;
   }
   return true;
+}
+
+function buildPackageDistContentInventory(packageRoot, inventory) {
+  return inventory
+    .map((relativePath) => {
+      const filePath = join(packageRoot, relativePath);
+      const stats = statSync(filePath);
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        throw new Error(`unsafe package dist path: ${relativePath}`);
+      }
+      return {
+        path: relativePath,
+        sha256: createHash("sha256").update(readFileSync(filePath)).digest("hex"),
+        mode: stats.mode & 0o777,
+        size: stats.size,
+      };
+    })
+    .toSorted((left, right) => left.path.localeCompare(right.path));
 }
 
 export async function writePackageDistInventoryForCandidate(params) {
@@ -804,6 +827,12 @@ export async function writePackageDistInventoryForCandidate(params) {
   const inventoryPath = join(params.sourceDir, PACKAGE_DIST_INVENTORY_RELATIVE_PATH);
   mkdirSync(dirname(inventoryPath), { recursive: true });
   writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, "utf8");
+  const contentInventoryPath = join(params.sourceDir, PACKAGE_DIST_CONTENT_INVENTORY_RELATIVE_PATH);
+  writeFileSync(
+    contentInventoryPath,
+    `${JSON.stringify(buildPackageDistContentInventory(params.sourceDir, inventory), null, 2)}\n`,
+    "utf8",
+  );
 }
 
 function readProvidedCandidate(params) {

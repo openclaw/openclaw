@@ -35,6 +35,7 @@ const STEP_LABELS: Record<string, string> = {
   "global install verify": "Verifying global package",
   "global install swap": "Activating global package",
   "global install": "Installing global package",
+  "local overrides": "Checking local OpenClaw changes",
 };
 
 function getStepLabel(step: UpdateStepInfo): string {
@@ -207,6 +208,20 @@ export function printResult(result: UpdateRunResult, opts: PrintResultOptions): 
   if (result.after?.version || result.after?.sha) {
     const after = result.after.version ?? result.after.sha?.slice(0, 8) ?? "";
     defaultRuntime.log(`  After: ${theme.muted(after)}`);
+  }
+  if (result.localOverrides && result.localOverrides.status !== "none") {
+    const local = result.localOverrides;
+    defaultRuntime.log(
+      `  Local changes: ${theme.muted(
+        `${local.status} (${local.added} added, ${local.modified} modified, ${local.deleted} deleted)`,
+      )}`,
+    );
+    if (local.recoveryDir) {
+      defaultRuntime.log(`  Local recovery: ${theme.muted(local.recoveryDir)}`);
+    }
+    for (const warning of local.warnings) {
+      defaultRuntime.log(`  ${theme.warn(warning)}`);
+    }
   }
 
   if (!opts.hideSteps && result.steps.length > 0) {
