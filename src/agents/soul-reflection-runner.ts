@@ -25,7 +25,6 @@ export type MaybeFireSoulReflectionInput = {
   readonly sessionKey: string | undefined;
   readonly workspaceDir: string | undefined;
   readonly userMessage: string;
-  readonly turnsSinceLast: number;
   readonly channel?: string;
   readonly skipSoulReflection?: boolean;
 };
@@ -57,7 +56,6 @@ export async function maybeFireSoulReflection(
   }
   const trigger = shouldFireReflection({
     userMessage: input.userMessage,
-    turnsSinceLast: input.turnsSinceLast,
     config: soulConfig,
   });
   if (!trigger) {

@@ -112,8 +112,7 @@ structured way to persist a rule when you express one:
 
 ```toml
 [agents.defaults.soul]
-autoUpdate = true            # default false
-reflectionTurnInterval = 5   # optional; default 5
+autoUpdate = true   # default false
 ```
 
 When enabled:
@@ -122,8 +121,7 @@ When enabled:
   managed `## Auto-added` section in `SOUL.md`, tagged with a date and the
   user-quote evidence the agent used to justify it.
 - The runtime fires a brief reflection sub-turn when your message contains
-  a signal keyword (_stop, don't, never, please, prefer, no more_) or every
-  `reflectionTurnInterval` turns — whichever comes first. The agent decides
+  a signal keyword (_stop, don't, never, prefer, no more_). The agent decides
   whether anything is worth persisting; if not, it returns a `noop`.
 - Duplicate rules are rejected by the helper, so the section won't bloat with
   rephrased restatements of the same preference.

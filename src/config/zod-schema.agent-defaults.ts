@@ -98,8 +98,6 @@ export const AgentDefaultsSchema = z
       .object({
         /** When true, the runtime fires reflection sub-turns that can append rules to SOUL.md. Default false. */
         autoUpdate: z.boolean().optional(),
-        /** Lower bound on turns between automatic reflection sub-turns (default 5). */
-        reflectionTurnInterval: z.number().int().min(1).max(100).optional(),
       })
       .strict()
       .optional(),

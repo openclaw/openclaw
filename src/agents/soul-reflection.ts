@@ -10,16 +10,7 @@
  * This module owns no IO and no model calls — those live in the runner.
  */
 
-export const DEFAULT_TURN_INTERVAL = 5;
-export const SIGNAL_KEYWORDS = [
-  "stop",
-  "don't",
-  "dont",
-  "never",
-  "please",
-  "prefer",
-  "no more",
-] as const;
+export const SIGNAL_KEYWORDS = ["stop", "don't", "dont", "never", "prefer", "no more"] as const;
 
 const SIGNAL_KEYWORD_PATTERN = new RegExp(
   `\\b(?:${SIGNAL_KEYWORDS.map((kw) => kw.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|")})\\b`,
@@ -28,16 +19,12 @@ const SIGNAL_KEYWORD_PATTERN = new RegExp(
 
 export type SoulReflectionConfig = {
   readonly autoUpdate?: boolean;
-  readonly reflectionTurnInterval?: number;
 };
 
-export type ReflectionTrigger =
-  | { readonly kind: "keyword"; readonly matched: string }
-  | { readonly kind: "interval"; readonly turnsSinceLast: number };
+export type ReflectionTrigger = { readonly kind: "keyword"; readonly matched: string };
 
 export type ShouldFireReflectionInput = {
   readonly userMessage: string;
-  readonly turnsSinceLast: number;
   readonly config: SoulReflectionConfig | undefined;
 };
 
@@ -53,18 +40,7 @@ export function shouldFireReflection(input: ShouldFireReflectionInput): Reflecti
   if (keywordMatch) {
     return { kind: "keyword", matched: keywordMatch[0].toLowerCase() };
   }
-  const interval = resolveTurnInterval(input.config.reflectionTurnInterval);
-  if (input.turnsSinceLast >= interval) {
-    return { kind: "interval", turnsSinceLast: input.turnsSinceLast };
-  }
   return null;
-}
-
-export function resolveTurnInterval(configured: number | undefined): number {
-  if (typeof configured !== "number" || !Number.isFinite(configured) || configured < 1) {
-    return DEFAULT_TURN_INTERVAL;
-  }
-  return Math.floor(configured);
 }
 
 export const REFLECTION_PROMPT = [
@@ -87,10 +63,7 @@ export type BuildReflectionPromptInput = {
 };
 
 export function buildReflectionPrompt(input: BuildReflectionPromptInput): string {
-  const triggerLine =
-    input.trigger.kind === "keyword"
-      ? `Trigger: signal keyword "${input.trigger.matched}" in latest user message.`
-      : `Trigger: ${input.trigger.turnsSinceLast} turns since last reflection.`;
+  const triggerLine = `Trigger: signal keyword "${input.trigger.matched}" in latest user message.`;
   return [
     REFLECTION_PROMPT,
     "",

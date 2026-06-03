@@ -902,7 +902,6 @@ async function agentCommandInternal(
       sessionKey,
       workspaceDir,
       userMessage: body,
-      turnsSinceLast: 0,
       channel: opts.channel,
       skipSoulReflection: opts.skipSoulReflection,
     });

@@ -31,17 +31,17 @@ afterEach(() => {
  * forced-notice payload, and undo — wired together the way the runner would call them.
  */
 describe("soul reflection end-to-end flow", () => {
-  const config: SoulReflectionConfig = { autoUpdate: true, reflectionTurnInterval: 5 };
+  const config: SoulReflectionConfig = { autoUpdate: true };
 
-  it("user says 'please stop using em-dashes' -> rule lands in SOUL.md and undo reverses it", async () => {
+  it("user says 'stop using em-dashes' -> rule lands in SOUL.md and undo reverses it", async () => {
     await fsp.writeFile(
       soulPath,
       ["# SOUL.md", "", "## Vibe", "", "- Be terse.", ""].join("\n"),
       "utf-8",
     );
-    const userMessage = "please stop using em-dashes";
+    const userMessage = "stop using em-dashes";
 
-    const trigger = shouldFireReflection({ userMessage, turnsSinceLast: 1, config });
+    const trigger = shouldFireReflection({ userMessage, config });
     expect(trigger).not.toBeNull();
     if (!trigger) {
       return;
@@ -55,7 +55,7 @@ describe("soul reflection end-to-end flow", () => {
     const tool = createSoulUpdateTool({ workspaceDir });
     const toolResult = await tool.execute("reflection-call-1", {
       rule: "Never use em-dashes.",
-      evidence: "User: 'please stop using em-dashes'",
+      evidence: "User: 'stop using em-dashes'",
     });
     const payload = JSON.parse((toolResult.content[0] as { text: string }).text);
     expect(payload).toMatchObject({
@@ -68,7 +68,7 @@ describe("soul reflection end-to-end flow", () => {
     const soul = await fsp.readFile(soulPath, "utf-8");
     expect(soul).toContain("## Auto-added");
     expect(soul).toContain("- Never use em-dashes.");
-    expect(soul).toContain("evidence: User: 'please stop using em-dashes'");
+    expect(soul).toContain("evidence: User: 'stop using em-dashes'");
     expect(soul).toContain("## Vibe");
     expect(soul).toContain("- Be terse.");
 
@@ -79,22 +79,13 @@ describe("soul reflection end-to-end flow", () => {
     expect(afterUndo).toContain("- Be terse.");
   });
 
-  it("interval-trigger flow on a neutral turn -> agent decides noop -> SOUL.md unchanged", async () => {
+  it("neutral turn does not trigger reflection -> SOUL.md unchanged", async () => {
     const original = "# SOUL.md\n\nNothing fancy.\n";
     await fsp.writeFile(soulPath, original, "utf-8");
 
-    const trigger = shouldFireReflection({
-      userMessage: "ok, next file",
-      turnsSinceLast: 5,
-      config,
-    });
-    expect(trigger?.kind).toBe("interval");
+    const trigger = shouldFireReflection({ userMessage: "ok, next file", config });
+    expect(trigger).toBeNull();
 
-    const tool = createSoulUpdateTool({ workspaceDir });
-    const noopResult = await tool.execute("reflection-call-noop", { noop: true });
-    expect(JSON.parse((noopResult.content[0] as { text: string }).text)).toEqual({
-      status: "noop",
-    });
     expect(await fsp.readFile(soulPath, "utf-8")).toBe(original);
   });
 
@@ -111,12 +102,11 @@ describe("soul reflection end-to-end flow", () => {
     });
   });
 
-  it("autoUpdate=false -> no trigger ever fires regardless of message or turn count", () => {
+  it("autoUpdate=false -> no trigger ever fires regardless of message", () => {
     expect(
       shouldFireReflection({
-        userMessage: "please never do that again",
-        turnsSinceLast: 100,
-        config: { autoUpdate: false, reflectionTurnInterval: 5 },
+        userMessage: "never do that again",
+        config: { autoUpdate: false },
       }),
     ).toBeNull();
   });

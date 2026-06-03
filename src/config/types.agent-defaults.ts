@@ -297,8 +297,6 @@ export type AgentDefaultsConfig = {
   soul?: {
     /** When true, runtime exposes the `soul_update` tool and fires reflection sub-turns. Default false. */
     autoUpdate?: boolean;
-    /** Lower bound on turns between automatic reflection sub-turns (default 5). */
-    reflectionTurnInterval?: number;
   };
   /**
    * Agent-visible bootstrap truncation warning mode:

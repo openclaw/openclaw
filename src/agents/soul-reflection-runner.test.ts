@@ -44,7 +44,6 @@ describe("maybeFireSoulReflection", () => {
       sessionKey: "session:abc",
       workspaceDir,
       userMessage: "please stop using em-dashes",
-      turnsSinceLast: 0,
     });
     expect(outcome).toEqual({ status: "skipped", reason: "disabled" });
     expect(ingressSpy).not.toHaveBeenCalled();
@@ -56,7 +55,6 @@ describe("maybeFireSoulReflection", () => {
       sessionKey: "session:abc",
       workspaceDir,
       userMessage: "please stop using em-dashes",
-      turnsSinceLast: 0,
       skipSoulReflection: true,
     });
     expect(outcome).toEqual({ status: "skipped", reason: "disabled" });
@@ -69,19 +67,17 @@ describe("maybeFireSoulReflection", () => {
       sessionKey: undefined,
       workspaceDir,
       userMessage: "please stop using em-dashes",
-      turnsSinceLast: 0,
     });
     expect(outcome).toEqual({ status: "skipped", reason: "no-session" });
     expect(ingressSpy).not.toHaveBeenCalled();
   });
 
-  it("skips with reason=no-trigger on a neutral message under interval threshold", async () => {
+  it("skips with reason=no-trigger on a neutral message with no signal keywords", async () => {
     const outcome = await maybeFireSoulReflection({
       cfg: baseCfg(true),
       sessionKey: "session:abc",
       workspaceDir,
       userMessage: "ok next file",
-      turnsSinceLast: 0,
     });
     expect(outcome).toEqual({ status: "skipped", reason: "no-trigger" });
     expect(ingressSpy).not.toHaveBeenCalled();
@@ -93,7 +89,6 @@ describe("maybeFireSoulReflection", () => {
       sessionKey: "session:abc",
       workspaceDir,
       userMessage: "please stop using em-dashes",
-      turnsSinceLast: 0,
     });
     expect(outcome).toEqual({ status: "fired", appendedRule: null });
     expect(ingressSpy).toHaveBeenCalledTimes(1);
@@ -130,7 +125,6 @@ describe("maybeFireSoulReflection", () => {
       sessionKey: "session:abc",
       workspaceDir,
       userMessage: "please stop using em-dashes",
-      turnsSinceLast: 0,
     });
 
     expect(outcome).toEqual({ status: "fired", appendedRule: "Never use em-dashes." });
@@ -143,7 +137,6 @@ describe("maybeFireSoulReflection", () => {
       sessionKey: "session:abc",
       workspaceDir,
       userMessage: "please stop using em-dashes",
-      turnsSinceLast: 0,
     });
     expect(outcome).toEqual({ status: "error", detail: "simulated ingress failure" });
   });
