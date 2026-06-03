@@ -1030,4 +1030,54 @@ describe("Tool Search", () => {
     });
     expect(second.catalogReused).toBe(false);
   });
+
+  it("ignores unreadable catalog parameters without dropping sibling tools", async () => {
+    const config = {
+      tools: {
+        toolSearch: { enabled: true, mode: "tools" },
+      },
+    } as never;
+    const sessionId = "session-unreadable-schema";
+    const controls = createToolSearchTools({ config, sessionId });
+    const searchTool = controls.find((tool) => tool.name === TOOL_SEARCH_RAW_TOOL_NAME);
+    const describeTool = controls.find((tool) => tool.name === TOOL_DESCRIBE_RAW_TOOL_NAME);
+    if (!searchTool || !describeTool) {
+      throw new Error("Expected raw Tool Search controls");
+    }
+    const hostile = pluginTool("fake_unreadable_schema", "Tool with unreadable parameters");
+    hostile.parameters = new Proxy<Record<string, unknown>>(
+      {
+        type: "object",
+        properties: {
+          value: { type: "string" },
+        },
+      },
+      {
+        ownKeys() {
+          throw new Error("schema keys exploded");
+        },
+      },
+    );
+    const healthy = pluginTool("fake_healthy_schema", "Healthy sibling tool");
+
+    const compacted = applyToolSearchCatalog({
+      tools: [...controls, hostile, healthy],
+      config,
+      sessionId,
+    });
+
+    expect(compacted.catalogRegistered).toBe(true);
+    expect(compacted.catalogToolCount).toBe(2);
+
+    const searchResult = await searchTool.execute("search-unreadable-schema", {
+      query: "healthy",
+    });
+    const hits = searchResult.details as Array<{ name?: string }>;
+    expect(hits.map((hit) => hit.name)).toContain("fake_healthy_schema");
+
+    const describeResult = await describeTool.execute("describe-unreadable-schema", {
+      id: "fake_unreadable_schema",
+    });
+    expect(resultDetails(describeResult).parameters).toEqual({});
+  });
 });

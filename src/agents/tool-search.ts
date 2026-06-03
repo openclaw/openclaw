@@ -503,10 +503,42 @@ function stableJsonFingerprint(value: unknown, seen = new WeakSet<object>()): st
     return `[${value.map((item) => stableJsonFingerprint(item, seen)).join(",")}]`;
   }
   const record = value as Record<string, unknown>;
-  const entries = Object.keys(record)
-    .toSorted()
-    .map((key) => `${JSON.stringify(key)}:${stableJsonFingerprint(record[key], seen)}`);
+  let keys: string[];
+  try {
+    keys = Object.keys(record);
+  } catch {
+    return '"[Unreadable]"';
+  }
+  const entries = keys.toSorted().map((key) => {
+    let child: unknown;
+    try {
+      child = record[key];
+    } catch {
+      child = "[Unreadable]";
+    }
+    return `${JSON.stringify(key)}:${stableJsonFingerprint(child, seen)}`;
+  });
   return `{${entries.join(",")}}`;
+}
+
+function readCatalogParameters(tool: CatalogTool): unknown {
+  try {
+    return tool.parameters;
+  } catch {
+    return {};
+  }
+}
+
+function toJsonSafeCatalogParameters(parameters: unknown): unknown {
+  if (parameters === undefined) {
+    return undefined;
+  }
+  try {
+    const text = JSON.stringify(parameters);
+    return text === undefined ? undefined : JSON.parse(text);
+  } catch {
+    return {};
+  }
 }
 
 function catalogToolIdentity(tool: CatalogTool): number {
@@ -658,7 +690,7 @@ function toCatalogEntry(
     name: tool.name,
     label: tool.label,
     description: tool.description ?? "",
-    parameters: tool.parameters,
+    parameters: toJsonSafeCatalogParameters(readCatalogParameters(tool)),
     tool: catalogTool,
   };
 }
