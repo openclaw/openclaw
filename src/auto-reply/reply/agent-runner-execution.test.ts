@@ -3010,6 +3010,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result).toEqual({
       kind: "final",
       payload: {
+        isError: true,
         text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
       },
     });
@@ -5290,7 +5291,7 @@ describe("runAgentTurnWithFallback", () => {
   );
 
   it.each(["group", "channel"] as const)(
-    "keeps rate-limit fallback copy out of Discord %s chats",
+    "surfaces rate-limit fallback copy in Discord %s chats",
     async (chatType) => {
       state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("429 rate limit exceeded"));
 
@@ -5310,7 +5311,37 @@ describe("runAgentTurnWithFallback", () => {
 
       expect(result.kind).toBe("final");
       if (result.kind === "final") {
-        expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.isError).toBe(true);
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).toContain("rate-limited");
+      }
+    },
+  );
+
+  it.each(["group", "channel"] as const)(
+    "surfaces overloaded fallback copy in Discord %s chats",
+    async (chatType) => {
+      state.runEmbeddedAgentMock.mockRejectedValueOnce(new Error("model is overloaded"));
+
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: {
+            Provider: "discord",
+            Surface: "discord",
+            ChatType: chatType,
+            GroupSubject: "agent group",
+            GroupChannel: "#general",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+        }),
+      );
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.isError).toBe(true);
+        expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
+        expect(result.payload.text).toContain("overloaded");
       }
     },
   );
@@ -5344,6 +5375,7 @@ describe("runAgentTurnWithFallback", () => {
 
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
+      expect(result.payload.isError).toBe(true);
       expect(result.payload.text).not.toBe(SILENT_REPLY_TOKEN);
       expect(result.payload.text).toContain("rate-limited");
     }
