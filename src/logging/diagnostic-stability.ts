@@ -123,6 +123,33 @@ export type DiagnosticStabilitySnapshot = {
       chunked: number;
       bySurface: Record<string, number>;
     };
+    channelTurns?: {
+      totalEvents: number;
+      deliveryRequired: number;
+      deliverySent: number;
+      deliveryFailed: number;
+      invalidCompletions: number;
+      missingVisibleDelivery: number;
+      byChannel: Record<
+        string,
+        {
+          deliveryRequired: number;
+          deliverySent: number;
+          deliveryFailed: number;
+          invalidCompletions: number;
+          missingVisibleDelivery: number;
+        }
+      >;
+      recentFailures: Array<{
+        seq: number;
+        ts: number;
+        channel?: string;
+        turnId?: string;
+        sessionKey?: string;
+        messageId?: string;
+        reason?: string;
+      }>;
+    };
   };
 };
 
@@ -603,6 +630,20 @@ function summarizeRecords(
     chunked: 0,
     bySurface: {} as Record<string, number>,
   };
+  const channelTurns = {
+    totalEvents: 0,
+    deliveryRequired: 0,
+    deliverySent: 0,
+    deliveryFailed: 0,
+    invalidCompletions: 0,
+    missingVisibleDelivery: 0,
+    byChannel: {} as NonNullable<
+      DiagnosticStabilitySnapshot["summary"]["channelTurns"]
+    >["byChannel"],
+    recentFailures: [] as NonNullable<
+      DiagnosticStabilitySnapshot["summary"]["channelTurns"]
+    >["recentFailures"],
+  };
 
   for (const record of records) {
     byType[record.type] = (byType[record.type] ?? 0) + 1;
@@ -632,6 +673,48 @@ function summarizeRecords(
       const surface = record.surface ?? "unknown";
       payloadLarge.bySurface[surface] = (payloadLarge.bySurface[surface] ?? 0) + 1;
     }
+    if (record.type === "channel.turn.event") {
+      channelTurns.totalEvents += 1;
+      const channel = record.channel ?? "unknown";
+      channelTurns.byChannel[channel] ??= {
+        deliveryRequired: 0,
+        deliverySent: 0,
+        deliveryFailed: 0,
+        invalidCompletions: 0,
+        missingVisibleDelivery: 0,
+      };
+      const channelSummary = channelTurns.byChannel[channel];
+      if (record.action === "delivery.required") {
+        channelTurns.deliveryRequired += 1;
+        channelSummary.deliveryRequired += 1;
+      } else if (record.action === "delivery.sent") {
+        channelTurns.deliverySent += 1;
+        channelSummary.deliverySent += 1;
+      } else if (record.action === "delivery.failed") {
+        channelTurns.deliveryFailed += 1;
+        channelSummary.deliveryFailed += 1;
+      }
+      if (record.outcome === "invalid" || record.action === "turn.failed") {
+        channelTurns.invalidCompletions += 1;
+        channelSummary.invalidCompletions += 1;
+      }
+      if (record.reason === "missing_visible_delivery") {
+        channelTurns.missingVisibleDelivery += 1;
+        channelSummary.missingVisibleDelivery += 1;
+        channelTurns.recentFailures.push({
+          seq: record.seq,
+          ts: record.ts,
+          channel: record.channel,
+          turnId: record.turnId,
+          sessionKey: record.sessionKey,
+          messageId: record.messageId,
+          reason: record.reason,
+        });
+        if (channelTurns.recentFailures.length > 10) {
+          channelTurns.recentFailures.shift();
+        }
+      }
+    }
   }
 
   return {
@@ -647,6 +730,7 @@ function summarizeRecords(
         }
       : {}),
     ...(payloadLarge.count > 0 ? { payloadLarge } : {}),
+    ...(channelTurns.totalEvents > 0 ? { channelTurns } : {}),
   };
 }
 

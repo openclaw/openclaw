@@ -377,6 +377,100 @@ describe("diagnostic stability recorder", () => {
     });
   });
 
+  it("summarizes channel turn delivery SLA failures without message content", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      accountId: "acct",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageId: "msg-1",
+      target: "sebastian",
+      turnEventType: "delivery.required",
+      status: "required",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      accountId: "acct",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageId: "msg-1",
+      target: "sebastian",
+      turnEventType: "delivery.failed",
+      status: "failed",
+      reason: "missing_visible_delivery",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      accountId: "acct",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      messageId: "msg-1",
+      target: "sebastian",
+      turnEventType: "turn.failed",
+      status: "invalid",
+      reason: "missing_visible_delivery",
+      completionAllowed: false,
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-2",
+      messageId: "msg-2",
+      turnEventType: "delivery.sent",
+      status: "sent",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.channelTurns).toMatchObject({
+      totalEvents: 4,
+      deliveryRequired: 1,
+      deliverySent: 1,
+      deliveryFailed: 1,
+      invalidCompletions: 1,
+      missingVisibleDelivery: 2,
+      byChannel: {
+        telegram: {
+          deliveryRequired: 1,
+          deliverySent: 1,
+          deliveryFailed: 1,
+          invalidCompletions: 1,
+          missingVisibleDelivery: 2,
+        },
+      },
+    });
+    expect(snapshot.summary.channelTurns?.recentFailures).toEqual([
+      {
+        seq: expect.any(Number),
+        ts: expect.any(Number),
+        channel: "telegram",
+        turnId: "telegram:acct:message:msg-1",
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageId: "msg-1",
+        reason: "missing_visible_delivery",
+      },
+      {
+        seq: expect.any(Number),
+        ts: expect.any(Number),
+        channel: "telegram",
+        turnId: "telegram:acct:message:msg-1",
+        sessionKey: "agent:main:telegram:direct:owner",
+        messageId: "msg-1",
+        reason: "missing_visible_delivery",
+      },
+    ]);
+    expect(snapshot.events[0]).not.toHaveProperty("accountId");
+    expect(JSON.stringify(snapshot)).not.toContain("hello");
+  });
+
   it("keeps the newest events when capacity is exceeded", () => {
     startDiagnosticStabilityRecorder();
 

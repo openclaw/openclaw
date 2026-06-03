@@ -1326,6 +1326,125 @@ describe("channel turn kernel", () => {
     expect(state.errors).toContain("missing_visible_delivery");
   });
 
+  it("blocks materialized turn completion when required delivery was not sent", () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1, createId: () => "evt" });
+    turnEvents.append({
+      type: "message.received",
+      turnId: "telegram:message:msg-1",
+      actor: "user",
+      channel: "telegram",
+      status: "received",
+    });
+    turnEvents.append({
+      type: "turn.started",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "started",
+    });
+    turnEvents.append({
+      type: "delivery.required",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "required",
+    });
+
+    const state = materializeTurnState(turnEvents.list("telegram:message:msg-1"));
+
+    expect(state.visibleDeliveryRequired).toBe(true);
+    expect(state.visibleDeliverySent).toBe(false);
+    expect(state.completionAllowed).toBe(false);
+    expect(state.errors).toContain("missing_visible_delivery");
+  });
+
+  it("allows materialized turn completion after required delivery was sent", () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    turnEvents.append({
+      type: "delivery.required",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "required",
+    });
+    turnEvents.append({
+      type: "delivery.sent",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "sent",
+    });
+    turnEvents.append({
+      type: "turn.completed",
+      turnId: "telegram:message:msg-1",
+      actor: "runtime",
+      channel: "telegram",
+      status: "valid",
+    });
+
+    const state = materializeTurnState(turnEvents.list("telegram:message:msg-1"));
+
+    expect(state.currentState).toBe("completed");
+    expect(state.completionAllowed).toBe(true);
+    expect(state.errors).toEqual([]);
+  });
+
+  it("keeps delivery failures visible in materialized turn state", () => {
+    const state = materializeTurnState([
+      {
+        id: "evt-1",
+        type: "delivery.required",
+        timestamp: 1,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "required",
+      },
+      {
+        id: "evt-2",
+        type: "delivery.failed",
+        timestamp: 2,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "failed",
+        metadata: { reason: "missing_visible_delivery" },
+      },
+    ]);
+
+    expect(state.currentState).toBe("failed");
+    expect(state.completionAllowed).toBe(false);
+    expect(state.errors).toContain("missing_visible_delivery");
+  });
+
+  it("models tool call and result causality inside the same turn", () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    const called = turnEvents.append({
+      id: "tool-call-1",
+      type: "tool.called",
+      turnId: "telegram:message:msg-1",
+      actor: "agent",
+      channel: "telegram",
+      status: "started",
+      metadata: { tool: "message.send" },
+    });
+    const result = turnEvents.append({
+      type: "tool.result",
+      turnId: "telegram:message:msg-1",
+      parentId: called.id,
+      actor: "tool",
+      channel: "telegram",
+      status: "completed",
+      metadata: { tool: "message.send" },
+    });
+
+    expect(result.parentId).toBe("tool-call-1");
+    expect(turnEvents.list("telegram:message:msg-1").map((event) => event.type)).toEqual([
+      "tool.called",
+      "tool.result",
+    ]);
+  });
+
   it("emits bounded diagnostic turn events without requiring a custom recorder", async () => {
     const diagnostics: DiagnosticChannelTurnEvent[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => {
