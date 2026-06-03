@@ -29,4 +29,28 @@ describe("feishu setup entry", () => {
     const { getFeishuRuntime } = await import("./src/runtime.js");
     expect(getFeishuRuntime()).toBe(runtime);
   });
+
+  it("wires the Feishu runtime through the setup-loader registration path", async () => {
+    const { default: setupEntry } = await import("./setup-entry.js");
+    const { resolveSetupChannelRegistration } =
+      await import("../../src/plugins/loader-channel-setup.js");
+    const runtime = { channel: { inbound: { run: vi.fn() } } };
+
+    const registration = resolveSetupChannelRegistration({
+      default: {
+        kind: setupEntry.kind,
+        loadSetupPlugin: () => ({ id: "feishu" }),
+        setChannelRuntime: setupEntry.setChannelRuntime,
+      },
+    });
+
+    expect(registration.usesBundledSetupContract).toBe(true);
+    expect(registration.plugin?.id).toBe("feishu");
+    expect(typeof registration.setChannelRuntime).toBe("function");
+
+    registration.setChannelRuntime?.(runtime as never);
+
+    const { getFeishuRuntime } = await import("./src/runtime.js");
+    expect(getFeishuRuntime()).toBe(runtime);
+  });
 });
