@@ -148,6 +148,26 @@ describe("buildOpenAIProvider", () => {
     expect(manifest.modelCatalog.discovery.openai).toBe("runtime");
   });
 
+  it("keeps a network-free OpenAI static catalog", async () => {
+    const provider = buildOpenAIProvider();
+
+    const result = await provider.staticCatalog?.run({
+      resolveProviderAuth: () => ({
+        apiKey: undefined,
+        mode: "none",
+        source: "none",
+      }),
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      config: {},
+      env: {},
+    } as never);
+
+    if (!result || !("provider" in result)) {
+      throw new Error("expected OpenAI static provider catalog");
+    }
+    expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.5");
+  });
+
   it("filters the OpenAI API-key catalog against live model ids", async () => {
     const release = vi.fn(async () => undefined);
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({

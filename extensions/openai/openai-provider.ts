@@ -399,6 +399,10 @@ export function buildOpenAIProvider(): ProviderPlugin {
         };
       },
     },
+    staticCatalog: {
+      order: "simple",
+      run: async () => ({ provider: OPENAI_MANIFEST_PROVIDER }),
+    },
     resolveDynamicModel: (ctx) =>
       shouldResolveDynamicModelThroughCodex(ctx)
         ? codexHooks.resolveDynamicModel?.(ctx)
