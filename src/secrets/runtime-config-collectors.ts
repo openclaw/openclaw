@@ -5,6 +5,7 @@ import { collectCoreConfigAssignments } from "./runtime-config-collectors-core.j
 import { collectPluginConfigAssignments } from "./runtime-config-collectors-plugins.js";
 import type { ResolverContext } from "./runtime-shared.js";
 
+/** Collects every config-backed SecretRef assignment before runtime values are materialized. */
 export function collectConfigAssignments(params: {
   config: OpenClawConfig;
   context: ResolverContext;

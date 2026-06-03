@@ -4,6 +4,7 @@ import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { loadChannelSecretContractApi } from "./channel-contract-api.js";
 import type { ResolverContext, SecretDefaults } from "./runtime-shared.js";
 
+/** Collects SecretRef assignments declared by active channel/plugin channel contracts. */
 export function collectChannelConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
@@ -24,6 +25,7 @@ export function collectChannelConfigAssignments(params: {
     const collectRuntimeConfigAssignments =
       contract?.collectRuntimeConfigAssignments ??
       getBootstrapChannelSecrets(channelId)?.collectRuntimeConfigAssignments;
+    // Bootstrap contracts cover built-in channels before plugin contract loading is available.
     collectRuntimeConfigAssignments?.(params);
   }
 }

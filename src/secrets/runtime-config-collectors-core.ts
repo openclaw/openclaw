@@ -635,6 +635,7 @@ function collectSandboxSshAssignments(params: {
   }
 }
 
+/** Collects SecretRef assignments from core-owned config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;
