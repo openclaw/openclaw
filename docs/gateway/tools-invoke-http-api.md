@@ -141,6 +141,56 @@ to callers that do not have owner/admin identity (`operator.admin`) even when
 they are listed in `gateway.tools.allow`. Shared-secret bearer auth still follows
 the full trusted-operator rule above.
 
+### Opt-in: coding tool `read` over direct-invoke
+
+The `read` coding tool can be exposed for deterministic automation (CI/preflight
+checks, lint pipelines, browser capture flows) without an LLM round-trip. This
+applies to BOTH `POST /tools/invoke` AND the SDK-facing JSON-RPC `tools.invoke`
+(they share the same direct-invoke resolver).
+
+**`read` is denied by default.** To enable it, operators must set TWO distinct
+config keys, intentionally:
+
+```json5
+{
+  gateway: {
+    tools: {
+      // (1) Lift `read` from the HTTP default deny list (same opt-in shape as
+      // the other dangerous-by-default tools).
+      allow: ["read"],
+      // (2) NEW: distinct direct-invoke opt-in. Without this, the `read` tool
+      // is not materialized into the candidate set even if `allow` includes it.
+      // This dual-key gating prevents an upgrade-time compatibility break for
+      // pre-existing configs that already include `"read"` in `allow` for
+      // unrelated reasons (e.g. for an MCP/agent surface where `read` is
+      // already available).
+      directInvoke: {
+        hostFsRead: true,
+      },
+    },
+  },
+}
+```
+
+**Either key alone is insufficient.** Only the combination grants direct-invoke
+read access:
+
+| `tools.allow` includes `"read"` | `directInvoke.hostFsRead` | `read` reachable           |
+| ------------------------------- | ------------------------- | -------------------------- |
+| no                              | no                        | ❌                         |
+| yes                             | no                        | ❌ (tool not materialized) |
+| no                              | yes                       | ❌ (filtered by HTTP deny) |
+| yes                             | yes                       | ✅                         |
+
+**Security:** When enabled, `read` can access any file the gateway process can
+open, **outside the configured workspace** unless `tools.fs.workspaceOnly: true`
+is set. The default-deny config audit (`gateway.tools_invoke_http.host_read_allow`)
+warns when both keys are set without workspace confinement.
+
+Only the `read` tool is exposed via this mechanism. Mutating coding primitives
+(`write`/`edit`/`apply_patch`/`exec`/`process`) remain unavailable on the
+direct-invoke surface in this release.
+
 To help group policies resolve context, you can optionally set:
 
 - `x-openclaw-message-channel: <channel>` (example: `slack`, `telegram`)

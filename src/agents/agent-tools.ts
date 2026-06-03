@@ -390,6 +390,19 @@ export type OpenClawCodingToolConstructionPlan = {
   includePluginTools: boolean;
 };
 
+/**
+ * Internal-only marker. Set by `createOpenClawCodingToolsRaw()` to request
+ * that the returned tools NOT be wrapped with `wrapToolWithBeforeToolCallHook`,
+ * because the caller (the gateway `/tools/invoke` HTTP surface) runs
+ * `runBeforeToolCallHook` itself before dispatch.
+ *
+ * Module-private (not exported) so SDK consumers cannot pass it through the
+ * typed `createOpenClawCodingTools` parameters and bypass the hook system.
+ * The only call site that may set this is `createOpenClawCodingToolsRaw`
+ * below, which is the trusted internal HTTP-surface entry point.
+ */
+const SKIP_BEFORE_TOOL_CALL_HOOK = Symbol("openclaw.agent-tools.skip-before-tool-call-hook");
+
 /** Build the runtime tool list for one agent run. */
 export function createOpenClawCodingTools(options?: {
   agentId?: string;
@@ -1217,11 +1230,20 @@ export function createOpenClawCodingTools(options?: {
     allocateToolOutcomeOrdinal: options?.allocateToolOutcomeOrdinal,
   };
   const hookOptions = { emitDiagnostics: options?.emitBeforeToolCallDiagnostics };
-  const withHooks = normalized.map((tool) =>
-    isToolWrappedWithBeforeToolCallHook(tool)
-      ? rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions)
-      : wrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
-  );
+  // Internal-only hook bypass: only `createOpenClawCodingToolsRaw` may pass
+  // this Symbol-keyed flag (see SKIP_BEFORE_TOOL_CALL_HOOK above). SDK
+  // consumers cannot reach this code path because the symbol is not exported.
+  const skipBeforeToolCallHook =
+    options !== undefined &&
+    Object.prototype.hasOwnProperty.call(options, SKIP_BEFORE_TOOL_CALL_HOOK) &&
+    (options as Record<symbol, unknown>)[SKIP_BEFORE_TOOL_CALL_HOOK] === true;
+  const withHooks = skipBeforeToolCallHook
+    ? normalized
+    : normalized.map((tool) =>
+        isToolWrappedWithBeforeToolCallHook(tool)
+          ? rewrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions)
+          : wrapToolWithBeforeToolCallHook(tool, hookContext, hookOptions),
+      );
   options?.recordToolPrepStage?.("tool-hooks");
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
@@ -1238,3 +1260,23 @@ export function createOpenClawCodingTools(options?: {
   return withDeferredFollowupDescriptions;
 }
 export { testing as __testing };
+
+/**
+ * Build OpenClaw coding tools without the `before_tool_call` hook wrapper.
+ * Intended for callers that drive the hook themselves (e.g. the gateway
+ * `/tools/invoke` HTTP surface in `handleToolsInvokeHttpRequest`, which calls
+ * `runBeforeToolCallHook` directly before dispatching). Passing wrapped tools
+ * to that path would double-fire the hook and leak adjusted-params state.
+ */
+export function createOpenClawCodingToolsRaw(
+  options?: Parameters<typeof createOpenClawCodingTools>[0],
+): AnyAgentTool[] {
+  // Internal call site: set the module-private Symbol so the factory skips
+  // the before-tool-call hook wrap step. SDK consumers cannot reach this
+  // path because the symbol is module-private (not exported).
+  const taggedOptions = {
+    ...options,
+    [SKIP_BEFORE_TOOL_CALL_HOOK]: true,
+  } as Parameters<typeof createOpenClawCodingTools>[0];
+  return createOpenClawCodingTools(taggedOptions);
+}

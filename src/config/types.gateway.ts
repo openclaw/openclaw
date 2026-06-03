@@ -459,6 +459,39 @@ export type GatewayToolsConfig = {
   deny?: string[];
   /** Tools to explicitly allow (removes from default deny list). */
   allow?: string[];
+  /**
+   * Distinct, surface-specific opt-ins for tools that expand the security
+   * boundary beyond the regular allow/deny policy. Each opt-in must be set
+   * EXPLICITLY in addition to including the tool in `allow`; old configs that
+   * only have `allow: ["read"]` for unrelated reasons stay inert here.
+   *
+   * Addresses ClawSweeper [P1] on PR #85664: distinct opt-in prevents an
+   * upgrade-time compatibility break where existing `allow: ["read"]` entries
+   * would silently grant host-FS read over the direct-invoke surface.
+   */
+  directInvoke?: GatewayDirectInvokeOptIns;
+};
+
+/**
+ * Direct-invoke surface-specific opt-ins. Currently only `hostFsRead` is
+ * defined (gates the `read` tool). Future opt-ins for write/exec/process
+ * primitives will follow the same dual-key gating pattern.
+ */
+export type GatewayDirectInvokeOptIns = {
+  /**
+   * Allow the `read` coding tool to be materialized for the gateway
+   * direct-invoke surfaces (HTTP `POST /tools/invoke` AND SDK RPC
+   * `tools.invoke`, which share the resolver). Defaults to `false`.
+   *
+   * Even when set to `true`, the operator MUST also include `"read"` in
+   * `gateway.tools.allow` for the tool to actually be reachable; this
+   * dual-key gating is intentional, see GatewayToolsConfig.directInvoke
+   * docs.
+   *
+   * Exposes host filesystem reads outside the workspace unless
+   * `tools.fs.workspaceOnly` is also enabled.
+   */
+  hostFsRead?: boolean;
 };
 
 export type GatewayConfig = {
