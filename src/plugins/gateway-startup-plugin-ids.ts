@@ -1,6 +1,9 @@
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { collectConfiguredAgentHarnessRuntimes } from "../agents/harness-runtimes.js";
@@ -527,51 +530,106 @@ function resolveEffectiveMemoryEmbeddingProviderId(
   return normalizeConfiguredMemoryEmbeddingProviderId(override?.provider ?? defaults?.provider);
 }
 
+type ConfiguredMemoryEmbeddingProvider = {
+  /** Raw `memorySearch.provider` id as configured (normalized). */
+  configuredId: string;
+  /**
+   * Adapter ids a plugin can own for this provider: the configured id plus its
+   * `models.providers.<id>.api` owner when a custom provider maps to one.
+   */
+  ownerIds: ReadonlySet<string>;
+};
+
 /**
- * Collect explicitly configured `agents.*.memorySearch.provider` ids that map to
- * a plugin-owned memory embedding provider contract. Enablement and provider are
- * resolved with the same defaults->override inheritance as runtime memory search,
- * so inherited-disabled blocks and sentinel values ("auto"/"local"/"none") are
+ * Resolve a configured memory embedding provider id to the adapter id(s) a
+ * plugin manifest contract or runtime registry can own. Mirrors runtime
+ * `getConfiguredMemoryEmbeddingProvider`: the raw id maps to a direct adapter,
+ * and a custom `models.providers.<id>` entry additionally maps to its `api`
+ * owner adapter (`provider: "ollama-5080"` with `api: "ollama"` -> "ollama").
+ * Both candidates are returned so matching covers the direct adapter and the
+ * API owner without the runtime adapter registry.
+ */
+function resolveMemoryEmbeddingProviderOwnerIds(
+  providerId: string,
+  config: OpenClawConfig,
+): string[] {
+  const ownerIds = [providerId];
+  const ownerApi = normalizeOptionalLowercaseString(
+    findNormalizedProviderValue(config.models?.providers, providerId)?.api,
+  );
+  if (ownerApi && ownerApi !== providerId) {
+    ownerIds.push(ownerApi);
+  }
+  return ownerIds;
+}
+
+/**
+ * Collect explicitly configured `agents.*.memorySearch.provider` entries with
+ * the adapter ids each resolves to. Enablement and provider are resolved with
+ * the same defaults->override inheritance as runtime memory search, so
+ * inherited-disabled blocks and sentinel values ("auto"/"local"/"none") are
  * ignored.
+ */
+function collectConfiguredMemoryEmbeddingProviders(
+  config: OpenClawConfig,
+): ConfiguredMemoryEmbeddingProvider[] {
+  const byConfiguredId = new Map<string, ConfiguredMemoryEmbeddingProvider>();
+  const defaultsBlock = config.agents?.defaults?.memorySearch;
+  const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;
+  const addEffectiveProvider = (override: Record<string, unknown> | undefined) => {
+    const configuredId = resolveEffectiveMemoryEmbeddingProviderId(defaults, override);
+    if (!configuredId || byConfiguredId.has(configuredId)) {
+      return;
+    }
+    byConfiguredId.set(configuredId, {
+      configuredId,
+      ownerIds: new Set(resolveMemoryEmbeddingProviderOwnerIds(configuredId, config)),
+    });
+  };
+  // Defaults baseline covers the default agent and every agent that does not
+  // override memorySearch.
+  addEffectiveProvider(undefined);
+  const agents = config.agents?.list;
+  if (Array.isArray(agents)) {
+    for (const agent of agents) {
+      if (isRecord(agent)) {
+        addEffectiveProvider(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
+      }
+    }
+  }
+  return [...byConfiguredId.values()];
+}
+
+/**
+ * Collect configured memory embedding provider ids that map to a plugin-owned
+ * memory embedding provider contract, including the resolved `api` owner for
+ * custom `models.providers` ids so the owning plugin loads at startup.
  */
 export function collectConfiguredMemoryEmbeddingProviderIds(
   config: OpenClawConfig,
 ): ReadonlySet<string> {
   const providerIds = new Set<string>();
-  const defaultsBlock = config.agents?.defaults?.memorySearch;
-  const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;
-  const addEffectiveProviderId = (override: Record<string, unknown> | undefined) => {
-    const providerId = resolveEffectiveMemoryEmbeddingProviderId(defaults, override);
-    if (providerId) {
-      providerIds.add(providerId);
-    }
-  };
-  // Defaults baseline covers the default agent and every agent that does not
-  // override memorySearch.
-  addEffectiveProviderId(undefined);
-  const agents = config.agents?.list;
-  if (Array.isArray(agents)) {
-    for (const agent of agents) {
-      if (isRecord(agent)) {
-        addEffectiveProviderId(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
-      }
+  for (const provider of collectConfiguredMemoryEmbeddingProviders(config)) {
+    for (const ownerId of provider.ownerIds) {
+      providerIds.add(ownerId);
     }
   }
   return providerIds;
 }
 
 /**
- * Report configured memory embedding provider ids that no loaded plugin
- * registered. Custom / OpenAI-compatible providers resolve to an adapter via
- * `models.providers.<id>.api`, so their configured id may differ from the
- * registered adapter id; skip those to avoid false-positive warnings.
+ * Report configured memory embedding providers that no loaded plugin can serve.
+ * A provider is unregistered only when none of its resolved adapter ids (the
+ * configured id and its `models.providers.<id>.api` owner) was registered, so
+ * custom providers warn when their API-owner plugin is missing but stay quiet
+ * once that plugin loads.
  */
 export function collectUnregisteredConfiguredMemoryEmbeddingProviderIds(params: {
   config: OpenClawConfig;
   registeredProviderIds: ReadonlySet<string>;
 }): string[] {
-  const configured = collectConfiguredMemoryEmbeddingProviderIds(params.config);
-  if (configured.size === 0) {
+  const configured = collectConfiguredMemoryEmbeddingProviders(params.config);
+  if (configured.length === 0) {
     return [];
   }
   const registered = new Set(
@@ -579,13 +637,9 @@ export function collectUnregisteredConfiguredMemoryEmbeddingProviderIds(params: 
       .map((id) => normalizeOptionalLowercaseString(id))
       .filter((id): id is string => Boolean(id)),
   );
-  const customProviderIds = new Set(
-    Object.keys(params.config.models?.providers ?? {})
-      .map((id) => normalizeOptionalLowercaseString(id))
-      .filter((id): id is string => Boolean(id)),
-  );
-  return [...configured]
-    .filter((providerId) => !registered.has(providerId) && !customProviderIds.has(providerId))
+  return configured
+    .filter((provider) => ![...provider.ownerIds].some((ownerId) => registered.has(ownerId)))
+    .map((provider) => provider.configuredId)
     .toSorted((left, right) => left.localeCompare(right));
 }
 

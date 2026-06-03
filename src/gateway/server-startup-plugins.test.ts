@@ -469,37 +469,46 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
     expect(log.warn).not.toHaveBeenCalled();
   });
 
-  it("does not warn for custom providers configured through models.providers", async () => {
+  function customOllamaConfig(): OpenClawConfig {
+    return {
+      agents: { defaults: { memorySearch: { provider: "ollama-5080" } } },
+      models: {
+        providers: {
+          "ollama-5080": {
+            api: "ollama",
+            baseUrl: "http://gpu-box.local:11435",
+            models: [],
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+
+  it("does not warn for custom providers whose api-owner plugin is registered", async () => {
+    const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
+      await import("./server-startup-plugins.js");
+    const log = createLog();
+    // memorySearch.provider="ollama-5080" resolves to api owner "ollama"; the
+    // registered owner satisfies the contract, so the custom id must stay quiet.
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: customOllamaConfig(),
+      pluginRegistry: registry(["ollama"]),
+      log,
+    });
+    expect(log.warn).not.toHaveBeenCalled();
+  });
+
+  it("warns for custom providers whose api-owner plugin is not registered", async () => {
     const { warnUnregisteredConfiguredMemoryEmbeddingProviders } =
       await import("./server-startup-plugins.js");
     const log = createLog();
     warnUnregisteredConfiguredMemoryEmbeddingProviders({
-      config: {
-        agents: { defaults: { memorySearch: { provider: "my-embeddings" } } },
-        models: {
-          providers: {
-            "my-embeddings": {
-              api: "openai-completions",
-              baseUrl: "https://example.invalid/v1",
-              models: [
-                {
-                  id: "embedding-model",
-                  name: "Embedding Model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
-          },
-        },
-      } as OpenClawConfig,
+      config: customOllamaConfig(),
       pluginRegistry: registry([]),
       log,
     });
-    expect(log.warn).not.toHaveBeenCalled();
+    expect(log.warn).toHaveBeenCalledTimes(1);
+    expect(String(log.warn.mock.calls[0]?.[0])).toContain('memorySearch.provider="ollama-5080"');
   });
 
   it("does not warn for sentinel or disabled memory search providers", async () => {

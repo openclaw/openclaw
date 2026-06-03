@@ -182,6 +182,17 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         },
       },
       {
+        id: "ollama",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: ["ollama"],
+        cliBackends: [],
+        contracts: {
+          memoryEmbeddingProviders: ["ollama"],
+        },
+      },
+      {
         id: "google",
         channels: [],
         origin: "bundled",
@@ -949,6 +960,29 @@ describe("resolveGatewayStartupPluginIds", () => {
         },
       } as OpenClawConfig,
       ["browser", "openai", "memory-core"],
+    ],
+    [
+      "includes the api-owner plugin for a custom models.providers memory embedding provider at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            // Custom id resolves to its `api` owner ("ollama") for the embedding
+            // adapter, so the owning plugin must load at startup.
+            memorySearch: { provider: "ollama-5080" },
+          },
+        },
+        models: {
+          providers: {
+            "ollama-5080": {
+              api: "ollama",
+              baseUrl: "http://gpu-box.local:11435",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "ollama", "memory-core"],
     ],
     [
       "ignores sentinel memory embedding providers that no plugin owns",
