@@ -3,6 +3,7 @@ import type { HealthSummary } from "./health.js";
 import {
   buildStatusFooterLines,
   buildStatusHealthRows,
+  buildStatusLastHeartbeatValue,
   buildStatusModelSelectionLines,
   buildStatusPairingRecoveryLines,
   buildStatusPluginCompatibilityLines,
@@ -302,5 +303,56 @@ describe("status.command-sections", () => {
       { key: "Status", header: "Status", minWidth: 8 },
       { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
     ]);
+  });
+
+  describe("buildStatusLastHeartbeatValue", () => {
+    const base = {
+      deep: true,
+      gatewayReachable: true,
+      warn: (value: string) => `warn(${value})`,
+      muted: (value: string) => `muted(${value})`,
+      formatTimeAgo: () => "2m",
+    };
+
+    it("shows the hint without an 'unknown' channel for a config-disabled skip", () => {
+      expect(
+        buildStatusLastHeartbeatValue({
+          ...base,
+          lastHeartbeat: {
+            status: "skipped",
+            ts: Date.now(),
+            reason: "target-none",
+            hint: "delivery disabled by configuration",
+          },
+        }),
+      ).toBe("skipped · 2m ago · delivery disabled by configuration");
+    });
+
+    it("omits the channel for a skip even when no hint is present", () => {
+      expect(
+        buildStatusLastHeartbeatValue({
+          ...base,
+          lastHeartbeat: { status: "skipped", ts: Date.now(), reason: "no-target" },
+        }),
+      ).toBe("skipped · 2m ago");
+    });
+
+    it("still labels a non-skipped heartbeat without a channel as unknown", () => {
+      expect(
+        buildStatusLastHeartbeatValue({
+          ...base,
+          lastHeartbeat: { status: "sent", ts: Date.now() },
+        }),
+      ).toBe("sent · 2m ago · unknown");
+    });
+
+    it("keeps a resolved channel when present", () => {
+      expect(
+        buildStatusLastHeartbeatValue({
+          ...base,
+          lastHeartbeat: { status: "sent", ts: Date.now(), channel: "telegram" },
+        }),
+      ).toBe("sent · 2m ago · telegram");
+    });
   });
 });
