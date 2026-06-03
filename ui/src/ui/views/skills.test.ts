@@ -415,6 +415,60 @@ describe("renderSkills", () => {
     expect(chips.some((chip) => normalizeText(chip) === "Clean")).toBe(false);
     expect(verdictChip?.classList.contains("chip-ok")).toBe(false);
   });
+
+  it("does not transfer toggle UI state when a skill is removed from the list", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const skillA = createSkill({ skillKey: "skill-a", name: "Skill A", disabled: true });
+    const skillB = createSkill({ skillKey: "skill-b", name: "Skill B", disabled: true });
+
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [skillA, skillB],
+    };
+
+    // Render with both skills in the disabled tab
+    render(
+      renderSkills(
+        createProps({
+          report,
+          statusFilter: "disabled",
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    let toggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
+    expect(toggles.length).toBe(2);
+    expect(toggles[0]!.checked).toBe(false);
+    expect(toggles[1]!.checked).toBe(false);
+
+    // Simulate skill-a being enabled (removed from disabled tab)
+    const updatedReport: SkillStatusReport = {
+      ...report,
+      skills: [{ ...skillA, disabled: false }, skillB],
+    };
+
+    render(
+      renderSkills(
+        createProps({
+          report: updatedReport,
+          statusFilter: "disabled",
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    toggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
+    expect(toggles.length).toBe(1);
+    // The remaining skill-b should still be unchecked (disabled)
+    expect(toggles[0]!.checked).toBe(false);
+  });
 });
 
 function installDialogMethod(
