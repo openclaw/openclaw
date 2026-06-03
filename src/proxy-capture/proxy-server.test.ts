@@ -1,6 +1,5 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
-import { createServer, type Server } from "node:http";
-import { Socket, type AddressInfo } from "node:net";
+import { createServer, request as httpRequest, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -54,7 +53,7 @@ describe("proxy upstream response error handling", () => {
     await new Promise<void>((resolve) => {
       origin!.listen(0, "127.0.0.1", resolve);
     });
-    const originAddr = origin.address() as AddressInfo;
+    const originAddr = origin.address() as { port: number };
     const originUrl = `http://127.0.0.1:${originAddr.port}/test`;
 
     // Start the debug proxy
@@ -78,23 +77,31 @@ describe("proxy upstream response error handling", () => {
 
     // Send a request through the proxy to the broken origin
     const proxy = new URL(proxyServer.proxyUrl);
-    const socket = new Socket();
-    let data = "";
-    socket.setEncoding("utf8");
-    socket.on("data", (chunk) => {
-      data += String(chunk);
+    const data = await new Promise<string>((resolve) => {
+      let body = "";
+      const req = httpRequest(
+        {
+          hostname: proxy.hostname,
+          port: Number(proxy.port),
+          path: originUrl,
+          method: "GET",
+          headers: {
+            Host: `127.0.0.1:${originAddr.port}`,
+            Connection: "close",
+          },
+        },
+        (res) => {
+          res.setEncoding("utf8");
+          res.on("data", (chunk: string) => {
+            body += chunk;
+          });
+          res.on("end", () => resolve(body));
+          res.on("error", () => resolve(body));
+        },
+      );
+      req.on("error", () => resolve(body));
+      req.end();
     });
-    await new Promise<void>((resolve, reject) => {
-      socket.once("error", reject);
-      socket.connect(Number(proxy.port), proxy.hostname, resolve);
-    });
-    socket.write(
-      `GET ${originUrl} HTTP/1.1\r\nHost: 127.0.0.1:${originAddr.port}\r\nConnection: close\r\n\r\n`,
-    );
-    await new Promise<void>((resolve) => {
-      socket.once("end", resolve);
-    });
-    socket.destroy();
 
     // The proxy should NOT crash. The response may contain partial data
     // followed by an abrupt close, or the error text from the handler.
