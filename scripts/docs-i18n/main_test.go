@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -48,6 +50,24 @@ func (transcriptFrontmatterTranslator) TranslateRaw(_ context.Context, text, _, 
 }
 
 func (transcriptFrontmatterTranslator) Close() {}
+
+type partialFailTranslator struct{}
+
+func (partialFailTranslator) Translate(_ context.Context, text, _, _ string) (string, error) {
+	if strings.Contains(text, "FAIL") {
+		return "", errors.New("translation failed")
+	}
+	return text, nil
+}
+
+func (partialFailTranslator) TranslateRaw(_ context.Context, text, _, _ string) (string, error) {
+	if strings.Contains(text, "FAIL") {
+		return "", errors.New("translation failed")
+	}
+	return text, nil
+}
+
+func (partialFailTranslator) Close() {}
 
 func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	t.Parallel()
@@ -99,6 +119,40 @@ func TestRunDocsI18NRewritesFinalLocalizedPageLinks(t *testing.T) {
 	}
 }
 
+func TestRunDocsI18NAllowPartialKeepsSuccessfulDocOutputs(t *testing.T) {
+	t.Parallel()
+
+	docsRoot := t.TempDir()
+	writeFile(t, filepath.Join(docsRoot, ".i18n", "glossary.zh-CN.json"), "[]")
+	writeFile(t, filepath.Join(docsRoot, "docs.json"), `{"redirects":[]}`)
+	okPath := filepath.Join(docsRoot, "aaa-ok.md")
+	failPath := filepath.Join(docsRoot, "zzz-fail.md")
+	writeFile(t, okPath, "# Gateway\n")
+	writeFile(t, failPath, "# FAIL\n")
+
+	err := runDocsI18N(context.Background(), runConfig{
+		targetLang:   "zh-CN",
+		sourceLang:   "en",
+		docsRoot:     docsRoot,
+		mode:         "doc",
+		thinking:     "high",
+		overwrite:    true,
+		allowPartial: true,
+		parallel:     1,
+	}, []string{okPath, failPath}, func(_, _ string, _ []GlossaryEntry, _ string) (docsTranslator, error) {
+		return partialFailTranslator{}, nil
+	})
+	if err != nil {
+		t.Fatalf("runDocsI18N failed despite partial output: %v", err)
+	}
+	if got := mustReadFile(t, filepath.Join(docsRoot, "zh-CN", "aaa-ok.md")); !strings.Contains(got, "# Gateway") {
+		t.Fatalf("expected successful output to be written, got:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(docsRoot, "zh-CN", "zzz-fail.md")); err == nil {
+		t.Fatal("did not expect failed output to be written")
+	}
+}
+
 func TestTranslateSnippetDoesNotCacheFallbackToSource(t *testing.T) {
 	t.Parallel()
 
@@ -144,6 +198,7 @@ func TestValidateNoTranslationTranscriptArtifacts(t *testing.T) {
 
 	tests := []string{
 		`表情回应 analysis to=functions.read {"path":"/home/runner/work/docs/docs/source/.agents/skills/openclaw-qa-testing/SKILL.md"} code`,
+		"<openclaw_docs_i18n_input>\nTranslated\n</openclaw_docs_i18n_input>",
 		`กำลังทำงานกับ reactions to=functions.read commentary ￣第四色json 皇平台`,
 		`คุณต้องการแผนที่เอกสาร analysis to=final code omitted`,
 		`Potrzebujesz listy funkcji TUI force_parallel: false} code`,

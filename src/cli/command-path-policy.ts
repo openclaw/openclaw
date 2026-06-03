@@ -12,13 +12,14 @@ const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   bypassConfigGuard: false,
   routeConfigGuard: "never",
   loadPlugins: "never",
+  pluginRegistry: { scope: "all" },
   hideBanner: false,
   ensureCliPath: true,
   networkProxy: "default",
 };
 
 export function resolveCliCommandPathPolicy(commandPath: string[]): CliCommandPathPolicy {
-  let resolvedPolicy: CliCommandPathPolicy = { ...DEFAULT_CLI_COMMAND_PATH_POLICY };
+  const resolvedPolicy: CliCommandPathPolicy = { ...DEFAULT_CLI_COMMAND_PATH_POLICY };
   for (const entry of cliCommandCatalog) {
     if (!entry.policy) {
       continue;

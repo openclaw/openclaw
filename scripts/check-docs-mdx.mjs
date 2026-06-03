@@ -2,6 +2,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { compile } from "@mdx-js/mdx";
 import {
   checkMintlifyAccordionIndentation,
@@ -65,6 +66,10 @@ const POISON_TEXT_PATTERNS = [
     message: "Leaked tool-call input payload.",
   },
   {
+    pattern: /<\/?openclaw_docs_i18n_input>/iu,
+    message: "Leaked docs i18n prompt wrapper.",
+  },
+  {
     pattern: /\/home\/runner\/work\//u,
     message: "Leaked GitHub Actions workspace path.",
   },
@@ -74,7 +79,19 @@ const POISON_TEXT_PATTERNS = [
   },
 ];
 
-function parseArgs(argv) {
+function parsePositiveIntegerArg(raw, label) {
+  const text = String(raw ?? "").trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  const value = Number(text);
+  if (!Number.isSafeInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   const roots = [];
   let jsonOut = "";
   let maxErrors = 50;
@@ -87,7 +104,7 @@ function parseArgs(argv) {
       continue;
     }
     if (part === "--max-errors") {
-      maxErrors = Number.parseInt(argv[index + 1] ?? "", 10);
+      maxErrors = parsePositiveIntegerArg(argv[index + 1], "--max-errors");
       index += 1;
       continue;
     }
@@ -100,7 +117,7 @@ function parseArgs(argv) {
   return {
     roots: roots.length ? roots : ["docs"],
     jsonOut,
-    maxErrors: Number.isFinite(maxErrors) && maxErrors > 0 ? maxErrors : 50,
+    maxErrors,
   };
 }
 
@@ -342,7 +359,13 @@ async function main() {
   process.exitCode = 1;
 }
 
-main().catch((error) => {
-  console.error(error?.stack ?? error);
-  process.exit(1);
-});
+const isMain = process.argv[1] ? fileURLToPath(import.meta.url) === process.argv[1] : false;
+
+if (isMain) {
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error?.stack ?? error);
+      process.exit(1);
+    },
+  );
+}

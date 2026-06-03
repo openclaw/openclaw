@@ -28,7 +28,7 @@ type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 
 export type { PreparedChannelNativeApprovalTarget } from "./approval-native-runtime-types.js";
 
-export type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
+type ChannelNativeApprovalPlanDeliveryResult<TPendingEntry> = {
   entries: TPendingEntry[];
   deliveryPlan: ChannelApprovalNativeDeliveryPlan;
   deliveredTargets: ChannelApprovalNativePlannedTarget[];
@@ -266,49 +266,49 @@ export function createChannelNativeApprovalRuntime<
           approvalKind,
           request,
           adapter: adapter.nativeAdapter,
-          prepareTarget: async ({ plannedTarget, request }) =>
+          prepareTarget: async ({ plannedTarget, request: requestCandidate }) =>
             await adapter.prepareTarget({
               plannedTarget,
-              request,
+              request: requestCandidate,
               approvalKind,
               pendingContent,
             }),
-          deliverTarget: async ({ plannedTarget, preparedTarget, request }) =>
+          deliverTarget: async ({ plannedTarget, preparedTarget, request: requestEntry }) =>
             await adapter.deliverTarget({
               plannedTarget,
               preparedTarget,
-              request,
+              request: requestEntry,
               approvalKind,
               pendingContent,
             }),
           onDeliveryError: adapter.onDeliveryError
-            ? ({ error, plannedTarget, request }) => {
+            ? ({ error, plannedTarget, request: requestResult }) => {
                 adapter.onDeliveryError?.({
                   error,
                   plannedTarget,
-                  request,
+                  request: requestResult,
                   approvalKind,
                   pendingContent,
                 });
               }
             : undefined,
           onDuplicateSkipped: adapter.onDuplicateSkipped
-            ? ({ plannedTarget, preparedTarget, request }) => {
+            ? ({ plannedTarget, preparedTarget, request: requestValue }) => {
                 adapter.onDuplicateSkipped?.({
                   plannedTarget,
                   preparedTarget,
-                  request,
+                  request: requestValue,
                   approvalKind,
                   pendingContent,
                 });
               }
             : undefined,
           onDelivered: adapter.onDelivered
-            ? ({ plannedTarget, preparedTarget, request, entry }) => {
+            ? ({ plannedTarget, preparedTarget, request: requestLocal, entry }) => {
                 adapter.onDelivered?.({
                   plannedTarget,
                   preparedTarget,
-                  request,
+                  request: requestLocal,
                   approvalKind,
                   pendingContent,
                   entry,

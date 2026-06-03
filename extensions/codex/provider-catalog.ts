@@ -29,13 +29,6 @@ export const FALLBACK_CODEX_MODELS = [
     inputModalities: ["text", "image"],
     supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
   },
-  {
-    id: "gpt-5.2",
-    model: "gpt-5.2",
-    displayName: "gpt-5.2",
-    inputModalities: ["text", "image"],
-    supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
-  },
 ] satisfies CodexAppServerModel[];
 
 export function buildCodexModelDefinition(model: {
@@ -49,7 +42,7 @@ export function buildCodexModelDefinition(model: {
   return {
     id,
     name: model.displayName?.trim() || id,
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     reasoning: model.supportedReasoningEfforts.length > 0 || shouldDefaultToReasoningModel(id),
     input: model.inputModalities.includes("image") ? ["text", "image"] : ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -67,7 +60,7 @@ export function buildCodexProviderConfig(models: CodexAppServerModel[]): ModelPr
     baseUrl: CODEX_BASE_URL,
     apiKey: CODEX_APP_SERVER_AUTH_MARKER,
     auth: "token",
-    api: "openai-codex-responses",
+    api: "openai-chatgpt-responses",
     models: models.map(buildCodexModelDefinition),
   };
 }

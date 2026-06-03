@@ -1,3 +1,7 @@
+import {
+  createMessageReceiptFromOutboundResults,
+  type MessageReceiptPartKind,
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "../runtime-api.js";
@@ -46,6 +50,7 @@ const MATRIX_TEXT_LIMIT = 4000;
 const getCore = () => getMatrixRuntime();
 
 export type { MatrixSendOpts, MatrixSendResult } from "./send/types.js";
+export { resolveMatrixMentionsForBody } from "./send/formatting.js";
 export { resolveMatrixRoomId } from "./send/targets.js";
 
 export type MatrixPreparedSingleText = {
@@ -65,6 +70,25 @@ type MatrixClientResolveOpts = {
   timeoutMs?: number;
   accountId?: string | null;
 };
+
+function createMatrixSendReceipt(params: {
+  roomId: string;
+  platformMessageIds: readonly string[];
+  kind: MessageReceiptPartKind;
+  replyToId?: string;
+  threadId?: string | null;
+}) {
+  return createMessageReceiptFromOutboundResults({
+    kind: params.kind,
+    ...(params.replyToId ? { replyToId: params.replyToId } : {}),
+    ...(params.threadId ? { threadId: params.threadId } : {}),
+    results: params.platformMessageIds.map((messageId) => ({
+      channel: "matrix",
+      messageId,
+      roomId: params.roomId,
+    })),
+  });
+}
 
 function isMatrixClient(value: MatrixClient | MatrixClientResolveOpts): value is MatrixClient {
   return typeof (value as { sendEvent?: unknown }).sendEvent === "function";
@@ -219,8 +243,9 @@ export async function sendMessageMatrix(
         return eventId;
       };
 
-      const messageIds: string[] = [];
+      const platformMessageIds: string[] = [];
       let lastMessageId = "";
+      let receiptKind: MessageReceiptPartKind = "text";
       if (opts.mediaUrl) {
         const maxBytes = resolveMediaMaxBytes(opts.accountId, cfg);
         const media = await loadOutboundMediaFromUrl(opts.mediaUrl, {
@@ -246,6 +271,7 @@ export async function sendMessageMatrix(
           fileName: media.fileName,
         });
         const msgtype = useVoice ? MsgType.Audio : baseMsgType;
+        receiptKind = useVoice ? "voice" : "media";
         const isImage = msgtype === MsgType.Image;
         const imageInfo = isImage
           ? await prepareImageInfo({
@@ -278,7 +304,7 @@ export async function sendMessageMatrix(
         const eventId = await sendContent(content);
         lastMessageId = eventId ?? lastMessageId;
         if (eventId) {
-          messageIds.push(eventId);
+          platformMessageIds.push(eventId);
         }
         const textChunks = useVoice ? chunks : rest;
         // Voice messages use a generic media body ("Voice message"), so keep any
@@ -298,7 +324,7 @@ export async function sendMessageMatrix(
           const followupEventId = await sendContent(followup);
           lastMessageId = followupEventId ?? lastMessageId;
           if (followupEventId) {
-            messageIds.push(followupEventId);
+            platformMessageIds.push(followupEventId);
           }
         }
       } else {
@@ -316,7 +342,7 @@ export async function sendMessageMatrix(
           const eventId = await sendContent(content);
           lastMessageId = eventId ?? lastMessageId;
           if (eventId) {
-            messageIds.push(eventId);
+            platformMessageIds.push(eventId);
           }
         }
       }
@@ -324,8 +350,14 @@ export async function sendMessageMatrix(
       return {
         messageId: lastMessageId || "unknown",
         roomId,
-        primaryMessageId: messageIds[0] ?? (lastMessageId || "unknown"),
-        messageIds,
+        primaryMessageId: platformMessageIds[0] ?? (lastMessageId || "unknown"),
+        receipt: createMatrixSendReceipt({
+          roomId,
+          platformMessageIds,
+          kind: receiptKind,
+          replyToId: opts.replyToId,
+          threadId,
+        }),
       };
     },
   );
@@ -474,11 +506,18 @@ export async function sendSingleTextMessageMatrix(
         (content as Record<string, unknown>)[MSC4357_LIVE_KEY] = {};
       }
       const eventId = await client.sendMessage(resolvedRoom, content);
+      const platformMessageIds = eventId ? [eventId] : [];
       return {
         messageId: eventId ?? "unknown",
         roomId: resolvedRoom,
         primaryMessageId: eventId ?? "unknown",
-        messageIds: eventId ? [eventId] : [],
+        receipt: createMatrixSendReceipt({
+          roomId: resolvedRoom,
+          platformMessageIds,
+          kind: "text",
+          replyToId: opts.replyToId,
+          threadId: normalizedThreadId,
+        }),
       };
     },
   );

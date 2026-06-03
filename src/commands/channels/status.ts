@@ -1,6 +1,11 @@
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { parseTimeoutMsWithFallback } from "../../cli/parse-timeout.js";
 import { withProgress } from "../../cli/progress.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { callGateway } from "../../gateway/call.js";
@@ -9,9 +14,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../../plugins/channel-plugin-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { redactSensitiveUrlLikeString } from "../../shared/net/redact-sensitive-url.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -23,9 +25,8 @@ import {
 } from "./shared.js";
 import { formatConfigChannelsStatusLines } from "./status-config-format.js";
 
-export { formatConfigChannelsStatusLines } from "./status-config-format.js";
-
 export type ChannelsStatusOptions = {
+  channel?: string;
   json?: boolean;
   probe?: boolean;
   timeout?: string;
@@ -41,9 +42,46 @@ function formatChannelsStatusError(err: unknown): string {
   return redactGatewayUrlSecretsInText(formatErrorMessage(err));
 }
 
+function formatEventLoopBits(value: unknown): string | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.degraded !== true) {
+    return null;
+  }
+  const reasons = Array.isArray(record.reasons)
+    ? record.reasons.filter((reason): reason is string => typeof reason === "string")
+    : [];
+  const delayMaxMs =
+    typeof record.delayMaxMs === "number" && Number.isFinite(record.delayMaxMs)
+      ? Math.round(record.delayMaxMs)
+      : null;
+  const utilization =
+    typeof record.utilization === "number" && Number.isFinite(record.utilization)
+      ? record.utilization
+      : null;
+  const cpuCoreRatio =
+    typeof record.cpuCoreRatio === "number" && Number.isFinite(record.cpuCoreRatio)
+      ? record.cpuCoreRatio
+      : null;
+  return [
+    reasons.length ? `reasons=${reasons.join(",")}` : null,
+    delayMaxMs != null ? `eventLoopDelayMaxMs=${delayMaxMs}` : null,
+    utilization != null ? `eventLoopUtilization=${utilization}` : null,
+    cpuCoreRatio != null ? `cpuCoreRatio=${cpuCoreRatio}` : null,
+  ]
+    .filter((part): part is string => Boolean(part))
+    .join(" ");
+}
+
 export function formatGatewayChannelsStatusLines(payload: Record<string, unknown>): string[] {
   const lines: string[] = [];
   lines.push(theme.success("Gateway reachable."));
+  const eventLoopLine = formatEventLoopBits(payload.eventLoop);
+  if (eventLoopLine) {
+    lines.push(theme.warn(`Gateway event loop degraded: ${eventLoopLine}`));
+  }
   const channelLabels =
     payload.channelLabels && typeof payload.channelLabels === "object"
       ? (payload.channelLabels as Record<string, unknown>)
@@ -66,11 +104,19 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
         typeof account.lastOutboundAt === "number" && Number.isFinite(account.lastOutboundAt)
           ? account.lastOutboundAt
           : null;
+      const transportAt =
+        typeof account.lastTransportActivityAt === "number" &&
+        Number.isFinite(account.lastTransportActivityAt)
+          ? account.lastTransportActivityAt
+          : null;
       if (inboundAt) {
         bits.push(`in:${formatTimeAgo(Date.now() - inboundAt)}`);
       }
       if (outboundAt) {
         bits.push(`out:${formatTimeAgo(Date.now() - outboundAt)}`);
+      }
+      if (transportAt) {
+        bits.push(`transport:${formatTimeAgo(Date.now() - transportAt)}`);
       }
       appendModeBit(bits, account);
       const botUsername = (() => {
@@ -109,6 +155,9 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       }
       if (account.allowUnmentionedGroups === true) {
         bits.push("groups:unmentioned");
+      }
+      if (typeof account.healthState === "string" && account.healthState) {
+        bits.push(`health:${account.healthState}`);
       }
       appendBaseUrlBit(bits, account);
       const probe = account.probe as { ok?: boolean } | undefined;
@@ -166,7 +215,8 @@ export async function channelsStatusCommand(
   opts: ChannelsStatusOptions,
   runtime: RuntimeEnv = defaultRuntime,
 ) {
-  const timeoutMs = Number(opts.timeout ?? (opts.probe ? 30_000 : 10_000));
+  const timeoutMs = parseTimeoutMsWithFallback(opts.timeout, opts.probe ? 30_000 : 10_000);
+  const requestedChannel = opts.channel ? normalizeChannelId(opts.channel) : null;
   const statusLabel = opts.probe ? "Checking channel status (probe)…" : "Checking channel status…";
   const shouldLogStatus = opts.json !== true && !process.stderr.isTTY;
   if (shouldLogStatus) {
@@ -179,12 +229,20 @@ export async function channelsStatusCommand(
         indeterminate: true,
         enabled: opts.json !== true,
       },
-      async () =>
-        await callGateway({
-          method: "channels.status",
-          params: { probe: Boolean(opts.probe), timeoutMs },
+      async () => {
+        const params: { channel?: string; probe: boolean; timeoutMs: number } = {
+          probe: Boolean(opts.probe),
           timeoutMs,
-        }),
+        };
+        if (opts.channel) {
+          params.channel = opts.channel;
+        }
+        return await callGateway({
+          method: "channels.status",
+          params,
+          timeoutMs,
+        });
+      },
     );
     if (opts.json) {
       writeRuntimeJson(runtime, payload);
@@ -221,7 +279,7 @@ export async function channelsStatusCommand(
           activationSourceConfig: cfg,
           env: process.env,
           includePersistedAuthState: false,
-        }),
+        }).filter((channelId) => !requestedChannel || channelId === requestedChannel),
       });
       return;
     }
@@ -233,7 +291,7 @@ export async function channelsStatusCommand(
             path: snapshot.path,
             mode,
           },
-          { sourceConfig: cfg },
+          { sourceConfig: cfg, channel: opts.channel },
         )
       ).join("\n"),
     );

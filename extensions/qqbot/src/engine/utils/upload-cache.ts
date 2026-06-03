@@ -4,6 +4,10 @@
  */
 
 import * as crypto from "node:crypto";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationSeconds,
+} from "openclaw/plugin-sdk/number-runtime";
 import type { ChatScope } from "../types.js";
 import { debugLog } from "./log.js";
 
@@ -46,7 +50,7 @@ export function getCachedFileInfo(
     return null;
   }
 
-  if (Date.now() >= entry.expiresAt) {
+  if (!isFutureDateTimestampMs(entry.expiresAt)) {
     cache.delete(key);
     return null;
   }
@@ -68,7 +72,7 @@ export function setCachedFileInfo(
   if (cache.size >= MAX_CACHE_SIZE) {
     const now = Date.now();
     for (const [k, v] of cache) {
-      if (now >= v.expiresAt) {
+      if (!isFutureDateTimestampMs(v.expiresAt, { nowMs: now })) {
         cache.delete(k);
       }
     }
@@ -83,25 +87,19 @@ export function setCachedFileInfo(
   const key = buildCacheKey(contentHash, scope, targetId, fileType);
   const safetyMargin = 60;
   const effectiveTtl = Math.max(ttl - safetyMargin, 10);
+  const expiresAt = resolveExpiresAtMsFromDurationSeconds(effectiveTtl);
+  if (expiresAt === undefined) {
+    cache.delete(key);
+    return;
+  }
 
   cache.set(key, {
     fileInfo,
     fileUuid,
-    expiresAt: Date.now() + effectiveTtl * 1000,
+    expiresAt,
   });
 
   debugLog(
     `[upload-cache] Cache SET: key=${key.slice(0, 40)}..., ttl=${effectiveTtl}s, uuid=${fileUuid}`,
   );
-}
-
-/** Return cache stats for diagnostics. */
-export function getUploadCacheStats(): { size: number; maxSize: number } {
-  return { size: cache.size, maxSize: MAX_CACHE_SIZE };
-}
-
-/** Clear the upload cache. */
-export function clearUploadCache(): void {
-  cache.clear();
-  debugLog(`[upload-cache] Cache cleared`);
 }

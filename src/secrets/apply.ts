@@ -15,7 +15,7 @@ import {
   type OpenClawConfig,
 } from "../config/config.js";
 import type { ConfigWriteOptions } from "../config/io.js";
-import type { SecretProviderConfig } from "../config/types.secrets.js";
+import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
@@ -169,7 +169,7 @@ function applyProviderPlanMutations(params: {
   let changed = false;
 
   for (const providerAlias of params.deletes ?? []) {
-    if (!Object.prototype.hasOwnProperty.call(currentProviders, providerAlias)) {
+    if (!Object.hasOwn(currentProviders, providerAlias)) {
       continue;
     }
     delete currentProviders[providerAlias];
@@ -411,7 +411,10 @@ function scrubAuthStoresForProviderTargets(params: {
           delete profile.profile[profile.valueField];
           mutated = true;
         }
-        if (profile.refField in profile.profile) {
+        if (
+          profile.refField in profile.profile &&
+          coerceSecretRef(profile.refValue, params.nextConfig.secrets?.defaults) === null
+        ) {
           delete profile.profile[profile.refField];
           mutated = true;
         }
@@ -837,8 +840,8 @@ export async function runSecretsApply(params: {
       io,
       afterWrite: { mode: "auto" },
     });
-    for (const write of writes) {
-      writeTextFileAtomic(write.path, write.content, write.mode);
+    for (const writeLocal of writes) {
+      writeTextFileAtomic(writeLocal.path, writeLocal.content, writeLocal.mode);
     }
   } catch (err) {
     for (const [pathname, snapshot] of snapshots.entries()) {
@@ -866,7 +869,7 @@ export async function runSecretsApply(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   async projectConfigForTest(params: {
     plan: SecretsApplyPlan;
     env?: NodeJS.ProcessEnv;
@@ -880,3 +883,4 @@ export const __testing = {
     return projected.nextConfig;
   },
 };
+export { testing as __testing };

@@ -1,15 +1,17 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
+import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { redactSensitiveUrlLikeString } from "../shared/net/redact-sensitive-url.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { resolveUserPath } from "../utils.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
@@ -308,27 +310,13 @@ function parseMarketplaceManifest(
   };
 }
 
-async function pathExists(target: string): Promise<boolean> {
-  try {
-    await fs.access(target);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function readClaudeKnownMarketplaces(): Promise<Record<string, KnownMarketplaceRecord>> {
   const knownPath = resolveOsHomeRelativePath(CLAUDE_KNOWN_MARKETPLACES_PATH);
   if (!(await pathExists(knownPath))) {
     return {};
   }
 
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(await fs.readFile(knownPath, "utf-8"));
-  } catch {
-    return {};
-  }
+  const parsed = await tryReadJson<unknown>(knownPath);
 
   if (!parsed || typeof parsed !== "object") {
     return {};
@@ -481,37 +469,37 @@ async function loadMarketplace(params: {
   logger?: MarketplaceLogger;
   timeoutMs?: number;
 }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> {
-  const loadMarketplaceFromManifestFile = async (params: {
+  const loadMarketplaceFromManifestFile = async (paramsLocal: {
     manifestPath: string;
     sourceLabel: string;
     rootDir: string;
     origin: MarketplaceManifestOrigin;
     cleanup?: () => Promise<void>;
   }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> => {
-    const raw = await fs.readFile(params.manifestPath, "utf-8");
-    const parsed = parseMarketplaceManifest(raw, params.manifestPath);
+    const raw = await fs.readFile(paramsLocal.manifestPath, "utf-8");
+    const parsed = parseMarketplaceManifest(raw, paramsLocal.manifestPath);
     if (!parsed.ok) {
-      await params.cleanup?.();
+      await paramsLocal.cleanup?.();
       return parsed;
     }
     const validated = await validateMarketplaceManifest({
       manifest: parsed.manifest,
-      sourceLabel: params.sourceLabel,
-      rootDir: params.rootDir,
-      origin: params.origin,
+      sourceLabel: paramsLocal.sourceLabel,
+      rootDir: paramsLocal.rootDir,
+      origin: paramsLocal.origin,
     });
     if (!validated.ok) {
-      await params.cleanup?.();
+      await paramsLocal.cleanup?.();
       return validated;
     }
     return {
       ok: true,
       marketplace: {
         manifest: validated.manifest,
-        rootDir: params.rootDir,
-        sourceLabel: params.sourceLabel,
-        origin: params.origin,
-        cleanup: params.cleanup,
+        rootDir: paramsLocal.rootDir,
+        sourceLabel: paramsLocal.sourceLabel,
+        origin: paramsLocal.origin,
+        cleanup: paramsLocal.cleanup,
       },
     };
   };
@@ -631,6 +619,18 @@ function hasStreamingResponseBody(
   );
 }
 
+function parseMarketplaceContentLength(raw: string): number {
+  const trimmed = raw.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`invalid content-length header: ${raw}`);
+  }
+  const size = Number(trimmed);
+  if (!Number.isSafeInteger(size)) {
+    throw new Error(`invalid content-length header: ${raw}`);
+  }
+  return size;
+}
+
 async function readMarketplaceChunkWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   chunkTimeoutMs: number,
@@ -660,10 +660,10 @@ async function readMarketplaceChunkWithTimeout(
           resolve(result);
         }
       },
-      (err) => {
+      (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(err);
+          reject(toLintErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -767,8 +767,8 @@ async function downloadUrlToTempFile(
 
       const contentLength = response.headers.get("content-length");
       if (contentLength) {
-        const size = Number(contentLength);
-        if (Number.isFinite(size) && size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
+        const size = parseMarketplaceContentLength(contentLength);
+        if (size > MAX_MARKETPLACE_ARCHIVE_BYTES) {
           throw new Error(
             `download too large: ${size} bytes (limit: ${MAX_MARKETPLACE_ARCHIVE_BYTES} bytes)`,
           );
@@ -1175,4 +1175,18 @@ export async function installPluginFromMarketplace(
     await installCleanup?.();
     await loaded.marketplace.cleanup?.();
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

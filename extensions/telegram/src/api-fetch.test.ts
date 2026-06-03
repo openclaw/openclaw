@@ -48,14 +48,19 @@ function getOwnSymbolValue(
 }
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   vi.unstubAllEnvs();
 });
 
-vi.mock("undici", () => ({
-  ProxyAgent: proxyMocks.ProxyAgent,
-  fetch: proxyMocks.undiciFetch,
-  setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    ProxyAgent: proxyMocks.ProxyAgent,
+    fetch: proxyMocks.undiciFetch,
+    setGlobalDispatcher: proxyMocks.setGlobalDispatcher,
+  };
+});
 
 describe("fetchTelegramChatId", () => {
   const cases = [
@@ -148,9 +153,11 @@ describe("undici env proxy semantics", () => {
     const noProxyAgent = withoutProxyTls[kNoProxyAgent] as Record<PropertyKey, unknown>;
     const httpsProxyAgent = withoutProxyTls[kHttpsProxyAgent] as Record<PropertyKey, unknown>;
 
-    expect(getOwnSymbolValue(noProxyAgent, "options")?.connect).toEqual(
-      expect.objectContaining(connect),
-    );
+    const noProxyConnect = getOwnSymbolValue(noProxyAgent, "options")?.connect as
+      | { autoSelectFamily?: boolean; family?: number }
+      | undefined;
+    expect(noProxyConnect?.family).toBe(connect.family);
+    expect(noProxyConnect?.autoSelectFamily).toBe(connect.autoSelectFamily);
     expect(getOwnSymbolValue(httpsProxyAgent, "proxy tls settings")).toBeUndefined();
 
     const withProxyTls = new EnvHttpProxyAgent({
@@ -162,9 +169,12 @@ describe("undici env proxy semantics", () => {
       unknown
     >;
 
-    expect(getOwnSymbolValue(httpsProxyAgentWithProxyTls, "proxy tls settings")).toEqual(
-      expect.objectContaining(connect),
-    );
+    const proxyTlsSettings = getOwnSymbolValue(
+      httpsProxyAgentWithProxyTls,
+      "proxy tls settings",
+    ) as { autoSelectFamily?: boolean; family?: number } | undefined;
+    expect(proxyTlsSettings?.family).toBe(connect.family);
+    expect(proxyTlsSettings?.autoSelectFamily).toBe(connect.autoSelectFamily);
   });
 });
 

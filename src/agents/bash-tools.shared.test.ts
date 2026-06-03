@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { resolveSandboxWorkdir } from "./bash-tools.shared.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { readEnvInt, resolveSandboxWorkdir } from "./bash-tools.shared.js";
 
 async function withTempDir(run: (dir: string) => Promise<void>) {
   const dir = await mkdtemp(path.join(os.tmpdir(), "openclaw-bash-workdir-"));
@@ -14,6 +14,44 @@ async function withTempDir(run: (dir: string) => Promise<void>) {
 }
 
 describe("resolveSandboxWorkdir", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("reads deprecated PI env integer aliases behind OPENCLAW env names", () => {
+    vi.stubEnv("PI_BASH_YIELD_MS", "250");
+
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBe(250);
+
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "500");
+
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBe(500);
+  });
+
+  it("ignores partial environment integers", () => {
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "250ms");
+    vi.stubEnv("PI_BASH_YIELD_MS", "500");
+
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+  });
+
+  it("reads only strict signed decimal environment integers", () => {
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "+250");
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBe(250);
+
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "0x10");
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "1e2");
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+  });
+
+  it("ignores unsafe environment integers", () => {
+    vi.stubEnv("OPENCLAW_BASH_YIELD_MS", "9007199254740993");
+
+    expect(readEnvInt("OPENCLAW_BASH_YIELD_MS", "PI_BASH_YIELD_MS")).toBeUndefined();
+  });
+
   it("maps container root workdir to host workspace", async () => {
     await withTempDir(async (workspaceDir) => {
       const warnings: string[] = [];
@@ -29,7 +67,7 @@ describe("resolveSandboxWorkdir", () => {
 
       expect(resolved.hostWorkdir).toBe(workspaceDir);
       expect(resolved.containerWorkdir).toBe("/workspace");
-      expect(warnings).toEqual([]);
+      expect(warnings).toStrictEqual([]);
     });
   });
 
@@ -50,7 +88,7 @@ describe("resolveSandboxWorkdir", () => {
 
       expect(resolved.hostWorkdir).toBe(nested);
       expect(resolved.containerWorkdir).toBe("/workspace/scripts/runner");
-      expect(warnings).toEqual([]);
+      expect(warnings).toStrictEqual([]);
     });
   });
 
@@ -71,7 +109,7 @@ describe("resolveSandboxWorkdir", () => {
 
       expect(resolved.hostWorkdir).toBe(nested);
       expect(resolved.containerWorkdir).toBe("/sandbox-root/project");
-      expect(warnings).toEqual([]);
+      expect(warnings).toStrictEqual([]);
     });
   });
 });

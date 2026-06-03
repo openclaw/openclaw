@@ -14,25 +14,40 @@ import { getSubCliEntries } from "./subcli-descriptors.js";
 export type RootHelpRenderOptions = Pick<PluginLoadOptions, "pluginSdkResolution"> & {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  includePluginDescriptors?: boolean;
 };
 
 async function buildRootHelpProgram(renderOptions?: RootHelpRenderOptions): Promise<Command> {
   const program = new Command();
-  configureProgramHelp(program, {
-    programVersion: VERSION,
-    channelOptions: [],
-    messageChannelOptions: "",
-    agentChannelOptions: "",
-  });
+  const pluginDescriptors =
+    renderOptions?.includePluginDescriptors === true || renderOptions?.config
+      ? await getPluginCliCommandDescriptors(renderOptions.config, renderOptions.env, {
+          pluginSdkResolution: renderOptions.pluginSdkResolution,
+        })
+      : [];
+  configureProgramHelp(
+    program,
+    {
+      programVersion: VERSION,
+      channelOptions: [],
+      messageChannelOptions: "",
+      agentChannelOptions: "",
+    },
+    {
+      commandsWithSubcommands: new Set(
+        pluginDescriptors
+          .filter((descriptor) => descriptor.hasSubcommands)
+          .map((descriptor) => descriptor.name),
+      ),
+    },
+  );
 
   addCommandDescriptorsToProgram(
     program,
     collectUniqueCommandDescriptors([
       getCoreCliCommandDescriptors(),
       getSubCliEntries(),
-      await getPluginCliCommandDescriptors(renderOptions?.config, renderOptions?.env, {
-        pluginSdkResolution: renderOptions?.pluginSdkResolution,
-      }),
+      pluginDescriptors,
     ]),
   );
 

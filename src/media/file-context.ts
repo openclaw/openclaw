@@ -1,4 +1,5 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { sanitizeUntrustedFileName } from "../infra/fs-safe-advanced.js";
 
 const XML_ESCAPE_MAP: Record<string, string> = {
   "<": "&lt;",
@@ -21,7 +22,7 @@ function sanitizeFileName(value: string | null | undefined, fallbackName: string
     normalizeOptionalString(
       typeof value === "string" ? value.replace(/[\r\n\t]+/g, " ") : undefined,
     ) ?? "";
-  return normalized || fallbackName;
+  return sanitizeUntrustedFileName(normalized, fallbackName);
 }
 
 export function renderFileContextBlock(params: {

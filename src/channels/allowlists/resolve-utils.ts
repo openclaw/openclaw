@@ -1,9 +1,9 @@
-import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
-import type { RuntimeEnv } from "../../runtime.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { mapAllowFromEntries } from "openclaw/plugin-sdk/channel-config-helpers";
+import type { RuntimeEnv } from "../../runtime.js";
 import { summarizeStringEntries } from "../../shared/string-sample.js";
 
 export type AllowlistUserResolutionLike = {
@@ -59,7 +59,7 @@ export function buildAllowlistResolutionSummary<T extends AllowlistUserResolutio
   return { resolvedMap, mapping, unresolved, additions };
 }
 
-export function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(params: {
+function resolveAllowlistIdAdditions<T extends AllowlistUserResolutionLike>(params: {
   existing: Array<string | number>;
   resolvedMap: Map<string, T>;
 }): string[] {

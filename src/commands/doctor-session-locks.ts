@@ -1,10 +1,14 @@
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentSessionDirs } from "../agents/session-dirs.js";
-import { cleanStaleLockFiles, type SessionLockInspection } from "../agents/session-write-lock.js";
+import {
+  cleanStaleLockFiles,
+  resolveSessionWriteLockStaleMs,
+  type SessionLockInspection,
+  type SessionLockOwnerProcessArgsReader,
+  type SessionWriteLockAcquireTimeoutConfig,
+} from "../agents/session-write-lock.js";
 import { resolveStateDir } from "../config/paths.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
-
-const DEFAULT_STALE_MS = 30 * 60 * 1000;
 
 function formatAge(ageMs: number | null): string {
   if (ageMs === null) {
@@ -35,10 +39,16 @@ function formatLockLine(lock: SessionLockInspection): string {
   return `- ${shortenHomePath(lock.lockPath)} ${pidStatus} ${ageStatus} ${staleStatus}${removedStatus}`;
 }
 
-export async function noteSessionLockHealth(params?: { shouldRepair?: boolean; staleMs?: number }) {
+export async function noteSessionLockHealth(params?: {
+  shouldRepair?: boolean;
+  config?: SessionWriteLockAcquireTimeoutConfig;
+  env?: NodeJS.ProcessEnv;
+  staleMs?: number;
+  readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
+}) {
   const shouldRepair = params?.shouldRepair === true;
-  const staleMs = params?.staleMs ?? DEFAULT_STALE_MS;
-  let sessionDirs: string[] = [];
+  const staleMs = params?.staleMs ?? resolveSessionWriteLockStaleMs(params?.config, params?.env);
+  let sessionDirs: string[];
   try {
     sessionDirs = await resolveAgentSessionDirs(resolveStateDir(process.env));
   } catch (err) {
@@ -56,6 +66,7 @@ export async function noteSessionLockHealth(params?: { shouldRepair?: boolean; s
       sessionsDir,
       staleMs,
       removeStale: shouldRepair,
+      readOwnerProcessArgs: params?.readOwnerProcessArgs,
     });
     allLocks.push(...result.locks);
   }

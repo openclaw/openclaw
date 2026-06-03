@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import * as fences from "../markdown/fences.js";
+import * as fences from "../../packages/markdown-core/src/fences.js";
 import { hasBalancedFences } from "../test-utils/chunk-test-helpers.js";
 import {
   chunkByNewline,
@@ -17,10 +17,18 @@ function expectFencesBalanced(chunks: string[]) {
   }
 }
 
+function requireChunk(chunks: string[], index: number): string {
+  const chunk = chunks[index];
+  if (chunk === undefined) {
+    throw new Error(`expected chunk ${index}`);
+  }
+  return chunk;
+}
+
 function expectChunkLengths(chunks: string[], expectedLengths: number[]) {
   expect(chunks).toHaveLength(expectedLengths.length);
   expectedLengths.forEach((length, index) => {
-    expect(chunks[index]?.length).toBe(length);
+    expect(requireChunk(chunks, index).length).toBe(length);
   });
 }
 
@@ -145,9 +153,15 @@ const newlineModeFenceCases = (() => {
       expected: [fence],
     },
     {
-      name: "splits between fence and following paragraph",
+      name: "keeps short fenced block and following paragraph together",
       text: `${fence}\n\nAfter`,
       limit: 1000,
+      expected: [`${fence}\n\nAfter`],
+    },
+    {
+      name: "splits oversized fenced block away from following paragraph",
+      text: `${fence}\n\nAfter`,
+      limit: fence.length + 1,
       expected: [fence, "After"],
     },
     {
@@ -191,8 +205,8 @@ describe("chunkText", () => {
       text: "This is a message that should break nicely near a word boundary.",
       limit: 30,
       assert: (chunks: string[], text: string) => {
-        expect(chunks[0]?.length).toBeLessThanOrEqual(30);
-        expect(chunks[1]?.length).toBeLessThanOrEqual(30);
+        expect(requireChunk(chunks, 0).length).toBeLessThanOrEqual(30);
+        expect(requireChunk(chunks, 1).length).toBeLessThanOrEqual(30);
         expectNormalizedChunkJoin(chunks, text);
       },
     },
@@ -322,6 +336,26 @@ describe("resolveTextChunkLimit", () => {
       options: undefined,
       expected: 4000,
     },
+    {
+      name: "ignores retired webchat textChunkLimit channel config",
+      cfg: {
+        channels: {
+          webchat: { textChunkLimit: 16000 },
+        },
+      },
+      provider: "webchat" as const,
+      accountId: undefined,
+      options: undefined,
+      expected: 4000,
+    },
+    {
+      name: "falls back to default when webchat has no override",
+      cfg: { channels: {} },
+      provider: "webchat" as const,
+      accountId: undefined,
+      options: undefined,
+      expected: 4000,
+    },
   ] as const)("$name", ({ cfg, provider, accountId, options, expected }) => {
     expect(resolveTextChunkLimit(cfg as never, provider, accountId, options)).toBe(expected);
   });
@@ -338,7 +372,8 @@ describe("chunkMarkdownText", () => {
         const text = `${prefix}\n\n${fence}\n\n${suffix}`;
 
         const chunks = chunkMarkdownText(text, 40);
-        expect(chunks.some((chunk) => chunk.trimEnd() === fence)).toBe(true);
+        const intactFenceChunks = chunks.filter((chunk) => chunk.trimEnd() === fence);
+        expect(intactFenceChunks.length).toBeGreaterThan(0);
         expectFencesBalanced(chunks);
       },
     },
@@ -394,7 +429,7 @@ describe("chunkMarkdownText", () => {
       run: () => {
         const text = `(${"a".repeat(80)})`;
         const chunks = chunkMarkdownText(text, 20);
-        expect(chunks[0]?.length).toBe(20);
+        expect(requireChunk(chunks, 0).length).toBe(20);
         expect(chunks.join("")).toBe(text);
       },
     },
@@ -475,7 +510,7 @@ describe("chunkByNewline", () => {
   });
 
   it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {
-    expect(chunkByNewline(text, 100)).toEqual([]);
+    expect(chunkByNewline(text, 100)).toStrictEqual([]);
   });
 });
 
@@ -494,10 +529,10 @@ describe("chunkTextWithMode", () => {
       expected: ["Line one\nLine two"],
     },
     {
-      name: "newline mode (blank-line split)",
+      name: "newline mode packs short blank-line-separated paragraphs",
       text: "Para one\n\nPara two",
       mode: "newline" as const,
-      expected: ["Para one", "Para two"],
+      expected: ["Para one\n\nPara two"],
     },
   ] as const)(
     "applies mode-specific chunking behavior: $name",
@@ -529,10 +564,10 @@ describe("chunkMarkdownTextWithMode", () => {
       expected: ["Line one\nLine two"],
     },
     {
-      name: "newline mode splits by blank line",
+      name: "newline mode packs short blank-line-separated paragraphs",
       text: "Para one\n\nPara two",
       mode: "newline" as const,
-      expected: ["Para one", "Para two"],
+      expected: ["Para one\n\nPara two"],
     },
   ] as const)("applies markdown/newline mode behavior: $name", ({ text, mode, expected, name }) => {
     expectChunkModeCase({
@@ -551,6 +586,13 @@ describe("chunkMarkdownTextWithMode", () => {
       expect(chunkMarkdownTextWithMode(text, limit, "newline"), name).toEqual(expected);
     },
   );
+
+  it("packs multiple paragraphs up to the limit in newline mode", () => {
+    expect(chunkMarkdownTextWithMode("Alpha\n\nBeta\n\nGamma", 14, "newline")).toEqual([
+      "Alpha\n\nBeta",
+      "Gamma",
+    ]);
+  });
 });
 
 describe("resolveChunkMode", () => {
@@ -569,12 +611,18 @@ describe("resolveChunkMode", () => {
   it.each([
     { cfg: undefined, provider: "telegram", accountId: undefined, expected: "length" },
     { cfg: {}, provider: "discord", accountId: undefined, expected: "length" },
-    { cfg: undefined, provider: "bluebubbles", accountId: undefined, expected: "length" },
+    { cfg: undefined, provider: "imessage", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "__internal__", accountId: undefined, expected: "length" },
     { cfg: providerCfg, provider: "slack", accountId: undefined, expected: "newline" },
     { cfg: providerCfg, provider: "discord", accountId: undefined, expected: "length" },
     { cfg: accountCfg, provider: "slack", accountId: "primary", expected: "newline" },
     { cfg: accountCfg, provider: "slack", accountId: "other", expected: "length" },
+    {
+      cfg: { channels: { webchat: { chunkMode: "newline" as const } } },
+      provider: "webchat",
+      accountId: undefined,
+      expected: "length",
+    },
   ] as const)(
     "resolves default/provider/account/internal chunk mode for $provider $accountId",
     ({ cfg, provider, accountId, expected }) => {

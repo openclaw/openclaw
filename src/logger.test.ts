@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../packages/terminal-core/src/theme.js";
 import { isVerbose, isYes, logVerbose, setVerbose, setYes } from "./globals.js";
 import { logDebug, logError, logInfo, logSuccess, logWarn } from "./logger.js";
 import {
@@ -34,16 +35,16 @@ describe("logger helpers", () => {
   });
 
   it("only logs debug when verbose is enabled", () => {
-    const logVerbose = vi.spyOn(console, "log").mockImplementation(() => {});
+    const logVerboseLocal = vi.spyOn(console, "log").mockImplementation(() => {});
     setVerbose(false);
     logDebug("quiet");
-    expect(logVerbose).not.toHaveBeenCalled();
+    expect(logVerboseLocal).not.toHaveBeenCalled();
 
     setVerbose(true);
-    logVerbose.mockClear();
+    logVerboseLocal.mockClear();
     logDebug("loud");
-    expect(logVerbose).toHaveBeenCalled();
-    logVerbose.mockRestore();
+    expect(logVerboseLocal).toHaveBeenCalled();
+    logVerboseLocal.mockRestore();
   });
 
   it("writes to configured log file at configured level", () => {
@@ -106,7 +107,7 @@ describe("globals", () => {
     setVerbose(true);
     logVerbose("shown");
     expect(isVerbose()).toBe(true);
-    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining("shown"));
+    expect(logSpy).toHaveBeenCalledWith(theme.muted("shown"));
   });
 
   it("stores yes flag", () => {

@@ -6,7 +6,7 @@ read_when:
 title: "Amazon Bedrock"
 ---
 
-OpenClaw can use **Amazon Bedrock** models via pi-ai's **Bedrock Converse**
+OpenClaw can use **Amazon Bedrock** models via its **Bedrock Converse**
 streaming provider. Bedrock auth uses the **AWS SDK default credential chain**,
 not an API key.
 
@@ -28,7 +28,7 @@ Choose your preferred auth method and follow the setup steps.
     <Steps>
       <Step title="Set AWS credentials on the gateway host">
         ```bash
-        export AWS_ACCESS_KEY_ID="AKIA..."
+        export AWS_ACCESS_KEY_ID="EXAMPLE_AWS_ACCESS_KEY_ID"
         export AWS_SECRET_ACCESS_KEY="..."
         export AWS_REGION="us-east-1"
         # Optional:
@@ -256,6 +256,60 @@ openclaw models list
 
   </Accordion>
 
+  <Accordion title="Service tier">
+    Some Bedrock models support a `service_tier` parameter to optimize for cost
+    or latency. The following tiers are available:
+
+    | Tier | Description |
+    |------|-------------|
+    | `default` | Standard Bedrock tier |
+    | `flex` | Discounted processing for workloads that can tolerate longer latency |
+    | `priority` | Prioritized processing for latency-sensitive workloads |
+    | `reserved` | Reserved capacity for steady-state workloads |
+
+    Set `serviceTier` (or `service_tier`) via `agents.defaults.params` for
+    Bedrock model requests, or per-model in
+    `agents.defaults.models["<model-key>"].params`:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          params: {
+            serviceTier: "flex", // applies to all models
+          },
+          models: {
+            "amazon-bedrock/mistral.mistral-large-3-675b-instruct": {
+              params: {
+                serviceTier: "priority", // per-model override
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    Valid values are `default`, `flex`, `priority`, and `reserved`. Not all
+    models support all tiers — if an unsupported tier is requested, Bedrock will
+    return a validation error. Note: the error message is somewhat misleading;
+    it may say "The provided model identifier is invalid" rather than indicating
+    an unsupported service tier. If you see this error, check whether the model
+    supports the requested tier.
+
+  </Accordion>
+
+  <Accordion title="Claude Opus 4.7 temperature">
+    Bedrock rejects the `temperature` parameter for Claude Opus 4.7. OpenClaw
+    omits `temperature` automatically for any Opus 4.7 Bedrock ref, including
+    foundation model ids, named inference profiles, application inference
+    profiles whose underlying model resolves to Opus 4.7 via
+    `bedrock:GetInferenceProfile`, and dotted `opus-4.7` variants with
+    optional region prefixes (`us.`, `eu.`, `ap.`, `apac.`, `au.`, `jp.`,
+    `global.`). No config knob is required, and the omission applies to both
+    the request options object and the `inferenceConfig` payload field.
+  </Accordion>
+
   <Accordion title="Guardrails">
     You can apply [Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html)
     to all Bedrock model invocations by adding a `guardrail` object to the
@@ -315,8 +369,8 @@ openclaw models list
 
     Bedrock embeddings use the same AWS SDK credential chain as inference (instance
     roles, SSO, access keys, shared config, and web identity). No API key is
-    needed. When `provider` is `"auto"`, Bedrock is auto-detected if that
-    credential chain resolves successfully.
+    needed. Set `memorySearch.provider: "bedrock"` explicitly to use Bedrock
+    embeddings.
 
     Supported embedding models include Amazon Titan Embed (v1, v2), Amazon Nova
     Embed, Cohere Embed (v3, v4), and TwelveLabs Marengo. See

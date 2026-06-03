@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { uniqueStrings, uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaObservedEvent } from "./events.js";
 import { requestMatrixJson, type MatrixQaFetchLike } from "./request.js";
 import {
@@ -9,7 +10,6 @@ import {
   waitForMatrixQaRoomEvent,
   waitForOptionalMatrixQaRoomEvent,
   type MatrixQaRoomObserver,
-  type MatrixQaRoomEventWaitResult,
 } from "./sync.js";
 import {
   findMatrixQaProvisionedRoom,
@@ -19,8 +19,7 @@ import {
   type MatrixQaTopologySpec,
 } from "./topology.js";
 
-export type { MatrixQaObservedEvent } from "./events.js";
-export type { MatrixQaRoomEventWaitResult, MatrixQaRoomObserver } from "./sync.js";
+export type { MatrixQaRoomObserver } from "./sync.js";
 
 type MatrixQaAuthStage = "m.login.dummy" | "m.login.registration_token";
 
@@ -92,7 +91,7 @@ type MatrixQaUiaaResponse = {
   session?: string;
 };
 
-export type MatrixQaRegisteredAccount = {
+type MatrixQaRegisteredAccount = {
   accessToken: string;
   deviceId?: string;
   localpart: string;
@@ -205,7 +204,7 @@ export function buildMatrixQaMessageContent(params: {
   threadRootEventId?: string;
 }): MatrixQaSendMessageContent {
   const body = params.body;
-  const uniqueMentionUserIds = [...new Set(params.mentionUserIds?.filter(Boolean) ?? [])];
+  const uniqueMentionUserIds = uniqueStrings(params.mentionUserIds?.filter(Boolean) ?? []);
   const formattedParts: string[] = [];
   let cursor = 0;
   let usedFormattedMention = false;
@@ -353,7 +352,7 @@ async function uploadMatrixQaContent(params: {
   return contentUri;
 }
 
-export function resolveNextRegistrationAuth(params: {
+function resolveNextRegistrationAuth(params: {
   registrationToken: string;
   response: MatrixQaUiaaResponse;
 }) {
@@ -766,7 +765,7 @@ function resolveTopologyMemberAccounts(
   accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>,
   memberRoles: MatrixQaParticipantRole[],
 ) {
-  const uniqueRoles = [...new Set(memberRoles)];
+  const uniqueRoles = uniqueValues(memberRoles);
   if (uniqueRoles.length === 0) {
     throw new Error("Matrix QA room provisioning requires at least one member");
   }
@@ -903,7 +902,7 @@ export async function provisionMatrixQaRoom(params: {
   } satisfies MatrixQaProvisionResult;
 }
 
-export const __testing = {
+export const testing = {
   buildMatrixQaMessageContent,
   buildMatrixQaReplacementMessageContent,
   buildMatrixReactionRelation,
@@ -912,3 +911,4 @@ export const __testing = {
   createMatrixQaRoomObserver,
   resolveNextRegistrationAuth,
 };
+export { testing as __testing };

@@ -50,8 +50,10 @@ export type InboundDebounceCreateParams<T> = {
   buildKey: (item: T) => string | null | undefined;
   shouldDebounce?: (item: T) => boolean;
   resolveDebounceMs?: (item: T) => number | undefined;
+  serializeImmediate?: boolean;
   onFlush: (items: T[]) => Promise<void>;
   onError?: (err: unknown, items: T[]) => void;
+  onCancel?: (items: T[]) => void;
 };
 
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
@@ -92,6 +94,29 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       }
     };
     settled.then(cleanup, cleanup);
+    return next;
+  };
+
+  const runKeyTaskNow = (key: string, task: () => Promise<void>) => {
+    let resolveSettled!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      resolveSettled = resolve;
+    });
+    keyChains.set(key, settled);
+    const cleanup = () => {
+      resolveSettled();
+      if (keyChains.get(key) === settled) {
+        keyChains.delete(key);
+      }
+    };
+    let next: Promise<void>;
+    try {
+      next = task();
+    } catch (err) {
+      cleanup();
+      throw err;
+    }
+    next.then(cleanup, cleanup);
     return next;
   };
 
@@ -146,12 +171,36 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     await flushBuffer(key, buffer);
   };
 
+  const cancelKey = (key: string): boolean => {
+    const buffer = buffers.get(key);
+    if (!buffer) {
+      return false;
+    }
+    if (buffers.get(key) === buffer) {
+      buffers.delete(key);
+    }
+    if (buffer.timeout) {
+      clearTimeout(buffer.timeout);
+      buffer.timeout = null;
+    }
+    const canceledItems = buffer.items;
+    buffer.items = [];
+    try {
+      params.onCancel?.(canceledItems);
+    } catch {
+      // Cancellation observers release caller-owned resources; debounce state
+      // must still drain even if an observer fails.
+    }
+    releaseBuffer(buffer);
+    return true;
+  };
+
   const scheduleFlush = (key: string, buffer: DebounceBuffer<T>) => {
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
-    buffer.timeout = setTimeout(async () => {
-      await flushBuffer(key, buffer);
+    buffer.timeout = setTimeout(() => {
+      void flushBuffer(key, buffer);
     }, buffer.debounceMs);
     buffer.timeout.unref?.();
   };
@@ -190,6 +239,12 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
           });
           return;
         }
+        if (params.serializeImmediate) {
+          await runKeyTaskNow(key, async () => {
+            await runFlush([item]);
+          });
+          return;
+        }
         await runFlush([item]);
       } else {
         await runFlush([item]);
@@ -212,15 +267,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       });
       return;
     }
-
-    let buffer!: DebounceBuffer<T>;
     const reservedTask = enqueueReservedKeyTask(key, async () => {
       if (buffer.items.length === 0) {
         return;
       }
       await runFlush(buffer.items);
     });
-    buffer = {
+    const buffer: DebounceBuffer<T> = {
       items: [item],
       timeout: null,
       debounceMs,
@@ -232,5 +285,5 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     scheduleFlush(key, buffer);
   };
 
-  return { enqueue, flushKey };
+  return { enqueue, flushKey, cancelKey };
 }

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isRecord } from "../utils.js";
+import { externalCliDiscoveryForProviderAuth } from "./auth-profiles/external-cli-discovery.js";
 import { listProfilesForProvider } from "./auth-profiles/profile-list.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import {
@@ -7,7 +8,7 @@ import {
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
 
-export type CodexNativeSearchActivation = {
+type CodexNativeSearchActivation = {
   globalWebSearchEnabled: boolean;
   codexNativeEnabled: boolean;
   codexMode: CodexNativeSearchMode;
@@ -21,18 +22,24 @@ export type CodexNativeSearchActivation = {
     | "codex_auth_missing";
 };
 
-export type CodexNativeSearchPayloadPatchResult = {
+type CodexNativeSearchPayloadPatchResult = {
   status: "payload_not_object" | "native_tool_already_present" | "injected";
 };
+
+const OPENAI_AUTH_PROVIDER_IDS = ["openai"] as const;
+
+function isOpenAIAuthProviderId(provider: string | undefined): boolean {
+  return OPENAI_AUTH_PROVIDER_IDS.some((candidate) => candidate === provider);
+}
 
 export function isCodexNativeSearchEligibleModel(params: {
   modelProvider?: string;
   modelApi?: string;
 }): boolean {
-  return params.modelProvider === "openai-codex" || params.modelApi === "openai-codex-responses";
+  return params.modelApi === "openai-chatgpt-responses";
 }
 
-export function hasCodexNativeWebSearchTool(tools: unknown): boolean {
+function hasCodexNativeWebSearchTool(tools: unknown): boolean {
   if (!Array.isArray(tools)) {
     return false;
   }
@@ -47,7 +54,10 @@ export function hasAvailableCodexAuth(params: {
 }): boolean {
   if (
     Object.values(params.config?.auth?.profiles ?? {}).some(
-      (profile) => isRecord(profile) && profile.provider === "openai-codex",
+      (profile) =>
+        isRecord(profile) &&
+        isOpenAIAuthProviderId(profile.provider) &&
+        (profile.mode === "oauth" || profile.mode === "token"),
     )
   ) {
     return true;
@@ -55,8 +65,16 @@ export function hasAvailableCodexAuth(params: {
 
   if (params.agentDir) {
     try {
+      const store = ensureAuthProfileStore(params.agentDir, {
+        externalCli: externalCliDiscoveryForProviderAuth({
+          cfg: params.config,
+          provider: "openai",
+        }),
+      });
       if (
-        listProfilesForProvider(ensureAuthProfileStore(params.agentDir), "openai-codex").length > 0
+        OPENAI_AUTH_PROVIDER_IDS.some(
+          (provider) => listProfilesForProvider(store, provider).length > 0,
+        )
       ) {
         return true;
       }
@@ -76,7 +94,10 @@ export function resolveCodexNativeSearchActivation(params: {
   const globalWebSearchEnabled = params.config?.tools?.web?.search?.enabled !== false;
   const codexConfig = resolveCodexNativeWebSearchConfig(params.config);
   const nativeEligible = isCodexNativeSearchEligibleModel(params);
-  const hasRequiredAuth = params.modelProvider !== "openai-codex" || hasAvailableCodexAuth(params);
+  const hasRequiredAuth =
+    params.modelApi !== "openai-chatgpt-responses" ||
+    !isOpenAIAuthProviderId(params.modelProvider) ||
+    hasAvailableCodexAuth(params);
 
   if (!globalWebSearchEnabled) {
     return {

@@ -7,13 +7,14 @@ import {
 const GEMINI_MODEL_ALIASES: Record<string, string> = {
   pro: "gemini-3.1-pro-preview",
   flash: "gemini-3.1-flash-preview",
-  "flash-lite": "gemini-3.1-flash-lite-preview",
+  "flash-lite": "gemini-3.1-flash-lite",
 };
 const GEMINI_CLI_DEFAULT_MODEL_REF = "google-gemini-cli/gemini-3-flash-preview";
 
 export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
   return {
     id: "google-gemini-cli",
+    modelProvider: "google",
     liveTest: {
       defaultModelRef: GEMINI_CLI_DEFAULT_MODEL_REF,
       defaultImageProbe: true,
@@ -25,6 +26,7 @@ export function buildGoogleGeminiCliBackend(): CliBackendPlugin {
     },
     bundleMcp: true,
     bundleMcpMode: "gemini-system-settings",
+    nativeToolMode: "always-on",
     config: {
       command: "gemini",
       args: ["--skip-trust", "--output-format", "json", "--prompt", "{prompt}"],

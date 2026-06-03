@@ -2,7 +2,38 @@ import { nothing } from "lit";
 import type { AppViewState } from "./app-view-state.ts";
 import type { UsageState } from "./controllers/usage.ts";
 import { loadUsage, loadSessionTimeSeries, loadSessionLogs } from "./controllers/usage.ts";
-import { renderUsage } from "./views/usage.ts";
+import type { LazyView } from "./lazy-view.ts";
+import { renderLazyView } from "./lazy-view.ts";
+import type { UsageColumnId } from "./views/usageTypes.ts";
+
+type UsageViewModule = typeof import("./views/usage.ts");
+
+type UsageCacheStatus = NonNullable<NonNullable<UsageState["usageResult"]>["cacheStatus"]>;
+
+function mergeUsageCacheStatus(
+  sessionsStatus?: UsageCacheStatus,
+  costStatus?: UsageCacheStatus,
+): UsageCacheStatus | undefined {
+  if (!sessionsStatus) {
+    return costStatus;
+  }
+  if (!costStatus) {
+    return sessionsStatus;
+  }
+  const rank = { fresh: 0, partial: 1, stale: 2, refreshing: 3 } as const;
+  const status =
+    rank[costStatus.status] > rank[sessionsStatus.status]
+      ? costStatus.status
+      : sessionsStatus.status;
+  return {
+    status,
+    cachedFiles: Math.max(sessionsStatus.cachedFiles, costStatus.cachedFiles),
+    pendingFiles: Math.max(sessionsStatus.pendingFiles, costStatus.pendingFiles),
+    staleFiles: Math.max(sessionsStatus.staleFiles, costStatus.staleFiles),
+    refreshedAt:
+      Math.max(sessionsStatus.refreshedAt ?? 0, costStatus.refreshedAt ?? 0) || undefined,
+  };
+}
 
 // Module-scope debounce for usage date changes (avoids type-unsafe hacks on state object)
 let usageDateDebounceTimeout: number | null = null;
@@ -13,27 +44,34 @@ const debouncedLoadUsage = (state: UsageState) => {
   usageDateDebounceTimeout = window.setTimeout(() => void loadUsage(state), 400);
 };
 
-export function renderUsageTab(state: AppViewState) {
+export function renderUsageTab(state: AppViewState, usageView: LazyView<UsageViewModule>) {
   if (state.tab !== "usage") {
     return nothing;
   }
 
-  return renderUsage({
+  return renderLazyView(usageView, ({ renderUsage }) => renderUsage({
     data: {
       loading: state.usageLoading,
       error: state.usageError,
       sessions: state.usageResult?.sessions ?? [],
+      agents: state.agentsList?.agents.map((entry) => entry.id).filter(Boolean) ?? [],
       sessionsLimitReached: (state.usageResult?.sessions?.length ?? 0) >= 1000,
       totals: state.usageResult?.totals ?? null,
       aggregates: state.usageResult?.aggregates ?? null,
       costDaily: state.usageCostSummary?.daily ?? [],
+      cacheStatus: mergeUsageCacheStatus(
+        state.usageResult?.cacheStatus,
+        state.usageCostSummary?.cacheStatus,
+      ),
     },
     filters: {
       startDate: state.usageStartDate,
       endDate: state.usageEndDate,
+      scope: state.usageScope,
       selectedSessions: state.usageSelectedSessions,
       selectedDays: state.usageSelectedDays,
       selectedHours: state.usageSelectedHours,
+      agentId: state.usageAgentId,
       query: state.usageQuery,
       queryDraft: state.usageQueryDraft,
       timeZone: state.usageTimeZone,
@@ -45,7 +83,7 @@ export function renderUsageTab(state: AppViewState) {
       sessionSortDir: state.usageSessionSortDir,
       recentSessions: state.usageRecentSessions,
       sessionsTab: state.usageSessionsTab,
-      visibleColumns: state.usageVisibleColumns as import("./views/usage.ts").UsageColumnId[],
+      visibleColumns: state.usageVisibleColumns as UsageColumnId[],
       contextExpanded: state.usageContextExpanded,
       headerPinned: state.usageHeaderPinned,
     },
@@ -82,7 +120,25 @@ export function renderUsageTab(state: AppViewState) {
           state.usageSelectedSessions = [];
           debouncedLoadUsage(state);
         },
-        onRefresh: () => loadUsage(state),
+        onScopeChange: (scope) => {
+          state.usageScope = scope;
+          state.usageSelectedDays = [];
+          state.usageSelectedHours = [];
+          state.usageSelectedSessions = [];
+          state.usageTimeSeries = null;
+          state.usageSessionLogs = null;
+          void loadUsage(state);
+        },
+        onAgentChange: (agentId) => {
+          state.usageAgentId = agentId;
+          state.usageSelectedDays = [];
+          state.usageSelectedHours = [];
+          state.usageSelectedSessions = [];
+          state.usageTimeSeries = null;
+          state.usageSessionLogs = null;
+          void loadUsage(state);
+        },
+        onRefresh: () => void loadUsage(state),
         onTimeZoneChange: (zone) => {
           state.usageTimeZone = zone;
           state.usageSelectedDays = [];
@@ -281,5 +337,5 @@ export function renderUsageTab(state: AppViewState) {
         },
       },
     },
-  });
+  }));
 }

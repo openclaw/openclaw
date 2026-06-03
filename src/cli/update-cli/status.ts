@@ -1,17 +1,19 @@
+import { getTerminalTableWidth, renderTable } from "../../../packages/terminal-core/src/table.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   formatUpdateAvailableHint,
   formatUpdateOneLiner,
   resolveUpdateAvailability,
 } from "../../commands/status.update.js";
-import { readConfigFileSnapshot } from "../../config/config.js";
+import { readSourceConfigBestEffort } from "../../config/config.js";
 import {
   normalizeUpdateChannel,
+  resolveRegistryUpdateChannel,
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { checkUpdateStatus } from "../../infra/update-check.js";
 import { defaultRuntime } from "../../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../../terminal/table.js";
-import { theme } from "../../terminal/theme.js";
+import { VERSION } from "../../version.js";
 import { parseTimeoutMsOrExit, resolveUpdateRoot, type UpdateStatusOptions } from "./shared.js";
 
 function formatGitStatusLine(params: {
@@ -37,20 +39,23 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   }
 
   const root = await resolveUpdateRoot();
-  const configSnapshot = await readConfigFileSnapshot();
-  const configChannel = configSnapshot.valid
-    ? normalizeUpdateChannel(configSnapshot.config.update?.channel)
-    : null;
+  const config = await readSourceConfigBestEffort();
+  const configChannel = normalizeUpdateChannel(config.update?.channel);
 
   const update = await checkUpdateStatus({
     root,
     timeoutMs: timeoutMs ?? 3500,
     fetchGit: true,
     includeRegistry: true,
+    registryChannel: resolveRegistryUpdateChannel({
+      configChannel,
+      currentVersion: VERSION,
+    }),
   });
 
   const channelInfo = resolveUpdateChannelDisplay({
     configChannel,
+    currentVersion: VERSION,
     installKind: update.installKind,
     gitTag: update.git?.tag ?? null,
     gitBranch: update.git?.branch ?? null,

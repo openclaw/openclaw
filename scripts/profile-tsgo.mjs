@@ -8,6 +8,7 @@ import {
   applyLocalTsgoPolicy,
   shouldAcquireLocalHeavyCheckLockForTsgo,
 } from "./lib/local-heavy-check-runtime.mjs";
+import { createManagedCommandInvocation } from "./lib/managed-child-process.mjs";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const artifactRoot = path.resolve(repoRoot, ".artifacts/tsgo-profile");
@@ -19,15 +20,15 @@ const GRAPH_DEFINITIONS = {
     description: "core production graph",
   },
   "core-test": {
-    config: "tsconfig.core.test.json",
+    config: "test/tsconfig/tsconfig.core.test.json",
     description: "core colocated test graph",
   },
   "core-test-agents": {
-    config: "tsconfig.core.test.agents.json",
+    config: "test/tsconfig/tsconfig.core.test.agents.json",
     description: "diagnostic slice: core agent colocated tests",
   },
   "core-test-non-agents": {
-    config: "tsconfig.core.test.non-agents.json",
+    config: "test/tsconfig/tsconfig.core.test.non-agents.json",
     description: "diagnostic slice: core tests excluding agent test roots",
   },
   extensions: {
@@ -35,7 +36,7 @@ const GRAPH_DEFINITIONS = {
     description: "bundled extension production graph",
   },
   "extensions-test": {
-    config: "tsconfig.extensions.test.json",
+    config: "test/tsconfig/tsconfig.extensions.test.json",
     description: "bundled extension colocated test graph",
   },
 };
@@ -139,12 +140,18 @@ function runTsgo(label, args, params = {}) {
 
   const startedAt = Date.now();
   try {
-    const result = spawnSync(tsgoPath, finalArgs, {
+    const tsgo = createManagedCommandInvocation({
+      args: finalArgs,
+      bin: tsgoPath,
+      env,
+    });
+    const result = spawnSync(tsgo.command, tsgo.args, {
       cwd: repoRoot,
       env,
       encoding: "utf8",
       maxBuffer: params.maxBuffer ?? 128 * 1024 * 1024,
-      shell: process.platform === "win32",
+      shell: tsgo.shell,
+      windowsVerbatimArguments: tsgo.windowsVerbatimArguments,
     });
     const elapsedMs = Date.now() - startedAt;
     const stdout = result.stdout ?? "";

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import {
   MATRIX_QA_BLOCK_ROOM_KEY,
@@ -18,16 +20,19 @@ import {
   buildMatrixPartialStreamingPrompt,
   buildMatrixQuietStreamingPrompt,
   buildMatrixQaToken,
+  buildMatrixToolProgressTaskContent,
   buildMatrixToolProgressErrorPrompt,
   buildMatrixToolProgressMentionSafetyPrompt,
   buildMatrixToolProgressPrompt,
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
+  doesMatrixQaReplyBodyMatchToken,
   createMatrixQaDriverScenarioClient,
   createMatrixQaScenarioClient,
   isMatrixQaExactMarkerReply,
   isMatrixQaMessageLikeKind,
+  MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME,
   primeMatrixQaActorCursor,
   primeMatrixQaDriverScenarioClient,
   resolveMatrixQaNoReplyWindowMs,
@@ -302,18 +307,21 @@ export async function runThreadIsolationScenario(context: MatrixQaScenarioContex
 export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioContext) {
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const childToken = buildMatrixQaToken("MATRIX_QA_SUBAGENT_CHILD");
+  const spawnArgs = {
+    task: `Finish with exactly ${childToken}.`,
+    label: "matrix-thread-subagent",
+    thread: true,
+    mode: "session",
+    runTimeoutSeconds: 120,
+  };
   const triggerBody = [
-    `${context.sutUserId} Call sessions_spawn now for this QA check.`,
-    `Use task="Finish with exactly ${childToken}."`,
-    "Use label=matrix-thread-subagent thread=true mode=session runTimeoutSeconds=60.",
-    "Do not send the child token from this parent session.",
+    `${context.sutUserId} Run this exact OpenClaw Matrix thread-spawn QA check. Use tool calls, not prose.`,
+    `Step 1: call sessions_spawn with exactly this JSON input: ${JSON.stringify(spawnArgs)}.`,
+    'Step 2: after spawn returns status="accepted", wait for the child session reply in the spawned Matrix thread.',
+    "Do not omit thread=true; the child must bind to this Matrix thread.",
+    `Do not write ${childToken} in the parent response.`,
   ].join(" ");
-  const driverEventId = await client.sendTextMessage({
-    body: triggerBody,
-    mentionUserIds: [context.sutUserId],
-    roomId: context.roomId,
-  });
-  const intro = await client.waitForRoomEvent({
+  const introPromise = client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) => {
       failIfMatrixSubagentThreadHookError(event);
@@ -330,6 +338,12 @@ export async function runSubagentThreadSpawnScenario(context: MatrixQaScenarioCo
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
+  const driverEventId = await client.sendTextMessage({
+    body: triggerBody,
+    mentionUserIds: [context.sutUserId],
+    roomId: context.roomId,
+  });
+  const intro = await introPromise;
   const completion = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) => {
@@ -560,7 +574,7 @@ export async function runAllowlistHotReloadScenario(context: MatrixQaScenarioCon
 export async function runQuietStreamingPreviewScenario(context: MatrixQaScenarioContext) {
   return runMatrixStreamingPreviewScenario(context, {
     expectedPreviewKind: "notice",
-    finalText: `MATRIX_QA_QUIET_STREAM_${randomUUID().slice(0, 8).toUpperCase()} preview complete`,
+    finalText: buildMatrixStreamingPreviewFinalText("MATRIX_QA_QUIET_STREAM"),
     label: "quiet streaming",
     triggerBodyBuilder: buildMatrixQuietStreamingPrompt,
   });
@@ -569,10 +583,20 @@ export async function runQuietStreamingPreviewScenario(context: MatrixQaScenario
 export async function runPartialStreamingPreviewScenario(context: MatrixQaScenarioContext) {
   return runMatrixStreamingPreviewScenario(context, {
     expectedPreviewKind: "message",
-    finalText: `MATRIX_QA_PARTIAL_STREAM_${randomUUID().slice(0, 8).toUpperCase()} preview complete`,
+    finalText: buildMatrixStreamingPreviewFinalText("MATRIX_QA_PARTIAL_STREAM"),
     label: "partial streaming",
     triggerBodyBuilder: buildMatrixPartialStreamingPrompt,
   });
+}
+
+function buildMatrixStreamingPreviewFinalText(prefix: string) {
+  const token = `${prefix}_${randomUUID().slice(0, 8).toUpperCase()}`;
+  return [
+    `${token} preview complete.`,
+    `${token} alpha segment confirms the draft stream started before final delivery.`,
+    `${token} beta segment keeps the exact final answer long enough for preview updates.`,
+    `${token} omega segment marks the finalized Matrix QA reply.`,
+  ].join(" ");
 }
 
 async function runMatrixStreamingPreviewScenario(
@@ -596,12 +620,38 @@ async function runMatrixStreamingPreviewScenario(
     predicate: (event) =>
       event.roomId === context.roomId &&
       event.sender === context.sutUserId &&
-      event.kind === params.expectedPreviewKind &&
-      event.relatesTo === undefined,
+      event.relatesTo === undefined &&
+      (event.kind === params.expectedPreviewKind ||
+        (isMatrixQaMessageLikeKind(event.kind) &&
+          doesMatrixQaReplyBodyMatchToken(event, params.finalText))),
     roomId: context.roomId,
     since: startSince,
     timeoutMs: context.timeoutMs,
   });
+  if (doesMatrixQaReplyBodyMatchToken(preview.event, params.finalText)) {
+    advanceMatrixQaActorCursor({
+      actorId: "driver",
+      syncState: context.syncState,
+      nextSince: preview.since,
+      startSince,
+    });
+    const finalReply = buildMatrixReplyArtifact(preview.event, params.finalText);
+    return {
+      artifacts: {
+        driverEventId,
+        previewEventId: undefined,
+        reply: finalReply,
+        token: params.finalText,
+        triggerBody,
+      },
+      details: [
+        `driver event: ${driverEventId}`,
+        `scenario: ${params.label}`,
+        "preview event: <none>; final delivered without draft replacement",
+        ...buildMatrixReplyDetails("final reply", finalReply),
+      ].join("\n"),
+    } satisfies MatrixQaScenarioExecution;
+  }
   const finalized = await client.waitForRoomEvent({
     observedEvents: context.observedEvents,
     predicate: (event) =>
@@ -690,12 +740,138 @@ function assertMatrixQaToolProgressMentionsInert(event: MatrixQaObservedEvent) {
   }
 }
 
+function hasMatrixQaToolProgressPreviewLine(body: string | undefined) {
+  return Boolean(
+    body?.split(/\r?\n/).some((line) => /^\s*(?:[-*•]\s+`?[^`\s][^`]*`?|`[^`]+`)\s*$/u.test(line)),
+  );
+}
+
+function truncateMatrixQaToolProgressBody(body: string | undefined) {
+  if (!body) {
+    return "<none>";
+  }
+  return body.length <= 240 ? body : `${body.slice(0, 237)}...`;
+}
+
+function describeMatrixQaToolProgressCandidate(event: MatrixQaObservedEvent) {
+  const relation = event.relatesTo?.relType
+    ? `${event.relatesTo.relType}:${event.relatesTo.eventId ?? "<none>"}`
+    : "<none>";
+  return [
+    `${event.eventId} kind=${event.kind}`,
+    `relation=${relation}`,
+    `body=${JSON.stringify(truncateMatrixQaToolProgressBody(event.body))}`,
+  ].join(" ");
+}
+
+function buildMatrixQaToolProgressTimeoutMessage(params: {
+  cause: unknown;
+  events: MatrixQaObservedEvent[];
+  expectedPreviewKind: MatrixQaObservedEvent["kind"];
+  previewEventId: string;
+  roomId: string;
+  startIndex: number;
+  sutUserId: string;
+}) {
+  const candidates = params.events
+    .slice(params.startIndex)
+    .filter((event) => {
+      if (
+        event.roomId !== params.roomId ||
+        event.sender !== params.sutUserId ||
+        event.type !== "m.room.message" ||
+        event.kind !== params.expectedPreviewKind
+      ) {
+        return false;
+      }
+      return (
+        event.eventId === params.previewEventId ||
+        event.relatesTo?.eventId === params.previewEventId ||
+        event.body !== undefined
+      );
+    })
+    .slice(-8);
+  const messageCandidates =
+    candidates.length === 0
+      ? params.events
+          .slice(params.startIndex)
+          .filter(
+            (event) =>
+              event.roomId === params.roomId &&
+              event.sender === params.sutUserId &&
+              event.type === "m.room.message" &&
+              isMatrixQaMessageLikeKind(event.kind),
+          )
+          .slice(-8)
+      : [];
+  const candidateDetails =
+    candidates.length === 0
+      ? ["observed preview candidates: <none>"]
+      : ["observed preview candidates:", ...candidates.map(describeMatrixQaToolProgressCandidate)];
+  const messageCandidateDetails =
+    messageCandidates.length === 0
+      ? []
+      : [
+          "observed message candidates:",
+          ...messageCandidates.map(describeMatrixQaToolProgressCandidate),
+        ];
+  return [
+    params.cause instanceof Error
+      ? params.cause.message
+      : `Matrix tool progress wait failed: ${String(params.cause)}`,
+    `preview event: ${params.previewEventId}`,
+    ...candidateDetails,
+    ...messageCandidateDetails,
+  ].join("\n");
+}
+
+function buildMatrixQaToolProgressFinalTimeoutMessage(params: {
+  cause: unknown;
+  events: MatrixQaObservedEvent[];
+  previewEventId: string;
+  roomId: string;
+  startIndex: number;
+  sutUserId: string;
+  token: string;
+}) {
+  const candidates = params.events
+    .slice(params.startIndex)
+    .filter((event) => {
+      if (
+        event.roomId !== params.roomId ||
+        event.sender !== params.sutUserId ||
+        event.type !== "m.room.message" ||
+        !isMatrixQaMessageLikeKind(event.kind)
+      ) {
+        return false;
+      }
+      return event.relatesTo?.eventId === params.previewEventId;
+    })
+    .slice(-8);
+  const candidateDetails =
+    candidates.length === 0
+      ? ["observed final candidates: <none>"]
+      : ["observed final candidates:", ...candidates.map(describeMatrixQaToolProgressCandidate)];
+  return [
+    params.cause instanceof Error
+      ? params.cause.message
+      : `Matrix tool progress final wait failed: ${String(params.cause)}`,
+    `preview event: ${params.previewEventId}`,
+    `expected token: ${params.token}`,
+    ...candidateDetails,
+  ].join("\n");
+}
+
 async function runMatrixToolProgressScenario(
   context: MatrixQaScenarioContext,
   params: {
     expectedPreviewKind: MatrixQaObservedEvent["kind"];
     finalText: string;
+    allowFinalOnly?: boolean;
+    allowFinalBeforeProgress?: boolean;
+    allowTopLevelFinalWithProgress?: boolean;
     label: string;
+    allowGenericProgressLine?: boolean;
     mentionSafety?: boolean;
     progressPattern: RegExp;
     triggerBodyBuilder: (sutUserId: string, finalText: string) => string;
@@ -703,62 +879,279 @@ async function runMatrixToolProgressScenario(
 ) {
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const startObservedIndex = context.observedEvents.length;
+  await writeMatrixToolProgressTaskFile(context, params.finalText);
   const triggerBody = params.triggerBodyBuilder(context.sutUserId, params.finalText);
   const driverEventId = await client.sendTextMessage({
     body: triggerBody,
     mentionUserIds: [context.sutUserId],
     roomId: context.roomId,
   });
-  const preview = await client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: (event) =>
-      event.roomId === context.roomId &&
-      event.sender === context.sutUserId &&
-      event.kind === params.expectedPreviewKind &&
-      event.relatesTo === undefined &&
-      /\bWorking\b/i.test(event.body ?? ""),
-    roomId: context.roomId,
-    since: startSince,
-    timeoutMs: context.timeoutMs,
-  });
-  const progress = params.progressPattern.test(preview.event.body ?? "")
-    ? preview
-    : await client.waitForRoomEvent({
+  const matchesExpectedProgress = (body: string | undefined) =>
+    params.progressPattern.test(body ?? "") ||
+    (params.allowGenericProgressLine === true && hasMatrixQaToolProgressPreviewLine(body));
+  const getPreviewRootEventId = (event: MatrixQaObservedEvent) =>
+    event.relatesTo?.relType === "m.replace" && event.relatesTo.eventId
+      ? event.relatesTo.eventId
+      : event.eventId;
+  const isFinalReply = (event: MatrixQaObservedEvent) =>
+    event.roomId === context.roomId &&
+    event.sender === context.sutUserId &&
+    event.type === "m.room.message" &&
+    event.relatesTo === undefined &&
+    isMatrixQaMessageLikeKind(event.kind) &&
+    doesMatrixQaReplyBodyMatchToken(event, params.finalText);
+  const isExpectedProgressKind = (event: MatrixQaObservedEvent) =>
+    event.kind === params.expectedPreviewKind ||
+    (params.allowTopLevelFinalWithProgress === true &&
+      isMatrixQaMessageLikeKind(event.kind) &&
+      matchesExpectedProgress(event.body));
+  const isProgressEvent = (event: MatrixQaObservedEvent) =>
+    event.roomId === context.roomId &&
+    event.sender === context.sutUserId &&
+    isExpectedProgressKind(event) &&
+    (matchesExpectedProgress(event.body) || event.relatesTo === undefined);
+  const isProgressProofEvent = (event: MatrixQaObservedEvent) =>
+    event.roomId === context.roomId &&
+    event.sender === context.sutUserId &&
+    isExpectedProgressKind(event) &&
+    matchesExpectedProgress(event.body);
+  const isProgressReplacement = (event: MatrixQaObservedEvent, previewRootEventId: string) =>
+    event.roomId === context.roomId &&
+    event.sender === context.sutUserId &&
+    event.kind === params.expectedPreviewKind &&
+    event.relatesTo?.relType === "m.replace" &&
+    event.relatesTo.eventId === previewRootEventId &&
+    matchesExpectedProgress(event.body);
+  const preview = await client
+    .waitForRoomEvent({
+      observedEvents: context.observedEvents,
+      predicate: (event) =>
+        isProgressEvent(event) ||
+        ((params.allowFinalOnly === true ||
+          params.allowFinalBeforeProgress === true ||
+          params.allowTopLevelFinalWithProgress === true) &&
+          isFinalReply(event)),
+      roomId: context.roomId,
+      since: startSince,
+      timeoutMs: context.timeoutMs,
+    })
+    .catch((err: unknown) => {
+      throw new Error(
+        buildMatrixQaToolProgressTimeoutMessage({
+          cause: err,
+          events: context.observedEvents,
+          expectedPreviewKind: params.expectedPreviewKind,
+          previewEventId: "<not observed>",
+          roomId: context.roomId,
+          startIndex: startObservedIndex,
+          sutUserId: context.sutUserId,
+        }),
+      );
+    });
+  if (isFinalReply(preview.event)) {
+    if (
+      (params.allowFinalBeforeProgress === true || params.allowTopLevelFinalWithProgress === true) &&
+      params.allowFinalOnly !== true
+    ) {
+      const progressAfterFinal = await client
+        .waitForRoomEvent({
+          observedEvents: context.observedEvents,
+          predicate: isProgressProofEvent,
+          roomId: context.roomId,
+          since: preview.since,
+          timeoutMs: context.timeoutMs,
+        })
+        .catch((err: unknown) => {
+          throw new Error(
+            buildMatrixQaToolProgressTimeoutMessage({
+              cause: err,
+              events: context.observedEvents,
+              expectedPreviewKind: params.expectedPreviewKind,
+              previewEventId: "<not observed>",
+              roomId: context.roomId,
+              startIndex: startObservedIndex,
+              sutUserId: context.sutUserId,
+            }),
+          );
+        });
+      const progressPreviewEventId = getPreviewRootEventId(progressAfterFinal.event);
+      const unexpectedWorkingEvents = findMatrixQaUnexpectedWorkingEvents({
+        events: context.observedEvents,
+        finalEventId: preview.event.eventId,
+        previewEventId: progressPreviewEventId,
+        startIndex: startObservedIndex,
+        sutUserId: context.sutUserId,
+      });
+      if (unexpectedWorkingEvents.length > 0) {
+        throw new Error(
+          `Matrix tool progress leaked outside preview event: ${unexpectedWorkingEvents.map((event) => `${event.eventId}:${event.body ?? ""}`).join("; ")}`,
+        );
+      }
+      if (params.mentionSafety) {
+        assertMatrixQaToolProgressMentionsInert(progressAfterFinal.event);
+      }
+      advanceMatrixQaActorCursor({
+        actorId: "driver",
+        syncState: context.syncState,
+        nextSince: progressAfterFinal.since,
+        startSince,
+      });
+      const finalReply = buildMatrixReplyArtifact(preview.event, params.finalText);
+      return {
+        artifacts: {
+          driverEventId,
+          previewBodyPreview: progressAfterFinal.event.body?.slice(0, 200),
+          previewEventId: progressPreviewEventId,
+          previewFormattedBodyPreview: progressAfterFinal.event.formattedBody?.slice(0, 200),
+          previewMentions: progressAfterFinal.event.mentions,
+          reply: finalReply,
+          token: params.finalText,
+          triggerBody,
+        },
+        details: [
+          `driver event: ${driverEventId}`,
+          `scenario: ${params.label}`,
+          `preview event: ${progressPreviewEventId}`,
+          `preview kind: ${progressAfterFinal.event.kind}`,
+          `preview body: ${progressAfterFinal.event.body ?? "<none>"}`,
+          "final reply relation: <none>; final delivered before observable tool-progress failure",
+          ...buildMatrixReplyDetails("final reply", finalReply),
+        ].join("\n"),
+      } satisfies MatrixQaScenarioExecution;
+    }
+
+    if (params.allowFinalOnly === true) {
+      const unexpectedWorkingEvents = findMatrixQaUnexpectedWorkingEvents({
+        events: context.observedEvents,
+        finalEventId: preview.event.eventId,
+        startIndex: startObservedIndex,
+        sutUserId: context.sutUserId,
+      });
+      if (unexpectedWorkingEvents.length > 0) {
+        throw new Error(
+          `Matrix tool progress leaked outside preview event: ${unexpectedWorkingEvents.map((event) => `${event.eventId}:${event.body ?? ""}`).join("; ")}`,
+        );
+      }
+      advanceMatrixQaActorCursor({
+        actorId: "driver",
+        syncState: context.syncState,
+        nextSince: preview.since,
+        startSince,
+      });
+      const finalReply = buildMatrixReplyArtifact(preview.event, params.finalText);
+      return {
+        artifacts: {
+          driverEventId,
+          previewEventId: undefined,
+          reply: finalReply,
+          token: params.finalText,
+          triggerBody,
+        },
+        details: [
+          `driver event: ${driverEventId}`,
+          `scenario: ${params.label}`,
+          "preview event: <none>; final delivered before observable tool-progress preview",
+          ...buildMatrixReplyDetails("final reply", finalReply),
+        ].join("\n"),
+      } satisfies MatrixQaScenarioExecution;
+    }
+  }
+  const previewRootEventId = getPreviewRootEventId(preview.event);
+  const isProgressProofForPreview = (event: MatrixQaObservedEvent) =>
+    isProgressReplacement(event, previewRootEventId) ||
+    (params.allowTopLevelFinalWithProgress === true && isProgressProofEvent(event));
+  let topLevelFinalBeforeProgress: typeof preview | undefined;
+  let progress = preview;
+  if (!matchesExpectedProgress(preview.event.body)) {
+    const progressOrFinal = await client
+      .waitForRoomEvent({
         observedEvents: context.observedEvents,
         predicate: (event) =>
-          event.roomId === context.roomId &&
-          event.sender === context.sutUserId &&
-          event.kind === params.expectedPreviewKind &&
-          event.relatesTo?.relType === "m.replace" &&
-          event.relatesTo.eventId === preview.event.eventId &&
-          /\bWorking\b/i.test(event.body ?? "") &&
-          params.progressPattern.test(event.body ?? ""),
+          isProgressProofForPreview(event) ||
+          (params.allowTopLevelFinalWithProgress === true && isFinalReply(event)),
         roomId: context.roomId,
         since: preview.since,
         timeoutMs: context.timeoutMs,
+      })
+      .catch((err: unknown) => {
+        throw new Error(
+          buildMatrixQaToolProgressTimeoutMessage({
+            cause: err,
+            events: context.observedEvents,
+            expectedPreviewKind: params.expectedPreviewKind,
+            previewEventId: previewRootEventId,
+            roomId: context.roomId,
+            startIndex: startObservedIndex,
+            sutUserId: context.sutUserId,
+          }),
+        );
       });
+    if (isFinalReply(progressOrFinal.event)) {
+      topLevelFinalBeforeProgress = progressOrFinal;
+      progress = await client
+        .waitForRoomEvent({
+          observedEvents: context.observedEvents,
+          predicate: isProgressProofForPreview,
+          roomId: context.roomId,
+          since: progressOrFinal.since,
+          timeoutMs: context.timeoutMs,
+        })
+        .catch((err: unknown) => {
+          throw new Error(
+            buildMatrixQaToolProgressTimeoutMessage({
+              cause: err,
+              events: context.observedEvents,
+              expectedPreviewKind: params.expectedPreviewKind,
+              previewEventId: previewRootEventId,
+              roomId: context.roomId,
+              startIndex: startObservedIndex,
+              sutUserId: context.sutUserId,
+            }),
+          );
+        });
+    } else {
+      progress = progressOrFinal;
+    }
+  }
 
   if (params.mentionSafety) {
     assertMatrixQaToolProgressMentionsInert(progress.event);
   }
 
-  const finalized = await client.waitForRoomEvent({
-    observedEvents: context.observedEvents,
-    predicate: (event) =>
-      event.roomId === context.roomId &&
-      event.sender === context.sutUserId &&
-      isMatrixQaMessageLikeKind(event.kind) &&
-      event.relatesTo?.relType === "m.replace" &&
-      event.relatesTo.eventId === preview.event.eventId &&
-      event.body === params.finalText,
-    roomId: context.roomId,
-    since: progress.since,
-    timeoutMs: context.timeoutMs,
-  });
+  const finalized =
+    topLevelFinalBeforeProgress ??
+    (await client
+      .waitForRoomEvent({
+        observedEvents: context.observedEvents,
+        predicate: (event) =>
+          event.roomId === context.roomId &&
+          event.sender === context.sutUserId &&
+          isMatrixQaMessageLikeKind(event.kind) &&
+          doesMatrixQaReplyBodyMatchToken(event, params.finalText) &&
+          ((event.relatesTo?.relType === "m.replace" &&
+            event.relatesTo.eventId === previewRootEventId) ||
+            (params.allowTopLevelFinalWithProgress === true && event.relatesTo === undefined)),
+        roomId: context.roomId,
+        since: progress.since,
+        timeoutMs: context.timeoutMs,
+      })
+      .catch((err: unknown) => {
+        throw new Error(
+          buildMatrixQaToolProgressFinalTimeoutMessage({
+            cause: err,
+            events: context.observedEvents,
+            previewEventId: previewRootEventId,
+            roomId: context.roomId,
+            startIndex: startObservedIndex,
+            sutUserId: context.sutUserId,
+            token: params.finalText,
+          }),
+        );
+      }));
   const unexpectedWorkingEvents = findMatrixQaUnexpectedWorkingEvents({
     events: context.observedEvents,
     finalEventId: finalized.event.eventId,
-    previewEventId: preview.event.eventId,
+    previewEventId: previewRootEventId,
     startIndex: startObservedIndex,
     sutUserId: context.sutUserId,
   });
@@ -770,7 +1163,7 @@ async function runMatrixToolProgressScenario(
   advanceMatrixQaActorCursor({
     actorId: "driver",
     syncState: context.syncState,
-    nextSince: finalized.since,
+    nextSince: topLevelFinalBeforeProgress ? progress.since : finalized.since,
     startSince,
   });
   const finalReply = buildMatrixReplyArtifact(finalized.event, params.finalText);
@@ -778,7 +1171,7 @@ async function runMatrixToolProgressScenario(
     artifacts: {
       driverEventId,
       previewBodyPreview: progress.event.body?.slice(0, 200),
-      previewEventId: preview.event.eventId,
+      previewEventId: previewRootEventId,
       previewFormattedBodyPreview: progress.event.formattedBody?.slice(0, 200),
       previewMentions: progress.event.mentions,
       reply: finalReply,
@@ -799,12 +1192,28 @@ async function runMatrixToolProgressScenario(
   } satisfies MatrixQaScenarioExecution;
 }
 
+async function writeMatrixToolProgressTaskFile(
+  context: MatrixQaScenarioContext,
+  finalText: string,
+) {
+  if (!context.gatewayWorkspaceDir) {
+    return;
+  }
+  await writeFile(
+    path.join(context.gatewayWorkspaceDir, MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME),
+    `${buildMatrixToolProgressTaskContent(finalText)}\n`,
+    "utf8",
+  );
+}
+
 export async function runToolProgressPreviewScenario(context: MatrixQaScenarioContext) {
   return runMatrixToolProgressScenario(context, {
     expectedPreviewKind: "notice",
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS"),
     label: "tool progress preview",
-    progressPattern: /\btool:\s*read\b/i,
+    allowFinalOnly: true,
+    allowGenericProgressLine: true,
+    progressPattern: /\b(?:tool:\s*)?read\s*:\s*from\b|\btool:\s*read\b/i,
     triggerBodyBuilder: buildMatrixToolProgressPrompt,
   });
 }
@@ -814,7 +1223,10 @@ export async function runToolProgressErrorScenario(context: MatrixQaScenarioCont
     expectedPreviewKind: "notice",
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_ERROR"),
     label: "tool progress error",
-    progressPattern: /read from missing-matrix-tool-progress-target\.txt/i,
+    allowGenericProgressLine: true,
+    allowTopLevelFinalWithProgress: true,
+    progressPattern:
+      /\b(?:read|show)\s*:?\s*(?:from\s+)?\S*missing-matrix-tool-progress-target\.txt\b/i,
     triggerBodyBuilder: buildMatrixToolProgressErrorPrompt,
   });
 }
@@ -824,6 +1236,7 @@ export async function runToolProgressMentionSafetyScenario(context: MatrixQaScen
     expectedPreviewKind: "message",
     finalText: buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_MENTION_SAFE"),
     label: "tool progress mention safety",
+    allowFinalBeforeProgress: true,
     mentionSafety: true,
     progressPattern: /@room|@alice:matrix-qa\.test|!room:matrix-qa\.test/i,
     triggerBodyBuilder: buildMatrixToolProgressMentionSafetyPrompt,
@@ -834,7 +1247,8 @@ export async function runToolProgressPreviewOptOutScenario(context: MatrixQaScen
   const { client, startSince } = await primeMatrixQaDriverScenarioClient(context);
   const startObservedIndex = context.observedEvents.length;
   const finalText = buildMatrixQaToken("MATRIX_QA_TOOL_PROGRESS_OPTOUT");
-  const triggerBody = buildMatrixToolProgressPrompt(context.sutUserId, finalText);
+  await writeMatrixToolProgressTaskFile(context, finalText);
+  const triggerBody = buildMatrixToolProgressPrompt(context.sutUserId);
   const driverEventId = await client.sendTextMessage({
     body: triggerBody,
     mentionUserIds: [context.sutUserId],

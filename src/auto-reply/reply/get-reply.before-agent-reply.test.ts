@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookRunner } from "../../plugins/hooks.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
@@ -47,8 +47,11 @@ function createContinueDirectivesResult() {
 }
 
 describe("getReplyFromConfig before_agent_reply wiring", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     await loadGetReplyRuntimeForTest();
+  });
+
+  beforeEach(() => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     mocks.resolveReplyDirectives.mockReset();
     mocks.handleInlineActions.mockReset();
@@ -71,6 +74,7 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
       kind: "continue",
       directives: {},
       abortedLastRun: false,
+      cleanedBody: "hello world",
     });
     mocks.hasHooks.mockImplementation((hookName) => hookName === "before_agent_reply");
   });
@@ -84,18 +88,29 @@ describe("getReplyFromConfig before_agent_reply wiring", () => {
     const result = await getReplyFromConfig(buildGetReplyGroupCtx(), undefined, {});
 
     expect(result).toEqual({ text: "plugin reply" });
-    expect(mocks.runBeforeAgentReply).toHaveBeenCalledWith(
-      { cleanedBody: "hello world" },
-      expect.objectContaining({
-        agentId: "main",
-        sessionKey: "agent:main:telegram:-100123",
-        sessionId: "session-1",
-        workspaceDir: "/tmp/workspace",
-        messageProvider: "telegram",
-        trigger: "user",
-        channelId: "telegram",
-      }),
-    );
+    expect(mocks.runBeforeAgentReply).toHaveBeenCalledTimes(1);
+    const [[body, hookCtx]] = mocks.runBeforeAgentReply.mock.calls as unknown as Array<
+      [
+        { cleanedBody?: string },
+        {
+          agentId?: string;
+          sessionKey?: string;
+          sessionId?: string;
+          workspaceDir?: string;
+          messageProvider?: string;
+          trigger?: string;
+          channelId?: string;
+        },
+      ]
+    >;
+    expect(body.cleanedBody).toBe("hello world");
+    expect(hookCtx.agentId).toBe("main");
+    expect(hookCtx.sessionKey).toBe("agent:main:telegram:-100123");
+    expect(hookCtx.sessionId).toBe("session-1");
+    expect(hookCtx.workspaceDir).toBe("/tmp/workspace");
+    expect(hookCtx.messageProvider).toBe("telegram");
+    expect(hookCtx.trigger).toBe("user");
+    expect(hookCtx.channelId).toBe("-100123");
     expect(mocks.handleInlineActions.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.runBeforeAgentReply.mock.invocationCallOrder[0] ?? 0,
     );

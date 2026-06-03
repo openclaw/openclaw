@@ -8,6 +8,7 @@ import {
 import type { ResolvedAgentRoute } from "../../routing/resolve-route.js";
 import { deriveLastRoutePolicy } from "../../routing/resolve-route.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { resolveConfiguredBinding } from "./binding-registry.js";
 import { ensureConfiguredBindingTargetReady } from "./binding-targets.js";
 import type { ConfiguredBindingResolution } from "./binding-types.js";
@@ -125,6 +126,16 @@ export function resolveRuntimeConversationBindingRoute(
     };
   }
 
+  if (isCronRunSessionKey(boundSessionKey)) {
+    logVerbose(
+      `ignored runtime conversation binding ${bindingRecord.bindingId} to isolated cron run session ${boundSessionKey}`,
+    );
+    return {
+      bindingRecord: null,
+      route: params.route,
+    };
+  }
+
   getSessionBindingService().touch(bindingRecord.bindingId);
   if (isPluginOwnedRuntimeBindingRecord(bindingRecord)) {
     return {
@@ -178,7 +189,7 @@ export async function ensureConfiguredBindingRouteReady(params: {
         logVerbose(
           `configured binding route ready check settled after timeout (ok=${lateResult.ok})`,
         ),
-      (err) =>
+      (err: unknown) =>
         logVerbose(`configured binding route ready check rejected after timeout: ${String(err)}`),
     );
     return { ok: false, error: "Configured binding route ready check timed out" };

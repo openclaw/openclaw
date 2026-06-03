@@ -1,11 +1,11 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveGatewayDiscoveryEndpoint,
   type GatewayBonjourBeacon,
   type GatewayDiscoveryResolvedEndpoint,
 } from "./bonjour-discovery.js";
 
-export type GatewayDiscoveryTarget = {
+type GatewayDiscoveryTarget = {
   title: string;
   domain: string;
   endpoint: GatewayDiscoveryResolvedEndpoint | null;

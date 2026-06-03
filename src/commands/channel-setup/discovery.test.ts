@@ -30,6 +30,7 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../../channels/plugins/catalog.js", () => ({
   listChannelPluginCatalogEntries: (_args?: unknown) => listChannelPluginCatalogEntries(),
+  listRawChannelPluginCatalogEntries: (_args?: unknown) => listChannelPluginCatalogEntries(),
 }));
 
 vi.mock("../../channels/chat-meta.js", () => ({
@@ -159,16 +160,23 @@ describe("listManifestInstalledChannelIds", () => {
       env: { OPENCLAW_HOME: "/tmp/home" } as NodeJS.ProcessEnv,
     });
 
-    expect(resolved.entries).toEqual([
-      expect.objectContaining({
-        id: "telegram",
-        meta: expect.objectContaining({
-          label: "Telegram",
-          selectionLabel: "Telegram",
-          blurb: "bot token",
-          docsPath: "/channels/telegram",
-        }),
-      }),
-    ]);
+    expect(resolved).toStrictEqual({
+      entries: [
+        {
+          id: "telegram",
+          meta: {
+            id: "telegram",
+            label: "Telegram",
+            selectionLabel: "Telegram",
+            blurb: "bot token",
+            docsPath: "/channels/telegram",
+          },
+        },
+      ],
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
   });
 });

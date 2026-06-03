@@ -2,10 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
-import { stripAnsi } from "../terminal/ansi.js";
 import { captureEnv } from "../test-utils/env.js";
 import { hasConfiguredInternalHooks, resolveConfiguredInternalHookNames } from "./configured.js";
 import {
@@ -261,6 +261,28 @@ describe("loader", () => {
       expect(keys).toContain("command:stop");
     });
 
+    it("loads legacy handler modules from dot-prefixed workspace paths", async () => {
+      await fs.mkdir(path.join(tmpDir, "..hooks"), { recursive: true });
+      await writeHandlerModule(
+        path.join("..hooks", "legacy-handler.js"),
+        'export default async function(event) { event.messages.push("dot-prefixed-hook"); }\n',
+      );
+
+      const cfg = createEnabledHooksConfig([
+        {
+          event: "command:new",
+          module: path.join("..hooks", "legacy-handler.js"),
+        },
+      ]);
+
+      const count = await loadInternalHooks(cfg, tmpDir);
+      expect(count).toBe(1);
+
+      const event = createInternalHookEvent("command", "new", "test-session");
+      await triggerInternalHook(event);
+      expect(event.messages).toEqual(["dot-prefixed-hook"]);
+    });
+
     it("preserves plugin-registered hooks when workspace hooks reload", async () => {
       const pluginHandler = vi.fn();
       registerInternalHook("gateway:startup", pluginHandler);
@@ -292,7 +314,12 @@ describe("loader", () => {
 
       const event = createInternalHookEvent("command", "new", "test-session");
       await triggerInternalHook(event);
-      expect(event.messages.filter((message) => message === "reloadable-hook")).toHaveLength(1);
+      expect(
+        event.messages.reduce(
+          (count, message) => count + (message === "reloadable-hook" ? 1 : 0),
+          0,
+        ),
+      ).toBe(1);
     });
 
     it("should support named exports", async () => {

@@ -1,17 +1,17 @@
 import {
-  ChannelType as CarbonChannelType,
-  Command,
-  CommandWithSubcommands,
-  type CommandInteraction,
-  type CommandOptions,
-} from "@buape/carbon";
-import {
   ApplicationCommandOptionType,
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveDiscordAccountAllowFrom } from "../accounts.js";
+import {
+  Command,
+  CommandWithSubcommands,
+  type CommandInteraction,
+  type CommandOptions,
+} from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
@@ -75,6 +75,7 @@ async function authorizeVoiceCommand(
   const access = await authorizeDiscordVoiceIngress({
     cfg: params.cfg,
     discordConfig: params.discordConfig,
+    accountId: params.accountId,
     groupPolicy: params.groupPolicy,
     useAccessGroups: params.useAccessGroups,
     guild: interaction.guild,
@@ -88,6 +89,10 @@ async function authorizeVoiceCommand(
     scope: channelContext.isThreadChannel ? "thread" : "channel",
     channelLabel: channelId ? formatMention({ channelId }) : "This channel",
     memberRoleIds,
+    ownerAllowFrom: resolveDiscordAccountAllowFrom({
+      cfg: params.cfg,
+      accountId: params.accountId,
+    }),
     sender: {
       id: sender.id,
       name: sender.name,
@@ -147,11 +152,11 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
     manager.status().find((entry) => entry.guildId === guildId)?.channelId;
 
   class JoinCommand extends Command {
-    name = "join";
-    description = "Join a voice channel";
-    defer = true;
-    ephemeral = params.ephemeralDefault;
-    options: CommandOptions = [
+    override name = "join";
+    override description = "Join a voice channel";
+    override defer = true;
+    override ephemeral = params.ephemeralDefault;
+    override options: CommandOptions = [
       {
         name: "channel",
         description: "Voice channel to join",
@@ -206,10 +211,10 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   }
 
   class LeaveCommand extends Command {
-    name = "leave";
-    description = "Leave the current voice channel";
-    defer = true;
-    ephemeral = params.ephemeralDefault;
+    override name = "leave";
+    override description = "Leave the current voice channel";
+    override defer = true;
+    override ephemeral = params.ephemeralDefault;
 
     async run(interaction: CommandInteraction) {
       const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
@@ -234,10 +239,10 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   }
 
   class StatusCommand extends Command {
-    name = "status";
-    description = "Show active voice sessions";
-    defer = true;
-    ephemeral = params.ephemeralDefault;
+    override name = "status";
+    override description = "Show active voice sessions";
+    override defer = true;
+    override ephemeral = params.ephemeralDefault;
 
     async run(interaction: CommandInteraction) {
       const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
@@ -268,12 +273,12 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   }
 
   return new (class extends CommandWithSubcommands {
-    name = "vc";
-    description = "Voice channel controls";
+    override name = "vc";
+    override description = "Voice channel controls";
     subcommands = [new JoinCommand(), new LeaveCommand(), new StatusCommand()];
   })();
 }
 
-function isVoiceChannelType(type: CarbonChannelType) {
-  return type === CarbonChannelType.GuildVoice || type === CarbonChannelType.GuildStageVoice;
+function isVoiceChannelType(type: DiscordChannelType) {
+  return type === DiscordChannelType.GuildVoice || type === DiscordChannelType.GuildStageVoice;
 }

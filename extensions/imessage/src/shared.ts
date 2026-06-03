@@ -20,7 +20,7 @@ import {
 } from "./media-contract.js";
 import { createIMessageSetupWizardProxy } from "./setup-core.js";
 
-export const IMESSAGE_CHANNEL = "imessage" as const;
+const IMESSAGE_CHANNEL = "imessage" as const;
 
 async function loadIMessageChannelRuntime() {
   return await import("./channel.runtime.js");
@@ -30,7 +30,7 @@ export const imessageSetupWizard = createIMessageSetupWizardProxy(
   async () => (await loadIMessageChannelRuntime()).imessageSetupWizard,
 );
 
-export const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
+const imessageConfigAdapter = createScopedChannelConfigAdapter<ResolvedIMessageAccount>({
   sectionKey: IMESSAGE_CHANNEL,
   listAccountIds: listIMessageAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveIMessageAccount),
@@ -82,6 +82,12 @@ export function createIMessagePluginBase(params: {
     capabilities: {
       chatTypes: ["direct", "group"],
       media: true,
+      reactions: true,
+      edit: true,
+      unsend: true,
+      reply: true,
+      effects: true,
+      groupManagement: true,
     },
     reload: { configPrefixes: ["channels.imessage"] },
     configSchema: IMessageChannelConfigSchema,
@@ -100,10 +106,13 @@ export function createIMessagePluginBase(params: {
   return {
     ...base,
     messaging: {
-      resolveInboundAttachmentRoots: (params) =>
-        resolveIMessageAttachmentRoots({ accountId: params.accountId, cfg: params.cfg }),
-      resolveRemoteInboundAttachmentRoots: (params) =>
-        resolveIMessageRemoteAttachmentRoots({ accountId: params.accountId, cfg: params.cfg }),
+      resolveInboundAttachmentRoots: (paramsValue) =>
+        resolveIMessageAttachmentRoots({ accountId: paramsValue.accountId, cfg: paramsValue.cfg }),
+      resolveRemoteInboundAttachmentRoots: (paramsLocal) =>
+        resolveIMessageRemoteAttachmentRoots({
+          accountId: paramsLocal.accountId,
+          cfg: paramsLocal.cfg,
+        }),
     },
   } as Pick<
     ChannelPlugin<ResolvedIMessageAccount>,

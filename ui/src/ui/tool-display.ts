@@ -6,6 +6,7 @@ import {
   resolveToolVerbAndDetailForArgs,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../src/agents/tool-display-common.js";
+import type { ToolDetailMode } from "../../../src/agents/tool-display-exec.js";
 import type { IconName } from "./icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "./string-coerce.ts";
 
@@ -100,6 +101,7 @@ export function resolveToolDisplay(params: {
   name?: string;
   args?: unknown;
   meta?: string;
+  detailMode?: ToolDetailMode;
 }): ToolDisplay {
   const name = normalizeToolName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
@@ -107,15 +109,18 @@ export function resolveToolDisplay(params: {
   const icon = (spec?.icon ?? FALLBACK.icon ?? "puzzle") as IconName;
   const title = spec?.title ?? defaultTitle(name);
   const label = spec?.label ?? title;
-  let { verb, detail } = resolveToolVerbAndDetailForArgs({
+  const toolDisplayParts = resolveToolVerbAndDetailForArgs({
     toolKey: key,
     args: params.args,
     meta: params.meta,
     spec,
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
+    toolDetailMode: params.detailMode,
     detailCoerce: { includeFalse: true, includeZero: true },
   });
+  const { verb } = toolDisplayParts;
+  let { detail } = toolDisplayParts;
 
   if (detail) {
     detail = shortenHomeInString(detail);

@@ -1,7 +1,7 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 type ChannelMediaContractApi = {
   resolveInboundAttachmentRoots?: (params: {
@@ -15,19 +15,15 @@ type ChannelMediaContractApi = {
 };
 type ChannelMediaRootResolver = keyof ChannelMediaContractApi;
 
-const mediaContractApiByResolver = new Map<string, ChannelMediaContractApi | null>();
-
-function mediaContractCacheKey(channelId: string, resolver: ChannelMediaRootResolver): string {
-  return `${channelId}:${resolver}`;
-}
+const mediaContractApiByChannel = new Map<string, ChannelMediaContractApi | null>();
 
 function loadChannelMediaContractApi(
   channelId: string,
   resolver: ChannelMediaRootResolver,
 ): ChannelMediaContractApi | undefined {
-  const cacheKey = mediaContractCacheKey(channelId, resolver);
-  if (mediaContractApiByResolver.has(cacheKey)) {
-    return mediaContractApiByResolver.get(cacheKey) ?? undefined;
+  if (mediaContractApiByChannel.has(channelId)) {
+    const cached = mediaContractApiByChannel.get(channelId);
+    return cached && typeof cached[resolver] === "function" ? cached : undefined;
   }
 
   try {
@@ -35,10 +31,11 @@ function loadChannelMediaContractApi(
       dirName: channelId,
       artifactBasename: "media-contract-api.js",
     });
+    mediaContractApiByChannel.set(channelId, loaded);
     if (typeof loaded[resolver] === "function") {
-      mediaContractApiByResolver.set(cacheKey, loaded);
       return loaded;
     }
+    return undefined;
   } catch (error) {
     if (
       !(
@@ -50,7 +47,7 @@ function loadChannelMediaContractApi(
     }
   }
 
-  mediaContractApiByResolver.set(cacheKey, null);
+  mediaContractApiByChannel.set(channelId, null);
   return undefined;
 }
 
@@ -69,14 +66,26 @@ export function resolveChannelInboundAttachmentRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): readonly string[] | undefined {
+  return resolveChannelInboundAttachmentRootsForChannel({
+    cfg: params.cfg,
+    channelId: params.ctx.Surface ?? params.ctx.Provider,
+    accountId: params.ctx.AccountId,
+  });
+}
+
+export function resolveChannelInboundAttachmentRootsForChannel(params: {
+  cfg: OpenClawConfig;
+  channelId?: string | null;
+  accountId?: string | null;
+}): readonly string[] | undefined {
   const contractApi = findChannelMediaContractApi(
-    params.ctx.Surface ?? params.ctx.Provider,
+    params.channelId,
     "resolveInboundAttachmentRoots",
   );
   if (contractApi?.resolveInboundAttachmentRoots) {
     return contractApi.resolveInboundAttachmentRoots({
       cfg: params.cfg,
-      accountId: params.ctx.AccountId,
+      accountId: params.accountId ?? undefined,
     });
   }
   return undefined;

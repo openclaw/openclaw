@@ -34,6 +34,31 @@ beforeEach(() => {
   resetDiagnosticEventsForTest();
 });
 
+function headerNames(setHeader: ReturnType<typeof vi.fn>): string[] {
+  return setHeader.mock.calls
+    .map((call) => call[0])
+    .filter((name): name is string => typeof name === "string");
+}
+
+function expectHeaderNotSet(setHeader: ReturnType<typeof vi.fn>, name: string): void {
+  expect(headerNames(setHeader)).not.toContain(name);
+}
+
+function mockCallRecord(mock: ReturnType<typeof vi.fn>, index: number): unknown[] {
+  const call = mock.mock.calls[index];
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call;
+}
+
+function expectUnauthorizedPayload(res: ServerResponse, end: ReturnType<typeof vi.fn>): void {
+  expect(res.statusCode).toBe(401);
+  expect(end).toHaveBeenCalledWith(
+    JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
+  );
+}
+
 describe("setDefaultSecurityHeaders", () => {
   it("sets X-Content-Type-Options", () => {
     const { res, setHeader } = makeMockHttpResponse();
@@ -70,19 +95,19 @@ describe("setDefaultSecurityHeaders", () => {
   it("does not set Strict-Transport-Security when not provided", () => {
     const { res, setHeader } = makeMockHttpResponse();
     setDefaultSecurityHeaders(res);
-    expect(setHeader).not.toHaveBeenCalledWith("Strict-Transport-Security", expect.anything());
+    expectHeaderNotSet(setHeader, "Strict-Transport-Security");
   });
 
   it("does not set Strict-Transport-Security for empty string", () => {
     const { res, setHeader } = makeMockHttpResponse();
     setDefaultSecurityHeaders(res, { strictTransportSecurity: "" });
-    expect(setHeader).not.toHaveBeenCalledWith("Strict-Transport-Security", expect.anything());
+    expectHeaderNotSet(setHeader, "Strict-Transport-Security");
   });
 
   it("does not set Strict-Transport-Security when opts is omitted", () => {
     const { res, setHeader } = makeMockHttpResponse();
     setDefaultSecurityHeaders(res, undefined);
-    expect(setHeader).not.toHaveBeenCalledWith("Strict-Transport-Security", expect.anything());
+    expectHeaderNotSet(setHeader, "Strict-Transport-Security");
   });
 });
 
@@ -126,10 +151,7 @@ describe("sendUnauthorized", () => {
   it("responds with 401 and a structured unauthorized payload", () => {
     const { res, end } = makeMockHttpResponse();
     sendUnauthorized(res);
-    expect(res.statusCode).toBe(401);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
-    );
+    expectUnauthorizedPayload(res, end);
   });
 });
 
@@ -138,7 +160,7 @@ describe("sendRateLimited", () => {
     const { res, setHeader, end } = makeMockHttpResponse();
     sendRateLimited(res);
     expect(res.statusCode).toBe(429);
-    expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
+    expectHeaderNotSet(setHeader, "Retry-After");
     expect(end).toHaveBeenCalledWith(
       JSON.stringify({
         error: {
@@ -153,14 +175,14 @@ describe("sendRateLimited", () => {
     const { res, setHeader } = makeMockHttpResponse();
     sendRateLimited(res, 0);
     expect(res.statusCode).toBe(429);
-    expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
+    expectHeaderNotSet(setHeader, "Retry-After");
   });
 
   it("responds with 429 and no Retry-After when retryAfterMs is negative", () => {
     const { res, setHeader } = makeMockHttpResponse();
     sendRateLimited(res, -500);
     expect(res.statusCode).toBe(429);
-    expect(setHeader).not.toHaveBeenCalledWith("Retry-After", expect.anything());
+    expectHeaderNotSet(setHeader, "Retry-After");
   });
 
   it("sets Retry-After (seconds, ceiled) when retryAfterMs is positive", () => {
@@ -185,10 +207,7 @@ describe("sendGatewayAuthFailure", () => {
     const { res, end } = makeMockHttpResponse();
     const authResult = { ok: false, rateLimited: false } as GatewayAuthResult;
     sendGatewayAuthFailure(res, authResult);
-    expect(res.statusCode).toBe(401);
-    expect(end).toHaveBeenCalledWith(
-      JSON.stringify({ error: { message: "Unauthorized", type: "unauthorized" } }),
-    );
+    expectUnauthorizedPayload(res, end);
   });
 });
 
@@ -209,9 +228,10 @@ describe("readJsonBodyOrError", () => {
   it("returns the parsed body on success", async () => {
     readJsonBodyMock.mockResolvedValueOnce({ ok: true, value: { hello: "world" } });
     const { res } = makeMockHttpResponse();
-    const result = await readJsonBodyOrError(makeRequest(), res, 1024);
+    const req = makeRequest();
+    const result = await readJsonBodyOrError(req, res, 1024);
     expect(result).toEqual({ hello: "world" });
-    expect(readJsonBodyMock).toHaveBeenCalledWith(expect.anything(), 1024);
+    expect(readJsonBodyMock).toHaveBeenCalledWith(req, 1024);
   });
 
   it("responds with 413 when the body is too large", async () => {
@@ -229,16 +249,12 @@ describe("readJsonBodyOrError", () => {
         error: { message: "Payload too large", type: "invalid_request_error" },
       }),
     );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "payload.large",
-        surface: "gateway.http.json",
-        action: "rejected",
-        bytes: 2048,
-        limitBytes: 1024,
-        reason: "json_body_limit",
-      }),
-    );
+    const event = events.find((entry) => entry.type === "payload.large");
+    expect(event?.surface).toBe("gateway.http.json");
+    expect(event?.action).toBe("rejected");
+    expect(event?.bytes).toBe(2048);
+    expect(event?.limitBytes).toBe(1024);
+    expect(event?.reason).toBe("json_body_limit");
   });
 
   it("responds with 408 when the request body times out", async () => {
@@ -292,7 +308,7 @@ describe("setSseHeaders", () => {
     const { res, setHeader } = makeMockHttpResponse();
     // Ensure flushHeaders is not defined on the mock response.
     expect((res as unknown as { flushHeaders?: () => void }).flushHeaders).toBeUndefined();
-    expect(() => setSseHeaders(res)).not.toThrow();
+    setSseHeaders(res);
     expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
   });
 });
@@ -312,8 +328,7 @@ describe("watchClientDisconnect", () => {
     const { req, res } = buildReqRes(null, null);
     const controller = new AbortController();
     const cleanup = watchClientDisconnect(req, res, controller);
-    expect(typeof cleanup).toBe("function");
-    expect(() => cleanup()).not.toThrow();
+    cleanup();
     expect(controller.signal.aborted).toBe(false);
   });
 
@@ -367,8 +382,12 @@ describe("watchClientDisconnect", () => {
     const { req, res } = buildReqRes(reqSocket, resSocket);
     const controller = new AbortController();
     watchClientDisconnect(req, res, controller);
-    expect(reqOn).toHaveBeenCalledWith("close", expect.any(Function));
-    expect(resOn).toHaveBeenCalledWith("close", expect.any(Function));
+    const reqOnCall = mockCallRecord(reqOn, 0);
+    const resOnCall = mockCallRecord(resOn, 0);
+    expect(reqOnCall[0]).toBe("close");
+    expect(typeof reqOnCall[1]).toBe("function");
+    expect(resOnCall[0]).toBe("close");
+    expect(typeof resOnCall[1]).toBe("function");
   });
 
   it("cleanup detaches the close listener from each socket", () => {

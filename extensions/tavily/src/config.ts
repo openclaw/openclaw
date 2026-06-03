@@ -1,9 +1,10 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-search";
 import {
   normalizeResolvedSecretInputString,
   normalizeSecretInput,
 } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com";
 export const DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS = 30;
@@ -60,15 +61,9 @@ export function resolveTavilyBaseUrl(cfg?: OpenClawConfig): string {
 }
 
 export function resolveTavilySearchTimeoutSeconds(override?: number): number {
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS;
+  return resolvePositiveTimeoutSeconds(override, DEFAULT_TAVILY_SEARCH_TIMEOUT_SECONDS);
 }
 
 export function resolveTavilyExtractTimeoutSeconds(override?: number): number {
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS;
+  return resolvePositiveTimeoutSeconds(override, DEFAULT_TAVILY_EXTRACT_TIMEOUT_SECONDS);
 }

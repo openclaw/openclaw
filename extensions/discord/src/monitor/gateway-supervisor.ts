@@ -3,11 +3,7 @@ import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 
-export type DiscordGatewayEventType =
-  | "disallowed-intents"
-  | "fatal"
-  | "other"
-  | "reconnect-exhausted";
+type DiscordGatewayEventType = "disallowed-intents" | "fatal" | "other" | "reconnect-exhausted";
 
 export type DiscordGatewayEvent = {
   type: DiscordGatewayEventType;
@@ -170,7 +166,6 @@ export function createDiscordGatewaySupervisor(params: {
         return;
       case "buffering":
         pending.push(event);
-        return;
     }
   };
   emitter.on("error", onGatewayError);

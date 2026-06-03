@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 
 const ATTESTATION_REFERENCE_TYPE = "attestation-manifest";
+const EXPECTED_ATTESTATION_ARTIFACT_TYPE = "application/vnd.docker.attestation.manifest.v1+json";
 const REQUIRED_PREDICATES = ["https://spdx.dev/Document", "https://slsa.dev/provenance/v1"];
 
 export function imageRefForDigest(imageRef, digest) {
@@ -85,7 +86,10 @@ export function collectDockerAttestationErrors(params) {
     const predicates = new Set();
     for (const descriptor of attestationDescriptors) {
       const attestation = inspectAttestation(descriptor.digest);
-      if (attestation?.artifactType !== "application/vnd.docker.attestation.manifest.v1+json") {
+      if (
+        attestation?.artifactType !== undefined &&
+        attestation.artifactType !== EXPECTED_ATTESTATION_ARTIFACT_TYPE
+      ) {
         errors.push(
           `${imageRef}: ${platformLabel} attestation ${descriptor.digest} has unexpected artifactType ${JSON.stringify(
             attestation?.artifactType,
@@ -195,8 +199,10 @@ async function main() {
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

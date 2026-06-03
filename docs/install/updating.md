@@ -21,13 +21,27 @@ To switch channels or target a specific version:
 ```bash
 openclaw update --channel beta
 openclaw update --channel dev
-openclaw update --tag main
 openclaw update --dry-run   # preview without applying
 ```
+
+`openclaw update` does not accept `--verbose`. For update diagnostics, use
+`--dry-run` to preview the planned actions, `--json` for structured results, or
+`openclaw update status --json` to inspect channel and availability state. The
+installer has its own `--verbose` flag, but that flag is not part of
+`openclaw update`.
 
 `--channel beta` prefers beta, but the runtime falls back to stable/latest when
 the beta tag is missing or older than the latest stable release. Use `--tag beta`
 if you want the raw npm beta dist-tag for a one-off package update.
+
+Use `--channel dev` for a persistent moving GitHub `main` checkout. For package
+updates, `--tag main` maps to `github:openclaw/openclaw#main` for one run, and
+GitHub/git source specs are packed into a temporary tarball before the staged
+npm install.
+
+For managed plugins, beta-channel fallback is a warning: the core update can
+still succeed while a plugin uses its recorded default/latest release because no
+plugin beta is available.
 
 See [Development channels](/install/development-channels) for channel semantics.
 
@@ -56,6 +70,13 @@ The `dev` channel ensures a git checkout, builds it, and installs the global CLI
 from that checkout. The `stable` and `beta` channels use package installs. If the
 gateway is already installed, `openclaw update` refreshes the service metadata
 and restarts it unless you pass `--no-restart`.
+
+For package installs with a managed Gateway service, `openclaw update` targets
+the package root used by that service. If the shell `openclaw` command comes
+from a different install, the updater prints both roots and the managed service
+Node path. The package update uses the package manager that owns the service
+root and checks the managed service Node against the target release engine
+before replacing the package.
 
 ## Alternative: re-run the installer
 
@@ -87,6 +108,37 @@ curl -fsSL https://openclaw.ai/install.sh | bash -s -- --install-method npm --ve
 npm i -g openclaw@latest
 ```
 
+Prefer `openclaw update` for supervised installs because it can coordinate the
+package swap with the running Gateway service. If you update manually on a
+supervised install, stop the managed Gateway before the package manager starts.
+Package managers replace files in place, and a running Gateway can otherwise try
+to load core or plugin files while the package tree is temporarily half-swapped.
+Restart the Gateway after the package manager finishes so the service picks up
+the new install.
+
+For a root-owned Linux system-global install, if `openclaw update` fails with
+`EACCES` and you recover with system npm, keep the Gateway stopped through the
+manual package replacement. Use the same `openclaw` profile flags or environment
+you normally use for that Gateway. Replace `/usr/bin/npm` with the system npm
+that owns the root-owned global prefix on your host:
+
+```bash
+openclaw gateway stop
+sudo /usr/bin/npm i -g openclaw@latest
+openclaw gateway install --force
+openclaw gateway restart
+```
+
+Then verify the service:
+
+```bash
+openclaw --version
+curl -fsS http://127.0.0.1:18789/readyz
+openclaw plugins list --json
+openclaw gateway status --deep --json
+openclaw doctor --lint --json
+```
+
 When `openclaw update` manages a global npm install, it installs the target into
 a temporary npm prefix first, verifies the packaged `dist` inventory, then swaps
 the clean package tree into the real global prefix. That avoids npm overlaying a
@@ -94,6 +146,12 @@ new package onto stale files from the old package. If the install command fails,
 OpenClaw retries once with `--omit=optional`. That retry helps hosts where native
 optional dependencies cannot compile, while keeping the original failure visible
 if the fallback also fails.
+
+OpenClaw-managed npm update and plugin-update commands also clear npm
+`min-release-age` quarantine for the child npm process. npm may report that
+policy as a derived `before` cutoff; both are useful for general supply-chain
+quarantine policies, but an explicit OpenClaw update means "install the selected
+OpenClaw release now."
 
 ```bash
 pnpm add -g openclaw@latest
@@ -107,37 +165,21 @@ bun add -g openclaw@latest
 
 <AccordionGroup>
   <Accordion title="Read-only package tree">
-    OpenClaw treats packaged global installs as read-only at runtime, even when the global package directory is writable by the current user. Bundled plugin runtime dependencies are staged into a writable runtime directory instead of mutating the package tree. This keeps `openclaw update` from racing with a running gateway or local agent that is repairing plugin dependencies during the same install.
+    OpenClaw treats packaged global installs as read-only at runtime, even when the global package directory is writable by the current user. Plugin package installs live in OpenClaw-owned npm/git roots under the user config directory, and Gateway startup does not mutate the OpenClaw package tree.
 
-    Some Linux npm setups install global packages under root-owned directories such as `/usr/lib/node_modules/openclaw`. OpenClaw supports that layout through the same external staging path.
+    Some Linux npm setups install global packages under root-owned directories such as `/usr/lib/node_modules/openclaw`. OpenClaw supports that layout because plugin install/update commands write outside that global package directory.
 
   </Accordion>
   <Accordion title="Hardened systemd units">
-    Set a writable stage directory that is included in `ReadWritePaths`:
+    Give OpenClaw write access to its config/state roots so explicit plugin installs, plugin updates, and doctor cleanup can persist their changes:
 
     ```ini
-    Environment=OPENCLAW_PLUGIN_STAGE_DIR=/var/lib/openclaw/plugin-runtime-deps
     ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
     ```
-
-    `OPENCLAW_PLUGIN_STAGE_DIR` also accepts a path list. OpenClaw resolves bundled plugin runtime dependencies left-to-right across the listed roots, treats earlier roots as read-only preinstalled layers, and installs or repairs only into the final writable root:
-
-    ```ini
-    Environment=OPENCLAW_PLUGIN_STAGE_DIR=/opt/openclaw/plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
-    ReadWritePaths=/var/lib/openclaw /home/openclaw/.openclaw /tmp
-    ```
-
-    If `OPENCLAW_PLUGIN_STAGE_DIR` is not set, OpenClaw uses `$STATE_DIRECTORY` when systemd provides it, then falls back to `~/.openclaw/plugin-runtime-deps`. The repair step treats that stage as an OpenClaw-owned local package root and ignores user npm prefix and global settings, so global-install npm config does not redirect bundled plugin dependencies into `~/node_modules` or the global package tree.
 
   </Accordion>
   <Accordion title="Disk-space preflight">
-    Before package updates and bundled runtime-dependency repairs, OpenClaw tries a best-effort disk-space check for the target volume. Low space produces a warning with the checked path, but does not block the update because filesystem quotas, snapshots, and network volumes can change after the check. The actual npm install, copy, and post-install verification remain authoritative.
-  </Accordion>
-  <Accordion title="Bundled plugin runtime dependencies">
-    Packaged installs keep bundled plugin runtime dependencies out of the read-only package tree. On startup and during `openclaw doctor --fix`, OpenClaw repairs runtime dependencies only for bundled plugins that are active in config, active through legacy channel config, or enabled by their bundled manifest default. Persisted channel auth state alone does not trigger Gateway startup runtime-dependency repair.
-
-    Explicit disablement wins. A disabled plugin or channel does not get its runtime dependencies repaired just because it exists in the package. External plugins and custom load paths still use `openclaw plugins install` or `openclaw plugins update`.
-
+    Before package updates and explicit plugin installs, OpenClaw tries a best-effort disk-space check for the target volume. Low space produces a warning with the checked path, but does not block the update because filesystem quotas, snapshots, and network volumes can change after the check. The actual package-manager install and post-install verification remain authoritative.
   </Accordion>
 </AccordionGroup>
 
@@ -167,6 +209,15 @@ The auto-updater is off by default. Enable it in `~/.openclaw/openclaw.json`:
 
 The gateway also logs an update hint on startup (disable with `update.checkOnStart: false`).
 For downgrade or incident recovery, set `OPENCLAW_NO_AUTO_UPDATE=1` in the gateway environment to block automatic applies even when `update.auto.enabled` is configured. Startup update hints can still run unless `update.checkOnStart` is also disabled.
+
+Package-manager updates requested through the live Gateway control-plane handler
+do not replace the package tree inside the running Gateway process. On managed
+service installs, the Gateway starts a detached handoff, exits, and lets the
+normal `openclaw update --yes --json` CLI path stop the service, replace the
+package, refresh service metadata, restart, verify the Gateway version and
+reachability, and recover an installed-but-unloaded macOS LaunchAgent when
+possible. If the Gateway cannot make that handoff safely, `update.run` reports a
+safe shell command instead of running the package manager in-process.
 
 ## After updating
 

@@ -1,4 +1,7 @@
-import type { ModelCatalogSource, NormalizedModelCatalogRow } from "./types.js";
+import type {
+  ModelCatalogSource,
+  NormalizedModelCatalogRow,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 
 const MODEL_CATALOG_SOURCE_AUTHORITY: Readonly<Record<ModelCatalogSource, number>> = {
   config: 0,
@@ -8,7 +11,7 @@ const MODEL_CATALOG_SOURCE_AUTHORITY: Readonly<Record<ModelCatalogSource, number
   "provider-index": 3,
 };
 
-export function compareModelCatalogSourceAuthority(
+function compareModelCatalogSourceAuthority(
   left: ModelCatalogSource,
   right: ModelCatalogSource,
 ): number {

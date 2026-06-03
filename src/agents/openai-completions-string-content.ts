@@ -1,4 +1,4 @@
-export function flattenStringOnlyCompletionContent(content: unknown): unknown {
+function flattenStringOnlyCompletionContent(content: unknown): unknown {
   if (!Array.isArray(content)) {
     return content;
   }
@@ -31,5 +31,22 @@ export function flattenCompletionMessagesToStringContent(messages: unknown[]): u
       ...message,
       content: flattenedContent,
     };
+  });
+}
+
+export function stripCompletionMessagesToRoleContent(messages: unknown[]): unknown[] {
+  return messages.map((message) => {
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      return message;
+    }
+    const record = message as Record<string, unknown>;
+    const stripped: Record<string, unknown> = {};
+    if (Object.hasOwn(record, "role")) {
+      stripped.role = record.role;
+    }
+    if (Object.hasOwn(record, "content")) {
+      stripped.content = record.content;
+    }
+    return stripped;
   });
 }

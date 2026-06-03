@@ -1,12 +1,15 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
 export type WritableStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
   destroyed?: boolean;
+  writable?: boolean;
+  writableEnded?: boolean;
+  writableFinished?: boolean;
 };
 
 function failText(text: string): AgentToolResult<unknown> {

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { z } from "zod";
 import {
   joinQaCredentialEndpoint,
@@ -8,6 +9,7 @@ import {
   parseQaCredentialPositiveIntegerEnv,
   QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX,
 } from "./qa-credentials-common.runtime.js";
+import { fingerprintQaCredentialId } from "./qa-credentials-fingerprint.runtime.js";
 
 const DEFAULT_ENDPOINT_PREFIX = QA_CREDENTIALS_DEFAULT_ENDPOINT_PREFIX;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
@@ -32,6 +34,7 @@ const credentialLeaseSchema = z.object({
 
 const credentialRecordSchema = z.object({
   credentialId: z.string().min(1),
+  credentialFingerprint: z.string().optional(),
   kind: z.string().min(1),
   status: credentialStatusSchema,
   createdAtMs: z.number().int(),
@@ -59,9 +62,8 @@ const listCredentialsResponseSchema = z.object({
   count: z.number().int().nonnegative().optional(),
 });
 
-export type QaCredentialAdminListStatus = z.infer<typeof listStatusSchema>;
+type QaCredentialAdminListStatus = z.infer<typeof listStatusSchema>;
 export type QaCredentialRecord = z.infer<typeof credentialRecordSchema>;
-export type QaCredentialListResponse = z.infer<typeof listCredentialsResponseSchema>;
 
 export class QaCredentialAdminError extends Error {
   code: string;
@@ -112,13 +114,13 @@ type ListQaCredentialSetsOptions = AdminBaseOptions & {
   status?: string;
 };
 
-export type QaCredentialDoctorCheck = {
+type QaCredentialDoctorCheck = {
   details?: string;
   name: string;
   status: "fail" | "pass" | "warn";
 };
 
-export type QaCredentialDoctorResult = {
+type QaCredentialDoctorResult = {
   checks: QaCredentialDoctorCheck[];
   status: "fail" | "pass" | "warn";
 };
@@ -370,6 +372,7 @@ async function postJson<T>(params: {
   responseSchema: z.ZodType<T>;
   url: string;
 }) {
+  const httpTimeoutMs = resolveTimerTimeoutMs(params.httpTimeoutMs, DEFAULT_HTTP_TIMEOUT_MS);
   let response: Response;
   try {
     response = await params.fetchImpl(params.url, {
@@ -379,7 +382,7 @@ async function postJson<T>(params: {
         "content-type": "application/json",
       },
       body: JSON.stringify(params.body),
-      signal: AbortSignal.timeout(params.httpTimeoutMs),
+      signal: AbortSignal.timeout(httpTimeoutMs),
     });
   } catch (error) {
     throw new QaCredentialAdminError({
@@ -443,10 +446,17 @@ function normalizeLimit(value: number | undefined) {
   return value;
 }
 
+function withQaCredentialFingerprint(credential: QaCredentialRecord): QaCredentialRecord {
+  return {
+    ...credential,
+    credentialFingerprint: fingerprintQaCredentialId(credential.credentialId),
+  };
+}
+
 export async function addQaCredentialSet(options: AddQaCredentialSetOptions) {
   const config = resolveAdminConfig(options);
   const fetchImpl = options.fetchImpl ?? fetch;
-  return await postJson({
+  const result = await postJson({
     fetchImpl,
     authToken: config.authToken,
     httpTimeoutMs: config.httpTimeoutMs,
@@ -460,12 +470,16 @@ export async function addQaCredentialSet(options: AddQaCredentialSetOptions) {
       actorId: config.actorId,
     },
   });
+  return {
+    ...result,
+    credential: withQaCredentialFingerprint(result.credential),
+  };
 }
 
 export async function removeQaCredentialSet(options: RemoveQaCredentialSetOptions) {
   const config = resolveAdminConfig(options);
   const fetchImpl = options.fetchImpl ?? fetch;
-  return await postJson({
+  const result = await postJson({
     fetchImpl,
     authToken: config.authToken,
     httpTimeoutMs: config.httpTimeoutMs,
@@ -476,6 +490,10 @@ export async function removeQaCredentialSet(options: RemoveQaCredentialSetOption
       actorId: config.actorId,
     },
   });
+  return {
+    ...result,
+    credential: withQaCredentialFingerprint(result.credential),
+  };
 }
 
 export async function listQaCredentialSets(options: ListQaCredentialSetsOptions) {
@@ -483,7 +501,7 @@ export async function listQaCredentialSets(options: ListQaCredentialSetsOptions)
   const fetchImpl = options.fetchImpl ?? fetch;
   const status = normalizeStatus(options.status);
   const limit = normalizeLimit(options.limit);
-  return await postJson({
+  const result = await postJson({
     fetchImpl,
     authToken: config.authToken,
     httpTimeoutMs: config.httpTimeoutMs,
@@ -496,14 +514,8 @@ export async function listQaCredentialSets(options: ListQaCredentialSetsOptions)
       ...(limit !== undefined ? { limit } : {}),
     },
   });
+  return {
+    ...result,
+    credentials: result.credentials.map((credential) => withQaCredentialFingerprint(credential)),
+  };
 }
-
-export const __testing = {
-  DEFAULT_ENDPOINT_PREFIX,
-  DEFAULT_HTTP_TIMEOUT_MS,
-  normalizeConvexSiteUrl,
-  normalizeEndpointPrefix,
-  normalizeStatus,
-  parsePositiveIntegerEnv,
-  resolveAdminConfig,
-};

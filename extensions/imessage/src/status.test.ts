@@ -1,11 +1,11 @@
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
 import * as setupRuntime from "openclaw/plugin-sdk/setup";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveIMessageAccount } from "./accounts.js";
 import * as channelRuntimeModule from "./channel.runtime.js";
 import * as clientModule from "./client.js";
-import { probeIMessage } from "./probe.js";
+import { clearIMessagePrivateApiCache, probeIMessage, probeIMessagePrivateApi } from "./probe.js";
 import { imessageSetupWizard } from "./setup-surface.js";
 import { probeIMessageStatusAccount } from "./status-core.js";
 
@@ -27,6 +27,16 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
+
+afterAll(() => {
+  vi.doUnmock("node:child_process");
+  vi.resetModules();
+});
+
 describe("createIMessageRpcClient", () => {
   beforeEach(() => {
     spawnMock.mockClear();
@@ -39,6 +49,22 @@ describe("createIMessageRpcClient", () => {
       /Refusing to start imsg rpc in test environment/i,
     );
     expect(spawnMock).not.toHaveBeenCalled();
+  });
+
+  it("promotes Full Disk Access rpc banners to the public probe error", async () => {
+    const { IMessageRpcClient, PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR } =
+      await import("./client.js");
+    const client = new IMessageRpcClient();
+    const internals = client as unknown as {
+      handleLine: (line: string) => void;
+      buildCloseError: (code: number | null, signal: NodeJS.Signals | null) => Error;
+    };
+
+    internals.handleLine(
+      "imsg cannot access /Users/alice/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.",
+    );
+
+    expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
   });
 });
 
@@ -133,6 +159,7 @@ describe("imessage setup status", () => {
 describe("probeIMessage", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    clearIMessagePrivateApiCache();
     spawnMock.mockClear();
     vi.spyOn(setupRuntime, "detectBinary").mockResolvedValue(true);
     vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
@@ -156,6 +183,145 @@ describe("probeIMessage", () => {
     expect(result.ok).toBe(false);
     expect(result.fatal).toBe(true);
     expect(result.error).toMatch(/rpc/i);
+    expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
+  });
+
+  it("drops cached rpc support when the current clock is not a valid date timestamp", async () => {
+    vi.spyOn(Date, "now")
+      .mockReturnValueOnce(1_700_000_000_000)
+      .mockReturnValueOnce(Number.NaN)
+      .mockReturnValue(1_700_000_000_000);
+    const runCommand = vi
+      .spyOn(processRuntime, "runCommandWithTimeout")
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: 'unknown command "rpc" for "imsg"',
+        code: 1,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "rpc help",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({
+          advanced_features: true,
+          v2_ready: true,
+          selectors: {},
+          rpc_methods: ["chats.list"],
+        }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      })
+      .mockResolvedValueOnce({
+        stdout: "send-rich --file",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+      });
+    vi.spyOn(clientModule, "createIMessageRpcClient").mockResolvedValue({
+      request: vi.fn().mockResolvedValue({ chats: [] }),
+      stop: vi.fn().mockResolvedValue(undefined),
+    } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    await expect(probeIMessage(1000, { cliPath: "imsg-invalid-rpc-clock" })).resolves.toMatchObject(
+      {
+        ok: false,
+        fatal: true,
+      },
+    );
+    await expect(probeIMessage(1000, { cliPath: "imsg-invalid-rpc-clock" })).resolves.toMatchObject(
+      {
+        ok: true,
+      },
+    );
+
+    expect(runCommand).toHaveBeenNthCalledWith(1, ["imsg-invalid-rpc-clock", "rpc", "--help"], {
+      timeoutMs: 1000,
+    });
+    expect(runCommand).toHaveBeenNthCalledWith(2, ["imsg-invalid-rpc-clock", "rpc", "--help"], {
+      timeoutMs: 1000,
+    });
+  });
+
+  it("does not cache rpc support when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    const runCommand = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "",
+      stderr: 'unknown command "rpc" for "imsg"',
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(
+      probeIMessage(1000, { cliPath: "imsg-overflow-rpc-clock" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      fatal: true,
+    });
+    await expect(
+      probeIMessage(1000, { cliPath: "imsg-overflow-rpc-clock" }),
+    ).resolves.toMatchObject({
+      ok: false,
+      fatal: true,
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache unavailable private API status when the process clock is invalid", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    const runCommand = vi.spyOn(processRuntime, "runCommandWithTimeout").mockResolvedValue({
+      stdout: "",
+      stderr: "bridge unavailable",
+      code: 1,
+      signal: null,
+      killed: false,
+      termination: "exit",
+    });
+
+    await expect(
+      probeIMessagePrivateApi("imsg-invalid-private-status-clock", 1000),
+    ).resolves.toMatchObject({
+      available: false,
+    });
+    await expect(
+      probeIMessagePrivateApi("imsg-invalid-private-status-clock", 1000),
+    ).resolves.toMatchObject({
+      available: false,
+    });
+
+    expect(runCommand).toHaveBeenCalledTimes(4);
+  });
+
+  it("fails fast for default local imsg probes on non-mac hosts", async () => {
+    const createIMessageRpcClientMock = vi
+      .spyOn(clientModule, "createIMessageRpcClient")
+      .mockResolvedValue({
+        request: vi.fn(),
+        stop: vi.fn(),
+      } as unknown as Awaited<ReturnType<typeof clientModule.createIMessageRpcClient>>);
+
+    const result = await probeIMessage(1000, { cliPath: "imsg", platform: "linux" });
+
+    expect(result.ok).toBe(false);
+    expect(result.fatal).toBe(true);
+    expect(result.error).toMatch(/macOS/i);
+    expect(result.error).toMatch(/SSH wrapper/i);
+    expect(setupRuntime.detectBinary).not.toHaveBeenCalled();
     expect(createIMessageRpcClientMock).not.toHaveBeenCalled();
   });
 

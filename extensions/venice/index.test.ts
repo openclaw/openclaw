@@ -16,10 +16,19 @@ describe("venice provider plugin", () => {
           },
         },
       } as never),
-    ).toMatchObject({
+    ).toEqual({
+      id: "grok-4",
       compat: {
         supportsUsageInStreaming: true,
         toolSchemaProfile: "xai",
+        unsupportedToolSchemaKeywords: [
+          "minLength",
+          "maxLength",
+          "minItems",
+          "maxItems",
+          "minContains",
+          "maxContains",
+        ],
         nativeWebSearchTool: true,
         toolCallArgumentsEncoding: "html-entities",
       },
@@ -55,6 +64,7 @@ describe("venice provider plugin", () => {
               },
             ],
           },
+          { role: "assistant", content: "done" },
         ],
       };
       (options as { onPayload?: (payload: Record<string, unknown>) => void })?.onPayload?.(payload);
@@ -85,6 +95,11 @@ describe("venice provider plugin", () => {
                 function: { name: "read", arguments: "{}" },
               },
             ],
+            reasoning_content: "",
+          },
+          {
+            role: "assistant",
+            content: "done",
             reasoning_content: "",
           },
         ],

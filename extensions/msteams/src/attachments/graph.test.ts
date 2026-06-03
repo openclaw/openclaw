@@ -31,6 +31,25 @@ vi.mock("../runtime.js", () => ({
     },
     channel: {
       media: {
+        saveResponseMedia: vi.fn(
+          async (
+            response: Response,
+            options?: { fallbackContentType?: string; maxBytes?: number },
+          ) => {
+            const length = Number(response.headers.get("content-length"));
+            if (
+              Number.isFinite(length) &&
+              options?.maxBytes !== undefined &&
+              length > options.maxBytes
+            ) {
+              throw new Error("content length exceeds maxBytes");
+            }
+            return {
+              path: "/tmp/saved.png",
+              contentType: options?.fallbackContentType ?? "image/png",
+            };
+          },
+        ),
         saveMediaBuffer: vi.fn(async (_buf: Buffer, ct: string) => ({
           path: "/tmp/saved.png",
           contentType: ct ?? "image/png",
@@ -70,6 +89,17 @@ function guardedFetchResult(params: GuardedFetchParams, response: Response) {
     release: async () => {},
     finalUrl: params.url,
   };
+}
+
+function requireFirstMockCall<TArgs extends unknown[]>(
+  mock: { mock: { calls: TArgs[] } },
+  label: string,
+): TArgs {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label}`);
+  }
+  return call;
 }
 
 function mockGraphMediaFetch(options: {
@@ -126,8 +156,9 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     });
 
     // Verify the $value endpoint was fetched
-    const valueCall = fetchCalls.find((u) => u.includes("/hostedContents/hosted-123/$value"));
-    expect(valueCall).toBeDefined();
+    expect(fetchCalls).toContain(
+      "https://graph.microsoft.com/v1.0/chats/c/messages/msg-1/hostedContents/hosted-123/$value",
+    );
     expect(result.media.length).toBeGreaterThan(0);
     expect(result.hostedCount).toBe(1);
   });
@@ -173,8 +204,9 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
     });
 
     // $value was fetched but skipped due to Content-Length exceeding maxBytes
-    const valueCall = fetchCalls.find((u) => u.includes("/hostedContents/hosted-big/$value"));
-    expect(valueCall).toBeDefined();
+    expect(fetchCalls).toContain(
+      "https://graph.microsoft.com/v1.0/chats/c/messages/msg-cl/hostedContents/hosted-big/$value",
+    );
     expect(result.media).toHaveLength(0);
   });
 
@@ -252,14 +284,12 @@ describe("downloadMSTeamsGraphMedia hosted content $value fallback", () => {
       maxBytes: 10 * 1024 * 1024,
     });
 
-    expect(safeFetchWithPolicy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requestInit: expect.objectContaining({
-          headers: expect.any(Headers),
-        }),
-      }),
+    const [fetchParams] = requireFirstMockCall(
+      vi.mocked(safeFetchWithPolicy),
+      "safeFetchWithPolicy call",
     );
-    const requestInit = vi.mocked(safeFetchWithPolicy).mock.calls[0]?.[0]?.requestInit;
+    expect(fetchParams.requestInit?.headers).toBeInstanceOf(Headers);
+    const requestInit = fetchParams.requestInit;
     const headers = requestInit?.headers as Headers;
     expect(headers.get("User-Agent")).toMatch(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/);
   });
@@ -357,10 +387,9 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     });
 
     expect(result.media).toHaveLength(0);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "msteams graph message fetch failed",
-      expect.objectContaining({ error: "network boom" }),
-    );
+    const [message, context] = requireFirstMockCall(logger.warn, "message fetch warning");
+    expect(message).toBe("msteams graph message fetch failed");
+    expect((context as { error?: unknown }).error).toBe("network boom");
   });
 
   it("logs a debug event when the message fetch returns non-ok", async () => {
@@ -384,10 +413,9 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
 
     expect(result.media).toHaveLength(0);
     expect(result.attachmentStatus).toBe(403);
-    expect(log.debug).toHaveBeenCalledWith(
-      "graph media message fetch not ok",
-      expect.objectContaining({ status: 403 }),
-    );
+    const [message, context] = requireFirstMockCall(log.debug, "message fetch debug event");
+    expect(message).toBe("graph media message fetch not ok");
+    expect((context as { status?: unknown }).status).toBe(403);
   });
 
   it("logs a debug event when token acquisition fails", async () => {
@@ -408,9 +436,8 @@ describe("downloadMSTeamsGraphMedia attachment sourcing and error logging", () =
     });
 
     expect(result.tokenError).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "msteams graph token acquisition failed",
-      expect.objectContaining({ error: "token expired" }),
-    );
+    const [message, context] = requireFirstMockCall(logger.warn, "token acquisition warning");
+    expect(message).toBe("msteams graph token acquisition failed");
+    expect((context as { error?: unknown }).error).toBe("token expired");
   });
 });

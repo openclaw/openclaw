@@ -13,6 +13,11 @@ export type SkillsLoadConfig = {
    * Each directory should contain skill subfolders with `SKILL.md`.
    */
   extraDirs?: string[];
+  /**
+   * Real target directories that skill symlinks may resolve into even when they
+   * sit outside the configured source root.
+   */
+  allowSymlinkTargets?: string[];
   /** Watch skill folders for changes and refresh the skills snapshot. */
   watch?: boolean;
   /** Debounce for the skills watcher (ms). */
@@ -22,6 +27,8 @@ export type SkillsLoadConfig = {
 export type SkillsInstallConfig = {
   preferBrew?: boolean;
   nodeManager?: "npm" | "pnpm" | "yarn" | "bun";
+  /** Allow gateway clients to install zip archives staged through skills.upload.*. */
+  allowUploadedArchives?: boolean;
 };
 
 export type SkillsLimitsConfig = {
@@ -37,11 +44,26 @@ export type SkillsLimitsConfig = {
   maxSkillFileBytes?: number;
 };
 
+export type SkillsWorkshopConfig = {
+  /** Autonomous Skill Workshop behavior controlled separately from user-prompted proposals. */
+  autonomous?: {
+    /** Allow agents to create pending proposals from durable conversation signals. */
+    enabled?: boolean;
+  };
+  /** Whether proposal lifecycle actions need explicit approval. */
+  approvalPolicy?: "pending" | "auto";
+  /** Maximum pending/quarantined proposals retained per workspace. */
+  maxPending?: number;
+  /** Maximum generated skill proposal size in bytes. */
+  maxSkillBytes?: number;
+};
+
 export type SkillsConfig = {
   /** Optional bundled-skill allowlist (only affects bundled skills). */
   allowBundled?: string[];
   load?: SkillsLoadConfig;
   install?: SkillsInstallConfig;
   limits?: SkillsLimitsConfig;
+  workshop?: SkillsWorkshopConfig;
   entries?: Record<string, SkillConfig>;
 };

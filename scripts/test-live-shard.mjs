@@ -1,8 +1,13 @@
 #!/usr/bin/env node
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
+import {
+  installVitestProcessGroupCleanup,
+  shouldUseDetachedVitestProcessGroup,
+} from "./vitest-process-group.mjs";
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 
@@ -11,9 +16,11 @@ export const RELEASE_LIVE_TEST_SHARDS = Object.freeze([
   "native-live-src-gateway-core",
   "native-live-src-gateway-profiles",
   "native-live-src-gateway-backends",
+  "native-live-src-infra",
   "native-live-test",
   "native-live-extensions-a-k",
   "native-live-extensions-l-n",
+  "native-live-extensions-moonshot",
   "native-live-extensions-openai",
   "native-live-extensions-o-z-other",
   "native-live-extensions-xai",
@@ -62,10 +69,80 @@ function walkFiles(rootDir) {
 }
 
 export function collectAllLiveTestFiles(repoRoot = process.cwd()) {
+  const externalFiles = listExternalLiveTestFiles(repoRoot);
+  if (externalFiles) {
+    return externalFiles;
+  }
   return ["src", "test", "extensions"]
     .flatMap((dir) => walkFiles(path.join(repoRoot, dir)))
     .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
     .filter((file) => file.endsWith(LIVE_TEST_SUFFIX))
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+function listExternalLiveTestFiles(repoRoot) {
+  return listGitLiveTestFiles(repoRoot) ?? listFindLiveTestFiles(repoRoot);
+}
+
+function listGitLiveTestFiles(repoRoot) {
+  const result = spawnSync("git", ["ls-files", "--", "src", "test", "extensions"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024 * 4,
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((file) => file.endsWith(LIVE_TEST_SUFFIX))
+    .toSorted((a, b) => a.localeCompare(b));
+}
+
+function listFindLiveTestFiles(repoRoot) {
+  const roots = ["src", "test", "extensions"].map((dir) => path.join(repoRoot, dir));
+  const result = spawnSync(
+    "find",
+    [
+      ...roots,
+      "(",
+      "-name",
+      "node_modules",
+      "-o",
+      "-name",
+      "dist",
+      "-o",
+      "-name",
+      "vendor",
+      "-o",
+      "-name",
+      "fixtures",
+      ")",
+      "-prune",
+      "-o",
+      "-type",
+      "f",
+      "-name",
+      `*${LIVE_TEST_SUFFIX}`,
+      "-print",
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      maxBuffer: 1024 * 1024 * 4,
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
+  if (result.status !== 0) {
+    return null;
+  }
+  return result.stdout
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((file) => file.length > 0)
+    .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
     .toSorted((a, b) => a.localeCompare(b));
 }
 
@@ -130,6 +207,10 @@ function isXaiLiveTest(file) {
   return file.startsWith("extensions/xai/");
 }
 
+function isMoonshotLiveTest(file) {
+  return file.startsWith("extensions/moonshot/");
+}
+
 export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   switch (shard) {
     case "native-live-src-agents":
@@ -149,6 +230,8 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter(isGatewayProfilesLiveTest);
     case "native-live-src-gateway-backends":
       return files.filter(isGatewayBackendLiveTest);
+    case "native-live-src-infra":
+      return files.filter((file) => file.startsWith("src/infra/"));
     case "native-live-test":
       return files.filter((file) => file.startsWith("test/"));
     case "native-live-extensions-a-k":
@@ -158,8 +241,11 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
         (file) =>
           isExtensionInRange(file, "l", "n") &&
           !file.startsWith("extensions/openai/") &&
+          !isMoonshotLiveTest(file) &&
           !isExtensionMediaLiveTest(file),
       );
+    case "native-live-extensions-moonshot":
+      return files.filter(isMoonshotLiveTest);
     case "native-live-extensions-openai":
       return files.filter(
         (file) => file.startsWith("extensions/openai/") && !isExtensionMediaLiveTest(file),
@@ -191,8 +277,6 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter(isExtensionMediaMusicLiveTest);
     case "native-live-extensions-media-video":
       return files.filter(isExtensionMediaVideoLiveTest);
-    case "native-live-extensions-l-z":
-      return files.filter((file) => isExtensionInRange(file, "l", "z"));
     default:
       throw new Error(
         `Unknown live test shard '${shard}'. Expected one of: ${LIVE_TEST_SHARDS.join(", ")}`,
@@ -200,14 +284,64 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   }
 }
 
-function usage() {
-  console.error(`Usage: node scripts/test-live-shard.mjs <${LIVE_TEST_SHARDS.join("|")}> [--list]`);
+function usage(stream = process.stderr) {
+  stream.write(
+    `Usage: node scripts/test-live-shard.mjs <${LIVE_TEST_SHARDS.join("|")}> [--list]\n`,
+  );
+}
+
+export function parseLiveShardArgs(args) {
+  const separatorIndex = args.indexOf("--");
+  const optionArgs = separatorIndex >= 0 ? args.slice(0, separatorIndex) : args;
+  const passthroughArgs = separatorIndex >= 0 ? args.slice(separatorIndex + 1) : [];
+  let shard = "";
+  let listOnly = false;
+  for (const arg of optionArgs) {
+    if (arg === "--list") {
+      listOnly = true;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      throw new Error(`Unknown option: ${arg}`);
+    }
+    if (shard) {
+      throw new Error(`Unexpected argument: ${arg}`);
+    }
+    shard = arg;
+  }
+  return { shard, listOnly, passthroughArgs };
+}
+
+export function buildLiveShardPnpmArgs(files, passthroughArgs) {
+  return ["test:live", "--", ...files, ...passthroughArgs];
+}
+
+export function buildLiveShardSpawnParams(env = process.env, platform = process.platform) {
+  return {
+    detached: shouldUseDetachedVitestProcessGroup(platform),
+    env,
+    stdio: "inherit",
+  };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const args = process.argv.slice(2);
-  const shard = args.find((arg) => !arg.startsWith("-"));
-  const listOnly = args.includes("--list");
+  const rawArgs = process.argv.slice(2);
+  const separatorIndex = rawArgs.indexOf("--");
+  const optionArgs = separatorIndex >= 0 ? rawArgs.slice(0, separatorIndex) : rawArgs;
+  if (optionArgs.includes("--help") || optionArgs.includes("-h")) {
+    usage(process.stdout);
+    process.exit(0);
+  }
+
+  let parsedArgs;
+  try {
+    parsedArgs = parseLiveShardArgs(rawArgs);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    usage();
+    process.exit(2);
+  }
+  const { shard, listOnly, passthroughArgs } = parsedArgs;
   if (!shard) {
     usage();
     process.exit(2);
@@ -235,18 +369,30 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
   console.log(`[test:live:shard] ${shard}: ${files.length} file(s)`);
   const child = spawnPnpmRunner({
-    stdio: "inherit",
-    pnpmArgs: ["test:live", "--", ...files],
-    env: process.env,
+    pnpmArgs: buildLiveShardPnpmArgs(files, passthroughArgs),
+    ...buildLiveShardSpawnParams(process.env),
+  });
+  let forwardedSignal = null;
+  const teardown = installVitestProcessGroupCleanup({
+    child,
+    onSignal: (signal) => {
+      forwardedSignal ??= signal;
+    },
   });
   child.on("exit", (code, signal) => {
+    teardown();
     if (signal) {
       process.kill(process.pid, signal);
+      return;
+    }
+    if (forwardedSignal) {
+      process.kill(process.pid, forwardedSignal);
       return;
     }
     process.exit(code ?? 1);
   });
   child.on("error", (error) => {
+    teardown();
     console.error(error);
     process.exit(1);
   });

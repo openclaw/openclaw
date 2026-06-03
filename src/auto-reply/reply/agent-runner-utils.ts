@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type {
   ChannelId,
@@ -16,10 +20,6 @@ import {
   selectApplicableRuntimeConfig,
   type OpenClawConfig,
 } from "../../config/config.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import type { TemplateContext } from "../templating.js";
 import {
@@ -29,10 +29,10 @@ import {
 export { resolveProviderScopedAuthProfile, resolveRunAuthProfile };
 import {
   buildEmbeddedRunBaseParams as buildEmbeddedRunBaseParamsCore,
-  resolveModelFallbackOptions,
   resolveEnforceFinalTagWithResolver,
 } from "./agent-runner-run-params.js";
 export { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
+import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 
@@ -106,7 +106,12 @@ export function buildThreadingToolContext(params: {
   hasRepliedRef: { value: boolean } | undefined;
 }): ChannelThreadingToolContext {
   const { sessionCtx, config, hasRepliedRef } = params;
-  const currentMessageId = sessionCtx.MessageSidFull ?? sessionCtx.MessageSid;
+  const isRestartSentinelContinuation =
+    sessionCtx.InputProvenance?.kind === "internal_system" &&
+    sessionCtx.InputProvenance.sourceTool === "restart-sentinel";
+  const currentMessageId = isRestartSentinelContinuation
+    ? sessionCtx.ReplyToId
+    : (sessionCtx.MessageSidFull ?? sessionCtx.MessageSid);
   const originProvider = resolveOriginMessageProvider({
     originatingChannel: sessionCtx.OriginatingChannel,
     provider: sessionCtx.Provider,
@@ -127,7 +132,7 @@ export function buildThreadingToolContext(params: {
     };
   }
   const provider = normalizeChannelId(rawProvider) ?? normalizeAnyChannelId(rawProvider);
-  // Fallback for unrecognized/plugin channels (e.g., BlueBubbles before plugin registry init)
+  // Fallback for unrecognized/plugin channels (e.g., iMessage before plugin registry init)
   const threading = provider ? getChannelPlugin(provider)?.threading : undefined;
   if (!threading?.buildToolContext) {
     return {
@@ -148,16 +153,21 @@ export function buildThreadingToolContext(params: {
         ChatType: sessionCtx.ChatType,
         CurrentMessageId: currentMessageId,
         ReplyToId: sessionCtx.ReplyToId,
+        ReplyToIdFull: sessionCtx.ReplyToIdFull,
         ThreadLabel: sessionCtx.ThreadLabel,
         MessageThreadId: sessionCtx.MessageThreadId,
+        TransportThreadId: sessionCtx.TransportThreadId,
         NativeChannelId: sessionCtx.NativeChannelId,
       },
       hasRepliedRef,
     }) ?? {};
+  const hasAdapterCurrentMessageId = Object.hasOwn(context, "currentMessageId");
   return {
     ...context,
     currentChannelProvider: provider!, // guaranteed non-null since threading exists
-    currentMessageId: context.currentMessageId ?? currentMessageId,
+    // Some providers expose only thread resources as reply targets; explicit
+    // `undefined` means the adapter rejected the generic message-id fallback.
+    currentMessageId: hasAdapterCurrentMessageId ? context.currentMessageId : currentMessageId,
   };
 }
 
@@ -189,7 +199,7 @@ export function buildEmbeddedRunBaseParams(
   });
 }
 
-export function buildEmbeddedContextFromTemplate(params: {
+function buildEmbeddedContextFromTemplate(params: {
   run: FollowupRun["run"];
   sessionCtx: TemplateContext;
   hasRepliedRef: { value: boolean } | undefined;
@@ -217,6 +227,7 @@ export function buildEmbeddedContextFromTemplate(params: {
       config,
       hasRepliedRef: params.hasRepliedRef,
     }),
+    currentInboundAudio: hasInboundAudio(params.sessionCtx),
   };
 }
 
@@ -229,7 +240,7 @@ function normalizeMemberRoleIds(value: TemplateContext["MemberRoleIds"]): string
   return roles.length > 0 ? roles : undefined;
 }
 
-export function buildTemplateSenderContext(sessionCtx: TemplateContext) {
+function buildTemplateSenderContext(sessionCtx: TemplateContext) {
   return {
     senderId: normalizeOptionalString(sessionCtx.SenderId),
     senderName: normalizeOptionalString(sessionCtx.SenderName),
@@ -262,6 +273,7 @@ export function buildEmbeddedRunExecutionParams(params: {
   provider: string;
   model: string;
   runId: string;
+  promptCacheKey?: string;
   allowTransientCooldownProbe?: boolean;
 }) {
   const { authProfile, embeddedContext, senderContext } = buildEmbeddedRunContexts(params);
@@ -270,6 +282,7 @@ export function buildEmbeddedRunExecutionParams(params: {
     provider: params.provider,
     model: params.model,
     runId: params.runId,
+    promptCacheKey: params.promptCacheKey,
     authProfile,
     allowTransientCooldownProbe: params.allowTransientCooldownProbe,
   });

@@ -1,10 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isBlockedObjectKey } from "../../infra/prototype-keys.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
-import { loadPluginManifestRegistryForInstalledIndex } from "../../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.js";
-import { loadPluginRegistrySnapshot } from "../../plugins/plugin-registry.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 
 const SAFE_MANIFEST_CHANNEL_ID_PATTERN = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -21,7 +20,7 @@ export function isSafeManifestChannelId(channelId: string): boolean {
 }
 
 export function readOwnRecordValue(record: Record<string, unknown>, key: string): unknown {
-  if (isBlockedObjectKey(key) || !Object.prototype.hasOwnProperty.call(record, key)) {
+  if (isBlockedObjectKey(key) || !Object.hasOwn(record, key)) {
     return undefined;
   }
   return record[key];
@@ -65,30 +64,19 @@ export function resolveReadOnlyChannelCommandDefaults(
   if (!normalizedChannelId || !isSafeManifestChannelId(normalizedChannelId)) {
     return undefined;
   }
-  const index = loadPluginRegistrySnapshot({
+  const env = options.env ?? process.env;
+  const resolvedSnapshot = resolvePluginMetadataSnapshot({
     config: options.config,
     stateDir: options.stateDir,
     workspaceDir: options.workspaceDir,
-    env: options.env ?? process.env,
+    env,
+    allowWorkspaceScopedCurrent: true,
   });
-  const registry = loadPluginManifestRegistryForInstalledIndex({
-    index,
-    config: options.config,
-    workspaceDir: options.workspaceDir,
-    env: options.env ?? process.env,
-    includeDisabled: true,
-  });
-  for (const record of registry.plugins) {
+  for (const record of resolvedSnapshot.plugins) {
     if (!record.channels.includes(normalizedChannelId)) {
       continue;
     }
-    if (
-      record.id !== normalizedChannelId &&
-      record.channelCatalogMeta?.id !== normalizedChannelId
-    ) {
-      continue;
-    }
-    if (!isInstalledPluginEnabled(index, record.id, options.config)) {
+    if (!isInstalledPluginEnabled(resolvedSnapshot.index, record.id, options.config)) {
       continue;
     }
     const channelConfigValue = record.channelConfigs
@@ -100,9 +88,11 @@ export function resolveReadOnlyChannelCommandDefaults(
       !Array.isArray(channelConfigValue)
         ? (channelConfigValue as ManifestChannelConfigRecord)
         : undefined;
-    const commands = normalizeChannelCommandDefaults(
-      channelConfig?.commands ?? record.channelCatalogMeta?.commands,
-    );
+    const catalogCommands =
+      record.channelCatalogMeta?.id === normalizedChannelId
+        ? record.channelCatalogMeta.commands
+        : undefined;
+    const commands = normalizeChannelCommandDefaults(channelConfig?.commands ?? catalogCommands);
     if (commands) {
       return commands;
     }

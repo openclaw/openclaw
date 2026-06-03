@@ -49,7 +49,7 @@ function makeParams(msg: WebInboundMsg, groupHistories: Map<string, GroupHistory
     groupHistoryLimit: 20,
     groupMemberNames: new Map<string, Map<string, string>>(),
     logVerbose: vi.fn(),
-    replyLogger: { debug: vi.fn() },
+    replyLogger: { debug: vi.fn(), warn: vi.fn() },
   };
 }
 
@@ -95,9 +95,13 @@ describe("applyGroupGating audio preflight mention text", () => {
 
     expect(result).toEqual({ shouldProcess: false });
     expect(groupHistories.get("whatsapp:group:1203630")).toEqual([
-      expect.objectContaining({
+      {
+        sender: "Alice (+15550000002)",
         body: "please summarize the thread",
-      }),
+        timestamp: 1700000000,
+        id: "msg-1",
+        senderJid: undefined,
+      },
     ]);
   });
 });

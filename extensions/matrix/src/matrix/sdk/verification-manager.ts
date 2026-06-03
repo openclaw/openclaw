@@ -4,6 +4,10 @@ import {
   VerifierEvent,
 } from "matrix-js-sdk/lib/crypto-api/verification.js";
 import { VerificationMethod } from "matrix-js-sdk/lib/types.js";
+import {
+  resolveDateTimestampMs,
+  resolveTimestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
 import { formatMatrixErrorMessage } from "../errors.js";
 
 export type MatrixVerificationMethod = "sas" | "show-qr" | "scan-qr";
@@ -161,7 +165,7 @@ export class MatrixVerificationManager {
   ) {}
 
   private readRequestValue<T>(
-    request: MatrixVerificationRequestLike,
+    _request: MatrixVerificationRequestLike,
     reader: () => T,
     fallback: T,
   ): T {
@@ -266,7 +270,7 @@ export class MatrixVerificationManager {
   }
 
   private touchVerificationSession(session: MatrixVerificationSession): void {
-    session.updatedAtMs = Date.now();
+    session.updatedAtMs = resolveDateTimestampMs(Date.now());
     this.emitVerificationSummary(session);
   }
 
@@ -317,8 +321,8 @@ export class MatrixVerificationManager {
       hasReciprocateQr: Boolean(session.reciprocateQrCallbacks),
       completed: phase === VerificationPhase.Done,
       error: session.error,
-      createdAt: new Date(session.createdAtMs).toISOString(),
-      updatedAt: new Date(session.updatedAtMs).toISOString(),
+      createdAt: resolveTimestampMsToIsoString(session.createdAtMs),
+      updatedAt: resolveTimestampMsToIsoString(session.updatedAtMs),
     };
   }
 
@@ -390,7 +394,7 @@ export class MatrixVerificationManager {
       .then(() => {
         this.touchVerificationSession(session);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         session.acceptRequested = false;
         session.error = formatMatrixErrorMessage(err);
         this.touchVerificationSession(session);
@@ -504,11 +508,15 @@ export class MatrixVerificationManager {
         return;
       }
       session.sasAutoConfirmStarted = true;
-      void this.confirmSasForSession(session, callbacks, { trustOwnDevice: false })
+      // For self-verifications, trustOwnDeviceAfterConfirmedSas is gated on
+      // isSelfVerification, so non-self requests remain unaffected. Without
+      // this, the bot's own device never gets cross-signed when SAS lands
+      // via the auto-confirm timer (initiated remotely).
+      void this.confirmSasForSession(session, callbacks, { trustOwnDevice: true })
         .then(() => {
           this.touchVerificationSession(session);
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           session.error = formatMatrixErrorMessage(err);
           this.touchVerificationSession(session);
         });
@@ -537,7 +545,7 @@ export class MatrixVerificationManager {
       .then(() => {
         this.touchVerificationSession(session);
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         session.error = formatMatrixErrorMessage(err);
         this.touchVerificationSession(session);
       });
@@ -590,7 +598,7 @@ export class MatrixVerificationManager {
       }
     }
 
-    const now = Date.now();
+    const now = resolveDateTimestampMs(Date.now());
     const id = `verification-${++this.verificationSessionCounter}`;
     const session: MatrixVerificationSession = {
       id,
@@ -647,7 +655,7 @@ export class MatrixVerificationManager {
     if (!crypto) {
       throw new Error("Matrix crypto is not available");
     }
-    let request: MatrixVerificationRequestLike | null = null;
+    let request: MatrixVerificationRequestLike | null;
     if (params.ownUser) {
       request = await crypto.requestOwnUserVerification();
     } else if (params.userId && params.deviceId && crypto.requestDeviceVerification) {
@@ -732,6 +740,15 @@ export class MatrixVerificationManager {
     session.sasCallbacks = callbacks;
     session.sasAutoConfirmStarted = true;
     await this.confirmSasForSession(session, callbacks);
+    // Wait for the rust-crypto verifier to fully resolve (done-exchange + any
+    // pending cross-signing uploads triggered by trustOwnDeviceAfterSas) so
+    // the operator's client sees a settled state on the next /keys/query.
+    // verifyPromise is set inside ensureVerificationStarted and already
+    // funnels its own rejection into session.error, so awaiting it here
+    // cannot double-throw.
+    if (session.verifyPromise) {
+      await session.verifyPromise;
+    }
     this.touchVerificationSession(session);
     return this.buildVerificationSummary(session);
   }

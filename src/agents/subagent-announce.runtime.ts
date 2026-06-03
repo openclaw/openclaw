@@ -1,13 +1,14 @@
 export { getRuntimeConfig } from "../config/config.js";
 export {
   loadSessionStore,
+  readSessionEntry,
   resolveAgentIdFromSessionKey,
-  resolveMainSessionKey,
   resolveStorePath,
 } from "../config/sessions.js";
 export { callGateway } from "../gateway/call.js";
+export { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
+export { dispatchGatewayMethodInProcess } from "../gateway/server-plugins.js";
 export {
-  isEmbeddedPiRunActive,
-  queueEmbeddedPiMessage,
-  waitForEmbeddedPiRunEnd,
-} from "./pi-embedded-runner/runs.js";
+  isEmbeddedAgentRunActive,
+  waitForEmbeddedAgentRunEnd,
+} from "./embedded-agent-runner/runs.js";

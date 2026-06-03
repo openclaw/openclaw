@@ -7,7 +7,8 @@ import {
 } from "../config/config.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
-  __testing,
+  testing,
+  consumeGatewaySigusr1RestartIntent,
   consumeGatewaySigusr1RestartAuthorization,
   emitGatewayRestart,
   isGatewaySigusr1RestartExternallyAllowed,
@@ -58,6 +59,16 @@ function withoutSigusr1Listeners(fn: () => void): void {
   }
 }
 
+function countSigusr1Emits(calls: readonly unknown[][]): number {
+  let count = 0;
+  for (const args of calls) {
+    if (args[0] === "SIGUSR1") {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function withRestartSupervisorEnabled(fn: () => void): void {
   const originalVitest = process.env.VITEST;
   const originalNodeEnv = process.env.NODE_ENV;
@@ -82,7 +93,7 @@ function withRestartSupervisorEnabled(fn: () => void): void {
 describe("infra runtime", () => {
   function setupRestartSignalSuite() {
     beforeEach(() => {
-      __testing.resetSigusr1State();
+      testing.resetSigusr1State();
       relaunchGatewayScheduledTaskMock.mockReset();
       relaunchGatewayScheduledTaskMock.mockReturnValue({ ok: true, method: "schtasks" });
       cleanStaleGatewayProcessesSyncMock.mockReset();
@@ -94,7 +105,7 @@ describe("infra runtime", () => {
     });
 
     afterEach(async () => {
-      __testing.resetSigusr1State();
+      testing.resetSigusr1State();
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       await vi.runOnlyPendingTimersAsync();
@@ -231,6 +242,29 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(1_000);
 
         expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("preserves update restart reason when an in-flight intent coalesces", () => {
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        expect(
+          emitGatewayRestart("config reload forced restart", {
+            force: true,
+            reason: "config reload forced restart",
+          }),
+        ).toBe(true);
+        const update = scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "update.run" });
+
+        expect(update.coalesced).toBe(true);
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+          force: true,
+          reason: "update.run",
+        });
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -417,10 +451,38 @@ describe("infra runtime", () => {
         expect(second.cooldownMsApplied).toBe(30_000);
 
         await vi.advanceTimersByTimeAsync(29_999);
-        expect(emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length).toBe(1);
+        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(1);
 
         await vi.advanceTimersByTimeAsync(1);
-        expect(emitSpy.mock.calls.filter((args) => args[0] === "SIGUSR1").length).toBe(2);
+        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("bypasses restart cooldown when requested", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        scheduleGatewaySigusr1Restart({ delayMs: 0, reason: "first" });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
+        markGatewaySigusr1RestartHandled();
+
+        const forced = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipCooldown: true,
+        });
+
+        expect(forced.coalesced).toBe(false);
+        expect(forced.delayMs).toBe(0);
+        expect(forced.cooldownMsApplied).toBe(0);
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(countSigusr1Emits(emitSpy.mock.calls)).toBe(2);
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
       } finally {
         process.removeListener("SIGUSR1", handler);
       }
@@ -483,7 +545,86 @@ describe("infra runtime", () => {
       }
     });
 
-    it("keeps SIGUSR1 deferred by default while work is still pending", async () => {
+    it("bypasses the pre-restart deferral check when requested", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const pendingCheck = vi.fn(() => 5);
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(pendingCheck);
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipDeferral: true,
+        });
+
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(pendingCheck).not.toHaveBeenCalled();
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("upgrades an already scheduled restart to bypass deferral", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const pendingCheck = vi.fn(() => 5);
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(pendingCheck);
+        scheduleGatewaySigusr1Restart({ delayMs: 1_000, reason: "config.patch" });
+        const forced = scheduleGatewaySigusr1Restart({
+          delayMs: 1_000,
+          reason: "update.run",
+          skipDeferral: true,
+        });
+
+        expect(forced.coalesced).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(pendingCheck).not.toHaveBeenCalled();
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("bypasses an active restart deferral when a forced restart arrives", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const staleBeforeEmit = vi.fn(async () => {});
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setPreRestartDeferralCheck(() => 5);
+        scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "config.patch",
+          emitHooks: { beforeEmit: staleBeforeEmit },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
+        const forced = scheduleGatewaySigusr1Restart({
+          delayMs: 0,
+          reason: "update.run",
+          skipDeferral: true,
+        });
+
+        expect(forced.coalesced).toBe(false);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(staleBeforeEmit).not.toHaveBeenCalled();
+        expect(peekGatewaySigusr1RestartReason()).toBe("update.run");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("emits SIGUSR1 after the default deferral timeout while work is still pending", async () => {
       const emitSpy = vi.spyOn(process, "emit");
       const handler = () => {};
       process.on("SIGUSR1", handler);
@@ -495,8 +636,25 @@ describe("infra runtime", () => {
         await vi.advanceTimersByTimeAsync(0);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
 
-        // No default max deferral wait; active turns should not be killed just
-        // because a config-triggered restart has been pending for 5 minutes.
+        await vi.advanceTimersByTimeAsync(300_000);
+        expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+      } finally {
+        process.removeListener("SIGUSR1", handler);
+      }
+    });
+
+    it("keeps SIGUSR1 deferred when deferral timeout is explicitly disabled", async () => {
+      const emitSpy = vi.spyOn(process, "emit");
+      const handler = () => {};
+      process.on("SIGUSR1", handler);
+      try {
+        setRuntimeConfigSnapshot({ gateway: { reload: { deferralTimeoutMs: 0 } } });
+        setPreRestartDeferralCheck(() => 5); // always pending
+        scheduleGatewaySigusr1Restart({ delayMs: 0 });
+
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
+
         await vi.advanceTimersByTimeAsync(300_000);
         expect(emitSpy).not.toHaveBeenCalledWith("SIGUSR1");
       } finally {
@@ -518,6 +676,9 @@ describe("infra runtime", () => {
 
         await vi.advanceTimersByTimeAsync(1_000);
         expect(emitSpy).toHaveBeenCalledWith("SIGUSR1");
+        expect(consumeGatewaySigusr1RestartIntent()).toEqual({
+          force: true,
+        });
       } finally {
         process.removeListener("SIGUSR1", handler);
       }

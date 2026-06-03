@@ -7,9 +7,11 @@ import { installMatrixTestRuntime } from "../../test-runtime.js";
 import {
   claimCurrentTokenStorageState,
   maybeMigrateLegacyStorage,
+  recordCurrentStorageMetaDeviceId,
   repairCurrentTokenStorageMetaDeviceId,
   resolveMatrixStateFilePath,
   resolveMatrixStoragePaths,
+  writeStorageMeta,
 } from "./storage.js";
 
 const createBackupArchiveMock = vi.hoisted(() =>
@@ -102,6 +104,24 @@ describe("matrix client storage paths", () => {
       OPENCLAW_STATE_DIR: stateDir,
       OPENCLAW_TEST_FAST: "1",
     } as NodeJS.ProcessEnv;
+  }
+
+  function expectFallbackMigrationSnapshot(env: NodeJS.ProcessEnv): void {
+    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledTimes(1);
+    const [params] = maybeCreateMatrixMigrationSnapshotMock.mock.calls.at(0) ?? [];
+    expect(params).toEqual({
+      env,
+      log: {
+        info: (params as { log?: { info?: unknown } })?.log?.info,
+        warn: (params as { log?: { warn?: unknown } })?.log?.warn,
+        error: (params as { log?: { error?: unknown } })?.log?.error,
+      },
+      trigger: "matrix-client-fallback",
+    });
+    const log = (params as { log?: { info?: unknown; warn?: unknown; error?: unknown } })?.log;
+    expect(typeof log?.info).toBe("function");
+    expect(typeof log?.warn).toBe("function");
+    expect(typeof log?.error).toBe("function");
   }
 
   function resolveDefaultStoragePaths(
@@ -240,6 +260,35 @@ describe("matrix client storage paths", () => {
     fs.writeFileSync(path.join(rootDir, filename), JSON.stringify(value, null, 2));
   }
 
+  it("records a learned deviceId in storage metadata without startup JSON", () => {
+    const stateDir = setupStateDir();
+    const storagePaths = resolveMatrixStoragePaths({
+      ...defaultStorageAuth,
+      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      writeStorageMeta({
+        storagePaths,
+        homeserver: defaultStorageAuth.homeserver,
+        userId: defaultStorageAuth.userId,
+        deviceId: null,
+      }),
+    ).toBe(true);
+
+    expect(
+      recordCurrentStorageMetaDeviceId({
+        rootDir: storagePaths.rootDir,
+        deviceId: "DEVICE123",
+      }),
+    ).toBe(true);
+
+    const meta = JSON.parse(fs.readFileSync(storagePaths.metaPath, "utf8")) as {
+      deviceId?: string | null;
+    };
+    expect(meta.deviceId).toBe("DEVICE123");
+    expect(fs.existsSync(path.join(storagePaths.rootDir, "startup-verification.json"))).toBe(false);
+  });
+
   function seedExistingStorageRoot(params: {
     accessToken: string;
     deviceId?: string;
@@ -343,12 +392,7 @@ describe("matrix client storage paths", () => {
       env,
     });
 
-    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        trigger: "matrix-client-fallback",
-      }),
-    );
+    expectFallbackMigrationSnapshot(env);
     expect(fs.existsSync(path.join(legacyRoot, "bot-storage.json"))).toBe(false);
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"legacy":true}');
     expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);
@@ -367,12 +411,7 @@ describe("matrix client storage paths", () => {
       env,
     });
 
-    expect(maybeCreateMatrixMigrationSnapshotMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        trigger: "matrix-client-fallback",
-      }),
-    );
+    expectFallbackMigrationSnapshot(env);
     expect(fs.readFileSync(storagePaths.storagePath, "utf8")).toBe('{"new":true}');
     expect(fs.existsSync(path.join(legacyRoot, "crypto"))).toBe(false);
     expect(fs.existsSync(storagePaths.cryptoPath)).toBe(true);

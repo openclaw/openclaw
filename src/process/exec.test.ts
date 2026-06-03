@@ -100,7 +100,7 @@ describe("runCommandWithTimeout", () => {
     ).toBe(false);
   });
 
-  it("merges custom env with base env and drops undefined values", async () => {
+  it("merges custom env with base env and drops undefined values", () => {
     const resolved = resolveCommandEnv({
       argv: ["node", "script.js"],
       baseEnv: {
@@ -118,7 +118,43 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
-  it("suppresses npm fund prompts for npm argv", async () => {
+  it("collapses case-insensitive duplicate env keys on Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "win32",
+      baseEnv: {
+        Path: "C:\\base\\bin",
+        OPENCLAW_BASE_ENV: "base",
+      },
+      env: {
+        PATH: "C:\\override\\bin",
+        OPENCLAW_TEST_ENV: "ok",
+      },
+    });
+
+    expect(resolved.Path).toBeUndefined();
+    expect(resolved.PATH).toBe("C:\\override\\bin");
+    expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
+    expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
+  });
+
+  it("preserves case-distinct env keys outside Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "linux",
+      baseEnv: {
+        Path: "/base/bin",
+      },
+      env: {
+        PATH: "/override/bin",
+      },
+    });
+
+    expect(resolved.Path).toBe("/base/bin");
+    expect(resolved.PATH).toBe("/override/bin");
+  });
+
+  it("suppresses npm fund prompts for npm argv", () => {
     const resolved = resolveCommandEnv({
       argv: ["npm", "--version"],
       baseEnv: {},
@@ -154,6 +190,29 @@ describe("runCommandWithTimeout", () => {
         killIssuedByTimeout: true,
       }),
     ).toBeNull();
+  });
+
+  it("does not spawn when the abort signal is already aborted", async () => {
+    await loadExecModules({ mockSpawn: true });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+      timeoutMs: 2_000,
+      signal: controller.signal,
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      killed: false,
+      termination: "signal",
+      noOutputTimedOut: false,
+    });
+    expect(result.code).not.toBe(0);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -196,6 +255,19 @@ describe("runCommandWithTimeout", () => {
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
       expect(result.code).not.toBe(0);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "swallows stdin EPIPE when child exits before input is consumed (#75438)",
+    { timeout: 5_000 },
+    async () => {
+      await loadExecModules();
+      const result = await runCommandWithTimeout([process.execPath, "-e", "process.exit(0)"], {
+        timeoutMs: 3_000,
+        input: "this input will EPIPE because the child ignores stdin\n",
+      });
+      expect(result.code).toBe(0);
     },
   );
 });

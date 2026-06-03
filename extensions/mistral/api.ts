@@ -14,13 +14,17 @@ const MISTRAL_MAX_TOKENS_FIELD = "max_tokens";
 
 export const MISTRAL_MODEL_TRANSPORT_PATCH = {
   supportsStore: false,
+  supportsPromptCacheKey: true,
+  supportsLongCacheRetention: false,
   maxTokensField: MISTRAL_MAX_TOKENS_FIELD,
 } as const satisfies {
   supportsStore: boolean;
+  supportsPromptCacheKey: boolean;
+  supportsLongCacheRetention: boolean;
   maxTokensField: "max_tokens";
 };
 
-export const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> = {
+const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> = {
   off: "none",
   minimal: "none",
   low: "high",
@@ -32,14 +36,18 @@ export const MISTRAL_SMALL_LATEST_REASONING_EFFORT_MAP: Record<string, string> =
 };
 
 export const MISTRAL_SMALL_LATEST_ID = "mistral-small-latest";
+export const MISTRAL_MEDIUM_3_5_ID = "mistral-medium-3-5";
 
 export function resolveMistralCompatPatch(model: { id?: string }): {
   supportsStore: boolean;
+  supportsPromptCacheKey: boolean;
+  supportsLongCacheRetention: boolean;
   supportsReasoningEffort: boolean;
   maxTokensField: "max_tokens";
   reasoningEffortMap?: Record<string, string>;
 } {
-  const reasoningEnabled = model.id === MISTRAL_SMALL_LATEST_ID;
+  const reasoningEnabled =
+    model.id === MISTRAL_SMALL_LATEST_ID || model.id === MISTRAL_MEDIUM_3_5_ID;
   return {
     ...MISTRAL_MODEL_TRANSPORT_PATCH,
     supportsReasoningEffort: reasoningEnabled,
@@ -54,6 +62,8 @@ function compatMatchesResolved(
   const expected = resolveMistralCompatPatch({ id: modelId });
   return (
     compat?.supportsStore === expected.supportsStore &&
+    compat?.supportsPromptCacheKey === expected.supportsPromptCacheKey &&
+    compat?.supportsLongCacheRetention === expected.supportsLongCacheRetention &&
     compat?.supportsReasoningEffort === expected.supportsReasoningEffort &&
     compat?.maxTokensField === expected.maxTokensField &&
     compat?.reasoningEffortMap === expected.reasoningEffortMap

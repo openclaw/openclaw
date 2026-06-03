@@ -1,8 +1,8 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { MediaUnderstandingScopeConfig } from "../config/types.tools.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
-export type MediaUnderstandingScopeDecision = "allow" | "deny";
+type MediaUnderstandingScopeDecision = "allow" | "deny";
 
 function normalizeDecision(value?: string | null): MediaUnderstandingScopeDecision | undefined {
   const normalized = normalizeOptionalLowercaseString(value);

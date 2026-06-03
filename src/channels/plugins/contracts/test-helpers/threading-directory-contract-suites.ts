@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect } from "vitest";
 import type { OpenClawConfig } from "../../../../config/config.js";
 import type { RuntimeEnv } from "../../../../runtime.js";
 import type {
@@ -9,16 +9,11 @@ import type {
 } from "../../types.core.js";
 import type { ChannelPlugin } from "../../types.js";
 
-let contractRuntime: RuntimeEnv | undefined;
-
-async function getDirectoryContractRuntime(): Promise<RuntimeEnv> {
-  if (contractRuntime) {
-    return contractRuntime;
-  }
-  const { createNonExitingRuntime } = await import("../../../../runtime.js");
-  contractRuntime = createNonExitingRuntime();
-  return contractRuntime;
-}
+const contractRuntime = new Proxy(Object.create(null), {
+  get(_target, property) {
+    throw new Error(`Directory contract unexpectedly accessed runtime.${String(property)}`);
+  },
+}) as RuntimeEnv;
 
 function expectDirectoryEntryShape(entry: ChannelDirectoryEntry) {
   expect(["user", "group", "channel"]).toContain(entry.kind);
@@ -80,18 +75,6 @@ function expectFocusedBindingShape(binding: ChannelFocusedBindingContext) {
   expect(["current", "child"]).toContain(binding.placement);
   expect(typeof binding.labelNoun).toBe("string");
   expect(binding.labelNoun.trim()).not.toBe("");
-}
-
-export function installChannelThreadingContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "threading">;
-}) {
-  it("exposes the base threading contract", () => {
-    expectChannelThreadingBaseContract(params.plugin);
-  });
-
-  it("keeps threading return values normalized", () => {
-    expectChannelThreadingReturnValuesNormalized(params.plugin);
-  });
 }
 
 export function expectChannelThreadingBaseContract(
@@ -185,17 +168,6 @@ export function expectChannelThreadingReturnValuesNormalized(
   }
 }
 
-export function installChannelDirectoryContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "directory">;
-  coverage?: "lookups" | "presence";
-  cfg?: OpenClawConfig;
-  accountId?: string;
-}) {
-  it("exposes the base directory contract", async () => {
-    await expectChannelDirectoryBaseContract(params);
-  });
-}
-
 export async function expectChannelDirectoryBaseContract(params: {
   plugin: Pick<ChannelPlugin, "id" | "directory">;
   coverage?: "lookups" | "presence";
@@ -204,15 +176,22 @@ export async function expectChannelDirectoryBaseContract(params: {
 }) {
   const directory = params.plugin.directory;
   expect(directory).toBeDefined();
+  const cfg =
+    params.cfg ??
+    ({
+      channels: {
+        [params.plugin.id]: { enabled: false },
+      },
+    } as unknown as OpenClawConfig);
+  const accountId = params.accountId ?? "default";
 
   if (params.coverage === "presence") {
     return;
   }
-  const runtime = await getDirectoryContractRuntime();
   const self = await directory?.self?.({
-    cfg: params.cfg ?? ({} as OpenClawConfig),
-    accountId: params.accountId ?? "default",
-    runtime,
+    cfg,
+    accountId,
+    runtime: contractRuntime,
   });
   if (self) {
     expectDirectoryEntryShape(self);
@@ -220,11 +199,11 @@ export async function expectChannelDirectoryBaseContract(params: {
 
   const peers =
     (await directory?.listPeers?.({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
-      accountId: params.accountId ?? "default",
+      cfg,
+      accountId,
       query: "",
       limit: 5,
-      runtime,
+      runtime: contractRuntime,
     })) ?? [];
   expect(Array.isArray(peers)).toBe(true);
   for (const peer of peers) {
@@ -233,11 +212,11 @@ export async function expectChannelDirectoryBaseContract(params: {
 
   const groups =
     (await directory?.listGroups?.({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
-      accountId: params.accountId ?? "default",
+      cfg,
+      accountId,
       query: "",
       limit: 5,
-      runtime,
+      runtime: contractRuntime,
     })) ?? [];
   expect(Array.isArray(groups)).toBe(true);
   for (const group of groups) {
@@ -246,11 +225,11 @@ export async function expectChannelDirectoryBaseContract(params: {
 
   if (directory?.listGroupMembers && groups[0]?.id) {
     const members = await directory.listGroupMembers({
-      cfg: params.cfg ?? ({} as OpenClawConfig),
-      accountId: params.accountId ?? "default",
+      cfg,
+      accountId,
       groupId: groups[0].id,
       limit: 5,
-      runtime,
+      runtime: contractRuntime,
     });
     expect(Array.isArray(members)).toBe(true);
     for (const member of members) {

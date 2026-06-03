@@ -1,25 +1,12 @@
-export type {
-  AgentToAgentPolicy,
-  SessionAccessAction,
-  SessionAccessResult,
-  SessionToolsVisibility,
-} from "./sessions-access.js";
 export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
+  createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
-  resolveSandboxSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
-  resolveSessionToolsVisibility,
 } from "./sessions-access.js";
 import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
-export type { SessionReferenceResolution } from "./sessions-resolution.js";
 export {
-  isRequesterSpawnedSessionVisible,
-  isResolvedSessionVisibleToRequester,
-  listSpawnedSessionKeys,
-  looksLikeSessionId,
-  looksLikeSessionKey,
   resolveCurrentSessionClientAlias,
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
@@ -27,16 +14,15 @@ export {
   resolveSessionReference,
   resolveVisibleSessionReference,
   shouldResolveSessionIdInput,
-  shouldVerifyRequesterSpawnedSessionVisibility,
 } from "./sessions-resolution.js";
 export {
   extractAssistantText,
   sanitizeTextContent,
   stripToolMessages,
 } from "./chat-history-text.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 export type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
 

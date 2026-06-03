@@ -5,11 +5,11 @@ import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/director
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { resolveLineAccount } from "./accounts.js";
 import { lineBindingsAdapter } from "./bindings.js";
-import { type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
+import type { ChannelPlugin, ResolvedLineAccount } from "./channel-api.js";
 import { lineChannelPluginCommon } from "./channel-shared.js";
 import { lineGatewayAdapter } from "./gateway.js";
 import { resolveLineGroupRequireMention } from "./group-policy.js";
-import { lineOutboundAdapter } from "./outbound.js";
+import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { hasLineDirectives, parseLineDirectives } from "./reply-payload-transform.js";
 import { getLineRuntime } from "./runtime.js";
 import { lineSetupAdapter } from "./setup-core.js";
@@ -42,6 +42,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
       resolveRequireMention: resolveLineGroupRequireMention,
     },
     messaging: {
+      targetPrefixes: ["line"],
       normalizeTarget: (target) => {
         const trimmed = target.trim();
         if (!trimmed) {
@@ -71,6 +72,7 @@ export const linePlugin: ChannelPlugin<ResolvedLineAccount> = createChatChannelP
     setup: lineSetupAdapter,
     status: lineStatusAdapter,
     gateway: lineGatewayAdapter,
+    message: lineMessageAdapter,
     bindings: lineBindingsAdapter,
     conversationBindings: {
       defaultTopLevelPlacement: "current",

@@ -5,6 +5,7 @@ import {
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderAdapter,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { resolveFirstGithubToken } from "./auth.js";
@@ -23,8 +24,7 @@ const PREFERRED_MODELS = [
 
 const COPILOT_HEADERS_STATIC: Record<string, string> = {
   "Content-Type": "application/json",
-  "Editor-Version": "vscode/1.96.2",
-  "User-Agent": "GitHubCopilotChat/0.26.7",
+  ...buildCopilotIdeHeaders(),
 };
 
 function buildSsrfPolicy(baseUrl: string): SsrFPolicy | undefined {
@@ -221,7 +221,7 @@ async function createGitHubCopilotEmbeddingProvider(
 ): Promise<{ provider: MemoryEmbeddingProvider; client: GitHubCopilotEmbeddingClient }> {
   const initialSession = await resolveGitHubCopilotEmbeddingSession(client);
 
-  const embed = async (input: string[]): Promise<number[][]> => {
+  const embed = async (input: string[], signal?: AbortSignal): Promise<number[][]> => {
     if (input.length === 0) {
       return [];
     }
@@ -232,6 +232,7 @@ async function createGitHubCopilotEmbeddingProvider(
       url,
       fetchImpl: client.fetchImpl,
       ssrfPolicy: buildRemoteBaseUrlPolicy(session.baseUrl),
+      signal,
       init: {
         method: "POST",
         headers: session.headers,
@@ -259,11 +260,11 @@ async function createGitHubCopilotEmbeddingProvider(
     provider: {
       id: COPILOT_EMBEDDING_PROVIDER_ID,
       model: client.model,
-      embedQuery: async (text) => {
-        const [vector] = await embed([text]);
+      embedQuery: async (text, options) => {
+        const [vector] = await embed([text], options?.signal);
         return vector ?? [];
       },
-      embedBatch: embed,
+      embedBatch: async (texts, options) => await embed(texts, options?.signal),
     },
     client: {
       ...client,

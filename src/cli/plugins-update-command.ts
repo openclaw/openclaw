@@ -1,4 +1,10 @@
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import {
+  assertConfigWriteAllowedInCurrentMode,
+  getRuntimeConfig,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+} from "../config/config.js";
 import { updateNpmInstalledHookPacks } from "../hooks/update.js";
 import {
   loadInstalledPluginIndexInstallRecords,
@@ -7,7 +13,6 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
@@ -21,6 +26,8 @@ export async function runPluginUpdateCommand(params: {
   id?: string;
   opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
 }) {
+  assertConfigWriteAllowedInCurrentMode();
+
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
   const cfg = getRuntimeConfig();
   const pluginInstallRecords = await loadInstalledPluginIndexInstallRecords();
@@ -111,6 +118,9 @@ export async function runPluginUpdateCommand(params: {
         nextInstallRecords: nextPluginInstallRecords,
         nextConfig,
         baseHash: (await sourceSnapshotPromise)?.hash,
+        writeOptions: {
+          afterWrite: { mode: "restart", reason: "plugin source changed" },
+        },
       });
     } else {
       await replaceConfigFile({

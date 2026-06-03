@@ -1,10 +1,14 @@
 import { createSubsystemLogger } from "openclaw/plugin-sdk/core";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const log = createSubsystemLogger("bedrock-mantle-discovery");
 
@@ -51,8 +55,8 @@ function isSupportedRegion(region: string): boolean {
 // Bearer token resolution
 // ---------------------------------------------------------------------------
 
-export type MantleBearerTokenProvider = () => Promise<string>;
-export type MantleBearerTokenProviderFactory = (opts?: {
+type MantleBearerTokenProvider = () => Promise<string>;
+type MantleBearerTokenProviderFactory = (opts?: {
   region?: string;
   expiresInSeconds?: number;
 }) => MantleBearerTokenProvider;
@@ -92,9 +96,10 @@ function getCachedIamTokenEntry(
   now: number = Date.now(),
 ): { token: string; expiresAt: number } | undefined {
   const cached = iamTokenCache.get(region);
-  if (cached && cached.expiresAt > now) {
+  if (cached && isFutureDateTimestampMs(cached.expiresAt, { nowMs: now })) {
     return cached;
   }
+  iamTokenCache.delete(region);
   return undefined;
 }
 
@@ -123,7 +128,10 @@ export async function generateBearerTokenFromIam(params: {
       region: params.region,
       expiresInSeconds: 7200, // 2 hours
     })();
-    iamTokenCache.set(params.region, { token, expiresAt: now + IAM_TOKEN_TTL_MS });
+    const expiresAt = resolveExpiresAtMsFromDurationMs(IAM_TOKEN_TTL_MS, { nowMs: now });
+    if (expiresAt !== undefined) {
+      iamTokenCache.set(params.region, { token, expiresAt });
+    }
     return token;
   } catch (error) {
     log.debug?.("Mantle IAM token generation unavailable", {
@@ -171,9 +179,11 @@ export async function resolveMantleRuntimeBearerToken(params: {
     return undefined;
   }
   const refreshed = getCachedIamTokenEntry(region, now);
+  const expiresAt =
+    refreshed?.expiresAt ?? resolveExpiresAtMsFromDurationMs(IAM_TOKEN_TTL_MS, { nowMs: now });
   return {
     apiKey: refreshed?.token ?? token,
-    expiresAt: refreshed?.expiresAt ?? now + IAM_TOKEN_TTL_MS,
+    ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
 /** Reset the IAM token cache (for testing). */
@@ -224,6 +234,10 @@ interface MantleCacheEntry {
   models: ModelDefinitionConfig[];
   fetchedAt: number;
 }
+
+type MantleDiscoveryConfig = {
+  enabled?: boolean;
+};
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
 
@@ -322,10 +336,14 @@ export async function discoverMantleModels(params: {
  */
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
+  pluginConfig?: { discovery?: MantleDiscoveryConfig };
   fetchFn?: typeof fetch;
   tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
+  if (params.pluginConfig?.discovery?.enabled === false) {
+    return null;
+  }
   const region = resolveMantleRegion(env);
   const explicitBearerToken = resolveMantleBearerToken(env);
 

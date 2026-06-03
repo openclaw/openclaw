@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { Command } from "commander";
 import { removeCommandByName } from "./command-tree.js";
 import { registerLazyCommand } from "./register-lazy-command.js";
@@ -60,7 +61,7 @@ export function registerLazyCommandGroup(
     name: placeholder.name,
     description: placeholder.description,
     options: placeholder.options,
-    removeNames: [...new Set(getCommandGroupNames(entry))],
+    removeNames: uniqueStrings(getCommandGroupNames(entry)),
     register: async () => {
       await entry.register(program);
     },

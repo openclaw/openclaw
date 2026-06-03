@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   getBundledChannelPlugin,
   getBundledChannelSetupPlugin,
@@ -11,7 +12,6 @@ import type {
   ChannelDoctorSequenceResult,
 } from "../../../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorEntry = {
   doctor: ChannelDoctorAdapter;
@@ -134,7 +134,7 @@ function safeListReadOnlyChannelPlugins(context: ChannelDoctorLookupContext) {
     return resolveReadOnlyChannelPluginsForConfig(context.cfg, {
       ...(context.env ? { env: context.env } : {}),
       includePersistedAuthState: false,
-      includeSetupRuntimeFallback: true,
+      includeSetupFallbackPlugins: true,
     }).plugins;
   } catch {
     return [];

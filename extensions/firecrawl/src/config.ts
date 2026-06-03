@@ -1,5 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
+import { resolvePositiveTimeoutSeconds } from "openclaw/plugin-sdk/provider-web-fetch";
 import { resolveSecretInputString, normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export const DEFAULT_FIRECRAWL_BASE_URL = "https://api.firecrawl.dev";
@@ -86,7 +87,7 @@ export function resolveFirecrawlSearchConfig(cfg?: OpenClawConfig): FirecrawlSea
   return firecrawl as FirecrawlSearchConfig;
 }
 
-export function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig {
+function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig {
   const pluginConfig = cfg?.plugins?.entries?.firecrawl?.config as PluginEntryConfig;
   const pluginWebFetch = pluginConfig?.webFetch;
   if (pluginWebFetch && typeof pluginWebFetch === "object" && !Array.isArray(pluginWebFetch)) {
@@ -225,23 +226,13 @@ export function resolveFirecrawlScrapeTimeoutSeconds(
   cfg?: OpenClawConfig,
   override?: number,
 ): number {
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
   const fetch = resolveFirecrawlFetchConfig(cfg);
-  if (
-    typeof fetch?.timeoutSeconds === "number" &&
-    Number.isFinite(fetch.timeoutSeconds) &&
-    fetch.timeoutSeconds > 0
-  ) {
-    return Math.floor(fetch.timeoutSeconds);
-  }
-  return DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS;
+  return resolvePositiveTimeoutSeconds(
+    override,
+    resolvePositiveTimeoutSeconds(fetch?.timeoutSeconds, DEFAULT_FIRECRAWL_SCRAPE_TIMEOUT_SECONDS),
+  );
 }
 
 export function resolveFirecrawlSearchTimeoutSeconds(override?: number): number {
-  if (typeof override === "number" && Number.isFinite(override) && override > 0) {
-    return Math.floor(override);
-  }
-  return DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS;
+  return resolvePositiveTimeoutSeconds(override, DEFAULT_FIRECRAWL_SEARCH_TIMEOUT_SECONDS);
 }

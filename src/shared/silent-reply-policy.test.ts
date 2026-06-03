@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_SILENT_REPLY_POLICY,
-  DEFAULT_SILENT_REPLY_REWRITE,
   classifySilentReplyConversationType,
   resolveSilentReplyPolicyFromPolicies,
-  resolveSilentReplyRewriteFromPolicies,
-  resolveSilentReplyRewriteText,
 } from "./silent-reply-policy.js";
 
 describe("classifySilentReplyConversationType", () => {
@@ -37,38 +34,7 @@ describe("classifySilentReplyConversationType", () => {
   });
 });
 
-describe("resolveSilentReplyRewriteFromPolicies", () => {
-  it("uses defaults when no overrides exist", () => {
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "direct" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.direct,
-    );
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "group" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.group,
-    );
-  });
-
-  it("prefers surface rewrite settings over defaults", () => {
-    expect(
-      resolveSilentReplyRewriteFromPolicies({
-        conversationType: "direct",
-        defaultRewrite: { direct: true },
-        surfaceRewrite: { direct: false },
-      }),
-    ).toBe(false);
-  });
-});
-
-describe("resolveSilentReplyRewriteText", () => {
-  it("picks a deterministic rewrite for a given seed", () => {
-    const first = resolveSilentReplyRewriteText({ seed: "main:NO_REPLY" });
-    const second = resolveSilentReplyRewriteText({ seed: "main:NO_REPLY" });
-    expect(first).toBe(second);
-    expect(first).not.toBe("NO_REPLY");
-    expect(first.length).toBeGreaterThan(0);
-  });
-});
-
-describe("resolveSilentReplyPolicyFromPolicies", () => {
+describe("silent reply default policy resolution", () => {
   it("uses defaults when no overrides exist", () => {
     expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "direct" })).toBe(
       DEFAULT_SILENT_REPLY_POLICY.direct,
@@ -77,14 +43,26 @@ describe("resolveSilentReplyPolicyFromPolicies", () => {
       DEFAULT_SILENT_REPLY_POLICY.group,
     );
   });
+});
 
+describe("resolveSilentReplyPolicyFromPolicies", () => {
   it("prefers surface policy over defaults", () => {
     expect(
       resolveSilentReplyPolicyFromPolicies({
-        conversationType: "direct",
-        defaultPolicy: { direct: "disallow" },
-        surfacePolicy: { direct: "allow" },
+        conversationType: "group",
+        defaultPolicy: { group: "allow" },
+        surfacePolicy: { group: "disallow" },
       }),
-    ).toBe("allow");
+    ).toBe("disallow");
+  });
+
+  it("always disallows direct silent replies", () => {
+    expect(
+      resolveSilentReplyPolicyFromPolicies({
+        conversationType: "direct",
+        defaultPolicy: { group: "allow" },
+        surfacePolicy: { group: "allow" },
+      }),
+    ).toBe("disallow");
   });
 });

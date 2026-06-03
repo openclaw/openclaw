@@ -10,7 +10,7 @@ import {
   resolveProviderHttpRequestConfig,
   requireTranscriptionText,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
 
 export const XAI_DEFAULT_STT_MODEL = "grok-stt";
@@ -78,6 +78,9 @@ export async function transcribeXaiAudio(
 }
 
 export function buildXaiMediaUnderstandingProvider(): MediaUnderstandingProvider {
+  // Auth is resolved by media-understanding core via resolveProviderExecutionContext
+  // before transcribeAudio runs, so an OAuth profile (when configured) reaches
+  // here as `params.apiKey` already. No plugin-side fallback required.
   return {
     id: "xai",
     capabilities: ["audio"],

@@ -169,6 +169,7 @@ describe("applyCliProfileEnv", () => {
 
   it("does not override explicit env values", () => {
     const env: Record<string, string | undefined> = {
+      OPENCLAW_PROFILE: "prod",
       OPENCLAW_STATE_DIR: "/custom",
       OPENCLAW_GATEWAY_PORT: "19099",
     };
@@ -177,6 +178,7 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
+    expect(env.OPENCLAW_PROFILE).toBe("dev");
     expect(env.OPENCLAW_STATE_DIR).toBe("/custom");
     expect(env.OPENCLAW_GATEWAY_PORT).toBe("19099");
     expect(env.OPENCLAW_CONFIG_PATH).toBe(path.join("/custom", "openclaw.json"));
@@ -210,6 +212,7 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
+
     expect(env.OPENCLAW_PROFILE).toBe("interactive");
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
     expect(resolveLaunchAgentPlistPath(env)).toBe(
@@ -226,11 +229,12 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
+
     expect(env.OPENCLAW_PROFILE).toBe("work");
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
   });
 
-  it("preserves custom OPENCLAW_LAUNCHD_LABEL overrides that do not match the profile-derived label", () => {
+  it("preserves custom OPENCLAW_LAUNCHD_LABEL overrides", () => {
     const env: Record<string, string | undefined> = {
       OPENCLAW_LAUNCHD_LABEL: "com.custom.openclaw",
     };
@@ -239,6 +243,8 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
+
+    expect(env.OPENCLAW_PROFILE).toBe("ops");
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("com.custom.openclaw");
   });
 
@@ -251,12 +257,16 @@ describe("applyCliProfileEnv", () => {
       env,
       homedir: () => "/home/peter",
     });
+
+    expect(env.OPENCLAW_PROFILE).toBe("ops");
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("   ");
   });
 
   it("does not set OPENCLAW_LAUNCHD_LABEL when it was absent", () => {
     const env: Record<string, string | undefined> = {};
     applyCliProfileEnv({ profile: "ops", env });
+
+    expect(env.OPENCLAW_PROFILE).toBe("ops");
     expect(env.OPENCLAW_LAUNCHD_LABEL).toBeUndefined();
   });
 });

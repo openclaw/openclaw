@@ -1,3 +1,1 @@
-export function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
+export * from "@openclaw/normalization-core/number-coercion";

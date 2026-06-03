@@ -5,6 +5,13 @@
   },
   "enabledByDefault": true,
   "providers": ["nvidia"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "nvidia-native",
+      "hosts": ["integrate.api.nvidia.com"],
+      "baseUrls": ["https://integrate.api.nvidia.com/v1"]
+    }
+  ],
   "modelIdNormalization": {
     "providers": {
       "nvidia": {
@@ -29,6 +36,9 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
             }
           },
           {
@@ -42,6 +52,41 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            }
+          },
+          {
+            "id": "minimaxai/minimax-m2.7",
+            "name": "Minimax M2.7",
+            "input": ["text"],
+            "contextWindow": 196608,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
+            }
+          },
+          {
+            "id": "z-ai/glm-5.1",
+            "name": "GLM 5.1",
+            "input": ["text"],
+            "contextWindow": 202752,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "requiresStringContent": true
             }
           },
           {
@@ -55,7 +100,13 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
-            }
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "Shipped compatibility row; use minimaxai/minimax-m2.7 for new NVIDIA setups.",
+            "replacedBy": "minimaxai/minimax-m2.7"
           },
           {
             "id": "z-ai/glm5",
@@ -68,7 +119,13 @@
               "output": 0,
               "cacheRead": 0,
               "cacheWrite": 0
-            }
+            },
+            "compat": {
+              "requiresStringContent": true
+            },
+            "status": "deprecated",
+            "statusReason": "Shipped compatibility row; use z-ai/glm-5.1 for new NVIDIA setups.",
+            "replacedBy": "z-ai/glm-5.1"
           }
         ]
       }
@@ -77,8 +134,13 @@
       "nvidia": "static"
     }
   },
-  "providerAuthEnvVars": {
-    "nvidia": ["NVIDIA_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "nvidia",
+        "envVars": ["NVIDIA_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -88,7 +150,7 @@
       "choiceLabel": "NVIDIA API key",
       "groupId": "nvidia",
       "groupLabel": "NVIDIA",
-      "groupHint": "API key",
+      "groupHint": "Direct API key",
       "optionKey": "nvidiaApiKey",
       "cliFlag": "--nvidia-api-key",
       "cliOption": "--nvidia-api-key <key>",

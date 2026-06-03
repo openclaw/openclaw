@@ -63,6 +63,7 @@ describe("buildStatusAllReportLines", () => {
         pluginCompatibility: [],
         channelsStatus: null,
         channelIssues: [],
+        deliveryDiagnostics: null,
         gatewayReachable: false,
         health: null,
         nodeOnlyGateway: null,
@@ -73,10 +74,10 @@ describe("buildStatusAllReportLines", () => {
     expect(output).toContain("Bootstrap file");
     expect(output).toContain("PRESENT");
     expect(output).toContain("ABSENT");
-    expect(diagnosisSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        secretDiagnostics: [],
-      }),
-    );
+    expect(diagnosisSpy).toHaveBeenCalledOnce();
+    const [diagnosisOptions] = diagnosisSpy.mock.calls[0] as unknown as [
+      { secretDiagnostics?: unknown[] },
+    ];
+    expect(diagnosisOptions?.secretDiagnostics).toEqual([]);
   });
 });

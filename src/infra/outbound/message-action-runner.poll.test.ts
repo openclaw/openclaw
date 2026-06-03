@@ -10,6 +10,21 @@ const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
 }));
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  if (typeof arg !== "object" || arg === null || Array.isArray(arg)) {
+    throw new Error(`expected ${label} params to be an object`);
+  }
+  return arg as Record<string, unknown>;
+}
+
 vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
   resetOutboundChannelResolutionStateForTest: vi.fn(),
@@ -88,26 +103,23 @@ async function runPollAction(params: {
   cfg: OpenClawConfig;
   actionParams: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
+  inboundEventKind?: "user_request" | "room_event";
 }) {
   await runMessageAction({
     cfg: params.cfg,
     action: "poll",
     params: params.actionParams as never,
     toolContext: params.toolContext as never,
+    inboundEventKind: params.inboundEventKind,
   });
-  const call = mocks.executePollAction.mock.calls[0]?.[0] as
-    | {
-        resolveCorePoll?: () => {
-          durationHours?: number;
-          maxSelections?: number;
-          threadId?: string;
-        };
-        ctx?: { params?: Record<string, unknown> };
-      }
-    | undefined;
-  if (!call) {
-    return undefined;
-  }
+  const call = firstMockArg(mocks.executePollAction, "executePollAction") as {
+    resolveCorePoll?: () => {
+      durationHours?: number;
+      maxSelections?: number;
+      threadId?: string;
+    };
+    ctx?: { inboundEventKind?: string; params?: Record<string, unknown> };
+  };
   return {
     ...call.resolveCorePoll?.(),
     ctx: call.ctx,
@@ -177,6 +189,39 @@ describe("runMessageAction poll handling", () => {
     expect(call?.durationHours).toBe(2);
     expect(call?.threadId).toBe("42");
     expect(call?.ctx?.params?.threadId).toBe("42");
+  });
+
+  it.each([0, -1, 1.5, "1.5", "soon"])(
+    "rejects invalid pollDurationHours value %s",
+    async (pollDurationHours) => {
+      await expect(
+        runPollAction({
+          cfg: pollerConfig,
+          actionParams: {
+            channel: "poller",
+            target: "poller:123",
+            pollQuestion: "Lunch?",
+            pollOption: ["Pizza", "Sushi"],
+            pollDurationHours,
+          },
+        }),
+      ).rejects.toThrow(/pollDurationHours must be a positive integer/i);
+    },
+  );
+
+  it("passes inbound event kind to poll execution", async () => {
+    const call = await runPollAction({
+      cfg: pollerConfig,
+      actionParams: {
+        channel: "poller",
+        target: "poller:123",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+      inboundEventKind: "room_event",
+    });
+
+    expect(call?.ctx?.inboundEventKind).toBe("room_event");
   });
 
   it("expands maxSelections when pollMulti is enabled", async () => {

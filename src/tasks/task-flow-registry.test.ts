@@ -1,9 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createFlowRecord,
-  createTaskFlowForTask,
-  createManagedTaskFlow,
+  createFlowRecord as createFlowRecordOrNull,
+  createTaskFlowForTask as createTaskFlowForTaskOrNull,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   deleteTaskFlowRecordById,
   failFlow,
   getTaskFlowById,
@@ -16,19 +16,48 @@ import {
   updateFlowRecordByIdExpectedRevision,
 } from "./task-flow-registry.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+function createFlowRecord(params: Parameters<typeof createFlowRecordOrNull>[0]): TaskFlowRecord {
+  const flow = createFlowRecordOrNull(params);
+  if (!flow) {
+    throw new Error("expected TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+function createTaskFlowForTask(
+  params: Parameters<typeof createTaskFlowForTaskOrNull>[0],
+): TaskFlowRecord {
+  const flow = createTaskFlowForTaskOrNull(params);
+  if (!flow) {
+    throw new Error("expected task-mirrored TaskFlow creation to succeed");
+  }
+  return flow;
+}
 
 async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Promise<T> {
-  return await withTempDir({ prefix: "openclaw-task-flow-registry-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskFlowRegistryForTests();
-    try {
-      return await run(root);
-    } finally {
+  return await withOpenClawTestState(
+    { layout: "state-only", prefix: "openclaw-task-flow-registry-" },
+    async (state) => {
       resetTaskFlowRegistryForTests();
-    }
-  });
+      try {
+        return await run(state.stateDir);
+      } finally {
+        resetTaskFlowRegistryForTests();
+      }
+    },
+  );
 }
 
 describe("task-flow-registry", () => {
@@ -38,11 +67,6 @@ describe("task-flow-registry", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    if (ORIGINAL_STATE_DIR === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-    }
     resetTaskFlowRegistryForTests();
   });
 
@@ -59,15 +83,15 @@ describe("task-flow-registry", () => {
         stateJson: { phase: "spawn" },
       });
 
-      expect(created).toMatchObject({
-        flowId: created.flowId,
-        syncMode: "managed",
-        controllerId: "tests/managed-controller",
-        revision: 0,
-        status: "queued",
-        currentStep: "spawn_task",
-        stateJson: { phase: "spawn" },
-      });
+      expect(created.flowId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      );
+      expect(created.syncMode).toBe("managed");
+      expect(created.controllerId).toBe("tests/managed-controller");
+      expect(created.revision).toBe(0);
+      expect(created.status).toBe("queued");
+      expect(created.currentStep).toBe("spawn_task");
+      expect(created.stateJson).toEqual({ phase: "spawn" });
 
       const waiting = setFlowWaiting({
         flowId: created.flowId,
@@ -76,16 +100,15 @@ describe("task-flow-registry", () => {
         stateJson: { phase: "await_review" },
         waitJson: { kind: "task", taskId: "task-123" },
       });
-      expect(waiting).toMatchObject({
-        applied: true,
-        flow: expect.objectContaining({
-          flowId: created.flowId,
-          revision: 1,
-          status: "waiting",
-          currentStep: "await_review",
-          waitJson: { kind: "task", taskId: "task-123" },
-        }),
-      });
+      expect(waiting.applied).toBe(true);
+      if (!waiting.applied) {
+        throw new Error("Expected wait state update to apply");
+      }
+      expect(waiting.flow.flowId).toBe(created.flowId);
+      expect(waiting.flow.revision).toBe(1);
+      expect(waiting.flow.status).toBe("waiting");
+      expect(waiting.flow.currentStep).toBe("await_review");
+      expect(waiting.flow.waitJson).toEqual({ kind: "task", taskId: "task-123" });
 
       const conflict = updateFlowRecordByIdExpectedRevision({
         flowId: created.flowId,
@@ -94,14 +117,13 @@ describe("task-flow-registry", () => {
           currentStep: "stale",
         },
       });
-      expect(conflict).toMatchObject({
-        applied: false,
-        reason: "revision_conflict",
-        current: expect.objectContaining({
-          flowId: created.flowId,
-          revision: 1,
-        }),
-      });
+      expect(conflict.applied).toBe(false);
+      if (conflict.applied) {
+        throw new Error("Expected stale revision update to conflict");
+      }
+      expect(conflict.reason).toBe("revision_conflict");
+      expect(conflict.current?.flowId).toBe(created.flowId);
+      expect(conflict.current?.revision).toBe(1);
 
       const resumed = resumeFlow({
         flowId: created.flowId,
@@ -109,30 +131,28 @@ describe("task-flow-registry", () => {
         status: "running",
         currentStep: "resume_work",
       });
-      expect(resumed).toMatchObject({
-        applied: true,
-        flow: expect.objectContaining({
-          flowId: created.flowId,
-          revision: 2,
-          status: "running",
-          currentStep: "resume_work",
-          waitJson: null,
-        }),
-      });
+      expect(resumed.applied).toBe(true);
+      if (!resumed.applied) {
+        throw new Error("Expected resume update to apply");
+      }
+      expect(resumed.flow.flowId).toBe(created.flowId);
+      expect(resumed.flow.revision).toBe(2);
+      expect(resumed.flow.status).toBe("running");
+      expect(resumed.flow.currentStep).toBe("resume_work");
+      expect(resumed.flow.waitJson).toBeNull();
 
       const cancelRequested = requestFlowCancel({
         flowId: created.flowId,
         expectedRevision: 2,
         cancelRequestedAt: 400,
       });
-      expect(cancelRequested).toMatchObject({
-        applied: true,
-        flow: expect.objectContaining({
-          flowId: created.flowId,
-          revision: 3,
-          cancelRequestedAt: 400,
-        }),
-      });
+      expect(cancelRequested.applied).toBe(true);
+      if (!cancelRequested.applied) {
+        throw new Error("Expected cancel request update to apply");
+      }
+      expect(cancelRequested.flow.flowId).toBe(created.flowId);
+      expect(cancelRequested.flow.revision).toBe(3);
+      expect(cancelRequested.flow.cancelRequestedAt).toBe(400);
 
       const failed = failFlow({
         flowId: created.flowId,
@@ -140,24 +160,21 @@ describe("task-flow-registry", () => {
         blockedSummary: "Task runner failed.",
         endedAt: 500,
       });
-      expect(failed).toMatchObject({
-        applied: true,
-        flow: expect.objectContaining({
-          flowId: created.flowId,
-          revision: 4,
-          status: "failed",
-          blockedSummary: "Task runner failed.",
-          endedAt: 500,
-        }),
-      });
+      expect(failed.applied).toBe(true);
+      if (!failed.applied) {
+        throw new Error("Expected fail update to apply");
+      }
+      expect(failed.flow.flowId).toBe(created.flowId);
+      expect(failed.flow.revision).toBe(4);
+      expect(failed.flow.status).toBe("failed");
+      expect(failed.flow.blockedSummary).toBe("Task runner failed.");
+      expect(failed.flow.endedAt).toBe(500);
 
-      expect(listTaskFlowRecords()).toEqual([
-        expect.objectContaining({
-          flowId: created.flowId,
-          revision: 4,
-          cancelRequestedAt: 400,
-        }),
-      ]);
+      const flows = listTaskFlowRecords();
+      expect(flows).toHaveLength(1);
+      expect(flows[0]?.flowId).toBe(created.flowId);
+      expect(flows[0]?.revision).toBe(4);
+      expect(flows[0]?.cancelRequestedAt).toBe(400);
 
       expect(deleteTaskFlowRecordById(created.flowId)).toBe(true);
       expect(getTaskFlowById(created.flowId)).toBeUndefined();
@@ -220,20 +237,107 @@ describe("task-flow-registry", () => {
       kind: "restored",
       flows: [],
     });
-    expect(onEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "upserted",
-        flow: expect.objectContaining({
-          flowId: created.flowId,
+    const events = onEvent.mock.calls.map((call) => call[0]);
+    expect(events[1]?.kind).toBe("upserted");
+    expect(events[1]?.flow?.flowId).toBe(created.flowId);
+    expect(events[2]?.kind).toBe("deleted");
+    expect(events[2]?.flowId).toBe(created.flowId);
+  });
+
+  it("does not throw or register memory when flow create persistence fails", () => {
+    const upsertFlow = vi.fn((_flow: TaskFlowRecord) => {
+      throw new Error("SQLITE_FULL: database or disk is full");
+    });
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          flows: new Map(),
         }),
-      }),
-    );
-    expect(onEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "deleted",
+        saveSnapshot: () => {},
+        upsertFlow,
+      },
+    });
+
+    const created = createManagedTaskFlowOrNull({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/create-persist-fail",
+      goal: "Create while persistence fails",
+    });
+
+    expect(created).toBeNull();
+    const attempted = upsertFlow.mock.calls[0]?.[0];
+    expect(attempted?.flowId).toEqual(expect.any(String));
+    expect(getTaskFlowById(attempted?.flowId ?? "")).toBeUndefined();
+  });
+
+  it("does not throw or mutate memory when flow update persistence fails", () => {
+    let failUpsert = false;
+    const upsertFlow = vi.fn(() => {
+      if (failUpsert) {
+        throw new Error("SQLITE_IOERR: disk I/O error");
+      }
+    });
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          flows: new Map(),
+        }),
+        saveSnapshot: () => {},
+        upsertFlow,
+      },
+    });
+    const created = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/update-persist-fail",
+      goal: "Update while persistence fails",
+    });
+
+    failUpsert = true;
+    const result = setFlowWaiting({
+      flowId: created.flowId,
+      expectedRevision: created.revision,
+      currentStep: "persist failed",
+    });
+
+    expect(result).toMatchObject({
+      applied: false,
+      reason: "persist_failed",
+      current: {
         flowId: created.flowId,
-      }),
-    );
+        revision: 0,
+        status: "queued",
+      },
+    });
+    expect(getTaskFlowById(created.flowId)).toMatchObject({
+      revision: 0,
+      status: "queued",
+    });
+  });
+
+  it("does not throw or delete memory when flow delete persistence fails", () => {
+    const deleteFlow = vi.fn(() => {
+      throw new Error("SQLITE_BUSY: database is locked");
+    });
+    configureTaskFlowRegistryRuntime({
+      store: {
+        loadSnapshot: () => ({
+          flows: new Map(),
+        }),
+        saveSnapshot: () => {},
+        upsertFlow: () => {},
+        deleteFlow,
+      },
+    });
+    const created = createManagedTaskFlow({
+      ownerKey: "agent:main:main",
+      controllerId: "tests/delete-persist-fail",
+      goal: "Delete while persistence fails",
+    });
+
+    expect(deleteTaskFlowRecordById(created.flowId)).toBe(false);
+
+    expect(deleteFlow).toHaveBeenCalledWith(created.flowId);
+    expect(getTaskFlowById(created.flowId)?.flowId).toBe(created.flowId);
   });
 
   it("normalizes restored managed flows without a controller id", () => {
@@ -261,11 +365,10 @@ describe("task-flow-registry", () => {
       },
     });
 
-    expect(getTaskFlowById("legacy-managed")).toMatchObject({
-      flowId: "legacy-managed",
-      syncMode: "managed",
-      controllerId: "core/legacy-restored",
-    });
+    const restored = getTaskFlowById("legacy-managed");
+    expect(restored?.flowId).toBe("legacy-managed");
+    expect(restored?.syncMode).toBe("managed");
+    expect(restored?.controllerId).toBe("core/legacy-restored");
   });
 
   it("mirrors one-task flow state from tasks and leaves managed flows alone", async () => {
@@ -298,13 +401,53 @@ describe("task-flow-registry", () => {
         endedAt: 200,
         terminalSummary: "Writable session required.",
       });
-      expect(blocked).toMatchObject({
-        flowId: mirrored.flowId,
-        syncMode: "task_mirrored",
-        status: "blocked",
-        blockedTaskId: "task-blocked",
-        blockedSummary: "Writable session required.",
+      if (!blocked) {
+        throw new Error("Expected blocked mirrored flow update");
+      }
+      expect(blocked.flowId).toBe(mirrored.flowId);
+      expect(blocked.syncMode).toBe("task_mirrored");
+      expect(blocked.status).toBe("blocked");
+      expect(blocked.blockedTaskId).toBe("task-blocked");
+      expect(blocked.blockedSummary).toBe("Writable session required.");
+      expect(blocked.endedAt).toBe(200);
+      expect(blocked.updatedAt).toBe(200);
+
+      const delivered = syncFlowFromTask({
+        taskId: "task-blocked",
+        parentFlowId: mirrored.flowId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        notifyPolicy: "done_only",
+        label: "Fix permissions",
+        task: "Fix permissions",
+        lastEventAt: 250,
+        endedAt: 200,
+        terminalSummary: "Writable session required.",
       });
+      if (!delivered) {
+        throw new Error("Expected repeated mirrored flow update");
+      }
+      expect(delivered.flowId).toBe(mirrored.flowId);
+      expect(delivered.status).toBe("blocked");
+      expect(delivered.endedAt).toBe(200);
+      expect(delivered.updatedAt).toBe(200);
+
+      const terminalCreated = createTaskFlowForTask({
+        task: {
+          ownerKey: "agent:main:main",
+          taskId: "task-failed",
+          notifyPolicy: "done_only",
+          status: "failed",
+          label: "Fail permissions",
+          task: "Fail permissions",
+          createdAt: 100,
+          lastEventAt: 300,
+          endedAt: 200,
+        },
+      });
+      expect(terminalCreated.status).toBe("failed");
+      expect(terminalCreated.endedAt).toBe(200);
+      expect(terminalCreated.updatedAt).toBe(200);
 
       const managed = createManagedTaskFlow({
         ownerKey: "agent:main:main",
@@ -324,13 +467,14 @@ describe("task-flow-registry", () => {
         lastEventAt: 250,
         progressSummary: "Running child task",
       });
-      expect(syncedManaged).toMatchObject({
-        flowId: managed.flowId,
-        syncMode: "managed",
-        status: "waiting",
-        currentStep: "wait_for",
-        waitJson: { kind: "external_event" },
-      });
+      if (!syncedManaged) {
+        throw new Error("Expected managed flow sync result");
+      }
+      expect(syncedManaged.flowId).toBe(managed.flowId);
+      expect(syncedManaged.syncMode).toBe("managed");
+      expect(syncedManaged.status).toBe("waiting");
+      expect(syncedManaged.currentStep).toBe("wait_for");
+      expect(syncedManaged.waitJson).toEqual({ kind: "external_event" });
     });
   });
 
@@ -347,11 +491,11 @@ describe("task-flow-registry", () => {
         waitJson: null,
       });
 
-      expect(created).toMatchObject({
-        flowId: created.flowId,
-        stateJson: null,
-        waitJson: null,
-      });
+      expect(created.flowId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
+      );
+      expect(created.stateJson).toBeNull();
+      expect(created.waitJson).toBeNull();
 
       const resumed = resumeFlow({
         flowId: created.flowId,
@@ -359,13 +503,12 @@ describe("task-flow-registry", () => {
         stateJson: null,
       });
 
-      expect(resumed).toMatchObject({
-        applied: true,
-        flow: expect.objectContaining({
-          flowId: created.flowId,
-          stateJson: null,
-        }),
-      });
+      expect(resumed.applied).toBe(true);
+      if (!resumed.applied) {
+        throw new Error("Expected resume update to apply");
+      }
+      expect(resumed.flow.flowId).toBe(created.flowId);
+      expect(resumed.flow.stateJson).toBeNull();
     });
   });
 });

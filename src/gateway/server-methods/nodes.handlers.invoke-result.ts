@@ -1,4 +1,8 @@
-import { ErrorCodes, errorShape, validateNodeInvokeResultParams } from "../protocol/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  validateNodeInvokeResultParams,
+} from "../../../packages/gateway-protocol/src/index.js";
 import { respondInvalidParams } from "./nodes.helpers.js";
 import type { GatewayRequestHandler } from "./types.js";
 
@@ -54,6 +58,7 @@ export const handleNodeInvokeResult: GatewayRequestHandler = async ({
   const ok = context.nodeRegistry.handleInvokeResult({
     id: p.id,
     nodeId: p.nodeId,
+    connId: client?.connId,
     ok: p.ok,
     payload: p.payload,
     payloadJSON: p.payloadJSON ?? null,

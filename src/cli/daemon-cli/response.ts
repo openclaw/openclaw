@@ -41,7 +41,7 @@ export type DaemonActionResponse = {
   };
 };
 
-export function emitDaemonActionJson(payload: DaemonActionResponse) {
+function emitDaemonActionJson(payload: DaemonActionResponse) {
   defaultRuntime.writeJson(payload);
 }
 
@@ -167,7 +167,7 @@ export async function installDaemonServiceAndEmit(params: {
     return;
   }
 
-  let installed = true;
+  let installed;
   try {
     installed = await params.service.isLoaded({ env: process.env });
   } catch {

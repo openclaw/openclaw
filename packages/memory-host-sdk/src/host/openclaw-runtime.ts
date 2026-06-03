@@ -9,7 +9,7 @@ export {
 } from "../../../../src/agents/agent-scope.js";
 export { requireApiKey, resolveApiKeyForProvider } from "../../../../src/agents/model-auth.js";
 export { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
-export { DEFAULT_PI_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../../../src/agents/pi-settings.js";
+export { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../../../src/agents/agent-settings.js";
 export {
   asToolParamsRecord,
   jsonResult,
@@ -74,13 +74,27 @@ export { isVerbose, setVerbose } from "../../../../src/globals.js";
 
 // IO, network, and logging helpers.
 export { isExecCompletionEvent } from "../../../../src/infra/heartbeat-events-filter.js";
-export { writeFileWithinRoot } from "../../../../src/infra/fs-safe.js";
+export { root } from "../../../../src/infra/fs-safe.js";
 export { fetchWithSsrFGuard } from "../../../../src/infra/net/fetch-guard.js";
 export { shouldUseEnvHttpProxyForUrl } from "../../../../src/infra/net/proxy-env.js";
 export { ssrfPolicyFromHttpBaseUrlAllowedHostname } from "../../../../src/infra/net/ssrf.js";
+export {
+  DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES,
+  DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS,
+  configureSqliteWalMaintenance,
+} from "../../../../src/infra/sqlite-wal.js";
+export type {
+  SqliteWalMaintenance,
+  SqliteWalMaintenanceOptions,
+} from "../../../../src/infra/sqlite-wal.js";
+export {
+  installProcessWarningFilter,
+  shouldIgnoreWarning,
+} from "../../../../src/infra/warning-filter.js";
+export type { ProcessWarning } from "../../../../src/infra/warning-filter.js";
 export { redactSensitiveText } from "../../../../src/logging/redact.js";
 export { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-export { detectMime } from "../../../../src/media/mime.js";
+export { detectMime } from "@openclaw/media-core/mime";
 
 // Memory plugin helpers.
 export {
@@ -98,6 +112,7 @@ export type {
   MemoryEmbeddingBatchOptions,
   MemoryEmbeddingProvider,
   MemoryEmbeddingProviderAdapter,
+  MemoryEmbeddingProviderCallOptions,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderCreateResult,
   MemoryEmbeddingProviderRuntime,
@@ -125,8 +140,8 @@ export { parseAgentSessionKey } from "../../../../src/routing/session-key.js";
 export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-provenance.js";
 export { isCronRunSessionKey } from "../../../../src/sessions/session-key-utils.js";
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
-export { formatDocsLink } from "../../../../src/terminal/links.js";
-export { colorize, isRich, theme } from "../../../../src/terminal/theme.js";
+export { formatDocsLink } from "../../../terminal-core/src/links.js";
+export { colorize, isRich, theme } from "../../../terminal-core/src/theme.js";
 export { CHARS_PER_TOKEN_ESTIMATE, estimateStringChars } from "../../../../src/utils/cjk-chars.js";
 export { runTasksWithConcurrency } from "../../../../src/utils/run-with-concurrency.js";
 export { splitShellArgs } from "../../../../src/utils/shell-argv.js";
@@ -136,4 +151,20 @@ export {
   shortenHomePath,
   truncateUtf16Safe,
 } from "../../../../src/utils.js";
+export {
+  applyWindowsSpawnProgramPolicy,
+  materializeWindowsSpawnProgram,
+  resolveWindowsExecutablePath,
+  resolveWindowsSpawnProgram,
+  resolveWindowsSpawnProgramCandidate,
+} from "../../../../src/plugin-sdk/windows-spawn.js";
+export type {
+  ResolveWindowsSpawnProgramCandidateParams,
+  ResolveWindowsSpawnProgramParams,
+  WindowsSpawnCandidateResolution,
+  WindowsSpawnInvocation,
+  WindowsSpawnProgram,
+  WindowsSpawnProgramCandidate,
+  WindowsSpawnResolution,
+} from "../../../../src/plugin-sdk/windows-spawn.js";
 export { resolveGlobalSingleton } from "../../../../src/shared/global-singleton.js";

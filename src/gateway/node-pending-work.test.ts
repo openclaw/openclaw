@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   acknowledgeNodePendingWork,
   drainNodePendingWork,
@@ -14,13 +14,12 @@ describe("node pending work", () => {
 
   it("returns a baseline status request even when no explicit work is queued", () => {
     const drained = drainNodePendingWork("node-1");
-    expect(drained.items).toEqual([
-      expect.objectContaining({
-        id: "baseline-status",
-        type: "status.request",
-        priority: "default",
-      }),
-    ]);
+    expect(drained.items).toHaveLength(1);
+    expect(drained.items[0]?.id).toBe("baseline-status");
+    expect(drained.items[0]?.type).toBe("status.request");
+    expect(drained.items[0]?.priority).toBe("default");
+    expect(typeof drained.items[0]?.createdAtMs).toBe("number");
+    expect(drained.items[0]?.expiresAtMs).toBeNull();
     expect(drained.hasMore).toBe(false);
   });
 
@@ -74,11 +73,46 @@ describe("node pending work", () => {
   });
 
   it("prunes the state entry when all items expire naturally via drain", () => {
-    enqueueNodePendingWork({ nodeId: "node-6", type: "location.request", expiresInMs: 5_000 });
+    const queued = enqueueNodePendingWork({
+      nodeId: "node-6",
+      type: "location.request",
+      expiresInMs: 5_000,
+    });
     expect(getNodePendingWorkStateCountForTests()).toBe(1);
 
-    // Drain well after the item has expired (Date.now() + 60s > enqueue time + 5s)
-    drainNodePendingWork("node-6", { nowMs: Date.now() + 60_000 });
+    const drained = drainNodePendingWork("node-6", { nowMs: Date.now() + 60_000 });
+
+    expect(drained.revision).toBeGreaterThan(queued.revision);
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+  });
+
+  it("expires timed pending work immediately when the enqueue clock is invalid", () => {
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      const { item } = enqueueNodePendingWork({
+        nodeId: "node-7",
+        type: "location.request",
+        expiresInMs: 5_000,
+      });
+      expect(item.createdAtMs).toBe(0);
+      expect(item.expiresAtMs).toBe(0);
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    drainNodePendingWork("node-7", { nowMs: 1_000 });
+    expect(getNodePendingWorkStateCountForTests()).toBe(0);
+  });
+
+  it("expires timed pending work immediately when expiry would exceed Date bounds", () => {
+    const { item } = enqueueNodePendingWork({
+      nodeId: "node-8",
+      type: "location.request",
+      expiresInMs: Number.MAX_SAFE_INTEGER,
+    });
+    expect(item.expiresAtMs).toBe(0);
+
+    drainNodePendingWork("node-8", { nowMs: Date.now() });
     expect(getNodePendingWorkStateCountForTests()).toBe(0);
   });
 });

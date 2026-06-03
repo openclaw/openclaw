@@ -6,9 +6,9 @@ import {
   resolveUserPath,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
-import type { DmPolicy, GroupPolicy, ReplyToMode } from "openclaw/plugin-sdk/config-types";
+import type { DmPolicy, GroupPolicy, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMergedWhatsAppAccountConfig } from "./account-config.js";
 import {
   listConfiguredAccountIds,
@@ -16,7 +16,7 @@ import {
   resolveDefaultWhatsAppAccountId,
 } from "./account-ids.js";
 import type { WhatsAppAccountConfig } from "./account-types.js";
-import { hasWebCredsSync } from "./creds-files.js";
+import { hasWebCredsRegularFileSync, hasWebCredsSync } from "./creds-files.js";
 
 export { listWhatsAppAccountIds, resolveDefaultWhatsAppAccountId } from "./account-ids.js";
 
@@ -33,6 +33,7 @@ export type ResolvedWhatsAppAccount = {
   allowFrom?: string[];
   groupAllowFrom?: string[];
   groupPolicy?: GroupPolicy;
+  mentionPatterns?: WhatsAppAccountConfig["mentionPatterns"];
   dmPolicy?: DmPolicy;
   historyLimit?: number;
   textChunkLimit?: number;
@@ -88,11 +89,7 @@ function resolveLegacyAuthDir(): string {
 }
 
 function legacyAuthExists(authDir: string): boolean {
-  try {
-    return fs.existsSync(path.join(authDir, "creds.json"));
-  } catch {
-    return false;
-  }
+  return hasWebCredsRegularFileSync(authDir);
 }
 
 export function resolveWhatsAppAuthDir(params: { cfg: OpenClawConfig; accountId: string }): {
@@ -145,6 +142,7 @@ export function resolveWhatsAppAccount(params: {
     allowFrom: merged.allowFrom,
     groupAllowFrom: merged.groupAllowFrom,
     groupPolicy: merged.groupPolicy,
+    mentionPatterns: merged.mentionPatterns,
     historyLimit: merged.historyLimit,
     textChunkLimit: merged.textChunkLimit,
     chunkMode: merged.chunkMode,
@@ -166,7 +164,7 @@ export function resolveWhatsAppMediaMaxBytes(
     typeof account.mediaMaxMb === "number" && account.mediaMaxMb > 0
       ? account.mediaMaxMb
       : DEFAULT_WHATSAPP_MEDIA_MAX_MB;
-  return mediaMaxMb * 1024 * 1024;
+  return Math.floor(mediaMaxMb * 1024 * 1024);
 }
 
 export function listEnabledWhatsAppAccounts(cfg: OpenClawConfig): ResolvedWhatsAppAccount[] {

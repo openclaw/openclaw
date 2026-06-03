@@ -1,12 +1,12 @@
-import { theme } from "../terminal/theme.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 
 export type HelpExample = readonly [command: string, description: string];
 
-export function formatHelpExample(command: string, description: string): string {
+function formatHelpExample(command: string, description: string): string {
   return `  ${theme.command(command)}\n    ${theme.muted(description)}`;
 }
 
-export function formatHelpExampleLine(command: string, description: string): string {
+function formatHelpExampleLine(command: string, description: string): string {
   if (!description) {
     return `  ${theme.command(command)}`;
   }

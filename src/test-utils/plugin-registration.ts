@@ -7,6 +7,7 @@ import type {
   ProviderPlugin,
   RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
   VideoGenerationProviderPlugin,
 } from "../plugins/types.js";
 
@@ -24,6 +25,7 @@ export type RegisteredProviderCollections = {
   imageProviders: ImageGenerationProviderPlugin[];
   musicProviders: MusicGenerationProviderPlugin[];
   videoProviders: VideoGenerationProviderPlugin[];
+  modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
 };
 
 export async function registerSingleProviderPlugin(params: {
@@ -57,6 +59,7 @@ export async function registerProviderPlugin(params: {
     imageProviders: captured.imageGenerationProviders,
     musicProviders: captured.musicGenerationProviders,
     videoProviders: captured.videoGenerationProviders,
+    modelCatalogProviders: captured.modelCatalogProviders,
   };
 }
 
@@ -70,12 +73,17 @@ export async function registerProviderPlugins(
   return captured.providers;
 }
 
-export function requireRegisteredProvider<T extends { id: string }>(
-  providers: T[],
-  providerId: string,
-  label = "provider",
-): T {
-  const provider = providers.find((entry) => entry.id === providerId);
+function matchesRegisteredProviderId(
+  entry: { id: string; hookAliases?: readonly string[] },
+  id: string,
+) {
+  return entry.id === id || entry.hookAliases?.includes(id) === true;
+}
+
+export function requireRegisteredProvider<
+  T extends { id: string; hookAliases?: readonly string[] },
+>(providers: T[], providerId: string, label = "provider"): T {
+  const provider = providers.find((entry) => matchesRegisteredProviderId(entry, providerId));
   if (!provider) {
     throw new Error(`${label} ${providerId} missing`);
   }

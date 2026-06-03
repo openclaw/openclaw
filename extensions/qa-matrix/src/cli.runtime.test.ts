@@ -9,15 +9,30 @@ const closeGlobalDispatcher = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock("./runners/contract/runtime.js", () => ({
   runMatrixQaLive,
 }));
-vi.mock("undici", () => ({
-  getGlobalDispatcher: () => ({
-    close: closeGlobalDispatcher,
-  }),
-}));
+vi.mock("undici", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici");
+  return {
+    ...actual,
+    getGlobalDispatcher: () => ({
+      close: closeGlobalDispatcher,
+    }),
+  };
+});
 
 import { runQaMatrixCommand } from "./cli.runtime.js";
 
 const tmpDirs: string[] = [];
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await readFile(targetPath, "utf8");
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
 
 describe("matrix qa cli runtime", () => {
   const originalRunNodeOutputLog = process.env.OPENCLAW_RUN_NODE_OUTPUT_LOG;
@@ -48,7 +63,7 @@ describe("matrix qa cli runtime", () => {
       summaryPath: "/tmp/matrix-summary.json",
       observedEventsPath: "/tmp/matrix-events.json",
     });
-    const originalStdoutWrite = process.stdout.write;
+    const originalStdoutWrite = process.stdout["write"];
     process.stdout.write = (() => true) as typeof process.stdout.write;
 
     try {
@@ -62,14 +77,20 @@ describe("matrix qa cli runtime", () => {
       process.stdout.write = originalStdoutWrite;
     }
 
-    expect(runMatrixQaLive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot,
-        outputDir: path.join(repoRoot, ".artifacts/qa-e2e/matrix"),
-        providerMode: "mock-openai",
-        credentialSource: "env",
-      }),
-    );
+    expect(runMatrixQaLive).toHaveBeenCalledWith({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts/qa-e2e/matrix"),
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      failFast: undefined,
+      profile: undefined,
+      scenarioIds: undefined,
+      sutAccountId: undefined,
+      credentialSource: "env",
+      credentialRole: undefined,
+    });
     expect(closeGlobalDispatcher).toHaveBeenCalledTimes(1);
   });
 
@@ -83,7 +104,7 @@ describe("matrix qa cli runtime", () => {
       summaryPath: "/tmp/matrix-summary.json",
       observedEventsPath: "/tmp/matrix-events.json",
     });
-    const originalStdoutWrite = process.stdout.write;
+    const originalStdoutWrite = process.stdout["write"];
     process.stdout.write = vi.fn(() => true) as unknown as typeof process.stdout.write;
 
     try {
@@ -98,7 +119,7 @@ describe("matrix qa cli runtime", () => {
     }
 
     expect(runMatrixQaLive).toHaveBeenCalledOnce();
-    await expect(readFile(outputPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(outputPath);
   });
 
   it("preserves the Matrix QA failure when output log cleanup also fails", async () => {
@@ -108,8 +129,8 @@ describe("matrix qa cli runtime", () => {
     await mkdir(path.join(outputDir, "matrix-qa-output.log"), { recursive: true });
     runMatrixQaLive.mockRejectedValue(new Error("scenario failed"));
     const stderrChunks: string[] = [];
-    const originalStdoutWrite = process.stdout.write;
-    const originalStderrWrite = process.stderr.write;
+    const originalStdoutWrite = process.stdout["write"];
+    const originalStderrWrite = process.stderr["write"];
     process.stdout.write = (() => true) as typeof process.stdout.write;
     process.stderr.write = ((chunk: string | Buffer) => {
       stderrChunks.push(String(chunk));

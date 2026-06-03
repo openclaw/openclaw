@@ -3,12 +3,13 @@ import { withOperatorApprovalsGatewayClient } from "../gateway/operator-approval
 import { isApprovalNotFoundError } from "./approval-errors.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
-export type ResolveApprovalOverGatewayParams = {
+type ResolveApprovalOverGatewayParams = {
   cfg: OpenClawConfig;
   approvalId: string;
   decision: ExecApprovalDecision;
   senderId?: string | null;
   allowPluginFallback?: boolean;
+  resolveMethod?: "plugin";
   gatewayUrl?: string;
   clientDisplayName?: string;
 };
@@ -32,7 +33,7 @@ export async function resolveApprovalOverGateway(
           decision: params.decision,
         });
       };
-      if (params.approvalId.startsWith("plugin:")) {
+      if (params.resolveMethod === "plugin" || params.approvalId.startsWith("plugin:")) {
         await requestResolve("plugin.approval.resolve");
         return;
       }

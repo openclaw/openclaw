@@ -166,8 +166,23 @@ describe("resolveGatewayConnection", () => {
     expect(result).toEqual({
       url: "wss://override.example/ws",
       ...expected,
+      preauthHandshakeTimeoutMs: undefined,
       allowInsecureLocalOperatorUi: false,
     });
+  });
+
+  it("carries configured handshake timeout to the TUI client connection", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        mode: "local",
+        handshakeTimeoutMs: 30_000,
+        auth: { token: "config-token" },
+      },
+    });
+
+    const result = await resolveGatewayConnection({});
+
+    expect(result.preauthHandshakeTimeoutMs).toBe(30_000);
   });
   it("uses config auth token for local mode when both config and env tokens are set", async () => {
     loadConfig.mockReturnValue({ gateway: { mode: "local", auth: { token: "config-token" } } });
@@ -500,25 +515,74 @@ describe("GatewayChatClient", () => {
     vi.useRealTimers();
   });
 
-  it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", () => {
+  it("identifies the TUI as a tui client and skips device identity on insecure local ui paths", async () => {
+    const constructedOptions: Array<Record<string, unknown>> = [];
+
+    vi.resetModules();
+    vi.doMock("../gateway/client.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("../gateway/client.js")>();
+      class CapturingGatewayClient {
+        constructor(opts: Record<string, unknown>) {
+          constructedOptions.push(opts);
+        }
+        start() {}
+        stop() {}
+        request() {
+          throw new Error("unexpected request");
+        }
+      }
+      return { ...actual, GatewayClient: CapturingGatewayClient };
+    });
+
+    try {
+      const { GatewayChatClient: CapturingGatewayChatClient } = await import("./gateway-chat.js");
+      const client = new CapturingGatewayChatClient({
+        url: "ws://127.0.0.1:18789",
+        token: "test-token",
+        preauthHandshakeTimeoutMs: 30_000,
+        allowInsecureLocalOperatorUi: true,
+      });
+
+      expect(client.connection.allowInsecureLocalOperatorUi).toBe(true);
+      expect(constructedOptions).toHaveLength(1);
+      expect(constructedOptions[0]).toMatchObject({
+        clientName: "openclaw-tui",
+        mode: "ui",
+        preauthHandshakeTimeoutMs: 30_000,
+        deviceIdentity: null,
+      });
+    } finally {
+      vi.doUnmock("../gateway/client.js");
+      vi.resetModules();
+    }
+  });
+
+  it("surfaces loopback block-mode start failures through disconnect handler", async () => {
+    vi.useFakeTimers();
+    const { startProxy, stopProxy } = await import("../infra/net/proxy/proxy-lifecycle.js");
+    const proxyHandle = await startProxy({
+      enabled: true,
+      proxyUrl: "http://127.0.0.1:3128",
+      loopbackMode: "block",
+    });
+    const onDisconnected = vi.fn();
     const client = new GatewayChatClient({
       url: "ws://127.0.0.1:18789",
       token: "test-token",
       allowInsecureLocalOperatorUi: true,
     });
+    client.onDisconnected = onDisconnected;
 
-    expect(
-      (client as unknown as { client: { opts: { clientName?: string; mode?: string } } }).client
-        .opts.clientName,
-    ).toBe("openclaw-tui");
-    expect(
-      (client as unknown as { client: { opts: { clientName?: string; mode?: string } } }).client
-        .opts.mode,
-    ).toBe("ui");
-    expect(
-      (client as unknown as { client: { opts: { deviceIdentity?: unknown } } }).client.opts
-        .deviceIdentity,
-    ).toBeUndefined();
+    try {
+      client.start();
+      await vi.advanceTimersByTimeAsync(2);
+
+      expect(onDisconnected).toHaveBeenCalledWith(
+        "proxy: Gateway loopback control-plane connections are blocked by proxy.loopbackMode",
+      );
+    } finally {
+      await stopProxy(proxyHandle);
+    }
   });
 
   it("retries startup-unavailable chat history until the gateway finishes booting", async () => {
@@ -549,5 +613,71 @@ describe("GatewayChatClient", () => {
 
     await expect(historyPromise).resolves.toEqual({ messages: [] });
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes selected-agent global scope through chat methods", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const request = vi.fn().mockResolvedValue({ messages: [] });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await client.sendChat({
+      sessionKey: "global",
+      agentId: "work",
+      message: "hello",
+      runId: "run-global-work",
+    });
+    await client.loadHistory({ sessionKey: "global", agentId: "work", limit: 50 });
+    await client.abortChat({ sessionKey: "global", agentId: "work", runId: "run-global-work" });
+
+    expect(request).toHaveBeenNthCalledWith(1, "chat.send", {
+      sessionKey: "global",
+      agentId: "work",
+      message: "hello",
+      thinking: undefined,
+      deliver: undefined,
+      timeoutMs: undefined,
+      idempotencyKey: "run-global-work",
+    });
+    expect(request).toHaveBeenNthCalledWith(2, "chat.history", {
+      sessionKey: "global",
+      agentId: "work",
+      limit: 50,
+    });
+    expect(request).toHaveBeenNthCalledWith(3, "chat.abort", {
+      sessionKey: "global",
+      agentId: "work",
+      runId: "run-global-work",
+    });
+  });
+
+  it("lists gateway commands through commands.list", async () => {
+    const client = new GatewayChatClient({
+      url: "ws://127.0.0.1:18789",
+      token: "test-token",
+      allowInsecureLocalOperatorUi: true,
+    });
+    const command = {
+      name: "tts",
+      textAliases: ["/tts"],
+      description: "Text to speech",
+      source: "plugin",
+      scope: "both",
+      acceptsArgs: false,
+    };
+    const request = vi.fn().mockResolvedValue({ commands: [command] });
+    (client as unknown as { client: { request: typeof request } }).client.request = request;
+
+    await expect(
+      client.listCommands({ agentId: "main", provider: "discord", scope: "text" }),
+    ).resolves.toEqual([command]);
+    expect(request).toHaveBeenCalledWith("commands.list", {
+      agentId: "main",
+      provider: "discord",
+      scope: "text",
+    });
   });
 });

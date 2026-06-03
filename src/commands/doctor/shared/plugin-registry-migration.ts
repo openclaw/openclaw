@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { normalizeProviderId } from "../../../agents/provider-id.js";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   extractShippedPluginInstallConfigRecords,
   stripShippedPluginInstallConfigRecords,
@@ -25,6 +25,9 @@ import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js
 
 export const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 export const FORCE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION";
+const DOCTOR_PLUGIN_ID_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  openai: ["openai-codex"],
+};
 
 export type PluginRegistryInstallMigrationPreflightAction =
   | "disabled"
@@ -150,6 +153,7 @@ function createMigrationPluginIdNormalizer(
       ...(plugin.setup?.cliBackends ?? []),
       ...Object.keys(plugin.modelCatalog?.providers ?? {}),
       ...(plugin.legacyPluginIds ?? []),
+      ...(DOCTOR_PLUGIN_ID_ALIASES[plugin.id] ?? []),
     ]) {
       const normalizedAlias = normalizeRegistryReference(alias);
       if (normalizedAlias && !aliases.has(normalizedAlias)) {
@@ -201,7 +205,7 @@ function listConfiguredModelProviderIds(config: OpenClawConfig): Set<string> {
   );
 }
 
-export function listMigrationRelevantPluginRecords(params: {
+function listMigrationRelevantPluginRecords(params: {
   index: InstalledPluginIndex;
   config: OpenClawConfig;
   installRecords: Record<string, unknown>;
@@ -255,6 +259,12 @@ export function listMigrationRelevantPluginRecords(params: {
     if (plugin.enabledByDefault && (manifest?.providers.length ?? 0) > 0) {
       return true;
     }
+    if (plugin.startup.memory) {
+      return true;
+    }
+    if ((manifest?.commandAliases ?? []).some((alias) => alias.cliCommand)) {
+      return true;
+    }
     if (installedPluginIds.has(plugin.pluginId) || referencedPluginIds.has(plugin.pluginId)) {
       return true;
     }
@@ -287,9 +297,11 @@ export async function migratePluginRegistryForInstall(
 
   const rawConfig = await readMigrationConfig(params);
   const config = stripShippedPluginInstallConfigRecords(rawConfig) as OpenClawConfig;
+  const durableInstallRecords =
+    params.installRecords ?? (await loadInstalledPluginIndexInstallRecords(params));
   const installRecords = {
     ...extractShippedPluginInstallConfigRecords(rawConfig),
-    ...(await loadInstalledPluginIndexInstallRecords(params)),
+    ...durableInstallRecords,
   };
   const migrationParams = {
     ...params,
@@ -299,7 +311,6 @@ export async function migratePluginRegistryForInstall(
   const inspection = await inspectPersistedInstalledPluginIndex(migrationParams);
   const candidateIndex = loadInstalledPluginIndex({
     ...migrationParams,
-    cache: false,
   });
   const current: InstalledPluginIndex = {
     ...candidateIndex,

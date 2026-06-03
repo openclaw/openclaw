@@ -1,11 +1,12 @@
-import type { MsgContext } from "../../auto-reply/templating.js";
-import { listChannelPlugins } from "../../channels/plugins/registry.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeHyphenSlug } from "../../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeHyphenSlug } from "@openclaw/normalization-core/string-normalization";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import { listChannelPlugins } from "../../channels/plugins/registry.js";
+import { normalizeSessionPeerId } from "../../sessions/session-key-utils.js";
 import { listDeliverableMessageChannels } from "../../utils/message-channel.js";
 import type { GroupKeyResolution } from "./types.js";
 
@@ -29,6 +30,34 @@ function resolveLegacyGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nul
 
 function normalizeGroupLabel(raw?: string) {
   return normalizeHyphenSlug(raw);
+}
+
+function resolveOriginatingGroupTargetId(params: {
+  ctx: MsgContext;
+  provider: string;
+}): string | null {
+  const target = normalizeOptionalString(params.ctx.OriginatingTo ?? params.ctx.To) ?? "";
+  if (!target) {
+    return null;
+  }
+  const parts = target.split(":").filter(Boolean);
+  if (parts.length < 2) {
+    return null;
+  }
+
+  const head = normalizeLowercaseStringOrEmpty(parts[0]);
+  const second = normalizeOptionalLowercaseString(parts[1]);
+  const secondIsKind = second === "group" || second === "channel";
+  if (secondIsKind && (head === params.provider || getGroupSurfaces().has(head))) {
+    return parts.slice(2).join(":") || null;
+  }
+  if (head === params.provider || head === "chat" || head === "room" || head === "group") {
+    return parts.slice(1).join(":") || null;
+  }
+  if (head === "channel") {
+    return parts.slice(1).join(":") || null;
+  }
+  return null;
 }
 
 function shortenGroupId(value?: string) {
@@ -112,12 +141,16 @@ export function resolveGroupSessionKey(ctx: MsgContext): GroupKeyResolution | nu
     : from.includes(":channel:") || normalizedChatType === "channel"
       ? "channel"
       : "group";
-  const id = headIsSurface
-    ? secondIsKind
-      ? parts.slice(2).join(":")
-      : parts.slice(1).join(":")
-    : from;
-  const finalId = normalizeLowercaseStringOrEmpty(id);
+  const originatingGroupTargetId =
+    !secondIsKind && normalizedChatType ? resolveOriginatingGroupTargetId({ ctx, provider }) : null;
+  const id = originatingGroupTargetId
+    ? originatingGroupTargetId
+    : headIsSurface
+      ? secondIsKind
+        ? parts.slice(2).join(":")
+        : parts.slice(1).join(":")
+      : from;
+  const finalId = normalizeSessionPeerId({ channel: provider, peerKind: kind, peerId: id });
   if (!finalId) {
     return null;
   }

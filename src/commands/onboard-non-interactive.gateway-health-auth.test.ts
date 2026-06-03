@@ -21,12 +21,18 @@ async function writeSecureFile(filePath: string, content: string): Promise<void>
 
 describe("resolveGatewayHealthProbeToken", () => {
   const originalGatewayToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+  const originalGatewayPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
 
   afterEach(() => {
     if (originalGatewayToken === undefined) {
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
     } else {
       process.env.OPENCLAW_GATEWAY_TOKEN = originalGatewayToken;
+    }
+    if (originalGatewayPassword === undefined) {
+      delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    } else {
+      process.env.OPENCLAW_GATEWAY_PASSWORD = originalGatewayPassword;
     }
   });
 
@@ -89,7 +95,29 @@ describe("resolveGatewayHealthProbeToken", () => {
       } as OpenClawConfig);
 
       expect(resolved.token).toBeUndefined();
-      expect(resolved.unresolvedRefReason).toContain("gateway.auth.token SecretRef is unresolved");
+      expect(resolved.unresolvedRefReason).toBe(
+        "gateway.auth.token SecretRef is unresolved (file:gateway-token-file:value).",
+      );
     });
+  });
+
+  it("resolves password auth for the local onboarding health probe", async () => {
+    process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
+    process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-password"; // pragma: allowlist secret
+
+    const resolved = await resolveGatewayHealthProbeToken({
+      gateway: {
+        auth: {
+          mode: "password",
+          password: {
+            source: "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_PASSWORD",
+          },
+        },
+      },
+    } as OpenClawConfig);
+
+    expect(resolved).toEqual({ password: "resolved-password" });
   });
 });

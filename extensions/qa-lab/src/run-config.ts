@@ -1,4 +1,5 @@
 import path from "node:path";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { defaultQaModelForMode as defaultStaticQaModelForMode } from "./model-selection.js";
 import { defaultQaRuntimeModelForMode } from "./model-selection.runtime.js";
 import {
@@ -13,7 +14,7 @@ import type { QaSeedScenario } from "./scenario-catalog.js";
 export type { QaProviderMode } from "./model-selection.js";
 export type { QaProviderModeInput } from "./providers/index.js";
 
-export type QaLabRunSelection = {
+type QaLabRunSelection = {
   providerMode: QaProviderMode;
   primaryModel: string;
   alternateModel: string;
@@ -21,14 +22,14 @@ export type QaLabRunSelection = {
   scenarioIds: string[];
 };
 
-export type QaLabRunArtifacts = {
+type QaLabRunArtifacts = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
   watchUrl: string;
 };
 
-export type QaLabRunnerSnapshot = {
+type QaLabRunnerSnapshot = {
   status: "idle" | "running" | "completed" | "failed";
   selection: QaLabRunSelection;
   startedAt?: string;
@@ -85,9 +86,7 @@ function normalizeScenarioIds(input: unknown, scenarios: QaSeedScenario[]) {
         .map((value) => (typeof value === "string" ? value.trim() : ""))
         .filter((value) => value.length > 0)
     : [];
-  const selectedIds = requestedIds.filter((id, index) => {
-    return availableIds.has(id) && requestedIds.indexOf(id) === index;
-  });
+  const selectedIds = uniqueStrings(requestedIds.filter((id) => availableIds.has(id)));
   return selectedIds.length > 0 ? selectedIds : scenarios.map((scenario) => scenario.id);
 }
 

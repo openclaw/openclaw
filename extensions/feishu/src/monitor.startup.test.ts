@@ -1,7 +1,8 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
+import { resolveStartupProbeTimeoutMs } from "./monitor.startup.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -16,6 +17,10 @@ vi.mock("./client.js", async () => {
 vi.mock("./runtime.js", async () => {
   const { createFeishuRuntimeMockModule } = await import("./monitor.test-mocks.js");
   return createFeishuRuntimeMockModule();
+});
+
+beforeAll(async () => {
+  await import("./monitor.account.js");
 });
 
 function buildMultiAccountWebsocketConfig(accountIds: string[]): ClawdbotConfig {
@@ -52,15 +57,39 @@ afterEach(() => {
   stopFeishuMonitor();
 });
 
+afterAll(() => {
+  vi.doUnmock("./probe.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./runtime.js");
+  vi.resetModules();
+});
+
 describe("Feishu monitor startup preflight", () => {
+  it("parses startup probe timeout env strictly", () => {
+    expect(resolveStartupProbeTimeoutMs({})).toBe(30_000);
+    expect(
+      resolveStartupProbeTimeoutMs({ OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: "90000" }),
+    ).toBe(90_000);
+
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        resolveStartupProbeTimeoutMs({ OPENCLAW_FEISHU_STARTUP_PROBE_TIMEOUT_MS: value }),
+      ).toBe(30_000);
+    }
+  });
+
   it("starts account probes sequentially to avoid startup bursts", async () => {
     let inFlight = 0;
     let maxInFlight = 0;
     const started: string[] = [];
-    let releaseProbes!: () => void;
+    let releaseProbes: (() => void) | undefined;
     const probesReleased = new Promise<void>((resolve) => {
       releaseProbes = () => resolve();
     });
+    if (!releaseProbes) {
+      throw new Error("Expected probe release callback to be initialized");
+    }
+    const releaseStartedProbes = releaseProbes;
     probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
       started.push(account.accountId);
       inFlight += 1;
@@ -81,7 +110,7 @@ describe("Feishu monitor startup preflight", () => {
       expect(started).toEqual(["alpha"]);
       expect(maxInFlight).toBe(1);
     } finally {
-      releaseProbes();
+      releaseStartedProbes();
       abortController.abort();
       await monitorPromise;
     }
@@ -89,10 +118,14 @@ describe("Feishu monitor startup preflight", () => {
 
   it("does not refetch bot info after a failed sequential preflight", async () => {
     const started: string[] = [];
-    let releaseBetaProbe!: () => void;
+    let releaseBetaProbe: (() => void) | undefined;
     const betaProbeReleased = new Promise<void>((resolve) => {
       releaseBetaProbe = () => resolve();
     });
+    if (!releaseBetaProbe) {
+      throw new Error("Expected beta probe release callback to be initialized");
+    }
+    const releaseStartedBetaProbe = releaseBetaProbe;
 
     probeFeishuMock.mockImplementation(async (account: { accountId: string }) => {
       started.push(account.accountId);
@@ -112,9 +145,11 @@ describe("Feishu monitor startup preflight", () => {
     try {
       await waitForStartedAccount(started, "beta");
       expect(started).toEqual(["alpha", "beta"]);
-      expect(started.filter((accountId) => accountId === "alpha")).toHaveLength(1);
+      expect(started.reduce((count, accountId) => count + (accountId === "alpha" ? 1 : 0), 0)).toBe(
+        1,
+      );
     } finally {
-      releaseBetaProbe();
+      releaseStartedBetaProbe();
       abortController.abort();
       await monitorPromise;
     }
@@ -122,10 +157,14 @@ describe("Feishu monitor startup preflight", () => {
 
   it("continues startup when probe layer reports timeout", async () => {
     const started: string[] = [];
-    let releaseBetaProbe!: () => void;
+    let releaseBetaProbe: (() => void) | undefined;
     const betaProbeReleased = new Promise<void>((resolve) => {
       releaseBetaProbe = () => resolve();
     });
+    if (!releaseBetaProbe) {
+      throw new Error("Expected beta probe release callback to be initialized");
+    }
+    const releaseStartedBetaProbe = releaseBetaProbe;
 
     probeFeishuMock.mockImplementation((account: { accountId: string }) => {
       started.push(account.accountId);
@@ -147,10 +186,10 @@ describe("Feishu monitor startup preflight", () => {
       await waitForStartedAccount(started, "beta");
       expect(started).toEqual(["alpha", "beta"]);
       expect(runtime.error).toHaveBeenCalledWith(
-        expect.stringContaining("bot info probe timed out"),
+        "feishu[alpha]: bot info probe timed out after 30000ms; continuing startup",
       );
     } finally {
-      releaseBetaProbe();
+      releaseStartedBetaProbe();
       abortController.abort();
       await monitorPromise;
     }

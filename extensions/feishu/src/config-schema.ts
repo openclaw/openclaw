@@ -1,5 +1,5 @@
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 export { z };
 import { buildSecretInputSchema, hasConfiguredSecretInput } from "./secret-input.js";
 
@@ -68,6 +68,7 @@ const RenderModeSchema = z.enum(["auto", "raw", "card"]).optional();
 // Streaming card mode: when enabled, card replies use Feishu's Card Kit streaming API
 // for incremental text display with a "Thinking..." placeholder
 const StreamingModeSchema = z.boolean().optional();
+const BlockStreamingSchema = z.boolean().optional();
 
 const BlockStreamingCoalesceSchema = z
   .object({
@@ -116,6 +117,8 @@ const FeishuToolsConfigSchema = z
     drive: z.boolean().optional(), // Cloud storage operations (default: true)
     perm: z.boolean().optional(), // Permission management (default: false, sensitive)
     scopes: z.boolean().optional(), // App scopes diagnostic (default: true)
+    bitable: z.boolean().optional(), // Bitable/Base operations (default: true)
+    base: z.boolean().optional(), // Alias for bitable tools (default: true)
   })
   .strict()
   .optional();
@@ -188,6 +191,7 @@ const FeishuSharedConfigShape = {
   dms: z.record(z.string(), DmConfigSchema).optional(),
   textChunkLimit: z.number().int().positive().optional(),
   chunkMode: z.enum(["length", "newline"]).optional(),
+  blockStreaming: BlockStreamingSchema,
   blockStreamingCoalesce: BlockStreamingCoalesceSchema,
   mediaMaxMb: z.number().positive().optional(),
   httpTimeoutMs: z.number().int().positive().max(300_000).optional(),
@@ -256,7 +260,7 @@ export const FeishuConfigSchema = z
     const defaultAccount = value.defaultAccount?.trim();
     if (defaultAccount && value.accounts && Object.keys(value.accounts).length > 0) {
       const normalizedDefaultAccount = normalizeAccountId(defaultAccount);
-      if (!Object.prototype.hasOwnProperty.call(value.accounts, normalizedDefaultAccount)) {
+      if (!Object.hasOwn(value.accounts, normalizedDefaultAccount)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: ["defaultAccount"],

@@ -1,6 +1,6 @@
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
-import { theme } from "../terminal/theme.js";
 
 export type SessionDisplayRow = {
   key: string;
@@ -25,41 +25,44 @@ export type SessionDisplayRow = {
   providerOverride?: string;
   modelOverride?: string;
   contextTokens?: number;
+  runtimePolicySessionKey?: string;
 };
 
 export const SESSION_KEY_PAD = 26;
 export const SESSION_AGE_PAD = 9;
 export const SESSION_MODEL_PAD = 14;
 
+export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDisplayRow {
+  const updatedAt = entry?.updatedAt ?? null;
+  return {
+    key,
+    updatedAt,
+    ageMs: updatedAt ? Date.now() - updatedAt : null,
+    sessionId: entry?.sessionId,
+    systemSent: entry?.systemSent,
+    abortedLastRun: entry?.abortedLastRun,
+    thinkingLevel: entry?.thinkingLevel,
+    verboseLevel: entry?.verboseLevel,
+    traceLevel: entry?.traceLevel,
+    reasoningLevel: entry?.reasoningLevel,
+    elevatedLevel: entry?.elevatedLevel,
+    responseUsage: entry?.responseUsage,
+    groupActivation: entry?.groupActivation,
+    inputTokens: entry?.inputTokens,
+    outputTokens: entry?.outputTokens,
+    totalTokens: entry?.totalTokens,
+    totalTokensFresh: entry?.totalTokensFresh,
+    model: entry?.model,
+    modelProvider: entry?.modelProvider,
+    providerOverride: entry?.providerOverride,
+    modelOverride: entry?.modelOverride,
+    contextTokens: entry?.contextTokens,
+  };
+}
+
 export function toSessionDisplayRows(store: Record<string, SessionEntry>): SessionDisplayRow[] {
   return Object.entries(store)
-    .map(([key, entry]) => {
-      const updatedAt = entry?.updatedAt ?? null;
-      return {
-        key,
-        updatedAt,
-        ageMs: updatedAt ? Date.now() - updatedAt : null,
-        sessionId: entry?.sessionId,
-        systemSent: entry?.systemSent,
-        abortedLastRun: entry?.abortedLastRun,
-        thinkingLevel: entry?.thinkingLevel,
-        verboseLevel: entry?.verboseLevel,
-        traceLevel: entry?.traceLevel,
-        reasoningLevel: entry?.reasoningLevel,
-        elevatedLevel: entry?.elevatedLevel,
-        responseUsage: entry?.responseUsage,
-        groupActivation: entry?.groupActivation,
-        inputTokens: entry?.inputTokens,
-        outputTokens: entry?.outputTokens,
-        totalTokens: entry?.totalTokens,
-        totalTokensFresh: entry?.totalTokensFresh,
-        model: entry?.model,
-        modelProvider: entry?.modelProvider,
-        providerOverride: entry?.providerOverride,
-        modelOverride: entry?.modelOverride,
-        contextTokens: entry?.contextTokens,
-      } satisfies SessionDisplayRow;
-    })
+    .map(([key, entry]) => toSessionDisplayRow(key, entry))
     .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
 }
 
@@ -100,6 +103,7 @@ export function formatSessionFlagsCell(
     | "systemSent"
     | "abortedLastRun"
     | "sessionId"
+    | "runtimePolicySessionKey"
   >,
   rich: boolean,
 ): string {
@@ -113,6 +117,7 @@ export function formatSessionFlagsCell(
     row.groupActivation ? `activation:${row.groupActivation}` : null,
     row.systemSent ? "system" : null,
     row.abortedLastRun ? "aborted" : null,
+    row.runtimePolicySessionKey ? `policy:${row.runtimePolicySessionKey}` : null,
     row.sessionId ? `id:${row.sessionId}` : null,
   ].filter(Boolean);
   const label = flags.join(" ");

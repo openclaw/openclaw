@@ -1,7 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { getChannelPlugin } from "../../../channels/plugins/index.js";
 import type { ChannelMessageActionName } from "../../../channels/plugins/types.public.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 import type { MessageCliHelpers } from "./helpers.js";
 
 function resolveThreadCreateRequest(opts: Record<string, unknown>) {
@@ -77,5 +77,3 @@ export function registerMessageThreadCommands(message: Command, helpers: Message
       await helpers.runMessageAction("thread-reply", opts);
     });
 }
-
-export const __test__ = { resolveThreadCreateRequest };

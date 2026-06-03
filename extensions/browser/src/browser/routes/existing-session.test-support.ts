@@ -1,5 +1,10 @@
 import { vi } from "vitest";
-import type { BrowserRequest } from "./types.js";
+import {
+  assertBrowserNavigationResultAllowed,
+  withBrowserNavigationPolicy,
+} from "../navigation-guard.js";
+import type { BrowserRouteContext } from "../server-context.js";
+import type { BrowserRequest, BrowserResponse } from "./types.js";
 
 export const existingSessionRouteState = {
   profileCtx: {
@@ -26,8 +31,15 @@ export const existingSessionRouteState = {
 
 export function createExistingSessionAgentSharedModule() {
   return {
+    browserNavigationPolicyForProfile: vi.fn((ctx: BrowserRouteContext) =>
+      withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy),
+    ),
     getPwAiModule: vi.fn(async () => null),
-    handleRouteError: vi.fn(),
+    handleRouteError: vi.fn((_ctx: BrowserRouteContext, res: BrowserResponse, err: unknown) => {
+      const message = err instanceof Error ? err.message : String(err);
+      res.status(400);
+      res.json({ error: message });
+    }),
     readBody: vi.fn((req: BrowserRequest) => req.body ?? {}),
     requirePwAi: vi.fn(async () => {
       throw new Error("Playwright should not be used for existing-session tests");
@@ -37,14 +49,33 @@ export function createExistingSessionAgentSharedModule() {
       typeof body.targetId === "string" ? body.targetId : undefined,
     ),
     withPlaywrightRouteContext: vi.fn(),
-    withRouteTabContext: vi.fn(async ({ run }: { run: (args: unknown) => Promise<void> }) => {
-      await run({
-        profileCtx: existingSessionRouteState.profileCtx,
-        cdpUrl: "http://127.0.0.1:18800",
-        tab: existingSessionRouteState.tab,
-        resolveTabUrl: vi.fn(async (fallbackUrl?: string) => fallbackUrl ?? routeStateUrl()),
-      });
-    }),
+    withRouteTabContext: vi.fn(
+      async ({
+        ctx,
+        enforceCurrentUrlAllowed,
+        run,
+      }: {
+        ctx: BrowserRouteContext;
+        enforceCurrentUrlAllowed?: boolean;
+        run: (args: unknown) => Promise<void>;
+      }) => {
+        if (enforceCurrentUrlAllowed) {
+          const ssrfPolicyOpts = withBrowserNavigationPolicy(ctx.state().resolved.ssrfPolicy);
+          if (ssrfPolicyOpts.ssrfPolicy) {
+            await assertBrowserNavigationResultAllowed({
+              url: existingSessionRouteState.tab.url,
+              ...ssrfPolicyOpts,
+            });
+          }
+        }
+        await run({
+          profileCtx: existingSessionRouteState.profileCtx,
+          cdpUrl: "http://127.0.0.1:18800",
+          tab: existingSessionRouteState.tab,
+          resolveTabUrl: vi.fn(async (fallbackUrl?: string) => fallbackUrl ?? routeStateUrl()),
+        });
+      },
+    ),
   };
 }
 

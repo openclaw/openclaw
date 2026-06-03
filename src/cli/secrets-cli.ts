@@ -1,15 +1,18 @@
-import fs from "node:fs";
-import { confirm } from "@clack/prompts";
 import type { Command } from "commander";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { danger } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import { defaultRuntime } from "../runtime.js";
-import { runSecretsApply } from "../secrets/apply.js";
-import { resolveSecretsAuditExitCode, runSecretsAudit } from "../secrets/audit.js";
-import { runSecretsConfigureInteractive } from "../secrets/configure.js";
-import { isSecretsApplyPlan, type SecretsApplyPlan } from "../secrets/plan.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { theme } from "../terminal/theme.js";
+import type { SecretsApplyPlan } from "../secrets/plan.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import { formatCliCommand } from "./command-format.js";
+import { formatGatewayCommandFailure } from "./error-format.js";
 import { addGatewayClientOptions, callGatewayFromCli, type GatewayRpcOpts } from "./gateway-rpc.js";
+
+type FsModule = typeof import("node:fs");
+type ClackPromptsModule = typeof import("@clack/prompts");
+type SecretsApplyModule = typeof import("../secrets/apply.js");
 
 type SecretsReloadOptions = GatewayRpcOpts & { json?: boolean };
 type SecretsAuditOptions = {
@@ -34,16 +37,30 @@ type SecretsApplyOptions = {
   json?: boolean;
 };
 
-function readPlanFile(pathname: string): SecretsApplyPlan {
-  const raw = fs.readFileSync(pathname, "utf8");
+const fsModuleLoader = createLazyImportLoader<FsModule>(() => import("node:fs"));
+const clackPromptsLoader = createLazyImportLoader<ClackPromptsModule>(
+  () => import("@clack/prompts"),
+);
+const secretsApplyLoader = createLazyImportLoader<SecretsApplyModule>(
+  () => import("../secrets/apply.js"),
+);
+
+async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
+  const [{ readFileSync }, { isSecretsApplyPlan }] = await Promise.all([
+    fsModuleLoader.load(),
+    import("../secrets/plan.js"),
+  ]);
+  const raw = readFileSync(pathname, "utf8");
   const parsed = JSON.parse(raw) as unknown;
   if (!isSecretsApplyPlan(parsed)) {
-    throw new Error(`Invalid secrets plan file: ${pathname}`);
+    throw new Error(
+      `Invalid secrets plan file: ${pathname}. Generate a fresh plan with ${formatCliCommand("openclaw secrets configure --plan-out <path>")}.`,
+    );
   }
   return parsed;
 }
 
-export function registerSecretsCli(program: Command) {
+export function registerSecretsCli(program: Command): void {
   const secrets = program
     .command("secrets")
     .description("Secrets runtime controls")
@@ -76,7 +93,15 @@ export function registerSecretsCli(program: Command) {
       }
       defaultRuntime.log("Secrets reloaded.");
     } catch (err) {
-      defaultRuntime.error(danger(String(err)));
+      defaultRuntime.error(
+        danger(
+          formatGatewayCommandFailure({
+            action: "reload secrets",
+            error: err,
+            inspectCommand: "openclaw gateway status --deep",
+          }),
+        ),
+      );
       defaultRuntime.exit(1);
     }
   });
@@ -93,6 +118,8 @@ export function registerSecretsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsAuditOptions) => {
       try {
+        const { resolveSecretsAuditExitCode, runSecretsAudit } =
+          await import("../secrets/audit.js");
         const report = await runSecretsAudit({
           allowExec: Boolean(opts.allowExec),
         });
@@ -123,7 +150,11 @@ export function registerSecretsCli(program: Command) {
           defaultRuntime.exit(exitCode);
         }
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(
+          danger(
+            `Secrets audit failed: ${formatErrorMessage(err)}. Run ${formatCliCommand("openclaw doctor")} to inspect config and credential state.`,
+          ),
+        );
         defaultRuntime.exit(2);
       }
     });
@@ -152,6 +183,7 @@ export function registerSecretsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsConfigureOptions) => {
       try {
+        const { runSecretsConfigureInteractive } = await import("../secrets/configure.js");
         const configured = await runSecretsConfigureInteractive({
           providersOnly: Boolean(opts.providersOnly),
           skipProviderSetup: Boolean(opts.skipProviderSetup),
@@ -159,13 +191,18 @@ export function registerSecretsCli(program: Command) {
           allowExecInPreflight: Boolean(opts.allowExec),
         });
         if (opts.planOut) {
-          fs.writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
+          const { writeFileSync } = await fsModuleLoader.load();
+          writeFileSync(opts.planOut, `${JSON.stringify(configured.plan, null, 2)}\n`, "utf8");
         }
+
+        let shouldApply = Boolean(opts.apply || opts.yes);
         if (opts.json) {
-          defaultRuntime.writeJson({
-            plan: configured.plan,
-            preflight: configured.preflight,
-          });
+          if (!shouldApply) {
+            defaultRuntime.writeJson({
+              plan: configured.plan,
+              preflight: configured.preflight,
+            });
+          }
         } else {
           defaultRuntime.log(
             `Preflight: changed=${configured.preflight.changed}, files=${configured.preflight.changedFiles.length}, warnings=${configured.preflight.warningCount}.`,
@@ -193,8 +230,8 @@ export function registerSecretsCli(program: Command) {
           }
         }
 
-        let shouldApply = Boolean(opts.apply);
         if (!shouldApply && !opts.json) {
+          const { confirm } = await clackPromptsLoader.load();
           const approved = await confirm({
             message: "Apply this plan now?",
             initialValue: true,
@@ -204,8 +241,14 @@ export function registerSecretsCli(program: Command) {
           }
         }
         if (shouldApply) {
-          const needsIrreversiblePrompt = Boolean(opts.apply);
+          // Show the irreversibility warning whenever we are about to apply,
+          // including when the user opted in through the interactive "Apply
+          // this plan now?" confirm. Previously this checked opts.apply, so the
+          // one-way-migration warning was silently skipped on the interactive
+          // path (only --apply surfaced it). See #83883.
+          const needsIrreversiblePrompt = shouldApply;
           if (needsIrreversiblePrompt && !opts.yes && !opts.json) {
+            const { confirm } = await clackPromptsLoader.load();
             const confirmed = await confirm({
               message:
                 "This migration is one-way for migrated plaintext values. Continue with apply?",
@@ -216,6 +259,7 @@ export function registerSecretsCli(program: Command) {
               return;
             }
           }
+          const { runSecretsApply } = await secretsApplyLoader.load();
           const result = await runSecretsApply({
             plan: configured.plan,
             write: true,
@@ -232,7 +276,11 @@ export function registerSecretsCli(program: Command) {
           );
         }
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(
+          danger(
+            `Secrets configure failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets audit")} before applying changes.`,
+          ),
+        );
         defaultRuntime.exit(1);
       }
     });
@@ -246,7 +294,10 @@ export function registerSecretsCli(program: Command) {
     .option("--json", "Output JSON", false)
     .action(async (opts: SecretsApplyOptions) => {
       try {
-        const plan = readPlanFile(opts.from);
+        const [{ runSecretsApply }, plan] = await Promise.all([
+          secretsApplyLoader.load(),
+          readPlanFile(opts.from),
+        ]);
         const result = await runSecretsApply({
           plan,
           write: !opts.dryRun,
@@ -275,7 +326,11 @@ export function registerSecretsCli(program: Command) {
             : "Secrets apply: no changes.",
         );
       } catch (err) {
-        defaultRuntime.error(danger(String(err)));
+        defaultRuntime.error(
+          danger(
+            `Secrets apply failed: ${formatErrorMessage(err)}. Re-run ${formatCliCommand("openclaw secrets apply --from <path> --dry-run")} to inspect the plan without writing.`,
+          ),
+        );
         defaultRuntime.exit(1);
       }
     });

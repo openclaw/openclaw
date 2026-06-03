@@ -3,6 +3,7 @@ import { markMigrationItemSkipped, summarizeMigrationItems } from "openclaw/plug
 import {
   archiveMigrationItem,
   copyMigrationFileItem,
+  withCachedMigrationConfigRuntime,
   writeMigrationReport,
 } from "openclaw/plugin-sdk/migration-runtime";
 import type {
@@ -11,6 +12,7 @@ import type {
   MigrationPlan,
   MigrationProviderContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import { applyAuthItem } from "./auth.js";
 import { applyConfigItem, applyManualItem } from "./config.js";
 import { appendItem } from "./helpers.js";
 import { applyModelItem } from "./model.js";
@@ -19,54 +21,6 @@ import { applySecretItem } from "./secrets.js";
 import { resolveTargets } from "./targets.js";
 
 const HERMES_REASON_BLOCKED_BY_APPLY_CONFLICT = "blocked by earlier apply conflict";
-
-function withCachedConfigRuntime(
-  runtime: MigrationProviderContext["runtime"] | undefined,
-  fallbackConfig: MigrationProviderContext["config"],
-): MigrationProviderContext["runtime"] | undefined {
-  if (!runtime) {
-    return undefined;
-  }
-  const configApi = runtime.config;
-  if (!configApi?.current || !configApi.mutateConfigFile) {
-    return runtime;
-  }
-  let cachedConfig: MigrationProviderContext["config"] | undefined;
-  const current = (): ReturnType<typeof configApi.current> => {
-    cachedConfig ??= structuredClone(
-      (configApi.current() ?? fallbackConfig) as MigrationProviderContext["config"],
-    );
-    return cachedConfig;
-  };
-  return {
-    ...runtime,
-    config: {
-      ...runtime.config,
-      current,
-      mutateConfigFile: async (params) => {
-        const result = await configApi.mutateConfigFile({
-          ...params,
-          mutate: async (draft, context) => {
-            const mutationResult = await params.mutate(draft, context);
-            cachedConfig = structuredClone(draft);
-            return mutationResult;
-          },
-        });
-        cachedConfig = structuredClone(result.nextConfig);
-        return result;
-      },
-      ...(configApi.replaceConfigFile
-        ? {
-            replaceConfigFile: async (params) => {
-              const result = await configApi.replaceConfigFile(params);
-              cachedConfig = structuredClone(result.nextConfig);
-              return result;
-            },
-          }
-        : {}),
-    },
-  };
-}
 
 export async function applyHermesPlan(params: {
   ctx: MigrationProviderContext;
@@ -77,7 +31,10 @@ export async function applyHermesPlan(params: {
   const reportDir = params.ctx.reportDir ?? path.join(params.ctx.stateDir, "migration", "hermes");
   const targets = resolveTargets(params.ctx);
   const items: MigrationItem[] = [];
-  const runtime = withCachedConfigRuntime(params.ctx.runtime ?? params.runtime, params.ctx.config);
+  const runtime = withCachedMigrationConfigRuntime(
+    params.ctx.runtime ?? params.runtime,
+    params.ctx.config,
+  );
   const applyCtx = { ...params.ctx, runtime };
   let blockedByApplyConflict = false;
   for (const item of plan.items) {
@@ -98,8 +55,10 @@ export async function applyHermesPlan(params: {
       appliedItem = applyManualItem(item);
     } else if (item.action === "archive") {
       appliedItem = await archiveMigrationItem(item, reportDir);
+    } else if (item.kind === "auth") {
+      appliedItem = await applyAuthItem(applyCtx, item, targets);
     } else if (item.kind === "secret") {
-      appliedItem = await applySecretItem(params.ctx, item, targets);
+      appliedItem = await applySecretItem(applyCtx, item, targets);
     } else if (item.action === "append") {
       appliedItem = await appendItem(item);
     } else {

@@ -1,7 +1,10 @@
+import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
 } from "../../channels/account-snapshot-fields.js";
+import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import {
   buildChannelAccountSnapshot,
@@ -9,8 +12,11 @@ import {
 } from "../../channels/plugins/status.js";
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { formatDocsLink } from "../../terminal/links.js";
-import { theme } from "../../terminal/theme.js";
+import { listExplicitConfiguredChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
+import {
+  type OfficialExternalPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHint,
+} from "../../plugins/official-external-plugin-repair-hints.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -28,7 +34,7 @@ type ChannelStatusPluginLabel = {
 export async function formatConfigChannelsStatusLines(
   cfg: OpenClawConfig,
   meta: { path?: string; mode?: "local" | "remote" },
-  opts?: { sourceConfig?: OpenClawConfig },
+  opts?: { sourceConfig?: OpenClawConfig; channel?: string },
 ): Promise<string[]> {
   const lines: string[] = [];
   lines.push(theme.warn("Gateway not reachable; showing config-only status."));
@@ -58,11 +64,14 @@ export async function formatConfigChannelsStatusLines(
     });
 
   const sourceConfig = opts?.sourceConfig ?? cfg;
+  const requestedChannel = opts?.channel ? normalizeChannelId(opts.channel) : null;
   const plugins = listReadOnlyChannelPluginsForConfig(cfg, {
     activationSourceConfig: sourceConfig,
-    includeSetupRuntimeFallback: false,
-  });
+    includeSetupFallbackPlugins: true,
+  }).filter((plugin) => !requestedChannel || plugin.id === requestedChannel);
+  const visibleChannelIds = new Set<string>();
   for (const plugin of plugins) {
+    visibleChannelIds.add(plugin.id);
     const accountIds = plugin.config.listAccountIds(cfg);
     if (!accountIds.length) {
       continue;
@@ -90,6 +99,39 @@ export async function formatConfigChannelsStatusLines(
     }
     if (snapshots.length > 0) {
       lines.push(...accountLines(plugin, snapshots));
+    }
+  }
+
+  const missingHints: OfficialExternalPluginRepairHint[] = [];
+  const missingChannelIds = [
+    ...new Set([
+      ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
+      ...listExplicitConfiguredChannelIdsForConfig(cfg),
+    ]),
+  ];
+  for (const channelId of missingChannelIds) {
+    if (requestedChannel && channelId !== requestedChannel) {
+      continue;
+    }
+    if (visibleChannelIds.has(channelId)) {
+      continue;
+    }
+    const hint = resolveMissingOfficialExternalChannelPluginRepairHint({
+      config: cfg,
+      activationSourceConfig: sourceConfig,
+      channelId,
+    });
+    if (!hint?.channelId || visibleChannelIds.has(hint.channelId)) {
+      continue;
+    }
+    missingHints.push(hint);
+    visibleChannelIds.add(hint.channelId);
+  }
+  if (missingHints.length > 0) {
+    lines.push("");
+    lines.push(theme.warn("Missing official external plugins:"));
+    for (const hint of missingHints) {
+      lines.push(`- ${hint.label}: ${hint.repairHint}`);
     }
   }
 

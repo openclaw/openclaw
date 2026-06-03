@@ -1,22 +1,32 @@
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { OPENAI_COMPATIBLE_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-model-shared";
 import { defaultToolStreamExtraParams } from "openclaw/plugin-sdk/provider-stream-shared";
-import { jsonResult, readProviderEnvValue } from "openclaw/plugin-sdk/provider-web-search";
-import { Type } from "typebox";
+import { jsonResult } from "openclaw/plugin-sdk/provider-web-search";
 import {
-  applyXaiModelCompat,
+  applyXaiRuntimeModelCompat,
   buildXaiImageGenerationProvider,
   normalizeXaiModelId,
   resolveXaiTransport,
-  resolveXaiModelCompatPatch,
-  shouldContributeXaiCompat,
 } from "./api.js";
+import {
+  buildMissingCodeExecutionApiKeyPayload,
+  createCodeExecutionToolDefinition,
+} from "./code-execution-tool-shared.js";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildXaiProvider } from "./provider-catalog.js";
 import { isModernXaiModel, resolveXaiForwardCompatModel } from "./provider-models.js";
+import { resolveThinkingProfile } from "./provider-policy-api.js";
 import { buildXaiRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";
 import { buildXaiSpeechProvider } from "./speech-provider.js";
-import { resolveFallbackXaiAuth } from "./src/tool-auth-shared.js";
+import {
+  readPluginCodeExecutionConfig,
+  resolveCodeExecutionEnabled,
+} from "./src/code-execution-config.js";
+import {
+  isXaiToolEnabled,
+  resolveFallbackXaiAuth,
+  type XaiToolAuthContext,
+} from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
 import { wrapXaiProviderStream } from "./stream.js";
 import { buildXaiMediaUnderstandingProvider } from "./stt.js";
@@ -26,10 +36,19 @@ import {
   buildMissingXSearchApiKeyPayload,
   createXSearchToolDefinition,
 } from "./x-search-tool-shared.js";
+import {
+  createXaiDeviceCodeAuthMethod,
+  createXaiOAuthAuthMethod,
+  refreshXaiOAuthCredential,
+} from "./xai-oauth.js";
 
 const PROVIDER_ID = "xai";
 type CodeExecutionModule = typeof import("./code-execution.js");
 type XSearchModule = typeof import("./x-search.js");
+
+const XAI_CREDIT_OR_SPENDING_LIMIT_RE =
+  /\b(?:used all available credits|monthly spending limit|purchase more credits|raise your spending limit)\b/i;
+const XAI_RATE_LIMIT_RE = /\b(?:rate limit exceeded|too many requests)\b/i;
 
 let codeExecutionModulePromise: Promise<CodeExecutionModule> | undefined;
 let xSearchModulePromise: Promise<XSearchModule> | undefined;
@@ -44,40 +63,30 @@ function loadXSearchModule(): Promise<XSearchModule> {
   return xSearchModulePromise;
 }
 
-function hasResolvableXaiApiKey(config: unknown): boolean {
-  return Boolean(
-    resolveFallbackXaiAuth(config as never)?.apiKey || readProviderEnvValue(["XAI_API_KEY"]),
-  );
+function classifyXaiFailoverReason(errorMessage: string) {
+  if (XAI_CREDIT_OR_SPENDING_LIMIT_RE.test(errorMessage)) {
+    return "billing" as const;
+  }
+  if (XAI_RATE_LIMIT_RE.test(errorMessage)) {
+    return "rate_limit" as const;
+  }
+  return undefined;
 }
 
-function isCodeExecutionEnabled(config: unknown): boolean {
-  if (!config || typeof config !== "object") {
-    return hasResolvableXaiApiKey(config);
-  }
-  const entries = (config as Record<string, unknown>).plugins;
-  const pluginEntries =
-    entries && typeof entries === "object"
-      ? ((entries as Record<string, unknown>).entries as Record<string, unknown> | undefined)
-      : undefined;
-  const xaiEntry =
-    pluginEntries && typeof pluginEntries.xai === "object"
-      ? (pluginEntries.xai as Record<string, unknown>)
-      : undefined;
-  const pluginConfig =
-    xaiEntry && typeof xaiEntry.config === "object"
-      ? (xaiEntry.config as Record<string, unknown>)
-      : undefined;
-  const codeExecution =
-    pluginConfig && typeof pluginConfig.codeExecution === "object"
-      ? (pluginConfig.codeExecution as Record<string, unknown>)
-      : undefined;
-  if (codeExecution?.enabled === false) {
-    return false;
-  }
-  return hasResolvableXaiApiKey(config);
+function hasResolvableXaiApiKey(config: unknown, auth?: XaiToolAuthContext): boolean {
+  return isXaiToolEnabled({ sourceConfig: config as never, auth });
 }
 
-function isXSearchEnabled(config: unknown): boolean {
+function isCodeExecutionEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
+  return resolveCodeExecutionEnabled({
+    sourceConfig: config,
+    runtimeConfig: config,
+    config: readPluginCodeExecutionConfig(config),
+    auth,
+  });
+}
+
+function isXSearchEnabled(config: unknown, auth?: XaiToolAuthContext): boolean {
   const resolved =
     config && typeof config === "object"
       ? resolveEffectiveXSearchConfig(config as never)
@@ -85,54 +94,44 @@ function isXSearchEnabled(config: unknown): boolean {
   if (resolved?.enabled === false) {
     return false;
   }
-  return hasResolvableXaiApiKey(config);
+  return hasResolvableXaiApiKey(config, auth);
 }
 
 function createLazyCodeExecutionTool(ctx: {
   config?: Record<string, unknown>;
   runtimeConfig?: Record<string, unknown>;
+  hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
+  resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
 }) {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
-  if (!isCodeExecutionEnabled(effectiveConfig)) {
+  if (!isCodeExecutionEnabled(effectiveConfig, ctx)) {
     return null;
   }
 
-  return {
-    label: "Code Execution",
-    name: "code_execution",
-    description:
-      "Run sandboxed Python analysis with xAI. Use for calculations, tabulation, summaries, and chart-style analysis without local machine access.",
-    parameters: Type.Object({
-      task: Type.String({
-        description:
-          "The full analysis task for xAI's remote Python sandbox. Include any data to analyze directly in the task.",
-      }),
-    }),
-    execute: async (toolCallId: string, args: Record<string, unknown>) => {
+  return createCodeExecutionToolDefinition(
+    async (toolCallId: string, args: Record<string, unknown>) => {
       const { createCodeExecutionTool } = await loadCodeExecutionModule();
       const tool = createCodeExecutionTool({
         config: ctx.config as never,
         runtimeConfig: (ctx.runtimeConfig as never) ?? null,
+        auth: ctx,
       });
       if (!tool) {
-        return jsonResult({
-          error: "missing_xai_api_key",
-          message:
-            "code_execution needs an xAI API key. Set XAI_API_KEY in the Gateway environment, or configure plugins.entries.xai.config.webSearch.apiKey.",
-          docs: "https://docs.openclaw.ai/tools/code-execution",
-        });
+        return jsonResult(buildMissingCodeExecutionApiKeyPayload());
       }
       return await tool.execute(toolCallId, args);
     },
-  };
+  );
 }
 
 function createLazyXSearchTool(ctx: {
   config?: Record<string, unknown>;
   runtimeConfig?: Record<string, unknown>;
+  hasAuthForProvider?: XaiToolAuthContext["hasAuthForProvider"];
+  resolveApiKeyForProvider?: XaiToolAuthContext["resolveApiKeyForProvider"];
 }) {
   const effectiveConfig = ctx.runtimeConfig ?? ctx.config;
-  if (!isXSearchEnabled(effectiveConfig)) {
+  if (!isXSearchEnabled(effectiveConfig, ctx)) {
     return null;
   }
 
@@ -141,6 +140,7 @@ function createLazyXSearchTool(ctx: {
     const tool = createXSearchTool({
       config: ctx.config as never,
       runtimeConfig: (ctx.runtimeConfig as never) ?? null,
+      auth: ctx,
     });
     if (!tool) {
       return jsonResult(buildMissingXSearchApiKeyPayload());
@@ -173,6 +173,7 @@ export default defineSingleProviderPluginEntry({
         },
       },
     ],
+    extraAuth: [createXaiOAuthAuthMethod(), createXaiDeviceCodeAuthMethod()],
     catalog: {
       buildProvider: buildXaiProvider,
     },
@@ -194,15 +195,15 @@ export default defineSingleProviderPluginEntry({
         mode: "api-key" as const,
       };
     },
-    normalizeResolvedModel: ({ model }) => applyXaiModelCompat(model),
+    normalizeResolvedModel: ({ model }) => applyXaiRuntimeModelCompat(model),
     normalizeTransport: ({ provider, api, baseUrl }) =>
       resolveXaiTransport({ provider, api, baseUrl }),
-    contributeResolvedModelCompat: ({ modelId, model }) =>
-      shouldContributeXaiCompat({ modelId, model }) ? resolveXaiModelCompatPatch() : undefined,
     normalizeModelId: ({ modelId }) => normalizeXaiModelId(modelId),
     resolveDynamicModel: (ctx) => resolveXaiForwardCompatModel({ providerId: PROVIDER_ID, ctx }),
-    resolveThinkingProfile: () => ({ levels: [{ id: "off" }], defaultLevel: "off" }),
+    refreshOAuth: refreshXaiOAuthCredential,
+    resolveThinkingProfile,
     isModernModelRef: ({ modelId }) => isModernXaiModel(modelId),
+    classifyFailoverReason: ({ errorMessage }) => classifyXaiFailoverReason(errorMessage),
   },
   register(api) {
     api.registerWebSearchProvider(createXaiWebSearchProvider());

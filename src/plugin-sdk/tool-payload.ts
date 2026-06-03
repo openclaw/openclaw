@@ -1,3 +1,32 @@
+import {
+  parseStandalonePlainTextToolCallBlocks as parseStandaloneRepairToolCallBlocks,
+  stripPlainTextToolCallBlocks as stripRepairToolCallBlocks,
+} from "../../packages/tool-call-repair/src/index.js";
+
+export type PlainTextToolCallBlock = {
+  arguments: Record<string, unknown>;
+  end: number;
+  name: string;
+  raw: string;
+  start: number;
+};
+
+export type PlainTextToolCallParseOptions = {
+  allowedToolNames?: Iterable<string>;
+  maxPayloadBytes?: number;
+};
+
+export function parseStandalonePlainTextToolCallBlocks(
+  text: string,
+  options?: PlainTextToolCallParseOptions,
+): PlainTextToolCallBlock[] | null {
+  return parseStandaloneRepairToolCallBlocks(text, options);
+}
+
+export function stripPlainTextToolCallBlocks(text: string): string {
+  return stripRepairToolCallBlocks(text);
+}
+
 type ToolPayloadTextBlock = {
   type: "text";
   text: string;
@@ -10,7 +39,7 @@ export type ToolPayloadCarrier = {
 
 function isToolPayloadTextBlock(block: unknown): block is ToolPayloadTextBlock {
   return (
-    !!block &&
+    Boolean(block) &&
     typeof block === "object" &&
     (block as { type?: unknown }).type === "text" &&
     typeof (block as { text?: unknown }).text === "string"

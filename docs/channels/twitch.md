@@ -14,7 +14,7 @@ Twitch chat support via IRC connection. OpenClaw connects as a Twitch user (bot 
 Twitch ships as a bundled plugin in current OpenClaw releases, so normal packaged builds do not need a separate install.
 </Note>
 
-If you are on an older build or a custom install that excludes Twitch, install it manually:
+If you are on an older build or a custom install that excludes Twitch, install the npm package directly:
 
 <Tabs>
   <Tab title="npm registry">
@@ -28,6 +28,9 @@ If you are on an older build or a custom install that excludes Twitch, install i
     ```
   </Tab>
 </Tabs>
+
+Use the bare package to follow the current official release tag. Pin an exact
+version only when you need a reproducible install.
 
 Details: [Plugins](/tools/plugin)
 

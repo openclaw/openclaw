@@ -1,0 +1,290 @@
+import { describe, expect, it } from "vitest";
+import { AUTH_STORE_VERSION } from "./constants.js";
+import { coercePersistedAuthProfileStore, mergeAuthProfileStores } from "./persisted.js";
+
+describe("persisted auth profile boundary", () => {
+  it("normalizes malformed persisted credentials and state before runtime use", () => {
+    const store = coercePersistedAuthProfileStore({
+      version: "not-a-version",
+      profiles: {
+        "openai:default": {
+          type: "apiKey",
+          provider: " OpenAI ",
+          apiKey: "demo-openai-key",
+          keyRef: { source: "env", id: "OPENAI_API_KEY" },
+          metadata: { account: "acct_123", bad: 123 },
+          copyToAgents: "yes",
+          email: ["wrong"],
+          displayName: "Work",
+        },
+        "openai:legacy-api-key": {
+          type: "apiKey",
+          provider: "openai",
+          apiKey: "legacy-openai-key",
+        },
+        "openai:legacy-malformed-ref": {
+          type: "apiKey",
+          provider: "openai",
+          apiKey: "legacy-fallback-key",
+          keyRef: { source: "env", id: "" },
+        },
+        "minimax:default": {
+          type: "token",
+          provider: "minimax",
+          token: ["wrong"],
+          tokenRef: { source: "env", provider: "default", id: "MINIMAX_TOKEN" },
+          expires: "tomorrow",
+        },
+        "openai:oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: ["wrong"],
+          refresh: "refresh-token",
+          expires: "later",
+          oauthRef: {
+            source: "openclaw-credentials",
+            provider: "openai",
+            id: "not-a-secret-id",
+          },
+        },
+        "broken:array": [],
+      },
+      order: {
+        OpenAI: [" openai:default ", 5, ""],
+        minimax: "wrong",
+      },
+      lastGood: {
+        OpenAI: " openai:default ",
+        minimax: 5,
+      },
+      usageStats: {
+        "openai:default": {
+          cooldownUntil: "later",
+          disabledUntil: 123,
+          disabledReason: "billing",
+          failureCounts: {
+            billing: 2,
+            nope: 4,
+          },
+        },
+        "minimax:default": "wrong",
+      },
+    });
+
+    expect(store).toMatchObject({
+      version: AUTH_STORE_VERSION,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          metadata: { account: "acct_123" },
+          displayName: "Work",
+        },
+        "openai:legacy-api-key": {
+          type: "api_key",
+          provider: "openai",
+          key: "legacy-openai-key",
+        },
+        "openai:legacy-malformed-ref": {
+          type: "api_key",
+          provider: "openai",
+          key: "legacy-fallback-key",
+        },
+        "minimax:default": {
+          type: "token",
+          provider: "minimax",
+          tokenRef: { source: "env", provider: "default", id: "MINIMAX_TOKEN" },
+          expires: 0,
+        },
+        "openai:oauth": {
+          type: "oauth",
+          provider: "openai",
+          refresh: "refresh-token",
+          expires: 0,
+        },
+      },
+      order: {
+        openai: ["openai:default"],
+      },
+      lastGood: {
+        openai: "openai:default",
+      },
+      usageStats: {
+        "openai:default": {
+          disabledUntil: 123,
+          disabledReason: "billing",
+          failureCounts: { billing: 2 },
+        },
+      },
+    });
+    expect(store?.profiles["broken:array"]).toBeUndefined();
+    expect(store?.profiles["openai:default"]).not.toHaveProperty("copyToAgents");
+    expect(store?.profiles["openai:oauth"]).not.toHaveProperty("oauthRef");
+  });
+
+  it("lets authoritative runtime external metadata remove stale base profiles", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: ["anthropic:claude-cli"],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {
+          "anthropic:claude-cli": {
+            type: "oauth",
+            provider: "anthropic",
+            access: "stale-access",
+            refresh: "stale-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          anthropic: ["anthropic:claude-cli"],
+        },
+        lastGood: {
+          anthropic: "anthropic:claude-cli",
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {},
+      },
+    );
+
+    expect(merged.runtimeExternalProfileIds).toEqual([]);
+    expect(merged.runtimeExternalProfileIdsAuthoritative).toBe(true);
+    expect(merged.profiles["anthropic:claude-cli"]).toBeUndefined();
+    expect(merged.order?.anthropic).toBeUndefined();
+    expect(merged.lastGood?.anthropic).toBeUndefined();
+  });
+
+  it("keeps override profiles when authoritative metadata removes base runtime external state", () => {
+    const profileId = "anthropic:claude-cli";
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [profileId],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "stale-access",
+            refresh: "stale-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          anthropic: [profileId],
+        },
+        lastGood: {
+          anthropic: profileId,
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {
+          [profileId]: {
+            type: "api_key",
+            provider: "anthropic",
+            key: "sk-local",
+          },
+        },
+        order: {
+          anthropic: [profileId],
+        },
+        lastGood: {
+          anthropic: profileId,
+        },
+      },
+    );
+
+    expect(merged.runtimeExternalProfileIds).toEqual([]);
+    expect(merged.runtimeExternalProfileIdsAuthoritative).toBe(true);
+    expect(merged.profiles[profileId]).toMatchObject({
+      type: "api_key",
+      provider: "anthropic",
+      key: "sk-local",
+    });
+    expect(merged.order?.anthropic).toEqual([profileId]);
+    expect(merged.lastGood?.anthropic).toBe(profileId);
+  });
+
+  it("preserves config-only order fallbacks during agent-store merges", () => {
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {},
+        order: {
+          openai: ["openai:aws-sdk"],
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:new-login": {
+            type: "oauth",
+            provider: "openai",
+            access: "new-access",
+            refresh: "new-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          openai: ["openai:new-login", "openai:aws-sdk"],
+        },
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(merged.order?.openai).toEqual(["openai:new-login", "openai:aws-sdk"]);
+  });
+
+  it("preserves inherited base runtime external profiles during agent-store merges", () => {
+    const profileId = "anthropic:claude-cli";
+    const merged = mergeAuthProfileStores(
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [profileId],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {
+          [profileId]: {
+            type: "oauth",
+            provider: "anthropic",
+            access: "main-access",
+            refresh: "main-refresh",
+            expires: 1,
+          },
+        },
+        order: {
+          anthropic: [profileId],
+        },
+        lastGood: {
+          anthropic: profileId,
+        },
+      },
+      {
+        version: AUTH_STORE_VERSION,
+        runtimeExternalProfileIds: [],
+        runtimeExternalProfileIdsAuthoritative: true,
+        profiles: {},
+      },
+      { preserveBaseRuntimeExternalProfiles: true },
+    );
+
+    expect(merged.runtimeExternalProfileIds).toEqual([profileId]);
+    expect(merged.runtimeExternalProfileIdsAuthoritative).toBe(true);
+    expect(merged.profiles[profileId]).toMatchObject({
+      type: "oauth",
+      provider: "anthropic",
+      access: "main-access",
+      refresh: "main-refresh",
+    });
+    expect(merged.order?.anthropic).toEqual([profileId]);
+    expect(merged.lastGood?.anthropic).toBe(profileId);
+  });
+});

@@ -1,25 +1,28 @@
 import { randomUUID } from "node:crypto";
-import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
-import type { ExecApprovalDecision } from "../../infra/exec-approvals.js";
-import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
-import {
-  DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
-  MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
-} from "../../infra/plugin-approvals.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
   formatValidationErrors,
   validatePluginApprovalRequestParams,
   validatePluginApprovalResolveParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import {
+  resolvePluginApprovalRequestAllowedDecisions,
+  resolvePluginApprovalTimeoutMs,
+} from "../../infra/plugin-approvals.js";
+import type { ExecApprovalManager } from "../exec-approval-manager.js";
+import {
+  bindApprovalRequesterMetadata,
+  buildRequestedApprovalEvent,
   handleApprovalResolve,
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
-  isApprovalDecision,
+  listVisiblePendingApprovalRequests,
+  registerPendingApprovalRecord,
+  resolveApprovalDecisionParams,
 } from "./approval-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
@@ -28,17 +31,8 @@ export function createPluginApprovalHandlers(
   opts?: { forwarder?: ExecApprovalForwarder },
 ): GatewayRequestHandlers {
   return {
-    "plugin.approval.list": async ({ respond }) => {
-      respond(
-        true,
-        manager.listPendingRecords().map((record) => ({
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        })),
-        undefined,
-      );
+    "plugin.approval.list": async ({ respond, client }) => {
+      respond(true, listVisiblePendingApprovalRequests({ manager, client }), undefined);
     },
     "plugin.approval.request": async ({ params, client, respond, context }) => {
       if (!validatePluginApprovalRequestParams(params)) {
@@ -61,6 +55,7 @@ export function createPluginApprovalHandlers(
         severity?: string | null;
         toolName?: string | null;
         toolCallId?: string | null;
+        allowedDecisions?: string[] | null;
         agentId?: string | null;
         sessionKey?: string | null;
         turnSourceChannel?: string | null;
@@ -71,10 +66,7 @@ export function createPluginApprovalHandlers(
         twoPhase?: boolean;
       };
       const twoPhase = p.twoPhase === true;
-      const timeoutMs = Math.min(
-        typeof p.timeoutMs === "number" ? p.timeoutMs : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS,
-        MAX_PLUGIN_APPROVAL_TIMEOUT_MS,
-      );
+      const timeoutMs = resolvePluginApprovalTimeoutMs(p.timeoutMs);
 
       const normalizeTrimmedString = (value?: string | null): string | null =>
         normalizeOptionalString(value) || null;
@@ -86,6 +78,13 @@ export function createPluginApprovalHandlers(
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: p.toolName ?? null,
         toolCallId: p.toolCallId ?? null,
+        ...(Array.isArray(p.allowedDecisions)
+          ? {
+              allowedDecisions: resolvePluginApprovalRequestAllowedDecisions({
+                allowedDecisions: p.allowedDecisions,
+              }),
+            }
+          : {}),
         agentId: p.agentId ?? null,
         sessionKey: p.sessionKey ?? null,
         turnSourceChannel: normalizeTrimmedString(p.turnSourceChannel),
@@ -97,25 +96,19 @@ export function createPluginApprovalHandlers(
       // Always server-generate the ID — never accept plugin-provided IDs.
       // Kind-prefix so /approve routing can distinguish plugin vs exec IDs deterministically.
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+      bindApprovalRequesterMetadata({ record, client });
 
-      let decisionPromise: Promise<ExecApprovalDecision | null>;
-      try {
-        decisionPromise = manager.register(record, timeoutMs);
-      } catch (err) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `registration failed: ${String(err)}`),
-        );
+      const decisionPromise = registerPendingApprovalRecord({
+        manager,
+        record,
+        timeoutMs,
+        respond,
+      });
+      if (!decisionPromise) {
         return;
       }
 
-      const requestEvent = {
-        id: record.id,
-        request: record.request,
-        createdAtMs: record.createdAtMs,
-        expiresAtMs: record.expiresAtMs,
-      };
+      const requestEvent = buildRequestedApprovalEvent(record);
 
       await handlePendingApprovalRequest({
         manager,
@@ -127,57 +120,70 @@ export function createPluginApprovalHandlers(
         requestEventName: "plugin.approval.requested",
         requestEvent,
         twoPhase,
+        approvalKind: "plugin",
         deliverRequest: () => {
           if (!opts?.forwarder?.handlePluginApprovalRequested) {
             return false;
           }
-          return opts.forwarder.handlePluginApprovalRequested(requestEvent).catch((err) => {
-            context.logGateway?.error?.(`plugin approvals: forward request failed: ${String(err)}`);
-            return false;
-          });
+          return opts.forwarder
+            .handlePluginApprovalRequested(requestEvent)
+            .catch((err: unknown) => {
+              context.logGateway?.error?.(
+                `plugin approvals: forward request failed: ${String(err)}`,
+              );
+              return false;
+            });
         },
       });
     },
 
-    "plugin.approval.waitDecision": async ({ params, respond }) => {
+    "plugin.approval.waitDecision": async ({ params, respond, client }) => {
       await handleApprovalWaitDecision({
         manager,
         inputId: (params as { id?: string }).id,
+        client,
         respond,
       });
     },
 
     "plugin.approval.resolve": async ({ params, respond, client, context }) => {
-      if (!validatePluginApprovalResolveParams(params)) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `invalid plugin.approval.resolve params: ${formatValidationErrors(
-              validatePluginApprovalResolveParams.errors,
-            )}`,
-          ),
-        );
+      const resolveParams = resolveApprovalDecisionParams({
+        rawParams: params,
+        validate: validatePluginApprovalResolveParams,
+        methodName: "plugin.approval.resolve",
+        respond,
+      });
+      if (!resolveParams) {
         return;
       }
-      const p = params as { id: string; decision: string };
-      if (!isApprovalDecision(p.decision)) {
-        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid decision"));
-        return;
-      }
+      const { inputId, decision } = resolveParams;
       await handleApprovalResolve({
         manager,
-        inputId: p.id,
-        decision: p.decision,
+        inputId,
+        decision,
         respond,
         context,
         client,
         exposeAmbiguousPrefixError: false,
+        validateDecision: (snapshot) =>
+          resolvePluginApprovalRequestAllowedDecisions(snapshot.request).includes(decision)
+            ? null
+            : {
+                message: `${decision} is unavailable for this plugin approval`,
+                details: {
+                  allowedDecisions: resolvePluginApprovalRequestAllowedDecisions(snapshot.request),
+                },
+              },
         resolvedEventName: "plugin.approval.resolved",
-        buildResolvedEvent: ({ approvalId, decision, resolvedBy, snapshot, nowMs }) => ({
+        buildResolvedEvent: ({
+          approvalId,
+          decision: decisionLocal,
+          resolvedBy,
+          snapshot,
+          nowMs,
+        }) => ({
           id: approvalId,
-          decision,
+          decision: decisionLocal,
           resolvedBy,
           ts: nowMs,
           request: snapshot.request,

@@ -1,16 +1,16 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { tryLoadActivatedBundledPluginPublicSurfaceModuleSync } from "../../plugin-sdk/facade-runtime.js";
-import { getActivePluginChannelRegistryVersion } from "../../plugins/runtime.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
   type ParsedThreadSessionSuffix,
   type RawSessionConversationRef,
 } from "../../sessions/session-key-utils.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { normalizeChannelId as normalizeChatChannelId } from "../registry.js";
 import { getLoadedChannelPlugin, normalizeChannelId as normalizeAnyChannelId } from "./registry.js";
 
@@ -59,16 +59,6 @@ type NormalizedSessionConversationResolution = ResolvedSessionConversation & {
   hasExplicitParentConversationCandidates: boolean;
 };
 
-type BundledSessionConversationFallbackCacheEntry = {
-  version: number;
-  resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"] | null;
-};
-
-const bundledSessionConversationFallbackCache = new Map<
-  string,
-  BundledSessionConversationFallbackCacheEntry
->();
-
 function normalizeResolvedChannel(channel: string): string {
   return (
     normalizeAnyChannelId(channel) ??
@@ -88,20 +78,7 @@ function getMessagingAdapter(channel: string) {
 }
 
 function dedupeConversationIds(values: Array<string | undefined | null>): string[] {
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const value of values) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const trimmed = value.trim();
-    if (!trimmed || seen.has(trimmed)) {
-      continue;
-    }
-    seen.add(trimmed);
-    resolved.push(trimmed);
-  }
-  return resolved;
+  return normalizeUniqueSingleOrTrimmedStringList(values);
 }
 
 function buildGenericConversationResolution(rawId: string): ResolvedSessionConversation | null {
@@ -159,35 +136,22 @@ function resolveBundledSessionConversationFallback(params: {
     return null;
   }
   const dirName = normalizeResolvedChannel(params.channel);
-  const version = getActivePluginChannelRegistryVersion();
-  let cached = bundledSessionConversationFallbackCache.get(dirName);
-  if (!cached || cached.version !== version) {
-    let resolveSessionConversation: BundledSessionKeyModule["resolveSessionConversation"] | null =
-      null;
-    try {
-      const loaded = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
-        dirName,
-        artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
-      });
-      resolveSessionConversation =
-        typeof loaded?.resolveSessionConversation === "function"
-          ? loaded.resolveSessionConversation
-          : null;
-    } catch {
-      resolveSessionConversation = null;
-    }
-    cached = {
-      version,
-      resolveSessionConversation,
-    };
-    bundledSessionConversationFallbackCache.set(dirName, cached);
+  let loaded: BundledSessionKeyModule | null;
+  try {
+    loaded = tryLoadActivatedBundledPluginPublicSurfaceModuleSync<BundledSessionKeyModule>({
+      dirName,
+      artifactBasename: SESSION_KEY_API_ARTIFACT_BASENAME,
+    });
+  } catch {
+    return null;
   }
-  if (typeof cached.resolveSessionConversation !== "function") {
+  const resolveSessionConversationLocal = loaded?.resolveSessionConversation;
+  if (typeof resolveSessionConversationLocal !== "function") {
     return null;
   }
 
   return normalizeSessionConversationResolution(
-    cached.resolveSessionConversation({
+    resolveSessionConversationLocal({
       kind: params.kind,
       rawId: params.rawId,
     }),
@@ -203,7 +167,7 @@ function isBundledSessionConversationFallbackDisabled(channel: string): boolean 
     return true;
   }
   const entry = snapshot.plugins.entries?.[normalizeResolvedChannel(channel)];
-  return !!entry && typeof entry === "object" && entry.enabled === false;
+  return Boolean(entry) && typeof entry === "object" && entry.enabled === false;
 }
 
 function shouldProbeBundledSessionConversationFallback(rawId: string): boolean {

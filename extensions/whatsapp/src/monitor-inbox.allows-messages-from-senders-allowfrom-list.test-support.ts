@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildNotifyMessageUpsert,
   expectPairingPromptSent,
+  getRecordChannelActivityMock,
   installWebMonitorInboxUnitTestHooks,
   mockLoadConfig,
   settleInboundWork,
@@ -31,6 +32,20 @@ function createAllowListConfig(allowFrom: string[]) {
 async function openInboxMonitor(onMessage = vi.fn()) {
   const { listener, sock } = await startInboxMonitor(onMessage);
   return { onMessage, listener, sock };
+}
+
+function expectOnlyOutboundChannelActivity(accountId = "default") {
+  const recordChannelActivityMock = getRecordChannelActivityMock();
+  expect(recordChannelActivityMock).toHaveBeenCalledWith({
+    channel: "whatsapp",
+    accountId,
+    direction: "outbound",
+  });
+  expect(recordChannelActivityMock).not.toHaveBeenCalledWith({
+    channel: "whatsapp",
+    accountId,
+    direction: "inbound",
+  });
 }
 
 async function expectOutboundDmSkipsPairing(params: {
@@ -198,6 +213,33 @@ describe("web monitor inbox", () => {
     await listener.close();
   });
 
+  it("still sends pairing replies when live DMs have null timestamps", async () => {
+    mockLoadConfig.mockReturnValue({});
+    upsertPairingRequestMock.mockResolvedValueOnce({ code: "PAIRCODE", created: true });
+
+    const { onMessage, listener, sock } = await openInboxMonitor();
+
+    const upsertBlocked = buildNotifyMessageUpsert({
+      id: "no-config-null-ts",
+      remoteJid: "999@s.whatsapp.net",
+      text: "ping",
+      timestamp: null as never,
+    });
+
+    sock.ev.emit("messages.upsert", upsertBlocked);
+    await vi.waitFor(
+      () => {
+        expect(sock.sendMessage).toHaveBeenCalledTimes(1);
+      },
+      { timeout: 5_000, interval: 5 },
+    );
+
+    expect(onMessage).not.toHaveBeenCalled();
+    expectPairingPromptSent(sock, "999@s.whatsapp.net", "+999");
+
+    await listener.close();
+  });
+
   it("skips pairing replies for outbound DMs in same-phone mode", async () => {
     await expectOutboundDmSkipsPairing({
       selfChatMode: true,
@@ -294,6 +336,7 @@ describe("web monitor inbox", () => {
     await settleInboundWork();
 
     expect(onMessage).not.toHaveBeenCalled();
+    expectOnlyOutboundChannelActivity();
 
     await listener.close();
   });
@@ -333,6 +376,7 @@ describe("web monitor inbox", () => {
     await settleInboundWork();
 
     expect(onMessage).not.toHaveBeenCalled();
+    expectOnlyOutboundChannelActivity();
 
     await listener.close();
   });

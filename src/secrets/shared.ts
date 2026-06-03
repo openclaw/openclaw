@@ -1,5 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { privateFileStoreSync } from "../infra/private-file-store.js";
+import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import { resolvePositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 export { isRecord } from "../utils.js";
 
 export function isNonEmptyString(value: unknown): value is string {
@@ -24,6 +27,10 @@ export function normalizePositiveInt(value: unknown, fallback: number): number {
   return Math.max(1, Math.floor(fallback));
 }
 
+export function normalizePositiveTimerMs(value: unknown, fallback: number): number {
+  return resolvePositiveTimerTimeoutMs(value, fallback);
+}
+
 export function parseDotPath(pathname: string): string[] {
   return pathname
     .split(".")
@@ -40,9 +47,9 @@ export function ensureDirForFile(filePath: string): void {
 }
 
 export function writeJsonFileSecure(pathname: string, value: unknown): void {
-  ensureDirForFile(pathname);
-  fs.writeFileSync(pathname, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-  fs.chmodSync(pathname, 0o600);
+  privateFileStoreSync(path.dirname(pathname)).writeJson(path.basename(pathname), value, {
+    trailingNewline: true,
+  });
 }
 
 export function readTextFileIfExists(pathname: string): string | null {
@@ -53,9 +60,14 @@ export function readTextFileIfExists(pathname: string): string | null {
 }
 
 export function writeTextFileAtomic(pathname: string, value: string, mode = 0o600): void {
-  ensureDirForFile(pathname);
-  const tempPath = `${pathname}.tmp-${process.pid}-${Date.now()}`;
-  fs.writeFileSync(tempPath, value, "utf8");
-  fs.chmodSync(tempPath, mode);
-  fs.renameSync(tempPath, pathname);
+  if (mode !== 0o600) {
+    replaceFileAtomicSync({
+      filePath: pathname,
+      content: value,
+      mode,
+      tempPrefix: ".openclaw-secrets",
+    });
+    return;
+  }
+  privateFileStoreSync(path.dirname(pathname)).writeText(path.basename(pathname), value);
 }

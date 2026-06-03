@@ -1,20 +1,23 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.ui.OpenClawTheme
+import ai.openclaw.app.ui.RootScreen
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.viewModels
-import androidx.core.view.WindowCompat
 import androidx.compose.material3.Surface
 import androidx.compose.ui.Modifier
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
-import ai.openclaw.app.ui.RootScreen
-import ai.openclaw.app.ui.OpenClawTheme
 import kotlinx.coroutines.launch
 
+/**
+ * Main Android activity that owns Compose UI attachment and runtime UI wiring.
+ */
 class MainActivity : ComponentActivity() {
   private val viewModel: MainViewModel by viewModels()
   private lateinit var permissionRequester: PermissionRequester
@@ -43,6 +46,7 @@ class MainActivity : ComponentActivity() {
       repeatOnLifecycle(Lifecycle.State.STARTED) {
         viewModel.runtimeInitialized.collect { ready ->
           if (!ready || didAttachRuntimeUi) return@collect
+          // Runtime UI helpers need an Activity owner, so attach once after NodeRuntime is ready.
           viewModel.attachRuntimeUi(owner = this@MainActivity, permissionRequester = permissionRequester)
           didAttachRuntimeUi = true
           if (!didStartNodeService) {
@@ -78,7 +82,14 @@ class MainActivity : ComponentActivity() {
     handleAssistantIntent(intent)
   }
 
+  /**
+   * Routes assistant/app-action intents into ViewModel state without recreating the activity.
+   */
   private fun handleAssistantIntent(intent: android.content.Intent?) {
+    parseHomeDestinationIntent(intent)?.let { destination ->
+      viewModel.requestHomeDestination(destination)
+      return
+    }
     val request = parseAssistantLaunchIntent(intent) ?: return
     viewModel.handleAssistantLaunch(request)
   }

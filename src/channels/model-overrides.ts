@@ -1,12 +1,12 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   parseRawSessionConversationRef,
   parseThreadSessionSuffix,
 } from "../sessions/session-key-utils.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import {
   buildChannelKeyCandidates,
@@ -188,6 +188,16 @@ export function resolveChannelModelOverride(
 
   const { keys, parentKeys } = buildChannelCandidates(params);
   if (keys.length === 0 && parentKeys.length === 0) {
+    const wildcardModel = normalizeOptionalString(providerEntries["*"]);
+    if (wildcardModel) {
+      return {
+        channel:
+          normalizeMessageChannel(channel) ?? normalizeOptionalLowercaseString(channel) ?? "",
+        model: wildcardModel,
+        matchKey: "*",
+        matchSource: "wildcard",
+      };
+    }
     return null;
   }
   const match = resolveChannelEntryMatchWithFallback({

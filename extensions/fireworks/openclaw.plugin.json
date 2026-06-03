@@ -5,8 +5,13 @@
   },
   "enabledByDefault": true,
   "providers": ["fireworks"],
-  "providerAuthEnvVars": {
-    "fireworks": ["FIREWORKS_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "fireworks",
+        "envVars": ["FIREWORKS_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -48,6 +53,9 @@
             "input": ["text", "image"],
             "contextWindow": 256000,
             "maxTokens": 256000,
+            "compat": {
+              "unsupportedToolSchemaKeywords": ["not"]
+            },
             "cost": {
               "input": 0,
               "output": 0,

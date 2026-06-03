@@ -88,6 +88,19 @@ describe("resolveCodexAppServerSpawnInvocation", () => {
       windowsHide: true,
     });
   });
+
+  it("rejects Windows Codex app-server commands that include inline script arguments", () => {
+    expect(() =>
+      resolveCodexAppServerSpawnInvocation(
+        startOptions("node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js"),
+        {
+          platform: "win32",
+          env: {},
+          execPath: "C:\\node\\node.exe",
+        },
+      ),
+    ).toThrow("Windows spawn command must be an executable path only");
+  });
 });
 
 describe("resolveCodexAppServerSpawnEnv", () => {
@@ -109,6 +122,28 @@ describe("resolveCodexAppServerSpawnEnv", () => {
       ),
     }).toEqual({
       KEEP: "override",
+    });
+  });
+
+  it("clears denied env vars case-insensitively on Windows", () => {
+    expect({
+      ...resolveCodexAppServerSpawnEnv(
+        {
+          env: {
+            OpenAI_Api_Key: "configured-openai-key",
+            Other: "configured",
+          },
+          clearEnv: ["OPENAI_API_KEY", " CODEX_API_KEY ", ""],
+        },
+        {
+          Codex_Api_Key: "parent-codex-key",
+          KEEP: "parent",
+        },
+        "win32",
+      ),
+    }).toEqual({
+      KEEP: "parent",
+      Other: "configured",
     });
   });
 

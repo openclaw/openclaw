@@ -1,4 +1,4 @@
-import { resolveAcpSessionCwd } from "../../acp/runtime/session-identifiers.js";
+import { resolveAcpSessionCwd } from "@openclaw/acp-core/runtime/session-identifiers";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { persistAcpTurnTranscript } from "../../agents/command/attempt-execution.js";
 import {
@@ -52,5 +52,6 @@ export async function persistAcpDispatchTranscript(params: {
     sessionAgentId,
     threadId: params.threadId,
     sessionCwd: resolveAcpSessionCwd(params.meta) ?? process.cwd(),
+    config: params.cfg,
   });
 }

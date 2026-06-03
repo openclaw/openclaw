@@ -1,10 +1,14 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
+import { buildTextObservationFields } from "./embedded-agent-error-observation.js";
+import type { FailoverReason } from "./embedded-agent-helpers.js";
 import type { FallbackAttempt, ModelCandidate } from "./model-fallback.types.js";
-import { buildTextObservationFields } from "./pi-embedded-error-observation.js";
-import type { FailoverReason } from "./pi-embedded-helpers.js";
 
 const decisionLog = createSubsystemLogger("model-fallback").child("decision");
+
+export function isModelFallbackDecisionLogEnabled(): boolean {
+  return decisionLog.isEnabled("warn");
+}
 
 function buildErrorObservationFields(error?: string): {
   errorPreview?: string;
@@ -46,6 +50,8 @@ export type ModelFallbackDecisionParams = {
     | "candidate_failed"
     | "candidate_succeeded";
   runId?: string;
+  sessionId?: string;
+  lane?: string;
   requestedProvider: string;
   requestedModel: string;
   candidate: ModelCandidate;
@@ -145,6 +151,8 @@ export function logModelFallbackDecision(
     event: "model_fallback_decision",
     tags: ["error_handling", "model_fallback", params.decision],
     runId: params.runId,
+    sessionId: params.sessionId,
+    lane: params.lane,
     decision: params.decision,
     requestedProvider: params.requestedProvider,
     requestedModel: params.requestedModel,

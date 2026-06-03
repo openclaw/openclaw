@@ -1,8 +1,8 @@
 import crypto from "node:crypto";
-import { estimateBase64DecodedBytes } from "../media/base64.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
-export const REDACTED_IMAGE_DATA = "<redacted>";
+const REDACTED_IMAGE_DATA = "<redacted>";
 
 const NON_CREDENTIAL_FIELD_NAMES = new Set([
   "passwordfile",

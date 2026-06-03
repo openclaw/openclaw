@@ -2,18 +2,95 @@
  * Tests for Nostr Profile Import
  */
 
-import { describe, it, expect } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { NostrProfile } from "./config-schema.js";
-import { mergeProfiles } from "./nostr-profile-import.js";
+import { importProfileFromRelays, mergeProfiles } from "./nostr-profile-import.js";
 
-// Note: importProfileFromRelays requires real network calls or complex mocking
-// of nostr-tools SimplePool, so we focus on unit testing mergeProfiles
+const mockState = vi.hoisted(() => ({
+  subscribeMany: vi.fn(),
+}));
+
+vi.mock("nostr-tools", () => {
+  class MockSimplePool {
+    subscribeMany(
+      relays: string[],
+      filters: unknown,
+      handlers: {
+        onevent: (event: Record<string, unknown>) => void;
+        oneose?: () => void;
+        onclose?: () => void;
+      },
+    ) {
+      mockState.subscribeMany(relays, filters, handlers);
+      queueMicrotask(() => handlers.oneose?.());
+      return {
+        close: vi.fn(),
+      };
+    }
+
+    close = vi.fn();
+  }
+
+  return {
+    SimplePool: MockSimplePool,
+    verifyEvent: vi.fn(() => true),
+  };
+});
+
+// Mock SimplePool so importProfileFromRelays can assert the relay subscription shape.
 
 describe("nostr-profile-import", () => {
+  beforeEach(() => {
+    mockState.subscribeMany.mockClear();
+  });
+
+  describe("importProfileFromRelays", () => {
+    it("subscribes to profiles with a single Nostr filter object", async () => {
+      const pubkey = "a".repeat(64);
+
+      await importProfileFromRelays({
+        pubkey,
+        relays: ["wss://relay.example"],
+        timeoutMs: 1,
+      });
+
+      expect(mockState.subscribeMany).toHaveBeenCalledTimes(1);
+      const filters = mockState.subscribeMany.mock.calls[0]?.[1];
+      expect(Array.isArray(filters)).toBe(false);
+      expect(filters).toMatchObject({
+        kinds: [0],
+        authors: [pubkey],
+        limit: 1,
+      });
+    });
+
+    it("caps oversized relay timeouts and clears pending timeout handles", async () => {
+      vi.useFakeTimers();
+      try {
+        const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+        const clearSpy = vi.spyOn(globalThis, "clearTimeout");
+
+        await importProfileFromRelays({
+          pubkey: "a".repeat(64),
+          relays: ["wss://relay.example"],
+          timeoutMs: Number.MAX_SAFE_INTEGER,
+        });
+
+        expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+        expect(timeoutSpy).toHaveBeenCalledTimes(2);
+        expect(clearSpy).toHaveBeenCalledTimes(2);
+      } finally {
+        vi.useRealTimers();
+        vi.restoreAllMocks();
+      }
+    });
+  });
+
   describe("mergeProfiles", () => {
     it("returns empty object when both are undefined", () => {
       const result = mergeProfiles(undefined, undefined);
-      expect(result).toEqual({});
+      expect(result).toStrictEqual({});
     });
 
     it("returns imported when local is undefined", () => {

@@ -34,6 +34,31 @@ Good output in one line:
   gateway is unreachable, the command falls back to config-only summaries.
 - `openclaw logs --follow` → steady activity, no repeating fatal errors.
 
+## Assistant feels limited or missing tools
+
+If the assistant cannot inspect files, run commands, use browser automation, or
+see expected tools, check the effective tool profile first:
+
+```bash
+openclaw status
+openclaw status --all
+openclaw doctor
+```
+
+Common causes:
+
+- `tools.profile: "messaging"` is intentionally narrow for chat-only agents.
+- `tools.profile: "coding"` is the usual profile for repository, file, shell,
+  and runtime workflows.
+- `tools.profile: "full"` exposes the broadest tool set and should be limited
+  to trusted operator-controlled agents.
+- Per-agent `agents.list[].tools` overrides can narrow or expand the root
+  profile for one agent.
+
+Change the root or per-agent tool profile, then restart or reload the Gateway
+and run `openclaw status --all` again. See [Tools](/tools) for the profile
+model and allow/deny overrides.
+
 ## Anthropic long context 429
 
 If you see:
@@ -79,6 +104,40 @@ Example:
 ```
 
 Reference: [Plugin architecture](/plugins/architecture)
+
+## Plugin present but blocked by suspicious ownership
+
+If `openclaw doctor`, setup, or startup warnings show:
+
+```text
+blocked plugin candidate: suspicious ownership (... uid=1000, expected uid=0 or root)
+plugin present but blocked
+```
+
+the plugin files are owned by a different Unix user than the process loading
+them. Do not remove the plugin config. Fix the file ownership or run OpenClaw as
+the same user that owns the state directory.
+
+Docker installs normally run as `node` (uid `1000`). For the default Docker
+setup, repair the host bind mounts:
+
+```bash
+sudo chown -R 1000:1000 /path/to/openclaw-config /path/to/openclaw-workspace
+openclaw doctor --fix
+```
+
+If you intentionally run OpenClaw as root, repair the managed plugin root to
+root ownership instead:
+
+```bash
+sudo chown -R root:root /path/to/openclaw-config/npm
+openclaw doctor --fix
+```
+
+Deeper docs:
+
+- [Plugin path ownership](/tools/plugin#blocked-plugin-path-ownership)
+- [Docker permissions](/install/docker#permissions-and-eacces)
 
 ## Decision tree
 

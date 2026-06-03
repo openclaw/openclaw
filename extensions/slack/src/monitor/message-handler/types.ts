@@ -1,3 +1,5 @@
+import type { MessageMetadata } from "@slack/types";
+import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { ResolvedSlackAccount } from "../../accounts.js";
@@ -13,7 +15,20 @@ export type PreparedSlackMessage = {
   channelConfig: SlackChannelConfigResolved | null;
   replyTarget: string;
   ctxPayload: FinalizedMsgContext;
+  turn: {
+    storePath: string;
+    record: unknown;
+    history?: {
+      isGroup?: boolean;
+      historyKey?: string;
+      historyMap?: Map<string, HistoryEntry[]>;
+      limit?: number;
+    };
+  };
   replyToMode: "off" | "first" | "all" | "batched";
+  forcedReplyThreadTs?: string;
+  slackMessageMetadata?: MessageMetadata;
+  requireMention: boolean;
   isDirectMessage: boolean;
   isRoomish: boolean;
   historyKey: string;

@@ -1,3 +1,5 @@
+import path from "node:path";
+import { optionalFiniteNumberSchema } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawConfig } from "../api.js";
 import { applyMemoryWikiMutation, normalizeMemoryWikiMutationInput } from "./apply.js";
@@ -7,9 +9,23 @@ import {
   type ResolvedMemoryWikiConfig,
 } from "./config.js";
 import { lintMemoryWikiVault } from "./lint.js";
-import { getMemoryWikiPage, searchMemoryWiki } from "./query.js";
+import { getMemoryWikiPage, searchMemoryWiki, WIKI_SEARCH_MODES } from "./query.js";
 import { syncMemoryWikiImportedSources } from "./source-sync.js";
 import { renderMemoryWikiStatus, resolveMemoryWikiStatus } from "./status.js";
+
+function formatWikiToolReportPath(config: ResolvedMemoryWikiConfig, reportPath: string): string {
+  const vaultRoot = path.resolve(config.vault.path);
+  const resolvedReportPath = path.resolve(reportPath);
+  const relativeReportPath = path.relative(vaultRoot, resolvedReportPath);
+  if (
+    !relativeReportPath ||
+    relativeReportPath.startsWith("..") ||
+    path.isAbsolute(relativeReportPath)
+  ) {
+    return reportPath;
+  }
+  return relativeReportPath.replace(/\\/g, "/");
+}
 
 const WikiStatusSchema = Type.Object({}, { additionalProperties: false });
 const WikiLintSchema = Type.Object({}, { additionalProperties: false });
@@ -17,20 +33,22 @@ const WikiSearchBackendSchema = Type.Union(
   WIKI_SEARCH_BACKENDS.map((value) => Type.Literal(value)),
 );
 const WikiSearchCorpusSchema = Type.Union(WIKI_SEARCH_CORPORA.map((value) => Type.Literal(value)));
+const WikiSearchModeSchema = Type.Union(WIKI_SEARCH_MODES.map((value) => Type.Literal(value)));
 const WikiSearchSchema = Type.Object(
   {
     query: Type.String({ minLength: 1 }),
-    maxResults: Type.Optional(Type.Number({ minimum: 1 })),
+    maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
     backend: Type.Optional(WikiSearchBackendSchema),
     corpus: Type.Optional(WikiSearchCorpusSchema),
+    mode: Type.Optional(WikiSearchModeSchema),
   },
   { additionalProperties: false },
 );
 const WikiGetSchema = Type.Object(
   {
     lookup: Type.String({ minLength: 1 }),
-    fromLine: Type.Optional(Type.Number({ minimum: 1 })),
-    lineCount: Type.Optional(Type.Number({ minimum: 1 })),
+    fromLine: Type.Optional(Type.Integer({ minimum: 1 })),
+    lineCount: Type.Optional(Type.Integer({ minimum: 1 })),
     backend: Type.Optional(WikiSearchBackendSchema),
     corpus: Type.Optional(WikiSearchCorpusSchema),
   },
@@ -38,11 +56,14 @@ const WikiGetSchema = Type.Object(
 );
 const WikiClaimEvidenceSchema = Type.Object(
   {
+    kind: Type.Optional(Type.String({ minLength: 1 })),
     sourceId: Type.Optional(Type.String({ minLength: 1 })),
     path: Type.Optional(Type.String({ minLength: 1 })),
     lines: Type.Optional(Type.String({ minLength: 1 })),
-    weight: Type.Optional(Type.Number({ minimum: 0 })),
+    weight: optionalFiniteNumberSchema({ minimum: 0 }),
     note: Type.Optional(Type.String({ minLength: 1 })),
+    confidence: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
+    privacyTier: Type.Optional(Type.String({ minLength: 1 })),
     updatedAt: Type.Optional(Type.String({ minLength: 1 })),
   },
   { additionalProperties: false },
@@ -52,7 +73,7 @@ const WikiClaimSchema = Type.Object(
     id: Type.Optional(Type.String({ minLength: 1 })),
     text: Type.String({ minLength: 1 }),
     status: Type.Optional(Type.String({ minLength: 1 })),
-    confidence: Type.Optional(Type.Number({ minimum: 0, maximum: 1 })),
+    confidence: optionalFiniteNumberSchema({ minimum: 0, maximum: 1 }),
     evidence: Type.Optional(Type.Array(WikiClaimEvidenceSchema)),
     updatedAt: Type.Optional(Type.String({ minLength: 1 })),
   },
@@ -84,6 +105,7 @@ async function syncImportedSourcesIfNeeded(
 type WikiToolMemoryContext = {
   agentId?: string;
   agentSessionKey?: string;
+  sandboxed?: boolean;
 };
 
 export function createWikiStatusTool(
@@ -126,6 +148,7 @@ export function createWikiSearchTool(
         maxResults?: number;
         backend?: ResolvedMemoryWikiConfig["search"]["backend"];
         corpus?: ResolvedMemoryWikiConfig["search"]["corpus"];
+        mode?: (typeof WIKI_SEARCH_MODES)[number];
       };
       await syncImportedSourcesIfNeeded(config, appConfig);
       const results = await searchMemoryWiki({
@@ -133,10 +156,12 @@ export function createWikiSearchTool(
         appConfig,
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
+        sandboxed: memoryContext.sandboxed,
         query: params.query,
         maxResults: params.maxResults,
         ...(params.backend ? { searchBackend: params.backend } : {}),
         ...(params.corpus ? { searchCorpus: params.corpus } : {}),
+        ...(params.mode ? { mode: params.mode } : {}),
       });
       const text =
         results.length === 0
@@ -144,7 +169,7 @@ export function createWikiSearchTool(
           : results
               .map(
                 (result, index) =>
-                  `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}\nSnippet: ${result.snippet}`,
+                  `${index + 1}. ${result.title} (${result.corpus}/${result.kind})\nPath: ${result.path}${typeof result.startLine === "number" && typeof result.endLine === "number" ? `\nLines: ${result.startLine}-${result.endLine}` : ""}${result.provenanceLabel ? `\nProvenance: ${result.provenanceLabel}` : ""}${result.matchedClaimId ? `\nClaim: ${result.matchedClaimId}` : ""}${result.evidenceKinds && result.evidenceKinds.length > 0 ? `\nEvidence: ${result.evidenceKinds.join(", ")}` : ""}\nSnippet: ${result.snippet}`,
               )
               .join("\n\n");
       return {
@@ -173,6 +198,7 @@ export function createWikiLintTool(
       const provenance = result.issuesByCategory.provenance.length;
       const errors = result.issues.filter((issue) => issue.severity === "error").length;
       const warnings = result.issues.filter((issue) => issue.severity === "warning").length;
+      const reportPath = formatWikiToolReportPath(config, result.reportPath);
       const summary =
         result.issueCount === 0
           ? "No wiki lint issues."
@@ -181,11 +207,16 @@ export function createWikiLintTool(
               `Contradictions: ${contradictions}`,
               `Open questions: ${openQuestions}`,
               `Provenance gaps: ${provenance}`,
-              `Report: ${result.reportPath}`,
+              `Report: ${reportPath}`,
             ].join("\n");
       return {
         content: [{ type: "text", text: summary }],
-        details: result,
+        details: {
+          issueCount: result.issueCount,
+          issues: result.issues,
+          issuesByCategory: result.issuesByCategory,
+          reportPath,
+        },
       };
     },
   };
@@ -248,6 +279,7 @@ export function createWikiGetTool(
         appConfig,
         agentId: memoryContext.agentId,
         agentSessionKey: memoryContext.agentSessionKey,
+        sandboxed: memoryContext.sandboxed,
         lookup: params.lookup,
         fromLine: params.fromLine,
         lineCount: params.lineCount,

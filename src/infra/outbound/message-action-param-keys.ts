@@ -1,8 +1,9 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([
   "accountId",
   "asDocument",
+  "attachments",
   "base64",
   "bestEffort",
   "caption",
@@ -20,6 +21,8 @@ const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([
   "interactive",
   "media",
   "mediaUrl",
+  "mediaUrls",
+  "media_urls",
   "message",
   "mimeType",
   "path",
@@ -37,9 +40,13 @@ const STANDARD_MESSAGE_ACTION_PARAM_KEYS = new Set([
   "targets",
   "text",
   "threadId",
+  "topLevel",
   "to",
 ]);
 
+/**
+ * Detects non-standard message action params that may need plugin-owned handling.
+ */
 export function hasPotentialPluginActionParam(params: Record<string, unknown>): boolean {
   return Object.entries(params).some(([key, value]) => {
     if (STANDARD_MESSAGE_ACTION_PARAM_KEYS.has(key)) {

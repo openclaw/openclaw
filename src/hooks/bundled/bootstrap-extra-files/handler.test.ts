@@ -68,8 +68,8 @@ describe("bootstrap-extra-files hook", () => {
 
     const injected = context.bootstrapFiles.filter((f) => f.name === "AGENTS.md");
     expect(injected).toHaveLength(2);
-    expect(injected.some((f) => f.path.endsWith(path.join("packages", "core", "AGENTS.md")))).toBe(
-      true,
+    expect(injected.map((f) => path.relative(tempDir, f.path))).toContain(
+      path.join("packages", "core", "AGENTS.md"),
     );
   });
 
@@ -92,10 +92,6 @@ describe("bootstrap-extra-files hook", () => {
 
     const event = createHookEvent("agent", "bootstrap", "agent:main:subagent:abc", context);
     await handler(event);
-    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual([
-      "AGENTS.md",
-      "SOUL.md",
-      "TOOLS.md",
-    ]);
+    expect(context.bootstrapFiles.map((f) => f.name).toSorted()).toEqual(["AGENTS.md", "TOOLS.md"]);
   });
 });
