@@ -46,8 +46,8 @@ describe("package Telegram live Docker E2E", () => {
     expect(installRun).toContain(
       '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
-    expect(installRun).toContain('elif command -v gtimeout >/dev/null 2>&1; then');
-    expect(installRun).toContain("timeout_bin=\"gtimeout\"");
+    expect(installRun).toContain("elif command -v gtimeout >/dev/null 2>&1; then");
+    expect(installRun).toContain('timeout_bin="gtimeout"');
     expect(installRun).toContain(
       'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
     );
@@ -56,7 +56,9 @@ describe("package Telegram live Docker E2E", () => {
       '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
     );
     expect(installRun).toContain('npm install -g "$install_source" --no-fund --no-audit');
-    expect(installRun).not.toContain("running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT");
+    expect(installRun).not.toContain(
+      "running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT",
+    );
     expect(installRun).toContain('"${package_mount_args[@]}"');
     expect(installRun).not.toContain('"${docker_env[@]}"');
     expect(installRun).toContain("run_logged docker_e2e_docker_run_cmd run --rm");
@@ -100,6 +102,21 @@ describe("package Telegram live Docker E2E", () => {
     expect(script).toContain('validate_openclaw_package_spec "$PACKAGE_SPEC"');
     expect(script.indexOf('if [ -n "$resolved_package_tgz" ]; then')).toBeLessThan(
       script.indexOf('validate_openclaw_package_spec "$PACKAGE_SPEC"'),
+    );
+  });
+
+  it("keeps live Docker artifacts isolated by default", () => {
+    const script = readFileSync(DOCKER_SCRIPT_PATH, "utf8");
+
+    expect(script).toContain(
+      'RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"',
+    );
+    expect(script).toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"',
+    );
+    expect(script).toContain('-e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"');
+    expect(script).not.toContain(
+      'OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"',
     );
   });
 

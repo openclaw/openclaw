@@ -47,6 +47,29 @@ Docs: https://docs.openclaw.ai
 
 - Agents/providers: avoid loading owner plugin runtimes for explicitly configured custom provider models during OpenAI-compatible transport setup.
 - Release/CI/E2E: fail early when Crabbox sparse-sync full checkouts do not have enough local disk, with guidance for moving the sync root.
+- Release/CI/E2E: reset shared Crabbox pnpm hydrate state before installs so stale `/var/tmp` stores cannot leave `pnpm install` spinning after completion.
+- Release/CI/E2E: print heartbeat progress during centralized Docker builds while keeping successful build logs quiet.
+- Release/CI/E2E: avoid heartbeat-tail delays in Docker E2E log wrappers while reporting captured log bytes during long runs.
+- Release/CI/E2E: keep release user-journey logs and temporary plugin fixtures under per-run scratch roots so parallel runs cannot collide or leak artifacts.
+- Release/CI/E2E: bound release candidate GitHub API calls so stalled network requests cannot wedge workflow and artifact polling.
+- Release/CI/E2E: bound Discord smoke API calls in cross-OS release checks so host-side round trips cannot hang on stalled fetches.
+- Release/CI/E2E: bound RPC RTT gateway readiness probes so a half-open local HTTP response cannot stall cleanup past the readiness deadline.
+- Scripts/UI: stop descendant processes from wrapped non-interactive commands when `run-with-env` receives shutdown signals.
+- Release/CI/E2E: write multi-node update Docker artifacts to unique per-run directories by default so parallel runs cannot overwrite evidence.
+- Release/CI/E2E: write package Telegram Docker artifacts to unique per-run directories by default so parallel live/RTT runs cannot overwrite evidence.
+- Release/CI/E2E: keep plugin lifecycle matrix resource artifacts under a unique per-run scratch root so parallel runs cannot overwrite tarballs or inspect output.
+- Release/CI/E2E: bound mock OpenAI readiness probes in web-search and Telegram RTT Docker smokes so stalled HTTP accepts cannot hang cleanup or fall through.
+- Tooling: cancel oversized pnpm audit advisory responses before failing so registry error paths do not leave response bodies open.
+- Release/CI/E2E: stop tracked gateway and mock service process groups so descendant helpers do not survive E2E cleanup.
+- Release/CI/E2E: fail secret-provider proof runs when temporary state cleanup still fails after retries instead of hiding the cleanup error.
+- Release/CI/E2E: fail package-candidate ref proofs when temporary source worktree cleanup fails instead of leaving stale worktrees behind.
+- Release/CI/E2E: remove package tarball extract directories when tar extraction fails before validation can continue.
+- Release/CI/E2E: retry generated temp-state cleanup after removal failures and route plugin lifecycle measurement edits to their owner tests.
+- Release/CI/E2E: close parent gateway log handles after spawning RPC RTT probes so repeated measurements do not leak file descriptors.
+- Release/CI/E2E: fail RPC RTT probes when temporary state cleanup fails instead of hiding leftover scratch directories.
+- Release/CI/E2E: fail Kitchen Sink RPC walks when temporary state cleanup still fails after retries instead of silently preserving scratch roots.
+- Control UI: lazy-load the usage view so the initial app bundle stays below the chunk warning threshold.
+- Build: keep Baileys optional image backends external so source builds do not warn about missing `jimp` or `sharp`.
 - Build: render independent CLI startup metadata help snapshots concurrently to cut cold build-all metadata time.
 - Plugins: stop timed-out package-boundary prep steps by process group so descendant TypeScript/helper processes do not survive local check cleanup.
 - Control UI: serve static assets asynchronously after safe-open checks so large UI files do not block Gateway request handling.

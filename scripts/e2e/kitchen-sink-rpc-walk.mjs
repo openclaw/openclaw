@@ -155,6 +155,11 @@ export async function cleanupKitchenSinkEnv(root, options = {}) {
       const message = lastError instanceof Error ? lastError.message : String(lastError);
       console.error(`Kitchen Sink RPC temp root cleanup failed; preserved ${root}: ${message}`);
     }
+    if (options.throwOnFailure) {
+      throw new Error(`failed to remove Kitchen Sink RPC temp root: ${root}`, {
+        cause: lastError,
+      });
+    }
     return false;
   }
   return true;
@@ -1686,7 +1691,7 @@ export async function main() {
     }
     await stopGateway(child);
     if (!failed && !keepTmp) {
-      await cleanupKitchenSinkEnv(root);
+      await cleanupKitchenSinkEnv(root, { throwOnFailure: true });
     } else if (failed || keepTmp) {
       console.error(`Kitchen Sink RPC temp root preserved: ${root}`);
     }

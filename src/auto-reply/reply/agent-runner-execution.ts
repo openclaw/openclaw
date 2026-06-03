@@ -652,17 +652,12 @@ function resolveExternalRunFailureTextForConversation(params: {
   text: string;
   sessionCtx: TemplateContext;
   isGenericRunnerFailure: boolean;
-  suppressInNonDirect?: boolean;
   cfg?: OpenClawConfig;
 }): string {
   if (!isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
-  if (
-    !params.suppressInNonDirect &&
-    !params.isGenericRunnerFailure &&
-    !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)
-  ) {
+  if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
     return params.text;
   }
   // Match normal reply routing: default group/channel failures stay silent,
@@ -850,7 +845,11 @@ function buildExternalRunFailureReply(
 }
 
 function markAgentRunFailureReplyPayload<T extends ReplyPayload>(payload: T): T {
-  return markReplyPayloadForSourceSuppressionDelivery(payload);
+  const marked = markReplyPayloadForSourceSuppressionDelivery(payload);
+  if (!isSilentReplyText(marked.text, SILENT_REPLY_TOKEN)) {
+    marked.isError = true;
+  }
+  return marked;
 }
 
 export function buildKnownAgentRunFailureReplyPayload(params: {
@@ -904,7 +903,6 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: buildRateLimitCooldownMessage(params.err),
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
-        suppressInNonDirect: true,
         cfg: params.cfg,
       }),
     });
@@ -916,7 +914,6 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
         text: rateLimitOrOverloadedCopy,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: false,
-        suppressInNonDirect: true,
         cfg: params.cfg,
       }),
     });
@@ -2231,6 +2228,7 @@ export async function runAgentTurnWithFallback(params: {
                 hasRepliedRef: params.opts?.hasRepliedRef,
                 provider,
                 runId,
+                promptCacheKey: params.opts?.promptCacheKey,
                 allowTransientCooldownProbe: runOptions?.allowTransientCooldownProbe,
                 model,
               });
@@ -2924,7 +2922,6 @@ export async function runAgentTurnWithFallback(params: {
         text: fallbackText,
         sessionCtx: params.sessionCtx,
         isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
-        suppressInNonDirect: Boolean(isRateLimit || rateLimitOrOverloadedCopy),
         cfg: params.followupRun.run.config,
       });
 
@@ -2993,7 +2990,6 @@ export async function runAgentTurnWithFallback(params: {
               text: formattedErrorCandidate,
               sessionCtx: params.sessionCtx,
               isGenericRunnerFailure: false,
-              suppressInNonDirect: true,
               cfg: params.followupRun.run.config,
             }),
             isError: true,

@@ -90,6 +90,28 @@ describe("kitchen-sink RPC isolated state", () => {
 
     expect(existsSync(root)).toBe(false);
   });
+
+  it("can fail the walk when generated temp cleanup cannot remove the root", async () => {
+    const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => {
+      throw new Error("device busy");
+    });
+
+    try {
+      await expect(
+        cleanupKitchenSinkEnv("/tmp/openclaw-kitchen-sink-rpc-stuck", {
+          attempts: 3,
+          delayMs: 1,
+          throwOnFailure: true,
+          warn: false,
+        }),
+      ).rejects.toThrow(
+        "failed to remove Kitchen Sink RPC temp root: /tmp/openclaw-kitchen-sink-rpc-stuck",
+      );
+      expect(rmSync).toHaveBeenCalledTimes(3);
+    } finally {
+      rmSync.mockRestore();
+    }
+  });
 });
 
 describe("kitchen-sink RPC gateway teardown", () => {
@@ -908,9 +930,9 @@ describe("kitchen-sink RPC process sampling", () => {
 
   it("allows missing command samples but fails command RSS spikes", () => {
     expect(() => assertCommandResourceCeiling(null)).not.toThrow();
-    expect(() =>
-      assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 }),
-    ).toThrow("command aggregate RSS exceeded 8192 MiB: 8193 MiB");
+    expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 })).toThrow(
+      "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
+    );
   });
 });
 

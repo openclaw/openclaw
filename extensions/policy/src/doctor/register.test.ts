@@ -661,7 +661,6 @@ describe("registerPolicyDoctorChecks", () => {
     ["tools settings array", { tools: { settings: [] } }, "oc://policy.jsonc/tools/settings"],
     ["tools entries object", { tools: { entries: {} } }, "oc://policy.jsonc/tools/entries"],
     ["tools profiles array", { tools: { profiles: [] } }, "oc://policy.jsonc/tools/profiles"],
-
     [
       "tools profiles allow string",
       { tools: { profiles: { allow: "coding" } } },
@@ -992,6 +991,182 @@ describe("registerPolicyDoctorChecks", () => {
         target,
       }),
     ]);
+  });
+
+  it("rejects unsupported policy keys across policy namespaces", async () => {
+    const cases: readonly {
+      readonly label: string;
+      readonly policy: unknown;
+      readonly target: string;
+    }[] = [
+      { label: "top-level", policy: { channel: {} }, target: "oc://policy.jsonc/channel" },
+      {
+        label: "tools top-level",
+        policy: { tools: { execPolicy: { allowHosts: ["sandbox"] } } },
+        target: "oc://policy.jsonc/tools/execPolicy",
+      },
+      {
+        label: "tools settings",
+        policy: { tools: { settings: {} } },
+        target: "oc://policy.jsonc/tools/settings",
+      },
+      {
+        label: "tools entries",
+        policy: { tools: { entries: [] } },
+        target: "oc://policy.jsonc/tools/entries",
+      },
+      {
+        label: "tools profile",
+        policy: { tools: { profiles: { deny: ["full"] } } },
+        target: "oc://policy.jsonc/tools/profiles/deny",
+      },
+      {
+        label: "tools exec",
+        policy: { tools: { exec: { allowShells: ["bash"] } } },
+        target: "oc://policy.jsonc/tools/exec/allowShells",
+      },
+      {
+        label: "tools fs",
+        policy: { tools: { fs: { allowOutsideWorkspace: true } } },
+        target: "oc://policy.jsonc/tools/fs/allowOutsideWorkspace",
+      },
+      {
+        label: "tools alsoAllow",
+        policy: { tools: { alsoAllow: { denied: ["exec"] } } },
+        target: "oc://policy.jsonc/tools/alsoAllow/denied",
+      },
+      {
+        label: "channels",
+        policy: { channels: { allowRules: [] } },
+        target: "oc://policy.jsonc/channels/allowRules",
+      },
+      {
+        label: "channel deny rule",
+        policy: { channels: { denyRules: [{ when: { provider: "telegram" }, action: "deny" }] } },
+        target: "oc://policy.jsonc/channels/denyRules/#0/action",
+      },
+      {
+        label: "channel deny selector",
+        policy: {
+          channels: { denyRules: [{ when: { provider: "telegram", channel: "stable" } }] },
+        },
+        target: "oc://policy.jsonc/channels/denyRules/#0/when/channel",
+      },
+      {
+        label: "ingress top-level",
+        policy: { ingress: { directMessages: {} } },
+        target: "oc://policy.jsonc/ingress/directMessages",
+      },
+      {
+        label: "ingress session",
+        policy: { ingress: { session: { requiredScope: "per-channel-peer" } } },
+        target: "oc://policy.jsonc/ingress/session/requiredScope",
+      },
+      {
+        label: "ingress channels",
+        policy: { ingress: { channels: { allowOpenGroups: false } } },
+        target: "oc://policy.jsonc/ingress/channels/allowOpenGroups",
+      },
+      { label: "mcp", policy: { mcp: { clients: {} } }, target: "oc://policy.jsonc/mcp/clients" },
+      {
+        label: "mcp servers",
+        policy: { mcp: { servers: { require: ["docs"] } } },
+        target: "oc://policy.jsonc/mcp/servers/require",
+      },
+      {
+        label: "models",
+        policy: { models: { modelRefs: {} } },
+        target: "oc://policy.jsonc/models/modelRefs",
+      },
+      {
+        label: "models providers",
+        policy: { models: { providers: { require: ["openai"] } } },
+        target: "oc://policy.jsonc/models/providers/require",
+      },
+      {
+        label: "network",
+        policy: { network: { publicNetwork: {} } },
+        target: "oc://policy.jsonc/network/publicNetwork",
+      },
+      {
+        label: "network privateNetwork",
+        policy: { network: { privateNetwork: { deny: true } } },
+        target: "oc://policy.jsonc/network/privateNetwork/deny",
+      },
+      {
+        label: "gateway top-level",
+        policy: { gateway: { bind: { allowNonLoopback: false } } },
+        target: "oc://policy.jsonc/gateway/bind",
+      },
+      {
+        label: "gateway exposure",
+        policy: { gateway: { exposure: { allowPublicBind: false } } },
+        target: "oc://policy.jsonc/gateway/exposure/allowPublicBind",
+      },
+      {
+        label: "gateway auth",
+        policy: { gateway: { auth: { allowDisabled: false } } },
+        target: "oc://policy.jsonc/gateway/auth/allowDisabled",
+      },
+      {
+        label: "agents",
+        policy: { agents: { tools: {} } },
+        target: "oc://policy.jsonc/agents/tools",
+      },
+      {
+        label: "agents workspace",
+        policy: { agents: { workspace: { requireReadOnly: true } } },
+        target: "oc://policy.jsonc/agents/workspace/requireReadOnly",
+      },
+      {
+        label: "dataHandling",
+        policy: { dataHandling: { logs: { requireRedaction: true } } },
+        target: "oc://policy.jsonc/dataHandling/logs",
+      },
+      {
+        label: "dataHandling nested",
+        policy: { dataHandling: { telemetry: { allowCaptureContent: false } } },
+        target: "oc://policy.jsonc/dataHandling/telemetry/allowCaptureContent",
+      },
+      {
+        label: "secrets",
+        policy: { secrets: { requireVault: true } },
+        target: "oc://policy.jsonc/secrets/requireVault",
+      },
+      {
+        label: "auth",
+        policy: { auth: { providers: {} } },
+        target: "oc://policy.jsonc/auth/providers",
+      },
+      {
+        label: "auth profiles",
+        policy: { auth: { profiles: { requireProvider: true } } },
+        target: "oc://policy.jsonc/auth/profiles/requireProvider",
+      },
+    ];
+
+    for (const testCase of cases) {
+      const configPath = join(workspaceDir, `${testCase.label.replaceAll(" ", "-")}.jsonc`);
+      await fs.writeFile(configPath, "{}", "utf-8");
+      await fs.writeFile(
+        join(workspaceDir, "policy.jsonc"),
+        JSON.stringify(testCase.policy),
+        "utf-8",
+      );
+      clearHealthChecksForTest();
+      resetPolicyDoctorChecksForTest();
+
+      const result = await runPolicyChecks(ctx(configPath, cfgWithPolicy()));
+
+      expect(result.findings, testCase.label).toEqual([
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          severity: "error",
+          path: "policy.jsonc",
+          target: testCase.target,
+        }),
+      ]);
+    }
   });
 
   it("reports a policy hash mismatch when expectedHash is configured", async () => {
