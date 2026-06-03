@@ -281,9 +281,22 @@ function formatValidationPath(error: TLocalizedValidationError): string {
   return path || "root";
 }
 
+function findToolByName(tools: readonly Tool[], name: string): Tool | undefined {
+  for (const tool of tools) {
+    try {
+      if (tool.name === name) {
+        return tool;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
 /** Finds the target tool and validates/coerces a model-emitted tool call. */
 export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
-  const tool = tools.find((t) => t.name === toolCall.name);
+  const tool = findToolByName(tools, toolCall.name);
   if (!tool) {
     throw new Error(`Tool "${toolCall.name}" not found`);
   }

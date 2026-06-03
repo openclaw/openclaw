@@ -17,6 +17,7 @@ import type {
   AgentTool,
   AgentToolCall,
   AgentToolResult,
+  ToolExecutionMode,
   StreamFn,
 } from "./types.js";
 import { validateToolArguments } from "./validation.js";
@@ -453,7 +454,7 @@ async function executeToolCalls(
 ): Promise<ExecutedToolCallBatch> {
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
   const hasSequentialToolCall = toolCalls.some(
-    (tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
+    (tc) => readToolExecutionMode(findToolByName(currentContext.tools, tc.name)) === "sequential",
   );
   if (config.toolExecution === "sequential" || hasSequentialToolCall) {
     return executeToolCallsSequential(
@@ -662,6 +663,33 @@ function prepareToolCallArguments(tool: AgentTool, toolCall: AgentToolCall): Age
   };
 }
 
+function findToolByName(
+  tools: readonly AgentTool[] | undefined,
+  name: string,
+): AgentTool | undefined {
+  for (const tool of tools ?? []) {
+    try {
+      if (tool.name === name) {
+        return tool;
+      }
+    } catch {
+      continue;
+    }
+  }
+  return undefined;
+}
+
+function readToolExecutionMode(tool: AgentTool | undefined): ToolExecutionMode | undefined {
+  if (!tool) {
+    return undefined;
+  }
+  try {
+    return tool.executionMode;
+  } catch {
+    return "sequential";
+  }
+}
+
 async function prepareToolCall(
   currentContext: AgentContext,
   assistantMessage: AssistantMessage,
@@ -669,7 +697,7 @@ async function prepareToolCall(
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
-  const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+  const tool = findToolByName(currentContext.tools, toolCall.name);
   if (!tool) {
     return {
       kind: "immediate",
