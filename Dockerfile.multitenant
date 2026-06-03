@@ -302,9 +302,14 @@ COPY --from=skills-assembly --chown=runtime:runtime /work/home/.codex /opt/rocki
 
 # Drop in the multitenant overlay files (entrypoint + settings template).
 COPY --chown=root:root overlay/multitenant/entrypoint.sh /usr/local/bin/entrypoint.sh
+# Per-tenant private user-skill sync (Phase A, S2): fetches the tenant's
+# web-authored skills from platform-context and materializes them under
+# ~/.claude/skills. Invoked by entrypoint.sh at boot AND by the SessionStart
+# hook in settings.json.j2 (so a just-authored skill loads without a restart).
+COPY --chown=root:root overlay/multitenant/sync-user-skills.sh /usr/local/bin/sync-user-skills.sh
 COPY --chown=runtime:runtime overlay/multitenant/settings.json.j2 /opt/rockielab/home-bundle/.claude/settings.json.j2
 COPY --chown=runtime:runtime overlay/multitenant/settings.json.j2 /home/runtime/.claude/settings.json.j2
-RUN chmod 755 /usr/local/bin/entrypoint.sh
+RUN chmod 755 /usr/local/bin/entrypoint.sh /usr/local/bin/sync-user-skills.sh
 
 # Drop in the git credential helper for GitHub-repo resource access
 # (rockie-workspace#85 M0). The helper fetches a short-lived

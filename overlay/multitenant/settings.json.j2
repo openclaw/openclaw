@@ -19,5 +19,17 @@
   },
   "commands": {
     "directory": "/home/runtime/.claude/commands"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/local/bin/sync-user-skills.sh"
+          }
+        ]
+      }
+    ]
   }
 }

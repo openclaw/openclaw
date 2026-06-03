@@ -231,6 +231,18 @@ fi
 
 # --- platform-owned home overlay + settings render (must precede broker) ----
 hydrate_platform_home_bundle
+
+# --- user-authored private skills (Phase A, S2) -----------------------------
+# Materialize the tenant's web-authored skills under ~/.claude/skills so the
+# subscription claude/codex binaries and the byok gateway load them. Best-effort
+# and idempotent; the per-session SessionStart hook (settings.json.j2) re-runs
+# this so skills authored after boot appear without a Fly restart.
+if [ -x /usr/local/bin/sync-user-skills.sh ]; then
+  /usr/local/bin/sync-user-skills.sh || log "WARN: initial user-skill sync failed (non-fatal)"
+else
+  log "WARN: /usr/local/bin/sync-user-skills.sh not present; user skills will not load."
+fi
+
 render_settings_json
 
 # --- broker (always-on) -----------------------------------------------------
