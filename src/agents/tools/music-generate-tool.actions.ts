@@ -6,6 +6,7 @@ import {
   buildMusicGenerationTaskStatusDetails,
   buildMusicGenerationTaskStatusText,
   findActiveMusicGenerationTaskForSession,
+  findDuplicateGuardMusicGenerationTaskForSession,
 } from "../music-generation-task-status.js";
 import {
   createMediaGenerateProviderListActionResult,
@@ -57,7 +58,7 @@ function summarizeMusicGenerationCapabilities(
 
 export function createMusicGenerateListActionResult(
   config?: OpenClawConfig,
-  options?: { agentDir?: string; authStore?: AuthProfileStore },
+  options?: { workspaceDir?: string; agentDir?: string; authStore?: AuthProfileStore },
 ): MusicGenerateActionResult {
   const providers = listRuntimeMusicGenerationProviders({ config });
   return createMediaGenerateProviderListActionResult({
@@ -65,6 +66,7 @@ export function createMusicGenerateListActionResult(
     providers,
     emptyText: "No music-generation providers are registered.",
     cfg: config,
+    workspaceDir: options?.workspaceDir,
     agentDir: options?.agentDir,
     authStore: options?.authStore,
     listModes: listSupportedMusicGenerationModes,
@@ -87,6 +89,26 @@ export function createMusicGenerateStatusActionResult(
 
 export function createMusicGenerateDuplicateGuardResult(
   sessionKey?: string,
+  params?: { prompt?: string; requestKey?: string },
 ): MusicGenerateActionResult | undefined {
-  return musicGenerateTaskStatusActions.createDuplicateGuardResult(sessionKey);
+  const blockingTask = findDuplicateGuardMusicGenerationTaskForSession(sessionKey, {
+    prompt: params?.prompt,
+    requestKey: params?.requestKey,
+  });
+  if (!blockingTask) {
+    return undefined;
+  }
+  return {
+    content: [
+      {
+        type: "text",
+        text: buildMusicGenerationTaskStatusText(blockingTask, { duplicateGuard: true }),
+      },
+    ],
+    details: {
+      action: "status",
+      duplicateGuard: true,
+      ...buildMusicGenerationTaskStatusDetails(blockingTask),
+    },
+  };
 }

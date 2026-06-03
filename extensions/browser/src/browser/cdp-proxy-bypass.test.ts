@@ -1,15 +1,30 @@
 import http from "node:http";
 import https from "node:https";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
+  registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
+    () => undefined,
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
+}));
+
 import {
+  assertManagedProxyAllowsCdpUrl,
   getDirectAgentForCdp,
   hasProxyEnv,
+  withManagedProxyForCdpUrl,
   withNoProxyForCdpUrl,
   withNoProxyForLocalhost,
 } from "./cdp-proxy-bypass.js";
 
 beforeEach(() => {
   vi.useRealTimers();
+  registerManagedProxyBrowserCdpBypassMock.mockReset();
+  registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
 });
 
 function createDeferred<T = void>() {
@@ -217,12 +232,13 @@ describe("cdp-proxy-bypass", () => {
 describe("withNoProxyForLocalhost concurrency", () => {
   it("does not leak NO_PROXY when called concurrently", async () => {
     await withIsolatedNoProxyEnv(async () => {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost: withNoProxyForLocalhostScoped } =
+        await import("./cdp-proxy-bypass.js");
 
       const releaseA = createDeferred();
       const enteredA = createDeferred();
 
-      const callA = withNoProxyForLocalhost(async () => {
+      const callA = withNoProxyForLocalhostScoped(async () => {
         expect(process.env.NO_PROXY).toContain("localhost");
         expect(process.env.NO_PROXY).toContain("[::1]");
         enteredA.resolve();
@@ -232,7 +248,7 @@ describe("withNoProxyForLocalhost concurrency", () => {
 
       await enteredA.promise;
 
-      const callB = withNoProxyForLocalhost(async () => {
+      const callB = withNoProxyForLocalhostScoped(async () => {
         return "b";
       });
 
@@ -249,21 +265,22 @@ describe("withNoProxyForLocalhost concurrency", () => {
 describe("withNoProxyForLocalhost reverse exit order", () => {
   it("restores NO_PROXY when first caller exits before second", async () => {
     await withIsolatedNoProxyEnv(async () => {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost: withNoProxyForLocalhostItem } =
+        await import("./cdp-proxy-bypass.js");
 
       const enteredA = createDeferred();
       const enteredB = createDeferred();
       const releaseA = createDeferred();
       const releaseB = createDeferred();
 
-      const callA = withNoProxyForLocalhost(async () => {
+      const callA = withNoProxyForLocalhostItem(async () => {
         enteredA.resolve();
         await releaseA.promise;
         return "a";
       });
       await enteredA.promise;
 
-      const callB = withNoProxyForLocalhost(async () => {
+      const callB = withNoProxyForLocalhostItem(async () => {
         enteredB.resolve();
         await releaseB.promise;
         return "b";
@@ -291,9 +308,10 @@ describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
     process.env.HTTP_PROXY = "http://proxy:8080";
 
     try {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost: withNoProxyForLocalhostCandidate } =
+        await import("./cdp-proxy-bypass.js");
 
-      await withNoProxyForLocalhost(async () => {
+      await withNoProxyForLocalhostCandidate(async () => {
         // Should not modify since loopback is already covered
         expect(process.env.NO_PROXY).toBe(userNoProxy);
         return "ok";
@@ -317,9 +335,10 @@ describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
     process.env.HTTP_PROXY = "http://proxy:8080";
 
     try {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost: withNoProxyForLocalhostEntry } =
+        await import("./cdp-proxy-bypass.js");
 
-      await withNoProxyForLocalhost(async () => {
+      await withNoProxyForLocalhostEntry(async () => {
         expect(process.env.NO_PROXY).toBe(`${coveredNoProxy},localhost,127.0.0.1,[::1]`);
         expect(process.env.no_proxy).toBe(`${staleLowerNoProxy},localhost,127.0.0.1,[::1]`);
       });
@@ -340,9 +359,10 @@ describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
     process.env.HTTP_PROXY = "http://proxy:8080";
 
     try {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost: withNoProxyForLocalhostResult } =
+        await import("./cdp-proxy-bypass.js");
 
-      await withNoProxyForLocalhost(async () => {
+      await withNoProxyForLocalhostResult(async () => {
         expect(process.env.NO_PROXY).toBe(`${lowerNoProxy},localhost,127.0.0.1,[::1]`);
         expect(process.env.no_proxy).toBe(`${lowerNoProxy},localhost,127.0.0.1,[::1]`);
       });
@@ -363,9 +383,10 @@ describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
     process.env.HTTP_PROXY = "http://proxy:8080";
 
     try {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost: withNoProxyForLocalhostValue } =
+        await import("./cdp-proxy-bypass.js");
 
-      await withNoProxyForLocalhost(async () => {
+      await withNoProxyForLocalhostValue(async () => {
         expect(process.env.NO_PROXY).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
         expect(process.env.no_proxy).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
         delete process.env.no_proxy;
@@ -387,9 +408,10 @@ describe("withNoProxyForLocalhost preserves user-configured NO_PROXY", () => {
     process.env.HTTP_PROXY = "http://proxy:8080";
 
     try {
-      const { withNoProxyForLocalhost } = await import("./cdp-proxy-bypass.js");
+      const { withNoProxyForLocalhost: withNoProxyForLocalhostLocal } =
+        await import("./cdp-proxy-bypass.js");
 
-      await withNoProxyForLocalhost(async () => {
+      await withNoProxyForLocalhostLocal(async () => {
         expect(process.env.NO_PROXY).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
         expect(process.env.no_proxy).toBe(`${userNoProxy},localhost,127.0.0.1,[::1]`);
       });
@@ -456,5 +478,62 @@ describe("withNoProxyForCdpUrl", () => {
       delete process.env.NO_PROXY;
       delete process.env.no_proxy;
     }
+  });
+});
+
+describe("withManagedProxyForCdpUrl", () => {
+  it("registers the exact CDP URL and releases after the operation", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    const result = withManagedProxyForCdpUrl("http://127.0.0.1:9222/json/version", () => "ok");
+
+    expect(result).toBe("ok");
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+      "http://127.0.0.1:9222/json/version",
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("releases the exact CDP URL when the operation throws", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    expect(() =>
+      withManagedProxyForCdpUrl("ws://127.0.0.1:9222/devtools/browser/abc", () => {
+        throw new Error("boom");
+      }),
+    ).toThrow("boom");
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+      "ws://127.0.0.1:9222/devtools/browser/abc",
+    );
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the exact CDP URL registered until an async operation settles", async () => {
+    const release = vi.fn();
+    const deferred = createDeferred<string>();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    const result = withManagedProxyForCdpUrl(
+      "http://127.0.0.1:9222/json/version",
+      () => deferred.promise,
+    );
+
+    expect(release).not.toHaveBeenCalled();
+    deferred.resolve("ok");
+    await expect(result).resolves.toBe("ok");
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("uses the same scoped registration for launch policy preflight", () => {
+    const release = vi.fn();
+    registerManagedProxyBrowserCdpBypassMock.mockReturnValueOnce(release);
+
+    assertManagedProxyAllowsCdpUrl("http://127.0.0.1:9222");
+
+    expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith("http://127.0.0.1:9222");
+    expect(release).toHaveBeenCalledOnce();
   });
 });

@@ -11,6 +11,57 @@ import {
 } from "../../../test/mocks/baileys.js";
 
 type MockMessageInput = Parameters<typeof mockNormalizeMessageContent>[0];
+type InMemoryKeyedStoreEntry<T> = {
+  key: string;
+  value: T;
+  createdAt: number;
+  expiresAt?: number;
+};
+
+function createInMemoryKeyedStore<T>() {
+  const entries = new Map<string, InMemoryKeyedStoreEntry<T>>();
+  return {
+    async register(key: string, value: T, opts?: { ttlMs?: number }) {
+      const createdAt = Date.now();
+      entries.set(key, {
+        key,
+        value,
+        createdAt,
+        ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+      });
+    },
+    async registerIfAbsent(key: string, value: T, opts?: { ttlMs?: number }) {
+      if (entries.has(key)) {
+        return false;
+      }
+      const createdAt = Date.now();
+      entries.set(key, {
+        key,
+        value,
+        createdAt,
+        ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+      });
+      return true;
+    },
+    async lookup(key: string) {
+      return entries.get(key)?.value;
+    },
+    async consume(key: string) {
+      const value = entries.get(key)?.value;
+      entries.delete(key);
+      return value;
+    },
+    async delete(key: string) {
+      return entries.delete(key);
+    },
+    async entries() {
+      return Array.from(entries.values());
+    },
+    async clear() {
+      entries.clear();
+    },
+  };
+}
 
 const readAllowFromStoreMock = vi.fn().mockResolvedValue([]);
 const upsertPairingRequestMock = vi.fn().mockResolvedValue({ code: "PAIRCODE", created: true });
@@ -86,6 +137,28 @@ vi.mock("openclaw/plugin-sdk/media-store", async () => {
       saveMediaStreamSpy(...args);
       return actual.saveMediaStream(...args);
     }),
+  };
+});
+
+vi.mock("./runtime.js", async () => {
+  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
+    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
+      "openclaw/plugin-sdk/plugin-state-test-runtime",
+    ),
+  );
+  const stateDir = `/tmp/openclaw-whatsapp-inbound-media-${Date.now()}-${Math.random()}`;
+  return {
+    getOptionalWhatsAppRuntime: () => undefined,
+    getWhatsAppRuntime: () => ({
+      state: {
+        resolveStateDir: () => stateDir,
+        openKeyedStore: () => createInMemoryKeyedStore(),
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
+      },
+    }),
+    setWhatsAppRuntime: vi.fn(),
   };
 });
 

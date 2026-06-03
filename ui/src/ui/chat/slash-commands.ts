@@ -1,5 +1,8 @@
+import type {
+  CommandEntry,
+  CommandsListResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
-import type { CommandEntry, CommandsListResult } from "../../../../src/gateway/protocol/index.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { IconName } from "../icons.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
@@ -65,8 +68,6 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   compact: "loader",
   stop: "stop",
   clear: "trash",
-  focus: "eye",
-  unfocus: "eye",
   model: "brain",
   models: "brain",
   think: "brain",
@@ -74,7 +75,6 @@ const COMMAND_ICON_OVERRIDES: Partial<Record<string, IconName>> = {
   fast: "zap",
   agents: "monitor",
   subagents: "folder",
-  kill: "x",
   steer: "send",
   tts: "volume2",
 };
@@ -85,7 +85,6 @@ const LOCAL_COMMANDS = new Set([
   "reset",
   "stop",
   "compact",
-  "focus",
   "model",
   "think",
   "fast",
@@ -93,7 +92,6 @@ const LOCAL_COMMANDS = new Set([
   "export-session",
   "usage",
   "agents",
-  "kill",
   "steer",
   "redirect",
 ]);
@@ -112,7 +110,7 @@ const UI_ONLY_COMMANDS: SlashCommandDef[] = [
     key: "redirect",
     name: "redirect",
     description: "Abort and restart with a new message",
-    args: "[id] <message>",
+    args: "<message>",
     icon: "refresh",
     category: "agents",
     executeLocal: true,
@@ -131,7 +129,6 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   tts: "tools",
   agents: "agents",
   subagents: "agents",
-  kill: "agents",
   steer: "agents",
   redirect: "agents",
   session: "session",
@@ -139,8 +136,6 @@ const CATEGORY_OVERRIDES: Partial<Record<string, SlashCommandCategory>> = {
   reset: "session",
   new: "session",
   compact: "session",
-  focus: "session",
-  unfocus: "session",
   model: "model",
   models: "model",
   think: "model",
@@ -156,7 +151,7 @@ const COMMAND_DESCRIPTION_OVERRIDES: Partial<Record<string, string>> = {
 };
 
 const COMMAND_ARGS_OVERRIDES: Partial<Record<string, string>> = {
-  steer: "[id] <message>",
+  steer: "<message>",
 };
 
 function normalizeUiKey(command: CommandLike): string {
@@ -427,6 +422,87 @@ function buildFallbackSlashCommands(): SlashCommandDef[] {
 export const SLASH_COMMANDS: SlashCommandDef[] = buildFallbackSlashCommands();
 
 let refreshSeq = 0;
+const REMOTE_SLASH_COMMAND_CACHE_TTL_MS = 60_000;
+
+type RemoteSlashCommandCacheEntry = {
+  commands?: SlashCommandDef[];
+  expiresAt: number;
+  inFlight?: Promise<SlashCommandDef[]>;
+};
+
+let remoteSlashCommandCache = new WeakMap<
+  GatewayBrowserClient,
+  Map<string, RemoteSlashCommandCacheEntry>
+>();
+
+function remoteSlashCommandCacheKey(agentId: string | undefined): string {
+  return agentId ?? "";
+}
+
+function getRemoteSlashCommandCache(
+  client: GatewayBrowserClient,
+): Map<string, RemoteSlashCommandCacheEntry> {
+  let cache = remoteSlashCommandCache.get(client);
+  if (!cache) {
+    cache = new Map();
+    remoteSlashCommandCache.set(client, cache);
+  }
+  return cache;
+}
+
+async function requestRemoteSlashCommands(
+  client: GatewayBrowserClient,
+  agentId: string | undefined,
+  fallback: SlashCommandDef[] | undefined,
+): Promise<SlashCommandDef[]> {
+  try {
+    const result = await client.request<CommandsListResult>("commands.list", {
+      ...(agentId ? { agentId } : {}),
+      includeArgs: true,
+      scope: "text",
+    });
+    if (!Array.isArray(result?.commands)) {
+      return buildFallbackSlashCommands();
+    }
+    const commands = buildSlashCommandsFromEntries(getRemoteCommandEntries(result));
+    const cache = getRemoteSlashCommandCache(client);
+    cache.set(remoteSlashCommandCacheKey(agentId), {
+      commands,
+      expiresAt: Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS,
+    });
+    return commands;
+  } catch {
+    return fallback ?? buildFallbackSlashCommands();
+  }
+}
+
+function loadRemoteSlashCommands(
+  client: GatewayBrowserClient,
+  agentId: string | undefined,
+): Promise<SlashCommandDef[]> {
+  const cache = getRemoteSlashCommandCache(client);
+  const key = remoteSlashCommandCacheKey(agentId);
+  const cached = cache.get(key);
+  const now = Date.now();
+  if (cached?.commands && cached.expiresAt > now) {
+    return Promise.resolve(cached.commands);
+  }
+  if (cached?.inFlight) {
+    return cached.inFlight;
+  }
+  const inFlight = requestRemoteSlashCommands(client, agentId, cached?.commands).finally(() => {
+    const latest = cache.get(key);
+    if (latest?.inFlight === inFlight) {
+      delete latest.inFlight;
+    }
+  });
+  cache.set(key, {
+    ...(cached?.commands ? { commands: cached.commands } : {}),
+    expiresAt: cached?.expiresAt ?? 0,
+    inFlight,
+  });
+  return inFlight;
+}
 
 export async function refreshSlashCommands(params: {
   client: GatewayBrowserClient | null;
@@ -441,26 +517,16 @@ export async function refreshSlashCommands(params: {
     replaceSlashCommands(buildFallbackSlashCommands());
     return;
   }
-  try {
-    const result = await params.client.request<CommandsListResult>("commands.list", {
-      ...(agentId ? { agentId } : {}),
-      includeArgs: true,
-      scope: "text",
-    });
-    if (seq !== refreshSeq) {
-      return;
-    }
-    replaceSlashCommands(buildSlashCommandsFromEntries(getRemoteCommandEntries(result)));
-  } catch {
-    if (seq !== refreshSeq) {
-      return;
-    }
-    replaceSlashCommands(buildFallbackSlashCommands());
+  const commands = await loadRemoteSlashCommands(params.client, agentId);
+  if (seq !== refreshSeq) {
+    return;
   }
+  replaceSlashCommands(commands);
 }
 
 export function resetSlashCommandsForTest(): void {
   refreshSeq = 0;
+  remoteSlashCommandCache = new WeakMap();
   replaceSlashCommands(buildFallbackSlashCommands());
 }
 

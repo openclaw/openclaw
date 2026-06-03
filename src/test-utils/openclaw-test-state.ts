@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { captureEnv } from "./env.js";
 import { cleanupSessionStateForTest } from "./session-state-cleanup.js";
 
@@ -59,7 +60,6 @@ const ENV_KEYS = [
   "OPENCLAW_STATE_DIR",
   "OPENCLAW_CONFIG_PATH",
   "OPENCLAW_AGENT_DIR",
-  "PI_CODING_AGENT_DIR",
   "OPENCLAW_SERVICE_REPAIR_POLICY",
 ] as const;
 
@@ -201,11 +201,9 @@ function buildEnvVars(params: {
     params.agentEnv === "main"
       ? {
           OPENCLAW_AGENT_DIR: params.agentDir,
-          PI_CODING_AGENT_DIR: params.agentDir,
         }
       : {
           OPENCLAW_AGENT_DIR: undefined,
-          PI_CODING_AGENT_DIR: undefined,
         };
   const envVars: Record<string, string | undefined> = {
     OPENCLAW_STATE_DIR: params.stateDir,
@@ -275,7 +273,7 @@ export async function createOpenClawTestState(
     extraEnv: options.env ?? {},
   });
   const env = createSpawnEnv(envVars);
-  const snapshot = captureEnv([...new Set([...ENV_KEYS, ...Object.keys(envVars)])]);
+  const snapshot = captureEnv(uniqueStrings([...ENV_KEYS, ...Object.keys(envVars)]));
   let envApplied = false;
   let cleaned = false;
   const agentDir = (agentId = "main") => path.join(paths.stateDir, "agents", agentId, "agent");
@@ -306,10 +304,11 @@ export async function createOpenClawTestState(
     },
     applyEnv: () => {
       for (const [key, value] of Object.entries(envVars)) {
+        // Test fixtures apply a fixed OpenClaw env set, not plugin-provided host env.
         if (value === undefined) {
-          delete process.env[key];
+          Reflect.deleteProperty(process.env, key);
         } else {
-          process.env[key] = value;
+          Reflect.set(process.env, key, value);
         }
       }
       envApplied = true;

@@ -3,7 +3,11 @@ import {
   type OpenClawConfig,
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveClaudeCliAnthropicModelRefs } from "./claude-model-refs.js";
 import {
   readClaudeCliCredentialsForSetup,
   readClaudeCliCredentialsForSetupNonInteractive,
@@ -12,31 +16,19 @@ import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-
 
 type AgentDefaultsModel = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["model"];
 type AgentDefaultsModels = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["models"];
-type AgentDefaultsRuntimePolicy = NonNullable<
-  NonNullable<OpenClawConfig["agents"]>["defaults"]
->["agentRuntime"];
 type ClaudeCliCredential = NonNullable<ReturnType<typeof readClaudeCliCredentialsForSetup>>;
 
 function toAnthropicModelRef(raw: string): string | null {
-  const trimmed = raw.trim();
-  const lower = normalizeLowercaseStringOrEmpty(trimmed);
-  const provider = lower.startsWith("anthropic/")
-    ? "anthropic"
-    : lower.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
-      ? CLAUDE_CLI_BACKEND_ID
-      : "";
-  if (!provider) {
-    return null;
-  }
-  const modelId = trimmed.slice(provider.length + 1).trim();
-  if (!normalizeLowercaseStringOrEmpty(modelId).startsWith("claude-")) {
-    return null;
-  }
-  return `anthropic/${modelId}`;
+  return resolveClaudeCliAnthropicModelRefs(raw)?.rewriteRef ?? null;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+function toAnthropicRuntimeRefs(raw: string): string[] {
+  return resolveClaudeCliAnthropicModelRefs(raw)?.runtimeRefs ?? [];
+}
+
+function toAnthropicSelectedModelRef(raw: string): string | undefined {
+  const resolved = resolveClaudeCliAnthropicModelRefs(raw);
+  return resolved?.rewriteRef ?? resolved?.selectedRef;
 }
 
 function rewriteModelSelection(model: AgentDefaultsModel): {
@@ -46,10 +38,17 @@ function rewriteModelSelection(model: AgentDefaultsModel): {
   changed: boolean;
 } {
   if (typeof model === "string") {
+    const runtimeRefs = toAnthropicRuntimeRefs(model);
     const converted = toAnthropicModelRef(model);
+    const selectedRef = converted ?? toAnthropicSelectedModelRef(model);
     return converted
-      ? { value: converted, primary: converted, runtimeRefs: [converted], changed: true }
-      : { value: model, runtimeRefs: [], changed: false };
+      ? { value: converted, primary: converted, runtimeRefs, changed: true }
+      : {
+          value: model,
+          ...(selectedRef ? { primary: selectedRef } : {}),
+          runtimeRefs,
+          changed: false,
+        };
   }
   if (!model || typeof model !== "object" || Array.isArray(model)) {
     return { value: model, runtimeRefs: [], changed: false };
@@ -62,12 +61,14 @@ function rewriteModelSelection(model: AgentDefaultsModel): {
   let primary: string | undefined;
 
   if (typeof current.primary === "string") {
+    runtimeRefs.push(...toAnthropicRuntimeRefs(current.primary));
     const converted = toAnthropicModelRef(current.primary);
     if (converted) {
       next.primary = converted;
       primary = converted;
-      runtimeRefs.push(converted);
       changed = true;
+    } else {
+      primary = toAnthropicSelectedModelRef(current.primary);
     }
   }
 
@@ -77,10 +78,8 @@ function rewriteModelSelection(model: AgentDefaultsModel): {
       if (typeof entry !== "string") {
         return entry;
       }
+      runtimeRefs.push(...toAnthropicRuntimeRefs(entry));
       const converted = toAnthropicModelRef(entry);
-      if (converted) {
-        runtimeRefs.push(converted);
-      }
       return converted ?? entry;
     });
     if (nextFallbacks.some((entry, index) => entry !== currentFallbacks[index])) {
@@ -100,15 +99,18 @@ function rewriteModelSelection(model: AgentDefaultsModel): {
 function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
   value: Record<string, unknown> | undefined;
   migrated: string[];
+  runtimeRefs: string[];
 } {
   if (!models) {
-    return { value: models, migrated: [] };
+    return { value: models, migrated: [], runtimeRefs: [] };
   }
 
   const next = { ...models };
   const migrated: string[] = [];
+  const runtimeRefs: string[] = [];
 
   for (const [rawKey, value] of Object.entries(models)) {
+    runtimeRefs.push(...toAnthropicRuntimeRefs(rawKey));
     const converted = toAnthropicModelRef(rawKey);
     if (!converted) {
       continue;
@@ -119,13 +121,16 @@ function rewriteModelEntryMap(models: Record<string, unknown> | undefined): {
     if (!(converted in next)) {
       next[converted] = value;
     }
-    delete next[rawKey];
+    if (normalizeLowercaseStringOrEmpty(rawKey).startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)) {
+      delete next[rawKey];
+    }
     migrated.push(converted);
   }
 
   return {
-    value: migrated.length > 0 ? next : models,
+    value: migrated.length > 0 || runtimeRefs.length > 0 ? next : models,
     migrated,
+    runtimeRefs,
   };
 }
 
@@ -146,17 +151,6 @@ function seedClaudeCliAllowlist(
     next[ref] = modelEntryWithClaudeCliRuntime(next[ref]);
   }
   return next;
-}
-
-function selectClaudeCliRuntime(agentRuntime: AgentDefaultsRuntimePolicy | undefined) {
-  const currentRuntime = agentRuntime?.id?.trim();
-  if (currentRuntime && currentRuntime !== "auto") {
-    return agentRuntime;
-  }
-  return {
-    ...agentRuntime,
-    id: CLAUDE_CLI_BACKEND_ID,
-  };
 }
 
 function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
@@ -227,9 +221,10 @@ export function buildAnthropicCliMigrationResult(
     {}) as NonNullable<AgentDefaultsModels>;
   const nextModels = seedClaudeCliAllowlist(existingModels, [
     ...rewrittenModel.runtimeRefs,
+    ...rewrittenModels.runtimeRefs,
     ...rewrittenModels.migrated,
   ]);
-  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-4-7";
+  const defaultModel = rewrittenModel.primary ?? "anthropic/claude-opus-4-8";
 
   return {
     profiles: buildClaudeCliAuthProfiles(credential),
@@ -237,7 +232,6 @@ export function buildAnthropicCliMigrationResult(
       agents: {
         defaults: {
           ...(rewrittenModel.changed ? { model: rewrittenModel.value } : {}),
-          agentRuntime: selectClaudeCliRuntime(defaults?.agentRuntime),
           models: nextModels,
         },
       },

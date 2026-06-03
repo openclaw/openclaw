@@ -1,12 +1,16 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  resolveClaudeCliAnthropicModelRefs,
+  resolveKnownAnthropicModelRef,
+} from "./claude-model-refs.js";
 import { CLAUDE_CLI_BACKEND_ID, CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS } from "./cli-constants.js";
 
 const ANTHROPIC_PROVIDER_API = "anthropic-messages";
-const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = ["anthropic/claude-haiku-4-5"] as const;
-
-function normalizeLowercaseStringOrEmpty(value: unknown): string {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
+const ANTHROPIC_API_KEY_DEFAULT_ALLOWLIST_REFS = ["anthropic/claude-sonnet-4-6"] as const;
 
 function normalizeProviderId(provider: string): string {
   const normalized = normalizeLowercaseStringOrEmpty(provider);
@@ -14,10 +18,6 @@ function normalizeProviderId(provider: string): string {
     return "amazon-bedrock";
   }
   return normalized;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function resolveAnthropicDefaultAuthMode(
@@ -92,24 +92,6 @@ function resolveModelPrimaryValue(
   return trimmed || undefined;
 }
 
-function resolveAnthropicPrimaryModelRef(raw?: string): string | null {
-  if (!raw) {
-    return null;
-  }
-  const trimmed = raw.trim();
-  if (!trimmed) {
-    return null;
-  }
-  const aliasKey = normalizeLowercaseStringOrEmpty(trimmed);
-  if (aliasKey === "opus") {
-    return "anthropic/claude-opus-4-7";
-  }
-  if (aliasKey === "sonnet") {
-    return "anthropic/claude-sonnet-4-6";
-  }
-  return trimmed;
-}
-
 function parseProviderModelRef(
   raw: string,
   defaultProvider: string,
@@ -145,9 +127,6 @@ function isAnthropicCacheRetentionTarget(
 }
 
 function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
-  if (config.agents?.defaults?.agentRuntime?.id === CLAUDE_CLI_BACKEND_ID) {
-    return true;
-  }
   const primary = resolveModelPrimaryValue(
     config.agents?.defaults?.model as
       | string
@@ -171,28 +150,41 @@ function usesClaudeCliModelSelection(config: OpenClawConfig): boolean {
   });
 }
 
+function usesSelectedClaudeCliAuthProfile(config: OpenClawConfig): boolean {
+  const profiles = config.auth?.profiles ?? {};
+  const orderedProfileIds = [
+    ...(config.auth?.order?.anthropic ?? []),
+    ...((config.auth?.order as Record<string, string[] | undefined> | undefined)?.[
+      CLAUDE_CLI_BACKEND_ID
+    ] ?? []),
+  ];
+  for (const profileId of orderedProfileIds) {
+    const provider = profiles[profileId]?.provider;
+    if (provider === CLAUDE_CLI_BACKEND_ID) {
+      return true;
+    }
+    if (provider === "anthropic") {
+      return false;
+    }
+  }
+
+  let hasClaudeCliProfile = false;
+  let hasAnthropicProfile = false;
+  for (const profile of Object.values(profiles)) {
+    if (profile?.provider === CLAUDE_CLI_BACKEND_ID) {
+      hasClaudeCliProfile = true;
+    }
+    if (profile?.provider === "anthropic") {
+      hasAnthropicProfile = true;
+    }
+  }
+  return hasClaudeCliProfile && !hasAnthropicProfile;
+}
+
 function toCanonicalAnthropicModelRef(ref: string): string {
   return ref.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
     ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
     : ref;
-}
-
-function toClaudeCliRuntimeModelRef(raw: string): string | null {
-  const ref = resolveAnthropicPrimaryModelRef(raw);
-  if (!ref) {
-    return null;
-  }
-  const parsed = parseProviderModelRef(ref, "anthropic");
-  if (!parsed) {
-    return null;
-  }
-  if (parsed.provider !== "anthropic" && parsed.provider !== CLAUDE_CLI_BACKEND_ID) {
-    return null;
-  }
-  if (!normalizeLowercaseStringOrEmpty(parsed.model).startsWith("claude-")) {
-    return null;
-  }
-  return `anthropic/${parsed.model}`;
 }
 
 function modelEntryWithClaudeCliRuntime(entry: unknown): Record<string, unknown> {
@@ -214,20 +206,55 @@ function collectClaudeCliRuntimeRefs(
 ): string[] {
   const refs = new Set<string>();
   if (typeof model === "string") {
-    const ref = toClaudeCliRuntimeModelRef(model);
-    if (ref) {
+    for (const ref of resolveClaudeCliAnthropicModelRefs(model)?.runtimeRefs ?? []) {
       refs.add(ref);
     }
     return [...refs];
   }
-  const primary =
-    typeof model?.primary === "string" ? toClaudeCliRuntimeModelRef(model.primary) : null;
-  if (primary) {
-    refs.add(primary);
+  if (typeof model?.primary === "string") {
+    for (const ref of resolveClaudeCliAnthropicModelRefs(model.primary)?.runtimeRefs ?? []) {
+      refs.add(ref);
+    }
   }
   for (const fallback of model?.fallbacks ?? []) {
-    const ref = toClaudeCliRuntimeModelRef(fallback);
-    if (ref) {
+    for (const ref of resolveClaudeCliAnthropicModelRefs(fallback)?.runtimeRefs ?? []) {
+      refs.add(ref);
+    }
+  }
+  return [...refs];
+}
+
+function collectClaudeCliRuntimeRefsFromModelMap(
+  models: Record<string, unknown> | undefined,
+): string[] {
+  const refs = new Set<string>();
+  for (const key of Object.keys(models ?? {})) {
+    for (const ref of resolveClaudeCliAnthropicModelRefs(key)?.runtimeRefs ?? []) {
+      refs.add(ref);
+    }
+  }
+  return [...refs];
+}
+
+function collectClaudeCliRuntimeRefsFromConfig(config: OpenClawConfig): string[] {
+  const refs = new Set<string>(
+    collectClaudeCliRuntimeRefs(
+      config.agents?.defaults?.model as
+        | string
+        | { primary?: string; fallbacks?: string[] }
+        | undefined,
+    ),
+  );
+  for (const ref of collectClaudeCliRuntimeRefsFromModelMap(config.agents?.defaults?.models)) {
+    refs.add(ref);
+  }
+  for (const agent of config.agents?.list ?? []) {
+    for (const ref of collectClaudeCliRuntimeRefs(
+      agent.model as string | { primary?: string; fallbacks?: string[] } | undefined,
+    )) {
+      refs.add(ref);
+    }
+    for (const ref of collectClaudeCliRuntimeRefsFromModelMap(agent.models)) {
       refs.add(ref);
     }
   }
@@ -314,7 +341,7 @@ export function applyAnthropicConfigDefaults(params: {
       modelsMutated = true;
     }
 
-    const primary = resolveAnthropicPrimaryModelRef(
+    const primary = resolveKnownAnthropicModelRef(
       resolveModelPrimaryValue(
         defaults.model as string | { primary?: string; fallbacks?: string[] } | undefined,
       ),
@@ -355,10 +382,13 @@ export function applyAnthropicConfigDefaults(params: {
     }
   }
 
-  if (authMode === "oauth" && usesClaudeCliModelSelection(params.config)) {
+  if (
+    authMode === "oauth" &&
+    (usesClaudeCliModelSelection(params.config) || usesSelectedClaudeCliAuthProfile(params.config))
+  ) {
     const nextModels = defaults.models ? { ...defaults.models } : {};
     let modelsMutated = false;
-    const runtimeRefs = new Set<string>(collectClaudeCliRuntimeRefs(defaults.model));
+    const runtimeRefs = new Set<string>(collectClaudeCliRuntimeRefsFromConfig(params.config));
     for (const rawRef of CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS) {
       runtimeRefs.add(toCanonicalAnthropicModelRef(rawRef));
     }

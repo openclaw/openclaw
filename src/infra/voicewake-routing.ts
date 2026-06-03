@@ -1,4 +1,6 @@
 import path from "node:path";
+import { isRecord as isPlainObject } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import {
   classifySessionKeyShape,
@@ -48,14 +50,6 @@ export function normalizeVoiceWakeTriggerWord(value: string): string {
     .join(" ");
 }
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function normalizeRouteTarget(value: unknown): VoiceWakeRouteTarget | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -102,10 +96,6 @@ function isCanonicalAgentSessionKey(value: string): boolean {
     return false;
   }
   return !trimmed.split(":").some((part) => part.length === 0);
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function validateRouteTargetInput(

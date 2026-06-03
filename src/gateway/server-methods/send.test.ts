@@ -28,6 +28,8 @@ const mocks = vi.hoisted(() => ({
   getChannelPlugin: vi.fn(),
   loadOpenClawPlugins: vi.fn(),
   applyPluginAutoEnable: vi.fn(),
+  getRuntimeConfigSnapshot: vi.fn(),
+  getRuntimeConfigSourceSnapshot: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", async () => {
@@ -78,6 +80,17 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: ({ config, env }: { config: unknown; env?: unknown }) =>
     mocks.applyPluginAutoEnable({ config, env }),
 }));
+
+vi.mock("../../config/runtime-snapshot.js", async () => {
+  const actual = await vi.importActual<typeof import("../../config/runtime-snapshot.js")>(
+    "../../config/runtime-snapshot.js",
+  );
+  return {
+    ...actual,
+    getRuntimeConfigSnapshot: mocks.getRuntimeConfigSnapshot,
+    getRuntimeConfigSourceSnapshot: mocks.getRuntimeConfigSourceSnapshot,
+  };
+});
 
 vi.mock("../../plugins/loader.js", () => ({
   loadOpenClawPlugins: mocks.loadOpenClawPlugins,
@@ -199,6 +212,13 @@ function deliveryCall(index = 0): Record<string, any> | undefined {
   return calls[index]?.[0];
 }
 
+function appendTranscriptCall(index = 0): Record<string, any> | undefined {
+  const calls = mocks.appendAssistantMessageToSessionTranscript.mock.calls as unknown as Array<
+    [Record<string, any>]
+  >;
+  return calls[index]?.[0];
+}
+
 function firstRespondCall(respond: ReturnType<typeof vi.fn>) {
   const calls = respond.mock.calls as unknown as Array<
     [
@@ -273,6 +293,8 @@ describe("gateway send mirroring", () => {
       changes: [],
       autoEnabledReasons: {},
     }));
+    mocks.getRuntimeConfigSnapshot.mockReturnValue(null);
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(null);
     mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "resolved" });
     mocks.resolveOutboundSessionRoute.mockImplementation(
       async ({ agentId, channel }: { agentId?: string; channel?: string }) => ({
@@ -294,6 +316,251 @@ describe("gateway send mirroring", () => {
       actions: { handleAction: true },
       outbound: { sendPoll: mocks.sendPoll },
     });
+  });
+
+  it("uses the resolved runtime config for message.action when the source snapshot matches", async () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_DRCLAW",
+              },
+            },
+          },
+        },
+      },
+    };
+    const runtimeConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: {
+              token: "resolved-token",
+            },
+          },
+        },
+      },
+    };
+    mocks.applyPluginAutoEnable.mockImplementation(({ config }) => ({
+      config,
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.getRuntimeConfigSnapshot.mockReturnValue(runtimeConfig);
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
+
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => sourceConfig,
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+    await sendHandlers["message.action"]({
+      params: {
+        channel: "discord",
+        action: "channel-info",
+        params: { channelId: "123", accountId: "drclaw" },
+        idempotencyKey: "idem-action-runtime-config",
+      } as never,
+      respond,
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.getRuntimeConfigSnapshot).toHaveBeenCalledTimes(1);
+    expect(mocks.getRuntimeConfigSourceSnapshot).toHaveBeenCalledTimes(1);
+    expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(runtimeConfig);
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+  });
+
+  it("matches message.action runtime config against the canonical pre-auto-enable source config", async () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_DRCLAW",
+              },
+            },
+          },
+        },
+      },
+    };
+    const autoEnabledSourceConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+          accounts: {
+            drclaw: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_DRCLAW",
+              },
+            },
+          },
+        },
+      },
+      plugins: { allow: ["discord"] },
+    };
+    const autoEnabledRuntimeConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+          accounts: {
+            drclaw: {
+              token: "resolved-token",
+            },
+          },
+        },
+      },
+      plugins: { allow: ["discord"] },
+    };
+    mocks.applyPluginAutoEnable
+      .mockReturnValueOnce({
+        config: autoEnabledSourceConfig,
+        changes: [{ path: "channels.discord.enabled", value: true }],
+        autoEnabledReasons: {},
+      })
+      .mockReturnValueOnce({
+        config: autoEnabledRuntimeConfig,
+        changes: [{ path: "channels.discord.enabled", value: true }],
+        autoEnabledReasons: {},
+      });
+    mocks.getRuntimeConfigSnapshot.mockReturnValue(autoEnabledRuntimeConfig);
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue(sourceConfig);
+
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => sourceConfig,
+    } as unknown as GatewayRequestContext;
+    const respond = vi.fn();
+    await sendHandlers["message.action"]({
+      params: {
+        channel: "discord",
+        action: "channel-info",
+        params: { channelId: "123", accountId: "drclaw" },
+        idempotencyKey: "idem-action-runtime-config-auto-enabled",
+      } as never,
+      respond,
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(autoEnabledRuntimeConfig);
+    expect(mocks.applyPluginAutoEnable).toHaveBeenNthCalledWith(1, {
+      config: sourceConfig,
+      env: undefined,
+    });
+    expect(mocks.applyPluginAutoEnable).toHaveBeenNthCalledWith(2, {
+      config: autoEnabledRuntimeConfig,
+      env: undefined,
+    });
+    const response = firstRespondCall(respond);
+    expect(response?.[0]).toBe(true);
+  });
+
+  it("keeps the post-auto-enable request config for message.action when the runtime source snapshot does not match", async () => {
+    const sourceConfig = {
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_DRCLAW",
+              },
+            },
+          },
+        },
+      },
+    };
+    const autoEnabledRequestConfig = {
+      channels: {
+        discord: {
+          enabled: true,
+          accounts: {
+            drclaw: {
+              token: {
+                source: "env",
+                provider: "default",
+                id: "DISCORD_BOT_TOKEN_DRCLAW",
+              },
+            },
+          },
+        },
+      },
+      plugins: { allow: ["discord"] },
+    };
+    mocks.applyPluginAutoEnable.mockReturnValue({
+      config: autoEnabledRequestConfig,
+      changes: [{ path: "channels.discord.enabled", value: true }],
+      autoEnabledReasons: {},
+    });
+    mocks.getRuntimeConfigSnapshot.mockReturnValue({
+      channels: {
+        discord: {
+          accounts: {
+            drclaw: { token: "stale-runtime-token" },
+          },
+        },
+      },
+    });
+    mocks.getRuntimeConfigSourceSnapshot.mockReturnValue({
+      channels: {
+        discord: {
+          accounts: {
+            other: { token: "different-source" },
+          },
+        },
+      },
+    });
+
+    const context = {
+      ...makeContext(),
+      getRuntimeConfig: () => sourceConfig,
+    } as unknown as GatewayRequestContext;
+    await sendHandlers["message.action"]({
+      params: {
+        channel: "discord",
+        action: "channel-info",
+        params: { channelId: "123", accountId: "drclaw" },
+        idempotencyKey: "idem-action-stale-runtime-config",
+      } as never,
+      respond: vi.fn(),
+      context,
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(lastDispatchChannelMessageActionCall()?.cfg).toBe(autoEnabledRequestConfig);
+  });
+
+  it("does not read the runtime config snapshot for send requests", async () => {
+    mockDeliverySuccess("m-no-runtime-config-read");
+
+    await runSend({
+      to: "channel:C1",
+      message: "hi",
+      channel: "slack",
+      idempotencyKey: "idem-send-no-runtime-config-read",
+    });
+
+    expect(mocks.getRuntimeConfigSnapshot).not.toHaveBeenCalled();
+    expect(mocks.getRuntimeConfigSourceSnapshot).not.toHaveBeenCalled();
   });
 
   it("dedupes concurrent message.action requests while inflight", async () => {
@@ -645,7 +912,6 @@ describe("gateway send mirroring", () => {
 
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {},
-      env: process.env,
     });
     expect(mocks.resolveMessageChannelSelection).toHaveBeenCalledWith({
       cfg: autoEnabledConfig,
@@ -1297,6 +1563,640 @@ describe("gateway send mirroring", () => {
     );
   });
 
+  it("mirrors successful source-conversation message.action sends into the assistant transcript", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible source reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible source reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-source-message-action",
+      config: {},
+    });
+  });
+
+  it("mirrors accepted source send text aliases", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-content-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        content: "visible content alias reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-content-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible content alias reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-content-source-message-action",
+      config: {},
+    });
+  });
+
+  it("keeps delivered source sends successful when transcript mirroring fails", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-mirror-failed" }),
+    );
+    mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
+      new Error("transcript unavailable"),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible source reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-source-message-action-mirror-failed",
+    });
+
+    const call = firstRespondCall(respond);
+    expect(call[0]).toBe(true);
+    expect(call[1]).toEqual({ ok: true, messageId: "tg-mirror-failed" });
+    expect(call[2]).toBeUndefined();
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledOnce();
+  });
+
+  it("mirrors caption-only source sends with media", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-caption-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        mediaUrl: "https://example.com/image.png",
+        caption: "visible media caption",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-caption-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "visible media caption",
+      mediaUrls: ["https://example.com/image.png"],
+      idempotencyKey: "idem-caption-source-message-action",
+      config: {},
+    });
+  });
+
+  it("waits for source transcript mirroring before responding to message.action", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram async source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-async-1" }),
+      },
+    };
+    const mirrorDeferred = createDeferred<{ ok: boolean; sessionFile: string }>();
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-source-message-action-async-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-async-1" }),
+    );
+    mocks.appendAssistantMessageToSessionTranscript.mockReturnValueOnce(mirrorDeferred.promise);
+
+    const respond = vi.fn();
+    const request = sendHandlers["message.action"]({
+      params: {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: "visible media caption",
+        },
+        sessionKey: "agent:main:telegram:direct:chat-123",
+        agentId: "main",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "chat-123",
+        },
+        idempotencyKey: "idem-async-source-message-action",
+      } as never,
+      respond,
+      context: makeContext(),
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    await vi.waitFor(() => {
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    });
+    expect(respond).not.toHaveBeenCalled();
+
+    mirrorDeferred.resolve({ ok: true, sessionFile: "x" });
+    await request;
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("preserves source transcript mirror order before message.action responses", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram ordered async source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-ordered" }),
+      },
+    };
+    const firstMirrorDeferred = createDeferred<{ ok: boolean; sessionFile: string }>();
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-source-message-action-ordered-async-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValue(
+      jsonResult({ ok: true, messageId: "tg-ordered" }),
+    );
+    mocks.appendAssistantMessageToSessionTranscript
+      .mockReturnValueOnce(firstMirrorDeferred.promise)
+      .mockResolvedValueOnce({ ok: true, sessionFile: "x" });
+
+    const firstRespond = vi.fn();
+    const secondRespond = vi.fn();
+    const first = sendHandlers["message.action"]({
+      params: {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: "first visible reply",
+        },
+        sessionKey: "agent:main:telegram:direct:chat-123",
+        agentId: "main",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "chat-123",
+        },
+        idempotencyKey: "idem-ordered-source-message-action-1",
+      } as never,
+      respond: firstRespond,
+      context: makeContext(),
+      req: { type: "req", id: "1", method: "message.action" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+    await vi.waitFor(() => {
+      expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    });
+    const second = sendHandlers["message.action"]({
+      params: {
+        channel: "telegram",
+        action: "send",
+        params: {
+          to: "chat-123",
+          message: "second visible reply",
+        },
+        sessionKey: "agent:main:telegram:direct:chat-123",
+        agentId: "main",
+        toolContext: {
+          currentChannelProvider: "telegram",
+          currentChannelId: "chat-123",
+        },
+        idempotencyKey: "idem-ordered-source-message-action-2",
+      } as never,
+      respond: secondRespond,
+      context: makeContext(),
+      req: { type: "req", id: "2", method: "message.action" },
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(1);
+    expect(firstRespond).not.toHaveBeenCalled();
+    expect(secondRespond).not.toHaveBeenCalled();
+    expect(appendTranscriptCall(0)).toEqual(
+      expect.objectContaining({ text: "first visible reply" }),
+    );
+
+    firstMirrorDeferred.resolve({ ok: true, sessionFile: "x" });
+    await first;
+    await second;
+
+    expect(firstRespondCall(firstRespond)[0]).toBe(true);
+    expect(firstRespondCall(secondRespond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledTimes(2);
+    expect(appendTranscriptCall(1)).toEqual(
+      expect.objectContaining({ text: "second visible reply" }),
+    );
+  });
+
+  it("mirrors presentation-only source-conversation message.action sends", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram source send rich transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-rich-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-rich-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-rich-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        presentation: {
+          title: "Approval needed",
+          blocks: [
+            { type: "text", text: "Review the deployment request" },
+            {
+              type: "buttons",
+              buttons: [
+                { label: "Approve", value: "approve" },
+                { label: "Reject", value: "reject" },
+              ],
+            },
+          ],
+        },
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-rich-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "Approval needed\nReview the deployment request\nApprove\nReject",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-rich-source-message-action",
+      config: {},
+    });
+  });
+
+  it("mirrors title-only source-conversation presentation sends", async () => {
+    const telegramPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram source send title-only transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-title-1" }),
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramPlugin }]),
+      "send-test-title-only-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-title-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        presentation: {
+          title: "Title-only approval",
+        },
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-title-only-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      text: "Title-only approval",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-title-only-source-message-action",
+      config: {},
+    });
+  });
+
+  it("mirrors auto-threaded Telegram source sends into the topic transcript", async () => {
+    const telegramTopicPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram topic source send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["group"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-topic-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramTopicPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramTopicPlugin }]),
+      "send-test-topic-source-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-topic-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible topic source reply",
+        messageThreadId: "77",
+      },
+      sessionKey: "agent:main:telegram:group:chat-123:topic:77",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123:topic:77",
+        currentThreadTs: "77",
+      },
+      idempotencyKey: "idem-topic-source-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith({
+      agentId: "main",
+      sessionKey: "agent:main:telegram:group:chat-123:topic:77",
+      text: "visible topic source reply",
+      mediaUrls: undefined,
+      idempotencyKey: "idem-topic-source-message-action",
+      config: {},
+    });
+  });
+
+  it("does not mirror topic context when delivery params target the parent chat", async () => {
+    const telegramTopicPlugin: ChannelPlugin = {
+      id: "telegram",
+      meta: {
+        id: "telegram",
+        label: "Telegram",
+        selectionLabel: "Telegram",
+        docsPath: "/channels/telegram",
+        blurb: "Telegram parent send transcript mirror test plugin.",
+      },
+      capabilities: { chatTypes: ["group"] },
+      config: {
+        listAccountIds: () => ["default"],
+        resolveAccount: () => ({ enabled: true }),
+        isConfigured: () => true,
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["send"] }),
+        supportsAction: ({ action }) => action === "send",
+        handleAction: async () => jsonResult({ ok: true, messageId: "tg-parent-1" }),
+      },
+      threading: {
+        resolveCurrentChannelId: ({ to, threadId }) =>
+          threadId == null ? to : `${to}:topic:${threadId}`,
+      },
+    };
+    mocks.getChannelPlugin.mockReturnValue(telegramTopicPlugin);
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: telegramTopicPlugin }]),
+      "send-test-topic-context-parent-message-action-mirror",
+    );
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-parent-1" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "visible parent source reply",
+      },
+      sessionKey: "agent:main:telegram:group:chat-123:topic:77",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123:topic:77",
+        currentThreadTs: "77",
+      },
+      idempotencyKey: "idem-topic-context-parent-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror message.action sends to a different target", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: true, messageId: "tg-external" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "other-chat",
+        message: "external visible reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-external-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
+  it("does not mirror explicitly failed message.action sends", async () => {
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({ ok: false, error: "delivery failed" }),
+    );
+
+    const { respond } = await runMessageActionRequest({
+      channel: "telegram",
+      action: "send",
+      params: {
+        to: "chat-123",
+        message: "failed source reply",
+      },
+      sessionKey: "agent:main:telegram:direct:chat-123",
+      agentId: "main",
+      toolContext: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "chat-123",
+      },
+      idempotencyKey: "idem-failed-message-action",
+    });
+
+    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
   it("passes agent-scoped media roots to gateway message actions", async () => {
     const mediaActionPlugin: ChannelPlugin = {
       id: "telegram",
@@ -1340,90 +2240,5 @@ describe("gateway send mirroring", () => {
     const actionCall = lastDispatchChannelMessageActionCall();
     expect(actionCall?.mediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
     expect(actionCall?.gatewayClientScopes).toEqual(["operator.write"]);
-  });
-
-  it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {
-    const capture = { senderIsOwner: undefined as boolean | undefined };
-    const reactPlugin: ChannelPlugin = {
-      id: "whatsapp",
-      meta: {
-        id: "whatsapp",
-        label: "WhatsApp",
-        selectionLabel: "WhatsApp",
-        docsPath: "/channels/whatsapp",
-        blurb: "WhatsApp owner-derivation test plugin.",
-      },
-      capabilities: { chatTypes: ["direct"], reactions: true },
-      config: {
-        listAccountIds: () => ["default"],
-        resolveAccount: () => ({ enabled: true }),
-        isConfigured: () => true,
-      },
-      actions: {
-        describeMessageTool: () => ({ actions: ["react"] }),
-        supportsAction: ({ action }) => action === "react",
-        handleAction: async ({ senderIsOwner }) => {
-          capture.senderIsOwner = senderIsOwner;
-          return jsonResult({ ok: true });
-        },
-      },
-    };
-    mocks.getChannelPlugin.mockReturnValue(reactPlugin);
-
-    // Narrowly-scoped caller (e.g. gateway-forwarding least-privilege path
-    // that only requests operator.write): wire senderIsOwner=true must be
-    // forced to false so a non-admin scoped caller cannot unlock owner-only
-    // channel actions.
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
-      "send-test-owner-derive-non-admin",
-    );
-    await runMessageActionRequest(
-      {
-        channel: "whatsapp",
-        action: "react",
-        params: { chatJid: "+15551234567", messageId: "wamid.x", emoji: "✅" },
-        senderIsOwner: true,
-        idempotencyKey: "idem-owner-derive-non-admin",
-      },
-      { connect: { scopes: ["operator.write"] } },
-    );
-    expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(false);
-
-    // Full operator (admin-scoped): the trusted runtime is allowed to
-    // forward the real channel-sender ownership bit. Wire true → true.
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
-      "send-test-owner-derive-admin-true",
-    );
-    await runMessageActionRequest(
-      {
-        channel: "whatsapp",
-        action: "react",
-        params: { chatJid: "+15551234567", messageId: "wamid.y", emoji: "✅" },
-        senderIsOwner: true,
-        idempotencyKey: "idem-owner-derive-admin-true",
-      },
-      { connect: { scopes: ["operator.admin"] } },
-    );
-    expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(true);
-
-    // Full operator forwarding a non-owner sender: wire false → false
-    // (admin scope does not inflate ownership on its own).
-    setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: reactPlugin }]),
-      "send-test-owner-derive-admin-false",
-    );
-    await runMessageActionRequest(
-      {
-        channel: "whatsapp",
-        action: "react",
-        params: { chatJid: "+15551234567", messageId: "wamid.z", emoji: "✅" },
-        senderIsOwner: false,
-        idempotencyKey: "idem-owner-derive-admin-false",
-      },
-      { connect: { scopes: ["operator.admin"] } },
-    );
-    expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(false);
   });
 });

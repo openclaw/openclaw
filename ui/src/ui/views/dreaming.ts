@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
 import type {
@@ -91,8 +92,15 @@ type DreamingPhaseInfo = {
   nextRunAtMs?: number;
 };
 
+type DreamingAgentOption = {
+  id: string;
+  label: string;
+};
+
 export type DreamingProps = {
   active: boolean;
+  selectedAgentId: string;
+  agentOptions: DreamingAgentOption[];
   shortTermCount: number;
   groundedSignalCount: number;
   totalSignalCount: number;
@@ -125,6 +133,7 @@ export type DreamingProps = {
   wikiMemoryPalaceError: string | null;
   wikiMemoryPalace: WikiMemoryPalace | null;
   onRefresh: () => void;
+  onSelectAgent: (agentId: string) => void;
   onRefreshDiary: () => void;
   onRefreshImports: () => void;
   onRefreshMemoryPalace: () => void;
@@ -291,35 +300,63 @@ export function renderDreaming(props: DreamingProps) {
   return html`
     <div class="dreams-page">
       <!-- ── Sub-tab bar ── -->
-      <nav class="dreams__tabs">
-        <button
-          class="dreams__tab ${activeSubTab === "scene" ? "dreams__tab--active" : ""}"
-          @click=${() => {
-            activeSubTab = "scene";
-            props.onRequestUpdate?.();
-          }}
-        >
-          ${t("dreaming.tabs.scene")}
-        </button>
-        <button
-          class="dreams__tab ${activeSubTab === "diary" ? "dreams__tab--active" : ""}"
-          @click=${() => {
-            activeSubTab = "diary";
-            props.onRequestUpdate?.();
-          }}
-        >
-          ${t("dreaming.tabs.diary")}
-        </button>
-        <button
-          class="dreams__tab ${activeSubTab === "advanced" ? "dreams__tab--active" : ""}"
-          @click=${() => {
-            activeSubTab = "advanced";
-            props.onRequestUpdate?.();
-          }}
-        >
-          ${t("dreaming.tabs.advanced")}
-        </button>
-      </nav>
+      <div class="dreams__topbar">
+        <nav class="dreams__tabs">
+          <button
+            class="dreams__tab ${activeSubTab === "scene" ? "dreams__tab--active" : ""}"
+            @click=${() => {
+              activeSubTab = "scene";
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${t("dreaming.tabs.scene")}
+          </button>
+          <button
+            class="dreams__tab ${activeSubTab === "diary" ? "dreams__tab--active" : ""}"
+            @click=${() => {
+              activeSubTab = "diary";
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${t("dreaming.tabs.diary")}
+          </button>
+          <button
+            class="dreams__tab ${activeSubTab === "advanced" ? "dreams__tab--active" : ""}"
+            @click=${() => {
+              activeSubTab = "advanced";
+              props.onRequestUpdate?.();
+            }}
+          >
+            ${t("dreaming.tabs.advanced")}
+          </button>
+        </nav>
+        ${props.agentOptions.length > 1
+          ? html`<label class="field dreams__agent-select">
+              <span class="sr-only">${t("dreaming.agentSelect.label")}</span>
+              <select
+                data-dreaming-agent-select="true"
+                aria-label=${t("dreaming.agentSelect.ariaLabel")}
+                .value=${props.selectedAgentId}
+                @change=${(e: Event) => {
+                  const nextAgentId = (e.target as HTMLSelectElement).value;
+                  if (nextAgentId === props.selectedAgentId) {
+                    return;
+                  }
+                  props.onSelectAgent(nextAgentId);
+                }}
+              >
+                ${repeat(
+                  props.agentOptions,
+                  (entry) => entry.id,
+                  (entry) =>
+                    html`<option value=${entry.id} ?selected=${entry.id === props.selectedAgentId}>
+                      ${entry.label}
+                    </option>`,
+                )}
+              </select>
+            </label>`
+          : nothing}
+      </div>
 
       ${activeSubTab === "scene"
         ? renderScene(props, idle, dreamText)
@@ -492,6 +529,61 @@ function formatKindLabel(kind: "entity" | "concept" | "source" | "synthesis" | "
       return "report";
   }
   return kind;
+}
+
+function formatCount(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+const MEMORY_PALACE_PAGE_COUNT_ORDER: Array<keyof WikiMemoryPalace["pageCounts"]> = [
+  "source",
+  "synthesis",
+  "report",
+  "entity",
+  "concept",
+];
+
+function formatMemoryPalacePageCountLabel(kind: keyof WikiMemoryPalace["pageCounts"]): string {
+  switch (kind) {
+    case "source":
+      return "Sources";
+    case "synthesis":
+      return "Syntheses";
+    case "report":
+      return "Reports";
+    case "entity":
+      return "Entities";
+    case "concept":
+      return "Concepts";
+  }
+  return kind;
+}
+
+function formatMemoryPalacePageBreakdown(pageCounts: WikiMemoryPalace["pageCounts"]): string {
+  const parts = MEMORY_PALACE_PAGE_COUNT_ORDER.map((kind) => {
+    const count = pageCounts[kind];
+    return count > 0
+      ? `${formatMemoryPalacePageCountLabel(kind)} · ${formatCount(count, "page")}`
+      : null;
+  }).filter((entry): entry is string => entry !== null);
+  return parts.length > 0 ? parts.join("; ") : "No pages yet";
+}
+
+function formatMemoryPalaceClusterSummary(cluster: WikiMemoryPalace["clusters"][number]): string {
+  const parts = [`${cluster.label}: ${formatCount(cluster.itemCount, "page")}`];
+  if (cluster.claimCount > 0) {
+    parts.push(formatCount(cluster.claimCount, "claim row"));
+  }
+  if (cluster.questionCount > 0) {
+    const questionPageCount = cluster.items.filter((item) => item.questionCount > 0).length;
+    const questionPageSuffix =
+      questionPageCount > 0 ? ` on ${formatCount(questionPageCount, "page")}` : "";
+    parts.push(`${formatCount(cluster.questionCount, "open question")}${questionPageSuffix}`);
+  }
+  if (cluster.contradictionCount > 0) {
+    parts.push(formatCount(cluster.contradictionCount, "contradiction"));
+  }
+  return parts.join(" · ");
 }
 
 function formatImportBadge(item: {
@@ -1137,6 +1229,14 @@ function renderMemoryPalaceSection(props: DreamingProps) {
   diaryEntryCount = clusters.length;
   const clusterIndex = Math.max(0, Math.min(diaryPage, clusters.length - 1));
   const cluster = clusters[clusterIndex];
+  const totalPages = palace?.totalPages ?? palace?.totalItems ?? 0;
+  const totalClaims = palace?.totalClaims ?? 0;
+  const totalQuestions = palace?.totalQuestions ?? 0;
+  const totalContradictions = palace?.totalContradictions ?? 0;
+  const pageBreakdown = palace
+    ? formatMemoryPalacePageBreakdown(palace.pageCounts)
+    : "No pages yet";
+  const clusterSummary = formatMemoryPalaceClusterSummary(cluster);
 
   return html`
     <div class="dreams-diary__daychips">
@@ -1160,16 +1260,17 @@ function renderMemoryPalaceSection(props: DreamingProps) {
     <article class="dreams-diary__entry" key="palace-${cluster.key}">
       <div class="dreams-diary__accent"></div>
       <div class="dreams-diary__date">
-        ${cluster.label} · ${cluster.itemCount} pages
-        ${cluster.claimCount > 0 ? html`· ${cluster.claimCount} claims` : nothing}
-        ${cluster.questionCount > 0 ? html`· ${cluster.questionCount} questions` : nothing}
-        ${cluster.contradictionCount > 0
-          ? html`· ${cluster.contradictionCount} contradictions`
+        Vault · ${formatCount(totalPages, "page")}
+        ${totalClaims > 0 ? html`· ${formatCount(totalClaims, "claim row")}` : nothing}
+        ${totalQuestions > 0 ? html`· ${formatCount(totalQuestions, "open question")}` : nothing}
+        ${totalContradictions > 0
+          ? html`· ${formatCount(totalContradictions, "contradiction")}`
           : nothing}
       </div>
       <div class="dreams-diary__prose">
+        <p class="dreams-diary__para">Full vault breakdown: ${pageBreakdown}.</p>
         <p class="dreams-diary__para">
-          Compiled wiki pages currently grouped under ${cluster.label.toLowerCase()}.
+          Selected section: ${clusterSummary}.
           ${cluster.updatedAt ? ` Latest update ${formatCompactDateTime(cluster.updatedAt)}.` : ""}
         </p>
       </div>
@@ -1180,8 +1281,13 @@ function renderMemoryPalaceSection(props: DreamingProps) {
             <article
               class="dreams-diary__insight-card dreams-diary__insight-card--clickable"
               data-palace-page=${item.pagePath}
-              @click=${() =>
-                toggleExpandedCard(expandedPalaceCards, item.pagePath, props.onRequestUpdate)}
+              @click=${() => {
+                if (item.kind === "report") {
+                  void openWikiPreview(item.pagePath, props);
+                  return;
+                }
+                toggleExpandedCard(expandedPalaceCards, item.pagePath, props.onRequestUpdate);
+              }}
             >
               <div class="dreams-diary__insight-topline">
                 <div class="dreams-diary__insight-title">${item.title}</div>

@@ -15,6 +15,39 @@ describe("ChatLog", () => {
     expect(rendered).not.toContain("system-1");
   });
 
+  it("coalesces consecutive repeatable system messages", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children.length).toBe(1);
+    expect(rendered).toContain("no active run x3");
+  });
+
+  it("does not coalesce ordinary system messages", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("status unchanged");
+    chatLog.addSystem("status unchanged");
+
+    expect(chatLog.children.length).toBe(2);
+  });
+
+  it("starts a new repeatable system message after other chat content", () => {
+    const chatLog = new ChatLog(20);
+
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+    chatLog.addUser("hello");
+    chatLog.addSystem("no active run", { coalesceConsecutive: true });
+
+    const rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(chatLog.children.length).toBe(3);
+    expect(rendered).not.toContain("no active run x2");
+  });
+
   it("drops stale streaming references when old components are pruned", () => {
     const chatLog = new ChatLog(20);
     chatLog.startAssistant("first", "run-1");
@@ -41,6 +74,16 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
   });
 
+  it("reserves assistant position without clearing existing streamed text", () => {
+    const chatLog = new ChatLog(40);
+    chatLog.startAssistant("partial", "run-active");
+    chatLog.reserveAssistantSlot("run-active");
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("partial");
+    expect(chatLog.children.length).toBe(1);
+  });
+
   it("drops stale tool references when old components are pruned", () => {
     const chatLog = new ChatLog(20);
     chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
@@ -52,6 +95,22 @@ describe("ChatLog", () => {
     chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "done" }] });
 
     expect(chatLog.children.length).toBe(20);
+  });
+
+  it("clears visible tool entries and stale tool references", () => {
+    const chatLog = new ChatLog(20);
+    chatLog.startTool("tool-1", "read_file", { path: "a.txt" });
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "done" }] });
+
+    let rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).toContain("Read File");
+
+    chatLog.clearTools();
+    chatLog.updateToolResult("tool-1", { content: [{ type: "text", text: "stale" }] });
+
+    rendered = normalizeTestText(chatLog.render(120).join("\n"));
+    expect(rendered).not.toContain("Read File");
+    expect(rendered).not.toContain("stale");
   });
 
   it("prunes system messages atomically when a non-system entry overflows the log", () => {
@@ -148,6 +207,33 @@ describe("ChatLog", () => {
       "run-1",
     ]);
     expect(chatLog.countPendingUsers()).toBe(0);
+  });
+
+  it("dismisses a pending system notice by runId", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingSystem("run-1", "taking longer than expected");
+    let rendered = chatLog.render(120).join("\n");
+    expect(rendered).toContain("taking longer than expected");
+
+    const dismissed = chatLog.dismissPendingSystem("run-1");
+    expect(dismissed).toBe(true);
+
+    rendered = chatLog.render(120).join("\n");
+    expect(rendered).not.toContain("taking longer than expected");
+    expect(chatLog.dismissPendingSystem("run-1")).toBe(false);
+  });
+
+  it("replaces an existing pending system notice for the same runId", () => {
+    const chatLog = new ChatLog(40);
+
+    chatLog.addPendingSystem("run-1", "first notice");
+    chatLog.addPendingSystem("run-1", "second notice");
+
+    const rendered = chatLog.render(120).join("\n");
+    expect(rendered).not.toContain("first notice");
+    expect(rendered).toContain("second notice");
+    expect(chatLog.children.length).toBe(1);
   });
 
   it("does not hide a new repeated prompt when only older history matches", () => {

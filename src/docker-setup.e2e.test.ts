@@ -77,6 +77,10 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
     join(repoRoot, "scripts", "lib", "docker-e2e-logs.sh"),
     join(rootDir, "scripts", "lib", "docker-e2e-logs.sh"),
   );
+  await copyFile(
+    join(repoRoot, "scripts", "lib", "docker-e2e-container.sh"),
+    join(rootDir, "scripts", "lib", "docker-e2e-container.sh"),
+  );
   await chmod(scriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");
   await writeFile(
@@ -141,7 +145,8 @@ function runDockerSetup(
     cwd: sandbox.rootDir,
     env: createEnv(sandbox, overrides),
     encoding: "utf8",
-    stdio: ["ignore", "ignore", "pipe"],
+    maxBuffer: 4 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
@@ -203,14 +208,14 @@ async function runDockerSetupWithUnsetGatewayToken(
 
 async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Promise<T> {
   const server = createServer();
-  await new Promise<void>((resolve, reject) => {
+  await new Promise<void>((resolveValue, reject) => {
     const onError = (error: Error) => {
       server.off("listening", onListening);
       reject(error);
     };
     const onListening = () => {
       server.off("error", onError);
-      resolve();
+      resolveValue();
     };
     server.once("error", onError);
     server.once("listening", onListening);
@@ -220,7 +225,9 @@ async function withUnixSocket<T>(socketPath: string, run: () => Promise<T>): Pro
   try {
     return await run();
   } finally {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolveLocal) => {
+      server.close(() => resolveLocal());
+    });
     await rm(socketPath, { force: true });
   }
 }
@@ -284,8 +291,11 @@ describe("scripts/docker/setup.sh", () => {
     const log = await readDockerLog(activeSandbox);
     expect(log).toContain("--build-arg OPENCLAW_IMAGE_APT_PACKAGES=curl wget");
     expect(log).toContain(
-      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon`,
+      `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js onboard --mode local --no-install-daemon --gateway-auth token --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN --skip-ui --suppress-gateway-token-output`,
     );
+    expect(result.stdout).toContain("Gateway token: stored in Docker environment/config");
+    expect(result.stdout).not.toContain("test-token");
+    expect(result.stdout).not.toContain("#token=");
     expect(log).toContain(
       `run --rm --no-deps ${prestartContainerEnvFlags} --entrypoint node openclaw-gateway dist/index.js config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]`,
     );
@@ -478,6 +488,7 @@ describe("scripts/docker/setup.sh", () => {
     expect(chownIdx).toBeGreaterThanOrEqual(0);
     expect(onboardIdx).toBeGreaterThan(chownIdx);
     expect(log).toContain("run --rm --no-deps --user root --entrypoint sh openclaw-gateway -c");
+    expect(log).toContain("chown node:node /home/node/.config");
   });
 
   it("precreates auth profile secret key dir outside the mounted state dir", async () => {
@@ -702,7 +713,9 @@ describe("scripts/docker/setup.sh", () => {
 
     expect(result.status).toBe(0);
     const log = await readDockerLog(activeSandbox);
-    expect(log).toContain("onboard --mode local --no-install-daemon");
+    expect(log).toContain(
+      "onboard --mode local --no-install-daemon --gateway-auth token --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN --skip-ui --suppress-gateway-token-output",
+    );
     const envFile = await readFile(join(activeSandbox.rootDir, ".env"), "utf8");
     expect(envFile).toMatch(/OPENCLAW_SKIP_ONBOARDING=\n/);
   });

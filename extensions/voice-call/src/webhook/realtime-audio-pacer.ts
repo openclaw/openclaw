@@ -124,7 +124,7 @@ export class RealtimeAudioPacer {
     }
 
     let delayMs = 0;
-    let sent = true;
+    let sent;
     if (item.type === "audio") {
       this.queuedAudioBytes = Math.max(0, this.queuedAudioBytes - item.chunk.length);
       sent = this.params.send(this.params.serializer.media(item.chunk.toString("base64")));
@@ -149,8 +149,8 @@ export function calculateMulawRms(muLaw: Buffer): number {
     return 0;
   }
   let sum = 0;
-  for (let i = 0; i < muLaw.length; i += 1) {
-    const normalized = (MULAW_LINEAR_SAMPLES[muLaw[i] ?? 0] ?? 0) / PCM16_MAX_AMPLITUDE;
+  for (const sample of muLaw) {
+    const normalized = (MULAW_LINEAR_SAMPLES[sample] ?? 0) / PCM16_MAX_AMPLITUDE;
     sum += normalized * normalized;
   }
   return Math.sqrt(sum / muLaw.length);

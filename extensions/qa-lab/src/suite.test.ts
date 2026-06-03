@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { QaLabServerHandle } from "./lab-server.types.js";
+import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 import { qaSuiteProgressTesting, runQaSuite } from "./suite.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
@@ -11,6 +13,19 @@ afterEach(() => {
   fetchWithSsrFGuardMock.mockReset();
   vi.useRealTimers();
 });
+
+function makeQaSuiteTestLabHandle(): QaLabServerHandle {
+  return {
+    baseUrl: "http://127.0.0.1:43123",
+    listenUrl: "http://127.0.0.1:43123",
+    state: {} as QaLabServerHandle["state"],
+    setControlUi: vi.fn(),
+    setScenarioRun: vi.fn(),
+    setLatestReport: vi.fn(),
+    runSelfCheck: vi.fn(async () => ({}) as Awaited<ReturnType<QaLabServerHandle["runSelfCheck"]>>),
+    stop: vi.fn(async () => {}),
+  };
+}
 
 describe("qa suite", () => {
   it("rejects unsupported transport ids before starting the lab", async () => {
@@ -93,6 +108,13 @@ describe("qa suite", () => {
         OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
       }),
     ).toBe(120_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(undefined, {
+          OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: value,
+        }),
+      ).toBe(120_000);
+    }
     expect(qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(90_000, {})).toBe(90_000);
   });
 
@@ -245,13 +267,115 @@ describe("qa suite", () => {
     expect(
       qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
         providerMode: "mock-openai",
-        forcedRuntime: "pi",
+        forcedRuntime: "openclaw",
         mockBaseUrl: "http://127.0.0.1:44080",
       }),
     ).toEqual({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "pi",
+      OPENCLAW_QA_FORCE_RUNTIME: "openclaw",
     });
+  });
+
+  it("forwards run options into isolated scenario worker params", () => {
+    const startLab = vi.fn();
+    const scenario = makeQaSuiteTestScenario("patched-control-ui", {
+      surface: "control-ui",
+      gatewayConfigPatch: {
+        messages: {
+          groupChat: {
+            visibleReplies: "message_tool",
+          },
+        },
+      },
+    });
+
+    expect(
+      qaSuiteProgressTesting.buildQaIsolatedScenarioWorkerParams({
+        repoRoot: "/repo",
+        outputDir: "/repo/.artifacts/qa-e2e/scenarios/patched-control-ui",
+        providerMode: "mock-openai",
+        transportId: "qa-channel",
+        primaryModel: "mock-openai/gpt-5.5",
+        alternateModel: "mock-openai/gpt-5.5-alt",
+        fastMode: true,
+        scenario,
+        startLab,
+        input: {
+          thinkingDefault: "minimal",
+          claudeCliAuthMode: "subscription",
+          enabledPluginIds: ["acpx"],
+          transportReadyTimeoutMs: 180_000,
+          forcedRuntime: "codex",
+        },
+      }),
+    ).toMatchObject({
+      scenarioIds: ["patched-control-ui"],
+      concurrency: 1,
+      startLab,
+      controlUiEnabled: true,
+      thinkingDefault: "minimal",
+      claudeCliAuthMode: "subscription",
+      enabledPluginIds: ["acpx"],
+      transportReadyTimeoutMs: 180_000,
+      forcedRuntime: "codex",
+    });
+  });
+
+  it("enables Control UI only for Control UI scenarios unless explicitly overridden", () => {
+    const channelScenario = makeQaSuiteTestScenario("channel-baseline", { surface: "channel" });
+    const controlUiScenario = makeQaSuiteTestScenario("control-ui-roundtrip", {
+      surface: "control-ui",
+    });
+
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        scenarios: [channelScenario],
+      }),
+    ).toBe(false);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        scenarios: [channelScenario, controlUiScenario],
+      }),
+    ).toBe(true);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        explicit: true,
+        scenarios: [channelScenario],
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps caller-owned serial labs on shared workers without a launcher", () => {
+    const scenarios = [
+      makeQaSuiteTestScenario("baseline"),
+      makeQaSuiteTestScenario("message-tool-mode", {
+        gatewayConfigPatch: {
+          messages: {
+            groupChat: {
+              visibleReplies: "message_tool",
+            },
+          },
+        },
+      }),
+    ];
+    const lab = makeQaSuiteTestLabHandle();
+    const startLab = vi.fn();
+
+    expect(
+      qaSuiteProgressTesting.shouldRunQaSuiteWithIsolatedScenarioWorkers({
+        scenarios,
+        concurrency: 1,
+        lab,
+      }),
+    ).toBe(false);
+    expect(
+      qaSuiteProgressTesting.shouldRunQaSuiteWithIsolatedScenarioWorkers({
+        scenarios,
+        concurrency: 1,
+        lab,
+        startLab,
+      }),
+    ).toBe(true);
   });
 
   it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
@@ -266,7 +390,7 @@ describe("qa suite", () => {
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
         modelRef: "mock-openai/gpt-5.5",
         providerMode: "mock-openai",
-        forcedRuntime: "pi",
+        forcedRuntime: "openclaw",
       }),
     ).toBe("mock-openai/gpt-5.5");
   });

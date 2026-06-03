@@ -2,12 +2,14 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
-import { afterEach, describe, expect, it } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import type { Model } from "openclaw/plugin-sdk/llm";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   attachModelProviderLocalService,
   ensureModelProviderLocalService,
   getModelProviderLocalService,
+  hasLocalServiceProcessExited,
   stopManagedProviderLocalServicesForTest,
 } from "./provider-local-service.js";
 
@@ -65,6 +67,12 @@ describe("provider local service", () => {
     });
   });
 
+  it("treats signaled local service children as exited", () => {
+    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: "SIGTERM" })).toBe(true);
+    expect(hasLocalServiceProcessExited({ exitCode: 0, signalCode: null })).toBe(true);
+    expect(hasLocalServiceProcessExited({ exitCode: null, signalCode: null })).toBe(false);
+  });
+
   it("starts an on-demand local service and stops it after idle", async () => {
     const port = await freePort();
     const healthUrl = `http://127.0.0.1:${port}/v1/models`;
@@ -95,6 +103,43 @@ describe("provider local service", () => {
     expect((await fetch(healthUrl)).ok).toBe(true);
     lease.release();
     await waitForProbeFailure(healthUrl);
+  });
+
+  it("caps oversized local service idle stop timers", async () => {
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const port = await freePort();
+    const healthUrl = `http://127.0.0.1:${port}/v1/models`;
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-huge-idle",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: [
+          "-e",
+          `const http=require("http");const server=http.createServer((req,res)=>{res.writeHead(200,{"content-type":"application/json"});res.end('{"ok":true}');});server.listen(${port},"127.0.0.1");process.on("SIGTERM",()=>server.close(()=>process.exit(0)));`,
+        ],
+        healthUrl,
+        readyTimeoutMs: 5_000,
+        idleStopMs: Number.MAX_SAFE_INTEGER,
+      },
+    );
+
+    try {
+      const lease = await ensureModelProviderLocalService(model);
+
+      if (!lease) {
+        throw new Error("Expected provider local service lease");
+      }
+      lease.release();
+
+      expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
   });
 
   it("sends provider request headers on local service health probes", async () => {
@@ -319,6 +364,29 @@ describe("provider local service", () => {
     const startedAt = Date.now();
     await expect(ensureModelProviderLocalService(model)).rejects.toThrow(
       "local-fast-exit local service exited before readiness with code 17",
+    );
+    expect(Date.now() - startedAt).toBeLessThan(5_000);
+  });
+
+  it("reports a local service startup signal exit without waiting for readiness timeout", async () => {
+    const port = await freePort();
+    const model = attachModelProviderLocalService(
+      {
+        id: "demo",
+        provider: "local-signal-exit",
+        api: "openai-completions",
+        baseUrl: `http://127.0.0.1:${port}/v1`,
+      } as unknown as Model<"openai-completions">,
+      {
+        command: process.execPath,
+        args: ["-e", "process.kill(process.pid, 'SIGTERM')"],
+        readyTimeoutMs: 60_000,
+      },
+    );
+
+    const startedAt = Date.now();
+    await expect(ensureModelProviderLocalService(model)).rejects.toThrow(
+      "local-signal-exit local service exited before readiness with signal SIGTERM",
     );
     expect(Date.now() - startedAt).toBeLessThan(5_000);
   });

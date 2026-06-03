@@ -172,6 +172,89 @@ describe("memory-wiki cli", () => {
     );
   });
 
+  it("rejects apply confidence values outside the documented range", async () => {
+    const { config } = await createCliVault();
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerWikiCli(program, config);
+
+    await expect(
+      program.parseAsync(
+        [
+          "wiki",
+          "apply",
+          "synthesis",
+          "CLI Alpha",
+          "--body",
+          "Alpha from CLI.",
+          "--source-id",
+          "source.alpha",
+          "--confidence",
+          "Infinity",
+        ],
+        { from: "user" },
+      ),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+
+    await expect(
+      program.parseAsync(["wiki", "apply", "metadata", "entity.alpha", "--confidence", "1.5"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+
+    await expect(
+      program.parseAsync(["wiki", "apply", "metadata", "entity.alpha", "--confidence", "1e-1"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--confidence must be a number between 0 and 1.");
+  });
+
+  it("rejects non-decimal wiki search and get numeric options before dispatch", async () => {
+    const { config } = await createCliVault();
+    const program = new Command();
+    program.name("test");
+    program.exitOverride();
+    program.configureOutput({
+      writeErr: () => {},
+      writeOut: () => {},
+    });
+    registerWikiCli(program, config);
+
+    await expect(
+      program.parseAsync(["wiki", "search", "alpha", "--max-results", "0x10"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--max-results must be a positive integer.");
+    await expect(
+      program.parseAsync(["wiki", "get", "entity.alpha", "--from", "1e2"], { from: "user" }),
+    ).rejects.toThrow("--from must be a positive integer.");
+    await expect(
+      program.parseAsync(["wiki", "get", "entity.alpha", "--lines", "1.5"], { from: "user" }),
+    ).rejects.toThrow("--lines must be a positive integer.");
+  });
+
+  it("accepts signed and zero-padded wiki get line options", async () => {
+    const { rootDir, config } = await createCliVault();
+    const targetPath = path.join(rootDir, "syntheses", "cli-lines.md");
+    await fs.mkdir(path.dirname(targetPath), { recursive: true });
+    await fs.writeFile(targetPath, "# CLI Lines\n\nfirst\nsecond\n", "utf8");
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, config);
+
+    await program.parseAsync(
+      ["wiki", "get", "syntheses/cli-lines.md", "--from", "+01", "--lines", "02"],
+      {
+        from: "user",
+      },
+    );
+  });
+
   it("registers apply metadata and preserves the page body", async () => {
     const { rootDir, config } = await createCliVault();
     const targetPath = path.join(rootDir, "entities", "alpha.md");
@@ -521,5 +604,31 @@ cli note
         .readdir(path.join(rootDir, "sources"))
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
     ).resolves.toStrictEqual([]);
+  });
+
+  it("imports ChatGPT exports with out-of-range Unix timestamps", async () => {
+    const { rootDir, config } = await createCliVault({ initialize: true });
+    const exportDir = await createChatGptExport(rootDir);
+    const conversationsPath = path.join(exportDir, "conversations.json");
+    const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
+      Record<string, unknown>
+    >;
+    conversations[0].update_time = 9_000_000_000_000;
+    await fs.writeFile(conversationsPath, `${JSON.stringify(conversations, null, 2)}\n`, "utf8");
+
+    const result = await runWikiChatGptImport({
+      config,
+      exportPath: exportDir,
+      json: true,
+    });
+
+    expect(result.createdCount).toBe(1);
+    const sourceFile = (await fs.readdir(path.join(rootDir, "sources"))).find(
+      (entry) => entry !== "index.md",
+    );
+    expect(sourceFile).toBeDefined();
+    const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile ?? ""), "utf8");
+    expect(pageContent).toContain("- Created: 2024-04-06T00:26:40.000Z");
+    expect(pageContent).toContain("- Updated: 2024-04-06T00:26:40.000Z");
   });
 });

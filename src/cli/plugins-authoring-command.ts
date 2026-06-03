@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
 import {
   loadPluginManifest,
@@ -194,11 +195,15 @@ export function buildToolPluginPackageManifest(params: {
     !Array.isArray(params.packageManifest.openclaw)
       ? { ...(params.packageManifest.openclaw as JsonObject) }
       : {};
+  const existingExtensions = Array.isArray(openclaw.extensions)
+    ? openclaw.extensions.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  const extensions = uniqueStrings([...existingExtensions, params.entry]);
   return {
     ...params.packageManifest,
     openclaw: {
       ...openclaw,
-      extensions: [params.entry],
+      extensions,
     },
   };
 }

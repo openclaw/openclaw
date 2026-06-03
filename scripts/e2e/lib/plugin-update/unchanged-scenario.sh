@@ -19,7 +19,7 @@ node "$probe" seed
 
 node scripts/e2e/lib/plugin-update/registry-server.mjs >/tmp/openclaw-e2e-registry.log 2>&1 &
 registry_pid=$!
-trap 'kill "$registry_pid" >/dev/null 2>&1 || true' EXIT
+trap 'openclaw_e2e_stop_process "${registry_pid:-}"' EXIT
 
 if ! node "$probe" wait-registry; then
   echo "Local npm metadata registry failed to start"
@@ -36,7 +36,7 @@ plugin_update_timeout_seconds="${OPENCLAW_PLUGIN_UPDATE_TIMEOUT_SECONDS:-180}"
 node "$probe" snapshot > /tmp/plugin-update-before.json
 
 set +e
-timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update @example/lossless-claw > /tmp/plugin-update-output.log 2>&1
+openclaw_e2e_maybe_timeout "${plugin_update_timeout_seconds}s" node "$entry" plugins update @example/lossless-claw > /tmp/plugin-update-output.log 2>&1
 plugin_update_status=$?
 set -e
 if [ "$plugin_update_status" -ne 0 ]; then

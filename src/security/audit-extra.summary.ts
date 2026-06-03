@@ -1,5 +1,5 @@
+import { resolveProviderToolPolicy } from "../agents/agent-tools.policy.js";
 import { parseModelRef } from "../agents/model-selection-normalize.js";
-import { resolveProviderToolPolicy } from "../agents/pi-tools.policy.js";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
@@ -112,7 +112,6 @@ function hasWebSearchKey(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boolean {
     config: cfg,
     env,
     origin: "bundled",
-    bundledAllowlistCompat: true,
   });
 }
 
@@ -181,15 +180,13 @@ export function collectSmallModelRiskFindings(params: {
     return findings;
   }
 
-  const smallModels = models
-    .map((entry) => {
-      const paramB = inferParamBFromIdOrName(entry.id);
-      if (!paramB || paramB > SMALL_MODEL_PARAM_B_MAX) {
-        return null;
-      }
-      return { ...entry, paramB };
-    })
-    .filter((entry): entry is { id: string; source: string; paramB: number } => Boolean(entry));
+  const smallModels: Array<{ id: string; source: string; paramB: number }> = [];
+  for (const entry of models) {
+    const paramB = inferParamBFromIdOrName(entry.id);
+    if (paramB && paramB <= SMALL_MODEL_PARAM_B_MAX) {
+      smallModels.push({ id: entry.id, source: entry.source, paramB });
+    }
+  }
 
   if (smallModels.length === 0) {
     return findings;

@@ -37,6 +37,7 @@ function requireLastTtsCall(): {
   language?: string;
   speed?: number;
   responseFormat?: string;
+  maxBytes?: number;
 } {
   const params = (xaiTTSMock.mock.calls as unknown as Array<[unknown]>).at(-1)?.[0] as
     | {
@@ -47,6 +48,7 @@ function requireLastTtsCall(): {
         language?: string;
         speed?: number;
         responseFormat?: string;
+        maxBytes?: number;
       }
     | undefined;
   if (!params) {
@@ -68,7 +70,13 @@ describe("xai speech provider", () => {
     const provider = buildXaiSpeechProvider();
     const result = await provider.synthesize({
       text: "hello",
-      cfg: {},
+      cfg: {
+        agents: {
+          defaults: {
+            mediaMaxMb: 2,
+          },
+        },
+      },
       providerConfig: {
         apiKey: "xai-key",
         voiceId: "eve",
@@ -87,6 +95,7 @@ describe("xai speech provider", () => {
     expect(tts.baseUrl).toBe("https://api.x.ai/v1");
     expect(tts.voiceId).toBe("eve");
     expect(tts.responseFormat).toBe("mp3");
+    expect(tts.maxBytes).toBe(2 * 1024 * 1024);
   });
 
   it("honors configured response formats", async () => {
@@ -137,6 +146,25 @@ describe("xai speech provider", () => {
     expect(tts.language).toBe("es");
     expect(tts.speed).toBe(1.2);
     expect(tts.responseFormat).toBe("pcm");
+  });
+
+  it("drops malformed speed values before synthesis", async () => {
+    const provider = buildXaiSpeechProvider();
+    await provider.synthesize({
+      text: "hello",
+      cfg: {},
+      providerConfig: {
+        apiKey: "xai-key",
+        speed: 2,
+      },
+      providerOverrides: {
+        speed: 0.5,
+      },
+      target: "audio-file",
+      timeoutMs: 5_000,
+    });
+
+    expect(requireLastTtsCall().speed).toBeUndefined();
   });
 
   it("reports configured when an xAI auth profile exists, even without env or config apiKey", () => {

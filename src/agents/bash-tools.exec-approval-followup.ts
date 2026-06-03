@@ -1,21 +1,21 @@
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
   resolveExternalBestEffortDeliveryTarget,
   type ExternalBestEffortDeliveryTarget,
 } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../sessions/session-key-utils.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { isGatewayMessageChannel, normalizeMessageChannel } from "../utils/message-channel.js";
 import { buildExecApprovalFollowupIdempotencyKey } from "./bash-tools.exec-approval-followup-state.js";
+import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import {
   formatExecDeniedUserMessage,
   isExecDeniedResultText,
   parseExecApprovalResultText,
 } from "./exec-approval-result.js";
-import { sanitizeUserFacingText } from "./pi-embedded-helpers/sanitize-user-facing-text.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 type ExecApprovalFollowupParams = {
@@ -245,17 +245,19 @@ async function sendDirectFollowupFallback(params: {
   deliveryTarget: ExternalBestEffortDeliveryTarget;
   resultText: string;
   sessionError: unknown;
+  allowDenied?: boolean;
 }): Promise<boolean> {
   const directText = formatDirectExecApprovalFollowupText(params.resultText, {
-    allowDenied: canDirectSendDeniedFollowup(params.sessionError),
+    allowDenied: params.allowDenied ?? canDirectSendDeniedFollowup(params.sessionError),
   });
   if (!params.deliveryTarget.deliver || !directText) {
     return false;
   }
 
-  const prefix = shouldPrefixDirectFollowupWithSessionResumeFailure(params)
-    ? buildSessionResumeFallbackPrefix()
-    : "";
+  const prefix =
+    !params.allowDenied && shouldPrefixDirectFollowupWithSessionResumeFailure(params)
+      ? buildSessionResumeFallbackPrefix()
+      : "";
   await sendMessage({
     channel: params.deliveryTarget.channel,
     to: params.deliveryTarget.to ?? "",
@@ -277,9 +279,6 @@ export async function sendExecApprovalFollowup(
     return false;
   }
   const isDenied = isExecDeniedResultText(resultText);
-  if (isDenied && shouldSuppressExecDeniedFollowup(sessionKey)) {
-    return false;
-  }
 
   const deliveryTarget = resolveExternalBestEffortDeliveryTarget({
     channel: params.turnSourceChannel,
@@ -294,6 +293,10 @@ export async function sendExecApprovalFollowup(
       : undefined;
 
   let sessionError: unknown = null;
+
+  if (isDenied && (!sessionKey || shouldSuppressExecDeniedFollowup(sessionKey))) {
+    return false;
+  }
 
   if (sessionKey && params.direct !== true) {
     try {
@@ -328,6 +331,24 @@ export async function sendExecApprovalFollowup(
     } catch (err) {
       sessionError = err;
     }
+  }
+
+  if (isDenied) {
+    if (
+      await sendDirectFollowupFallback({
+        approvalId: params.approvalId,
+        deliveryTarget,
+        resultText,
+        sessionError,
+        allowDenied: true,
+      })
+    ) {
+      return true;
+    }
+    if (sessionError) {
+      throw new Error(`Session followup failed: ${formatUnknownError(sessionError)}`);
+    }
+    return false;
   }
 
   if (

@@ -1,12 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   matchRootFileOpenFailure,
   openRootFile,
   openRootFileSync,
 } from "../infra/boundary-file-read.js";
 import { resolveRootPath, resolveRootPathSync } from "../infra/boundary-path.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import {
@@ -142,6 +142,7 @@ export async function validatePackageExtensionEntriesForInstall(params: {
   packageDir: string;
   extensions: string[];
   manifest: PackageManifest;
+  allowSourceTypeScriptEntries?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const runtimeResolution = resolvePackageRuntimeExtensionEntries({
     manifest: params.manifest,
@@ -195,6 +196,14 @@ export async function validatePackageExtensionEntriesForInstall(params: {
     }
 
     if (foundBuiltEntry) {
+      continue;
+    }
+
+    if (
+      sourceEntry.exists &&
+      isTypeScriptPackageEntry(entry) &&
+      params.allowSourceTypeScriptEntries
+    ) {
       continue;
     }
 
@@ -279,6 +288,14 @@ export async function validatePackageExtensionEntriesForInstall(params: {
     }
 
     if (foundBuiltSetupEntry) {
+      return { ok: true };
+    }
+
+    if (
+      sourceEntry.exists &&
+      isTypeScriptPackageEntry(setupEntry) &&
+      params.allowSourceTypeScriptEntries
+    ) {
       return { ok: true };
     }
 

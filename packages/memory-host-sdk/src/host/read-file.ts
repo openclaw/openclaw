@@ -21,6 +21,7 @@ import {
   DEFAULT_MEMORY_READ_LINES,
   type MemoryReadResult,
 } from "./read-file-shared.js";
+import { retryTransientMemoryRead } from "./read-retry.js";
 
 async function isAllowedAdditionalDirectoryPath(
   additionalPath: string,
@@ -43,6 +44,18 @@ async function isAllowedAdditionalDirectoryPath(
     return false;
   }
   return true;
+}
+
+function isFileDisappearedDuringReadError(err: unknown): boolean {
+  return (
+    isFileMissingError(err) ||
+    Boolean(
+      err &&
+      typeof err === "object" &&
+      "code" in err &&
+      (err as { code?: unknown }).code === "path-mismatch",
+    )
+  );
 }
 
 export async function readMemoryFile(params: {
@@ -114,9 +127,14 @@ export async function readMemoryFile(params: {
   }
   let content: string;
   try {
-    content = (await readRegularFile({ filePath: absPath })).buffer.toString("utf-8");
+    content = (
+      await retryTransientMemoryRead(
+        () => readRegularFile({ filePath: absPath }),
+        `read memory file ${absPath}`,
+      )
+    ).buffer.toString("utf-8");
   } catch (err) {
-    if (isFileMissingError(err)) {
+    if (isFileDisappearedDuringReadError(err)) {
       return { text: "", path: relPath };
     }
     throw err;

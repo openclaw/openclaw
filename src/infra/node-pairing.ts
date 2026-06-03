@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
+import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
-import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
+import { sameNodeApprovalSurfaceSet, sameNodePermissionSurface } from "./node-pairing-surface.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
@@ -33,18 +34,22 @@ type NodeDeclaredSurface = {
 
 type NodeApprovedSurface = NodeDeclaredSurface;
 
+/** Node-declared pairing surface before approval. */
 export type NodePairingRequestInput = NodeDeclaredSurface & {
   silent?: boolean;
 };
 
+/** Pending node pairing request awaiting operator approval. */
 export type NodePairingPendingRequest = NodePairingRequestInput & {
   requestId: string;
   silent?: boolean;
   ts: number;
 };
 
+/** Pending request summary returned when a new approval surface supersedes older requests. */
 export type NodePairingSupersededRequest = Pick<NodePairingPendingRequest, "requestId" | "nodeId">;
 
+/** Result for creating or refreshing a pending node pairing request. */
 export type RequestNodePairingResult = {
   status: "pending";
   request: NodePairingPendingRequest;
@@ -56,6 +61,7 @@ type NodePairingPendingEntry = NodePairingPendingRequest & {
   requiredApproveScopes: NodeApprovalScope[];
 };
 
+/** Approved node record with its pairing token and persisted capability surface. */
 export type NodePairingPairedNode = NodeApprovedSurface & {
   token: string;
   bins?: string[];
@@ -131,43 +137,6 @@ function refreshPendingNodePairingRequest(
   };
 }
 
-function normalizeApprovalSurfaceList(value: string[] | undefined): string[] {
-  return normalizeArrayBackedTrimmedStringList(value) ?? [];
-}
-
-function sameApprovalSurfaceSet(left: string[] | undefined, right: string[] | undefined): boolean {
-  const normalizedLeft = new Set(normalizeApprovalSurfaceList(left));
-  const normalizedRight = new Set(normalizeApprovalSurfaceList(right));
-  if (normalizedLeft.size !== normalizedRight.size) {
-    return false;
-  }
-  for (const entry of normalizedLeft) {
-    if (!normalizedRight.has(entry)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function samePermissions(
-  left: Record<string, boolean> | undefined,
-  right: Record<string, boolean> | undefined,
-): boolean {
-  const leftEntries = Object.entries(left ?? {}).toSorted(([leftKey], [rightKey]) =>
-    leftKey.localeCompare(rightKey),
-  );
-  const rightEntries = Object.entries(right ?? {}).toSorted(([leftKey], [rightKey]) =>
-    leftKey.localeCompare(rightKey),
-  );
-  if (leftEntries.length !== rightEntries.length) {
-    return false;
-  }
-  return leftEntries.every(([key, value], index) => {
-    const rightEntry = rightEntries[index];
-    return rightEntry !== undefined && rightEntry[0] === key && rightEntry[1] === value;
-  });
-}
-
 function samePendingApprovalSurface(
   existing: NodePairingPendingRequest,
   incoming: NodePairingRequestInput,
@@ -177,9 +146,10 @@ function samePendingApprovalSurface(
     normalizeArrayBackedTrimmedStringList(incoming.commands) ?? existing.commands;
   const incomingPermissions = incoming.permissions ?? existing.permissions;
   return (
-    sameApprovalSurfaceSet(existing.caps, incomingCaps) &&
-    sameApprovalSurfaceSet(existing.commands, incomingCommands) &&
-    samePermissions(existing.permissions, incomingPermissions)
+    // Metadata-only reconnects may refresh one pending request; approval-surface changes supersede.
+    sameNodeApprovalSurfaceSet(existing.caps, incomingCaps) &&
+    sameNodeApprovalSurfaceSet(existing.commands, incomingCommands) &&
+    sameNodePermissionSurface(existing.permissions, incomingPermissions)
   );
 }
 
@@ -268,6 +238,7 @@ export async function listNodePairing(baseDir?: string): Promise<NodePairingList
   return { pending, paired };
 }
 
+/** Return one paired node by normalized node id. */
 export async function getPairedNode(
   nodeId: string,
   baseDir?: string,
@@ -276,6 +247,7 @@ export async function getPairedNode(
   return state.pairedByNodeId[normalizeNodeId(nodeId)] ?? null;
 }
 
+/** Create or refresh a pending node pairing request for operator approval. */
 export async function requestNodePairing(
   req: NodePairingRequestInput,
   baseDir?: string,
@@ -313,6 +285,7 @@ export async function requestNodePairing(
   });
 }
 
+/** Approve a pending node request when caller scopes cover the requested command surface. */
 export async function approveNodePairing(
   requestId: string,
   options: { callerScopes?: readonly string[] },
@@ -363,6 +336,7 @@ export async function approveNodePairing(
   });
 }
 
+/** Reject a pending node pairing request. */
 export async function rejectNodePairing(
   requestId: string,
   baseDir?: string,
@@ -382,6 +356,7 @@ export async function rejectNodePairing(
   });
 }
 
+/** Remove a paired node without disturbing unrelated pending requests. */
 export async function removePairedNode(
   nodeId: string,
   baseDir?: string,
@@ -398,6 +373,7 @@ export async function removePairedNode(
   });
 }
 
+/** Verify a paired node token and return the approved node record on success. */
 export async function verifyNodeToken(
   nodeId: string,
   token: string,
@@ -412,6 +388,7 @@ export async function verifyNodeToken(
   return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
 }
 
+/** Update non-auth metadata for a paired node heartbeat/status refresh. */
 export async function updatePairedNodeMetadata(
   nodeId: string,
   patch: Partial<Omit<NodePairingPairedNode, "nodeId" | "token" | "createdAtMs" | "approvedAtMs">>,
@@ -452,6 +429,7 @@ export async function updatePairedNodeMetadata(
   });
 }
 
+/** Rename a paired node display name while preserving token and approval metadata. */
 export async function renamePairedNode(
   nodeId: string,
   displayName: string,

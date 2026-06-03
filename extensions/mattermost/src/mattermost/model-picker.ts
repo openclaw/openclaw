@@ -4,6 +4,7 @@ import {
   type ModelsProviderData,
 } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
@@ -63,10 +64,7 @@ function readContextNumber(context: Record<string, unknown>, key: string): numbe
     return value;
   }
   if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
-      return parsed;
-    }
+    return parseStrictInteger(value);
   }
   return undefined;
 }
@@ -344,7 +342,7 @@ export function renderMattermostModelsPickerView(params: {
 
   const page = paginateItems(models, params.page);
   const rows: MattermostInteractiveButtonInput[][] = page.items.map((model) => {
-    const isCurrent = current?.provider === provider && current.model === model;
+    const isCurrent = current?.provider === provider && current?.model === model;
     return [
       buildButton({
         action: "select",

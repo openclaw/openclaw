@@ -19,6 +19,16 @@ vi.mock("node:child_process", async () => {
   };
 });
 
+const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
+  registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
+    () => undefined,
+  ),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+  registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
+}));
+
 const ensurePortAvailableMock = vi.hoisted(() => vi.fn(async () => {}));
 
 vi.mock("../infra/ports.js", () => ({
@@ -184,8 +194,12 @@ async function withMockChromeCdpServer(params: {
     const addr = server.address() as AddressInfo;
     await params.run(`http://127.0.0.1:${addr.port}`);
   } finally {
-    await new Promise<void>((resolve) => wss.close(() => resolve()));
-    await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => {
+      wss.close(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
   }
 }
 
@@ -201,6 +215,8 @@ describe("chrome.ts internal", () => {
     spawnMock.mockReset();
     ensurePortAvailableMock.mockReset();
     ensurePortAvailableMock.mockImplementation(async () => {});
+    registerManagedProxyBrowserCdpBypassMock.mockReset();
+    registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => undefined);
   });
 
   describe("resolveOpenClawUserDataDir", () => {
@@ -940,9 +956,13 @@ describe("chrome.ts internal", () => {
     it("resolves false when the direct-ws probe cannot connect", async () => {
       // Bind a ws server and then close it, so connecting to it fails.
       const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.once("listening", () => resolve());
+      });
       const port = (wss.address() as { port: number }).port;
-      await new Promise<void>((resolve) => wss.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.close(() => resolve());
+      });
       await expect(
         isChromeReachable(`ws://127.0.0.1:${port}/devtools/browser/GONE`, 50),
       ).resolves.toBe(false);
@@ -950,7 +970,9 @@ describe("chrome.ts internal", () => {
 
     it("resolves true when the direct-ws handshake succeeds", async () => {
       const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => wss.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        wss.once("listening", () => resolve());
+      });
       const port = (wss.address() as { port: number }).port;
       try {
         // Direct /devtools/ WS URL — isChromeReachable goes through
@@ -960,7 +982,9 @@ describe("chrome.ts internal", () => {
           isChromeReachable(`ws://127.0.0.1:${port}/devtools/browser/OK`, 500),
         ).resolves.toBe(true);
       } finally {
-        await new Promise<void>((resolve) => wss.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          wss.close(() => resolve());
+        });
       }
     });
   });
@@ -982,9 +1006,13 @@ describe("chrome.ts internal", () => {
       // accepting ws upgrades — the canRunCdpHealthCommand probe will
       // fire its 'error' handler during handshake.
       const dead = new WebSocketServer({ port: 0, host: "127.0.0.1" });
-      await new Promise<void>((resolve) => dead.once("listening", () => resolve()));
+      await new Promise<void>((resolve) => {
+        dead.once("listening", () => resolve());
+      });
       const deadPort = (dead.address() as { port: number }).port;
-      await new Promise<void>((resolve) => dead.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        dead.close(() => resolve());
+      });
       const server = createServer((req, res) => {
         if (req.url === "/json/version") {
           res.writeHead(200, { "Content-Type": "application/json" });
@@ -997,14 +1025,18 @@ describe("chrome.ts internal", () => {
         }
         res.writeHead(404).end();
       });
-      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", () => resolve()));
+      await new Promise<void>((resolve) => {
+        server.listen(0, "127.0.0.1", () => resolve());
+      });
       try {
         const addr = server.address() as AddressInfo;
         await expect(isChromeCdpReady(`http://127.0.0.1:${addr.port}`, 50, 10)).resolves.toBe(
           false,
         );
       } finally {
-        await new Promise<void>((resolve) => server.close(() => resolve()));
+        await new Promise<void>((resolve) => {
+          server.close(() => resolve());
+        });
       }
     });
 
@@ -1464,6 +1496,124 @@ describe("chrome.ts internal", () => {
           running.proc.kill?.("SIGTERM");
         },
       });
+    });
+  });
+
+  describe("launchOpenClawChrome managed-proxy CDP bypass", () => {
+    const makeLoopbackProfile = (cdpPort: number): ResolvedBrowserProfile =>
+      ({
+        name: "openclaw-bypass",
+        color: "#FF4500",
+        cdpPort,
+        cdpUrl: `http://127.0.0.1:${cdpPort}`,
+        cdpIsLoopback: true,
+      }) as unknown as ResolvedBrowserProfile;
+
+    const makeResolved = (): ResolvedBrowserConfig =>
+      ({
+        headless: true,
+        noSandbox: true,
+        extraArgs: [],
+        localLaunchTimeoutMs: 15_000,
+      }) as unknown as ResolvedBrowserConfig;
+
+    const stubExecutableAndPrefsExist = () => {
+      vi.spyOn(fs, "existsSync").mockImplementation((p) => {
+        const s = String(p);
+        if (
+          s.includes("Google Chrome") ||
+          s.includes("google-chrome") ||
+          s.includes("/usr/bin/chromium")
+        ) {
+          return true;
+        }
+        if (s.endsWith("Local State") || s.endsWith("Preferences")) {
+          return true;
+        }
+        return false;
+      });
+    };
+
+    it("preflights managed-proxy policy and registers exact CDP probe URLs", async () => {
+      stubExecutableAndPrefsExist();
+      const release = vi.fn();
+      registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => release);
+      spawnMock.mockImplementation(() => makeFakeProc());
+
+      await withMockChromeCdpServer({
+        wsPath: "/devtools/browser/BYPASS_OK",
+        run: async (baseUrl) => {
+          const port = Number(new URL(baseUrl).port);
+          const profile = { ...makeLoopbackProfile(port), cdpUrl: baseUrl };
+          const running = await launchOpenClawChrome(makeResolved(), profile);
+          expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(baseUrl);
+          expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+            `${baseUrl}/json/version`,
+          );
+          expect(release).toHaveBeenCalled();
+          expect(running.releaseCdpProxyBypass).toBeUndefined();
+          running.proc.kill?.("SIGTERM");
+        },
+      });
+    });
+
+    it("releases scoped bypass registrations when the CDP probe never succeeds", async () => {
+      stubExecutableAndPrefsExist();
+      const release = vi.fn();
+      registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => release);
+      const fakeProc = makeFakeProc();
+      spawnMock.mockImplementation(() => fakeProc);
+      mockExpiredLaunchPollingClock();
+      vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+
+      const profile = makeLoopbackProfile(54323);
+      await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(
+        /Failed to start Chrome CDP/,
+      );
+      expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(profile.cdpUrl);
+      expect(registerManagedProxyBrowserCdpBypassMock).toHaveBeenCalledWith(
+        `${profile.cdpUrl}/json/version`,
+      );
+      expect(release).toHaveBeenCalledTimes(
+        registerManagedProxyBrowserCdpBypassMock.mock.calls.length,
+      );
+    });
+
+    it("surfaces loopbackMode=block as BrowserProfileUnavailableError without spawning Chrome", async () => {
+      registerManagedProxyBrowserCdpBypassMock.mockImplementation(() => {
+        throw new Error(
+          "proxy: Browser loopback CDP connections are blocked by proxy.loopbackMode",
+        );
+      });
+      const profile = makeLoopbackProfile(54324);
+      const { BrowserProfileUnavailableError } = await import("./errors.js");
+      await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toBeInstanceOf(
+        BrowserProfileUnavailableError,
+      );
+      await expect(launchOpenClawChrome(makeResolved(), profile)).rejects.toThrow(
+        /blocked by proxy\.loopbackMode/,
+      );
+      expect(spawnMock).not.toHaveBeenCalled();
+    });
+
+    it("does not register a bypass for a remote attachOnly CDP URL (loopback gate)", async () => {
+      stubExecutableAndPrefsExist();
+      // For this test we want launchOpenClawChrome to reject before any
+      // spawn — but the rejection should come from the cdpIsLoopback guard,
+      // which fires before the bypass registration. Verify that the guard
+      // path never reaches registerManagedProxyBrowserCdpBypass.
+      const remoteProfile = {
+        name: "openclaw-remote",
+        color: "#FF4500",
+        cdpPort: 19222,
+        cdpUrl: "http://browserless.example.com:19222",
+        cdpIsLoopback: false,
+      } as unknown as ResolvedBrowserProfile;
+      await expect(launchOpenClawChrome(makeResolved(), remoteProfile)).rejects.toThrow(
+        /is remote; cannot launch local Chrome/,
+      );
+      expect(registerManagedProxyBrowserCdpBypassMock).not.toHaveBeenCalled();
+      expect(spawnMock).not.toHaveBeenCalled();
     });
   });
 });

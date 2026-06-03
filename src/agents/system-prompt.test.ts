@@ -6,10 +6,8 @@ import { resolveAgentPromptSurfaceForSessionKey } from "./prompt-surface.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
-  appendAgentBootstrapSystemPromptSupplement,
   buildAgentBootstrapSystemContext,
   buildAgentBootstrapSystemPromptSections,
-  buildAgentBootstrapSystemPromptSupplement,
   buildAgentSystemPrompt,
   buildRuntimeLine,
 } from "./system-prompt.js";
@@ -18,8 +16,8 @@ describe("buildAgentSystemPrompt", () => {
   it("resolves helper session keys to scoped prompt surfaces", () => {
     expect(resolveAgentPromptSurfaceForSessionKey("agent:main:subagent:child")).toBe("subagent");
     expect(resolveAgentPromptSurfaceForSessionKey("agent:codex:acp:child")).toBe("acp_backend");
-    expect(resolveAgentPromptSurfaceForSessionKey("agent:main")).toBe("pi_main");
-    expect(resolveAgentPromptSurfaceForSessionKey(undefined)).toBe("pi_main");
+    expect(resolveAgentPromptSurfaceForSessionKey("agent:main")).toBe("openclaw_main");
+    expect(resolveAgentPromptSurfaceForSessionKey(undefined)).toBe("openclaw_main");
   });
 
   it("formats owner section for plain, hash, and missing owner lists", () => {
@@ -375,13 +373,13 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("Brave API");
   });
 
-  it("keeps the PI empty-tool fallback on the main prompt surface", () => {
+  it("keeps the OpenClaw empty-tool fallback on the main prompt surface", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: [],
     });
 
-    expect(prompt).toContain("Pi lists the standard tools above");
+    expect(prompt).toContain("OpenClaw lists the standard tools above");
     expect(prompt).toContain("- sessions_spawn: spawn an isolated sub-agent session");
   });
 
@@ -685,6 +683,50 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("If several apply, choose the most specific.");
   });
 
+  it("instructs models to use skill_workshop only when the tool is available", () => {
+    const withoutTool = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read"],
+    });
+    expect(withoutTool).not.toContain("## Skill Workshop");
+    expect(withoutTool).not.toContain("use `skill_workshop`");
+
+    const withTool = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["read", "skill_workshop"],
+    });
+    expect(withTool).toContain(
+      "- skill_workshop: Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
+    );
+    expect(withTool).toContain("## Skill Workshop");
+    expect(withTool).toContain(
+      "Use `skill_workshop` when the user wants to create, update, revise, list, inspect, apply, reject, or quarantine a reusable skill, Skill Workshop proposal, playbook, workflow, procedure, or durable instruction.",
+    );
+    expect(withTool).toContain(
+      "Treat a request as durable when it should be saved, repeated, proposed, installed later, shared as a skill, or used as a standing workflow instead of answered once in chat.",
+    );
+    expect(withTool).toContain(
+      "Do not create or change skill proposal files manually with `write`, `edit`, `exec`, shell commands, or direct filesystem operations.",
+    );
+    expect(withTool).toContain("keep `description` under 160 bytes");
+    expect(withTool).toContain("`proposal_content` within the configured body limit");
+    expect(withTool).toContain(
+      "Use `action=list` or `action=inspect` only for pending proposal discovery/inspection. Do not use filesystem search for proposal discovery.",
+    );
+    expect(withTool).toContain("`action=revise` for an existing pending proposal");
+    expect(withTool).toContain("pass the proposal or skill name in `name`");
+    expect(withTool).toContain(
+      "Use `action=apply`, `action=reject`, or `action=quarantine` only after the user explicitly asks to approve/use/apply, reject, or quarantine a specific proposal.",
+    );
+    expect(withTool).toContain("Generated skills are pending proposals by default.");
+    expect(withTool).toContain(
+      "Do not apply, reject, or quarantine proposals manually with filesystem operations or shell commands.",
+    );
+    expect(withTool).toContain(
+      "You may gather context first, but the durable proposal write or lifecycle change must use `skill_workshop`.",
+    );
+  });
+
   it("appends available skills when provided", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
@@ -836,7 +878,7 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(messagingPrompt).not.toContain("Sub-agent orchestration");
     expect(messagingPrompt).not.toContain("sessions_spawn(...)");
-    expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
+    expect(messagingPrompt).not.toContain("subagents(action=list)");
 
     expect(spawnOnlyPrompt).toContain(
       '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
@@ -844,7 +886,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` only for on-demand status, debugging, or intervention.',
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list)` only for on-demand status/debugging visibility.',
     );
     expect(orchestrationWaitPrompt).toContain("use `sessions_yield` to wait for completion events");
   });
@@ -868,9 +910,10 @@ describe("buildAgentSystemPrompt", () => {
       "Anything requiring more work than a direct reply should go through `sessions_spawn`",
     );
     expect(preferPrompt).toContain("objective, expected output, relevant files/inputs");
+    expect(preferPrompt).toContain("keep it lowercase with underscores or hyphens");
     expect(preferPrompt).toContain("Treat child outputs as reports/evidence");
     expect(preferPrompt).toContain(
-      "Use `subagents(action=list|steer|kill)` only when explicitly asked for status",
+      "Use `subagents(action=list)` only when explicitly asked for sub-agent status",
     );
   });
 
@@ -948,7 +991,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("use `message(action=send)` for visible source-channel output");
-    expect(prompt).toContain("Attach media with message-tool attachment fields");
+    expect(prompt).toContain(
+      "Tool/generated media paths are attachments, not prose; send one with `media`, multiple with `attachments: [{media: ...}]`.",
+    );
     expect(prompt).not.toContain("Attach media: `MEDIA:<path-or-url>`");
     expect(prompt).toContain("The target defaults to the current source channel");
     expect(prompt).toContain("do not repeat that visible content in your final answer");
@@ -958,6 +1003,23 @@ describe("buildAgentSystemPrompt", () => {
       `respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies)`,
     );
     expect(prompt).not.toContain("For `action=send`, include `target` and `message`.");
+  });
+
+  it("tells automatic source delivery to expose generated media as MEDIA directives", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+      },
+    });
+
+    expect(prompt).toContain(
+      "Attach media in the final visible reply with `MEDIA:<path-or-url>` on its own line.",
+    );
+    expect(prompt).toContain(
+      "Tool/generated media paths are attachments, not prose; emit each as its own `MEDIA:<path-or-url>` line.",
+    );
   });
 
   it("suppresses plain chat approval commands when inline approval UI is available", () => {
@@ -1229,13 +1291,12 @@ describe("buildAgentBootstrapSystemContext", () => {
   });
 });
 
-describe("buildAgentBootstrapSystemPromptSupplement", () => {
+describe("buildAgentBootstrapSystemPromptSections", () => {
   it("can render bootstrap guidance without duplicating Project Context", () => {
     const sections = buildAgentBootstrapSystemPromptSections({
       bootstrapMode: "full",
       bootstrapTruncationNotice: "Bootstrap context was truncated.",
       contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
-      includeProjectContext: false,
     }).join("\n");
 
     expect(sections).toContain("## Bootstrap Pending");
@@ -1244,34 +1305,6 @@ describe("buildAgentBootstrapSystemPromptSupplement", () => {
     expect(sections).toContain("Bootstrap context was truncated.");
     expect(sections).not.toContain("## /tmp/openclaw/BOOTSTRAP.md");
     expect(sections).not.toContain("Ask who I am.");
-  });
-
-  it("adds pending bootstrap guidance and BOOTSTRAP.md contents for override prompts", () => {
-    const supplement = buildAgentBootstrapSystemPromptSupplement({
-      bootstrapMode: "full",
-      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
-    });
-
-    expect(supplement).toContain("## Bootstrap Pending");
-    expect(supplement).toContain("BOOTSTRAP.md is included below in Project Context");
-    expect(supplement).toContain("## /tmp/openclaw/BOOTSTRAP.md");
-    expect(supplement).toContain("Ask who I am.");
-  });
-
-  it("appends bootstrap supplement to configured system prompt overrides", () => {
-    const prompt = appendAgentBootstrapSystemPromptSupplement({
-      systemPrompt: "Custom override prompt.",
-      bootstrapMode: "full",
-      bootstrapTruncationNotice:
-        "[Bootstrap truncation warning]\nSome workspace bootstrap files were truncated before Project Context injection.\nTreat Project Context as partial and read the relevant files directly if details seem missing.",
-      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
-    });
-
-    expect(prompt).toContain("Custom override prompt.");
-    expect(prompt).toContain("## Bootstrap Pending");
-    expect(prompt).toContain("Ask who I am.");
-    expect(prompt).toContain("## Bootstrap Context Notice");
-    expect(prompt).toContain("[Bootstrap truncation warning]");
   });
 });
 
@@ -1314,7 +1347,9 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain("Avoid polling loops");
     expect(prompt).toContain("spawned by the main agent");
     expect(prompt).toContain("reported to the main agent");
-    expect(prompt).toContain("[... N more characters truncated]");
+    expect(prompt).toContain(
+      "[... N more characters truncated; rerun with narrower args if needed]",
+    );
     expect(prompt).toContain("offset/limit");
     expect(prompt).toContain("instead of full-file `cat`");
   });

@@ -3,6 +3,7 @@ import {
   type GeneratedImageAsset,
   type ImageGenerationProvider,
 } from "openclaw/plugin-sdk/image-generation";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -11,6 +12,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -41,10 +43,6 @@ const GOOGLE_SUPPORTED_ASPECT_RATIOS = [
 
 const GOOGLE_IMAGE_MALFORMED_RESPONSE = "Google image generation response malformed";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function normalizeGoogleImageModel(model: string | undefined): string {
   const trimmed = model?.trim();
   return normalizeGoogleModelId(trimmed || DEFAULT_GOOGLE_IMAGE_MODEL);
@@ -69,8 +67,11 @@ function mapSizeToImageConfig(
   const aspectRatio = mapping.get(normalized);
 
   const [widthRaw, heightRaw] = normalized.split("x");
-  const width = Number.parseInt(widthRaw ?? "", 10);
-  const height = Number.parseInt(heightRaw ?? "", 10);
+  const width = parseStrictPositiveInteger(widthRaw);
+  const height = parseStrictPositiveInteger(heightRaw);
+  if (width === undefined || height === undefined) {
+    return undefined;
+  }
   const longestEdge = Math.max(width, height);
   const imageSize = longestEdge >= 3072 ? "4K" : longestEdge >= 1536 ? "2K" : undefined;
 

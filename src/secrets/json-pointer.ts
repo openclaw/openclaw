@@ -1,12 +1,11 @@
+import { isRecord as isJsonObject } from "@openclaw/normalization-core/record-coerce";
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
+
 function failOrUndefined(params: { onMissing: "throw" | "undefined"; message: string }): undefined {
   if (params.onMissing === "throw") {
     throw new Error(params.message);
   }
   return undefined;
-}
-
-function isJsonObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function decodeJsonPointerToken(token: string): string {
@@ -39,8 +38,8 @@ export function readJsonPointer(
   let current: unknown = root;
   for (const token of tokens) {
     if (Array.isArray(current)) {
-      const index = Number.parseInt(token, 10);
-      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+      const index = parseConfigPathArrayIndex(token);
+      if (index === undefined || index >= current.length) {
         return failOrUndefined({
           onMissing,
           message: `JSON pointer segment "${token}" is out of bounds.`,

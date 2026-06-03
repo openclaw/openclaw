@@ -2,7 +2,7 @@ import {
   normalizeFastMode,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "../../packages/normalization-core/src/string-coerce.js";
 
 export { normalizeFastMode };
 
@@ -27,6 +27,7 @@ export type ThinkingCatalogEntry = {
   id: string;
   reasoning?: boolean;
   compat?: {
+    thinkingFormat?: string;
     supportedReasoningEfforts?: readonly string[] | null;
   } | null;
 };

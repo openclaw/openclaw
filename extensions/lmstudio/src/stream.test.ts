@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
@@ -217,6 +217,32 @@ describe("lmstudio stream wrapper", () => {
       baseUrl: "http://lmstudio.internal:1234/v1",
       modelKey: "qwen3-8b-instruct",
       requestedContextLength: 64000,
+      apiKey: "lmstudio-token",
+      ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
+    });
+  });
+
+  it("omits malformed preload context lengths", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      baseUrl: "http://lmstudio.internal:1234/v1",
+    });
+    const stream = runWrappedLmstudioStream(
+      wrapped,
+      {
+        contextTokens: 64000.5,
+        contextWindow: Number.POSITIVE_INFINITY,
+      },
+      { apiKey: "lmstudio-token" },
+    );
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expectEnsureLoadedFields({
+      baseUrl: "http://lmstudio.internal:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+      requestedContextLength: undefined,
       apiKey: "lmstudio-token",
       ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
     });

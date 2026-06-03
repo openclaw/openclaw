@@ -36,7 +36,7 @@ function account(
   };
 }
 
-function mockBotAdmin(features: number): void {
+function mockBotAdmin(features: number | string): void {
   hoisted.fetchWithSsrFGuard.mockResolvedValueOnce({
     response: new Response(
       JSON.stringify({
@@ -80,6 +80,19 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
     });
   });
 
+  it("normalizes signed decimal bot feature strings through the shared parser", async () => {
+    mockBotAdmin("+011");
+
+    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
+      ok: true,
+      code: "ok",
+      botId: "7",
+      botName: "OpenClaw",
+      features: 11,
+      message: 'Nextcloud Talk bot "OpenClaw" has the response feature.',
+    });
+  });
+
   it("reports missing response feature for the matching webhook bot", async () => {
     mockBotAdmin(1 | 8);
 
@@ -91,6 +104,32 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       features: 9,
       message:
         'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature (features=9); outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
+    });
+  });
+
+  it("does not coerce partial bot feature strings", async () => {
+    mockBotAdmin("2response");
+
+    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
+      ok: false,
+      code: "missing_response_feature",
+      botId: "7",
+      botName: "OpenClaw",
+      message:
+        'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
+    });
+  });
+
+  it("does not treat negative feature masks as having every feature", async () => {
+    mockBotAdmin(-1);
+
+    await expect(probeNextcloudTalkBotResponseFeature({ account: account() })).resolves.toEqual({
+      ok: false,
+      code: "missing_response_feature",
+      botId: "7",
+      botName: "OpenClaw",
+      message:
+        'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature; outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
     });
   });
 
