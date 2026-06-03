@@ -1,24 +1,14 @@
-import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
+import { tokenize, jaccardSimilarity, textSimilarity } from "./tokenize.js";
 
 /**
- * Maximal Marginal Relevance (MMR) re-ranking algorithm.
- *
- * MMR balances relevance with diversity by iteratively selecting results
- * that maximize: λ * relevance - (1-λ) * max_similarity_to_selected
- *
+ * Maximal Marginal Relevance (MMR) re-ranking.
+ * MMR balances relevance with diversity:
+ *   score = λ * relevance - (1-λ) * max_similarity_to_selected
  * @see Carbonell & Goldstein, "The Use of MMR, Diversity-Based Reranking" (1998)
  */
 
-export type MMRItem = {
-  id: string;
-  score: number;
-  content: string;
-};
-
 export type MMRConfig = {
-  /** Enable/disable MMR re-ranking. Default: false (opt-in) */
   enabled: boolean;
-  /** Lambda parameter: 0 = max diversity, 1 = max relevance. Default: 0.7 */
   lambda: number;
 };
 
@@ -27,10 +17,19 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
   lambda: 0.7,
 };
 
-// Re-export the shared CJK-aware tokenizer + Jaccard helpers so existing
-// `import { tokenize, jaccardSimilarity, textSimilarity } from "./mmr.js"`
-// callers (including `mmr.test.ts`) continue to work without churn.
-export { jaccardSimilarity, textSimilarity, tokenize };
+export function computeMMRScore(
+  normalizedRelevance: number,
+  maxSimilarity: number,
+  lambda: number,
+): number {
+  return lambda * normalizedRelevance - (1 - lambda) * maxSimilarity;
+}
+
+export type MMRItem = {
+  id: string;
+  score: number;
+  content: string;
+};
 
 /**
  * Compute the maximum similarity between an item and all selected items.
@@ -59,14 +58,6 @@ function maxSimilarityToSelected(
 }
 
 /**
- * Compute MMR score for a candidate item.
- * MMR = λ * relevance - (1-λ) * max_similarity_to_selected
- */
-export function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
-  return lambda * relevance - (1 - lambda) * maxSimilarity;
-}
-
-/**
  * Re-rank items using Maximal Marginal Relevance (MMR).
  *
  * The algorithm iteratively selects items that balance relevance with diversity:
@@ -80,6 +71,13 @@ export function computeMMRScore(relevance: number, maxSimilarity: number, lambda
  */
 export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
+
+  // Validate lambda
+  if (lambda !== undefined) {
+    if (typeof lambda !== "number" || !Number.isFinite(lambda)) {
+      throw new Error(`lambda must be a finite number, got ${lambda}`);
+    }
+  }
 
   // Early exits
   if (!enabled || items.length <= 1) {
@@ -177,3 +175,5 @@ export function applyMMRToHybridResults<
   // Map back to original items using the ID
   return reranked.map((item) => itemById.get(item.id)!);
 }
+
+export { tokenize, jaccardSimilarity, textSimilarity } from "./tokenize.js";

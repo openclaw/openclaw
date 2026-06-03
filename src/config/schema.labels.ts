@@ -501,6 +501,8 @@ export const FIELD_LABELS: Record<string, string> = {
     "Memory Search Hybrid Candidate Multiplier",
   "agents.defaults.memorySearch.query.hybrid.mmr.enabled": "Memory Search MMR Re-ranking",
   "agents.defaults.memorySearch.query.hybrid.mmr.lambda": "Memory Search MMR Lambda",
+  "agents.defaults.memorySearch.query.hybrid.mmr.provider": "Memory Search MMR Provider",
+  "agents.defaults.memorySearch.query.hybrid.mmr.fallback": "Memory Search MMR Fallback",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled": "Memory Search Temporal Decay",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
     "Memory Search Temporal Decay Half-life (Days)",

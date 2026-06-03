@@ -1,5 +1,4 @@
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
 import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
@@ -48,6 +47,45 @@ export function bm25RankToScore(rank: number): number {
   return 1 / (1 + rank);
 }
 
+type HybridMergedResult = {
+  path: string;
+  startLine: number;
+  endLine: number;
+  score: number;
+  vectorScore: number;
+  textScore: number;
+  snippet: string;
+  source: HybridSource;
+};
+
+export type RerankerAdapter = (
+  items: Array<{ id: string; score: number; content: string }>,
+  lambda: number,
+) => Promise<Array<{ id: string; score: number; content: string }>>;
+
+const rerankerKey = (r: { path: string; startLine: number; endLine: number }): string =>
+  `${r.path}:${r.startLine}-${r.endLine}`;
+
+async function runReranker(
+  adapter: RerankerAdapter,
+  sorted: HybridMergedResult[],
+  lambda: number,
+): Promise<HybridMergedResult[]> {
+  const reranked = await adapter(
+    sorted.map((r) => ({ id: rerankerKey(r), score: r.score, content: r.snippet })),
+    lambda,
+  );
+  const byId = new Map(sorted.map((s) => [rerankerKey(s), s]));
+  const out: HybridMergedResult[] = [];
+  for (const r of reranked) {
+    const original = byId.get(r.id);
+    if (original) {
+      out.push(original);
+    }
+  }
+  return out;
+}
+
 export async function mergeHybridResults(params: {
   vector: HybridVectorResult[];
   keyword: HybridKeywordResult[];
@@ -55,23 +93,16 @@ export async function mergeHybridResults(params: {
   textWeight: number;
   workspaceDir?: string;
   /** MMR configuration for diversity-aware re-ranking */
-  mmr?: Partial<MMRConfig>;
+  mmr?: Partial<{ enabled: boolean; lambda: number; provider: string; fallback: string }>;
   /** Temporal decay configuration for recency-aware scoring */
   temporalDecay?: Partial<TemporalDecayConfig>;
   /** Test hook for deterministic time-dependent behavior */
   nowMs?: number;
-}): Promise<
-  Array<{
-    path: string;
-    startLine: number;
-    endLine: number;
-    score: number;
-    vectorScore: number;
-    textScore: number;
-    snippet: string;
-    source: HybridSource;
-  }>
-> {
+  /** Reranker adapter for MMR re-ranking */
+  reranker?: RerankerAdapter;
+  /** Fallback reranker adapter if primary throws */
+  fallbackReranker?: RerankerAdapter;
+}): Promise<HybridMergedResult[]> {
   const byId = new Map<
     string,
     {
@@ -146,9 +177,20 @@ export async function mergeHybridResults(params: {
   const sorted = decayed.toSorted((a, b) => b.score - a.score);
 
   // Apply MMR re-ranking if enabled
-  const mmrConfig = { ...DEFAULT_MMR_CONFIG, ...params.mmr };
-  if (mmrConfig.enabled) {
-    return applyMMRToHybridResults(sorted, mmrConfig);
+  if (params.mmr?.enabled && params.reranker) {
+    const lambda = params.mmr.lambda ?? 0.7;
+    try {
+      return await runReranker(params.reranker, sorted, lambda);
+    } catch {
+      if (params.fallbackReranker) {
+        try {
+          return await runReranker(params.fallbackReranker, sorted, lambda);
+        } catch {
+          return sorted;
+        }
+      }
+      return sorted;
+    }
   }
 
   return sorted;

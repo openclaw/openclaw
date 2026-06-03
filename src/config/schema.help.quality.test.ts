@@ -109,6 +109,8 @@ const TARGET_KEYS = [
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier",
   "agents.defaults.memorySearch.query.hybrid.mmr.enabled",
   "agents.defaults.memorySearch.query.hybrid.mmr.lambda",
+  "agents.defaults.memorySearch.query.hybrid.mmr.provider",
+  "agents.defaults.memorySearch.query.hybrid.mmr.fallback",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays",
   "agents.defaults.memorySearch.cache.enabled",

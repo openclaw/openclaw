@@ -1253,6 +1253,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Adds MMR reranking to diversify results and reduce near-duplicate snippets in a single answer window. Enable when recall looks repetitive; keep off for strict score ordering.",
   "agents.defaults.memorySearch.query.hybrid.mmr.lambda":
     "Sets MMR relevance-vs-diversity balance (0 = most diverse, 1 = most relevant, default: 0.7). Lower values reduce repetition; higher values keep tightly relevant but may duplicate.",
+  "agents.defaults.memorySearch.query.hybrid.mmr.provider":
+    'Reranker plugin id used for MMR (default: "memory-mmr"). Set to "none" to disable, or to a registered external reranker id (e.g. "memory-external-reranker").',
+  "agents.defaults.memorySearch.query.hybrid.mmr.fallback":
+    'Reranker plugin id used when the primary reranker throws (default: "none"). Provides graceful degradation across providers.',
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled":
     "Applies recency decay so newer memory can outrank older memory when scores are close. Enable when timeliness matters; keep off for timeless reference knowledge.",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":

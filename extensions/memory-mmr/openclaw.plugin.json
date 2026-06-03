@@ -1,0 +1,18 @@
+{
+  "id": "memory-mmr",
+  "name": "Memory MMR Reranker",
+  "description": "Bundled OpenClaw MMR (Maximal Marginal Relevance) reranker for memory hybrid search diversity.",
+  "activation": {
+    "onStartup": false
+  },
+  "kind": "memory",
+  "contracts": {
+    "tools": [],
+    "memoryRerankers": ["memory-mmr"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

@@ -960,6 +960,8 @@ export const MemorySearchSchema = z
               .object({
                 enabled: z.boolean().optional(),
                 lambda: z.number().min(0).max(1).optional(),
+                provider: z.string().optional(),
+                fallback: z.string().optional(),
               })
               .strict()
               .optional(),

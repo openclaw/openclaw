@@ -11,6 +11,10 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import {
+  getRegisteredMemoryReranker,
+  type MemoryRerankerPlugin,
+} from "openclaw/plugin-sdk/memory-core-host-engine-reranker";
+import {
   readMemoryFile,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
@@ -29,7 +33,12 @@ import {
   type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
+import {
+  bm25RankToScore,
+  buildFtsQuery,
+  mergeHybridResults,
+  type RerankerAdapter,
+} from "./hybrid.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import {
@@ -657,6 +666,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       textWeight: hybrid.textWeight,
       mmr: hybrid.mmr,
       temporalDecay: hybrid.temporalDecay,
+      query: cleaned,
     });
     const strict = merged.filter((entry) => entry.score >= minScore);
     if (strict.length > 0 || keywordResults.length === 0) {
@@ -770,13 +780,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
   }
 
-  private mergeHybridResults(params: {
+  private async mergeHybridResults(params: {
     vector: Array<MemorySearchResult & { id: string }>;
     keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
     vectorWeight: number;
     textWeight: number;
-    mmr?: { enabled: boolean; lambda: number };
+    mmr?: { enabled: boolean; lambda: number; provider: string; fallback: string };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
+    query?: string;
   }): Promise<MemorySearchResult[]> {
     return mergeHybridResults({
       vector: params.vector.map((r) => ({
@@ -802,7 +813,36 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       mmr: params.mmr,
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
+      reranker: this.createReranker(params.mmr?.provider, params.query),
+      fallbackReranker: this.createReranker(params.mmr?.fallback, params.query),
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));
+  }
+
+  private createReranker(id?: string, query?: string): RerankerAdapter | undefined {
+    if (!id || id === "none") {
+      return undefined;
+    }
+    const reranker = getRegisteredMemoryReranker(id);
+    if (!reranker) {
+      return undefined;
+    }
+    return async (items, lambda) => {
+      const result = await reranker.rerank({
+        query: query ?? "",
+        documents: items.map((item) => ({
+          id: item.id,
+          content: item.content,
+          score: item.score,
+        })),
+        limit: items.length,
+        lambda,
+      });
+      return result.map((r) => ({
+        id: r.id,
+        score: r.score,
+        content: items.find((item) => item.id === r.id)?.content ?? "",
+      }));
+    };
   }
 
   async sync(params?: {

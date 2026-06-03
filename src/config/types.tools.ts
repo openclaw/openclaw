@@ -559,6 +559,10 @@ export type MemorySearchConfig = {
         enabled?: boolean;
         /** Lambda: 0 = max diversity, 1 = max relevance (default: 0.7). */
         lambda?: number;
+        /** Reranker plugin id to use (default: "memory-mmr"). Use "none" to disable. */
+        provider?: string;
+        /** Fallback reranker plugin id if primary fails (default: "none"). */
+        fallback?: string;
       };
       /** Optional temporal decay to boost recency in hybrid scoring. */
       temporalDecay?: {
