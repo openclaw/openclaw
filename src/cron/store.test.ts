@@ -553,6 +553,28 @@ describe("cron store", () => {
     });
   });
 
+  it("round-trips failure alert threadId through SQLite columns", async () => {
+    const { storePath } = await makeStorePath();
+    const job = makeStore("sqlite-failure-alert-thread-job", true).jobs[0];
+    job.failureAlert = {
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: 79,
+      after: 2,
+    };
+
+    await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+    expect((await loadCronStore(storePath)).jobs[0]?.failureAlert).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: "79",
+      after: 2,
+    });
+  });
+
   it("round-trips explicit failure destination field clears through SQLite delivery columns", async () => {
     const { storePath } = await makeStorePath();
     const job = makeStore("sqlite-failure-destination-clear-job", true).jobs[0];

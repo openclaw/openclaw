@@ -822,6 +822,7 @@ export const OpenClawSchema = z
             cooldownMs: z.number().int().min(0).optional(),
             includeSkipped: z.boolean().optional(),
             mode: z.enum(["announce", "webhook"]).optional(),
+            threadId: z.union([z.string(), z.number()]).optional(),
             accountId: z.string().optional(),
           })
           .strict()

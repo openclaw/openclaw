@@ -199,6 +199,7 @@ Failure notifications follow a separate destination path:
 - If neither is set and the job already delivers via `announce`, failure notifications now fall back to that primary announce target.
 - `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
 - `failureAlert.includeSkipped: true` opts a job or global cron alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive skip counter, so they do not affect execution-error backoff.
+- `failureAlert.threadId` routes threshold alerts to a channel thread or topic. When the alert uses the job's primary announce target and does not set its own `to`, it inherits `delivery.threadId`; if it names a separate destination, set `failureAlert.threadId` explicitly.
 
 ## CLI examples
 

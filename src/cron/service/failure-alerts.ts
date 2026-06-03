@@ -1,4 +1,7 @@
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalThreadValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
@@ -11,6 +14,7 @@ type ResolvedFailureAlert = {
   cooldownMs: number;
   channel: CronMessageChannel;
   to?: string;
+  threadId?: string | number;
   mode?: "announce" | "webhook";
   accountId?: string;
   includeSkipped: boolean;
@@ -77,6 +81,22 @@ export function resolveFailureAlert(
 
   const mode = jobConfig?.mode ?? globalConfig?.mode;
   const explicitTo = normalizeTo(jobConfig?.to);
+  const channel =
+    normalizeCronMessageChannel(jobConfig?.channel) ??
+    normalizeCronMessageChannel(job.delivery?.channel) ??
+    "last";
+  const accountId = jobConfig?.accountId ?? globalConfig?.accountId;
+  const explicitThreadId = normalizeOptionalThreadValue(
+    jobConfig?.threadId ?? globalConfig?.threadId,
+  );
+  const usesPrimaryAnnounceTarget =
+    mode !== "webhook" &&
+    explicitTo === undefined &&
+    channel === (normalizeCronMessageChannel(job.delivery?.channel) ?? "last") &&
+    accountId === job.delivery?.accountId;
+  const inheritedThreadId = usesPrimaryAnnounceTarget
+    ? normalizeOptionalThreadValue(job.delivery?.threadId)
+    : undefined;
 
   return {
     after: clampPositiveInt(jobConfig?.after ?? globalConfig?.after, DEFAULT_FAILURE_ALERT_AFTER),
@@ -84,13 +104,11 @@ export function resolveFailureAlert(
       jobConfig?.cooldownMs ?? globalConfig?.cooldownMs,
       DEFAULT_FAILURE_ALERT_COOLDOWN_MS,
     ),
-    channel:
-      normalizeCronMessageChannel(jobConfig?.channel) ??
-      normalizeCronMessageChannel(job.delivery?.channel) ??
-      "last",
+    channel,
     to: mode === "webhook" ? explicitTo : (explicitTo ?? normalizeTo(job.delivery?.to)),
+    threadId: mode === "webhook" ? undefined : (explicitThreadId ?? inheritedThreadId),
     mode,
-    accountId: jobConfig?.accountId ?? globalConfig?.accountId,
+    accountId,
     includeSkipped: jobConfig?.includeSkipped ?? globalConfig?.includeSkipped ?? false,
   };
 }
@@ -103,6 +121,7 @@ function emitFailureAlert(
     consecutiveErrors: number;
     channel: CronMessageChannel;
     to?: string;
+    threadId?: string | number;
     mode?: "announce" | "webhook";
     accountId?: string;
     status: "error" | "skipped";
@@ -132,6 +151,7 @@ function emitFailureAlert(
         text,
         channel: params.channel,
         to: params.to,
+        threadId: params.threadId,
         mode: params.mode,
         accountId: params.accountId,
       })
@@ -188,6 +208,7 @@ export function maybeEmitFailureAlert(
     consecutiveErrors: params.consecutiveCount,
     channel: params.alertConfig.channel,
     to: params.alertConfig.to,
+    threadId: params.alertConfig.threadId,
     mode: params.alertConfig.mode,
     accountId: params.alertConfig.accountId,
     status: params.status,

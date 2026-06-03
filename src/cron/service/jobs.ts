@@ -1070,6 +1070,9 @@ function mergeCronFailureAlert(
   if ("to" in patch) {
     next.to = normalizeOptionalString(patch.to);
   }
+  if ("threadId" in patch) {
+    next.threadId = normalizeOptionalThreadValue(patch.threadId);
+  }
   if ("cooldownMs" in patch) {
     const cooldownMs =
       typeof patch.cooldownMs === "number" && Number.isFinite(patch.cooldownMs)

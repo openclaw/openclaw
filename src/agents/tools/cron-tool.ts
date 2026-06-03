@@ -219,6 +219,9 @@ function createCronFailureAlertSchema(): TSchema {
         after: optionalPositiveIntegerSchema({ description: "Failures before alert" }),
         channel: Type.Optional(Type.String({ description: "Alert channel" })),
         to: Type.Optional(Type.String({ description: "Alert target" })),
+        threadId: Type.Optional(
+          Type.Union([Type.String(), Type.Number()], { description: "Alert thread/topic id" }),
+        ),
         cooldownMs: optionalNonNegativeIntegerSchema({ description: "Alert cooldown ms" }),
         includeSkipped: Type.Optional(
           Type.Boolean({ description: "Skipped runs count toward alert" }),

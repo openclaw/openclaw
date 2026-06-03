@@ -193,6 +193,206 @@ describe("CronService failure alerts", () => {
     await store.cleanup();
   });
 
+  it("passes explicit failureAlert.threadId to alert delivery", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "timeout",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: false,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "topic alert override",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      failureAlert: {
+        after: 1,
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: 79,
+      },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expectAlertFields(sendCronFailureAlert, {
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: 79,
+    });
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("inherits delivery.threadId when the failure alert uses the primary announce target", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "timeout",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: true,
+          after: 1,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "topic alert inherited",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: "79",
+      },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expectAlertFields(sendCronFailureAlert, {
+      channel: "telegram",
+      to: "-1001234567890",
+      threadId: "79",
+    });
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not inherit delivery.threadId when failure alert channel differs from primary delivery", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "timeout",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: false,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "different channel alert",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1001234567890",
+        threadId: "79",
+      },
+      failureAlert: {
+        after: 1,
+        channel: "slack",
+      },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expectAlertFields(sendCronFailureAlert, {
+      channel: "slack",
+      to: "-1001234567890",
+      threadId: undefined,
+    });
+
+    cron.stop();
+    await store.cleanup();
+  });
+
+  it("does not inherit delivery.threadId when failure alert account differs from primary delivery", async () => {
+    const store = await makeStorePath();
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const runIsolatedAgentJob = vi.fn(async () => ({
+      status: "error" as const,
+      error: "timeout",
+    }));
+
+    const cron = createFailureAlertCron({
+      storePath: store.storePath,
+      cronConfig: {
+        failureAlert: {
+          enabled: false,
+        },
+      },
+      runIsolatedAgentJob,
+      sendCronFailureAlert,
+    });
+
+    await cron.start();
+    const job = await cron.add({
+      name: "different account alert",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 60_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run report" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        to: "-1001234567890",
+        accountId: "primary-telegram",
+        threadId: "79",
+      },
+      failureAlert: {
+        after: 1,
+        channel: "telegram",
+        accountId: "alert-telegram",
+      },
+    });
+
+    await cron.run(job.id, "force");
+    expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
+    expectAlertFields(sendCronFailureAlert, {
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "alert-telegram",
+      threadId: undefined,
+    });
+
+    cron.stop();
+    await store.cleanup();
+  });
+
   it("respects per-job failureAlert=false and suppresses alerts", async () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn(async () => undefined);

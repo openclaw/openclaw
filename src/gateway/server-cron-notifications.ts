@@ -147,6 +147,7 @@ export async function sendGatewayCronFailureAlert(params: {
   text: string;
   channel: CronMessageChannel;
   to?: string;
+  threadId?: string | number;
   mode?: "announce" | "webhook";
   accountId?: string;
 }): Promise<void> {
@@ -198,6 +199,7 @@ export async function sendGatewayCronFailureAlert(params: {
     target: {
       channel: params.channel,
       to: params.to,
+      threadId: params.threadId,
       accountId: params.accountId,
       sessionKey: resolveCronDeliverySessionKey(params.job),
     },
@@ -368,6 +370,7 @@ function dispatchCronFailureDestinationNotifications(params: {
     {
       channel: primaryPlan.channel,
       to: primaryPlan.to,
+      threadId: primaryPlan.threadId,
       accountId: primaryPlan.accountId,
       sessionKey: deliverySessionKey,
     },

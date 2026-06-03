@@ -8,6 +8,7 @@ import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-
 import { sanitizeAgentId } from "../routing/session-key.js";
 import { isRecord } from "../utils.js";
 import {
+  DeliveryThreadIdFieldSchema,
   TimeoutSecondsFieldSchema,
   TrimmedNonEmptyStringFieldSchema,
   parseDeliveryInput,
@@ -336,6 +337,19 @@ function coerceFailureDestination(value: UnknownRecord) {
   return next;
 }
 
+function coerceFailureAlert(value: UnknownRecord) {
+  const next: UnknownRecord = { ...value };
+  if ("threadId" in next) {
+    const threadId = parseOptionalField(DeliveryThreadIdFieldSchema, next.threadId);
+    if (threadId !== undefined) {
+      next.threadId = threadId;
+    } else {
+      delete next.threadId;
+    }
+  }
+  return next;
+}
+
 function normalizeSessionTarget(raw: unknown) {
   if (typeof raw !== "string") {
     return undefined;
@@ -446,6 +460,15 @@ export function normalizeCronJobInput(
 
   if (isRecord(base.delivery)) {
     next.delivery = coerceDelivery(base.delivery);
+  }
+  if ("failureAlert" in base) {
+    if (base.failureAlert === false) {
+      next.failureAlert = false;
+    } else if (isRecord(base.failureAlert)) {
+      next.failureAlert = coerceFailureAlert(base.failureAlert);
+    } else {
+      delete next.failureAlert;
+    }
   }
 
   if (options.applyDefaults) {

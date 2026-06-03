@@ -180,6 +180,17 @@ function textField(record: Record<string, unknown>, key: string): string | null 
   return typeof value === "string" && value.trim() ? value : null;
 }
 
+function stringifiedTextOrNumberField(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  if (typeof value === "string") {
+    return value.trim() ? value : null;
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return null;
+}
+
 function numberField(record: Record<string, unknown>, key: string): number | null {
   const value = record[key];
   return typeof value === "number" && Number.isFinite(value) ? value : null;
@@ -299,6 +310,7 @@ function backfillCronJobsFromJobJson(db: DatabaseSync): void {
             failure_alert_after = ?,
             failure_alert_channel = ?,
             failure_alert_to = ?,
+            failure_alert_thread_id = ?,
             failure_alert_cooldown_ms = ?,
             failure_alert_include_skipped = ?,
             failure_alert_mode = ?,
@@ -377,7 +389,7 @@ function backfillCronJobsFromJobJson(db: DatabaseSync): void {
       delivery ? textField(delivery, "mode") : null,
       delivery ? textField(delivery, "channel") : null,
       delivery ? textField(delivery, "to") : null,
-      delivery ? textField(delivery, "threadId") : null,
+      delivery ? stringifiedTextOrNumberField(delivery, "threadId") : null,
       delivery ? textField(delivery, "accountId") : null,
       delivery && typeof delivery.bestEffort === "boolean" ? (delivery.bestEffort ? 1 : 0) : null,
       completionDestination ? textField(completionDestination, "mode") : null,
@@ -390,6 +402,7 @@ function backfillCronJobsFromJobJson(db: DatabaseSync): void {
       failureAlert ? numberField(failureAlert, "after") : null,
       failureAlert ? textField(failureAlert, "channel") : null,
       failureAlert ? textField(failureAlert, "to") : null,
+      failureAlert ? stringifiedTextOrNumberField(failureAlert, "threadId") : null,
       failureAlert ? numberField(failureAlert, "cooldownMs") : null,
       failureAlert && typeof failureAlert.includeSkipped === "boolean"
         ? failureAlert.includeSkipped
@@ -549,6 +562,7 @@ function ensureAdditiveStateColumns(db: DatabaseSync): void {
   ensureColumn(db, "cron_jobs", "failure_alert_after INTEGER");
   ensureColumn(db, "cron_jobs", "failure_alert_channel TEXT");
   ensureColumn(db, "cron_jobs", "failure_alert_to TEXT");
+  ensureColumn(db, "cron_jobs", "failure_alert_thread_id TEXT");
   ensureColumn(db, "cron_jobs", "failure_alert_cooldown_ms INTEGER");
   ensureColumn(db, "cron_jobs", "failure_alert_include_skipped INTEGER");
   ensureColumn(db, "cron_jobs", "failure_alert_mode TEXT");

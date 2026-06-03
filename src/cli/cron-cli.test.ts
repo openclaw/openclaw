@@ -1533,6 +1533,8 @@ describe("cron cli", () => {
         "telegram",
         "--failure-alert-to",
         "19098680",
+        "--failure-alert-thread-id",
+        "79",
       ],
       { from: "user" },
     );
@@ -1540,7 +1542,13 @@ describe("cron cli", () => {
     const updateCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.update");
     const patch = updateCall?.[2] as {
       patch?: {
-        failureAlert?: { after?: number; cooldownMs?: number; channel?: string; to?: string };
+        failureAlert?: {
+          after?: number;
+          cooldownMs?: number;
+          channel?: string;
+          to?: string;
+          threadId?: string | number;
+        };
       };
     };
 
@@ -1548,6 +1556,7 @@ describe("cron cli", () => {
     expect(patch?.patch?.failureAlert?.cooldownMs).toBe(3_600_000);
     expect(patch?.patch?.failureAlert?.channel).toBe("telegram");
     expect(patch?.patch?.failureAlert?.to).toBe("19098680");
+    expect(patch?.patch?.failureAlert?.threadId).toBe(79);
   });
 
   it("rejects partial failure alert threshold on cron edit", async () => {

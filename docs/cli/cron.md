@@ -84,6 +84,8 @@ Failure notifications resolve in this order:
 2. Global `cron.failureDestination`.
 3. The job's primary announce target (when no explicit failure destination is set).
 
+Per-job `failureAlert.threadId` routes threshold alerts to a channel thread or topic, such as a Telegram forum topic. When a failure alert uses the job's primary announce target and does not set its own `to`, OpenClaw reuses `delivery.threadId` so failures land beside the corresponding success announcement. If `failureAlert.to` names a separate destination, set `failureAlert.threadId` explicitly when that destination needs a topic.
+
 <Note>
 Main-session jobs may only use `delivery.failureDestination` when primary delivery mode is `webhook`. Isolated jobs accept it in all modes.
 </Note>
@@ -237,6 +239,16 @@ Announce to a Telegram forum topic:
 
 ```bash
 openclaw cron edit <job-id> --announce --channel telegram --to "-1001234567890" --thread-id 42
+```
+
+Route failure alerts to a Telegram forum topic:
+
+```bash
+openclaw cron edit <job-id> \
+  --failure-alert \
+  --failure-alert-channel telegram \
+  --failure-alert-to "-1001234567890" \
+  --failure-alert-thread-id 42
 ```
 
 Create an isolated job with lightweight bootstrap context:

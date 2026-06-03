@@ -211,6 +211,8 @@ export type CronFailureAlert = {
   after?: number;
   channel?: CronMessageChannel;
   to?: string;
+  /** Explicit thread/topic id for channels that support threaded alerts. */
+  threadId?: string | number;
   cooldownMs?: number;
   /** When true, consecutive skipped runs count toward the alert threshold. */
   includeSkipped?: boolean;

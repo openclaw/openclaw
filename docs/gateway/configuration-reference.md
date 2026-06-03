@@ -1333,6 +1333,7 @@ One-shot jobs stay enabled until retry attempts are exhausted, then disable whil
       cooldownMs: 3600000,
       includeSkipped: false,
       mode: "announce",
+      threadId: 79,
       accountId: "main",
     },
   },
@@ -1344,6 +1345,7 @@ One-shot jobs stay enabled until retry attempts are exhausted, then disable whil
 - `cooldownMs`: minimum milliseconds between repeated alerts for the same job (non-negative integer).
 - `includeSkipped`: count consecutive skipped runs toward the alert threshold (default: `false`). Skipped runs are tracked separately and do not affect execution-error backoff.
 - `mode`: delivery mode - `"announce"` sends via a channel message; `"webhook"` posts to the configured webhook.
+- `threadId`: optional channel thread or topic id for threshold alerts. If omitted and the alert uses a job's primary announce target, OpenClaw inherits the job's `delivery.threadId`.
 - `accountId`: optional account or channel id to scope alert delivery.
 
 ### `cron.failureDestination`

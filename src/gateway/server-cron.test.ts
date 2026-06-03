@@ -17,6 +17,7 @@ const {
   runCronChangedMock,
   abortAndDrainEmbeddedAgentRunMock,
   retireSessionMcpRuntimeMock,
+  sendGatewayCronFailureAlertMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatMock: vi.fn(),
@@ -25,7 +26,11 @@ const {
   >(async () => ({ status: "ran", durationMs: 1 })),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
-  runCronIsolatedAgentTurnMock: vi.fn(async () => ({ status: "ok" as const, summary: "ok" })),
+  runCronIsolatedAgentTurnMock: vi.fn<
+    (
+      ...args: unknown[]
+    ) => Promise<{ status: "ok"; summary?: string } | { status: "error"; error?: string }>
+  >(async () => ({ status: "ok", summary: "ok" })),
   cleanupBrowserSessionsForLifecycleEndMock: vi.fn(async () => {}),
   runCronChangedMock: vi.fn(async () => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
@@ -38,6 +43,7 @@ const {
     forceCleared: false,
   })),
   retireSessionMcpRuntimeMock: vi.fn(async () => true),
+  sendGatewayCronFailureAlertMock: vi.fn(async () => undefined),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -109,6 +115,16 @@ vi.mock("../agents/embedded-agent.js", () => ({
 vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
   retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
+
+vi.mock("./server-cron-notifications.js", async () => {
+  const actual = await vi.importActual<typeof import("./server-cron-notifications.js")>(
+    "./server-cron-notifications.js",
+  );
+  return {
+    ...actual,
+    sendGatewayCronFailureAlert: sendGatewayCronFailureAlertMock,
+  };
+});
 
 import { buildGatewayCronService } from "./server-cron.js";
 
@@ -212,6 +228,7 @@ describe("buildGatewayCronService", () => {
     getGlobalHookRunnerMock.mockClear();
     abortAndDrainEmbeddedAgentRunMock.mockClear();
     retireSessionMcpRuntimeMock.mockClear();
+    sendGatewayCronFailureAlertMock.mockClear();
     getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: runCronChangedMock,
@@ -998,6 +1015,56 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("passes failure alert threadId through the CronService gateway adapter", async () => {
+    const cfg = createCronConfig("server-cron-failure-alert-thread");
+    cfg.cron = {
+      ...cfg.cron,
+      failureAlert: {
+        enabled: true,
+        after: 1,
+      },
+    };
+    loadConfigMock.mockReturnValue(cfg);
+    runCronIsolatedAgentTurnMock.mockResolvedValueOnce({
+      status: "error",
+      error: "proof failure",
+    });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const job = await state.cron.add({
+        name: "topic failure alert",
+        enabled: true,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: { kind: "agentTurn", message: "hello" },
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: 79,
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      const alertParams = requireRecord(
+        callArg(sendGatewayCronFailureAlertMock, 0, 0, "failure alert params"),
+        "failure alert params",
+      );
+      expect(alertParams.channel).toBe("telegram");
+      expect(alertParams.to).toBe("-1001234567890");
+      expect(alertParams.threadId).toBe(79);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("blocks private webhook URLs via SSRF-guarded fetch", async () => {
     const cfg = createCronConfig("server-cron-ssrf");
     loadConfigMock.mockReturnValue(cfg);
@@ -1107,7 +1174,7 @@ describe("buildGatewayCronService", () => {
 
       const options = expectIsolatedRunFields({ sessionKey: `cron:${job.id}` });
       expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-      const isolatedRunCalls = runCronIsolatedAgentTurnMock.mock.calls as Array<Array<unknown>>;
+      const isolatedRunCalls = runCronIsolatedAgentTurnMock.mock.calls;
       expect(
         isolatedRunCalls.some(([value]) => {
           const record =

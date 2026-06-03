@@ -119,6 +119,27 @@ describe("sendFailureNotificationAnnounce", () => {
     expect(deliveryRequest.abortSignal).toBeInstanceOf(AbortSignal);
   });
 
+  it("passes explicit failure alert threadId to target resolution", async () => {
+    const deps = {} as never;
+    const cfg = {} as never;
+
+    await sendFailureNotificationAnnounce(
+      deps,
+      cfg,
+      "main",
+      "job-1",
+      { channel: "telegram", to: "123", accountId: "bot-a", threadId: 79 },
+      "Cron failed",
+    );
+
+    expect(mocks.resolveDeliveryTarget).toHaveBeenCalledWith(cfg, "main", {
+      channel: "telegram",
+      to: "123",
+      accountId: "bot-a",
+      threadId: 79,
+    });
+  });
+
   it("uses sessionKey for delivery-target resolution and outbound context", async () => {
     await sendFailureNotificationAnnounce(
       {} as never,

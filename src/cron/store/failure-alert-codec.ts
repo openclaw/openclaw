@@ -14,6 +14,7 @@ export function bindFailureAlertColumns(
   | "failure_alert_disabled"
   | "failure_alert_include_skipped"
   | "failure_alert_mode"
+  | "failure_alert_thread_id"
   | "failure_alert_to"
 > {
   if (failureAlert === false) {
@@ -22,6 +23,7 @@ export function bindFailureAlertColumns(
       failure_alert_after: null,
       failure_alert_channel: null,
       failure_alert_to: null,
+      failure_alert_thread_id: null,
       failure_alert_cooldown_ms: null,
       failure_alert_include_skipped: null,
       failure_alert_mode: null,
@@ -33,6 +35,10 @@ export function bindFailureAlertColumns(
     failure_alert_after: failureAlert?.after ?? null,
     failure_alert_channel: failureAlert?.channel ?? null,
     failure_alert_to: failureAlert?.to ?? null,
+    failure_alert_thread_id:
+      failureAlert?.threadId === undefined || failureAlert.threadId === null
+        ? null
+        : String(failureAlert.threadId),
     failure_alert_cooldown_ms: failureAlert?.cooldownMs ?? null,
     failure_alert_include_skipped: booleanToInteger(failureAlert?.includeSkipped),
     failure_alert_mode: failureAlert?.mode ?? null,
@@ -49,6 +55,7 @@ export function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false |
     row.failure_alert_after == null &&
     !row.failure_alert_channel &&
     !row.failure_alert_to &&
+    !row.failure_alert_thread_id &&
     row.failure_alert_cooldown_ms == null &&
     row.failure_alert_include_skipped == null &&
     !row.failure_alert_mode &&
@@ -62,6 +69,7 @@ export function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false |
       ? { channel: row.failure_alert_channel as CronFailureAlert["channel"] }
       : {}),
     ...(row.failure_alert_to ? { to: row.failure_alert_to } : {}),
+    ...(row.failure_alert_thread_id ? { threadId: row.failure_alert_thread_id } : {}),
     ...(row.failure_alert_cooldown_ms != null
       ? { cooldownMs: normalizeNumber(row.failure_alert_cooldown_ms) }
       : {}),
