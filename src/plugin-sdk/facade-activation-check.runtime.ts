@@ -27,7 +27,6 @@ import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolut
 const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set([
   "image-generation-core",
   "media-understanding-core",
-  "speech-core",
 ]);
 const EMPTY_FACADE_BOUNDARY_CONFIG: OpenClawConfig = {};
 
