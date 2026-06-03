@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export function createEditorSubmitHandler(params: {
   editor: {
@@ -8,7 +8,7 @@ export function createEditorSubmitHandler(params: {
   handleCommand: (value: string) => Promise<void> | void;
   sendMessage: (value: string) => Promise<void> | void;
   handleBangLine: (value: string) => Promise<void> | void;
-  canSubmitMessage?: () => boolean;
+  canSubmitMessage?: (value: string) => boolean;
   onBlockedMessageSubmit?: (value: string) => void;
 }) {
   return (text: string) => {
@@ -39,7 +39,7 @@ export function createEditorSubmitHandler(params: {
       return;
     }
 
-    if (params.canSubmitMessage && !params.canSubmitMessage()) {
+    if (params.canSubmitMessage && !params.canSubmitMessage(value)) {
       params.editor.setText(value);
       params.onBlockedMessageSubmit?.(value);
       return;

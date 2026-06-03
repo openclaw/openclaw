@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -127,6 +126,29 @@ describe("json file helpers", () => {
 
       expect(renameSpy).toHaveBeenCalledOnce();
       await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("new");
+    });
+  });
+
+  it("stages the atomic temp with a caller-provided prefix (#56827)", async () => {
+    await withTempDir({ prefix: "openclaw-json-files-" }, async (base) => {
+      const filePath = path.join(base, "sessions.json");
+      // Spy without mocking: rename is still performed, but we capture the staged
+      // temp path (its source) to confirm the prefix is applied.
+      const renameSpy = vi.spyOn(fsPromises, "rename");
+
+      await writeTextAtomic(filePath, "new", { tempPrefix: path.basename(filePath) });
+
+      await expect(fsPromises.readFile(filePath, "utf8")).resolves.toBe("new");
+      const stagedTemps = renameSpy.mock.calls.map((call) => path.basename(String(call[0])));
+      // The orphan a crash would leave is now identifiable as a session-store temp.
+      expect(
+        stagedTemps.some((name) =>
+          /^sessions\.json\.\d+\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.tmp$/i.test(
+            name,
+          ),
+        ),
+      ).toBe(true);
+      expect(stagedTemps.some((name) => name.startsWith(".fs-safe-replace"))).toBe(false);
     });
   });
 

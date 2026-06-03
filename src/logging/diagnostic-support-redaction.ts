@@ -1,7 +1,8 @@
 import path from "node:path";
+import { isSensitiveUrlQueryParamName } from "@openclaw/net-policy/redact-sensitive-url";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { isSecretRefShape } from "../config/redact-snapshot.secret-ref.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { isSensitiveUrlQueryParamName } from "../shared/net/redact-sensitive-url.js";
 import { redactSensitiveText } from "./redact.js";
 
 const SECRET_SUPPORT_FIELD_RE =
@@ -60,13 +61,6 @@ type LimitedSupportArray = {
   items: unknown[];
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
-}
-
 function isPrivateSupportField(key: string): boolean {
   return (
     SECRET_SUPPORT_FIELD_RE.test(key) ||
@@ -101,7 +95,7 @@ function createSupportRecord(): Record<string, unknown> {
 }
 
 function hasOwnRecordKey(record: Record<string, unknown>, key: string): boolean {
-  return Object.prototype.hasOwnProperty.call(record, key);
+  return Object.hasOwn(record, key);
 }
 
 function countOwnObjectEntries(record: Record<string, unknown>): number {
@@ -398,7 +392,7 @@ export function sanitizeSupportSnapshotValue(
       count,
     );
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "<unsupported>";
   }
@@ -447,7 +441,7 @@ export function sanitizeSupportConfigValue(
       count,
     );
   }
-  const record = asRecord(value);
+  const record = asOptionalRecord(value);
   if (!record) {
     return "<unsupported>";
   }

@@ -21,10 +21,16 @@ PORT="18789"
 MOCK_PORT="44210"
 CLICKCLACK_PORT="44211"
 SUCCESS_MARKER="OPENCLAW_E2E_OK_RELEASE_UPGRADE"
-MOCK_REQUEST_LOG="/tmp/openclaw-release-upgrade-user-journey-openai.jsonl"
-CLICKCLACK_STATE="/tmp/openclaw-release-upgrade-user-journey-clickclack.json"
+scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-upgrade-user-journey.XXXXXX")"
+MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"
+CLICKCLACK_STATE="$scenario_tmp/clickclack.json"
 BASELINE_SPEC="${OPENCLAW_RELEASE_UPGRADE_BASELINE_SPEC:-openclaw@latest}"
 export SUCCESS_MARKER MOCK_REQUEST_LOG CLICKCLACK_STATE
+
+candidate_version="$(
+  tar -xOf "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" package/package.json |
+    node -e 'let raw = ""; process.stdin.setEncoding("utf8"); process.stdin.on("data", (chunk) => { raw += chunk; }); process.stdin.on("end", () => { process.stdout.write(JSON.parse(raw).version); });'
+)"
 
 mock_pid=""
 clickclack_pid=""
@@ -33,6 +39,7 @@ cleanup() {
   openclaw_e2e_terminate_gateways "${gateway_pid:-}"
   openclaw_e2e_stop_process "${clickclack_pid:-}"
   openclaw_e2e_stop_process "${mock_pid:-}"
+  rm -rf "$scenario_tmp"
 }
 trap cleanup EXIT
 
@@ -64,10 +71,14 @@ start_gateway() {
 }
 
 echo "Installing published baseline $BASELINE_SPEC..."
-npm install -g "$BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-release-upgrade-baseline-install.log 2>&1
+if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g "$BASELINE_SPEC" --no-fund --no-audit >/tmp/openclaw-release-upgrade-baseline-install.log 2>&1; then
+  cat /tmp/openclaw-release-upgrade-baseline-install.log >&2 || true
+  exit 1
+fi
 command -v openclaw >/dev/null
 baseline_root="$(openclaw_e2e_package_root)"
 baseline_entry="$(openclaw_e2e_package_entrypoint "$baseline_root")"
+openclaw_e2e_enable_openclaw_cli_timeout
 
 mock_pid="$(openclaw_e2e_start_mock_openai "$MOCK_PORT" /tmp/openclaw-release-upgrade-openai.log)"
 openclaw_e2e_wait_mock_openai "$MOCK_PORT"
@@ -85,7 +96,7 @@ for _ in $(seq 1 100); do
 done
 openclaw_e2e_probe_http_status "http://127.0.0.1:$CLICKCLACK_PORT/health" 200
 
-node "$baseline_entry" onboard \
+openclaw_e2e_run_command node "$baseline_entry" onboard \
   --non-interactive \
   --accept-risk \
   --flow quickstart \
@@ -117,6 +128,8 @@ node scripts/e2e/lib/release-user-journey/assertions.mjs configure-clickclack "h
 openclaw_e2e_install_package /tmp/openclaw-release-upgrade-candidate-install.log "candidate OpenClaw package"
 package_root="$(openclaw_e2e_package_root)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
+openclaw_e2e_enable_openclaw_cli_timeout
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-package-version "$package_root" "$candidate_version" candidate
 
 openclaw agent --local \
   --agent main \

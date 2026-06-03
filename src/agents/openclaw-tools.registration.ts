@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isStrictAgenticExecutionContractActive } from "./execution-contract.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
@@ -31,7 +32,7 @@ export function isUpdatePlanToolEnabledForOpenClawTools(params: {
 
 function mergeOpenClawToolPolicyList(...lists: Array<string[] | undefined>): string[] | undefined {
   const merged = lists.flatMap((list) => (Array.isArray(list) ? list : []));
-  return merged.length > 0 ? Array.from(new Set(merged)) : undefined;
+  return merged.length > 0 ? uniqueStrings(merged) : undefined;
 }
 
 function isToolExplicitlyAllowedByOpenClawToolPolicy(params: {

@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { CommandOptions } from "../process/exec.js";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   repairManagedNpmRootOpenClawPeer,
   removeManagedNpmRootDependency,
@@ -14,7 +15,11 @@ import {
   upsertManagedNpmRootDependency,
 } from "./npm-managed-root.js";
 
+const fixtureRootTracker = createSuiteTempRootTracker({
+  prefix: "openclaw-npm-managed-root-",
+});
 const tempDirs: string[] = [];
+let previousNpmGlobalConfig: string | undefined;
 
 const successfulSpawn = {
   code: 0,
@@ -26,13 +31,30 @@ const successfulSpawn = {
 };
 
 async function makeTempRoot(): Promise<string> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-npm-managed-root-"));
+  const dir = await fixtureRootTracker.make("case");
   tempDirs.push(dir);
   return dir;
 }
 
+beforeAll(async () => {
+  const fixtureRoot = await fixtureRootTracker.setup();
+  previousNpmGlobalConfig = process.env.NPM_CONFIG_GLOBALCONFIG;
+  const globalConfig = path.join(fixtureRoot, "global-npmrc");
+  await fs.writeFile(globalConfig, "", "utf8");
+  process.env.NPM_CONFIG_GLOBALCONFIG = globalConfig;
+});
+
 afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+afterAll(async () => {
+  if (previousNpmGlobalConfig === undefined) {
+    delete process.env.NPM_CONFIG_GLOBALCONFIG;
+  } else {
+    process.env.NPM_CONFIG_GLOBALCONFIG = previousNpmGlobalConfig;
+  }
+  await fixtureRootTracker.cleanup();
 });
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -256,14 +278,14 @@ describe("managed npm root", () => {
         {
           name: "openclaw",
           dependencies: {
-            "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+            "managed-runtime": "3.1024.0",
             "node-domexception": "npm:@nolyfill/domexception@1.0.28",
           },
           optionalDependencies: {
             "optional-runtime": "2.0.0",
           },
           overrides: {
-            "@aws-sdk/client-bedrock-runtime": "$@aws-sdk/client-bedrock-runtime",
+            "managed-runtime": "$managed-runtime",
             nested: {
               "optional-runtime": "$optional-runtime",
               alias: "$node-domexception",
@@ -278,7 +300,7 @@ describe("managed npm root", () => {
     );
 
     await expect(readOpenClawManagedNpmRootOverrides({ packageRoot })).resolves.toEqual({
-      "@aws-sdk/client-bedrock-runtime": "3.1024.0",
+      "managed-runtime": "3.1024.0",
       nested: {
         "optional-runtime": "2.0.0",
         alias: "npm:@nolyfill/domexception@1.0.28",

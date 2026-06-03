@@ -110,6 +110,25 @@ function resolveProviderFromModelRef(model: string | undefined): string | undefi
   return slashIndex > 0 ? trimmed?.slice(0, slashIndex) : undefined;
 }
 
+function resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
+  cfg: OpenClawConfig,
+  selectedModels: readonly string[],
+): string | undefined {
+  const currentModel = cfg.agents?.defaults?.model;
+  const primary =
+    typeof currentModel === "string"
+      ? currentModel.trim()
+      : currentModel && typeof currentModel === "object" && typeof currentModel.primary === "string"
+        ? currentModel.primary.trim()
+        : undefined;
+  const modelId = primary?.startsWith("codex/") ? primary.slice("codex/".length).trim() : "";
+  if (!modelId) {
+    return undefined;
+  }
+  const canonical = `openai/${modelId}`;
+  return selectedModels.find((model) => model.trim() === canonical);
+}
+
 function resolveConfiguredProviderFromAuthChange(params: {
   before: OpenClawConfig;
   after: OpenClawConfig;
@@ -183,7 +202,7 @@ export async function promptAuthConfig(
   prompter: WizardPrompter,
 ): Promise<OpenClawConfig> {
   let next = cfg;
-  let authChoice: string = "skip";
+  let authChoice = "skip";
   let preferredProvider: string | undefined;
   while (true) {
     authChoice = await promptAuthChoiceGrouped({
@@ -262,6 +281,16 @@ export async function promptAuthConfig(
     });
     const promptProvider =
       modelPrompt?.provider ?? preferredProvider ?? resolveSingleConfiguredProvider(next);
+    const hasPromptProviderConfiguredModels = hasConfiguredProviderModels(next, promptProvider);
+    const hasPromptProviderStaticManifestRows = hasStaticManifestCatalogRows(next, promptProvider);
+    const shouldLoadModelCatalog =
+      modelPrompt?.loadCatalog ??
+      (hasPromptProviderConfiguredModels || hasPromptProviderStaticManifestRows);
+    const useProviderScopedCatalog = Boolean(
+      promptProvider &&
+      shouldLoadModelCatalog &&
+      (modelPrompt?.loadCatalog === true || hasPromptProviderConfiguredModels),
+    );
     const allowlistSelection = await promptModelAllowlist({
       config: next,
       prompter,
@@ -271,12 +300,17 @@ export async function promptAuthConfig(
       initialSelections: modelPrompt?.initialSelections,
       message: modelPrompt?.message,
       preferredProvider: promptProvider,
-      loadCatalog:
-        modelPrompt?.loadCatalog ??
-        (hasConfiguredProviderModels(next, promptProvider) ||
-          hasStaticManifestCatalogRows(next, promptProvider)),
+      providerScopedCatalog: useProviderScopedCatalog,
+      loadCatalog: shouldLoadModelCatalog,
     });
     if (allowlistSelection.models) {
+      const canonicalPrimary = resolveCanonicalOpenAISelectionForLegacyCodexPrimary(
+        next,
+        allowlistSelection.models,
+      );
+      if (canonicalPrimary) {
+        next = applyPrimaryModel(next, canonicalPrimary);
+      }
       next = applyModelFallbacksFromSelection(next, allowlistSelection.models, {
         scopeKeys: allowlistSelection.scopeKeys,
       });

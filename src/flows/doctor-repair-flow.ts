@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { normalizeHealthCheck } from "./health-check-adapter.js";
@@ -289,5 +290,5 @@ function createValidationScope(findings: readonly HealthFinding[]) {
 }
 
 function uniqueDefined(values: readonly (string | undefined)[]): readonly string[] {
-  return [...new Set(values.filter((value): value is string => value !== undefined))];
+  return uniqueStrings(values.filter((value): value is string => value !== undefined));
 }

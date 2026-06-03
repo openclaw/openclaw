@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   collectConfiguredAgentHarnessRuntimes,
   type ConfiguredAgentHarnessRuntimeOptions,
@@ -39,27 +40,22 @@ export function resolveConfiguredRuntimePluginInstallCandidate(
   );
 }
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function acpxRuntimeIsConfigured(cfg: OpenClawConfig): boolean {
-  const acp = asRecord(cfg.acp);
+  const acp = asOptionalRecord(cfg.acp);
   const backend = typeof acp?.backend === "string" ? acp.backend.trim().toLowerCase() : "";
   return (
-    (backend === "acpx" || acp?.enabled === true || asRecord(acp?.dispatch)?.enabled === true) &&
+    (backend === "acpx" ||
+      acp?.enabled === true ||
+      asOptionalRecord(acp?.dispatch)?.enabled === true) &&
     (!backend || backend === "acpx")
   );
 }
 
 export function collectConfiguredRuntimePluginIds(
   cfg: OpenClawConfig,
-  env: NodeJS.ProcessEnv,
   options?: ConfiguredAgentHarnessRuntimeOptions,
 ): string[] {
-  const ids = new Set(collectConfiguredAgentHarnessRuntimes(cfg, env, options));
+  const ids = new Set(collectConfiguredAgentHarnessRuntimes(cfg, options));
   if (acpxRuntimeIsConfigured(cfg)) {
     ids.add("acpx");
   }

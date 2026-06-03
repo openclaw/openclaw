@@ -2,6 +2,17 @@ import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeNullableString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import {
   buildModelAliasIndex,
@@ -9,7 +20,6 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
-import { findNormalizedProviderValue } from "../agents/provider-id.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import {
   resolveAgentModelFallbackValues,
@@ -24,11 +34,8 @@ import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
-import { mergeInboundPathRoots } from "../media/inbound-path-policy.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { isMediaUnderstandingSkipError } from "./errors.js";
@@ -80,8 +87,9 @@ function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
   providerId: string,
 ): string | null {
-  const value = findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey;
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  return normalizeNullableString(
+    findNormalizedProviderValue(cfg?.models?.providers, providerId)?.apiKey,
+  );
 }
 
 async function hasProviderAuthAvailable(params: {
@@ -106,16 +114,14 @@ function resolveConfiguredKeyProviderOrder(params: {
 }): string[] {
   const configuredProviders = Object.keys(params.cfg.models?.providers ?? {})
     .map((providerId) => normalizeMediaExecutionProviderId(providerId))
-    .filter(Boolean)
-    .filter((providerId, index, values) => values.indexOf(providerId) === index)
-    .filter((providerId) =>
-      providerSupportsCapability(
-        params.providerRegistry.get(normalizeMediaProviderId(providerId)),
-        params.capability,
-      ),
-    );
-
-  return [...new Set([...configuredProviders, ...params.fallbackProviders])];
+    .filter(Boolean);
+  const supportedProviders = uniqueStrings(configuredProviders).filter((providerId) =>
+    providerSupportsCapability(
+      params.providerRegistry.get(normalizeMediaProviderId(providerId)),
+      params.capability,
+    ),
+  );
+  return uniqueStrings([...supportedProviders, ...params.fallbackProviders]);
 }
 
 function resolveConfiguredImageModelId(params: {
@@ -343,13 +349,10 @@ function candidateBinaryNames(name: string): string[] {
   if (ext) {
     return [name];
   }
-  const pathext = (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM")
-    .split(";")
-    .map((item) => item.trim())
-    .filter(Boolean)
-    .map((item) => (item.startsWith(".") ? item : `.${item}`));
-  const unique = Array.from(new Set(pathext));
-  return [name, ...unique.map((item) => `${name}${item}`)];
+  const pathext = normalizeStringEntries(
+    (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";"),
+  ).map((item) => (item.startsWith(".") ? item : `.${item}`));
+  return [name, ...uniqueStrings(pathext).map((item) => `${name}${item}`)];
 }
 
 async function isExecutable(filePath: string): Promise<boolean> {

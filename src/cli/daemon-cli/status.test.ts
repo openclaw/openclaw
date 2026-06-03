@@ -25,7 +25,7 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
-vi.mock("../../terminal/theme.js", () => ({
+vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
   colorize: (_rich: boolean, _color: unknown, text: string) => text,
   isRich: () => false,
   theme: { error: "error" },
@@ -74,6 +74,10 @@ describe("runDaemonStatus", () => {
     ).rejects.toThrow("__exit__:1");
 
     expect(printDaemonStatus).toHaveBeenCalledTimes(1);
+    expect(printDaemonStatus).toHaveBeenCalledWith(expect.any(Object), {
+      json: false,
+      deep: false,
+    });
   });
 
   it("forwards require-rpc to daemon status gathering", async () => {

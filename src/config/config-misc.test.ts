@@ -76,6 +76,25 @@ describe("model provider localService config", () => {
     }
   });
 
+  it("accepts standalone timeout overlays for Xiaomi Token Plan", () => {
+    const result = validateConfigObjectRaw({
+      models: {
+        providers: {
+          "xiaomi-token-plan": {
+            timeoutSeconds: 600,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.timeoutSeconds).toBe(600);
+      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.models).toEqual([]);
+      expect(result.config.models?.providers?.["xiaomi-token-plan"]?.baseUrl).toBe("");
+    }
+  });
+
   it("rejects standalone timeout overlays for unknown model providers", () => {
     const result = OpenClawSchema.safeParse({
       models: {
@@ -161,34 +180,22 @@ describe("model provider localService config", () => {
   });
 
   it("accepts bundled provider timeout overlays without custom provider fields", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          openai: {
-            timeoutSeconds: 600,
+    for (const provider of ["openai", "zai"] as const) {
+      const result = validateConfigObjectRaw({
+        models: {
+          providers: {
+            [provider]: {
+              timeoutSeconds: 600,
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(result.ok).toBe(true);
-  });
-
-  it("accepts bundled provider alias timeout overlays without custom provider fields", () => {
-    const result = validateConfigObjectRaw({
-      models: {
-        providers: {
-          "z.ai": {
-            timeoutSeconds: 600,
-          },
-        },
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.models?.providers?.["z.ai"]?.models).toEqual([]);
-      expect(result.config.models?.providers?.["z.ai"]?.baseUrl).toBe("");
+      expect(result.ok).toBe(true);
+      if (provider === "zai" && result.ok) {
+        expect(result.config.models?.providers?.zai?.models).toEqual([]);
+        expect(result.config.models?.providers?.zai?.baseUrl).toBe("");
+      }
     }
   });
 
@@ -425,6 +432,7 @@ describe("diagnostics.otel.captureContent", () => {
         toolInputs: true,
         toolOutputs: true,
         systemPrompt: false,
+        toolDefinitions: true,
       },
     ]) {
       const result = OpenClawSchema.safeParse({
@@ -1142,7 +1150,7 @@ describe("config paths", () => {
 describe("config strict validation", () => {
   it("rejects unknown fields", () => {
     const res = validateConfigObject({
-      agents: { list: [{ id: "pi" }] },
+      agents: { list: [{ id: "openclaw" }] },
       customUnknownField: { nested: "value" },
     });
     expect(res.ok).toBe(false);
@@ -1316,7 +1324,7 @@ describe("config strict validation", () => {
           },
           list: [
             {
-              id: "pi",
+              id: "openclaw",
               sandbox: {
                 perSession: false,
               },

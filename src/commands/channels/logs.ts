@@ -1,12 +1,13 @@
 import fs from "node:fs/promises";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { normalizeChannelId as normalizeBundledChannelId } from "../../channels/registry.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { getResolvedLoggerSettings } from "../../logging.js";
 import { resolveLogFile } from "../../logging/log-tail.js";
 import { parseLogLine } from "../../logging/parse-log-line.js";
 import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
 
 export type ChannelsLogsOptions = {
   channel?: string;
@@ -54,6 +55,17 @@ function matchesChannel(line: NonNullable<LogLine>, channel: string) {
   return false;
 }
 
+function parseLinesOption(value: unknown): number {
+  if (value === undefined || value === null || value === "") {
+    return DEFAULT_LIMIT;
+  }
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw new Error("--lines must be a positive integer.");
+  }
+  return parsed;
+}
+
 async function readTailLines(file: string, limit: number): Promise<string[]> {
   const stat = await fs.stat(file).catch(() => null);
   if (!stat) {
@@ -97,11 +109,7 @@ export async function channelsLogsCommand(
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const channel = parseChannelFilter(opts.channel);
-  const limitRaw = typeof opts.lines === "string" ? Number(opts.lines) : opts.lines;
-  const limit =
-    typeof limitRaw === "number" && Number.isFinite(limitRaw) && limitRaw > 0
-      ? Math.floor(limitRaw)
-      : DEFAULT_LIMIT;
+  const limit = parseLinesOption(opts.lines);
 
   const file = await resolveLogFile(getResolvedLoggerSettings().file);
   const rawLines = await readTailLines(file, limit * 4);

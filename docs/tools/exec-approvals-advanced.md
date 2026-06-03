@@ -162,11 +162,16 @@ Approval-backed interpreter/runtime runs are intentionally conservative:
 When approvals are required, the exec tool returns immediately with an approval id. Use that id to
 correlate later approved-run system events (`Exec finished`, and `Exec running` when configured).
 If no decision arrives before the timeout, the request is treated as an approval timeout and
-surfaced as a terminal denial rather than an agent-waking system event.
+surfaced as a terminal host-command denial. For main-agent async approvals with an originating
+session, OpenClaw also resumes that session with an internal followup so the agent observes that
+the command did not run instead of later repairing a missing result.
 
 ### Followup delivery behavior
 
 After an approved async exec finishes, OpenClaw sends a followup `agent` turn to the same session.
+Denied async approvals use the same main-session followup path for the denial status, but they do
+not register elevated runtime handoffs and they do not run the command. Denials without a resumable
+main session are either suppressed or reported through a safe direct route when one exists.
 
 - If a valid external delivery target exists (deliverable channel plus target `to`), followup delivery uses that channel.
 - In webchat-only or internal-session flows with no external target, followup delivery stays session-only (`deliver: false`).
@@ -211,6 +216,8 @@ The `/approve` command handles both exec approvals and plugin approvals. If the 
 
 Plugin approval forwarding uses the same delivery pipeline as exec approvals but has its own
 independent config under `approvals.plugin`. Enabling or disabling one does not affect the other.
+For plugin-authoring behavior, request fields, and decision semantics, see
+[Plugin permission requests](/plugins/plugin-permission-requests).
 
 ```json5
 {
@@ -275,12 +282,13 @@ Generic model:
 
 - host exec policy still decides whether exec approval is required
 - `approvals.exec` controls forwarding approval prompts to other chat destinations
-- `channels.<channel>.execApprovals` controls whether that channel acts as a native approval client
+- `channels.<channel>.execApprovals` controls whether Discord, Slack, Telegram, and similar
+  channel-specific native clients are enabled
 - Slack plugin approvals can use Slack's native approval client when the request comes from Slack
   and Slack plugin approvers resolve; `approvals.plugin` can also route plugin approvals to Slack
   sessions or targets even when Slack exec approvals are disabled
-- WhatsApp emoji approval delivery is gated by `approvals.exec` and `approvals.plugin`, while
-  approval reactions require explicit WhatsApp approvers from `channels.whatsapp.allowFrom` or `"*"`
+- WhatsApp and Signal reaction approval delivery are gated by `approvals.exec` and
+  `approvals.plugin`; they do not have `channels.<channel>.execApprovals` blocks
 
 Native approval clients auto-enable DM-first delivery when all of these are true:
 
@@ -299,6 +307,7 @@ FAQ: [Why are there two exec approval configs for chat approvals?](/help/faq-fir
 - Slack: `channels.slack.execApprovals.*`
 - Telegram: `channels.telegram.execApprovals.*`
 - WhatsApp: use `approvals.exec` and `approvals.plugin` to route approval prompts to WhatsApp
+- Signal: use `approvals.exec` and `approvals.plugin` to route approval prompts to Signal
 
 These native approval clients add DM routing and optional channel fanout on top of the shared
 same-chat `/approve` flow and shared approval buttons.
@@ -319,6 +328,10 @@ Shared behavior:
 - WhatsApp emoji approvals handle both exec and plugin prompts only when the matching top-level
   forwarding family is enabled and routes to WhatsApp; target-only WhatsApp forwarding stays on
   the shared forwarding path unless it matches the same native origin target
+- Signal reaction approvals handle both exec and plugin prompts only when the matching top-level
+  forwarding family is enabled and routes to Signal. Direct same-chat Signal exec approvals can
+  suppress the local `/approve` fallback without explicit approvers; Signal reaction resolution
+  still requires explicit Signal approvers from `channels.signal.allowFrom` or `defaultTo`.
 - Matrix native DM/channel routing and reaction shortcuts handle both exec and plugin approvals;
   plugin authorization still comes from `channels.matrix.dm.allowFrom`
 - Matrix native prompts include `com.openclaw.approval` custom event content on the first prompt

@@ -1,9 +1,10 @@
-import type { ImageContent } from "@earendil-works/pi-ai";
+import { mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import type { ImageContent } from "../../llm/types.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { MsgContext } from "../templating.js";
 import { resolveAgentTurnAttachments } from "./agent-turn-attachments.js";
 
@@ -12,6 +13,30 @@ type CurrentImageAttachment = {
   path: string;
   mediaType: string;
 };
+
+function isGenericMediaType(mediaType: string | undefined): boolean {
+  if (!mediaType) {
+    return true;
+  }
+  const normalized = mediaType.split(";")[0]?.trim().toLowerCase();
+  return normalized === "application/octet-stream" || normalized === "binary/octet-stream";
+}
+
+function resolveCurrentImageMediaType(pathValue: unknown, mediaType?: unknown): string | undefined {
+  const mediaPath = normalizeOptionalString(pathValue);
+  if (!mediaPath) {
+    return undefined;
+  }
+  const normalizedMediaType = normalizeOptionalString(mediaType);
+  if (normalizedMediaType?.startsWith("image/")) {
+    return normalizedMediaType;
+  }
+  if (!isGenericMediaType(normalizedMediaType)) {
+    return undefined;
+  }
+  const inferredType = mimeTypeFromFilePath(mediaPath);
+  return inferredType?.startsWith("image/") ? inferredType : undefined;
+}
 
 function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment[] {
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;
@@ -31,8 +56,8 @@ function collectCurrentImageAttachments(ctx: MsgContext): CurrentImageAttachment
   const attachments: CurrentImageAttachment[] = [];
   for (const [index, pathValue] of paths.entries()) {
     const mediaPath = normalizeOptionalString(pathValue);
-    const mediaType = normalizeOptionalString(types?.[index] ?? ctx.MediaType);
-    if (mediaPath && mediaType?.startsWith("image/")) {
+    const mediaType = resolveCurrentImageMediaType(pathValue, types?.[index] ?? ctx.MediaType);
+    if (mediaPath && mediaType) {
       attachments.push({ index, path: mediaPath, mediaType });
     }
   }
@@ -101,7 +126,7 @@ export async function resolveCurrentTurnImages(params: {
     );
     if (images.length < undescribedImageAttachments.length) {
       logVerbose(
-        `agent-runner: native PI media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
+        `agent-runner: native OpenClaw media resolution produced ${images.length}/${undescribedImageAttachments.length} current image attachment(s); falling back to prompt image refs`,
       );
       return { images: params.images, imageOrder: params.imageOrder };
     }

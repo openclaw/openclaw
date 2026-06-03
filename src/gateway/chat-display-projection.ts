@@ -1,4 +1,7 @@
 import { createHash } from "node:crypto";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE } from "../agents/internal-runtime-context.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
@@ -29,15 +32,9 @@ type PendingMessageToolVisibleReply = {
   succeeded: boolean;
 };
 
-export function resolveEffectiveChatHistoryMaxChars(
-  cfg: { gateway?: { webchat?: { chatHistoryMaxChars?: number } } },
-  maxChars?: number,
-): number {
+export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {
   if (typeof maxChars === "number") {
     return maxChars;
-  }
-  if (typeof cfg.gateway?.webchat?.chatHistoryMaxChars === "number") {
-    return cfg.gateway.webchat.chatHistoryMaxChars;
   }
   return DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS;
 }
@@ -215,7 +212,7 @@ function projectAssistantTextFromMixedToolContent(
 }
 
 function toFiniteNumber(x: unknown): number | undefined {
-  return typeof x === "number" && Number.isFinite(x) ? x : undefined;
+  return asFiniteNumber(x);
 }
 
 function sanitizeCost(raw: unknown): { total?: number } | undefined {
@@ -446,24 +443,9 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
   return hasToolHistoryBlock && hasText;
 }
 
-function normalizeOptionalString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function normalizeToolHistoryType(value: unknown): string | undefined {
   const normalized = normalizeOptionalString(value)?.toLowerCase();
   return normalized ? normalized.replace(/_/g, "") : undefined;
-}
-
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return undefined;
-  }
-  return value as Record<string, unknown>;
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
@@ -796,8 +778,7 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
     clearPending();
   };
 
-  for (let i = 0; i < messages.length; i++) {
-    const message = messages[i];
+  for (const message of messages) {
     const record = readRecord(message);
     if (!record) {
       next.push(message);
@@ -1130,6 +1111,40 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   return isHeartbeatOkResponse(roleContent);
 }
 
+function openclawAssistantModel(message: Record<string, unknown>): string | undefined {
+  return message.role === "assistant" &&
+    message.provider === "openclaw" &&
+    typeof message.model === "string"
+    ? message.model
+    : undefined;
+}
+
+function displayTextForDuplicateCheck(message: Record<string, unknown>): string | undefined {
+  const text = extractProjectedText(message.content ?? message.text).trim();
+  return text ? text : undefined;
+}
+
+function isDuplicateAcpGatewayInjectedMessage(
+  current: Record<string, unknown>,
+  previousVisible: Record<string, unknown> | undefined,
+): boolean {
+  if (!previousVisible) {
+    return false;
+  }
+  if (
+    openclawAssistantModel(previousVisible) !== "acp-runtime" ||
+    openclawAssistantModel(current) !== "gateway-injected"
+  ) {
+    return false;
+  }
+  if (hasAssistantNonTextContent(previousVisible) || hasAssistantNonTextContent(current)) {
+    return false;
+  }
+  const previousText = displayTextForDuplicateCheck(previousVisible);
+  const currentText = displayTextForDuplicateCheck(current);
+  return Boolean(previousText && currentText && previousText === currentText);
+}
+
 function toProjectedMessages(messages: unknown[]): Array<Record<string, unknown>> {
   return messages.filter(
     (message): message is Record<string, unknown> =>
@@ -1164,6 +1179,10 @@ function filterVisibleProjectedHistoryMessages(
       continue;
     }
     if (shouldHideProjectedHistoryMessage(current)) {
+      changed = true;
+      continue;
+    }
+    if (isDuplicateAcpGatewayInjectedMessage(current, visible.at(-1))) {
       changed = true;
       continue;
     }

@@ -11,8 +11,13 @@ import {
 } from "./dreaming.ts";
 
 function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
-  return {
+  const props: DreamingProps = {
     active: true,
+    selectedAgentId: "main",
+    agentOptions: [
+      { id: "main", label: "main" },
+      { id: "ceo", label: "ceo" },
+    ],
     shortTermCount: 47,
     groundedSignalCount: 9,
     totalSignalCount: 182,
@@ -142,8 +147,16 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     wikiMemoryPalaceLoading: false,
     wikiMemoryPalaceError: null,
     wikiMemoryPalace: {
-      totalItems: 2,
-      totalClaims: 3,
+      totalItems: 1,
+      totalPages: 2,
+      pageCounts: {
+        synthesis: 1,
+        entity: 0,
+        concept: 0,
+        source: 1,
+        report: 0,
+      },
+      totalClaims: 2,
       totalQuestions: 1,
       totalContradictions: 1,
       clusters: [
@@ -176,6 +189,7 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
       ],
     },
     onRefresh: () => {},
+    onSelectAgent: () => {},
     onRefreshDiary: () => {},
     onRefreshImports: () => {},
     onRefreshMemoryPalace: () => {},
@@ -187,8 +201,8 @@ function buildProps(overrides?: Partial<DreamingProps>): DreamingProps {
     onResetDiary: () => {},
     onResetGroundedShortTerm: () => {},
     onRepairDreamingArtifacts: () => {},
-    ...overrides,
   };
+  return { ...props, ...overrides };
 }
 
 function renderInto(props: DreamingProps): HTMLDivElement {
@@ -354,7 +368,6 @@ describe("dreaming view", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("insights");
     const container = document.createElement("div");
-    let props: DreamingProps;
     const onOpenWikiPage = vi.fn().mockResolvedValue({
       title: "BA flight receipts process",
       path: "sources/chatgpt-2026-04-10-alpha.md",
@@ -363,7 +376,7 @@ describe("dreaming view", () => {
       truncated: true,
     });
     const rerender = () => render(renderDreaming(props), container);
-    props = buildProps({
+    const props: DreamingProps = buildProps({
       onOpenWikiPage,
       onRequestUpdate: rerender,
     });
@@ -398,7 +411,13 @@ describe("dreaming view", () => {
     setDreamDiarySubTab("palace");
     const container = renderInto(buildProps());
     expect(compactText(container.querySelector(".dreams-diary__date"))).toBe(
-      "Syntheses · 1 pages · 2 claims · 1 questions · 1 contradictions",
+      "Vault · 2 pages · 2 claim rows · 1 open question · 1 contradiction",
+    );
+    expect(compactText(container.querySelectorAll(".dreams-diary__para")[0])).toBe(
+      "Full vault breakdown: Sources · 1 page; Syntheses · 1 page.",
+    );
+    expect(compactText(container.querySelectorAll(".dreams-diary__para")[1])).toContain(
+      "Selected section: Syntheses: 1 page · 2 claim rows · 1 open question on 1 page · 1 contradiction.",
     );
     const insight = container.querySelector(".dreams-diary__insight-card");
     expect(insight?.querySelector(".dreams-diary__insight-title")?.textContent).toBe(
@@ -418,9 +437,8 @@ describe("dreaming view", () => {
     setDreamSubTab("diary");
     setDreamDiarySubTab("palace");
     const container = document.createElement("div");
-    let props: DreamingProps;
     const rerender = () => render(renderDreaming(props), container);
-    props = buildProps({ onRequestUpdate: rerender });
+    const props: DreamingProps = buildProps({ onRequestUpdate: rerender });
     rerender();
 
     const card = expectElement(container, "[data-palace-page='syntheses/travel-system.md']");
@@ -442,13 +460,20 @@ describe("dreaming view", () => {
       truncated: false,
     });
     const container = document.createElement("div");
-    let props: DreamingProps;
     const rerender = () => render(renderDreaming(props), container);
-    props = buildProps({
+    const props: DreamingProps = buildProps({
       onOpenWikiPage,
       onRequestUpdate: rerender,
       wikiMemoryPalace: {
         totalItems: 1,
+        totalPages: 1,
+        pageCounts: {
+          synthesis: 0,
+          entity: 0,
+          concept: 0,
+          source: 1,
+          report: 0,
+        },
         totalClaims: 0,
         totalQuestions: 0,
         totalContradictions: 0,

@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type ThreadBindingPlacement = "current" | "child";
 
@@ -8,6 +8,7 @@ type ThreadBindingInboundConversationParams = {
   to?: string;
   conversationId?: string;
   threadId?: string | number;
+  threadParentId?: string | number;
   isGroup: boolean;
 };
 
@@ -66,6 +67,7 @@ export function resolveBundledChannelThreadBindingInboundConversation(
     to: params.to,
     conversationId: params.conversationId,
     threadId: params.threadId,
+    threadParentId: params.threadParentId,
     isGroup: params.isGroup,
   });
 }

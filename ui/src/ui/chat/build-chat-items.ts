@@ -1,4 +1,5 @@
 import type { ChatItem, MessageGroup, NormalizedMessage, ToolCard } from "../types/chat-types.ts";
+import type { ChatQueueItem } from "../ui-types.ts";
 import {
   isAssistantHeartbeatAckForDisplay,
   stripHeartbeatTokenForDisplay,
@@ -8,7 +9,8 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
-import { extractToolCards, extractToolPreview } from "./tool-cards.ts";
+import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
+import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
 export type BuildChatItemsProps = {
   sessionKey: string;
@@ -17,6 +19,7 @@ export type BuildChatItemsProps = {
   streamSegments: Array<{ text: string; ts: number }>;
   stream: string | null;
   streamStartedAt: number | null;
+  queue?: ChatQueueItem[];
   showToolCalls: boolean;
   searchOpen?: boolean;
   searchQuery?: string;
@@ -92,7 +95,7 @@ function extractChatMessagePreview(toolMessage: unknown): {
   if (!normalized) {
     return null;
   }
-  const cards = extractToolCards(toolMessage, "preview");
+  const cards = extractToolCardsCached(toolMessage, "preview");
   for (let index = cards.length - 1; index >= 0; index--) {
     const card = cards[index];
     if (card?.preview?.kind === "canvas") {
@@ -223,6 +226,10 @@ function groupMessages(items: ChatItem[]): Array<ChatItem | MessageGroup> {
 }
 
 function collapseDuplicateDisplaySignature(message: unknown): string | null {
+  const marker = asRecord(message)?.["__openclaw"];
+  if (asRecord(marker)?.kind === "pending-send") {
+    return null;
+  }
   const normalized = safeNormalizeMessage(message);
   if (!normalized) {
     return null;
@@ -283,6 +290,41 @@ function hasRenderableNormalizedMessage(message: unknown): boolean {
 function sanitizeStreamText(text: string): string {
   const stripped = stripMessageDisplayMetadataText(text);
   return stripped.trim().length > 0 ? stripped : "";
+}
+
+function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
+  if (!previousText || !text.startsWith(previousText)) {
+    return text;
+  }
+  return text.slice(previousText.length).trimStart();
+}
+
+function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
+  if (typeof item.sendSubmittedAtMs !== "number" || item.sendState === "failed") {
+    return false;
+  }
+  return (
+    item.sendState === "waiting-model" ||
+    item.sendState === "sending" ||
+    item.sendState === "waiting-reconnect"
+  );
+}
+
+function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
+  const content = buildUserChatMessageContentBlocks(item.text, item.attachments);
+  if (content.length === 0) {
+    return null;
+  }
+  return {
+    role: "user",
+    content,
+    timestamp: item.createdAt,
+    __openclaw: {
+      kind: "pending-send",
+      id: item.id,
+      state: item.sendState,
+    },
+  };
 }
 
 function rawMessageTimestamp(message: unknown): number | null {
@@ -500,7 +542,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
             : `divider:compaction:${normalized.timestamp}:${i}`,
         label: "Compacted history",
         description:
-          "Earlier turns are preserved in a compaction checkpoint. Open session checkpoints to branch or restore that pre-compaction view.",
+          "The compacted transcript is preserved as a checkpoint. Open session checkpoints to branch or restore from that compacted view.",
         action: {
           kind: "session-checkpoints",
           label: "Open checkpoints",
@@ -528,6 +570,29 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
       message: msg,
     });
   }
+  const queuedSends = Array.isArray(props.queue) ? props.queue : [];
+  for (const queued of queuedSends) {
+    if (!shouldRenderQueuedSendInThread(queued)) {
+      continue;
+    }
+    const message = queuedSendThreadMessage(queued);
+    if (!message) {
+      continue;
+    }
+    const searchQuery = props.searchQuery ?? "";
+    if (
+      props.searchOpen &&
+      searchQuery.trim() &&
+      !messageMatchesSearchQuery(message, searchQuery)
+    ) {
+      continue;
+    }
+    items.push({
+      kind: "message",
+      key: `pending-send:${queued.id}`,
+      message,
+    });
+  }
   for (const liftedCanvasSource of liftedCanvasSources) {
     const assistantIndex = findNearestAssistantMessageIndex(items, liftedCanvasSource.timestamp);
     if (assistantIndex == null) {
@@ -551,15 +616,21 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const segments = props.streamSegments ?? [];
   const maxLen = Math.max(segments.length, tools.length);
+  let previousAccumulatedStreamText: string | null = null;
   for (let i = 0; i < maxLen; i++) {
     if (i < segments.length) {
       const text = sanitizeStreamText(segments[i].text);
+      const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
       if (text.length > 0) {
+        previousAccumulatedStreamText = text;
+      }
+      if (visibleText.length > 0) {
         items.push({
           kind: "stream",
           key: `stream-seg:${props.sessionKey}:${i}`,
-          text,
+          text: visibleText,
           startedAt: segments[i].ts,
+          isStreaming: false,
         });
       }
     }
@@ -575,13 +646,15 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   if (props.stream !== null) {
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     const text = sanitizeStreamText(props.stream);
-    if (text.length > 0) {
-      if (!stripHeartbeatTokenForDisplay(text).shouldSkip) {
+    const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    if (visibleText.length > 0) {
+      if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
         items.push({
           kind: "stream",
           key,
-          text,
+          text: visibleText,
           startedAt: props.streamStartedAt ?? Date.now(),
+          isStreaming: true,
         });
       }
     } else if (props.stream.trim().length === 0) {

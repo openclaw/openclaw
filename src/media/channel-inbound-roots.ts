@@ -1,7 +1,7 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 type ChannelMediaContractApi = {
   resolveInboundAttachmentRoots?: (params: {
@@ -66,14 +66,26 @@ export function resolveChannelInboundAttachmentRoots(params: {
   cfg: OpenClawConfig;
   ctx: MsgContext;
 }): readonly string[] | undefined {
+  return resolveChannelInboundAttachmentRootsForChannel({
+    cfg: params.cfg,
+    channelId: params.ctx.Surface ?? params.ctx.Provider,
+    accountId: params.ctx.AccountId,
+  });
+}
+
+export function resolveChannelInboundAttachmentRootsForChannel(params: {
+  cfg: OpenClawConfig;
+  channelId?: string | null;
+  accountId?: string | null;
+}): readonly string[] | undefined {
   const contractApi = findChannelMediaContractApi(
-    params.ctx.Surface ?? params.ctx.Provider,
+    params.channelId,
     "resolveInboundAttachmentRoots",
   );
   if (contractApi?.resolveInboundAttachmentRoots) {
     return contractApi.resolveInboundAttachmentRoots({
       cfg: params.cfg,
-      accountId: params.ctx.AccountId,
+      accountId: params.accountId ?? undefined,
     });
   }
   return undefined;

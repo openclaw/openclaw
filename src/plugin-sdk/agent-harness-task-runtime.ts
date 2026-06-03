@@ -1,3 +1,4 @@
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
@@ -67,6 +68,7 @@ export type AgentHarnessScopedSetDeliveryStatusParams = Omit<
 
 export type AgentHarnessTaskRuntime = {
   createRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord;
+  tryCreateRunningTaskRun(params: AgentHarnessScopedCreateRunningTaskRunParams): TaskRecord | null;
   recordTaskRunProgressByRunId(params: AgentHarnessScopedRecordTaskRunProgressParams): TaskRecord[];
   finalizeTaskRunByRunId(params: AgentHarnessScopedFinalizeTaskRunParams): TaskRecord[];
   setDetachedTaskDeliveryStatusByRunId(
@@ -92,18 +94,28 @@ export function createAgentHarnessTaskRuntime(
   const taskKind = normalizeOptionalString(params.taskKind);
   const runIdPrefix = normalizeOptionalString(params.runIdPrefix);
   const assertRunId = (runId: string) => assertScopedRunId(runId, runIdPrefix);
+  const tryCreateRunningTaskRun = (
+    taskParams: AgentHarnessScopedCreateRunningTaskRunParams,
+  ): TaskRecord | null => {
+    assertRunId(taskParams.runId);
+    return createRunningTaskRun({
+      ...taskParams,
+      runtime,
+      ...(taskKind ? { taskKind } : {}),
+      requesterSessionKey,
+      ownerKey: requesterSessionKey,
+      scopeKind: "session",
+    });
+  };
   return {
     createRunningTaskRun(taskParams) {
-      assertRunId(taskParams.runId);
-      return createRunningTaskRun({
-        ...taskParams,
-        runtime,
-        ...(taskKind ? { taskKind } : {}),
-        requesterSessionKey,
-        ownerKey: requesterSessionKey,
-        scopeKind: "session",
-      });
+      const task = tryCreateRunningTaskRun(taskParams);
+      if (!task) {
+        throw new Error("Task persistence failed.");
+      }
+      return task;
     },
+    tryCreateRunningTaskRun,
     recordTaskRunProgressByRunId(taskParams) {
       assertRunId(taskParams.runId);
       return recordTaskRunProgressByRunId({
@@ -247,11 +259,6 @@ export function isDurableAgentHarnessCompletionDelivery(
   return phases.some(
     (phase) => phase.phase === "direct-primary" && phase.delivered && phase.path === "direct",
   );
-}
-
-function normalizeOptionalString(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized || undefined;
 }
 
 function assertScopedRunId(runId: string, runIdPrefix: string | undefined): void {

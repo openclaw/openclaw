@@ -86,6 +86,7 @@ private enum class Tab(
   ProvidersModels(key = "providers-models", label = "Providers"),
 }
 
+/** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
 fun ShellScreen(
   viewModel: MainViewModel,
@@ -101,6 +102,8 @@ fun ShellScreen(
 
     LaunchedEffect(requestedHomeDestination) {
       val destination = requestedHomeDestination ?: return@LaunchedEffect
+      // HomeDestination is a one-shot command from launch intents and settings
+      // actions; consume it after translating to local shell state.
       activeTab =
         when (destination) {
           HomeDestination.Connect -> Tab.Overview
@@ -151,6 +154,11 @@ fun ShellScreen(
           VoiceShellScreen(
             viewModel = viewModel,
             onOpenCommand = { commandOpen = true },
+            onOpenGatewaySettings = {
+              settingsRoute = SettingsRoute.Gateway
+              returnToOverviewFromSettings = false
+              activeTab = Tab.Settings
+            },
             onOpenVoiceSettings = {
               settingsRoute = SettingsRoute.Voice
               returnToOverviewFromSettings = false
@@ -227,6 +235,8 @@ fun ShellScreen(
       }
 
       pendingTrust?.let { prompt ->
+        // Gateway certificate trust is modal across the shell so navigation
+        // cannot hide a changed TLS identity prompt.
         GatewayTrustDialog(
           prompt = prompt,
           onAccept = viewModel::acceptGatewayTrustPrompt,
@@ -237,6 +247,7 @@ fun ShellScreen(
   }
 }
 
+/** Modal trust decision for first-seen or changed gateway TLS fingerprints. */
 @Composable
 private fun GatewayTrustDialog(
   prompt: NodeRuntime.GatewayTrustPrompt,
@@ -304,7 +315,7 @@ private fun OverviewScreen(
 
   ClawScaffold(contentPadding = PaddingValues(start = 20.dp, top = 14.dp, end = 20.dp, bottom = 20.dp)) {
     Box(modifier = Modifier.fillMaxSize()) {
-      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 82.dp)) {
+      LazyColumn(verticalArrangement = Arrangement.spacedBy(10.dp), contentPadding = PaddingValues(bottom = 104.dp)) {
         item {
           Row(
             modifier = Modifier.fillMaxWidth(),
@@ -402,7 +413,7 @@ private fun OverviewScreen(
           }
         }
       }
-      OverviewChatButton(onClick = { onSelectTab(Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 8.dp))
+      OverviewChatButton(onClick = { onSelectTab(Tab.Chat) }, modifier = Modifier.align(Alignment.BottomEnd).padding(bottom = 20.dp))
     }
   }
 }
@@ -416,6 +427,7 @@ private data class ModuleRow(
   val settingsRoute: SettingsRoute? = null,
 )
 
+/** Floating overview shortcut that keeps chat one tap away from module lists. */
 @Composable
 private fun OverviewChatButton(
   onClick: () -> Unit,
@@ -424,17 +436,17 @@ private fun OverviewChatButton(
   Surface(
     onClick = onClick,
     modifier = modifier.height(ClawTheme.spacing.touchTarget),
-    shape = RoundedCornerShape(ClawTheme.radii.pill),
+    shape = RoundedCornerShape(ClawTheme.radii.button),
     color = ClawTheme.colors.primary,
     contentColor = ClawTheme.colors.primaryText,
   ) {
     Row(
-      modifier = Modifier.padding(horizontal = 18.dp),
+      modifier = Modifier.padding(horizontal = 16.dp),
       verticalAlignment = Alignment.CenterVertically,
-      horizontalArrangement = Arrangement.spacedBy(7.dp),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
       Icon(imageVector = Icons.Outlined.ChatBubbleOutline, contentDescription = null, modifier = Modifier.size(18.dp))
-      Text(text = "Chat", style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 22.sp))
+      Text(text = "Chat", style = ClawTheme.type.label.copy(fontSize = 16.sp, lineHeight = 20.sp))
     }
   }
 }
@@ -475,7 +487,7 @@ private fun ModuleList(
   onSelectTab: (Tab) -> Unit,
   onOpenSettingsRoute: (SettingsRoute) -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
     Column(verticalArrangement = Arrangement.spacedBy(0.dp)) {
       rows.forEachIndexed { index, row ->
         ModuleListRow(
@@ -490,7 +502,7 @@ private fun ModuleList(
           },
         )
         if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+          HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.82f), thickness = 1.dp)
         }
       }
     }
@@ -507,14 +519,14 @@ private fun ModuleListRow(
       modifier =
         Modifier
           .fillMaxWidth()
-          .heightIn(min = 50.dp)
+          .heightIn(min = 54.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = onClick)
-          .padding(horizontal = 2.dp, vertical = 5.dp),
+          .padding(horizontal = 0.dp, vertical = 6.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(9.dp),
     ) {
-      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
+      Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
       Text(
         text = row.title,
         style = ClawTheme.type.body,
@@ -526,7 +538,7 @@ private fun ModuleListRow(
       row.metadata?.let {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(statusDotColor(it)))
-          Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+          Text(text = it, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
       }
       Icon(
@@ -556,12 +568,13 @@ private data class RecentSessionListItem(
   val metadata: String,
 )
 
+/** Recent sessions panel that preserves the session key behind display labels. */
 @Composable
 private fun RecentSessionList(
   rows: List<RecentSessionListItem>,
   onOpen: (String) -> Unit,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 14.dp, vertical = 4.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
         RecentSessionRowContent(
@@ -571,7 +584,7 @@ private fun RecentSessionList(
           onClick = { onOpen(row.key) },
         )
         if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+          HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.82f), thickness = 1.dp)
         }
       }
     }
@@ -593,7 +606,7 @@ private fun RecentSessionRowContent(
           .heightIn(min = 58.dp)
           .clip(RoundedCornerShape(ClawTheme.radii.row))
           .clickable(onClick = onClick)
-          .padding(horizontal = 2.dp, vertical = 6.dp),
+          .padding(horizontal = 0.dp, vertical = 7.dp),
       verticalAlignment = Alignment.CenterVertically,
       horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -609,9 +622,9 @@ private fun RecentSessionRowContent(
       }
       Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
         Text(text = title, style = ClawTheme.type.body, color = ClawTheme.colors.text, maxLines = 1)
-        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
+        Text(text = subtitle, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textSubtle, maxLines = 1)
       }
-      Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted)
+      Text(text = metadata, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted)
       Icon(
         imageVector = Icons.AutoMirrored.Filled.KeyboardArrowRight,
         contentDescription = "Open session",
@@ -637,10 +650,16 @@ private fun ChatShellScreen(
 private fun VoiceShellScreen(
   viewModel: MainViewModel,
   onOpenCommand: () -> Unit,
+  onOpenGatewaySettings: () -> Unit,
   onOpenVoiceSettings: () -> Unit,
 ) {
   ClawScaffold(contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 8.dp)) {
-    VoiceScreen(viewModel = viewModel, onOpenCommand = onOpenCommand, onOpenVoiceSettings = onOpenVoiceSettings)
+    VoiceScreen(
+      viewModel = viewModel,
+      onOpenCommand = onOpenCommand,
+      onOpenGatewaySettings = onOpenGatewaySettings,
+      onOpenVoiceSettings = onOpenVoiceSettings,
+    )
   }
 }
 
@@ -769,6 +788,7 @@ private fun approvalsSummary(count: Int): String =
 
 private fun approvalsStatus(count: Int): Boolean? = if (count > 0) true else null
 
+/** Summarizes scheduled gateway jobs for overview and settings rows. */
 private fun cronJobsSummary(count: Int): String =
   when (count) {
     0 -> "No scheduled jobs"
@@ -776,6 +796,7 @@ private fun cronJobsSummary(count: Int): String =
     else -> "$count scheduled"
   }
 
+/** Summarizes provider usage buckets without exposing detailed billing data. */
 private fun usageSummaryText(count: Int): String =
   when (count) {
     0 -> "No provider usage"
@@ -783,11 +804,13 @@ private fun usageSummaryText(count: Int): String =
     else -> "$count providers"
   }
 
+/** Reports how many gateway skills are enabled, eligible, and dependency-complete. */
 private fun skillsSummaryText(skills: List<GatewaySkillSummary>): String {
   val ready = skills.count { !it.disabled && it.eligible && it.missingCount == 0 }
   return if (skills.isEmpty()) "No skills" else "$ready/${skills.size} ready"
 }
 
+/** Converts gateway skill health into a tri-state settings status dot. */
 private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
   when {
     skills.isEmpty() -> null
@@ -795,6 +818,7 @@ private fun skillsStatus(skills: List<GatewaySkillSummary>): Boolean? =
     else -> true
   }
 
+/** Prioritizes pending pairings over online counts for compact node/device summaries. */
 private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String {
   val online = summary.nodes.count { it.connected }
   val devices = summary.pairedDevices.size
@@ -806,6 +830,7 @@ private fun nodesDevicesSummaryText(summary: GatewayNodesDevicesSummary): String
   }
 }
 
+/** Maps node/device state to a settings status dot, treating pending pairings as attention-needed. */
 private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
   when {
     summary.pendingDevices.isNotEmpty() -> false
@@ -814,6 +839,7 @@ private fun nodesDevicesStatus(summary: GatewayNodesDevicesSummary): Boolean? =
     else -> null
   }
 
+/** Summarizes channel connection state, surfacing errors before connected counts. */
 private fun channelsSummaryText(summary: GatewayChannelsSummary): String {
   val connected = summary.channels.count { it.connected }
   return when {
@@ -823,6 +849,7 @@ private fun channelsSummaryText(summary: GatewayChannelsSummary): String {
   }
 }
 
+/** Maps channel health to the settings status dot shown in the shell. */
 private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
   when {
     summary.channels.any { it.error != null } -> false
@@ -831,6 +858,7 @@ private fun channelsStatus(summary: GatewayChannelsSummary): Boolean? =
     else -> null
   }
 
+/** Summarizes dreaming memory health before enabled/off state. */
 private fun dreamingSummaryText(summary: GatewayDreamingSummary): String =
   when {
     !summary.storeHealthy || !summary.phaseSignalHealthy -> "Needs attention"
@@ -838,6 +866,7 @@ private fun dreamingSummaryText(summary: GatewayDreamingSummary): String =
     else -> "Off"
   }
 
+/** Maps dreaming store/phase health and enabled state to a settings status dot. */
 private fun dreamingStatus(summary: GatewayDreamingSummary): Boolean? =
   when {
     !summary.storeHealthy || !summary.phaseSignalHealthy -> false
@@ -903,7 +932,7 @@ private fun SettingsGroup(
   onOpen: (SettingsRoute) -> Unit,
   onAction: (() -> Unit)? = null,
 ) {
-  ClawPanel(contentPadding = PaddingValues(horizontal = 0.dp, vertical = 0.dp)) {
+  ClawPanel(contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)) {
     Column {
       rows.forEachIndexed { index, row ->
         SettingsListRow(
@@ -918,7 +947,7 @@ private fun SettingsGroup(
           },
         )
         if (index != rows.lastIndex) {
-          HorizontalDivider(color = ClawTheme.colors.border, thickness = 1.dp)
+          HorizontalDivider(color = ClawTheme.colors.border.copy(alpha = 0.82f), thickness = 1.dp)
         }
       }
     }
@@ -934,17 +963,17 @@ private fun SettingsListRow(
     modifier =
       Modifier
         .fillMaxWidth()
-        .heightIn(min = 52.dp)
+        .heightIn(min = 54.dp)
         .clip(RoundedCornerShape(ClawTheme.radii.row))
         .clickable(onClick = onClick)
-        .padding(horizontal = 10.dp, vertical = 6.dp),
+        .padding(horizontal = 0.dp, vertical = 7.dp),
     verticalAlignment = Alignment.CenterVertically,
     horizontalArrangement = Arrangement.spacedBy(10.dp),
   ) {
-    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(19.dp), tint = ClawTheme.colors.text)
+    Icon(imageVector = row.icon, contentDescription = null, modifier = Modifier.size(20.dp), tint = ClawTheme.colors.text)
     Text(text = row.title, style = ClawTheme.type.body, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), maxLines = 1)
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-      Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp), color = ClawTheme.colors.textMuted, maxLines = 1)
+      Text(text = row.value, style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp), color = ClawTheme.colors.textMuted, maxLines = 1, overflow = TextOverflow.Ellipsis)
       row.status?.let { active ->
         Box(modifier = Modifier.size(4.5.dp).clip(CircleShape).background(if (active) ClawTheme.colors.success else ClawTheme.colors.textSubtle))
       }

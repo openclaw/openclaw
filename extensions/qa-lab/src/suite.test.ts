@@ -108,6 +108,13 @@ describe("qa suite", () => {
         OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "bad",
       }),
     ).toBe(120_000);
+    for (const value of ["0x10", "1e3", "10.5"]) {
+      expect(
+        qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(undefined, {
+          OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: value,
+        }),
+      ).toBe(120_000);
+    }
     expect(qaSuiteProgressTesting.resolveQaSuiteTransportReadyTimeoutMs(90_000, {})).toBe(90_000);
   });
 
@@ -260,12 +267,12 @@ describe("qa suite", () => {
     expect(
       qaSuiteProgressTesting.buildQaRuntimeEnvPatch({
         providerMode: "mock-openai",
-        forcedRuntime: "pi",
+        forcedRuntime: "openclaw",
         mockBaseUrl: "http://127.0.0.1:44080",
       }),
     ).toEqual({
       OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "pi",
+      OPENCLAW_QA_FORCE_RUNTIME: "openclaw",
     });
   });
 
@@ -314,6 +321,30 @@ describe("qa suite", () => {
     });
   });
 
+  it("enables Control UI only for Control UI scenarios unless explicitly overridden", () => {
+    const channelScenario = makeQaSuiteTestScenario("channel-baseline", { surface: "channel" });
+    const controlUiScenario = makeQaSuiteTestScenario("control-ui-roundtrip", {
+      surface: "control-ui",
+    });
+
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        scenarios: [channelScenario],
+      }),
+    ).toBe(false);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        scenarios: [channelScenario, controlUiScenario],
+      }),
+    ).toBe(true);
+    expect(
+      qaSuiteProgressTesting.resolveQaSuiteControlUiEnabled({
+        explicit: true,
+        scenarios: [channelScenario],
+      }),
+    ).toBe(true);
+  });
+
   it("keeps caller-owned serial labs on shared workers without a launcher", () => {
     const scenarios = [
       makeQaSuiteTestScenario("baseline"),
@@ -359,7 +390,7 @@ describe("qa suite", () => {
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
         modelRef: "mock-openai/gpt-5.5",
         providerMode: "mock-openai",
-        forcedRuntime: "pi",
+        forcedRuntime: "openclaw",
       }),
     ).toBe("mock-openai/gpt-5.5");
   });

@@ -199,8 +199,8 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
     if (buffer.timeout) {
       clearTimeout(buffer.timeout);
     }
-    buffer.timeout = setTimeout(async () => {
-      await flushBuffer(key, buffer);
+    buffer.timeout = setTimeout(() => {
+      void flushBuffer(key, buffer);
     }, buffer.debounceMs);
     buffer.timeout.unref?.();
   };
@@ -267,15 +267,13 @@ export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>
       });
       return;
     }
-
-    let buffer!: DebounceBuffer<T>;
     const reservedTask = enqueueReservedKeyTask(key, async () => {
       if (buffer.items.length === 0) {
         return;
       }
       await runFlush(buffer.items);
     });
-    buffer = {
+    const buffer: DebounceBuffer<T> = {
       items: [item],
       timeout: null,
       debounceMs,

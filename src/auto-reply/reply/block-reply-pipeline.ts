@@ -121,7 +121,7 @@ export function createBlockReplyPipeline(params: {
     void coalescer?.flush({ force: true });
   };
 
-  const sendPayload = (payload: ReplyPayload, bypassSeenCheck: boolean = false) => {
+  const sendPayload = (payload: ReplyPayload, bypassSeenCheck = false) => {
     if (aborted) {
       return;
     }
@@ -170,14 +170,14 @@ export function createBlockReplyPipeline(params: {
         for (const mediaUrl of reply.mediaUrls) {
           sentMediaUrls.add(mediaUrl);
         }
-        if (!isStatusNotice && !reply.hasMedia && reply.trimmedText) {
+        if (!isStatusNotice && reply.trimmedText) {
           streamedTextFragments.push(reply.trimmedText);
         }
         if (!isStatusNotice) {
           didStream = true;
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (err === timeoutError) {
           abortController.abort();
           aborted = true;
@@ -235,6 +235,32 @@ export function createBlockReplyPipeline(params: {
     bufferedPayloadKeys.clear();
   };
 
+  const enqueueCoalescedPayload = (payload: ReplyPayload) => {
+    if (!coalescer) {
+      return;
+    }
+    const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+    if (
+      assistantMessageIndex !== undefined &&
+      bufferedAssistantMessageIndex !== undefined &&
+      assistantMessageIndex !== bufferedAssistantMessageIndex &&
+      coalescer.hasBuffered()
+    ) {
+      // Logical assistant blocks must not be merged together by the generic
+      // coalescer. Force-flush the previous buffered block before starting a
+      // new assistant-message block.
+      flushBufferedAssistantBlock();
+    }
+    const payloadKey = createBlockReplyPayloadKey(payload);
+    if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedKeys.has(payloadKey)) {
+      return;
+    }
+    seenKeys.add(payloadKey);
+    bufferedKeys.add(payloadKey);
+    bufferedAssistantMessageIndex = assistantMessageIndex;
+    coalescer.enqueue(payload);
+  };
+
   const enqueue = (payload: ReplyPayload) => {
     if (aborted) {
       return;
@@ -244,35 +270,20 @@ export function createBlockReplyPipeline(params: {
     }
     const reply = resolveSendableOutboundReplyParts(payload);
     const hasNonTextContent = hasOutboundReplyContent(
-      { ...payload, text: undefined },
+      { ...payload, text: undefined, mediaUrl: undefined, mediaUrls: undefined },
       { trimText: true },
     );
+    if (reply.hasMedia && coalescer && !hasNonTextContent) {
+      enqueueCoalescedPayload(payload);
+      return;
+    }
     if (reply.hasMedia || hasNonTextContent) {
       void coalescer?.flush({ force: true });
       sendPayload(payload, /* bypassSeenCheck */ false);
       return;
     }
     if (coalescer) {
-      const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
-      if (
-        assistantMessageIndex !== undefined &&
-        bufferedAssistantMessageIndex !== undefined &&
-        assistantMessageIndex !== bufferedAssistantMessageIndex &&
-        coalescer.hasBuffered()
-      ) {
-        // Logical assistant blocks must not be merged together by the generic
-        // coalescer. Force-flush the previous buffered block before starting a
-        // new assistant-message block.
-        flushBufferedAssistantBlock();
-      }
-      const payloadKey = createBlockReplyPayloadKey(payload);
-      if (hasSeenOrQueuedPayloadKey(payloadKey) || bufferedKeys.has(payloadKey)) {
-        return;
-      }
-      seenKeys.add(payloadKey);
-      bufferedKeys.add(payloadKey);
-      bufferedAssistantMessageIndex = assistantMessageIndex;
-      coalescer.enqueue(payload);
+      enqueueCoalescedPayload(payload);
       return;
     }
     sendPayload(payload, /* bypassSeenCheck */ false);

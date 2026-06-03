@@ -1,4 +1,4 @@
-import type { AcpSessionUpdateTag } from "../../acp/runtime/types.js";
+import type { AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clampPositiveInteger, resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 
@@ -150,7 +150,7 @@ export function isAcpTagVisible(
   if (typeof override === "boolean") {
     return override;
   }
-  if (Object.prototype.hasOwnProperty.call(ACP_TAG_VISIBILITY_DEFAULTS, tag)) {
+  if (Object.hasOwn(ACP_TAG_VISIBILITY_DEFAULTS, tag)) {
     return ACP_TAG_VISIBILITY_DEFAULTS[tag];
   }
   return true;

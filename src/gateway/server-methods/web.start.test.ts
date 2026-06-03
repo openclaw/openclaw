@@ -12,6 +12,25 @@ vi.mock("../../channels/plugins/index.js", () => ({
 
 import { webHandlers } from "./web.js";
 
+function createRunningWhatsappSnapshot(): ChannelRuntimeSnapshot {
+  return {
+    channels: {
+      whatsapp: {
+        accountId: "default",
+        running: true,
+      },
+    },
+    channelAccounts: {
+      whatsapp: {
+        default: {
+          accountId: "default",
+          running: true,
+        },
+      },
+    },
+  };
+}
+
 function createOptions(
   params: Record<string, unknown>,
   overrides?: Partial<GatewayRequestHandlerOptions>,
@@ -25,24 +44,7 @@ function createOptions(
     context: {
       stopChannel: vi.fn(),
       startChannel: vi.fn(),
-      getRuntimeSnapshot: vi.fn(
-        (): ChannelRuntimeSnapshot => ({
-          channels: {
-            whatsapp: {
-              accountId: "default",
-              running: true,
-            },
-          },
-          channelAccounts: {
-            whatsapp: {
-              default: {
-                accountId: "default",
-                running: true,
-              },
-            },
-          },
-        }),
-      ),
+      getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
     },
     ...overrides,
   } as unknown as GatewayRequestHandlerOptions;
@@ -57,24 +59,7 @@ function createRunningWhatsappContext() {
     context: {
       stopChannel,
       startChannel,
-      getRuntimeSnapshot: vi.fn(
-        (): ChannelRuntimeSnapshot => ({
-          channels: {
-            whatsapp: {
-              accountId: "default",
-              running: true,
-            },
-          },
-          channelAccounts: {
-            whatsapp: {
-              default: {
-                accountId: "default",
-                running: true,
-              },
-            },
-          },
-        }),
-      ),
+      getRuntimeSnapshot: vi.fn(createRunningWhatsappSnapshot),
     } as unknown as GatewayRequestHandlerOptions["context"],
   };
 }
@@ -146,6 +131,51 @@ describe("webHandlers web.login.start", () => {
 
     expect(stopChannel).toHaveBeenCalledWith("whatsapp", "default");
     expect(startChannel).not.toHaveBeenCalled();
+  });
+
+  it("preserves gateway method receiver state for login start", async () => {
+    const gateway = {
+      marker: "gateway-state",
+      async loginWithQrStart(this: { marker: string }) {
+        return {
+          connected: true,
+          message: this.marker,
+        };
+      },
+    };
+    const loginWithQrStart = vi.spyOn(gateway, "loginWithQrStart");
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        gatewayMethods: ["web.login.start"],
+        gateway,
+      },
+    ]);
+    const respond = vi.fn();
+
+    await webHandlers["web.login.start"](
+      createOptions(
+        { accountId: "default" },
+        {
+          respond,
+        },
+      ),
+    );
+
+    expect(loginWithQrStart).toHaveBeenCalledWith({
+      accountId: "default",
+      force: false,
+      timeoutMs: undefined,
+      verbose: false,
+    });
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        connected: true,
+        message: "gateway-state",
+      },
+      undefined,
+    );
   });
 });
 

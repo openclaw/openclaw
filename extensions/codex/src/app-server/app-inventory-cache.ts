@@ -1,4 +1,10 @@
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  isFutureDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { JsonValue, v2 } from "./protocol.js";
 
 export const CODEX_APP_INVENTORY_CACHE_TTL_MS = 60 * 60 * 1_000;
@@ -70,7 +76,7 @@ export class CodexAppInventoryCache {
   }
 
   read(params: RefreshParams): CodexAppInventoryCacheRead {
-    const nowMs = params.nowMs ?? Date.now();
+    const nowMs = resolveDateTimestampMs(params.nowMs);
     const entry = this.entries.get(params.key);
     if (!entry) {
       const refreshScheduled = params.suppressRefresh ? false : this.scheduleRefresh(params);
@@ -86,7 +92,9 @@ export class CodexAppInventoryCache {
     }
 
     const state: CodexAppInventoryReadState =
-      entry.invalidated || entry.expiresAtMs <= nowMs ? "stale" : "fresh";
+      entry.invalidated || !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })
+        ? "stale"
+        : "fresh";
     const refreshScheduled =
       state === "fresh" && !params.forceRefetch ? false : this.scheduleRefresh(params);
     return {
@@ -162,15 +170,16 @@ export class CodexAppInventoryCache {
     params: RefreshParams,
     refreshToken: number,
   ): Promise<CodexAppInventorySnapshot> {
-    const nowMs = params.nowMs ?? Date.now();
+    const nowMs = resolveDateTimestampMs(params.nowMs);
     try {
       const apps = await listAllApps(params.request, params.forceRefetch ?? false);
       this.revision += 1;
+      const expiresAtMs = resolveExpiresAtMsFromDurationMs(this.ttlMs, { nowMs }) ?? 0;
       const snapshot: CodexAppInventorySnapshot = {
         key: params.key,
         apps,
         fetchedAtMs: nowMs,
-        expiresAtMs: nowMs + this.ttlMs,
+        expiresAtMs,
         revision: this.revision,
       };
       // Only publish this snapshot if no newer refresh started for the same key
@@ -258,10 +267,6 @@ function fingerprintInventoryCacheKey(key: string): string {
     hash = (hash * 31 + key.charCodeAt(index)) >>> 0;
   }
   return hash.toString(16).padStart(8, "0");
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function redactErrorData(value: unknown, depth = 0): JsonValue | undefined {

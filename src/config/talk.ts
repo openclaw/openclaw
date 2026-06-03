@@ -1,5 +1,8 @@
+import {
+  normalizeFastMode,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
-import { normalizeFastMode, normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import type {
   ResolvedTalkConfig,
@@ -107,6 +110,14 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
     normalized.model = model;
   }
   const voice = normalizeOptionalString(source.voice);
+  const speakerVoice = normalizeOptionalString(source.speakerVoice) ?? voice;
+  const speakerVoiceId = normalizeOptionalString(source.speakerVoiceId);
+  if (speakerVoice) {
+    normalized.speakerVoice = speakerVoice;
+  }
+  if (speakerVoiceId) {
+    normalized.speakerVoiceId = speakerVoiceId;
+  }
   if (voice) {
     normalized.voice = voice;
   }

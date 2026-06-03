@@ -55,6 +55,7 @@ describe("method scope resolution", () => {
     ["poll", ["operator.write"]],
     ["talk.client.create", ["operator.write"]],
     ["talk.client.toolCall", ["operator.write"]],
+    ["talk.client.steer", ["operator.write"]],
     ["talk.session.create", ["operator.write"]],
     ["talk.session.join", ["operator.write"]],
     ["talk.session.appendAudio", ["operator.write"]],
@@ -63,6 +64,7 @@ describe("method scope resolution", () => {
     ["talk.session.cancelTurn", ["operator.write"]],
     ["talk.session.cancelOutput", ["operator.write"]],
     ["talk.session.submitToolResult", ["operator.write"]],
+    ["talk.session.steer", ["operator.write"]],
     ["talk.session.close", ["operator.write"]],
     ["update.status", ["operator.admin"]],
     ["config.schema", ["operator.admin"]],
@@ -244,6 +246,7 @@ describe("operator scope authorization", () => {
     for (const method of [
       "talk.client.create",
       "talk.client.toolCall",
+      "talk.client.steer",
       "talk.session.create",
       "talk.session.join",
       "talk.session.appendAudio",
@@ -252,6 +255,7 @@ describe("operator scope authorization", () => {
       "talk.session.cancelTurn",
       "talk.session.cancelOutput",
       "talk.session.submitToolResult",
+      "talk.session.steer",
       "talk.session.close",
     ]) {
       expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
@@ -384,6 +388,37 @@ describe("core gateway method classification", () => {
       (method) => !isGatewayMethodClassified(method),
     );
     expect(unclassified).toStrictEqual([]);
+  });
+
+  it("exposes skill proposal methods through the core gateway registry", () => {
+    for (const method of ["skills.proposals.list", "skills.proposals.inspect"]) {
+      expect(listGatewayMethods()).toContain(method);
+      expect(coreGatewayHandlers).toHaveProperty(method);
+      expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.read"]);
+      expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+        allowed: true,
+      });
+    }
+
+    for (const method of [
+      "skills.proposals.create",
+      "skills.proposals.update",
+      "skills.proposals.revise",
+      "skills.proposals.apply",
+      "skills.proposals.reject",
+      "skills.proposals.quarantine",
+    ]) {
+      expect(listGatewayMethods()).toContain(method);
+      expect(coreGatewayHandlers).toHaveProperty(method);
+      expect(resolveLeastPrivilegeOperatorScopesForMethod(method)).toEqual(["operator.admin"]);
+      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+        allowed: false,
+        missingScope: "operator.admin",
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.admin"])).toEqual({
+        allowed: true,
+      });
+    }
   });
 });
 

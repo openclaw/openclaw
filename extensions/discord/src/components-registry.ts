@@ -1,4 +1,11 @@
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 import { getOptionalDiscordRuntime } from "./runtime.js";
 
@@ -162,7 +169,7 @@ function getPersistentModalStore(): DiscordRegistryStore<DiscordModalEntry> | un
 }
 
 function isExpired(entry: { expiresAt?: number }, now: number) {
-  return typeof entry.expiresAt === "number" && entry.expiresAt <= now;
+  return entry.expiresAt !== undefined && !isFutureDateTimestampMs(entry.expiresAt, { nowMs: now });
 }
 
 function normalizeEntryTimestamps<T extends { createdAt?: number; expiresAt?: number }>(
@@ -170,9 +177,31 @@ function normalizeEntryTimestamps<T extends { createdAt?: number; expiresAt?: nu
   now: number,
   ttlMs: number,
 ): T {
-  const createdAt = entry.createdAt ?? now;
-  const expiresAt = entry.expiresAt ?? createdAt + ttlMs;
+  const createdAt = resolveDateTimestampMs(entry.createdAt, now);
+  const expiresAt =
+    asDateTimestampMs(entry.expiresAt) ??
+    resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: createdAt }) ??
+    0;
   return { ...entry, createdAt, expiresAt };
+}
+
+function pruneUndefinedRegistryValues<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value
+      .filter((entry) => entry !== undefined)
+      .map((entry) => pruneUndefinedRegistryValues(entry)) as T;
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === undefined) {
+      continue;
+    }
+    result[key] = pruneUndefinedRegistryValues(entry);
+  }
+  return result as T;
 }
 
 function registerEntries<
@@ -236,8 +265,9 @@ function registerPersistentRegistryEntries<T extends { id: string }>(params: {
     return;
   }
   for (const entry of params.entries) {
+    const persistedEntry = pruneUndefinedRegistryValues(entry);
     void store
-      .register(entry.id, { version: 1, entry }, { ttlMs: params.ttlMs })
+      .register(entry.id, { version: 1, entry: persistedEntry }, { ttlMs: params.ttlMs })
       .catch(disablePersistentComponentRegistry);
   }
 }
@@ -275,7 +305,7 @@ function resolveComponentConsumptionIds(entry: DiscordComponentEntry): string[] 
     return [entry.id];
   }
   const ids = entry.consumptionGroupEntryIds?.filter((id) => typeof id === "string" && id) ?? [];
-  return ids.length > 0 ? Array.from(new Set(ids)) : [entry.id];
+  return ids.length > 0 ? uniqueStrings(ids) : [entry.id];
 }
 
 function deleteComponentConsumptionGroup(entry: DiscordComponentEntry): void {

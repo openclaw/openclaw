@@ -15,6 +15,8 @@ const {
   cleanupBrowserSessionsForLifecycleEndMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
+  abortAndDrainEmbeddedAgentRunMock,
+  retireSessionMcpRuntimeMock,
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   requestHeartbeatMock: vi.fn(),
@@ -30,6 +32,12 @@ const {
     hasHooks: (hookName: string) => hookName === "cron_changed",
     runCronChanged: runCronChangedMock,
   })),
+  abortAndDrainEmbeddedAgentRunMock: vi.fn(async () => ({
+    aborted: true,
+    drained: true,
+    forceCleared: false,
+  })),
+  retireSessionMcpRuntimeMock: vi.fn(async () => true),
 }));
 
 function enqueueSystemEvent(...args: unknown[]) {
@@ -92,6 +100,14 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
 
 vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: getGlobalHookRunnerMock,
+}));
+
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortAndDrainEmbeddedAgentRun: abortAndDrainEmbeddedAgentRunMock,
+}));
+
+vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
+  retireSessionMcpRuntime: retireSessionMcpRuntimeMock,
 }));
 
 import { buildGatewayCronService } from "./server-cron.js";
@@ -194,6 +210,8 @@ describe("buildGatewayCronService", () => {
     cleanupBrowserSessionsForLifecycleEndMock.mockClear();
     runCronChangedMock.mockClear();
     getGlobalHookRunnerMock.mockClear();
+    abortAndDrainEmbeddedAgentRunMock.mockClear();
+    retireSessionMcpRuntimeMock.mockClear();
     getGlobalHookRunnerMock.mockReturnValue({
       hasHooks: (hookName: string) => hookName === "cron_changed",
       runCronChanged: runCronChangedMock,
@@ -1024,7 +1042,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("passes custom session targets through to isolated cron runs", async () => {
+  it("passes opaque custom session targets through to isolated cron runs", async () => {
     const tmpDir = path.join(os.tmpdir(), `server-cron-custom-session-${Date.now()}`);
     const cfg = {
       session: {
@@ -1042,20 +1060,21 @@ describe("buildGatewayCronService", () => {
       broadcast: () => {},
     });
     try {
+      const sessionKey = "agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==";
       const job = await state.cron.add({
         name: "custom-session",
         enabled: true,
         schedule: { kind: "at", at: new Date(1).toISOString() },
-        sessionTarget: "session:project-alpha-monitor",
+        sessionTarget: `session:${sessionKey}`,
         wakeMode: "next-heartbeat",
         payload: { kind: "agentTurn", message: "hello" },
       });
 
       await state.cron.run(job.id, "force");
 
-      const options = expectIsolatedRunFields({ sessionKey: "project-alpha-monitor" });
+      const options = expectIsolatedRunFields({ sessionKey });
       expect(requireRecord(options.job, "isolated job").id).toBe(job.id);
-      expectCleanupForSessionKeys(["project-alpha-monitor"]);
+      expectCleanupForSessionKeys([sessionKey]);
     } finally {
       state.cron.stop();
     }

@@ -8,8 +8,12 @@ import YAML from "yaml";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
   [
-    "@agentclientprotocol/claude-agent-acp@0.36.1",
-    "patches/@agentclientprotocol__claude-agent-acp@0.36.1.patch",
+    "@agentclientprotocol/claude-agent-acp@0.37.0",
+    "patches/@agentclientprotocol__claude-agent-acp@0.37.0.patch",
+  ],
+  [
+    "@agentclientprotocol/claude-agent-acp@0.39.0",
+    "patches/@agentclientprotocol__claude-agent-acp@0.39.0.patch",
   ],
   ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
   ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
@@ -134,8 +138,10 @@ export async function main() {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  main().catch((error) => {
-    console.error(error);
-    process.exit(1);
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error);
+      process.exit(1);
+    },
+  );
 }

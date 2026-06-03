@@ -1,11 +1,13 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { SandboxConfig } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { normalizeToolName, type ToolPolicyLike } from "./tool-policy.js";
+import { normalizeToolList, normalizeToolName, type ToolPolicyLike } from "./tool-policy.js";
 
 const MAX_AUDIT_TOOL_NAMES = 50;
 const MAX_AUDIT_FIELD_LENGTH = 160;
 const toolPolicyAuditLogger = createSubsystemLogger("agents/tool-policy");
+
+export type ToolPolicyAuditLogLevel = "info" | "debug";
 
 type ToolPolicyRuleKind = "allow" | "deny" | "allow+deny" | "unknown";
 
@@ -25,7 +27,7 @@ function toolPolicyRuleKind(policy: ToolPolicyLike): ToolPolicyRuleKind {
 }
 
 function normalizedToolNames(tools: readonly { name: string }[]): string[] {
-  return tools.map((tool) => normalizeToolName(tool.name)).filter((name) => name.length > 0);
+  return normalizeToolList(tools.map((tool) => tool.name));
 }
 
 function removedToolNamesByRule(params: {
@@ -157,6 +159,7 @@ export function auditToolPolicyFilter(params: {
   policy: ToolPolicyLike;
   before: readonly { name: string }[];
   after: readonly { name: string }[];
+  logLevel?: ToolPolicyAuditLogLevel;
 }): void {
   const removedByRule = removedToolNamesByRule({
     policy: params.policy,
@@ -176,22 +179,25 @@ export function auditToolPolicyFilter(params: {
       tools: matchedRuleSourceTools,
     });
     const matchedRuleSuffix = matchedRules.length > 0 ? `; matched ${matchedRules.join(", ")}` : "";
-    toolPolicyAuditLogger.info(
-      `tool policy removed ${removed.length} tool(s) via ${rule}: ${toolNames.join(", ")}${matchedRuleSuffix}`,
-      {
-        rule,
-        ruleKind,
-        ...(matchedRules.length > 0
-          ? {
-              matchedRules,
-              ...(truncated ? { matchedRulesTruncated: true } : {}),
-            }
-          : {}),
-        removedToolCount: removed.length,
-        removedTools: toolNames,
-        removedToolsTruncated: truncated,
-      },
-    );
+    const message = `tool policy removed ${removed.length} tool(s) via ${rule}: ${toolNames.join(", ")}${matchedRuleSuffix}`;
+    const metadata = {
+      rule,
+      ruleKind,
+      ...(matchedRules.length > 0
+        ? {
+            matchedRules,
+            ...(truncated ? { matchedRulesTruncated: true } : {}),
+          }
+        : {}),
+      removedToolCount: removed.length,
+      removedTools: toolNames,
+      removedToolsTruncated: truncated,
+    };
+    if (params.logLevel === "debug") {
+      toolPolicyAuditLogger.debug(message, metadata);
+    } else {
+      toolPolicyAuditLogger.info(message, metadata);
+    }
   }
 }
 

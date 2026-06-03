@@ -12,6 +12,7 @@ function resolveCronSubagentTimings() {
   };
 }
 
+/** Reads completed descendant subagent replies when the orchestrator only emitted interim text. */
 export async function readDescendantSubagentFallbackReply(params: {
   sessionKey: string;
   runStartedAt: number;
@@ -45,11 +46,21 @@ export async function readDescendantSubagentFallbackReply(params: {
     .toSorted((a, b) => (a.endedAt ?? 0) - (b.endedAt ?? 0))
     .slice(-4);
   for (const entry of latestRuns) {
-    let reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
+    const frozenResultText = entry.completion?.resultText;
+    const frozenReply =
+      typeof frozenResultText === "string" && frozenResultText.trim()
+        ? frozenResultText.trim()
+        : undefined;
+    const usesInternalTranscript = typeof entry.execution?.transcriptFile === "string";
+    let reply = usesInternalTranscript ? frozenReply : undefined;
+    if (!reply && !usesInternalTranscript) {
+      reply = (await readLatestAssistantReply({ sessionKey: entry.childSessionKey }))?.trim();
+    }
     // Fall back to the registry's frozen result text when the session transcript
-    // is unavailable (e.g. child session already deleted by announce cleanup).
-    if (!reply && typeof entry.frozenResultText === "string" && entry.frozenResultText.trim()) {
-      reply = entry.frozenResultText.trim();
+    // is unavailable (e.g. child session already deleted by announce cleanup) or
+    // intentionally bypassed by an internal interrupted-resume run.
+    if (!reply && frozenReply) {
+      reply = frozenReply;
     }
     if (!reply || reply.toUpperCase() === SILENT_REPLY_TOKEN.toUpperCase()) {
       continue;
@@ -127,7 +138,9 @@ export async function waitForDescendantSubagentSummary(params: {
     if (latest) {
       return latest;
     }
-    await new Promise<void>((resolve) => setTimeout(resolve, timings.gracePollMs));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, timings.gracePollMs);
+    });
   }
 
   // Final read after grace period expires.

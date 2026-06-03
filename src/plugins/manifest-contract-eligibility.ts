@@ -1,3 +1,4 @@
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
@@ -63,7 +64,7 @@ export function listAvailableManifestContractValues(params: {
       values.add(value);
     }
   }
-  return [...values].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(values);
 }
 
 export function loadManifestContractSnapshot(params: {

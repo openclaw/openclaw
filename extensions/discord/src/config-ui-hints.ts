@@ -17,6 +17,22 @@ export const discordChannelConfigUiHints = {
     label: "Discord Config Writes",
     help: "Allow Discord to write config in response to channel events/commands (default: true).",
   },
+  mentionPatterns: {
+    label: "Discord Mention Pattern Policy",
+    help: "Scopes configured groupChat mentionPatterns to selected Discord channel IDs. Native Discord @mentions still trigger even when regex patterns are denied.",
+  },
+  "mentionPatterns.mode": {
+    label: "Discord Mention Pattern Mode",
+    help: '"allow" enables configured regex mention patterns unless denyIn matches; "deny" disables them unless allowIn matches.',
+  },
+  "mentionPatterns.allowIn": {
+    label: "Discord Mention Pattern Allowlist",
+    help: "Discord channel IDs where configured regex mention patterns are enabled when mode is deny.",
+  },
+  "mentionPatterns.denyIn": {
+    label: "Discord Mention Pattern Denylist",
+    help: "Discord channel IDs where configured regex mention patterns are disabled. Native @mentions still trigger.",
+  },
   proxy: {
     label: "Discord Proxy URL",
     help: "Proxy URL for Discord gateway + API requests (app-id lookup and allowlist resolution). Set per account via channels.discord.accounts.<id>.proxy.",
@@ -88,6 +104,10 @@ export const discordChannelConfigUiHints = {
   "streaming.progress.toolProgress": {
     label: "Discord Progress Tool Lines",
     help: "Show compact tool/progress lines in progress draft mode (default: true). Set false to keep only the label until final delivery.",
+  },
+  "streaming.progress.commentary": {
+    label: "Discord Progress Commentary",
+    help: "Show assistant commentary/preamble text in the temporary progress draft. Final answer delivery is unchanged.",
   },
   "streaming.progress.commandText": {
     label: "Discord Progress Command Text",
@@ -191,7 +211,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.model": {
     label: "Discord Voice Model",
-    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai-codex/gpt-5.5). Leave unset to inherit the routed agent model.",
+    help: "Optional LLM model override for Discord voice channel responses and realtime agent consults (for example openai/gpt-5.5). Leave unset to inherit the routed agent model.",
   },
   "voice.mode": {
     label: "Discord Voice Mode",
@@ -221,9 +241,17 @@ export const discordChannelConfigUiHints = {
     label: "Discord Realtime Model",
     help: "Provider realtime session model, such as gpt-realtime-2. This is separate from voice.model, which remains the OpenClaw agent brain model.",
   },
+  "voice.realtime.speakerVoice": {
+    label: "Discord Realtime Speaker Voice",
+    help: "Provider realtime output voice name, such as cedar.",
+  },
+  "voice.realtime.speakerVoiceId": {
+    label: "Discord Realtime Speaker Voice ID",
+    help: "Provider realtime output voice id.",
+  },
   "voice.realtime.voice": {
     label: "Discord Realtime Voice",
-    help: "Provider realtime output voice, such as cedar.",
+    help: "Deprecated provider realtime output voice. Use voice.realtime.speakerVoice.",
   },
   "voice.realtime.toolPolicy": {
     label: "Discord Realtime Tool Policy",
@@ -232,6 +260,14 @@ export const discordChannelConfigUiHints = {
   "voice.realtime.consultPolicy": {
     label: "Discord Realtime Consult Policy",
     help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
+  },
+  "voice.realtime.requireWakeName": {
+    label: "Discord Realtime Require Wake Name",
+    help: "Require a configured wake name before OpenAI agent-proxy Discord realtime voice responds. If wakeNames is unset, the routed agent name is used, falling back to the agent id.",
+  },
+  "voice.realtime.wakeNames": {
+    label: "Discord Realtime Wake Names",
+    help: "One- or two-word activation names that allow OpenAI agent-proxy Discord realtime voice to respond when requireWakeName is enabled.",
   },
   "voice.realtime.bootstrapContextFiles": {
     label: "Discord Realtime Bootstrap Context Files",
@@ -276,7 +312,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.captureSilenceGraceMs": {
     label: "Discord Voice Capture Silence Grace (ms)",
-    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2500.",
+    help: "Silence window after Discord reports a speaker ended before OpenClaw finalizes the audio segment for transcription. Default: 2000.",
   },
   "voice.tts": {
     label: "Discord Voice Text-to-Speech",

@@ -1,9 +1,9 @@
-import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { resolveThinkingDefaultForModel } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { legacyModelKey, modelKey, normalizeProviderId } from "./model-selection-normalize.js";
 import { normalizeModelSelection } from "./model-selection-resolve.js";
@@ -41,6 +41,14 @@ export function resolveThinkingDefault(params: {
   const perModelThinking =
     configuredModels?.[canonicalKey]?.params?.thinking ??
     (legacyKey ? configuredModels?.[legacyKey]?.params?.thinking : undefined);
+  // Accept boolean false and common disable aliases as "off".
+  if (
+    perModelThinking === false ||
+    perModelThinking === "disabled" ||
+    perModelThinking === "none"
+  ) {
+    return "off";
+  }
   if (
     perModelThinking === "off" ||
     perModelThinking === "minimal" ||
@@ -57,8 +65,18 @@ export function resolveThinkingDefault(params: {
   if (configured) {
     return configured;
   }
+  const isClaudeProvider =
+    normalizedProvider === "anthropic" ||
+    normalizedProvider === "anthropic-vertex" ||
+    normalizedProvider === "claude-cli";
   if (
-    normalizedProvider === "anthropic" &&
+    isClaudeProvider &&
+    (normalizedModel.startsWith("claude-opus-4-8") || normalizedModel.startsWith("claude-opus-4.8"))
+  ) {
+    return "off";
+  }
+  if (
+    isClaudeProvider &&
     (normalizedModel.startsWith("claude-opus-4-7") || normalizedModel.startsWith("claude-opus-4.7"))
   ) {
     return "off";

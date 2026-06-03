@@ -1,4 +1,4 @@
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
@@ -65,7 +65,13 @@ describe("google provider plugin hooks", () => {
         modelApi: "google-generative-ai",
         modelId: "gemini-3.1-pro-preview",
       } as never),
-    ).toBe("tagged");
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
 
     const sanitized = await Promise.resolve(
       provider.sanitizeReplayHistory?.({
@@ -100,6 +106,60 @@ describe("google provider plugin hooks", () => {
     });
     expect(customEntries).toHaveLength(1);
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
+  });
+
+  it("keeps google-gemini-cli on tagged reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const cliProvider = requireRegisteredProvider(providers, "google-gemini-cli");
+    expect(
+      cliProvider.resolveReasoningOutputMode?.({
+        provider: "google-gemini-cli",
+        modelApi: "google-gemini-cli",
+        modelId: "gemini-2.5-pro",
+      } as never),
+    ).toBe("tagged");
+  });
+
+  it("keeps google-antigravity hook aliases on tagged reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-antigravity");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-antigravity",
+        modelApi: "openai-completions",
+        modelId: "gemini-3-pro-low",
+      } as never),
+    ).toBe("tagged");
+  });
+
+  it("keeps google-vertex hook aliases on native reasoning mode", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google-vertex");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
+        modelApi: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
+    expect(
+      provider.resolveReasoningOutputMode?.({
+        provider: "google-vertex",
+        modelId: "gemini-3.1-pro-preview",
+      } as never),
+    ).toBe("native");
   });
 
   it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
@@ -197,6 +257,25 @@ describe("google provider plugin hooks", () => {
 
     runCase(googleProvider, "google");
     runCase(cliProvider, "google-gemini-cli");
+  });
+
+  it("wires Vertex transport before request-time metadata ADC detection", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+
+    expect(
+      provider.createStreamFn?.({
+        model: {
+          api: "google-vertex",
+          provider: "google",
+          id: "gemini-2.5-pro",
+        },
+      } as never),
+    ).toEqual(expect.any(Function));
   });
 
   it("advertises adaptive thinking for Gemini dynamic thinking", async () => {

@@ -11,15 +11,10 @@ internal data class TalkModeGatewayConfigState(
   val mainSessionKey: String,
   val interruptOnSpeech: Boolean?,
   val silenceTimeoutMs: Long,
-  val executionMode: TalkModeExecutionMode,
 )
 
-internal enum class TalkModeExecutionMode {
-  Native,
-  RealtimeRelay,
-}
-
 internal object TalkModeGatewayConfigParser {
+  /** Reads gateway talk/session config into the runtime state TalkMode needs. */
   fun parse(config: JsonObject?): TalkModeGatewayConfigState {
     val talk = config?.get("talk").asObjectOrNull()
     val sessionCfg = config?.get("session").asObjectOrNull()
@@ -27,22 +22,10 @@ internal object TalkModeGatewayConfigParser {
       mainSessionKey = normalizeMainKey(sessionCfg?.get("mainKey").asStringOrNull()),
       interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
-      executionMode = resolvedExecutionMode(talk),
     )
   }
 
-  fun resolvedExecutionMode(talk: JsonObject?): TalkModeExecutionMode {
-    val realtime = talk?.get("realtime").asObjectOrNull() ?: return TalkModeExecutionMode.Native
-    val mode = realtime["mode"].asStringOrNull()
-    val transport = realtime["transport"].asStringOrNull()
-    val brain = realtime["brain"].asStringOrNull()
-    return if (mode == "realtime" && transport == "gateway-relay" && (brain == null || brain == "agent-consult")) {
-      TalkModeExecutionMode.RealtimeRelay
-    } else {
-      TalkModeExecutionMode.Native
-    }
-  }
-
+  /** Accepts only numeric whole-millisecond silence timeouts; malformed config uses defaults. */
   fun resolvedSilenceTimeoutMs(talk: JsonObject?): Long {
     val fallback = TalkDefaults.defaultSilenceTimeoutMs
     val primitive = talk?.get("silenceTimeoutMs") as? JsonPrimitive ?: return fallback

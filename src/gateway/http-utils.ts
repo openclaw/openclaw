@@ -1,14 +1,15 @@
 import { randomUUID } from "node:crypto";
 import type { IncomingMessage } from "node:http";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { modelKey, parseModelRef, resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../routing/session-key.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-auth-utils.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
@@ -87,7 +88,18 @@ export async function resolveOpenAiCompatModelOverride(params: {
   const cfg = getRuntimeConfig();
   const defaultModelRef = resolveDefaultModelForAgent({ cfg, agentId: params.agentId });
   const defaultProvider = defaultModelRef.provider;
-  const parsed = parseModelRef(raw, defaultProvider);
+  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
+    config: cfg,
+    env: process.env,
+  });
+  const modelManifestContext = {
+    manifestPlugins: manifestMetadataSnapshot.plugins,
+  };
+  const parsed = parseModelRef(raw, defaultProvider, {
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
+  });
   if (!parsed) {
     return { errorMessage: "Invalid `x-openclaw-model`." };
   }
@@ -98,6 +110,9 @@ export async function resolveOpenAiCompatModelOverride(params: {
     catalog,
     defaultProvider,
     agentId: params.agentId,
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
   });
   const normalized = modelKey(parsed.provider, parsed.model);
   if (!policy.allowsKey(normalized)) {

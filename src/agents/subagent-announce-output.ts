@@ -1,5 +1,6 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "./agent-run-terminal-outcome.js";
 import { wrapPromptDataBlock } from "./sanitize-for-prompt.js";
 import {
   captureSubagentCompletionReplyUsing,
@@ -9,6 +10,7 @@ import {
   callGateway,
   getRuntimeConfig,
   readSessionEntry,
+  readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 } from "./subagent-announce.runtime.js";
@@ -22,6 +24,7 @@ type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
   getRuntimeConfig: typeof getRuntimeConfig;
   readSessionEntry: typeof readSessionEntry;
+  readSessionMessagesAsync: typeof readSessionMessagesAsync;
   resolveAgentIdFromSessionKey: typeof resolveAgentIdFromSessionKey;
   resolveStorePath: typeof resolveStorePath;
 };
@@ -30,6 +33,7 @@ const defaultSubagentAnnounceOutputDeps: SubagentAnnounceOutputDeps = {
   callGateway,
   getRuntimeConfig,
   readSessionEntry,
+  readSessionMessagesAsync,
   resolveAgentIdFromSessionKey,
   resolveStorePath,
 };
@@ -55,6 +59,9 @@ type AgentWaitResult = {
   stopReason?: string;
   livenessState?: string;
   yielded?: boolean;
+  pendingError?: boolean;
+  timeoutPhase?: string;
+  providerStarted?: boolean;
 };
 
 export type SubagentRunOutcome = {
@@ -65,10 +72,6 @@ export type SubagentRunOutcome = {
   elapsedMs?: number;
 };
 
-function readFiniteNumber(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 export function withSubagentOutcomeTiming(
   outcome: SubagentRunOutcome,
   timing: {
@@ -76,8 +79,8 @@ export function withSubagentOutcomeTiming(
     endedAt?: number;
   },
 ): SubagentRunOutcome {
-  const startedAt = readFiniteNumber(timing.startedAt) ?? readFiniteNumber(outcome.startedAt);
-  const endedAt = readFiniteNumber(timing.endedAt) ?? readFiniteNumber(outcome.endedAt);
+  const startedAt = asFiniteNumber(timing.startedAt) ?? asFiniteNumber(outcome.startedAt);
+  const endedAt = asFiniteNumber(timing.endedAt) ?? asFiniteNumber(outcome.endedAt);
   const nextTiming: Pick<SubagentRunOutcome, "startedAt" | "endedAt" | "elapsedMs"> = {};
   if (typeof startedAt === "number") {
     nextTiming.startedAt = startedAt;
@@ -194,13 +197,31 @@ function selectSubagentOutputText(snapshot: SubagentOutputSnapshot): string | un
 export async function readSubagentOutput(
   sessionKey: string,
   _outcome?: SubagentRunOutcome,
+  options?: { sessionFile?: string },
 ): Promise<string | undefined> {
-  const history = await subagentAnnounceOutputDeps.callGateway({
-    method: "chat.history",
-    params: { sessionKey, limit: 100 },
-  });
-  const messages = Array.isArray(history?.messages) ? history.messages : [];
-  const snapshot = summarizeSubagentOutputHistory(messages);
+  let messages: unknown[] | undefined;
+  if (options?.sessionFile) {
+    const transcriptMessages = await subagentAnnounceOutputDeps.readSessionMessagesAsync(
+      sessionKey,
+      undefined,
+      options.sessionFile,
+      {
+        mode: "recent",
+        maxMessages: 100,
+        maxBytes: 1024 * 1024,
+      },
+    );
+    messages = transcriptMessages;
+  }
+  const history =
+    messages === undefined
+      ? await subagentAnnounceOutputDeps.callGateway({
+          method: "chat.history",
+          params: { sessionKey, limit: 100 },
+        })
+      : undefined;
+  const sourceMessages = messages ?? (Array.isArray(history?.messages) ? history.messages : []);
+  const snapshot = summarizeSubagentOutputHistory(sourceMessages);
   const selected = selectSubagentOutputText(snapshot);
   if (selected?.trim()) {
     return selected;
@@ -255,15 +276,17 @@ export function applySubagentWaitOutcome(params: {
     next.endedAt = params.wait.endedAt;
   }
   const waitError = typeof params.wait?.error === "string" ? params.wait.error : undefined;
+  const terminalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(params.wait);
   let outcome = next.outcome;
-  // Capture/announcement callers can pass raw wait snapshots that bypass the primary normalizers.
-  if (isBlockedLivenessState(params.wait?.livenessState)) {
-    outcome = { status: "error", error: formatBlockedLivenessError(waitError) };
-  } else if (params.wait?.status === "timeout") {
+  // Capture/announcement callers can pass raw wait snapshots that bypass the
+  // primary normalizers, so preserve the shared timeout/cancel precedence here.
+  if (terminalOutcome?.status === "timeout") {
     outcome = { status: "timeout" };
-  } else if (params.wait?.status === "error") {
-    outcome = { status: "error", error: waitError };
-  } else if (params.wait?.status === "ok") {
+  } else if (terminalOutcome?.reason === "aborted" || terminalOutcome?.reason === "cancelled") {
+    outcome = { status: "error", error: "subagent run terminated" };
+  } else if (terminalOutcome?.reason === "blocked" || terminalOutcome?.reason === "failed") {
+    outcome = { status: "error", error: terminalOutcome.error ?? waitError };
+  } else if (terminalOutcome?.reason === "completed") {
     outcome = { status: "ok" };
   }
   next.outcome = outcome ? withSubagentOutcomeTiming(outcome, next) : undefined;
@@ -272,7 +295,7 @@ export function applySubagentWaitOutcome(params: {
 
 export async function captureSubagentCompletionReply(
   sessionKey: string,
-  options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome },
+  options?: { waitForReply?: boolean; outcome?: SubagentRunOutcome; sessionFile?: string },
 ): Promise<string | undefined> {
   return await captureSubagentCompletionReplyUsing({
     sessionKey,
@@ -280,7 +303,9 @@ export async function captureSubagentCompletionReply(
     maxWaitMs: isFastTestMode() ? 50 : 1_500,
     retryIntervalMs: isFastTestMode() ? FAST_TEST_RETRY_INTERVAL_MS : 100,
     readSubagentOutput: async (nextSessionKey) =>
-      await readSubagentOutput(nextSessionKey, options?.outcome),
+      await readSubagentOutput(nextSessionKey, options?.outcome, {
+        sessionFile: options?.sessionFile,
+      }),
   });
 }
 
@@ -309,16 +334,39 @@ function formatChildResultData(resultText?: string | null): string {
   );
 }
 
+type ChildCompletionRow = {
+  childSessionKey: string;
+  task: string;
+  label?: string;
+  createdAt: number;
+  endedAt?: number;
+  frozenResultText?: string | null;
+  completion?: {
+    resultText?: string | null;
+    fallbackResultText?: string | null;
+  };
+  delivery?: {
+    payload?: {
+      frozenResultText?: string | null;
+      fallbackFrozenResultText?: string | null;
+    };
+  };
+  outcome?: SubagentRunOutcome;
+};
+
+function selectChildCompletionResultText(child: ChildCompletionRow): string | undefined {
+  return (
+    child.completion?.resultText ??
+    child.delivery?.payload?.frozenResultText ??
+    child.completion?.fallbackResultText ??
+    child.delivery?.payload?.fallbackFrozenResultText ??
+    child.frozenResultText ??
+    undefined
+  )?.trim();
+}
+
 export function buildChildCompletionFindings(
-  children: Array<{
-    childSessionKey: string;
-    task: string;
-    label?: string;
-    createdAt: number;
-    endedAt?: number;
-    frozenResultText?: string | null;
-    outcome?: SubagentRunOutcome;
-  }>,
+  children: Array<ChildCompletionRow>,
 ): string | undefined {
   const sorted = [...children].toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
@@ -331,7 +379,7 @@ export function buildChildCompletionFindings(
 
   const sections: string[] = [];
   for (const [index, child] of sorted.entries()) {
-    const resultText = child.frozenResultText?.trim();
+    const resultText = selectChildCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.outcome);
     if (
       child.outcome?.status === "ok" &&
@@ -368,6 +416,16 @@ export function dedupeLatestChildCompletionRows(
     createdAt: number;
     endedAt?: number;
     frozenResultText?: string | null;
+    completion?: {
+      resultText?: string | null;
+      fallbackResultText?: string | null;
+    };
+    delivery?: {
+      payload?: {
+        frozenResultText?: string | null;
+        fallbackFrozenResultText?: string | null;
+      };
+    };
     outcome?: SubagentRunOutcome;
   }>,
 ) {
@@ -391,6 +449,16 @@ export function filterCurrentDirectChildCompletionRows(
     createdAt: number;
     endedAt?: number;
     frozenResultText?: string | null;
+    completion?: {
+      resultText?: string | null;
+      fallbackResultText?: string | null;
+    };
+    delivery?: {
+      payload?: {
+        frozenResultText?: string | null;
+        fallbackFrozenResultText?: string | null;
+      };
+    };
     outcome?: SubagentRunOutcome;
   }>,
   params: {
@@ -443,7 +511,13 @@ function formatTokenCount(value?: number) {
     return `${(value / 1_000_000).toFixed(1)}m`;
   }
   if (value >= 1_000) {
-    return `${(value / 1_000).toFixed(1)}k`;
+    const formattedThousands = (value / 1_000).toFixed(1);
+    // Keep the compact stats unit scheme stable when one-decimal rounding
+    // reaches the next unit, e.g. 999_999 -> 1000.0k.
+    if (Number(formattedThousands) >= 1_000) {
+      return `${(value / 1_000_000).toFixed(1)}m`;
+    }
+    return `${formattedThousands}k`;
   }
   return String(Math.round(value));
 }
@@ -467,7 +541,9 @@ export async function buildCompactAnnounceStatsLine(params: {
       break;
     }
     if (!isFastTestMode()) {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 150);
+      });
     }
     entry = subagentAnnounceOutputDeps.readSessionEntry(storePath, params.sessionKey);
   }

@@ -1,3 +1,6 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
@@ -23,22 +26,18 @@ const TOOL_RESULT_BLOCK_TYPES = new Set([
   "tool_result_error",
   "function_call_output",
 ]);
-const MESSAGE_TOOL_DELIVERY_PREFIX = "Delivery: to send a message, use the `message` tool.";
+const MESSAGE_TOOL_DELIVERY_PREFIXES = [
+  "Delivery: to send a message, use the `message` tool.",
+  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+] as const;
 
 type HeartbeatTranscriptMessage = { role: string; content?: unknown };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
 function readNestedString(record: Record<string, unknown>, key: string): string | undefined {
   const value = record[key];
-  if (typeof value === "string" && value.trim()) {
-    return value.trim();
+  const direct = readString(value);
+  if (direct) {
+    return direct;
   }
   if (!isRecord(value)) {
     return undefined;
@@ -79,7 +78,7 @@ function collectToolCallIds(block: Record<string, unknown>): string[] {
     readString(block.toolUseId),
     readString(block.id),
   ].filter((id): id is string => Boolean(id));
-  return [...new Set(ids)];
+  return uniqueStrings(ids);
 }
 
 function readNestedToolCallArguments(record: Record<string, unknown>): unknown {
@@ -239,7 +238,7 @@ function collectSuccessfulToolResultCallIds(message: {
       ids.push(...collectToolCallIds(block));
     }
   }
-  return [...new Set(ids)];
+  return uniqueStrings(ids);
 }
 
 function isRealNonHeartbeatUserMessage(
@@ -303,7 +302,7 @@ export function isHeartbeatUserMessage(
     return true;
   }
   if (
-    trimmed.startsWith(MESSAGE_TOOL_DELIVERY_PREFIX) &&
+    MESSAGE_TOOL_DELIVERY_PREFIXES.some((prefix) => trimmed.startsWith(prefix)) &&
     trimmed.endsWith(HEARTBEAT_TRANSCRIPT_PROMPT)
   ) {
     return true;

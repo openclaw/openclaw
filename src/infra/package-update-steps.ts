@@ -18,6 +18,8 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "./update-global.js";
 
+const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
+
 export type PackageUpdateStepResult = {
   name: string;
   command: string;
@@ -58,15 +60,18 @@ function formatError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
-async function removePathBestEffort(targetPath: string): Promise<void> {
-  await fs
-    .rm(targetPath, {
+async function removePathBestEffort(targetPath: string): Promise<boolean> {
+  try {
+    await fs.rm(targetPath, {
       recursive: true,
       force: true,
       maxRetries: process.platform === "win32" ? 5 : 2,
       retryDelay: 100,
-    })
-    .catch(() => undefined);
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function readPackageVersionIfPresent(packageRoot: string | null): Promise<string | null> {
@@ -333,7 +338,7 @@ async function replaceNpmBinShims(params: {
   targetLayout: NpmGlobalPrefixLayout;
   packageName: string;
 }): Promise<void> {
-  let entries: string[] = [];
+  let entries: string[];
   try {
     entries = await fs.readdir(params.stageLayout.binDir);
   } catch {
@@ -418,19 +423,20 @@ async function swapStagedNpmInstall(params: {
   const backupRoot = path.join(targetLayout.globalRoot, `.openclaw-${process.pid}-${Date.now()}`);
   let movedExisting = false;
   let movedStaged = false;
+  let removedBackup = true;
   try {
     await fs.mkdir(targetLayout.globalRoot, { recursive: true });
     if (await pathExists(targetPackageRoot)) {
       await movePathWithCopyFallback({
         from: targetPackageRoot,
-        sourceHardlinks: "reject",
+        sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
         to: backupRoot,
       });
       movedExisting = true;
     }
     await movePathWithCopyFallback({
       from: params.stage.packageRoot,
-      sourceHardlinks: "reject",
+      sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
       to: targetPackageRoot,
     });
     movedStaged = true;
@@ -442,7 +448,7 @@ async function swapStagedNpmInstall(params: {
       });
     }
     if (movedExisting) {
-      await removePathBestEffort(backupRoot);
+      removedBackup = await removePathBestEffort(backupRoot);
     }
     return {
       name: "global install swap",
@@ -451,7 +457,9 @@ async function swapStagedNpmInstall(params: {
       durationMs: Date.now() - startedAt,
       exitCode: 0,
       stdoutTail: movedExisting
-        ? `replaced ${params.packageName}`
+        ? removedBackup
+          ? `replaced ${params.packageName}`
+          : `replaced ${params.packageName}; preserved old package at ${backupRoot} for delayed cleanup`
         : `installed ${params.packageName}`,
       stderrTail: null,
     };
@@ -462,7 +470,7 @@ async function swapStagedNpmInstall(params: {
     if (movedExisting) {
       await movePathWithCopyFallback({
         from: backupRoot,
-        sourceHardlinks: "reject",
+        sourceHardlinks: PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
         to: targetPackageRoot,
       }).catch(() => undefined);
     }
@@ -497,7 +505,7 @@ export async function runGlobalPackageUpdateSteps(params: {
 }> {
   const installCwd = params.installCwd === undefined ? {} : { cwd: params.installCwd };
   const installEnv = params.env === undefined ? {} : { env: params.env };
-  let stagedInstall: StagedNpmInstall | null = null;
+  let stagedInstall: StagedNpmInstall | null | undefined;
   let packedInstallDir: string | null = null;
 
   try {
@@ -677,7 +685,7 @@ export async function runGlobalPackageUpdateSteps(params: {
       failedStep,
     };
   } finally {
-    await cleanupStagedNpmInstall(stagedInstall);
+    await cleanupStagedNpmInstall(stagedInstall ?? null);
     if (packedInstallDir) {
       await removePathBestEffort(packedInstallDir);
     }

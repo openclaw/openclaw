@@ -1,6 +1,7 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { buildMediaUnderstandingManifestMetadataRegistry } from "./manifest-metadata.js";
 import {
   normalizeMediaExecutionProviderId,
@@ -132,7 +133,7 @@ function insertConfiguredImageProviders(params: {
   for (const providerId of params.configured.filter((id) => !isExecutionAliasProvider(id))) {
     merged.push(providerId);
   }
-  return [...new Set(merged)];
+  return uniqueStrings(merged);
 }
 
 export function resolveDefaultMediaModel(params: {
@@ -215,4 +216,22 @@ export function providerSupportsNativePdfDocument(params: {
     params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
+}
+
+export function resolveDocumentMediaModel(params: {
+  providerId: string;
+  document: "pdf";
+  mode: "textExtraction" | "image";
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  providerRegistry?: Map<string, MediaUnderstandingProvider>;
+}): string | false | undefined {
+  const registry =
+    params.providerRegistry ?? resolveDefaultRegistry(params.cfg, params.workspaceDir);
+  const provider = registry.get(normalizeMediaProviderId(params.providerId));
+  const value = provider?.documentModels?.[params.document]?.[params.mode];
+  if (value === false) {
+    return false;
+  }
+  return normalizeOptionalString(value);
 }

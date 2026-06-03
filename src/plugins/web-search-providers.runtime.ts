@@ -1,6 +1,6 @@
 import { loadOpenClawPlugins } from "./loader.js";
 import type { PluginLoadOptions } from "./loader.js";
-import { type PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import { resolveBundledWebSearchProvidersFromPublicArtifacts } from "./web-provider-public-artifacts.js";
 import {
@@ -49,7 +49,6 @@ export function resolvePluginWebSearchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
   activate?: boolean;
   cache?: boolean;
@@ -68,7 +67,6 @@ export function resolveRuntimeWebSearchProviders(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
-  bundledAllowlistCompat?: boolean;
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
 }): PluginWebSearchProviderEntry[] {

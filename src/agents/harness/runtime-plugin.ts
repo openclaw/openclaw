@@ -3,9 +3,13 @@ import { withActivatedPluginIds } from "../../plugins/activation-context.js";
 import {
   resolveActivatableProviderOwnerPluginIds,
   resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProvider,
+  resolveOwningPluginIdsForProviderRef,
 } from "../../plugins/providers.js";
+import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
+
+const COLD_LOADABLE_HARNESS_PLUGIN_IDS = new Set(["codex", "copilot"]);
 
 function dedupePluginIds(values: readonly string[]): string[] {
   const seen = new Set<string>();
@@ -22,23 +26,24 @@ function dedupePluginIds(values: readonly string[]): string[] {
 }
 
 function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
-  if (config?.plugins?.bundledDiscovery === "compat") {
-    return false;
-  }
   const allow = config?.plugins?.allow ?? [];
   return allow.length > 0 && !allow.includes(pluginId);
 }
 
-function resolveCodexHarnessPluginIds(params: {
+function resolveHarnessPluginIds(params: {
+  runtime: string;
   provider: string;
   config?: OpenClawConfig;
   workspaceDir: string;
 }): string[] {
+  if (params.runtime !== "codex") {
+    return [params.runtime];
+  }
   if (restrictiveAllowlistOmitsPlugin(params.config, "codex")) {
     return ["codex"];
   }
   const providerOwnerPluginIds = dedupePluginIds(
-    resolveOwningPluginIdsForProvider({
+    resolveOwningPluginIdsForProviderRef({
       provider: params.provider,
       config: params.config,
       workspaceDir: params.workspaceDir,
@@ -97,7 +102,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   agentHarnessRuntimeOverride?: string;
   workspaceDir: string;
 }): Promise<void> {
-  const runtimeOverride = params.agentHarnessRuntimeOverride?.trim();
+  const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
   const policy = resolveAgentHarnessPolicy({
     provider: params.provider,
     modelId: params.modelId,
@@ -106,23 +111,26 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     sessionKey: params.sessionKey,
   });
   const runtime =
-    runtimeOverride && runtimeOverride !== "auto" && runtimeOverride !== "default"
-      ? runtimeOverride
-      : policy.runtime;
-  if (runtime !== "codex") {
+    runtimeOverride && !isDefaultAgentRuntimeId(runtimeOverride) ? runtimeOverride : policy.runtime;
+  if (
+    isDefaultAgentRuntimeId(runtime) ||
+    runtime === OPENCLAW_AGENT_RUNTIME_ID ||
+    !COLD_LOADABLE_HARNESS_PLUGIN_IDS.has(runtime)
+  ) {
     return;
   }
 
   const { ensurePluginRegistryLoaded } =
     await import("../../plugins/runtime/runtime-registry-loader.js");
-  const pluginIds = resolveCodexHarnessPluginIds({
+  const pluginIds = resolveHarnessPluginIds({
+    runtime,
     provider: params.provider,
     config: params.config,
     workspaceDir: params.workspaceDir,
   });
   const configWithAllowedRuntimePlugins = withRuntimePluginIdsAllowed({
     config: params.config,
-    requiredPluginId: "codex",
+    requiredPluginId: runtime,
     pluginIds,
   });
   const activatedConfig =

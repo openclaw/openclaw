@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   formatSessionArchiveTimestamp,
   parseSessionArchiveTimestamp,
@@ -121,7 +122,7 @@ export function resolveSessionTranscriptCandidates(
   const legacyDir = path.join(home, ".openclaw", "sessions");
   pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, legacyDir));
 
-  return Array.from(new Set(candidates));
+  return uniqueStrings(candidates);
 }
 
 export function archiveFileOnDisk(filePath: string, reason: ArchiveFileReason): string {
@@ -257,7 +258,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   }
   const now = opts.nowMs ?? Date.now();
   const reason: ArchiveFileReason = opts.reason ?? "deleted";
-  const directories = Array.from(new Set(opts.directories.map((dir) => path.resolve(dir))));
+  const directories = uniqueStrings(opts.directories.map((dir) => path.resolve(dir)));
   let removed = 0;
   let scanned = 0;
 

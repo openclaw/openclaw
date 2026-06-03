@@ -218,6 +218,19 @@ describe("sessions_spawn tool", () => {
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
   });
 
+  it("does not expose timeout override fields to the model", () => {
+    const tool = createSessionsSpawnTool();
+    const schema = tool.parameters as {
+      properties?: {
+        runTimeoutSeconds?: unknown;
+        timeoutSeconds?: unknown;
+      };
+    };
+
+    expect(schema.properties?.runTimeoutSeconds).toBeUndefined();
+    expect(schema.properties?.timeoutSeconds).toBeUndefined();
+  });
+
   it("hides thread-bound spawn fields when current channel disables spawnSessions", () => {
     const tool = createSessionsSpawnTool({
       agentChannel: "discord",
@@ -286,7 +299,6 @@ describe("sessions_spawn tool", () => {
       model: "anthropic/claude-sonnet-4-6",
       thinking: "medium",
       cwd: "/workspace/requester",
-      runTimeoutSeconds: 5,
       thread: true,
       mode: "session",
       cleanup: "keep",
@@ -304,7 +316,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.model).toBe("anthropic/claude-sonnet-4-6");
     expect(spawnArgs.thinking).toBe("medium");
     expect(spawnArgs.cwd).toBe("/workspace/requester");
-    expect(spawnArgs.runTimeoutSeconds).toBe(5);
+    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
     expect(spawnArgs.cleanup).toBe("keep");
@@ -355,7 +367,7 @@ describe("sessions_spawn tool", () => {
 
     const result = await tool.execute("call-task-name", {
       task: "review subagent handling",
-      taskName: "review_subagents",
+      taskName: "review-subagents",
     });
 
     expectDetailFields(result.details, {
@@ -364,23 +376,44 @@ describe("sessions_spawn tool", () => {
     });
     const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
     expect(spawnArgs.task).toBe("review subagent handling");
-    expect(spawnArgs.taskName).toBe("review_subagents");
+    expect(spawnArgs.taskName).toBe("review-subagents");
   });
 
-  it("rejects invalid taskName before spawning", async () => {
+  it("accepts underscore taskName aliases", async () => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
-    const result = await tool.execute("call-bad-task-name", {
+    const result = await tool.execute("call-underscore-task-name", {
       task: "review subagent handling",
-      taskName: "Bad-Name",
+      taskName: "review_subagents",
     });
 
-    expectDetailFields(result.details, { status: "error" });
-    expect(JSON.stringify(result.details)).toContain("Invalid taskName");
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    expectDetailFields(result.details, {
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+    });
+    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
+    expect(spawnArgs.taskName).toBe("review_subagents");
   });
+
+  it.each(["Bad-Name", "code review", "-bad"])(
+    "rejects invalid taskName %s before spawning",
+    async (taskName) => {
+      const tool = createSessionsSpawnTool({
+        agentSessionKey: "agent:main:main",
+      });
+
+      const result = await tool.execute("call-bad-task-name", {
+        task: "review subagent handling",
+        taskName,
+      });
+
+      expectDetailFields(result.details, { status: "error" });
+      expect(JSON.stringify(result.details)).toContain("Invalid taskName");
+      expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+    },
+  );
 
   it.each(["last", "all"])("rejects reserved taskName %s before spawning", async (taskName) => {
     const tool = createSessionsSpawnTool({
@@ -431,19 +464,26 @@ describe("sessions_spawn tool", () => {
     expect(result.details).not.toHaveProperty("role");
   });
 
-  it("supports legacy timeoutSeconds alias", async () => {
+  it.each([
+    "runTimeoutSeconds",
+    "timeoutSeconds",
+    "run_timeout_seconds",
+    "timeout_seconds",
+  ] as const)("rejects stale timeout override argument %s", async (timeoutParam) => {
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
     });
 
-    await tool.execute("call-timeout-alias", {
-      task: "do thing",
-      timeoutSeconds: 2,
-    });
+    await expect(
+      tool.execute("call-stale-timeout-override", {
+        task: "do thing",
+        [timeoutParam]: 2,
+      }),
+    ).rejects.toThrow(
+      `sessions_spawn does not support per-call "${timeoutParam}". Configure agents.defaults.subagents.runTimeoutSeconds instead.`,
+    );
 
-    const spawnArgs = mockCallArg(hoisted.spawnSubagentDirectMock, 0, 0, "spawnSubagentDirect");
-    expect(spawnArgs.task).toBe("do thing");
-    expect(spawnArgs.runTimeoutSeconds).toBe(2);
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it("passes inherited workspaceDir from tool context, not from tool args", async () => {
@@ -509,7 +549,6 @@ describe("sessions_spawn tool", () => {
       task: "investigate the failing CI run",
       agentId: "codex",
       cwd: "/workspace",
-      runTimeoutSeconds: 45,
       thread: true,
       mode: "session",
       streamTo: "parent",
@@ -524,7 +563,7 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.task).toBe("investigate the failing CI run");
     expect(spawnArgs.agentId).toBe("codex");
     expect(spawnArgs.cwd).toBe("/workspace");
-    expect(spawnArgs.runTimeoutSeconds).toBe(45);
+    expect(spawnArgs).not.toHaveProperty("runTimeoutSeconds");
     expect(spawnArgs.thread).toBe(true);
     expect(spawnArgs.mode).toBe("session");
     expect(spawnArgs.streamTo).toBe("parent");
@@ -697,6 +736,13 @@ describe("sessions_spawn tool", () => {
 
   it("forwards ACP sandbox options", async () => {
     registerAcpBackendForTest();
+    hoisted.spawnAcpDirectMock.mockResolvedValueOnce({
+      status: "accepted",
+      childSessionKey: "agent:codex:acp:1",
+      runId: "run-acp",
+      mode: "run",
+      runTimeoutSeconds: 120,
+    });
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:subagent:parent",
     });
@@ -719,6 +765,7 @@ describe("sessions_spawn tool", () => {
     expect(registration.requesterSessionKey).toBe("agent:main:subagent:parent");
     expect(registration.task).toBe("investigate");
     expect(registration.cleanup).toBe("keep");
+    expect(registration.runTimeoutSeconds).toBe(120);
     expect(registration.spawnMode).toBe("run");
   });
 
@@ -820,7 +867,29 @@ describe("sessions_spawn tool", () => {
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
-  it("rejects attachments for ACP runtime", async () => {
+  it("rejects ACP attachments when sessions_spawn attachments are disabled", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {} as never,
+    });
+
+    const imageBase64 = Buffer.from("png-bytes").toString("base64");
+    const result = await tool.execute("call-3", {
+      runtime: "acp",
+      task: "describe the image",
+      attachments: [
+        { name: "photo.png", content: imageBase64, encoding: "base64", mimeType: "image/png" },
+      ],
+    });
+
+    expectDetailFields(result.details, { status: "forbidden" });
+    expect(JSON.stringify(result.details)).toContain("attachments are disabled");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards validated image attachments for ACP runtime", async () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
@@ -828,19 +897,95 @@ describe("sessions_spawn tool", () => {
       agentAccountId: "default",
       agentTo: "channel:123",
       agentThreadId: "456",
+      config: {
+        tools: {
+          sessions_spawn: {
+            attachments: {
+              enabled: true,
+              maxFiles: 1,
+              maxFileBytes: 32,
+              maxTotalBytes: 32,
+            },
+          },
+        },
+      } as never,
     });
 
+    const imageBase64 = Buffer.from("png-bytes").toString("base64");
     const result = await tool.execute("call-3", {
       runtime: "acp",
-      task: "analyze file",
-      attachments: [{ name: "a.txt", content: "hello", encoding: "utf8" }],
+      task: "describe the image",
+      attachments: [
+        { name: "photo.png", content: imageBase64, encoding: "base64", mimeType: "image/png" },
+      ],
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+    });
+    expect(hoisted.spawnAcpDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "describe the image",
+        attachments: [{ mediaType: "image/png", data: imageBase64 }],
+      }),
+      expect.objectContaining({
+        agentSessionKey: "agent:main:main",
+      }),
+    );
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-image ACP attachments", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        tools: { sessions_spawn: { attachments: { enabled: true } } },
+      } as never,
+    });
+
+    const result = await tool.execute("call-acp-non-image", {
+      runtime: "acp",
+      task: "read text",
+      attachments: [
+        { name: "note.txt", content: "hello", encoding: "utf8", mimeType: "text/plain" },
+      ],
     });
 
     expectDetailFields(result.details, { status: "error" });
-    const details = result.details as { error?: string };
-    expect(details.error).toContain("attachments are currently unsupported for runtime=acp");
+    expect(JSON.stringify(result.details)).toContain("attachments_unsupported_for_acp");
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
-    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("enforces ACP attachment size limits", async () => {
+    registerAcpBackendForTest();
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        tools: {
+          sessions_spawn: {
+            attachments: {
+              enabled: true,
+              maxFiles: 1,
+              maxFileBytes: 4,
+              maxTotalBytes: 4,
+            },
+          },
+        },
+      } as never,
+    });
+
+    const result = await tool.execute("call-acp-too-large", {
+      runtime: "acp",
+      task: "describe the image",
+      attachments: [
+        { name: "photo.png", content: "too large", encoding: "utf8", mimeType: "image/png" },
+      ],
+    });
+
+    expectDetailFields(result.details, { status: "error" });
+    expect(JSON.stringify(result.details)).toContain("attachments_file_bytes_exceeded");
+    expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
   });
 
   it('ignores streamTo when runtime is omitted and defaults to "subagent"', async () => {

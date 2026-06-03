@@ -52,7 +52,11 @@ export type TalkRealtimeConfig = {
   providers?: Record<string, TalkProviderConfig>;
   /** Provider model override for realtime sessions. */
   model?: string;
-  /** Provider voice override for realtime sessions. */
+  /** Provider speaker voice name override for realtime sessions. */
+  speakerVoice?: string;
+  /** Provider speaker voice id override for realtime sessions. */
+  speakerVoiceId?: string;
+  /** @deprecated Use speakerVoice. */
   voice?: string;
   /** Additional system instructions appended to realtime Talk sessions. */
   instructions?: string;
@@ -212,6 +216,8 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /** Optional Tailscale Service name, such as `svc:openclaw`, for Serve mode. */
+  serviceName?: string;
   /**
    * When `mode="serve"` and an externally configured Tailscale Funnel route
    * already covers the gateway port, skip re-applying `tailscale serve` on
@@ -440,11 +446,6 @@ export type GatewayToolsConfig = {
   allow?: string[];
 };
 
-export type GatewayWebchatConfig = {
-  /** Max characters per text field in chat.history responses before truncation (default: 12000). */
-  chatHistoryMaxChars?: number;
-};
-
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -488,8 +489,6 @@ export type GatewayConfig = {
   allowRealIpFallback?: boolean;
   /** Tool access restrictions for HTTP /tools/invoke endpoint. */
   tools?: GatewayToolsConfig;
-  /** WebChat display/history settings. */
-  webchat?: GatewayWebchatConfig;
   /**
    * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
    * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.

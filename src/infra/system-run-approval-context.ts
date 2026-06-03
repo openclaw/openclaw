@@ -1,10 +1,25 @@
-import type { SystemRunApprovalPlan } from "./exec-approvals.js";
+import type {
+  AllowAlwaysPattern,
+  ExecAsk,
+  ExecSecurity,
+  SystemRunApprovalPlan,
+} from "./exec-approvals.js";
 import { normalizeSystemRunApprovalPlan } from "./system-run-approval-binding.js";
 import { formatExecCommand, resolveSystemRunCommandRequest } from "./system-run-command.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
+export type PreparedRunExecPolicy = {
+  security: ExecSecurity;
+  ask: ExecAsk;
+};
+
 type PreparedRunPayload = {
   plan: SystemRunApprovalPlan;
+  execPolicy?: PreparedRunExecPolicy;
+  allowAlwaysCoverage?: {
+    complete: boolean;
+    patterns: AllowAlwaysPattern[];
+  };
 };
 
 type SystemRunApprovalRequestContext = {
@@ -48,14 +63,67 @@ function normalizeCommandPreview(
   return preview;
 }
 
+function normalizePreparedRunExecPolicy(value: unknown): PreparedRunExecPolicy | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as { security?: unknown; ask?: unknown };
+  const security = raw.security;
+  const ask = raw.ask;
+  if (
+    (security === "deny" || security === "allowlist" || security === "full") &&
+    (ask === "off" || ask === "on-miss" || ask === "always")
+  ) {
+    return { security, ask };
+  }
+  return undefined;
+}
+
+function normalizeAllowAlwaysCoverage(value: unknown): PreparedRunPayload["allowAlwaysCoverage"] {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const raw = value as { complete?: unknown; patterns?: unknown };
+  if (!Array.isArray(raw.patterns)) {
+    return undefined;
+  }
+  const patterns = raw.patterns.flatMap((entry): AllowAlwaysPattern[] => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return [];
+    }
+    const pattern = normalizeNonEmptyString((entry as { pattern?: unknown }).pattern);
+    if (!pattern) {
+      return [];
+    }
+    const argPattern = normalizeNonEmptyString((entry as { argPattern?: unknown }).argPattern);
+    return [{ pattern, ...(argPattern ? { argPattern } : {}) }];
+  });
+  return {
+    complete: raw.complete === true,
+    patterns,
+  };
+}
+
 export function parsePreparedSystemRunPayload(payload: unknown): PreparedRunPayload | null {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return null;
   }
-  const raw = payload as { plan?: unknown; commandText?: unknown; cmdText?: unknown };
+  const raw = payload as {
+    plan?: unknown;
+    commandText?: unknown;
+    cmdText?: unknown;
+    execPolicy?: unknown;
+    allowAlwaysCoverage?: unknown;
+  };
+  const execPolicy = normalizePreparedRunExecPolicy(raw.execPolicy);
+  const allowAlwaysCoverage = normalizeAllowAlwaysCoverage(raw.allowAlwaysCoverage);
   const plan = normalizeSystemRunApprovalPlan(raw.plan);
   if (plan) {
-    return { plan };
+    return {
+      plan,
+      ...(execPolicy ? { execPolicy } : {}),
+      ...(allowAlwaysCoverage ? { allowAlwaysCoverage } : {}),
+    };
   }
   if (!raw.plan || typeof raw.plan !== "object" || Array.isArray(raw.plan)) {
     return null;
@@ -78,6 +146,8 @@ export function parsePreparedSystemRunPayload(payload: unknown): PreparedRunPayl
       agentId: normalizeNonEmptyString(legacyPlan.agentId),
       sessionKey: normalizeNonEmptyString(legacyPlan.sessionKey),
     },
+    ...(execPolicy ? { execPolicy } : {}),
+    ...(allowAlwaysCoverage ? { allowAlwaysCoverage } : {}),
   };
 }
 

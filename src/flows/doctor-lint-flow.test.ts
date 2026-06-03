@@ -59,9 +59,9 @@ describe("runDoctorLintChecks", () => {
         };
       },
     };
-    const check = normalizeHealthCheck(runnable);
+    const checkLocal = normalizeHealthCheck(runnable);
 
-    const result = await runDoctorLintChecks(ctx, { checks: [check] });
+    const result = await runDoctorLintChecks(ctx, { checks: [checkLocal] });
 
     expect(result.findings.map((finding) => finding.checkId)).toEqual(["run-check"]);
   });
@@ -91,5 +91,11 @@ describe("exitCodeFromFindings", () => {
 
     expect(exitCodeFromFindings(findings, "warning")).toBe(1);
     expect(exitCodeFromFindings(findings, "error")).toBe(0);
+  });
+
+  it("does not fail default lint for informational findings", () => {
+    const findings = [{ checkId: "a", severity: "info" as const, message: "info" }];
+
+    expect(exitCodeFromFindings(findings)).toBe(0);
   });
 });

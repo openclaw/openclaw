@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   hasConfiguredUnavailableCredentialStatus,
   hasResolvedCredentialValue,
@@ -269,7 +270,7 @@ export async function collectChannelSecurityFindings(params: {
       cfg: sourceConfig,
       accountIds,
     });
-    const orderedAccountIds = Array.from(new Set([defaultAccountId, ...accountIds]));
+    const orderedAccountIds = uniqueStrings([defaultAccountId, ...accountIds]);
 
     for (const accountId of orderedAccountIds) {
       const hasExplicitAccountPath = hasExplicitProviderAccountConfig(

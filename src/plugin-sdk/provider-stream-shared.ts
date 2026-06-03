@@ -1,7 +1,17 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
-import { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { randomUUID } from "node:crypto";
+import {
+  extractStandalonePlainTextToolCallText,
+  normalizePlainTextToolCallStreamEvents,
+  promoteStandalonePlainTextToolCallMessage,
+  scrubOverCapPlainTextToolCallMessage,
+  type PlainTextToolCallNameMatcher,
+  type PlainTextToolCallMessageNormalization,
+} from "../../packages/tool-call-repair/src/index.js";
+import type { StreamFn } from "../agents/runtime/index.js";
+import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
+import { streamSimple } from "../llm/stream.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
 
 export type ProviderStreamWrapperFactory =
@@ -18,6 +28,193 @@ export function composeProviderStreamWrappers(
     (streamFn, wrapper) => (wrapper ? wrapper(streamFn) : streamFn),
     baseStreamFn,
   );
+}
+
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> {
+  const tools = (context as { tools?: unknown }).tools;
+  if (!Array.isArray(tools)) {
+    return new Set();
+  }
+  const names = tools
+    .map((tool) => {
+      const record = toRecord(tool);
+      return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
+    })
+    .filter((name): name is string => Boolean(name));
+  return new Set(names);
+}
+
+function createSyntheticToolCallId(): string {
+  return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+function createPlainTextToolCallBlock(parsed: {
+  arguments: Record<string, unknown>;
+  name: string;
+}): Record<string, unknown> {
+  return {
+    type: "toolCall",
+    id: createSyntheticToolCallId(),
+    name: parsed.name,
+    arguments: parsed.arguments,
+    partialArgs: JSON.stringify(parsed.arguments),
+  };
+}
+
+function promotePlainTextToolCalls(
+  message: unknown,
+  toolNames: Set<string>,
+): Record<string, unknown> | undefined {
+  const messageRecord = toRecord(message);
+  if (
+    Array.isArray(messageRecord?.content) &&
+    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall")
+  ) {
+    return undefined;
+  }
+  return promoteStandalonePlainTextToolCallMessage({
+    allowedToolNames: toolNames,
+    createToolCallBlock: (block, name) => createPlainTextToolCallBlock({ ...block, name }),
+    isRetainableNonTextBlock: () => true,
+    message,
+  });
+}
+
+function emitPromotedToolCallEvents(
+  stream: { push(event: unknown): void },
+  message: Record<string, unknown>,
+): void {
+  const content = Array.isArray(message.content) ? message.content : [];
+  content.forEach((block, contentIndex) => {
+    const record = toRecord(block);
+    if (record?.type !== "toolCall") {
+      return;
+    }
+    stream.push({ type: "toolcall_start", contentIndex, partial: message });
+    stream.push({
+      type: "toolcall_delta",
+      contentIndex,
+      delta: typeof record.partialArgs === "string" ? record.partialArgs : "{}",
+      partial: message,
+    });
+  });
+}
+
+function extractPlainTextToolCallCandidate(message: unknown): string | undefined {
+  return extractStandalonePlainTextToolCallText({
+    allowOtherNonTextBlocks: true,
+    message,
+  });
+}
+
+function createProviderToolNameMatcher(toolNames: Set<string>): PlainTextToolCallNameMatcher {
+  return {
+    hasExactName: (name) => toolNames.has(name),
+    hasNamePrefix: (prefix) => {
+      for (const toolName of toolNames) {
+        if (toolName.startsWith(prefix)) {
+          return true;
+        }
+      }
+      return false;
+    },
+  };
+}
+
+function normalizeProviderDoneMessage(
+  message: unknown,
+  toolNames: Set<string>,
+  matcher: PlainTextToolCallNameMatcher,
+): PlainTextToolCallMessageNormalization {
+  const scrubbedMessage = scrubOverCapPlainTextToolCallMessage({
+    candidateText: extractPlainTextToolCallCandidate(message),
+    matcher,
+    message,
+  });
+  if (scrubbedMessage) {
+    return { kind: "scrubbed", message: scrubbedMessage };
+  }
+  const promotedMessage = promotePlainTextToolCalls(message, toolNames);
+  return promotedMessage ? { kind: "promoted", message: promotedMessage } : undefined;
+}
+
+function wrapPlainTextToolCallStream(
+  source: ReturnType<StreamFn>,
+  context: Parameters<StreamFn>[1],
+): ReturnType<StreamFn> {
+  const toolNames = resolveContextToolNames(context);
+  if (toolNames.size === 0) {
+    return source;
+  }
+  const matcher = createProviderToolNameMatcher(toolNames);
+  const output = createAssistantMessageEventStream();
+  const stream = output as unknown as { push(event: unknown): void; end(): void };
+
+  void (async () => {
+    let ended = false;
+    const endStream = () => {
+      if (!ended) {
+        ended = true;
+        stream.end();
+      }
+    };
+
+    try {
+      const normalizedEvents = normalizePlainTextToolCallStreamEvents(
+        source as AsyncIterable<unknown>,
+        {
+          createPromotedToolCallEvents: (message) => {
+            const events: unknown[] = [];
+            emitPromotedToolCallEvents({ push: (event: unknown) => events.push(event) }, message);
+            return events;
+          },
+          matcher,
+          normalizeDoneMessage: ({ message }) =>
+            normalizeProviderDoneMessage(message, toolNames, matcher),
+          stopAfterDone: true,
+        },
+      );
+      for await (const event of normalizedEvents) {
+        stream.push(event);
+      }
+    } catch (error) {
+      stream.push({
+        type: "error",
+        reason: "error",
+        error: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: error instanceof Error ? error.message : String(error),
+        },
+      });
+    } finally {
+      endStream();
+    }
+  })();
+
+  return output as ReturnType<StreamFn>;
+}
+
+/**
+ * Provider stream wrapper for local/proxy providers that sometimes emit a
+ * standalone textual tool-call block even when native tool calling is enabled.
+ */
+export function createPlainTextToolCallCompatWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const maybeStream = underlying(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapPlainTextToolCallStream(stream, context),
+      ) as ReturnType<StreamFn>;
+    }
+    return wrapPlainTextToolCallStream(maybeStream, context);
+  };
 }
 
 /** @deprecated Bundled provider stream helper; do not use from third-party plugins. */
@@ -650,7 +847,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     return;
   }
 
-  // pi-ai can emit thinkingBudget=-1 for some Google model IDs; a negative budget
+  // shared model runtime can emit thinkingBudget=-1 for some Google model IDs; a negative budget
   // is invalid for Google-compatible backends and can lead to malformed handling.
   delete thinkingConfigObj.thinkingBudget;
   if (Object.keys(thinkingConfigObj).length === 0) {
@@ -685,13 +882,13 @@ export {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "../agents/anthropic-payload-policy.js";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
+export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
 export {
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
-} from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/zai.js";

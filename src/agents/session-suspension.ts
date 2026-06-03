@@ -1,11 +1,16 @@
 import path from "node:path";
 import { resolveAgentMaxConcurrent, resolveSubagentMaxConcurrent } from "../config/agent-limits.js";
-import { updateSessionStoreEntry } from "../config/sessions.js";
+import { resolveCronMaxConcurrentRuns } from "../config/cron-limits.js";
+import { applySessionStoreEntryPatch } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { setCommandLaneConcurrency } from "../process/command-queue.js";
+import {
+  resolveExpiresAtMsFromDurationMs,
+  resolveTimerTimeoutMs,
+} from "../shared/number-coercion.js";
 import { resolveStoredSessionKeyForSessionId } from "./command/session.js";
-import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 
 const log = createSubsystemLogger("session-suspension");
 
@@ -23,10 +28,8 @@ function resolveLaneResumeConcurrency(cfg: OpenClawConfig | undefined, laneId: s
     case "subagent":
       return resolveSubagentMaxConcurrent(cfg);
     case "cron":
-    case "cron-nested": {
-      const raw = cfg?.cron?.maxConcurrentRuns;
-      return typeof raw === "number" && Number.isFinite(raw) ? Math.max(1, Math.floor(raw)) : 1;
-    }
+    case "cron-nested":
+      return resolveCronMaxConcurrentRuns(cfg?.cron);
     default:
       return DEFAULT_CUSTOM_LANE_RESUME_CONCURRENCY;
   }
@@ -95,14 +98,17 @@ export async function suspendSession(params: {
     return;
   }
 
-  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_RESUME_MS;
+  const ttlMs = resolveTimerTimeoutMs(params.ttlMs, DEFAULT_QUOTA_SUSPENSION_RESUME_MS, 0);
   const now = Date.now();
+  const expectedResumeBy = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: now }) ?? now;
 
   try {
-    await updateSessionStoreEntry({
+    await applySessionStoreEntryPatch({
       storePath,
       sessionKey,
-      update: async () => ({
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      patch: {
         quotaSuspension: {
           schemaVersion: 1,
           suspendedAt: now,
@@ -111,10 +117,10 @@ export async function suspendSession(params: {
           failedModel: params.failedModel,
           summary: params.summary,
           laneId: params.laneId,
-          expectedResumeBy: now + ttlMs,
+          expectedResumeBy,
           state: "suspended",
         },
-      }),
+      },
     });
   } catch (err) {
     log.warn("failed to persist quota suspension; not throttling lane", {

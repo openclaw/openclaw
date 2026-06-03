@@ -1,3 +1,4 @@
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasManifestContractValue,
@@ -42,9 +43,7 @@ export function resolveManifestContractRuntimePluginResolution(params: {
     config: params.cfg,
   }).map((plugin) => plugin.id);
   return {
-    pluginIds: [...new Set(pluginIds)].toSorted((left, right) => left.localeCompare(right)),
-    bundledCompatPluginIds: [...new Set(bundledCompatPluginIds)].toSorted((left, right) =>
-      left.localeCompare(right),
-    ),
+    pluginIds: sortUniqueStrings(pluginIds),
+    bundledCompatPluginIds: sortUniqueStrings(bundledCompatPluginIds),
   };
 }
