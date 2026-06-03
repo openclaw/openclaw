@@ -36,6 +36,13 @@ openclaw cron create "0 18 * * 1-5" \
 
 Use `--command` for deterministic shell-style jobs that should run inside OpenClaw cron without starting an isolated agent/model run:
 
+<Note>
+Command cron jobs are admin-authored Gateway automation. Creating, editing,
+removing, or manually running them requires `operator.admin`; the scheduled run
+later executes in the Gateway process, not as an agent `tools.exec` tool call.
+`tools.exec.*` and exec approvals still govern model-visible exec tools.
+</Note>
+
 ```bash
 openclaw cron create "*/15 * * * *" \
   --name "Queue depth probe" \

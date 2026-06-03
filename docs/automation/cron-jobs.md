@@ -126,6 +126,15 @@ This fires ~5–6 times per month instead of 0–1 times per month. OpenClaw use
 
 Use command payloads for deterministic scripts that should run inside the Gateway scheduler without starting a model-backed isolated agent turn. Command jobs execute on the Gateway host, capture stdout/stderr, record the run in cron history, and reuse the same `announce`, `webhook`, and `none` delivery modes as isolated jobs.
 
+<Note>
+Command cron is an operator-admin Gateway automation surface, not an agent
+`tools.exec` call. Creating, updating, removing, or manually running cron jobs
+requires `operator.admin`; scheduled command runs later execute inside the
+Gateway process as that admin-authored automation. Agent exec policy such as
+`tools.exec.mode`, approval prompts, and per-agent tool allowlists governs
+model-visible exec tools, not command cron payloads.
+</Note>
+
 ```bash
 openclaw cron create "*/15 * * * *" \
   --name "Queue depth probe" \
