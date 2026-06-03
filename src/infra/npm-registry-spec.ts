@@ -19,6 +19,11 @@ type OpenClawReleaseVersion = {
   correctionNumber?: number;
 };
 
+/**
+ * Parsed registry-only npm spec accepted by plugin install flows.
+ * Selectors are limited to exact versions and dist-tags; URL/git/file specs
+ * are rejected before they can execute on the gateway host.
+ */
 export type ParsedRegistryNpmSpec = {
   name: string;
   raw: string;
@@ -223,7 +228,11 @@ export function isPrereleaseSemverVersion(value: string): boolean {
   return Boolean(match?.[4]) && !isOpenClawStableCorrectionVersion(trimmed);
 }
 
-/** Enforces explicit opt-in before an npm spec may resolve to a prerelease version. */
+/**
+ * Enforces explicit opt-in before an npm spec may resolve to a prerelease.
+ * Bare specs and `latest` stay on stable releases unless the resolved version
+ * is an OpenClaw stable correction.
+ */
 export function isPrereleaseResolutionAllowed(params: {
   spec: ParsedRegistryNpmSpec;
   resolvedVersion?: string;
