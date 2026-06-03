@@ -48,6 +48,8 @@ export function shouldAckReaction(params: AckReactionGateParams): boolean {
     if (!params.canDetectMention) {
       return false;
     }
+    // Group activation can stand in for a literal mention when another gate already established
+    // that this inbound message belongs to the active conversation.
     return params.effectiveWasMentioned || params.shouldBypassMention === true;
   }
   return false;
@@ -78,6 +80,8 @@ export function shouldAckReactionForWhatsApp(params: {
   if (params.groupMode === "always") {
     return true;
   }
+  // WhatsApp "mentions" mode shares the generic group-mentions path so activation bypass and
+  // mention detection semantics stay aligned with other channels.
   return shouldAckReaction({
     scope: "group-mentions",
     isDirect: false,
@@ -106,6 +110,7 @@ export function createAckReactionHandle(params: {
   try {
     sendPromise = params.send();
   } catch (err) {
+    // Convert sync throws into the same Promise<boolean> flow used for async send failures.
     sendPromise = Promise.reject(toLintErrorObject(err, "Non-Error rejection"));
   }
 
