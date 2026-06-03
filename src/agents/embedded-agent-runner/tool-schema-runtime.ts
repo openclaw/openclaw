@@ -11,6 +11,12 @@ import type { AgentTool } from "../runtime/index.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { log } from "./logger.js";
 
+type NormalizedProviderToolSchemaDiagnostic = {
+  toolName?: string;
+  toolIndex?: number;
+  violations: string[];
+};
+
 type ProviderToolSchemaParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
   tools: AgentTool<TSchemaType, TResult>[];
   provider: string;
@@ -84,15 +90,16 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
     return;
   }
 
-  const summary = summarizeProviderToolSchemaDiagnostics(diagnostics);
+  const normalizedDiagnostics = diagnostics.map(normalizeProviderToolSchemaDiagnostic);
+  const summary = summarizeProviderToolSchemaDiagnostics(normalizedDiagnostics);
   log.warn(
     `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
     {
       provider: params.provider,
       toolCount: params.tools.length,
       diagnosticCount: diagnostics.length,
-      tools: params.tools.map((tool, index) => `${index}:${tool.name}`),
-      diagnostics: diagnostics.map((diagnostic) => ({
+      tools: params.tools.map((tool, index) => readProviderToolNameForDiagnostics(tool, index)),
+      diagnostics: normalizedDiagnostics.map((diagnostic) => ({
         index: diagnostic.toolIndex,
         tool: diagnostic.toolName,
         violations: diagnostic.violations.slice(0, 12),
@@ -103,7 +110,7 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
 }
 
 function summarizeProviderToolSchemaDiagnostics(
-  diagnostics: readonly ProviderToolSchemaDiagnostic[],
+  diagnostics: readonly NormalizedProviderToolSchemaDiagnostic[],
 ) {
   const visible = diagnostics.slice(0, 6).map((diagnostic) => {
     const violationCount = diagnostic.violations.length;
@@ -111,4 +118,54 @@ function summarizeProviderToolSchemaDiagnostics(
   });
   const remaining = diagnostics.length - visible.length;
   return remaining > 0 ? `${visible.join(", ")}, +${remaining} more` : visible.join(", ");
+}
+
+function readProviderToolNameForDiagnostics(tool: AgentTool, index: number): string {
+  try {
+    const name = tool.name.trim();
+    return `${index}:${name || `tool[${index}]`}`;
+  } catch {
+    return `${index}:tool[${index}]`;
+  }
+}
+
+function normalizeProviderToolSchemaDiagnostic(
+  diagnostic: ProviderToolSchemaDiagnostic,
+): NormalizedProviderToolSchemaDiagnostic {
+  return {
+    toolName: readProviderDiagnosticToolName(diagnostic),
+    toolIndex: readProviderDiagnosticToolIndex(diagnostic),
+    violations: readProviderDiagnosticViolations(diagnostic),
+  };
+}
+
+function readProviderDiagnosticToolName(
+  diagnostic: ProviderToolSchemaDiagnostic,
+): string | undefined {
+  try {
+    const name = diagnostic.toolName?.trim();
+    return name || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readProviderDiagnosticToolIndex(
+  diagnostic: ProviderToolSchemaDiagnostic,
+): number | undefined {
+  try {
+    return typeof diagnostic.toolIndex === "number" ? diagnostic.toolIndex : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readProviderDiagnosticViolations(diagnostic: ProviderToolSchemaDiagnostic): string[] {
+  try {
+    return diagnostic.violations.filter(
+      (violation): violation is string => typeof violation === "string",
+    );
+  } catch {
+    return [];
+  }
 }

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   inspectProviderToolSchemasWithPlugin: vi.fn(),
@@ -22,6 +22,13 @@ const { logProviderToolSchemaDiagnostics, normalizeProviderToolSchemas } =
   await import("./tool-schema-runtime.js");
 
 describe("tool schema runtime diagnostics", () => {
+  beforeEach(() => {
+    mocks.inspectProviderToolSchemasWithPlugin.mockReset();
+    mocks.normalizeProviderToolSchemasWithPlugin.mockReset();
+    mocks.log.info.mockClear();
+    mocks.log.warn.mockClear();
+  });
+
   it("stays quiet when a provider reports no diagnostics", () => {
     mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([]);
 
@@ -79,6 +86,58 @@ describe("tool schema runtime diagnostics", () => {
         tools: ["0:alpha", "1:beta"],
         diagnostics: [
           { index: 0, tool: "alpha", violations: ["one", "two"], violationCount: 2 },
+          { index: 1, tool: "beta", violations: ["one"], violationCount: 1 },
+        ],
+      },
+    );
+  });
+
+  it("keeps diagnostic logging lossy-safe when tool metadata is unreadable", () => {
+    const unreadableTool = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("diagnostic tool name getter exploded");
+      },
+    });
+    const unreadableDiagnostic = Object.defineProperties(
+      {},
+      {
+        toolName: {
+          get() {
+            throw new Error("diagnostic tool name field exploded");
+          },
+        },
+        toolIndex: {
+          get() {
+            throw new Error("diagnostic tool index field exploded");
+          },
+        },
+        violations: {
+          get() {
+            throw new Error("diagnostic violations field exploded");
+          },
+        },
+      },
+    );
+    mocks.inspectProviderToolSchemasWithPlugin.mockReturnValueOnce([
+      unreadableDiagnostic,
+      { toolName: "beta", toolIndex: 1, violations: ["one"] },
+    ]);
+
+    logProviderToolSchemaDiagnostics({
+      provider: "example",
+      tools: [unreadableTool, { name: "beta" }] as never,
+    });
+
+    expect(mocks.log.warn).toHaveBeenCalledTimes(1);
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics: 2 tools for example: unknown (0 violations), beta (1 violation)",
+      {
+        provider: "example",
+        toolCount: 2,
+        diagnosticCount: 2,
+        tools: ["0:tool[0]", "1:beta"],
+        diagnostics: [
+          { index: undefined, tool: undefined, violations: [], violationCount: 0 },
           { index: 1, tool: "beta", violations: ["one"], violationCount: 1 },
         ],
       },
