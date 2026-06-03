@@ -56,6 +56,12 @@ export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 
 export function chunkTextForOutbound(text: string, limit: number): string[] {
+  if (!text) {
+    return [];
+  }
+  if (limit <= 0 || text.length <= limit) {
+    return [text];
+  }
   const chunks: string[] = [];
   let remaining = text;
   while (remaining.length > limit) {
@@ -65,9 +71,9 @@ export function chunkTextForOutbound(text: string, limit: number): string[] {
     chunks.push(remaining.slice(0, breakAt).trimEnd());
     remaining = remaining.slice(breakAt).trimStart();
   }
-  if (remaining.length > 0 || text.length === 0) {
+  if (remaining.length > 0) {
     const finalChunk = remaining.trimEnd();
-    if (finalChunk.length > 0 || text.length === 0) {
+    if (finalChunk.length > 0) {
       chunks.push(finalChunk);
     }
   }
