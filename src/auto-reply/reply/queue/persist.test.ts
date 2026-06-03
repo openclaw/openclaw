@@ -170,6 +170,74 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
     });
   });
 
+  it("round-trips room_event inbound context through persist+restore", () => {
+    const inboundContext = {
+      text: "[OpenClaw room event]\nCurrent event:\n#42 Alice: ping",
+      resumableText: "[OpenClaw room event]\nCurrent event:\n#42 Alice: ping",
+    };
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push({
+      ...makeFollowupRun("[OpenClaw room event]"),
+      transcriptPrompt: "",
+      currentInboundEventKind: "room_event",
+      currentInboundContext: inboundContext,
+      originatingChatType: "group",
+    });
+    persistFollowupQueues();
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    clearFollowupQueuesRestoredFlagForTest();
+    restoreFollowupQueues();
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0];
+    expect(restored?.currentInboundEventKind).toBe("room_event");
+    expect(restored?.currentInboundContext).toEqual(inboundContext);
+    expect(restored?.originatingChatType).toBe("group");
+  });
+
+  it("round-trips quoted reply context and inbound audio flag through persist+restore", () => {
+    const inboundContext = {
+      text: "Quoted:\n> prior message\n\nreplying in thread",
+      promptJoiner: "\n\n" as const,
+    };
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push({
+      ...makeFollowupRun("replying in thread"),
+      transcriptPrompt: "replying in thread",
+      originatingReplyToId: "msg-quote-12",
+      originatingChatType: "direct",
+      currentInboundAudio: true,
+      currentInboundContext: inboundContext,
+    });
+    persistFollowupQueues();
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    clearFollowupQueuesRestoredFlagForTest();
+    restoreFollowupQueues();
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0];
+    expect(restored?.originatingReplyToId).toBe("msg-quote-12");
+    expect(restored?.currentInboundAudio).toBe(true);
+    expect(restored?.currentInboundContext).toEqual(inboundContext);
+  });
+
+  it("round-trips bare session-reset transcript without current-turn context", () => {
+    const queue = getFollowupQueue(TEST_KEY, SETTINGS);
+    queue.items.push({
+      prompt: "sender_id=telegram-user-1\nStartup context",
+      transcriptPrompt: "[OpenClaw session reset]",
+      enqueuedAt: Date.now(),
+      run: makeRun(),
+      originatingChannel: "telegram",
+      originatingTo: "user-1",
+    });
+    persistFollowupQueues();
+    FOLLOWUP_QUEUES.delete(TEST_KEY);
+    clearFollowupQueuesRestoredFlagForTest();
+    restoreFollowupQueues();
+    const restored = FOLLOWUP_QUEUES.get(TEST_KEY)?.items[0];
+    expect(restored?.transcriptPrompt).toBe("[OpenClaw session reset]");
+    expect(restored?.currentInboundContext).toBeUndefined();
+    expect(restored?.currentInboundEventKind).toBeUndefined();
+    expect(restored?.currentInboundAudio).toBeUndefined();
+  });
+
   it("does not restore abortSignal (runtime-only field stripped on persist)", () => {
     const controller = new AbortController();
     const run = { ...makeFollowupRun("signal test"), abortSignal: controller.signal };

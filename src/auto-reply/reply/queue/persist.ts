@@ -142,8 +142,10 @@ type PersistedRunFields = Pick<
 
 /**
  * Subset of FollowupRun that can be safely JSON-serialized across restarts.
- * Runtime-only fields (abortSignal, currentInboundContext, deliveryCorrelations,
- * queuedLifecycle) are intentionally excluded.
+ * Runtime-only fields (abortSignal, deliveryCorrelations, queuedLifecycle,
+ * userTurnTranscriptRecorder) are intentionally excluded. Inbound turn context
+ * (event kind, audio flag, current-turn prompt context) is persisted so restored
+ * drains rebuild the same prompt envelope after a gateway restart.
  */
 type PersistedFollowupRun = Pick<
   FollowupRun,
@@ -154,6 +156,9 @@ type PersistedFollowupRun = Pick<
   | "enqueuedAt"
   | "images"
   | "imageOrder"
+  | "currentInboundEventKind"
+  | "currentInboundAudio"
+  | "currentInboundContext"
   | "originatingChannel"
   | "originatingTo"
   | "originatingAccountId"
@@ -276,6 +281,13 @@ function toPersistedRun(item: FollowupRun): PersistedFollowupRun {
     enqueuedAt: item.enqueuedAt,
     ...(item.images !== undefined ? { images: item.images } : {}),
     ...(item.imageOrder !== undefined ? { imageOrder: item.imageOrder } : {}),
+    ...(item.currentInboundEventKind !== undefined
+      ? { currentInboundEventKind: item.currentInboundEventKind }
+      : {}),
+    ...(item.currentInboundAudio === true ? { currentInboundAudio: true } : {}),
+    ...(item.currentInboundContext !== undefined
+      ? { currentInboundContext: item.currentInboundContext }
+      : {}),
     ...(item.originatingChannel !== undefined
       ? { originatingChannel: item.originatingChannel }
       : {}),
