@@ -4,9 +4,14 @@ import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import {
+  buildOpencodeGoLiveProviderConfig,
+  fetchOpencodeGoLiveModelIds,
+} from "./provider-catalog.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -35,6 +40,10 @@ function requireCatalogEntry(entries: readonly unknown[] | null | undefined, id:
 }
 
 describe("opencode-go provider plugin", () => {
+  beforeEach(() => {
+    clearLiveCatalogCacheForTests();
+  });
+
   it("registers image media understanding through the OpenCode Go plugin", async () => {
     const { mediaProviders } = await registerProviderPlugin({
       plugin,
@@ -71,21 +80,26 @@ describe("opencode-go provider plugin", () => {
 
   it("keeps OpenCode Go catalog coverage aligned with upstream", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
-    expect(provider.catalog).toBeUndefined();
+    expect(provider.catalog).toBeDefined();
 
     const expectedModelIds = [
       "deepseek-v4-flash",
       "deepseek-v4-pro",
       "glm-5",
       "glm-5.1",
+      "hy3-preview",
       "kimi-k2.5",
       "kimi-k2.6",
+      "mimo-v2-omni",
       "mimo-v2.5",
+      "mimo-v2-pro",
       "mimo-v2.5-pro",
       "minimax-m2.5",
       "minimax-m2.7",
+      "minimax-m3",
       "qwen3.5-plus",
       "qwen3.6-plus",
+      "qwen3.7-max",
     ];
     const models = new Map<string, ProviderRuntimeModel>();
     for (const modelId of expectedModelIds) {
@@ -119,11 +133,18 @@ describe("opencode-go provider plugin", () => {
     expect(kimi.maxTokens).toBe(65_536);
 
     const minimax = requireMapEntry(models, "minimax-m2.7");
-    expect(minimax.api).toBe("openai-completions");
-    expect(minimax.baseUrl).toBe("https://opencode.ai/zen/go/v1");
+    expect(minimax.api).toBe("anthropic-messages");
+    expect(minimax.baseUrl).toBe("https://opencode.ai/zen/go");
     expect(minimax.reasoning).toBe(true);
     expect(minimax.contextWindow).toBe(204_800);
     expect(minimax.maxTokens).toBe(131_072);
+
+    const minimaxM3 = requireMapEntry(models, "minimax-m3");
+    expect(minimaxM3.api).toBe("anthropic-messages");
+    expect(minimaxM3.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(minimaxM3.reasoning).toBe(true);
+    expect(minimaxM3.contextWindow).toBe(204_800);
+    expect(minimaxM3.maxTokens).toBe(131_072);
 
     const mimoPro = requireMapEntry(models, "mimo-v2.5-pro");
     expect(mimoPro.api).toBe("openai-completions");
@@ -138,6 +159,21 @@ describe("opencode-go provider plugin", () => {
     expect(mimo.reasoning).toBe(true);
     expect(mimo.contextWindow).toBe(1_000_000);
     expect(mimo.maxTokens).toBe(128_000);
+
+    const qwenMax = requireMapEntry(models, "qwen3.7-max");
+    expect(qwenMax.api).toBe("anthropic-messages");
+    expect(qwenMax.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(qwenMax.input).toEqual(["text"]);
+    expect(qwenMax.reasoning).toBe(true);
+    expect(qwenMax.contextWindow).toBe(1_000_000);
+    expect(qwenMax.maxTokens).toBe(65_536);
+    expect(requireRecord(qwenMax.compat, "Qwen3.7 compat")).toMatchObject({
+      thinkingFormat: "qwen",
+    });
+
+    const qwenPlus = requireMapEntry(models, "qwen3.6-plus");
+    expect(qwenPlus.api).toBe("anthropic-messages");
+    expect(qwenPlus.baseUrl).toBe("https://opencode.ai/zen/go");
 
     const dynamicModel = requireRecord(
       provider.resolveDynamicModel?.({
@@ -156,6 +192,96 @@ describe("opencode-go provider plugin", () => {
     expect(compat.supportsUsageInStreaming).toBe(true);
     expect(compat.supportsReasoningEffort).toBe(true);
     expect(compat.maxTokensField).toBe("max_tokens");
+  });
+
+  it("skips live OpenCode Go catalog discovery when no shared key is configured", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+
+    await expect(
+      provider.catalog?.run({
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      } as never),
+    ).resolves.toBeNull();
+  });
+
+  it("fetches live OpenCode Go model ids from the provider endpoint", async () => {
+    const release = vi.fn(async () => undefined);
+    const fetchGuard = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify([
+          { id: "minimax-m3", object: "model" },
+          { id: "qwen3.7-max", object: "model" },
+          { id: "ignore-me", object: "embedding" },
+          { id: "minimax-m3", object: "model" },
+        ]),
+      ),
+      finalUrl: "https://opencode.ai/zen/go/v1/models",
+      release,
+    }));
+
+    await expect(
+      fetchOpencodeGoLiveModelIds({
+        apiKey: "OPENCODE_API_KEY",
+        discoveryApiKey: "resolved-opencode-key",
+        fetchGuard,
+      }),
+    ).resolves.toEqual(["minimax-m3", "qwen3.7-max"]);
+
+    expect(fetchGuard).toHaveBeenCalledTimes(1);
+    expect(fetchGuard.mock.calls[0]?.[0]).toMatchObject({
+      url: "https://opencode.ai/zen/go/v1/models",
+      auditContext: "opencode-go-model-discovery",
+      timeoutMs: 5_000,
+    });
+    expect(fetchGuard.mock.calls[0]?.[0]?.init?.headers).toMatchObject({
+      Authorization: "Bearer resolved-opencode-key",
+    });
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses cached live OpenCode Go discovery and falls back to static rows on failure", async () => {
+    const fetchGuard = vi.fn(async () => ({
+      response: new Response(
+        JSON.stringify({
+          data: [
+            { id: "minimax-m3", object: "model" },
+            { id: "qwen3.7-max", object: "model" },
+          ],
+        }),
+      ),
+      finalUrl: "https://opencode.ai/zen/go/v1/models",
+      release: vi.fn(async () => undefined),
+    }));
+
+    const first = await buildOpencodeGoLiveProviderConfig({
+      apiKey: "OPENCODE_API_KEY",
+      discoveryApiKey: "resolved-opencode-key",
+      fetchGuard,
+    });
+    const second = await buildOpencodeGoLiveProviderConfig({
+      apiKey: "OPENCODE_API_KEY",
+      discoveryApiKey: "resolved-opencode-key",
+      fetchGuard,
+    });
+
+    expect(fetchGuard).toHaveBeenCalledTimes(1);
+    expect(first.apiKey).toBe("OPENCODE_API_KEY");
+    expect(first.models.map((model) => model.id)).toEqual(["minimax-m3", "qwen3.7-max"]);
+    expect(second.models.map((model) => model.id)).toEqual(["minimax-m3", "qwen3.7-max"]);
+
+    clearLiveCatalogCacheForTests();
+    fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
+    const fallback = await buildOpencodeGoLiveProviderConfig({
+      apiKey: "OPENCODE_API_KEY",
+      discoveryApiKey: "resolved-opencode-key",
+      fetchGuard,
+    });
+    expect(fallback.apiKey).toBe("OPENCODE_API_KEY");
+    expect(fallback.models.map((model) => model.id)).toContain("deepseek-v4-pro");
+    expect(fallback.models.map((model) => model.id)).toContain("minimax-m3");
   });
 
   it("disables invalid DeepSeek V4 reasoning_effort off payloads on OpenCode Go", async () => {

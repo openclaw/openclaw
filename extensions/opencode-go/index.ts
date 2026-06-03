@@ -5,6 +5,7 @@ import { PASSTHROUGH_GEMINI_REPLAY_HOOKS } from "openclaw/plugin-sdk/provider-mo
 import { applyOpencodeGoConfig, OPENCODE_GO_DEFAULT_MODEL_REF } from "./api.js";
 import { opencodeGoMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import {
+  buildOpencodeGoLiveProviderConfig,
   listOpencodeGoModelCatalogEntries,
   normalizeOpencodeGoBaseUrl,
   normalizeOpencodeGoResolvedModel,
@@ -92,6 +93,25 @@ export default definePluginEntry({
           : undefined;
       },
       resolveDynamicModel: ({ modelId }) => resolveOpencodeGoModel(modelId),
+      catalog: {
+        order: "simple",
+        run: async (ctx) => {
+          const opencodeGoAuth = ctx.resolveProviderApiKey(PROVIDER_ID);
+          const sharedOpencodeAuth = ctx.resolveProviderApiKey("opencode");
+          const apiKey = opencodeGoAuth.apiKey ?? sharedOpencodeAuth.apiKey;
+          const discoveryApiKey =
+            opencodeGoAuth.discoveryApiKey ?? sharedOpencodeAuth.discoveryApiKey;
+          if (!apiKey && !discoveryApiKey) {
+            return null;
+          }
+          return {
+            provider: await buildOpencodeGoLiveProviderConfig({
+              apiKey: apiKey ?? discoveryApiKey,
+              discoveryApiKey,
+            }),
+          };
+        },
+      },
       augmentModelCatalog: () => listOpencodeGoModelCatalogEntries(),
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       wrapStreamFn: (ctx) => createOpencodeGoWrapper(ctx.streamFn, ctx.thinkingLevel),

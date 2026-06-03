@@ -1,13 +1,32 @@
 // Opencode Go provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
+import { getCachedLiveCatalogValue } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
+import type {
+  ModelDefinitionConfig,
+  ModelProviderConfig,
+} from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromHttpBaseUrlAllowedHostname,
+} from "openclaw/plugin-sdk/ssrf-runtime";
 
 const PROVIDER_ID = "opencode-go";
 
 const OPENCODE_GO_OPENAI_BASE_URL = "https://opencode.ai/zen/go/v1";
 const OPENCODE_GO_ANTHROPIC_BASE_URL = "https://opencode.ai/zen/go";
 const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set(["kimi-k2.5", "kimi-k2.6"]);
+const OPENCODE_GO_MODELS_ENDPOINT = `${OPENCODE_GO_OPENAI_BASE_URL}/models`;
+const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
+const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
+
+type OpencodeGoModelDefinition = ModelDefinitionConfig & {
+  provider: typeof PROVIDER_ID;
+  api: NonNullable<ModelDefinitionConfig["api"]>;
+  baseUrl: string;
+  input: Array<"text" | "image">;
+};
 
 const OPENCODE_GO_MODELS = (
   [
@@ -90,6 +109,23 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 32_768,
     },
     {
+      id: "hy3-preview",
+      name: "HY3 Preview",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 32_768,
+    },
+    {
       id: "kimi-k2.5",
       name: "Kimi K2.5",
       api: "openai-completions",
@@ -124,6 +160,23 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 65_536,
     },
     {
+      id: "mimo-v2-omni",
+      name: "MiMo V2 Omni",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text", "image"],
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextWindow: 262_144,
+      maxTokens: 32_000,
+    },
+    {
       id: "mimo-v2.5",
       name: "MiMo V2.5",
       api: "openai-completions",
@@ -139,6 +192,23 @@ const OPENCODE_GO_MODELS = (
       },
       contextWindow: 1_000_000,
       maxTokens: 128_000,
+    },
+    {
+      id: "mimo-v2-pro",
+      name: "MiMo V2 Pro",
+      api: "openai-completions",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+      },
+      contextWindow: 1_048_576,
+      maxTokens: 32_000,
     },
     {
       id: "mimo-v2.5-pro",
@@ -169,7 +239,7 @@ const OPENCODE_GO_MODELS = (
         input: 0.3,
         output: 1.2,
         cacheRead: 0.03,
-        cacheWrite: 0,
+        cacheWrite: 0.375,
       },
       contextWindow: 204_800,
       maxTokens: 65_536,
@@ -177,16 +247,33 @@ const OPENCODE_GO_MODELS = (
     {
       id: "minimax-m2.7",
       name: "MiniMax M2.7",
-      api: "openai-completions",
+      api: "anthropic-messages",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
       reasoning: true,
       input: ["text"],
       cost: {
         input: 0.3,
         output: 1.2,
         cacheRead: 0.06,
-        cacheWrite: 0,
+        cacheWrite: 0.375,
+      },
+      contextWindow: 204_800,
+      maxTokens: 131_072,
+    },
+    {
+      id: "minimax-m3",
+      name: "MiniMax M3",
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 0.6,
+        output: 2.4,
+        cacheRead: 0.12,
+        cacheWrite: 0.75,
       },
       contextWindow: 204_800,
       maxTokens: 131_072,
@@ -210,11 +297,29 @@ const OPENCODE_GO_MODELS = (
       maxTokens: 65_536,
     },
     {
+      id: "qwen3.7-max",
+      name: "Qwen3.7 Max",
+      api: "anthropic-messages",
+      provider: PROVIDER_ID,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+      compat: { thinkingFormat: "qwen" },
+      reasoning: true,
+      input: ["text"],
+      cost: {
+        input: 2.5,
+        output: 7.5,
+        cacheRead: 0.5,
+        cacheWrite: 3.125,
+      },
+      contextWindow: 1_000_000,
+      maxTokens: 65_536,
+    },
+    {
       id: "qwen3.6-plus",
       name: "Qwen3.6 Plus",
-      api: "openai-completions",
+      api: "anthropic-messages",
       provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
       compat: { thinkingFormat: "qwen" },
       reasoning: true,
       input: ["text", "image"],
@@ -227,8 +332,125 @@ const OPENCODE_GO_MODELS = (
       contextWindow: 262_144,
       maxTokens: 65_536,
     },
-  ] satisfies ProviderRuntimeModel[]
-).map((model) => normalizeModelCompat(model));
+  ] satisfies OpencodeGoModelDefinition[]
+).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
+
+type OpencodeGoModelsResponse = unknown[] | { data?: unknown[] };
+
+type OpencodeGoFetchGuard = typeof fetchWithSsrFGuard;
+
+export type FetchOpencodeGoLiveModelIdsParams = {
+  apiKey?: string;
+  discoveryApiKey?: string;
+  fetchGuard?: OpencodeGoFetchGuard;
+  signal?: AbortSignal;
+};
+
+function buildOpencodeGoProviderConfig(
+  models: OpencodeGoModelDefinition[],
+  apiKey?: string,
+): ModelProviderConfig {
+  return {
+    api: "openai-completions",
+    baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+    ...(apiKey ? { apiKey } : {}),
+    models,
+  };
+}
+
+function readOpencodeGoModelRows(body: OpencodeGoModelsResponse): unknown[] {
+  if (Array.isArray(body)) {
+    return body;
+  }
+  if (body && typeof body === "object" && Array.isArray(body.data)) {
+    return body.data;
+  }
+  throw new Error("OpenCode Go /models: malformed JSON response");
+}
+
+function readOpencodeGoModelId(row: unknown): string | undefined {
+  if (!row || typeof row !== "object" || Array.isArray(row)) {
+    return undefined;
+  }
+  const candidate = row as { id?: unknown; object?: unknown };
+  if (candidate.object !== undefined && candidate.object !== "model") {
+    return undefined;
+  }
+  if (typeof candidate.id !== "string") {
+    return undefined;
+  }
+  const modelId = candidate.id.trim().toLowerCase();
+  return modelId || undefined;
+}
+
+export async function fetchOpencodeGoLiveModelIds(
+  params: FetchOpencodeGoLiveModelIdsParams = {},
+): Promise<string[]> {
+  const fetchGuard = params.fetchGuard ?? fetchWithSsrFGuard;
+  const requestApiKey = params.discoveryApiKey ?? params.apiKey;
+  const { response, release } = await fetchGuard({
+    url: OPENCODE_GO_MODELS_ENDPOINT,
+    init: {
+      headers: {
+        Accept: "application/json",
+        ...(requestApiKey ? { Authorization: `Bearer ${requestApiKey}` } : {}),
+      },
+      signal: params.signal ?? AbortSignal.timeout(OPENCODE_GO_MODELS_TIMEOUT_MS),
+    },
+    timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
+    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(OPENCODE_GO_OPENAI_BASE_URL),
+    auditContext: "opencode-go-model-discovery",
+  });
+  try {
+    if (!response.ok) {
+      throw new Error(`OpenCode Go /models fetch failed: HTTP ${response.status}`);
+    }
+    const rows = readOpencodeGoModelRows((await response.json()) as OpencodeGoModelsResponse);
+    const seen = new Set<string>();
+    const modelIds: string[] = [];
+    for (const row of rows) {
+      const modelId = readOpencodeGoModelId(row);
+      if (!modelId || seen.has(modelId)) {
+        continue;
+      }
+      seen.add(modelId);
+      modelIds.push(modelId);
+    }
+    return modelIds;
+  } finally {
+    await release();
+  }
+}
+
+export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProviderConfig {
+  return buildOpencodeGoProviderConfig(OPENCODE_GO_MODELS, apiKey);
+}
+
+export async function buildOpencodeGoLiveProviderConfig(
+  params: FetchOpencodeGoLiveModelIdsParams = {},
+): Promise<ModelProviderConfig> {
+  try {
+    const liveModelIds = await getCachedLiveCatalogValue({
+      keyParts: [
+        PROVIDER_ID,
+        "models",
+        OPENCODE_GO_MODELS_ENDPOINT,
+        params.discoveryApiKey ?? params.apiKey,
+      ],
+      ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
+      load: async () => await fetchOpencodeGoLiveModelIds(params),
+    });
+    const liveModelIdSet = new Set(liveModelIds);
+    const models = OPENCODE_GO_MODELS.filter((model) => liveModelIdSet.has(model.id));
+    if (models.length > 0) {
+      return buildOpencodeGoProviderConfig(models, params.apiKey);
+    }
+  } catch {
+    // Explicit provider refresh should never make the catalog disappear when
+    // OpenCode's endpoint is unreachable; keep the static provider-owned rows.
+  }
+  return buildStaticOpencodeGoProviderConfig(params.apiKey);
+}
 
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
   return OPENCODE_GO_MODELS.map((model) => ({
