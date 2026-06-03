@@ -1967,14 +1967,36 @@ async function deliverOutboundPayloadsCore(
       mediaUrls: deliveredMirror.mediaUrls,
     });
     if (mirrorText) {
-      const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
-      await appendAssistantMessageToSessionTranscript({
-        agentId: params.mirror.agentId,
-        sessionKey: params.mirror.sessionKey,
-        text: mirrorText,
-        idempotencyKey: params.mirror.idempotencyKey,
-        config: params.cfg,
-      });
+      // The transcript mirror is best-effort bookkeeping that runs *after* the
+      // channel payloads were already delivered (guarded by results.length > 0
+      // above). A failure here — e.g. transient session-lock contention
+      // ("session file changed while embedded prompt lock was released") — must
+      // not propagate, or the caller would treat the whole send as failed and
+      // re-deliver the already-sent message (duplicate announcements). Match the
+      // cron delivery path (mirrorDirectDeliveryIntoTranscript) and downgrade
+      // mirror failures to a warning. The append carries an idempotency key, so
+      // any later reconciliation stays deduplicated.
+      try {
+        const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
+        const mirrorResult = await appendAssistantMessageToSessionTranscript({
+          agentId: params.mirror.agentId,
+          sessionKey: params.mirror.sessionKey,
+          text: mirrorText,
+          idempotencyKey: params.mirror.idempotencyKey,
+          config: params.cfg,
+        });
+        if (!mirrorResult.ok) {
+          log.warn(
+            `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${mirrorResult.reason}`,
+            { channel, to, sessionKey: params.mirror.sessionKey },
+          );
+        }
+      } catch (err) {
+        log.warn(
+          `failed to mirror outbound delivery into session transcript; channel send already succeeded: ${formatErrorMessage(err)}`,
+          { channel, to, sessionKey: params.mirror.sessionKey },
+        );
+      }
     }
   }
 
