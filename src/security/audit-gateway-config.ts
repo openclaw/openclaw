@@ -117,6 +117,30 @@ export function collectGatewayConfigFindings(
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
     });
   }
+
+  // Host-FS read opt-in finding: only fires when BOTH gates are set
+  // (`directInvoke.hostFsRead: true` AND `tools.allow` includes "read"). Set
+  // by either gate alone, the `read` tool is NOT materialized (see
+  // `tool-resolution.ts` dual-key gating) so no exposure exists — silence is
+  // correct in those cases.
+  const hostFsReadOptIn = cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
+  if (hostFsReadOptIn && gatewayToolsAllow.has("read")) {
+    const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    findings.push({
+      checkId: "gateway.tools_invoke_http.host_read_allow",
+      severity: extraRisk ? "critical" : "warn",
+      title: "Gateway HTTP /tools/invoke exposes host filesystem reads",
+      detail:
+        "gateway.tools.directInvoke.hostFsRead is true and gateway.tools.allow includes 'read', " +
+        "which exposes the `read` coding tool over both HTTP `POST /tools/invoke` and SDK RPC `tools.invoke`. " +
+        "Without `tools.fs.workspaceOnly: true`, this grants reads of any file the gateway process can open " +
+        "(outside the configured workspace).",
+      remediation:
+        "Confine reads to the workspace by setting `tools.fs.workspaceOnly: true` (recommended). " +
+        "Or remove `gateway.tools.directInvoke.hostFsRead` to disable host-FS read over direct-invoke entirely. " +
+        "If you keep host-FS read enabled, keep gateway.bind loopback-only (or tailnet-only) and restrict network exposure.",
+    });
+  }
   if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {
     findings.push({
       checkId: "gateway.bind_no_auth",

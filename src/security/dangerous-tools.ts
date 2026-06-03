@@ -33,6 +33,12 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "nodes",
   // Desktop control on a paired Mac (pointer/keyboard) and screen reads
   "computer",
+  // Host filesystem read — opt-in via BOTH `gateway.tools.allow: ["read"]` AND
+  // `gateway.tools.directInvoke.hostFsRead: true`. The default-deny prevents
+  // an upgrade-time compatibility break where pre-existing `allow: ["read"]`
+  // entries (kept around for non-direct-invoke surfaces) would silently grant
+  // host-FS read here. See `tool-resolution.ts` dual-key gating.
+  "read",
 ] as const;
 
 /**
