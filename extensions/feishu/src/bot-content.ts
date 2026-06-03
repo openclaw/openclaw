@@ -371,6 +371,11 @@ function inferPlaceholder(messageType: string): string {
   }
 }
 
+export type FeishuMediaResolutionResult = {
+  media: FeishuMediaInfo[];
+  errors: string[];
+};
+
 export async function resolveFeishuMediaList(params: {
   cfg: ClawdbotConfig;
   messageId: string;
@@ -379,18 +384,19 @@ export async function resolveFeishuMediaList(params: {
   maxBytes: number;
   log?: (msg: string) => void;
   accountId?: string;
-}): Promise<FeishuMediaInfo[]> {
+}): Promise<FeishuMediaResolutionResult> {
   const { cfg, messageId, messageType, content, maxBytes, log, accountId } = params;
   const mediaTypes = ["image", "file", "audio", "video", "media", "sticker", "post"];
   if (!mediaTypes.includes(messageType)) {
-    return [];
+    return { media: [], errors: [] };
   }
 
-  const out: FeishuMediaInfo[] = [];
+  const media: FeishuMediaInfo[] = [];
+  const errors: string[] = [];
   if (messageType === "post") {
     const { imageKeys, mediaKeys } = parsePostContent(content);
     if (imageKeys.length === 0 && mediaKeys.length === 0) {
-      return [];
+      return { media: [], errors: [] };
     }
     if (imageKeys.length > 0) {
       log?.(`feishu: post message contains ${imageKeys.length} embedded image(s)`);
@@ -410,55 +416,59 @@ export async function resolveFeishuMediaList(params: {
           maxBytes,
         });
         const saved = await resolveSavedFeishuMedia({ result, maxBytes });
-        out.push({
+        media.push({
           path: saved.path,
           contentType: saved.contentType,
           placeholder: "<media:image>",
         });
         log?.(`feishu: downloaded embedded image ${imageKey}, saved to ${saved.path}`);
       } catch (err) {
-        log?.(`feishu: failed to download embedded image ${imageKey}: ${String(err)}`);
+        const errorMsg = `feishu: failed to download embedded image ${imageKey}: ${String(err)}`;
+        log?.(errorMsg);
+        errors.push(errorMsg);
       }
     }
 
-    for (const media of mediaKeys) {
+    for (const mediaItem of mediaKeys) {
       try {
         const result = await saveMessageResourceFeishu({
           cfg,
           messageId,
-          fileKey: media.fileKey,
+          fileKey: mediaItem.fileKey,
           type: "file",
           accountId,
           maxBytes,
-          originalFilename: media.fileName,
+          originalFilename: mediaItem.fileName,
         });
         const saved = await resolveSavedFeishuMedia({
           result,
           maxBytes,
-          originalFilename: media.fileName,
+          originalFilename: mediaItem.fileName,
         });
-        out.push({
+        media.push({
           path: saved.path,
           contentType: saved.contentType,
           placeholder: "<media:video>",
         });
-        log?.(`feishu: downloaded embedded media ${media.fileKey}, saved to ${saved.path}`);
+        log?.(`feishu: downloaded embedded media ${mediaItem.fileKey}, saved to ${saved.path}`);
       } catch (err) {
-        log?.(`feishu: failed to download embedded media ${media.fileKey}: ${String(err)}`);
+        const errorMsg = `feishu: failed to download embedded media ${mediaItem.fileKey}: ${String(err)}`;
+        log?.(errorMsg);
+        errors.push(errorMsg);
       }
     }
-    return out;
+    return { media, errors };
   }
 
   const mediaKeys = parseMediaKeys(content, messageType);
   if (!mediaKeys.imageKey && !mediaKeys.fileKey) {
-    return [];
+    return { media: [], errors: [] };
   }
 
   try {
     const fileKey = mediaKeys.fileKey || mediaKeys.imageKey;
     if (!fileKey) {
-      return [];
+      return { media: [], errors: [] };
     }
     const result = await saveMessageResourceFeishu({
       cfg,
@@ -474,14 +484,16 @@ export async function resolveFeishuMediaList(params: {
       maxBytes,
       originalFilename: mediaKeys.fileName,
     });
-    out.push({
+    media.push({
       path: saved.path,
       contentType: saved.contentType,
       placeholder: inferPlaceholder(messageType),
     });
     log?.(`feishu: downloaded ${messageType} media, saved to ${saved.path}`);
   } catch (err) {
-    log?.(`feishu: failed to download ${messageType} media: ${String(err)}`);
+    const errorMsg = `feishu: failed to download ${messageType} media: ${String(err)}`;
+    log?.(errorMsg);
+    errors.push(errorMsg);
   }
-  return out;
+  return { media, errors };
 }

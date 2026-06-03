@@ -942,7 +942,7 @@ export async function handleFeishuMessage(params: {
 
     // Resolve media from message
     const mediaMaxBytes = (feishuCfg?.mediaMaxMb ?? 30) * 1024 * 1024; // 30MB default
-    const mediaList = await resolveFeishuMediaList({
+    const mediaResult = await resolveFeishuMediaList({
       cfg,
       messageId: ctx.messageId,
       messageType: event.message.message_type,
@@ -951,6 +951,29 @@ export async function handleFeishuMessage(params: {
       log,
       accountId: account.accountId,
     });
+    const mediaList = mediaResult.media;
+
+    // Notify user of media download failures so they know the file wasn't processed.
+    if (mediaResult.errors.length > 0) {
+      const replyTargetMessageId =
+        isGroup &&
+        (groupSession?.groupSessionScope === "group_topic" ||
+          groupSession?.groupSessionScope === "group_topic_sender")
+          ? (ctx.rootId ?? ctx.messageId)
+          : ctx.messageId;
+      const errorMessages = mediaResult.errors.map((e) => e.replace(/^feishu: /, "")).join("; ");
+      await sendMessageFeishu({
+        cfg: effectiveCfg,
+        to: `chat:${ctx.chatId}`,
+        text: `⚠️ Media download failed: ${errorMessages}`,
+        replyToMessageId: replyTargetMessageId,
+        replyInThread: isGroup ? (groupSession?.replyInThread ?? false) : false,
+        accountId: account.accountId,
+      }).catch((err: unknown) => {
+        log(`feishu[${account.accountId}]: failed to send media error reply: ${String(err)}`);
+      });
+    }
+
     // Skip messages with no text content and no media attachments. Feishu can
     // deliver empty-text events (e.g. `{"text":""}`) when a user sends a blank
     // message or when media parsing produces an empty string. Writing a blank

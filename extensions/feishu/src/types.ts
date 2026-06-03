@@ -89,6 +89,11 @@ export type FeishuMediaInfo = {
   placeholder: string;
 };
 
+export type FeishuMediaResolutionResult = {
+  media: FeishuMediaInfo[];
+  errors: string[];
+};
+
 export type FeishuToolsConfig = {
   doc?: boolean;
   chat?: boolean;
