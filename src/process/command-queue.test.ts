@@ -878,7 +878,7 @@ describe("command queue", () => {
   it("promotes aged background entry above steady foreground stream", async () => {
     vi.useFakeTimers();
     try {
-      const { task: blocker, release } = enqueueBlockedMainTask();
+      const { task: _blocker, release } = enqueueBlockedMainTask();
       const calls: string[] = [];
 
       // Enqueue a background task while the blocker is active
