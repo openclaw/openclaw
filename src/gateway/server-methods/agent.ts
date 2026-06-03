@@ -1275,25 +1275,30 @@ export const agentHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (!agentId && requestedSessionKeyRaw) {
-      const parsed = parseAgentSessionKey(requestedSessionKeyRaw);
-      const inferredAgentId =
-        parsed && resolveSessionStoreKey({ cfg, sessionKey: requestedSessionKeyRaw }) === "global"
-          ? normalizeAgentId(parsed.agentId)
-          : undefined;
+    const parsedRequestedSessionKey = requestedSessionKeyRaw
+      ? parseAgentSessionKey(requestedSessionKeyRaw)
+      : null;
+    const requestedSessionResolvesGlobal =
+      parsedRequestedSessionKey &&
+      resolveSessionStoreKey({ cfg, sessionKey: requestedSessionKeyRaw }) === "global";
+    if (!agentId && parsedRequestedSessionKey) {
+      const inferredAgentId = normalizeAgentId(parsedRequestedSessionKey.agentId);
       if (inferredAgentId) {
         if (!knownAgents.includes(inferredAgentId)) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `invalid agent params: unknown agent id "${parsed?.agentId}"`,
-            ),
-          );
-          return;
+          if (requestedSessionResolvesGlobal) {
+            respond(
+              false,
+              undefined,
+              errorShape(
+                ErrorCodes.INVALID_REQUEST,
+                `invalid agent params: unknown agent id "${parsedRequestedSessionKey.agentId}"`,
+              ),
+            );
+            return;
+          }
+        } else {
+          agentId = inferredAgentId;
         }
-        agentId = inferredAgentId;
       }
     }
     const requestedSessionId = normalizeOptionalString(request.sessionId);
@@ -1306,7 +1311,6 @@ export const agentHandlers: GatewayRequestHandlers = {
           })
         : undefined);
     if (agentId && requestedSessionKeyRaw) {
-      const parsedRequestedSessionKey = parseAgentSessionKey(requestedSessionKeyRaw);
       const requestedCanonicalKey = resolveSessionStoreKey({
         cfg,
         sessionKey: requestedSessionKeyRaw,

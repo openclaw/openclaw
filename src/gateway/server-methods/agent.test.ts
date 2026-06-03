@@ -3306,6 +3306,51 @@ describe("gateway agent handler", () => {
     });
   });
 
+  it("dispatches a fresh explicit agent session with the key agent id", async () => {
+    const sessionKey = "agent:main:probe-fresh";
+    mocks.loadSessionEntry.mockReturnValue({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: undefined,
+      canonicalKey: sessionKey,
+    });
+    let capturedEntry: Record<string, unknown> | undefined;
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, unknown> = {};
+      const result = await updater(store);
+      capturedEntry = store[sessionKey] as Record<string, unknown>;
+      return result;
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "first turn",
+        sessionKey,
+        idempotencyKey: "fresh-explicit-agent-session",
+      },
+      { reqId: "fresh-explicit-agent-session" },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      agentId?: string;
+      sessionId?: string;
+      sessionKey?: string;
+    }>();
+    expect(call.agentId).toBe("main");
+    expect(call.sessionKey).toBe(sessionKey);
+    expect(call.sessionId).toEqual(expect.any(String));
+    expect(call.sessionId).not.toBe("");
+    expect(capturedEntry).toMatchObject({
+      sessionId: call.sessionId,
+      sessionStartedAt: expect.any(Number),
+      lastInteractionAt: expect.any(Number),
+    });
+  });
+
   it("does not let --agent force the agent main session when --session-id is provided", async () => {
     mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
     mockMainSessionEntry({ sessionId: "resume-whatsapp-session" });
