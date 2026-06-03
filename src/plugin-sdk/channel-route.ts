@@ -48,10 +48,13 @@ export type ChannelRouteRefInput = {
   to?: unknown;
   /** Provider-specific target text retained when different from `to`. */
   rawTo?: unknown;
+  /** Coarse destination shape supplied by channels that distinguish target kinds. */
   chatType?: ChannelRouteChatType;
   /** Raw provider thread/topic/root id before route-key normalization. */
   threadId?: unknown;
+  /** Provider-specific thread family carried with the normalized thread id. */
   threadKind?: ChannelRouteThreadKind;
+  /** Runtime surface that supplied the thread id. */
   threadSource?: ChannelRouteThreadSource;
 };
 
@@ -158,6 +161,7 @@ export type ChannelRouteParsedTarget = ChannelRouteTargetInput & {
   to: string;
   /** Optional thread/topic/root id from the parser or fallback value. */
   threadId?: string | number;
+  /** Coarse destination shape parsed from the provider-specific target. */
   chatType?: ChannelRouteChatType;
 };
 
