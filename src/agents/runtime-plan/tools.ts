@@ -11,6 +11,7 @@ import {
 import type { AgentTool } from "../runtime/index.js";
 import {
   filterProviderNormalizableTools,
+  filterRuntimeCompatibleTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
 import type { AgentRuntimePlan } from "./types.js";
@@ -53,6 +54,15 @@ function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   copyChannelAgentToolMeta(source as never, target as never);
 }
 
+function readRuntimeToolName(tool: AgentTool): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" && name ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TResult = unknown>(
   sourceTools: AgentTool<TSchemaType, TResult>[],
   normalizedTools: AgentTool<TSchemaType, TResult>[],
@@ -60,7 +70,10 @@ function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TRes
   const sourcesByUniqueName = new Map<string, AgentTool<TSchemaType, TResult>>();
   const duplicateNames = new Set<string>();
   for (const source of sourceTools) {
-    const name = source.name;
+    const name = readRuntimeToolName(source);
+    if (!name) {
+      continue;
+    }
     if (sourcesByUniqueName.has(name)) {
       duplicateNames.add(name);
       sourcesByUniqueName.delete(name);
@@ -72,8 +85,16 @@ function preserveRuntimeToolMetadata<TSchemaType extends TSchema = TSchema, TRes
   }
   for (const [index, target] of normalizedTools.entries()) {
     const indexedSource = sourceTools[index];
+    const targetName = readRuntimeToolName(target);
+    if (!targetName) {
+      if (indexedSource) {
+        copyRuntimeToolMetadata(indexedSource, target);
+      }
+      continue;
+    }
+    const indexedSourceName = indexedSource ? readRuntimeToolName(indexedSource) : undefined;
     const source =
-      indexedSource?.name === target.name ? indexedSource : sourcesByUniqueName.get(target.name);
+      indexedSourceName === targetName ? indexedSource : sourcesByUniqueName.get(targetName);
     if (source) {
       copyRuntimeToolMetadata(source, target);
     }
@@ -112,7 +133,19 @@ export function normalizeAgentRuntimeTools<
       allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
     });
   const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
-  return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
+  const metadataPreservedTools = preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
+  const runtimeCompatibleProjection = filterRuntimeCompatibleTools(metadataPreservedTools);
+  if (runtimeCompatibleProjection.diagnostics.length > 0) {
+    params.onPreNormalizationSchemaDiagnostics?.(
+      runtimeCompatibleProjection.diagnostics,
+      metadataPreservedTools,
+    );
+  }
+  const runtimeCompatibleTools =
+    runtimeCompatibleProjection.diagnostics.length > 0
+      ? ([...runtimeCompatibleProjection.tools] as AgentTool<TSchemaType, TResult>[])
+      : metadataPreservedTools;
+  return runtimeCompatibleTools;
 }
 
 export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyParams): void {

@@ -222,6 +222,74 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     });
   });
 
+  it("quarantines unreadable provider-normalized tools before preserving metadata", () => {
+    const tool = createParameterFreeTool("fixture__lookup_note") as AgentTool;
+    setPluginToolMeta(tool, {
+      pluginId: "bundle-mcp",
+      optional: false,
+      mcp: {
+        serverName: "fixture",
+        safeServerName: "fixture",
+        toolName: "lookup_note",
+        operation: "tool",
+      },
+    });
+    const unreadableNormalized = {
+      ...createParameterFreeTool("fuzzplugin_unreadable_normalized"),
+      parameters: normalizedParameterFreeSchema(),
+    } as unknown as AgentTool;
+    Object.defineProperty(unreadableNormalized, "name", {
+      enumerable: true,
+      get(): string {
+        throw new Error("provider normalized tool name getter exploded");
+      },
+    });
+    const healthyNormalized = {
+      ...tool,
+      parameters: normalizedParameterFreeSchema(),
+    };
+    const diagnostics: RuntimeToolSchemaDiagnostic[][] = [];
+    const diagnosticTools: AgentTool[][] = [];
+    mocks.normalizeProviderToolSchemas.mockReturnValueOnce([
+      unreadableNormalized,
+      healthyNormalized,
+    ]);
+
+    const result = normalizeAgentRuntimeTools({
+      tools: [tool],
+      provider: "openai",
+      onPreNormalizationSchemaDiagnostics: (entries, sourceTools) => {
+        diagnostics.push([...entries]);
+        diagnosticTools.push([...sourceTools]);
+      },
+    });
+
+    expect(result).toEqual([healthyNormalized]);
+    expect(getPluginToolMeta(result[0])).toMatchObject({
+      pluginId: "bundle-mcp",
+      mcp: {
+        serverName: "fixture",
+        toolName: "lookup_note",
+      },
+    });
+    expect(diagnostics).toEqual([
+      [
+        {
+          toolName: "tool[0]",
+          toolIndex: 0,
+          violations: ["tool[0].name is unreadable"],
+        },
+      ],
+    ]);
+    expect(getPluginToolMeta(diagnosticTools[0]?.[0])).toMatchObject({
+      pluginId: "bundle-mcp",
+      mcp: {
+        serverName: "fixture",
+        toolName: "lookup_note",
+      },
+    });
+  });
+
   it("does not reread quarantined tools while preserving normalized metadata", () => {
     const unreadableName = {
       ...createParameterFreeTool("fuzzplugin_unreadable_name"),
