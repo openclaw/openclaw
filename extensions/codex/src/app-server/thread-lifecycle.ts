@@ -537,7 +537,11 @@ export async function startOrResumeThread(params: {
             authProfileStore: params.params.authProfileStore,
             agentDir: params.params.agentDir,
             config: params.params.config,
-          }) ?? binding.modelProvider;
+          }) ??
+          resolveCodexBindingModelProviderFallback({
+            currentModel: params.params.modelId,
+            bindingModelProvider: binding.modelProvider,
+          });
         const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>
           buildThreadResumeParams(params.params, {
             threadId: binding.threadId,
@@ -971,6 +975,19 @@ export function buildThreadResumeParams(
       buildDeveloperInstructions(params, { dynamicTools: options.dynamicTools }),
     persistExtendedHistory: true,
   };
+}
+
+export function resolveCodexBindingModelProviderFallback(params: {
+  currentModel: string | undefined;
+  bindingModelProvider: string | undefined;
+}): string | undefined {
+  return hasProviderQualifiedModelRef(params.currentModel) ? undefined : params.bindingModelProvider;
+}
+
+function hasProviderQualifiedModelRef(model: string | undefined): boolean {
+  const trimmed = model?.trim();
+  const slashIndex = trimmed?.indexOf("/") ?? -1;
+  return slashIndex > 0 && slashIndex < (trimmed?.length ?? 0) - 1;
 }
 
 export function buildCodexRuntimeThreadConfig(

@@ -309,10 +309,21 @@ describe("Codex app-server config", () => {
       nativeAuthProfile: true,
     });
     expect(switchedLocalModel).toEqual({
-      modelProvider: "openai",
+      modelProvider: "lmstudio",
       model: "lmstudio/local-model",
     });
     expect(canUseCodexModelBackedApprovalsReviewerForModel(switchedLocalModel)).toBe(false);
+    const switchedOpenAIModel = resolveCodexModelBackedReviewerPolicyContext({
+      provider: "codex",
+      model: "openai/gpt-5.5",
+      bindingModel: "local-model",
+      bindingModelProvider: "lmstudio",
+    });
+    expect(switchedOpenAIModel).toEqual({
+      modelProvider: "openai",
+      model: "openai/gpt-5.5",
+    });
+    expect(canUseCodexModelBackedApprovalsReviewerForModel(switchedOpenAIModel)).toBe(true);
   });
 
   it("uses user approvals when requirements force prompting but model provider is unknown", () => {

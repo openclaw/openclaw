@@ -621,6 +621,13 @@ export function resolveCodexModelBackedReviewerPolicyContext(params: {
       model: params.model,
     };
   }
+  const currentModelProvider = inferProviderFromModelRef(params.model);
+  if (currentModelProvider) {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(currentModelProvider),
+      model: params.model,
+    };
+  }
   const bindingModelProvider = params.bindingModelProvider?.trim();
   if (bindingModelProvider) {
     return {

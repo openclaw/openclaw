@@ -79,6 +79,7 @@ import {
 import {
   buildCodexRuntimeThreadConfig,
   CODEX_NATIVE_PERSONALITY_NONE,
+  resolveCodexBindingModelProviderFallback,
   resolveCodexAppServerModelProvider,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
@@ -169,7 +170,11 @@ export async function runCodexAppServerSideQuestion(
       authProfileId,
       agentDir: params.agentDir,
       config: params.cfg,
-    }) ?? binding.modelProvider;
+    }) ??
+    resolveCodexBindingModelProviderFallback({
+      currentModel: params.model,
+      bindingModelProvider: binding.modelProvider,
+    });
   const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
     provider: params.provider,
     model: params.model,
