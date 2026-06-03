@@ -10,6 +10,7 @@ import {
   type DiscoveredConfigSecretTarget,
 } from "./target-registry.js";
 
+/** Legacy marker string found on a registered secret target, with parsed ref when possible. */
 export type LegacySecretRefEnvMarkerCandidate = {
   path: string;
   pathSegments: string[];

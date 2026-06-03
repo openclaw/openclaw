@@ -93,6 +93,8 @@ function collectPatternCandidates(params: {
 
   if (token.kind === "wildcard") {
     if (Array.isArray(params.current)) {
+      // Wildcards traverse both objects and arrays because plugin/channel configs use both
+      // shapes for owner-defined maps.
       for (const [index, value] of params.current.entries()) {
         collectPatternCandidates({
           ...params,
@@ -129,6 +131,7 @@ function collectPatternCandidates(params: {
     if (!Array.isArray(value)) {
       return;
     }
+    // Array tokens preserve the named field in the reported path, matching config dot-paths.
     for (const [index, entry] of value.entries()) {
       collectPatternCandidates({
         ...params,
