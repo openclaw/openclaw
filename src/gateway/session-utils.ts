@@ -966,6 +966,28 @@ function buildSingleRowStoreChildSessionsByKey(params: {
   return storeChildSessions ? new Map([[params.key, storeChildSessions]]) : new Map();
 }
 
+function buildSingleRowContextWithDiskCompactionCheckpointPreviews(params: {
+  storePath: string;
+  key: string;
+  entry?: SessionEntry;
+  now: number;
+  storeChildSessionsByKey?: Map<string, string[]>;
+}): SessionListRowContext | undefined {
+  if (!params.entry) {
+    return undefined;
+  }
+  const rowContext = buildSessionListRowContextFromParts({
+    subagentRuns: buildSubagentRunReadIndex(params.now),
+    storeChildSessionsByKey: params.storeChildSessionsByKey ?? new Map(),
+  });
+  hydrateDiskCompactionCheckpointPreviewIndexesSync({
+    storePath: params.storePath,
+    entries: [[params.key, params.entry]],
+    rowContext,
+  });
+  return rowContext;
+}
+
 function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
   return `${normalizeLowercaseStringOrEmpty(provider)}\0${normalizeOptionalString(model) ?? ""}`;
 }
@@ -2604,6 +2626,13 @@ export function loadGatewaySessionRow(
     key: canonicalKey,
     now,
   });
+  const rowContext = buildSingleRowContextWithDiskCompactionCheckpointPreviews({
+    storePath,
+    key: canonicalKey,
+    entry,
+    now,
+    storeChildSessionsByKey,
+  });
   return buildGatewaySessionRow({
     cfg,
     storePath,
@@ -2615,6 +2644,7 @@ export function loadGatewaySessionRow(
     includeLastMessage: options?.includeLastMessage,
     transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
     storeChildSessionsByKey,
+    rowContext,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
   });
 }
@@ -2628,6 +2658,11 @@ export function buildGatewaySessionInfo(params: {
   agentId?: string;
   now?: number;
   modelCatalog?: ModelCatalogEntry[];
+  includeDerivedTitles?: boolean;
+  includeLastMessage?: boolean;
+  transcriptUsageMaxBytes?: number;
+  skipTranscriptUsageFallback?: boolean;
+  lightweightListRow?: boolean;
 }): GatewaySessionRow {
   const now = params.now ?? Date.now();
   const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
@@ -2635,6 +2670,13 @@ export function buildGatewaySessionInfo(params: {
     store: params.store,
     key: params.key,
     now,
+  });
+  const rowContext = buildSingleRowContextWithDiskCompactionCheckpointPreviews({
+    storePath: params.storePath,
+    key: params.key,
+    entry: params.entry,
+    now,
+    storeChildSessionsByKey,
   });
   return buildGatewaySessionRow({
     cfg: params.cfg,
@@ -2645,9 +2687,13 @@ export function buildGatewaySessionInfo(params: {
     agentId: params.agentId,
     modelCatalog: params.modelCatalog,
     now,
+    includeDerivedTitles: params.includeDerivedTitles,
+    includeLastMessage: params.includeLastMessage,
+    transcriptUsageMaxBytes: params.transcriptUsageMaxBytes,
     storeChildSessionsByKey,
-    skipTranscriptUsageFallback: true,
-    lightweightListRow: true,
+    rowContext,
+    skipTranscriptUsageFallback: params.skipTranscriptUsageFallback ?? true,
+    lightweightListRow: params.lightweightListRow ?? true,
   });
 }
 

@@ -95,7 +95,7 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
-  buildGatewaySessionRow,
+  buildGatewaySessionInfo,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadGatewaySessionRow,
@@ -1315,7 +1315,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { session: null }, undefined);
       return;
     }
-    const row = buildGatewaySessionRow({
+    const row = buildGatewaySessionInfo({
       cfg,
       storePath,
       store,
@@ -1324,6 +1324,8 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       includeDerivedTitles: p.includeDerivedTitles,
       includeLastMessage: p.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,
+      skipTranscriptUsageFallback: false,
+      lightweightListRow: false,
     });
     respond(true, { session: row }, undefined);
   },

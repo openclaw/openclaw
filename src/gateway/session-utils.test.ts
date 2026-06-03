@@ -10,6 +10,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   canonicalizeSpawnedByForAgent,
+  buildGatewaySessionInfo,
   buildGatewaySessionRow,
   capArrayByJsonBytes,
   classifySessionKey,
@@ -18,6 +19,7 @@ import {
   listAgentsForGateway,
   listSessionsFromStore,
   listSessionsFromStoreAsync,
+  loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   parseGroupKey,
@@ -1195,6 +1197,85 @@ describe("gateway session utils", () => {
     } finally {
       resetConfigRuntimeState();
     }
+  });
+
+  test("loadGatewaySessionRow includes disk-discovered checkpoint previews", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-load-row-checkpoint-", async ({ stateDir }) => {
+        const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const storePath = path.join(sessionsDir, "sessions.json");
+        const sessionFile = path.join(sessionsDir, "event-row.jsonl");
+        const checkpointId = "33333333-3333-4333-8333-333333333333";
+        const checkpointFile = path.join(sessionsDir, `event-row.checkpoint.${checkpointId}.jsonl`);
+        fs.writeFileSync(sessionFile, "", "utf8");
+        fs.writeFileSync(checkpointFile, "", "utf8");
+        fs.utimesSync(checkpointFile, 1_700_000_020.123, 1_700_000_021.789);
+        fs.writeFileSync(
+          storePath,
+          JSON.stringify({
+            "agent:main:main": {
+              sessionId: "event-row",
+              sessionFile: path.basename(sessionFile),
+              updatedAt: 7,
+            },
+          }),
+          "utf8",
+        );
+        const cfg = {
+          session: {
+            mainKey: "main",
+            store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
+          },
+          agents: { list: [{ id: "main", default: true }] },
+        } as OpenClawConfig;
+        setRuntimeConfigSnapshot(cfg, cfg);
+
+        const row = loadGatewaySessionRow("agent:main:main");
+
+        expect(row?.compactionCheckpointCount).toBe(1);
+        expect(row?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
+  test("buildGatewaySessionInfo includes disk-discovered checkpoint previews", async () => {
+    await withStateDirEnv("session-utils-info-checkpoint-", async ({ stateDir }) => {
+      const sessionsDir = path.join(stateDir, "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const storePath = path.join(sessionsDir, "sessions.json");
+      const sessionFile = path.join(sessionsDir, "describe-row.jsonl");
+      const checkpointId = "44444444-4444-4444-8444-444444444444";
+      const checkpointFile = path.join(
+        sessionsDir,
+        `describe-row.checkpoint.${checkpointId}.jsonl`,
+      );
+      fs.writeFileSync(sessionFile, "", "utf8");
+      fs.writeFileSync(checkpointFile, "", "utf8");
+      fs.utimesSync(checkpointFile, 1_700_000_030.123, 1_700_000_031.789);
+      const entry: SessionEntry = {
+        sessionId: "describe-row",
+        sessionFile: path.basename(sessionFile),
+        updatedAt: 7,
+      };
+      const store: Record<string, SessionEntry> = {
+        "agent:main:main": entry,
+      };
+
+      const row = buildGatewaySessionInfo({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath,
+        store,
+        key: "agent:main:main",
+        entry,
+      });
+
+      expect(row.compactionCheckpointCount).toBe(1);
+      expect(row.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
+    });
   });
 
   test("resolveGatewaySessionStoreTargetWithStore returns the caller-provided store", async () => {
