@@ -3451,6 +3451,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     isNewSession?: boolean;
     inboundEventKind?: string;
     transcriptPrompt?: string;
+    summaryLine?: string;
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -3486,7 +3487,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     } as unknown as TemplateContext;
     const followupRun = {
       prompt: "hello",
-      summaryLine: "hello",
+      summaryLine: params.summaryLine ?? "hello",
       enqueuedAt: Date.now(),
       ...(params.transcriptPrompt ? { transcriptPrompt: params.transcriptPrompt } : {}),
       run: {
@@ -3600,5 +3601,14 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(retryRun?.currentInboundContext).toBeUndefined();
     // The retry prompt itself must contain the delivery instruction.
     expect(retryRun?.prompt).toContain("message(action=send)");
+  });
+
+  it("does not enqueue a second retry when a stranded-reply retry strands again (#85714)", async () => {
+    // The retry turn itself can fail to call message(action=send). Bound the
+    // recovery to a single attempt: a run already marked as a stranded-reply
+    // retry must not enqueue another retry, or it loops forever.
+    await runPrivateFinalCase({ summaryLine: "stranded-reply-retry" });
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 });

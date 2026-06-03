@@ -140,6 +140,11 @@ const BLOCK_REPLY_SEND_TIMEOUT_MS = 15_000;
 const RESTART_LIFECYCLE_REPLY_TEXT =
   "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 
+// #85714: marks a followup turn enqueued to recover a stranded message_tool_only
+// reply. Reused at the enqueue site and the one-shot guard so a retry that
+// strands again cannot enqueue another retry (unbounded loop).
+const STRANDED_REPLY_RETRY_MARKER = "stranded-reply-retry";
+
 function scheduleFollowupDrainAfterReplyOperationClear(params: {
   operation: ReplyOperation;
   queueKey: string;
@@ -2598,33 +2603,40 @@ export async function runReplyAgent(params: {
             activeSessionEntry?.channel,
           finalTextLength: assistantFinalText.trim().length,
         });
-        // #85714: Enqueue a retry turn so the agent can deliver via message(action=send),
-        // preserving the message_tool_only privacy contract instead of bypassing suppression.
-        const retryPrompt =
-          `[System] Your previous reply was not delivered to the conversation because ` +
-          `you did not call message(action=send). Your reply text was:\n\n` +
-          `"${assistantFinalText}"\n\n` +
-          `Please deliver this reply now by calling message(action=send). ` +
-          `Do not add any extra commentary — just deliver the original reply.`;
-        enqueueFollowupRun(
-          queueKey,
-          {
-            ...followupRun,
-            prompt: retryPrompt,
-            summaryLine: "stranded-reply-retry",
-            // Clear transcript/persistence fields so the retry turn uses the
-            // retry prompt, not the original user message. The followup runner
-            // resolves `transcriptPrompt ?? extracted.text`, so a retained
-            // transcriptPrompt would hide the retry instruction.
-            transcriptPrompt: undefined,
-            userTurnTranscriptRecorder: undefined,
-            currentInboundContext: undefined,
-          },
-          resolvedQueue,
-          "none",
-          queuedRunFollowupTurn,
-          true,
-        );
+        // #85714: Bound recovery to a single attempt. If this run is itself a
+        // stranded-reply retry that stranded again, do NOT enqueue another
+        // retry — that would loop forever and re-attempt channel delivery each
+        // turn. Fall back to the existing message_tool_only suppression.
+        const isRetryRun = followupRun.summaryLine === STRANDED_REPLY_RETRY_MARKER;
+        if (!isRetryRun) {
+          // #85714: Enqueue a retry turn so the agent can deliver via message(action=send),
+          // preserving the message_tool_only privacy contract instead of bypassing suppression.
+          const retryPrompt =
+            `[System] Your previous reply was not delivered to the conversation because ` +
+            `you did not call message(action=send). Your reply text was:\n\n` +
+            `"${assistantFinalText}"\n\n` +
+            `Please deliver this reply now by calling message(action=send). ` +
+            `Do not add any extra commentary — just deliver the original reply.`;
+          enqueueFollowupRun(
+            queueKey,
+            {
+              ...followupRun,
+              prompt: retryPrompt,
+              summaryLine: STRANDED_REPLY_RETRY_MARKER,
+              // Clear transcript/persistence fields so the retry turn uses the
+              // retry prompt, not the original user message. The followup runner
+              // resolves `transcriptPrompt ?? extracted.text`, so a retained
+              // transcriptPrompt would hide the retry instruction.
+              transcriptPrompt: undefined,
+              userTurnTranscriptRecorder: undefined,
+              currentInboundContext: undefined,
+            },
+            resolvedQueue,
+            "none",
+            queuedRunFollowupTurn,
+            true,
+          );
+        }
       }
       const pendingText = sourceReplyPolicy.suppressDelivery ? "" : finalDeliveryText;
       const agentId = followupRun.run.agentId;
