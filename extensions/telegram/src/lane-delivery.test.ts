@@ -141,6 +141,37 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.sendPayload).not.toHaveBeenCalled();
   });
 
+  it("does not duplicate the first chunk when block mode finalizes a long reply", async () => {
+    // Reproduces the block-mode variant of #87624: a block event previews the
+    // first chunk, then the final event arrives with the full text. The final
+    // must reuse the preview as chunk 0 and only emit chunks 1..N as new
+    // messages instead of re-sending chunk 0.
+    const harness = createHarness({
+      answerMessageId: 999,
+      draftMaxChars: 5,
+      splitFinalTextForStream: () => ["Hello", " world", " again"],
+    });
+
+    const blockResult = await harness.deliverLaneText({
+      laneName: "answer",
+      text: "Hello",
+      payload: { text: "Hello" },
+      infoKind: "block",
+    });
+    const finalResult = await deliverFinalAnswer(harness, "Hello world again");
+
+    expect(blockResult.kind).toBe("preview-updated");
+    const delivery = expectPreviewFinalized(finalResult);
+    expect(delivery.content).toBe("Hello world again");
+    expect(delivery.promptContextContent).toBe("Hello");
+    expect(delivery.messageId).toBe(999);
+    expect(harness.answer?.update).toHaveBeenNthCalledWith(1, "Hello");
+    expect(harness.answer?.update).toHaveBeenNthCalledWith(2, "Hello");
+    expect(harness.sendPayload).toHaveBeenCalledTimes(2);
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(1, { text: " world" });
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(2, { text: " again" });
+  });
+
   it("uses normal final delivery when the stream edit leaves stale text", async () => {
     const answer = createTestDraftStream({ messageId: 999 });
     answer.lastDeliveredText.mockReturnValue("working");
@@ -706,6 +737,39 @@ describe("createLaneTextDeliverer", () => {
     expect(harness.clearDraftLane).not.toHaveBeenCalled();
     expect(harness.sendPayload).toHaveBeenCalledTimes(1);
     expect(harness.sendPayload).toHaveBeenCalledWith({ text: " again" });
+    expect(harness.markDelivered).toHaveBeenCalledTimes(1);
+  });
+
+  it("hands off from a shorter streamed prefix when stop ends below the first chunk boundary", async () => {
+    // Reproduces #87624: in partial/block streaming.mode the draft preview can
+    // end at a tighter boundary than the lane chunker (e.g. HTML rendering caps
+    // the preview a few characters before the first chunk's raw-text boundary,
+    // or stop() failed before sending the firstChunk update). The finalizer
+    // must still treat the preview as covering its delivered prefix instead of
+    // falling back to a fresh sendPayload pass that re-emits every chunk while
+    // any retained overflow preview pages stay visible, duplicating the reply.
+    let deliveredText = "Hello";
+    const answer = createTestDraftStream({ messageId: 999 });
+    answer.lastDeliveredText.mockImplementation(() => deliveredText);
+    const harness = createHarness({
+      answerStream: answer,
+      draftMaxChars: 11,
+      splitFinalTextForStream: (text) =>
+        text === " world again" ? [" world", " again"] : ["Hello world", " again"],
+    });
+    harness.lanes.answer.hasStreamedMessage = true;
+    harness.lanes.answer.lastPartialText = deliveredText;
+
+    const result = await deliverFinalAnswer(harness, "Hello world again");
+
+    const delivery = expectPreviewFinalized(result);
+    expect(delivery.content).toBe("Hello world again");
+    expect(delivery.promptContextContent).toBe("Hello");
+    expect(delivery.messageId).toBe(999);
+    expect(harness.clearDraftLane).not.toHaveBeenCalled();
+    expect(harness.sendPayload).toHaveBeenCalledTimes(2);
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(1, { text: " world" });
+    expect(harness.sendPayload).toHaveBeenNthCalledWith(2, { text: " again" });
     expect(harness.markDelivered).toHaveBeenCalledTimes(1);
   });
 
