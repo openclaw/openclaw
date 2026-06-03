@@ -8,6 +8,7 @@ import {
 } from "../auto-reply/inbound-debounce.js";
 import type { OpenClawConfig } from "../config/types.js";
 
+/** Returns true when an inbound text event is safe to debounce before dispatch. */
 export function shouldDebounceTextInbound(params: {
   text: string | null | undefined;
   cfg: OpenClawConfig;
@@ -28,6 +29,7 @@ export function shouldDebounceTextInbound(params: {
   return !isControlCommandMessage(text, params.cfg, params.commandOptions);
 }
 
+/** Creates a channel-scoped inbound debouncer using config/default debounce timing. */
 export function createChannelInboundDebouncer<T>(
   params: Omit<InboundDebounceCreateParams<T>, "debounceMs"> & {
     cfg: OpenClawConfig;
