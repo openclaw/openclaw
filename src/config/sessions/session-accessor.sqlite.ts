@@ -779,8 +779,9 @@ function writeSessionEntry(
   entry: SessionEntry,
 ): void {
   const db = getSessionKysely(database.db);
-  const updatedAt = entry.updatedAt;
-  const sessionRow = bindSqliteSessionRoot({ entry, sessionKey, updatedAt });
+  const normalizedEntry = normalizeSqliteSessionEntryTimestamp(entry);
+  const updatedAt = normalizedEntry.updatedAt;
+  const sessionRow = bindSqliteSessionRoot({ entry: normalizedEntry, sessionKey, updatedAt });
   executeSqliteQuerySync(
     database.db,
     db
@@ -817,18 +818,32 @@ function writeSessionEntry(
       .insertInto("session_entries")
       .values({
         session_key: sessionKey,
-        session_id: entry.sessionId,
-        entry_json: JSON.stringify(entry),
+        session_id: normalizedEntry.sessionId,
+        entry_json: JSON.stringify(normalizedEntry),
         updated_at: updatedAt,
       })
       .onConflict((conflict) =>
         conflict.column("session_key").doUpdateSet({
-          session_id: entry.sessionId,
-          entry_json: JSON.stringify(entry),
+          session_id: normalizedEntry.sessionId,
+          entry_json: JSON.stringify(normalizedEntry),
           updated_at: updatedAt,
         }),
       ),
   );
+}
+
+function normalizeSqliteSessionEntryTimestamp(entry: SessionEntry): SessionEntry {
+  if (typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)) {
+    return entry;
+  }
+  const updatedAt =
+    typeof entry.sessionStartedAt === "number" && Number.isFinite(entry.sessionStartedAt)
+      ? entry.sessionStartedAt
+      : Date.now();
+  return {
+    ...entry,
+    updatedAt,
+  };
 }
 
 function ensureTranscriptSessionRoot(
