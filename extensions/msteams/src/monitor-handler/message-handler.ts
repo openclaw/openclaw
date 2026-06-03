@@ -37,6 +37,7 @@ import {
   type GraphThreadMessage,
 } from "../graph-thread.js";
 import { resolveGraphChatId } from "../graph-upload.js";
+import { fetchAadUserProfile } from "../graph-users.js";
 import {
   extractMSTeamsConversationMessageId,
   extractMSTeamsQuoteInfo,
@@ -46,6 +47,7 @@ import {
   translateMSTeamsDmConversationIdForGraph,
   wasMSTeamsBotMentioned,
 } from "../inbound.js";
+import { buildSenderIdentityBlock, formatSenderIdentityContext } from "../sender-identity.js";
 import {
   fetchParentMessageCached,
   formatParentContextEvent,
@@ -757,9 +759,45 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
             }).allowed
         : true;
     // Prepend thread history to the agent body so the agent has full thread context.
-    const bodyForAgent = threadContext
+    let bodyForAgent = threadContext
       ? `[Thread history]\n${threadContext}\n[/Thread history]\n\n${rawBody}`
       : rawBody;
+
+    // AAD sender identity enrichment: fetch the sender's Azure AD profile and
+    // prepend a trusted identity block so the agent can use persona-aware
+    // routing/responses (department, title, email).
+    let senderIdentityName: string | undefined;
+    const aadObjectId = from.aadObjectId;
+    if (msteamsCfg?.senderIdentity?.enabled && aadObjectId) {
+      try {
+        const graphToken = await tokenProvider.getAccessToken("https://graph.microsoft.com");
+        if (graphToken) {
+          const profile = await fetchAadUserProfile({
+            token: graphToken,
+            aadObjectId,
+            cacheTtlMs: msteamsCfg.senderIdentity.cacheTtlMs,
+          });
+          if (profile) {
+            const identity = buildSenderIdentityBlock(profile);
+            if (identity) {
+              const identityBlock = formatSenderIdentityContext(identity);
+              bodyForAgent = `${identityBlock}\n\n${bodyForAgent}`;
+              combinedBody = `${identityBlock}\n\n${combinedBody}`;
+              senderIdentityName = profile.displayName ?? undefined;
+              log.debug?.("aad sender identity enriched", {
+                aadId: profile.id,
+                displayName: profile.displayName,
+                department: profile.department,
+              });
+            }
+          }
+        }
+      } catch (err) {
+        log.debug?.("aad sender identity enrichment failed", {
+          error: formatUnknownError(err),
+        });
+      }
+    }
 
     // For Teams *channel* messages (not group chats / DMs), preserve the
     // `teamId/channelId` pair on NativeChannelId so downstream action handlers
@@ -787,7 +825,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       from: teamsFrom,
       sender: {
         id: senderId,
-        name: senderName,
+        name: senderIdentityName ?? senderName,
       },
       conversation: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",

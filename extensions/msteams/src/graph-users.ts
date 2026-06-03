@@ -1,6 +1,46 @@
 // Msteams plugin module implements graph users behavior.
 import { escapeOData, fetchGraphJson, type GraphResponse, type GraphUser } from "./graph.js";
 
+const DEFAULT_PROFILE_CACHE_TTL_MS = 3_600_000; // 1 hour
+
+type CachedProfile = { profile: GraphUser; ts: number };
+const profileCache = new Map<string, CachedProfile>();
+
+/** @internal Clear the AAD profile cache (for testing). */
+export function clearAadProfileCache(): void {
+  profileCache.clear();
+}
+
+/**
+ * Fetch a user's AAD profile by object ID from Microsoft Graph.
+ * Results are cached in-process with a configurable TTL.
+ */
+export async function fetchAadUserProfile(params: {
+  token: string;
+  aadObjectId: string;
+  cacheTtlMs?: number;
+}): Promise<GraphUser | null> {
+  const { token, aadObjectId } = params;
+  if (!aadObjectId) return null;
+
+  const ttl = params.cacheTtlMs ?? DEFAULT_PROFILE_CACHE_TTL_MS;
+  const cached = profileCache.get(aadObjectId);
+  if (cached && Date.now() - cached.ts < ttl) return cached.profile;
+
+  const select = "id,displayName,mail,userPrincipalName,department,jobTitle";
+  const path = `/users/${encodeURIComponent(aadObjectId)}?$select=${select}`;
+  try {
+    const profile = await fetchGraphJson<GraphUser>({ token, path });
+    if (profile?.id) {
+      profileCache.set(aadObjectId, { profile, ts: Date.now() });
+      return profile;
+    }
+  } catch {
+    // Graph 404 or permission error — caller handles null.
+  }
+  return null;
+}
+
 export async function searchGraphUsers(params: {
   token: string;
   query: string;
