@@ -21,7 +21,9 @@ export type { CommandSecretAssignment } from "./command-config.js";
 
 /** Provider selections applied only while resolving command-scoped web secrets. */
 export type CommandSecretProviderOverrides = {
+  /** Temporary web-search provider id for this command request. */
   webSearch?: string;
+  /** Temporary web-fetch provider id for this command request. */
   webFetch?: string;
 };
 
@@ -402,10 +404,15 @@ async function resolveForcedActiveCommandSecretTargets(params: {
  * Provider overrides are evaluated against cloned snapshot config.
  */
 export function resolveCommandSecretsFromActiveRuntimeSnapshot(params: {
+  /** Command name used in diagnostics returned to gateway/tool callers. */
   commandName: string;
+  /** Secret target registry ids the command is allowed to resolve. */
   targetIds: ReadonlySet<string>;
+  /** Optional exact config paths allowed inside `targetIds`. */
   allowedPaths?: ReadonlySet<string>;
+  /** Inactive paths to force active because command-local provider overrides select them. */
   forcedActivePaths?: ReadonlySet<string>;
+  /** Inactive paths that may stay unresolved without diagnostics. */
   optionalActivePaths?: ReadonlySet<string>;
   providerOverrides?: CommandSecretProviderOverrides;
 }): Promise<{
