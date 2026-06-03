@@ -292,6 +292,16 @@ API key auth, and dynamic model resolution.
     endpoint capability map, so native Moonshot/DashScope-style endpoints still
     opt in even when a plugin is using a custom provider id.
 
+    When a provider exposes a live `/models`-style endpoint, use
+    `buildLiveModelProviderConfig(...)` from
+    `openclaw/plugin-sdk/provider-catalog-live-runtime` inside the provider
+    `catalog.run` hook. The helper performs SSRF-guarded fetches, supports
+    OpenAI-compatible `{ data: [...] }` and top-level array responses, reuses
+    the shared live-catalog TTL cache, filters live IDs through provider-owned
+    static model metadata, and falls back to those static rows when discovery
+    fails. Keep the hook auth-gated: use `discoveryApiKey` for the live request
+    and preserve the configured `apiKey` marker on the returned provider config.
+
   </Step>
 
   <Step title="Add dynamic model resolution">

@@ -8,10 +8,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import {
-  buildOpencodeGoLiveProviderConfig,
-  fetchOpencodeGoLiveModelIds,
-} from "./provider-catalog.js";
+import { buildOpencodeGoLiveProviderConfig } from "./provider-catalog.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -205,41 +202,6 @@ describe("opencode-go provider plugin", () => {
         resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
       } as never),
     ).resolves.toBeNull();
-  });
-
-  it("fetches live OpenCode Go model ids from the provider endpoint", async () => {
-    const release = vi.fn(async () => undefined);
-    const fetchGuard = vi.fn(async () => ({
-      response: new Response(
-        JSON.stringify([
-          { id: "minimax-m3", object: "model" },
-          { id: "qwen3.7-max", object: "model" },
-          { id: "ignore-me", object: "embedding" },
-          { id: "minimax-m3", object: "model" },
-        ]),
-      ),
-      finalUrl: "https://opencode.ai/zen/go/v1/models",
-      release,
-    }));
-
-    await expect(
-      fetchOpencodeGoLiveModelIds({
-        apiKey: "OPENCODE_API_KEY",
-        discoveryApiKey: "resolved-opencode-key",
-        fetchGuard,
-      }),
-    ).resolves.toEqual(["minimax-m3", "qwen3.7-max"]);
-
-    expect(fetchGuard).toHaveBeenCalledTimes(1);
-    expect(fetchGuard.mock.calls[0]?.[0]).toMatchObject({
-      url: "https://opencode.ai/zen/go/v1/models",
-      auditContext: "opencode-go-model-discovery",
-      timeoutMs: 5_000,
-    });
-    expect(fetchGuard.mock.calls[0]?.[0]?.init?.headers).toMatchObject({
-      Authorization: "Bearer resolved-opencode-key",
-    });
-    expect(release).toHaveBeenCalledTimes(1);
   });
 
   it("uses cached live OpenCode Go discovery and falls back to static rows on failure", async () => {
