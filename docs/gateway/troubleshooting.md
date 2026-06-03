@@ -684,13 +684,14 @@ Look for:
 
 - Cron enabled and next wake present.
 - Job run history status (`ok`, `skipped`, `error`).
-- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `cron-in-progress`, `lanes-busy`, `alerts-disabled`, `empty-heartbeat-file`, `no-tasks-due`).
+- Heartbeat skip reasons (`quiet-hours`, `requests-in-flight`, `cron-in-progress`, `lanes-busy`, `alerts-disabled`, `missing-heartbeat-file`, `empty-heartbeat-file`, `no-tasks-due`).
 
 <AccordionGroup>
   <Accordion title="Common signatures">
     - `cron: scheduler disabled; jobs will not run automatically` → cron disabled.
     - `cron: timer tick failed` → scheduler tick failed; check file/log/runtime errors.
     - `heartbeat skipped` with `reason=quiet-hours` → outside active hours window.
+    - `heartbeat skipped` with `reason=missing-heartbeat-file` → default idle heartbeat is enabled, but the workspace has no `HEARTBEAT.md`; add the file or explicit heartbeat config to opt into periodic runs.
     - `heartbeat skipped` with `reason=empty-heartbeat-file` → `HEARTBEAT.md` exists but only contains blank lines / markdown headers, so OpenClaw skips the model call.
     - `heartbeat skipped` with `reason=no-tasks-due` → `HEARTBEAT.md` contains a `tasks:` block, but none of the tasks are due on this tick.
     - `heartbeat: unknown accountId` → invalid account id for heartbeat delivery target.

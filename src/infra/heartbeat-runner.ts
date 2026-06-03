@@ -857,7 +857,17 @@ type HeartbeatWakePayloadFlags = {
   isWakePayload: boolean;
 };
 
-type HeartbeatSkipReason = "empty-heartbeat-file";
+type HeartbeatSkipReason = "empty-heartbeat-file" | "missing-heartbeat-file";
+
+function hasExplicitHeartbeatConfigForAgent(cfg: OpenClawConfig, agentId: string): boolean {
+  if (cfg.agents?.defaults?.heartbeat) {
+    return true;
+  }
+  const resolvedAgentId = normalizeAgentId(agentId);
+  return (cfg.agents?.list ?? []).some(
+    (entry) => Boolean(entry?.heartbeat) && normalizeAgentId(entry?.id) === resolvedAgentId,
+  );
+}
 
 function buildCommitmentDeliveryKey(commitment: CommitmentRecord): string {
   return [
@@ -1060,9 +1070,18 @@ async function resolveHeartbeatPreflight(params: {
     };
   } catch (err: unknown) {
     if (hasErrnoCode(err, "ENOENT")) {
-      // Missing HEARTBEAT.md is intentional in some setups (for example, when
-      // heartbeat instructions live outside the file), so keep the run active.
-      // The heartbeat prompt already says "if it exists".
+      if (
+        dueCommitments.length === 0 &&
+        !hasExplicitHeartbeatConfigForAgent(params.cfg, params.agentId)
+      ) {
+        return {
+          ...basePreflight,
+          skipReason: "missing-heartbeat-file",
+          tasks: [],
+        };
+      }
+      // Explicit heartbeat configs may keep instructions outside HEARTBEAT.md,
+      // so preserve that opt-in behavior when the file is absent.
       return basePreflight;
     }
     // For other read errors, proceed with heartbeat as before.

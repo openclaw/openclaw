@@ -67,6 +67,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     Common heartbeat skip reasons:
 
     - `quiet-hours`: outside the configured active-hours window
+    - `missing-heartbeat-file`: default idle heartbeat is enabled, but the workspace has no `HEARTBEAT.md`; add the file or explicit heartbeat config to opt into periodic runs
     - `empty-heartbeat-file`: `HEARTBEAT.md` exists but only contains blank/header-only scaffolding
     - `no-tasks-due`: `HEARTBEAT.md` task mode is active but none of the task intervals are due yet
     - `alerts-disabled`: all heartbeat visibility is disabled (`showOk`, `showAlerts`, and `useIndicator` are all off)
