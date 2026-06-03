@@ -338,6 +338,21 @@ export async function startOrResumeThread(params: {
     }),
   );
   let startModelProvider: string | undefined;
+  if (binding?.threadId) {
+    const authProfileId = params.params.authProfileId ?? binding.authProfileId;
+    startModelProvider =
+      resolveCodexAppServerModelProvider({
+        provider: params.params.provider,
+        authProfileId,
+        authProfileStore: params.params.authProfileStore,
+        agentDir: params.params.agentDir,
+        config: params.params.config,
+      }) ??
+      resolveCodexBindingModelProviderFallback({
+        currentModel: params.params.modelId,
+        bindingModelProvider: binding.modelProvider,
+      });
+  }
   let preserveExistingBinding = false;
   let rotatedContextEngineBinding = false;
   let prebuiltPluginThreadConfig: CodexPluginThreadConfig | undefined;
@@ -487,19 +502,6 @@ export async function startOrResumeThread(params: {
     }
   }
   if (binding?.threadId) {
-    const bindingAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
-    startModelProvider =
-      resolveCodexAppServerModelProvider({
-        provider: params.params.provider,
-        authProfileId: bindingAuthProfileId,
-        authProfileStore: params.params.authProfileStore,
-        agentDir: params.params.agentDir,
-        config: params.params.config,
-      }) ??
-      resolveCodexBindingModelProviderFallback({
-        currentModel: params.params.modelId,
-        bindingModelProvider: binding.modelProvider,
-      });
     // `/codex resume <thread>` writes a binding before the next turn can know
     // the dynamic tool catalog, so only invalidate fingerprints we actually have.
     if (
@@ -531,7 +533,7 @@ export async function startOrResumeThread(params: {
       }
     } else {
       try {
-        const authProfileId = bindingAuthProfileId;
+        const authProfileId = params.params.authProfileId ?? binding.authProfileId;
         const finalConfigPatch = params.buildFinalConfigPatch?.({
           action: "resume",
           binding,
