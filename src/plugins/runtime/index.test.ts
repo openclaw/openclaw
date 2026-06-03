@@ -365,6 +365,11 @@ describe("plugin runtime command execution", () => {
       source: "workspace cloud credentials",
       mode: "api-key",
     });
+    runtimeModelAuthMocks.getRuntimeAuthForModel.mockResolvedValue({
+      apiKey: "runtime-key",
+      source: "workspace cloud credentials",
+      mode: "api-key",
+    });
 
     const modelAuth = await runtime.modelAuth.getApiKeyForModel({
       model: model as never,
@@ -384,6 +389,18 @@ describe("plugin runtime command execution", () => {
     } as never);
     expect(providerAuth.apiKey).toBe("provider-key");
 
+    const runtimeAuth = await runtime.modelAuth.getRuntimeAuthForModel({
+      model: model as never,
+      cfg,
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      profileId: "workspace-cloud:private",
+      preferredProfile: "workspace-cloud:private",
+      lockedProfile: true,
+      store: { version: 1, profiles: {} },
+    } as never);
+    expect(runtimeAuth.apiKey).toBe("runtime-key");
+
     expect(runtimeModelAuthMocks.getApiKeyForModel).toHaveBeenCalledWith({
       model,
       cfg,
@@ -391,6 +408,11 @@ describe("plugin runtime command execution", () => {
     });
     expect(runtimeModelAuthMocks.resolveApiKeyForProvider).toHaveBeenCalledWith({
       provider: "workspace-cloud",
+      cfg,
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(runtimeModelAuthMocks.getRuntimeAuthForModel).toHaveBeenCalledWith({
+      model,
       cfg,
       workspaceDir: "/tmp/workspace",
     });

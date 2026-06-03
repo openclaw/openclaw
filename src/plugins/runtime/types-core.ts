@@ -348,11 +348,7 @@ export type PluginRuntimeCore = {
     getRuntimeAuthForModel: (params: {
       model: import("openclaw/plugin-sdk/llm").Model<import("openclaw/plugin-sdk/llm").Api>;
       cfg?: import("../../config/types.openclaw.js").OpenClawConfig;
-      agentDir?: string;
       workspaceDir?: string;
-      profileId?: string;
-      preferredProfile?: string;
-      lockedProfile?: boolean;
     }) => Promise<import("./model-auth-types.js").ResolvedProviderRuntimeAuth>;
     /** Resolve auth for a provider by name. Only provider, optional cfg, and workspaceDir are used. */
     resolveApiKeyForProvider: (params: {

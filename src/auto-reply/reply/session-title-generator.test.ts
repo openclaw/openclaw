@@ -139,7 +139,7 @@ describe("maybeGenerateSessionTitle", () => {
     expect(updateSessionStoreEntry).not.toHaveBeenCalled();
   });
 
-  it("counts user turns after a long first JSONL record", async () => {
+  it("caps title-model transcript excerpts after counting a long first JSONL record", async () => {
     const longFirstMessage = "a".repeat(9000);
     const transcriptPath = createTranscript([longFirstMessage, "second", "third"]);
     resolveSessionTranscriptCandidates.mockReturnValue([transcriptPath]);
@@ -155,9 +155,27 @@ describe("maybeGenerateSessionTitle", () => {
 
     expect(generateConversationLabel).toHaveBeenCalledWith(
       expect.objectContaining({
-        userMessage: `${longFirstMessage}\n---\nsecond\n---\nthird`,
+        userMessage: `${"a".repeat(1000)}\n---\nsecond\n---\nthird`,
       }),
     );
+    expect(updateSessionStoreEntry).toHaveBeenCalledOnce();
+  });
+
+  it("enforces a total title-model input cap", async () => {
+    const transcriptPath = createTranscript(Array.from({ length: 5 }, () => "x".repeat(9000)));
+    resolveSessionTranscriptCandidates.mockReturnValue([transcriptPath]);
+
+    maybeGenerateSessionTitle({
+      cfg: { sessionTitle: { enabled: true, turnsBeforeTitle: 5 } },
+      sessionKey: "agent:main:abc",
+      sessionEntry: { sessionId: "abc" } as SessionEntry,
+      storePath: "/tmp/store.json",
+    });
+
+    await vi.waitFor(() => expect(generateConversationLabel).toHaveBeenCalledOnce());
+
+    const titleRequest = generateConversationLabel.mock.calls[0]?.[0] as { userMessage: string };
+    expect(titleRequest.userMessage).toHaveLength(4000);
     expect(updateSessionStoreEntry).toHaveBeenCalledOnce();
   });
 });

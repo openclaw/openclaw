@@ -7,6 +7,10 @@ import { resolveSessionModelRef } from "../../gateway/session-utils.js";
 import { logVerbose } from "../../globals.js";
 import { generateConversationLabel } from "./conversation-label-generator.js";
 
+const TITLE_INPUT_SEPARATOR = "\n---\n";
+const MAX_TITLE_INPUT_CHARS = 4_000;
+const MAX_TITLE_MESSAGE_CHARS = 1_000;
+
 function buildTitlePrompt(maxChars: number): string {
   return (
     `Generate a concise, descriptive title (max ${maxChars} chars) for a conversation based on the user's messages below. ` +
@@ -18,6 +22,13 @@ function hasStoredSessionTitle(
   entry: Pick<SessionEntry, "autoTitle" | "displayName" | "subject">,
 ): boolean {
   return Boolean(entry.autoTitle?.trim() || entry.displayName?.trim() || entry.subject?.trim());
+}
+
+function buildTitleInputExcerpt(userMessages: string[]): string {
+  return userMessages
+    .map((message) => message.slice(0, MAX_TITLE_MESSAGE_CHARS))
+    .join(TITLE_INPUT_SEPARATOR)
+    .slice(0, MAX_TITLE_INPUT_CHARS);
 }
 
 /**
@@ -133,11 +144,11 @@ async function generateAndPersistTitle(params: {
     return;
   }
 
-  const combinedMessages = userMessages.join("\n---\n");
+  const inputExcerpt = buildTitleInputExcerpt(userMessages);
   const maxChars = titleCfg?.maxChars ?? 50;
 
   const title = await generateConversationLabel({
-    userMessage: combinedMessages,
+    userMessage: inputExcerpt,
     prompt: buildTitlePrompt(maxChars),
     cfg,
     agentId,

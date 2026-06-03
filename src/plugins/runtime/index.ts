@@ -141,11 +141,7 @@ function createRuntimeModelAuth(): PluginRuntime["modelAuth"] {
       getRuntimeAuthForModel({
         model: params.model,
         cfg: params.cfg,
-        agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
-        profileId: params.profileId,
-        preferredProfile: params.preferredProfile,
-        lockedProfile: params.lockedProfile,
       }),
     resolveApiKeyForProvider: (params) =>
       resolveApiKeyForProvider({
