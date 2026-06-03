@@ -22,6 +22,7 @@ export type {
 export const MIGRATION_REASON_MISSING_SOURCE_OR_TARGET = "missing source or target";
 export const MIGRATION_REASON_TARGET_EXISTS = "target exists";
 
+/** Creates a migration item, defaulting new provider output to the planned state. */
 export function createMigrationItem(
   params: Omit<MigrationItem, "status"> & { status?: MigrationItem["status"] },
 ): MigrationItem {
@@ -31,18 +32,22 @@ export function createMigrationItem(
   };
 }
 
+/** Marks a planned item as blocked by an existing target value. */
 export function markMigrationItemConflict(item: MigrationItem, reason: string): MigrationItem {
   return { ...item, status: "conflict", reason };
 }
 
+/** Marks an item as failed during detection or apply. */
 export function markMigrationItemError(item: MigrationItem, reason: string): MigrationItem {
   return { ...item, status: "error", reason };
 }
 
+/** Marks an item as intentionally skipped, usually for manual follow-up. */
 export function markMigrationItemSkipped(item: MigrationItem, reason: string): MigrationItem {
   return { ...item, status: "skipped", reason };
 }
 
+/** Counts migration item statuses for provider plans, apply results, and CLI reports. */
 export function summarizeMigrationItems(items: readonly MigrationItem[]): MigrationSummary {
   return {
     total: items.length,
@@ -119,6 +124,7 @@ export function readMigrationConfigPath(
   return current;
 }
 
+/** Deep-merges object patches and replaces scalar/array values with a cloned target value. */
 export function mergeMigrationConfigValue(left: unknown, right: unknown): unknown {
   if (!isRecord(left) || !isRecord(right)) {
     return structuredClone(right);
@@ -130,6 +136,7 @@ export function mergeMigrationConfigValue(left: unknown, right: unknown): unknow
   return next;
 }
 
+/** Writes a config patch path in-place, creating missing object parents as needed. */
 export function writeMigrationConfigPath(
   root: Record<string, unknown>,
   path: readonly string[],
@@ -150,6 +157,7 @@ export function writeMigrationConfigPath(
   current[leaf] = mergeMigrationConfigValue(current[leaf], value);
 }
 
+/** Checks whether a config patch would overwrite existing leaf keys without `--overwrite`. */
 export function hasMigrationConfigPatchConflict(
   config: MigrationProviderContext["config"],
   path: readonly string[],
@@ -165,6 +173,7 @@ export function hasMigrationConfigPatchConflict(
   return Object.keys(value).some((key) => existing[key] !== undefined);
 }
 
+/** Builds a planned or conflicting config-merge migration item. */
 export function createMigrationConfigPatchItem(params: {
   id: string;
   target: string;
@@ -189,6 +198,7 @@ export function createMigrationConfigPatchItem(params: {
   });
 }
 
+/** Builds a skipped item that records user-facing manual migration guidance. */
 export function createMigrationManualItem(params: {
   id: string;
   source: string;
@@ -206,6 +216,7 @@ export function createMigrationManualItem(params: {
   });
 }
 
+/** Reads config patch metadata from an item produced by `createMigrationConfigPatchItem`. */
 export function readMigrationConfigPatchDetails(
   item: MigrationItem,
 ): MigrationConfigPatchDetails | undefined {
@@ -219,6 +230,7 @@ export function readMigrationConfigPatchDetails(
   return { path, value: item.details?.value };
 }
 
+/** Applies one planned config patch through the runtime config writer and returns its final status. */
 export async function applyMigrationConfigPatchItem(
   ctx: MigrationProviderContext,
   item: MigrationItem,
@@ -261,6 +273,7 @@ export async function applyMigrationConfigPatchItem(
   }
 }
 
+/** Manual items never mutate state; applying one preserves the skipped/manual status. */
 export function applyMigrationManualItem(item: MigrationItem): MigrationItem {
   return markMigrationItemSkipped(item, item.reason ?? "manual follow-up required");
 }
@@ -309,14 +322,17 @@ function redactMigrationValueInternal(value: unknown, seen: WeakSet<object>): un
   return next;
 }
 
+/** Redacts likely secret values while preserving SecretRef-like objects for operator context. */
 export function redactMigrationValue(value: unknown): unknown {
   return redactMigrationValueInternal(value, new WeakSet<object>());
 }
 
+/** Redacts sensitive fields from one migration item before report/output serialization. */
 export function redactMigrationItem(item: MigrationItem): MigrationItem {
   return redactMigrationValue(item) as MigrationItem;
 }
 
+/** Redacts sensitive fields from a full migration plan before report/output serialization. */
 export function redactMigrationPlan<T extends MigrationPlan>(plan: T): T {
   return redactMigrationValue(plan) as T;
 }
