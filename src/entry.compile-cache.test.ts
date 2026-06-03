@@ -59,11 +59,20 @@ describe("entry compile cache", () => {
   it("keeps compile cache enabled for packaged installs unless disabled by env", () => {
     const root = makeTempDir(tempDirs, "openclaw-compile-cache-package-");
 
-    expect(shouldEnableOpenClawCompileCache({ env: {}, installRoot: root })).toBe(true);
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "24.15.0",
+        platform: "win32",
+      }),
+    ).toBe(true);
     expect(
       shouldEnableOpenClawCompileCache({
         env: { NODE_DISABLE_COMPILE_CACHE: "1" },
         installRoot: root,
+        nodeVersion: "24.15.0",
+        platform: "win32",
       }),
     ).toBe(false);
   });
@@ -248,13 +257,14 @@ describe("entry compile cache", () => {
     }
   });
 
-  it("disables compile cache for early Node 24.x versions with known deadlock risk", () => {
+  it("disables compile cache for early Node 24.x versions on Windows", () => {
     const root = makeTempDir(tempDirs, "openclaw-compile-cache-node24-");
     expect(
       shouldEnableOpenClawCompileCache({
         env: {},
         installRoot: root,
         nodeVersion: "24.1.0",
+        platform: "win32",
       }),
     ).toBe(false);
     expect(
@@ -262,17 +272,39 @@ describe("entry compile cache", () => {
         env: {},
         installRoot: root,
         nodeVersion: "24.14.0",
+        platform: "win32",
       }),
     ).toBe(false);
   });
 
-  it("keeps compile cache enabled for Node 24.15+ and other majors", () => {
+  it("keeps compile cache enabled for early Node 24.x on non-Windows packaged installs", () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-node24-nonwin-");
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "24.1.0",
+        platform: "linux",
+      }),
+    ).toBe(true);
+    expect(
+      shouldEnableOpenClawCompileCache({
+        env: {},
+        installRoot: root,
+        nodeVersion: "24.14.0",
+        platform: "darwin",
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps compile cache enabled for Node 24.15+ and other majors on Windows", () => {
     const root = makeTempDir(tempDirs, "openclaw-compile-cache-node2415-");
     expect(
       shouldEnableOpenClawCompileCache({
         env: {},
         installRoot: root,
         nodeVersion: "24.15.0",
+        platform: "win32",
       }),
     ).toBe(true);
     expect(
@@ -280,6 +312,7 @@ describe("entry compile cache", () => {
         env: {},
         installRoot: root,
         nodeVersion: "22.22.0",
+        platform: "win32",
       }),
     ).toBe(true);
     expect(
@@ -287,6 +320,7 @@ describe("entry compile cache", () => {
         env: {},
         installRoot: root,
         nodeVersion: "25.0.0",
+        platform: "win32",
       }),
     ).toBe(true);
   });
