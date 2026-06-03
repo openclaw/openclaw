@@ -2,11 +2,19 @@
 import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
+import {
+  clearGoogleChatApprovalCardBindingsForTest,
+  registerGoogleChatApprovalCardBinding,
+} from "./approval-card-actions.js";
 import { googlechatPlugin } from "./channel.js";
 import { googlechatSetupPlugin } from "./channel.setup.js";
 
 describe("googlechatPlugin config adapter", () => {
+  beforeEach(() => {
+    clearGoogleChatApprovalCardBindingsForTest();
+  });
+
   it("keeps setup metadata aligned with the runtime plugin", () => {
     expect(googlechatSetupPlugin.id).toBe(googlechatPlugin.id);
     expect(googlechatSetupPlugin.meta).toEqual(googlechatPlugin.meta);
@@ -94,5 +102,73 @@ describe("googlechatPlugin config adapter", () => {
         hint,
       }),
     ).toBe(true);
+  });
+
+  it("drops duplicate manual exec approval follow-up text after a native card is registered", () => {
+    const approvalId = "12345678-1234-1234-1234-123456789012";
+    registerGoogleChatApprovalCardBinding({
+      token: "token-1",
+      accountId: "default",
+      approvalId,
+      approvalKind: "exec",
+      decision: "allow-once",
+      allowedDecisions: ["allow-once", "deny"],
+      spaceName: "spaces/AAA",
+      messageName: "spaces/AAA/messages/msg-1",
+      expiresAtMs: Date.now() + 60_000,
+    });
+    const payload: ReplyPayload = {
+      text: `I need approval.\nReply with:\n/approve ${approvalId.slice(0, 8)} allow-once`,
+    };
+
+    expect(
+      googlechatPlugin.outbound?.normalizePayload?.({
+        cfg: {} as OpenClawConfig,
+        payload,
+      }),
+    ).toBeNull();
+  });
+
+  it("keeps unrelated or sendable structured approval-looking payloads visible", () => {
+    const approvalId = "12345678-1234-1234-1234-123456789012";
+    registerGoogleChatApprovalCardBinding({
+      token: "token-1",
+      accountId: "default",
+      approvalId,
+      approvalKind: "exec",
+      decision: "allow-once",
+      allowedDecisions: ["allow-once", "deny"],
+      spaceName: "spaces/AAA",
+      messageName: "spaces/AAA/messages/msg-1",
+      expiresAtMs: Date.now() + 60_000,
+    });
+    const unrelatedPayload: ReplyPayload = { text: "/approve deadbeef allow-once" };
+    const metadataPayload: ReplyPayload = {
+      text: `/approve ${approvalId.slice(0, 8)} allow-once`,
+      channelData: { execApproval: { approvalId } },
+    };
+    const structuredPayload: ReplyPayload = {
+      text: `/approve ${approvalId.slice(0, 8)} allow-once`,
+      presentation: { kind: "card" },
+    };
+
+    expect(
+      googlechatPlugin.outbound?.normalizePayload?.({
+        cfg: {} as OpenClawConfig,
+        payload: unrelatedPayload,
+      }),
+    ).toBe(unrelatedPayload);
+    expect(
+      googlechatPlugin.outbound?.normalizePayload?.({
+        cfg: {} as OpenClawConfig,
+        payload: metadataPayload,
+      }),
+    ).toBeNull();
+    expect(
+      googlechatPlugin.outbound?.normalizePayload?.({
+        cfg: {} as OpenClawConfig,
+        payload: structuredPayload,
+      }),
+    ).toBe(structuredPayload);
   });
 });

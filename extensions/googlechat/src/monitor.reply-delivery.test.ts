@@ -2,6 +2,10 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import {
+  clearGoogleChatApprovalCardBindingsForTest,
+  registerGoogleChatApprovalCardBinding,
+} from "./approval-card-actions.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -55,6 +59,7 @@ let deliverGoogleChatReply: typeof import("./monitor-reply-delivery.js").deliver
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  clearGoogleChatApprovalCardBindingsForTest();
   ({ deliverGoogleChatReply } = await import("./monitor-reply-delivery.js"));
 });
 
@@ -64,6 +69,48 @@ afterAll(() => {
 });
 
 describe("Google Chat reply delivery", () => {
+  it("drops duplicate manual approval follow-up text and clears the typing message", async () => {
+    const approvalId = "12345678-1234-1234-1234-123456789012";
+    const core = createCore();
+    const runtime = createRuntime();
+    const statusSink = vi.fn();
+    registerGoogleChatApprovalCardBinding({
+      token: "token-1",
+      accountId: "default",
+      approvalId,
+      approvalKind: "exec",
+      decision: "allow-once",
+      allowedDecisions: ["allow-once", "deny"],
+      spaceName: "spaces/AAA",
+      messageName: "spaces/AAA/messages/msg-1",
+      expiresAtMs: Date.now() + 60_000,
+    });
+    mocks.deleteGoogleChatMessage.mockResolvedValue(undefined);
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: `I need approval.\nReply with:\n/approve ${approvalId.slice(0, 8)} allow-once`,
+        channelData: { execApproval: { approvalId } },
+        replyToId: "spaces/AAA/threads/root",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      statusSink,
+      typingMessageName: "spaces/AAA/messages/typing",
+    });
+
+    expect(mocks.deleteGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      messageName: "spaces/AAA/messages/typing",
+    });
+    expect(mocks.updateGoogleChatMessage).not.toHaveBeenCalled();
+    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+    expect(statusSink).not.toHaveBeenCalled();
+  });
+
   it("resends the first text chunk as a new message when typing update fails", async () => {
     const core = createCore({ chunks: ["first chunk", "second chunk"] });
     const runtime = createRuntime();

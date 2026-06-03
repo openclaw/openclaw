@@ -5,6 +5,7 @@ import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { shouldSuppressGoogleChatManualExecApprovalFollowupText } from "./approval-card-actions.js";
 import { getGoogleChatAccessToken } from "./auth.js";
 import type { GoogleChatCardV2, GoogleChatReaction } from "./types.js";
 
@@ -143,6 +144,14 @@ export async function sendGoogleChatMessage(params: {
   attachments?: Array<{ attachmentUploadToken: string; contentName?: string }>;
 }): Promise<{ messageName?: string } | null> {
   const { account, space, text, thread, cardsV2, attachments } = params;
+  if (
+    text &&
+    (!cardsV2 || cardsV2.length === 0) &&
+    (!attachments || attachments.length === 0) &&
+    shouldSuppressGoogleChatManualExecApprovalFollowupText(text)
+  ) {
+    return null;
+  }
   const body: Record<string, unknown> = {};
   if (text) {
     body.text = text;

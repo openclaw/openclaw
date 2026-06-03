@@ -16,6 +16,7 @@ import {
   createGoogleChatApprovalToken,
   GOOGLECHAT_APPROVAL_ACTION,
   registerGoogleChatApprovalCardBinding,
+  registerGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
 import {
@@ -39,6 +40,9 @@ type GoogleChatApprovalActionToken = {
 };
 
 type GoogleChatPendingDelivery = {
+  approvalId: string;
+  approvalKind: "exec" | "plugin";
+  expiresAtMs: number;
   cardsV2: GoogleChatCardV2[];
   actionTokens: GoogleChatApprovalActionToken[];
   allowedDecisions: readonly ExecApprovalDecision[];
@@ -230,6 +234,9 @@ function buildPendingPayload(params: {
     },
   };
   return {
+    approvalId: view.approvalId,
+    approvalKind: view.approvalKind,
+    expiresAtMs: view.expiresAtMs,
     cardsV2: [card],
     actionTokens,
     allowedDecisions: view.actions.map((action) => action.decision),
@@ -331,6 +338,12 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
       if (!sent?.messageName) {
         return null;
       }
+      registerGoogleChatManualApprovalFollowupSuppression({
+        approvalId: pendingPayload.approvalId,
+        approvalKind: pendingPayload.approvalKind,
+        allowedDecisions: pendingPayload.allowedDecisions,
+        expiresAtMs: pendingPayload.expiresAtMs,
+      });
       return {
         accountId: account.accountId,
         spaceName,

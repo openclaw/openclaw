@@ -3,8 +3,12 @@ import type {
   ResolvedApprovalView,
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import {
+  clearGoogleChatApprovalCardBindingsForTest,
+  shouldSuppressGoogleChatManualExecApprovalFollowupText,
+} from "./approval-card-actions.js";
 
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 const updateGoogleChatMessage = vi.hoisted(() => vi.fn());
@@ -19,6 +23,11 @@ vi.mock("./api.js", async () => {
 });
 
 const { googleChatApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  clearGoogleChatApprovalCardBindingsForTest();
+});
 
 const account = {
   accountId: "default",
@@ -171,6 +180,11 @@ describe("googleChatApprovalNativeRuntime", () => {
       threadName: "threads/T1",
       actionTokens: expect.any(Array),
     });
+    expect(
+      shouldSuppressGoogleChatManualExecApprovalFollowupText(
+        "Please reply with:\n/approve approval-1 allow-once",
+      ),
+    ).toBe(true);
 
     const resolvedView: ResolvedApprovalView = {
       ...view,
