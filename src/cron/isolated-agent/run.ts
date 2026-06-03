@@ -301,6 +301,7 @@ function resolveCronSourceDeliveryPlan(params: {
   const target = {
     channel: params.resolvedDelivery.channel,
     to: params.resolvedDelivery.to,
+    aliases: params.resolvedDelivery.aliases,
     accountId: params.resolvedDelivery.accountId,
     threadId: params.resolvedDelivery.threadId,
   };
