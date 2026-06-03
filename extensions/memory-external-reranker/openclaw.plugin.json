@@ -16,15 +16,20 @@
     "memoryRerankers": ["memory-external-reranker"]
   },
   "uiHints": {
+    "provider": {
+      "label": "Provider",
+      "placeholder": "cohere",
+      "help": "Provider ID — must match a key in models.providers in your OpenClaw config"
+    },
     "model": {
       "label": "Model",
-      "placeholder": "cohere/rerank-english-v3.0",
-      "help": "Reranker model id, formatted as 'providerId/model'"
+      "placeholder": "rerank-english-v3.0",
+      "help": "Model ID sent in the rerank request body"
     },
     "modelFallbacks": {
       "label": "Model Fallbacks",
       "advanced": true,
-      "help": "Ordered list of alternate 'providerId/model' candidates tried on failure"
+      "help": "Ordered list of alternate model IDs (same provider) tried on failure"
     },
     "endpointPath": {
       "label": "Endpoint Path",
@@ -37,16 +42,17 @@
       "advanced": true,
       "help": "Maximum number of results returned by the rerank endpoint"
     },
-    "providers": {
-      "label": "Providers",
+    "additionalBodyParams": {
+      "label": "Additional Body Params",
       "advanced": true,
-      "help": "Map of providerId → { baseUrl, apiKey } credentials"
+      "help": "Extra key/value pairs merged into the rerank request body (e.g. max_chunks_per_doc, truncation)"
     }
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "provider": { "type": "string" },
       "model": { "type": "string" },
       "modelFallbacks": {
         "type": "array",
@@ -54,18 +60,7 @@
       },
       "endpointPath": { "type": "string" },
       "topN": { "type": "integer", "minimum": 1 },
-      "providers": {
-        "type": "object",
-        "additionalProperties": {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "baseUrl": { "type": "string" },
-            "apiKey": { "type": "string" }
-          },
-          "required": ["baseUrl"]
-        }
-      }
+      "additionalBodyParams": { "type": "object" }
     }
   }
 }

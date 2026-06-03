@@ -10,13 +10,16 @@ export default definePluginEntry({
   register(api) {
     const cfg = (api.pluginConfig ?? {}) as Partial<ExternalRerankerConfig>;
     registerMemoryReranker(
-      new ExternalMmrReranker({
-        model: cfg.model ?? "",
-        modelFallbacks: cfg.modelFallbacks,
-        endpointPath: cfg.endpointPath,
-        topN: cfg.topN,
-        providers: cfg.providers ?? {},
-      }),
+      new ExternalMmrReranker(
+        {
+          provider: cfg.provider ?? "",
+          model: cfg.model ?? "",
+          modelFallbacks: cfg.modelFallbacks,
+          endpointPath: cfg.endpointPath,
+          topN: cfg.topN,
+        },
+        api.config,
+      ),
     );
   },
 });

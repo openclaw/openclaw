@@ -1,32 +1,46 @@
+import type { GuardedFetchOptions } from "openclaw/plugin-sdk/fetch-runtime";
 import type { RerankDocument } from "openclaw/plugin-sdk/memory-core-host-engine-reranker";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { ExternalMmrReranker } from "./reranker.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const priorFetch = global.fetch;
+const { fetchGuardMock } = vi.hoisted(() => ({
+  fetchGuardMock: vi.fn(),
+}));
+
+import { ExternalMmrReranker, setExternalRerankerFetchGuardForTesting } from "./reranker.js";
 
 afterEach(() => {
-  global.fetch = priorFetch;
+  setExternalRerankerFetchGuardForTesting(null);
   vi.unstubAllEnvs();
 });
 
-function mockOkFetch(results: Array<{ index: number; relevance_score: number }>) {
-  const fn = vi.fn(async () => ({
-    ok: true,
-    status: 200,
-    json: async () => ({ results }),
-    text: async () => "",
-  }));
-  global.fetch = fn as unknown as typeof global.fetch;
-  return fn;
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+/** Build a minimal mock OpenClawConfig for tests. */
+function makeTestConfig(providers: Record<string, { baseUrl: string; apiKey?: unknown }>) {
+  return { models: { providers } } as never;
 }
 
-function fetchCallUrl(fn: ReturnType<typeof vi.fn>, index = 0): string {
-  return (fn.mock.calls[index] as [string, RequestInit])[0];
+function mockOkGuard(results: Array<{ index: number; relevance_score: number }>) {
+  fetchGuardMock.mockResolvedValue({
+    response: new Response(JSON.stringify({ results }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }),
+    release: vi.fn(async () => {}),
+  });
+  setExternalRerankerFetchGuardForTesting(fetchGuardMock);
+  return fetchGuardMock;
 }
 
-function fetchCallBody(fn: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
-  const init = (fn.mock.calls[index] as [string, RequestInit])[1];
-  return JSON.parse(init.body as string) as Record<string, unknown>;
+function guardCallOpts(fn: ReturnType<typeof vi.fn>, index = 0): GuardedFetchOptions {
+  return fn.mock.calls[index]?.[0] as GuardedFetchOptions;
+}
+
+function guardCallBody(fn: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
+  const opts = guardCallOpts(fn, index);
+  return JSON.parse(opts.init?.body as string) as Record<string, unknown>;
 }
 
 const sampleDocs: RerankDocument[] = [
@@ -38,22 +52,22 @@ const sampleDocs: RerankDocument[] = [
 describe("ExternalMmrReranker", () => {
   describe("single model", () => {
     it("sends one fetch to provider baseUrl + endpointPath with correct body", async () => {
-      const mock = mockOkFetch([
+      const mock = mockOkGuard([
         { index: 0, relevance_score: 0.9 },
         { index: 1, relevance_score: 0.5 },
         { index: 2, relevance_score: 0.3 },
       ]);
 
-      const reranker = new ExternalMmrReranker({
-        model: "llamacpp/qwen3",
-        providers: { llamacpp: { baseUrl: "http://localhost:8080" } },
-      });
+      const reranker = new ExternalMmrReranker(
+        { provider: "llamacpp", model: "qwen3" },
+        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+      );
 
       await reranker.rerank({ query: "neural networks", documents: sampleDocs, limit: 10 });
 
       expect(mock).toHaveBeenCalledTimes(1);
-      expect(fetchCallUrl(mock)).toBe("http://localhost:8080/v1/rerank");
-      expect(fetchCallBody(mock)).toMatchObject({
+      expect(guardCallOpts(mock).url).toBe("http://localhost:8080/v1/rerank");
+      expect(guardCallBody(mock)).toMatchObject({
         query: "neural networks",
         documents: [
           "machine learning neural networks",
@@ -73,36 +87,36 @@ describe("ExternalMmrReranker", () => {
         callCount++;
         if (callCount === 1) {
           return {
-            ok: false,
-            status: 503,
-            text: async () => "Service Unavailable",
-            json: async () => ({}),
+            response: new Response("Service Unavailable", { status: 503 }),
+            release: vi.fn(async () => {}),
           };
         }
         return {
-          ok: true,
-          status: 200,
-          json: async () => ({ results: [{ index: 0, relevance_score: 0.7 }] }),
-          text: async () => "",
+          response: new Response(
+            JSON.stringify({ results: [{ index: 0, relevance_score: 0.7 }] }),
+            {
+              status: 200,
+              headers: { "Content-Type": "application/json" },
+            },
+          ),
+          release: vi.fn(async () => {}),
         };
       });
-      global.fetch = mockFn as unknown as typeof global.fetch;
+      setExternalRerankerFetchGuardForTesting(mockFn);
 
-      const reranker = new ExternalMmrReranker({
-        model: "llamacpp/qwen3",
-        modelFallbacks: ["openai/text-reranker"],
-        providers: {
-          llamacpp: { baseUrl: "http://localhost:8080" },
-          openai: { baseUrl: "https://api.openai.com" },
-        },
-      });
+      const reranker = new ExternalMmrReranker(
+        { provider: "llamacpp", model: "qwen3", modelFallbacks: ["qwen3-large"] },
+        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+      );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
       await reranker.rerank({ query: "test", documents: docs, limit: 5 });
 
       expect(mockFn).toHaveBeenCalledTimes(2);
-      expect(fetchCallUrl(mockFn, 0)).toBe("http://localhost:8080/v1/rerank");
-      expect(fetchCallUrl(mockFn, 1)).toBe("https://api.openai.com/v1/rerank");
+      expect(guardCallOpts(mockFn, 0).url).toBe("http://localhost:8080/v1/rerank");
+      expect(guardCallOpts(mockFn, 1).url).toBe("http://localhost:8080/v1/rerank");
+      expect(guardCallBody(mockFn, 0)).toMatchObject({ model: "qwen3" });
+      expect(guardCallBody(mockFn, 1)).toMatchObject({ model: "qwen3-large" });
     });
   });
 
@@ -112,75 +126,67 @@ describe("ExternalMmrReranker", () => {
       const mockFn = vi.fn(async () => {
         callCount++;
         return {
-          ok: false,
-          status: 500,
-          text: async () => `provider ${callCount} error`,
-          json: async () => ({}),
+          response: new Response(`provider ${callCount} error`, { status: 500 }),
+          release: vi.fn(async () => {}),
         };
       });
-      global.fetch = mockFn as unknown as typeof global.fetch;
+      setExternalRerankerFetchGuardForTesting(mockFn);
 
-      const reranker = new ExternalMmrReranker({
-        model: "llamacpp/qwen3",
-        modelFallbacks: ["openai/gpt-rerank"],
-        providers: {
-          llamacpp: { baseUrl: "http://localhost:8080" },
-          openai: { baseUrl: "https://api.openai.com" },
-        },
-      });
+      const reranker = new ExternalMmrReranker(
+        { provider: "llamacpp", model: "qwen3", modelFallbacks: ["gpt-rerank"] },
+        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+      );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
       await expect(reranker.rerank({ query: "test", documents: docs, limit: 5 })).rejects.toThrow(
-        /llamacpp\/qwen3.*openai\/gpt-rerank/,
+        /qwen3.*gpt-rerank/,
       );
     });
   });
 
   describe("endpointPath override", () => {
     it("uses custom endpointPath instead of /v1/rerank", async () => {
-      const mock = mockOkFetch([{ index: 0, relevance_score: 0.8 }]);
+      const mock = mockOkGuard([{ index: 0, relevance_score: 0.8 }]);
 
-      const reranker = new ExternalMmrReranker({
-        model: "llamacpp/qwen3",
-        endpointPath: "/rerank",
-        providers: { llamacpp: { baseUrl: "http://localhost:8080" } },
-      });
+      const reranker = new ExternalMmrReranker(
+        { provider: "llamacpp", model: "qwen3", endpointPath: "/rerank" },
+        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+      );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
       await reranker.rerank({ query: "test", documents: docs, limit: 5 });
 
-      expect(fetchCallUrl(mock)).toBe("http://localhost:8080/rerank");
+      expect(guardCallOpts(mock).url).toBe("http://localhost:8080/rerank");
     });
   });
 
   describe("topN cap", () => {
     it("sends topN from config as top_n even when limit is larger", async () => {
-      const mock = mockOkFetch([{ index: 0, relevance_score: 0.8 }]);
+      const mock = mockOkGuard([{ index: 0, relevance_score: 0.8 }]);
 
-      const reranker = new ExternalMmrReranker({
-        model: "llamacpp/qwen3",
-        topN: 3,
-        providers: { llamacpp: { baseUrl: "http://localhost:8080" } },
-      });
+      const reranker = new ExternalMmrReranker(
+        { provider: "llamacpp", model: "qwen3", topN: 3 },
+        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+      );
 
       const docs: RerankDocument[] = [{ id: "doc-1", content: "hello", score: 0.5 }];
       await reranker.rerank({ query: "test", documents: docs, limit: 10 });
 
-      expect(fetchCallBody(mock)).toMatchObject({ top_n: 3 });
+      expect(guardCallBody(mock)).toMatchObject({ top_n: 3 });
     });
   });
 
   describe("score mapping and id preservation", () => {
     it("maps relevance_score to result score and preserves original document id by index", async () => {
-      mockOkFetch([
+      mockOkGuard([
         { index: 1, relevance_score: 0.95 },
         { index: 0, relevance_score: 0.72 },
       ]);
 
-      const reranker = new ExternalMmrReranker({
-        model: "llamacpp/qwen3",
-        providers: { llamacpp: { baseUrl: "http://localhost:8080" } },
-      });
+      const reranker = new ExternalMmrReranker(
+        { provider: "llamacpp", model: "qwen3" },
+        makeTestConfig({ llamacpp: { baseUrl: "http://localhost:8080" } }),
+      );
 
       const docs: RerankDocument[] = [
         { id: "doc-alpha", content: "first document", score: 0.5 },

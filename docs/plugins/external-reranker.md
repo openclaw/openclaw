@@ -46,23 +46,43 @@ The external reranker plugin is **not enabled by default**. To enable it, add th
 
 ---
 
+## How provider and credential configuration works
+
+The plugin uses two separate config fields:
+
+- **`provider`** — the provider ID, looked up in `models.providers` in your OpenClaw config. This is where the endpoint `baseUrl` and API key live.
+- **`model`** — the model ID sent in the rerank request body.
+
+```json5
+{
+  config: {
+    provider: "cohere", // key in models.providers
+    model: "rerank-english-v3.0", // sent as model in the request
+  },
+}
+```
+
+This keeps all endpoint URLs and credentials in one place (`models.providers`) rather than inside the plugin config. API keys use OpenClaw's standard secret facilities and are never stored as plain strings in `openclaw.json`. See [API key configuration](#api-key-configuration) below.
+
+---
+
 ## Configuration fields
 
-The external reranker accepts the following configuration options:
-
-<ParamField path="plugins.entries.memory-external-reranker.config.model" type="string">
-  The reranker model ID to use. This is provider-specific:
-
-- Cohere: `rerank-english-v3.0`, `rerank-multilingual-v3.0`, `rerank-english-v2.0`
-- Jina: `jina-reranker-v2-base-multilingual`
-- Voyage AI: `rerank-2`, `rerank-lite-2`
-- llama.cpp: `llama.cpp` (any model loaded with `--reranking`)
-
-The model ID is sent in the `model` field of the rerank request.
+<ParamField path="plugins.entries.memory-external-reranker.config.provider" type="string" required>
+  Provider ID — must match a key in `models.providers` in your OpenClaw config. All model candidates (primary and fallbacks) are served by this provider.
 </ParamField>
 
+<ParamField path="plugins.entries.memory-external-reranker.config.model" type="string" required>
+  The model ID to send in the rerank request body. Provider-specific examples:
+
+- Cohere: `rerank-english-v3.0`, `rerank-multilingual-v3.0`
+- Jina: `jina-reranker-v2-base-multilingual`
+- Voyage AI: `rerank-2`, `rerank-lite-2`
+- llama.cpp: the model name loaded with `--reranking`
+  </ParamField>
+
 <ParamField path="plugins.entries.memory-external-reranker.config.modelFallbacks" type="string[]">
-  Array of alternate model IDs to try if the primary model fails. The plugin will attempt each fallback in order until one succeeds or all options are exhausted.
+  Ordered list of alternate model IDs (on the same provider) to try if the primary model fails.
 
 Example: `["rerank-english-v2.0", "rerank-multilingual-v2.0"]`
 </ParamField>
@@ -76,45 +96,68 @@ Change this if your provider uses a different path (e.g., `/rerank`, `/api/v1/re
 <ParamField path="plugins.entries.memory-external-reranker.config.topN" type="number">
   Maximum number of results to return. Must be a positive integer (minimum: 1).
 
-If not specified, the provider's default is used. Set this to limit the response size and improve performance.
+If not specified, the value from `limit` in the active memory search request is used. Set this to cap results independently of the search limit.
 </ParamField>
 
-<ParamField path="plugins.entries.memory-external-reranker.config.providers" type="object">
-  Map of provider IDs to endpoint configuration. Each provider entry defines a Cohere-compatible endpoint:
+<ParamField path="plugins.entries.memory-external-reranker.config.additionalBodyParams" type="object">
+  Extra fields merged verbatim into the rerank request body. Use this for provider-specific parameters that are not covered by the named fields above. Unknown fields are ignored by providers that do not support them.
+
+Common examples:
+
+- `max_chunks_per_doc` (Cohere) — controls how long documents are split into chunks before scoring
+- `truncation` (Voyage AI) — `"NONE"` or `"END"`, controls what happens when inputs exceed the context window
 
 ```json5
 {
-  providerId: {
-    baseUrl: "https://api.provider.com",
-    apiKey: "your-api-key",
+  config: {
+    provider: "cohere",
+    model: "rerank-english-v3.0",
+    additionalBodyParams: {
+      max_chunks_per_doc: 10,
+    },
   },
 }
 ```
 
-- `baseUrl`: The base URL of the reranking endpoint (required)
-- `apiKey`: API key for authentication (optional, depends on provider)
-  </ParamField>
+</ParamField>
 
 ---
 
 ## Provider configuration
 
+Endpoint URLs go in `models.providers` in your `openclaw.json`. The key you choose is what you set as `provider` in the plugin config.
+
+<Note>
+  Custom providers must include a `models` array declaring every model they expose. OpenClaw will reject the config with a validation error if `models` is missing or empty.
+</Note>
+
 ### Cohere
 
 ```json5
 {
+  models: {
+    providers: {
+      cohere: {
+        baseUrl: "https://api.cohere.ai/v1",
+        apiKey: { source: "env", provider: "default", id: "COHERE_API_KEY" },
+        models: [
+          { id: "rerank-english-v3.0", name: "Cohere Rerank English v3.0", input: ["text"] },
+          {
+            id: "rerank-multilingual-v3.0",
+            name: "Cohere Rerank Multilingual v3.0",
+            input: ["text"],
+          },
+        ],
+      },
+    },
+  },
   plugins: {
     entries: {
       "memory-external-reranker": {
         enabled: true,
         config: {
+          provider: "cohere",
           model: "rerank-english-v3.0",
-          providers: {
-            cohere: {
-              baseUrl: "https://api.cohere.ai/v1",
-              apiKey: "${COHERE_API_KEY}",
-            },
-          },
         },
       },
     },
@@ -126,19 +169,28 @@ If not specified, the provider's default is used. Set this to limit the response
 
 ```json5
 {
+  models: {
+    providers: {
+      jina: {
+        baseUrl: "https://api.jina.ai",
+        apiKey: { source: "env", provider: "default", id: "JINA_API_KEY" },
+        models: [
+          {
+            id: "jina-reranker-v2-base-multilingual",
+            name: "Jina Reranker v2 Multilingual",
+            input: ["text"],
+          },
+        ],
+      },
+    },
+  },
   plugins: {
     entries: {
       "memory-external-reranker": {
         enabled: true,
         config: {
+          provider: "jina",
           model: "jina-reranker-v2-base-multilingual",
-          endpointPath: "/v1/rerank",
-          providers: {
-            jina: {
-              baseUrl: "https://api.jina.ai",
-              apiKey: "${JINA_API_KEY}",
-            },
-          },
         },
       },
     },
@@ -150,18 +202,25 @@ If not specified, the provider's default is used. Set this to limit the response
 
 ```json5
 {
+  models: {
+    providers: {
+      voyage: {
+        baseUrl: "https://api.voyageai.com/v1",
+        apiKey: { source: "env", provider: "default", id: "VOYAGE_API_KEY" },
+        models: [
+          { id: "rerank-2", name: "Voyage Rerank 2", input: ["text"] },
+          { id: "rerank-lite-2", name: "Voyage Rerank Lite 2", input: ["text"] },
+        ],
+      },
+    },
+  },
   plugins: {
     entries: {
       "memory-external-reranker": {
         enabled: true,
         config: {
+          provider: "voyage",
           model: "rerank-2",
-          providers: {
-            voyage: {
-              baseUrl: "https://api.voyageai.com/v1",
-              apiKey: "${VOYAGE_API_KEY}",
-            },
-          },
         },
       },
     },
@@ -173,18 +232,22 @@ If not specified, the provider's default is used. Set this to limit the response
 
 ```json5
 {
+  models: {
+    providers: {
+      "llamacpp-local": {
+        baseUrl: "http://localhost:8080",
+        // No API key needed for a local server
+        models: [{ id: "my-reranker-model", name: "My Reranker Model", input: ["text"] }],
+      },
+    },
+  },
   plugins: {
     entries: {
       "memory-external-reranker": {
         enabled: true,
         config: {
-          model: "llama.cpp",
-          providers: {
-            llama: {
-              baseUrl: "http://localhost:8080",
-              // No API key needed for local llama.cpp
-            },
-          },
+          provider: "llamacpp-local",
+          model: "my-reranker-model",
         },
       },
     },
@@ -196,18 +259,22 @@ If not specified, the provider's default is used. Set this to limit the response
 
 ```json5
 {
+  models: {
+    providers: {
+      "vllm-local": {
+        baseUrl: "http://localhost:8000",
+        // No API key needed for a local server
+        models: [{ id: "my-reranker-model", name: "My Reranker Model", input: ["text"] }],
+      },
+    },
+  },
   plugins: {
     entries: {
       "memory-external-reranker": {
         enabled: true,
         config: {
-          model: "vllm",
-          providers: {
-            vllm: {
-              baseUrl: "http://localhost:8000",
-              // No API key needed for local vLLM
-            },
-          },
+          provider: "vllm-local",
+          model: "my-reranker-model",
         },
       },
     },
@@ -246,20 +313,27 @@ After enabling the external reranker plugin, configure memory search to use it:
 
 ```json5
 {
+  models: {
+    providers: {
+      cohere: {
+        baseUrl: "https://api.cohere.ai/v1",
+        apiKey: { source: "env", provider: "default", id: "COHERE_API_KEY" },
+        models: [
+          { id: "rerank-english-v3.0", name: "Cohere Rerank English v3.0", input: ["text"] },
+          { id: "rerank-english-v2.0", name: "Cohere Rerank English v2.0", input: ["text"] },
+        ],
+      },
+    },
+  },
   plugins: {
     entries: {
       "memory-external-reranker": {
         enabled: true,
         config: {
+          provider: "cohere",
           model: "rerank-english-v3.0",
           modelFallbacks: ["rerank-english-v2.0"],
           topN: 20,
-          providers: {
-            cohere: {
-              baseUrl: "https://api.cohere.ai/v1",
-              apiKey: "${COHERE_API_KEY}",
-            },
-          },
         },
       },
     },
@@ -300,18 +374,26 @@ The external reranker plugin handles its own model fallbacks by trying alternate
 
 ```json5
 {
+  models: {
+    providers: {
+      cohere: {
+        baseUrl: "https://api.cohere.ai/v1",
+        apiKey: { source: "env", provider: "default", id: "COHERE_API_KEY" },
+        models: [
+          { id: "rerank-english-v3.0", name: "Cohere Rerank English v3.0", input: ["text"] },
+          { id: "rerank-english-v2.0", name: "Cohere Rerank English v2.0", input: ["text"] },
+          { id: "rerank-english-v1.0", name: "Cohere Rerank English v1.0", input: ["text"] },
+        ],
+      },
+    },
+  },
   plugins: {
     entries: {
       "memory-external-reranker": {
         config: {
+          provider: "cohere",
           model: "rerank-english-v3.0",
           modelFallbacks: ["rerank-english-v2.0", "rerank-english-v1.0"],
-          providers: {
-            cohere: {
-              baseUrl: "https://api.cohere.ai/v1",
-              apiKey: "${COHERE_API_KEY}",
-            },
-          },
         },
       },
     },
@@ -379,30 +461,56 @@ This ensures that memory search always returns results, even if reranking is una
 
 ---
 
-## Environment variables
+## API key configuration
 
-Use environment variable substitution (`${VAR_NAME}`) for sensitive values like API keys:
+API keys are stored in `models.providers.<id>.apiKey` using OpenClaw's `SecretInput` format. They are never written as plain strings in `openclaw.json`.
 
-```bash
-export COHERE_API_KEY="your-cohere-api-key"
-export JINA_API_KEY="your-jina-api-key"
-export VOYAGE_API_KEY="your-voyage-api-key"
-```
-
-Then reference them in `openclaw.json`:
+### Environment variable
 
 ```json5
 {
-  plugins: {
-    entries: {
-      "memory-external-reranker": {
-        config: {
-          providers: {
-            cohere: {
-              apiKey: "${COHERE_API_KEY}",
-            },
-          },
-        },
+  models: {
+    providers: {
+      cohere: {
+        baseUrl: "https://api.cohere.ai/v1",
+        apiKey: { source: "env", provider: "default", id: "COHERE_API_KEY" },
+      },
+    },
+  },
+}
+```
+
+Export the variable before starting OpenClaw:
+
+```bash
+export COHERE_API_KEY="your-cohere-api-key"
+```
+
+### File
+
+```json5
+{
+  models: {
+    providers: {
+      cohere: {
+        baseUrl: "https://api.cohere.ai/v1",
+        apiKey: { source: "file", provider: "default", id: "/run/secrets/cohere_api_key" },
+      },
+    },
+  },
+}
+```
+
+### No API key
+
+For local servers (llama.cpp, vLLM) that don't require authentication, omit `apiKey` entirely:
+
+```json5
+{
+  models: {
+    providers: {
+      "llamacpp-local": {
+        baseUrl: "http://localhost:8080",
       },
     },
   },
@@ -417,10 +525,11 @@ Then reference them in `openclaw.json`:
 
 If you see connection errors to the reranking endpoint:
 
-1. Verify the `baseUrl` is correct and accessible
-2. Check that the endpoint supports the `/v1/rerank` path
-3. Ensure any required API keys are set correctly
-4. Test the endpoint directly with `curl`:
+1. Verify the `baseUrl` in `models.providers.<providerId>` is correct and accessible
+2. Check that the endpoint supports the `/v1/rerank` path (or matches your `endpointPath`)
+3. Ensure the `providerId` prefix in your `model` string matches the key in `models.providers`
+4. Ensure any required API keys are configured in `models.providers.<providerId>.apiKey`
+5. Test the endpoint directly with `curl`:
 
    ```bash
    curl -X POST https://api.cohere.ai/v1/rerank \
@@ -437,7 +546,7 @@ If you see connection errors to the reranking endpoint:
 
 If the provider returns a "model not found" error:
 
-1. Verify the `model` field matches the provider's model ID
+1. Check that the part of `model` after the first `/` matches the provider's model ID
 2. Check the provider's documentation for available reranker models
 3. Try a different model from the `modelFallbacks` list
 
