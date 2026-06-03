@@ -1,13 +1,17 @@
+/** Channel-level policy for when an inbound message should get an ack reaction. */
 export type AckReactionScope = "all" | "direct" | "group-all" | "group-mentions" | "off" | "none";
 
+/** WhatsApp-specific group ack behavior because direct and group policies differ there. */
 export type WhatsAppAckReactionMode = "always" | "mentions" | "never";
 
+/** Sent ack reaction plus the cleanup hook needed after the agent replies. */
 export type AckReactionHandle = {
   ackReactionPromise: Promise<boolean>;
   ackReactionValue: string;
   remove: () => Promise<void>;
 };
 
+/** Inputs needed to decide whether an ack reaction is allowed for one inbound message. */
 export type AckReactionGateParams = {
   scope: AckReactionScope | undefined;
   isDirect: boolean;
@@ -19,6 +23,7 @@ export type AckReactionGateParams = {
   shouldBypassMention?: boolean;
 };
 
+/** Resolves the generic ack reaction gate for direct/group/mention scopes. */
 export function shouldAckReaction(params: AckReactionGateParams): boolean {
   const scope = params.scope ?? "group-mentions";
   if (scope === "off" || scope === "none") {
@@ -48,6 +53,7 @@ export function shouldAckReaction(params: AckReactionGateParams): boolean {
   return false;
 }
 
+/** Resolves WhatsApp ack policy while preserving mention-only group semantics. */
 export function shouldAckReactionForWhatsApp(params: {
   emoji: string;
   isDirect: boolean;
@@ -84,6 +90,7 @@ export function shouldAckReactionForWhatsApp(params: {
   });
 }
 
+/** Sends an ack reaction and returns a handle that records send success for later cleanup. */
 export function createAckReactionHandle(params: {
   ackReactionValue: string;
   send: () => Promise<void>;
@@ -115,6 +122,7 @@ export function createAckReactionHandle(params: {
   };
 }
 
+/** Removes a previously sent ack reaction after the agent reply has been delivered. */
 export function removeAckReactionAfterReply(params: {
   removeAfterReply: boolean;
   ackReactionPromise: Promise<boolean> | null;
@@ -131,6 +139,7 @@ export function removeAckReactionAfterReply(params: {
   if (!params.ackReactionValue) {
     return;
   }
+  // Only remove if the send actually succeeded; failed sends are already reported by the handle.
   void params.ackReactionPromise.then((didAck) => {
     if (!didAck) {
       return;
@@ -139,6 +148,7 @@ export function removeAckReactionAfterReply(params: {
   });
 }
 
+/** Convenience wrapper that removes an ack reaction handle after reply delivery. */
 export function removeAckReactionHandleAfterReply(params: {
   removeAfterReply: boolean;
   ackReaction: AckReactionHandle | null | undefined;
