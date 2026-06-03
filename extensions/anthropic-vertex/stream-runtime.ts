@@ -164,6 +164,7 @@ export function createAnthropicVertexStreamFn(
       ...(temperature !== undefined ? { temperature } : {}),
       ...(maxTokens !== undefined ? { maxTokens } : {}),
       signal: options?.signal,
+      stop: options?.stop,
       cacheRetention: options?.cacheRetention,
       sessionId: options?.sessionId,
       headers: options?.headers,
