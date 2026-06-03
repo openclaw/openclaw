@@ -1,5 +1,6 @@
 import net from "node:net";
 
+/** Opens and closes a temporary listener to verify that a port can be bound. */
 export async function tryListenOnPort(params: {
   port: number;
   host?: string;
@@ -17,6 +18,7 @@ export async function tryListenOnPort(params: {
       .createServer()
       .once("error", (err) => reject(err))
       .once("listening", () => {
+        // Binding succeeded; close immediately so the real server can claim the same port.
         tester.close(() => resolve());
       })
       .listen(listenOptions);
