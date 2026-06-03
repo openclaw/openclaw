@@ -102,11 +102,17 @@ export async function waitForGatewayReady({
   child.once("exit", (code, signal) => {
     childExit = { code, signal };
   });
+  const getChildExit = () =>
+    childExit ??
+    (child.exitCode != null || child.signalCode != null
+      ? { code: child.exitCode, signal: child.signalCode }
+      : null);
   while (Date.now() - startedAt < readyTimeoutMs) {
-    if (childExit) {
+    const observedExit = getChildExit();
+    if (observedExit) {
       const stderr = await fs.readFile(stderrPath, "utf8").catch(() => "");
       throw new Error(
-        `gateway exited before readiness code=${childExit.code ?? "null"} signal=${childExit.signal ?? "null"}\n${stderr.slice(-4000)}`,
+        `gateway exited before readiness code=${observedExit.code ?? "null"} signal=${observedExit.signal ?? "null"}\n${stderr.slice(-4000)}`,
       );
     }
     for (const endpoint of ["/readyz", "/healthz"]) {
@@ -142,6 +148,92 @@ async function stopGateway(child) {
   if (!exited && child.exitCode === null && child.signalCode === null) {
     child.kill("SIGKILL");
   }
+}
+
+async function closeFileHandles(handles) {
+  const results = await Promise.allSettled(
+    handles.filter(Boolean).map((handle) => handle.close()),
+  );
+  const failedClose = results.find((result) => result.status === "rejected");
+  if (failedClose) {
+    throw failedClose.reason;
+  }
+}
+
+export async function startGateway({
+  configPath,
+  env = process.env,
+  openImpl = fs.open,
+  port,
+  repoRoot,
+  spawnImpl = spawn,
+  stderrPath,
+  stdoutPath,
+  tempRoot,
+  token,
+}) {
+  const stdout = await openImpl(stdoutPath, "w");
+  let stderr;
+  try {
+    stderr = await openImpl(stderrPath, "w");
+  } catch (error) {
+    try {
+      await closeFileHandles([stdout]);
+    } catch {}
+    throw error;
+  }
+
+  let child;
+  try {
+    child = spawnImpl(
+      "pnpm",
+      [
+        "openclaw",
+        "gateway",
+        "run",
+        "--port",
+        String(port),
+        "--bind",
+        "loopback",
+        "--allow-unconfigured",
+      ],
+      {
+        cwd: repoRoot,
+        env: {
+          ...env,
+          HOME: path.join(tempRoot, "home"),
+          XDG_CONFIG_HOME: path.join(tempRoot, "xdg-config"),
+          XDG_DATA_HOME: path.join(tempRoot, "xdg-data"),
+          XDG_CACHE_HOME: path.join(tempRoot, "xdg-cache"),
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+          OPENCLAW_GATEWAY_TOKEN: token,
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_TEST_FAST: "1",
+        },
+        stdio: ["ignore", stdout.fd, stderr.fd],
+      },
+    );
+  } catch (error) {
+    try {
+      await closeFileHandles([stdout, stderr]);
+    } catch {}
+    throw error;
+  }
+
+  try {
+    await closeFileHandles([stdout, stderr]);
+  } catch (error) {
+    try {
+      await stopGateway(child);
+    } catch {}
+    throw error;
+  }
+
+  return child;
 }
 
 function quantile(sorted, q) {
@@ -329,40 +421,15 @@ async function main() {
         2,
       )}\n`,
     );
-    const stdout = await fs.open(stdoutPath, "w");
-    const stderr = await fs.open(stderrPath, "w");
-    gatewayChild = spawn(
-      "pnpm",
-      [
-        "openclaw",
-        "gateway",
-        "run",
-        "--port",
-        String(port),
-        "--bind",
-        "loopback",
-        "--allow-unconfigured",
-      ],
-      {
-        cwd: repoRoot,
-        env: {
-          ...process.env,
-          HOME: path.join(tempRoot, "home"),
-          XDG_CONFIG_HOME: path.join(tempRoot, "xdg-config"),
-          XDG_DATA_HOME: path.join(tempRoot, "xdg-data"),
-          XDG_CACHE_HOME: path.join(tempRoot, "xdg-cache"),
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
-          OPENCLAW_GATEWAY_TOKEN: token,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_TEST_FAST: "1",
-        },
-        stdio: ["ignore", stdout.fd, stderr.fd],
-      },
-    );
+    gatewayChild = await startGateway({
+      configPath,
+      port,
+      repoRoot,
+      stderrPath,
+      stdoutPath,
+      tempRoot,
+      token,
+    });
     await waitForGatewayReady({ child: gatewayChild, port, stderrPath });
 
     const requireFromOpenClaw = createRequire(path.join(repoRoot, "package.json"));

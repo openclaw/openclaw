@@ -1,8 +1,84 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
-import { waitForGatewayReady } from "../../scripts/measure-rpc-rtt.mjs";
+import { startGateway, waitForGatewayReady } from "../../scripts/measure-rpc-rtt.mjs";
 
 describe("scripts/measure-rpc-rtt.mjs", () => {
+  it("closes parent gateway log handles after spawning", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: null,
+      kill: vi.fn(),
+      signalCode: null,
+    });
+    const stdout = { close: vi.fn().mockResolvedValue(undefined), fd: 41 };
+    const stderr = { close: vi.fn().mockResolvedValue(undefined), fd: 42 };
+    const openImpl = vi.fn().mockResolvedValueOnce(stdout).mockResolvedValueOnce(stderr);
+    const spawnImpl = vi.fn().mockReturnValue(child);
+
+    await expect(
+      startGateway({
+        configPath: "/tmp/openclaw.json",
+        env: { PATH: "/bin" },
+        openImpl,
+        port: 23456,
+        repoRoot: "/repo",
+        spawnImpl,
+        stderrPath: "/tmp/stderr.log",
+        stdoutPath: "/tmp/stdout.log",
+        tempRoot: "/tmp/rpc-rtt",
+        token: "secret-token",
+      }),
+    ).resolves.toBe(child);
+
+    expect(openImpl).toHaveBeenNthCalledWith(1, "/tmp/stdout.log", "w");
+    expect(openImpl).toHaveBeenNthCalledWith(2, "/tmp/stderr.log", "w");
+    expect(spawnImpl).toHaveBeenCalledWith(
+      "pnpm",
+      [
+        "openclaw",
+        "gateway",
+        "run",
+        "--port",
+        "23456",
+        "--bind",
+        "loopback",
+        "--allow-unconfigured",
+      ],
+      expect.objectContaining({
+        cwd: "/repo",
+        env: expect.objectContaining({
+          HOME: "/tmp/rpc-rtt/home",
+          OPENCLAW_CONFIG_PATH: "/tmp/openclaw.json",
+          OPENCLAW_GATEWAY_TOKEN: "secret-token",
+          OPENCLAW_STATE_DIR: "/tmp/rpc-rtt/state",
+          PATH: "/bin",
+        }),
+        stdio: ["ignore", 41, 42],
+      }),
+    );
+    expect(stdout.close).toHaveBeenCalledTimes(1);
+    expect(stderr.close).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails readiness immediately when the gateway already exited", async () => {
+    const child = Object.assign(new EventEmitter(), {
+      exitCode: 1,
+      signalCode: null,
+    });
+    const fetchImpl = vi.fn();
+
+    await expect(
+      waitForGatewayReady({
+        child,
+        fetchImpl,
+        port: 12345,
+        readyTimeoutMs: 10_000,
+        sleepMs: 1,
+        stderrPath: "/no/such/stderr.log",
+      }),
+    ).rejects.toThrow("gateway exited before readiness code=1 signal=null");
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("bounds readiness probes and keeps polling after a stalled response", async () => {
     const child = new EventEmitter();
     const fetchImpl = vi

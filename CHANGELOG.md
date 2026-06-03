@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 - Release/CI/E2E: write package Telegram Docker artifacts to unique per-run directories by default so parallel live/RTT runs cannot overwrite evidence.
 - Release/CI/E2E: fail secret-provider proof runs when temporary state cleanup still fails after retries instead of hiding the cleanup error.
 - Release/CI/E2E: retry generated temp-state cleanup after removal failures and route plugin lifecycle measurement edits to their owner tests.
+- Release/CI/E2E: close parent gateway log handles after spawning RPC RTT probes so repeated measurements do not leak file descriptors.
 - Control UI: lazy-load the usage view so the initial app bundle stays below the chunk warning threshold.
 - Build: keep Baileys optional image backends external so source builds do not warn about missing `jimp` or `sharp`.
 - Build: render independent CLI startup metadata help snapshots concurrently to cut cold build-all metadata time.
