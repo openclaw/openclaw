@@ -45,7 +45,10 @@ import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging
 import { mergeEmbeddedAgentRunResultForModelFallbackExhaustion } from "../../agents/embedded-agent-runner/result-fallback-classifier.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
-import { isEmbeddedAttemptSessionTakeoverError, isFailoverError } from "../../agents/failover-error.js";
+import {
+  isEmbeddedAttemptSessionTakeoverError,
+  isFailoverError,
+} from "../../agents/failover-error.js";
 import type { FastModeAutoProgressState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
@@ -3142,7 +3145,11 @@ export async function runAgentTurnWithFallback(params: {
         settledLifecycleTerminal?.emit("end", runResult);
       }
       break;
-    } catch (err) {
+    } catch (caughtErr) {
+      // Mutable alias: a session-takeover error may unwrap to its preserved
+      // promptError below, after which the rest of this handler classifies the
+      // underlying failure. Reassigning the catch parameter trips no-ex-assign.
+      let err = caughtErr;
       if (err instanceof LiveSessionModelSwitchError) {
         liveModelSwitchRetries += 1;
         if (liveModelSwitchRetries > MAX_LIVE_SWITCH_RETRIES) {
