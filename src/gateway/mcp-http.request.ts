@@ -139,13 +139,43 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
+  if (params.req.method === "GET") {
+    const authHeader = getHeader(params.req, "authorization") ?? "";
+    const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
+    const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
+    if (!ownerTokenMatched && !nonOwnerTokenMatched) {
+      params.res.writeHead(401, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "unauthorized" }));
+      return null;
+    }
+    logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
+    params.res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+    params.req.on("close", () => {
+      if (!params.res.writableEnded) {
+        params.res.end();
+      }
+    });
+    return null;
+  }
+
+  if (params.req.method === "DELETE") {
+    logMcpLoopbackHttp("session-delete", { method: "DELETE", path: url.pathname });
+    params.res.writeHead(200);
+    params.res.end();
+    return null;
+  }
+
   if (params.req.method !== "POST") {
     logMcpLoopbackHttp("reject", {
       reason: "method_not_allowed",
       method: params.req.method ?? "",
       path: url.pathname,
     });
-    params.res.writeHead(405, { Allow: "POST" });
+    params.res.writeHead(405, { Allow: "POST, GET, DELETE" });
     params.res.end();
     return null;
   }
