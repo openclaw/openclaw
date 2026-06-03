@@ -57,6 +57,7 @@ function readCredentialStatus(record: Record<string, unknown>, key: CredentialSt
     : undefined;
 }
 
+/** Infers whether any known credential status makes an account configured. */
 export function resolveConfiguredFromCredentialStatuses(account: unknown): boolean | undefined {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -76,6 +77,7 @@ export function resolveConfiguredFromCredentialStatuses(account: unknown): boole
   return sawCredentialStatus ? false : undefined;
 }
 
+/** Infers configured state only from the credential status keys required by a channel. */
 export function resolveConfiguredFromRequiredCredentialStatuses(
   account: unknown,
   requiredKeys: CredentialStatusKey[],
@@ -98,6 +100,7 @@ export function resolveConfiguredFromRequiredCredentialStatuses(
   return sawCredentialStatus ? true : undefined;
 }
 
+/** Returns true when a credential exists but cannot be resolved at status-render time. */
 export function hasConfiguredUnavailableCredentialStatus(account: unknown): boolean {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -108,6 +111,7 @@ export function hasConfiguredUnavailableCredentialStatus(account: unknown): bool
   );
 }
 
+/** Returns true when account data contains a resolved credential value or available status. */
 export function hasResolvedCredentialValue(account: unknown): boolean {
   const record = isRecord(account) ? account : null;
   if (!record) {
@@ -120,6 +124,7 @@ export function hasResolvedCredentialValue(account: unknown): boolean {
   );
 }
 
+/** Projects credential source/status metadata while omitting raw credential values. */
 export function projectCredentialSnapshotFields(
   account: unknown,
 ): Pick<
@@ -166,6 +171,7 @@ export function projectCredentialSnapshotFields(
   };
 }
 
+/** Projects status-safe account fields for read-only channel/account snapshots. */
 export function projectSafeChannelAccountSnapshotFields(
   account: unknown,
 ): Partial<ChannelAccountSnapshot> {
