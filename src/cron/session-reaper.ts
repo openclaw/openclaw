@@ -1,9 +1,10 @@
 /**
- * Cron session reaper — prunes completed isolated cron run sessions
- * from the session store after a configurable retention period.
+ * Cron session reaper — prunes expired cron sessions from the session store
+ * after a configurable retention period.
  *
- * Pattern: sessions keyed as `...:cron:<jobId>:run:<uuid>` are ephemeral
- * run records. The base session (`...:cron:<jobId>`) is kept as-is.
+ * Pattern: isolated cron jobs persist stable base sessions keyed as
+ * `...:cron:<jobId>`, while explicit run records use
+ * `...:cron:<jobId>:run:<uuid>`. Both should respect retention.
  */
 
 import path from "node:path";
@@ -14,7 +15,7 @@ import {
   archiveSessionTranscripts,
   cleanupArchivedSessionTranscripts,
 } from "../gateway/session-utils.fs.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronBaseSessionKey, isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -84,7 +85,7 @@ export async function sweepCronRunSessions(params: {
     await updateSessionStore(storePath, (store) => {
       const cutoff = now - retentionMs;
       for (const key of Object.keys(store)) {
-        if (!isCronRunSessionKey(key)) {
+        if (!isCronRunSessionKey(key) && !isCronBaseSessionKey(key)) {
           continue;
         }
         const entry = store[key];
@@ -148,7 +149,7 @@ export async function sweepCronRunSessions(params: {
   if (pruned > 0) {
     params.log.info(
       { pruned, retentionMs },
-      `cron-reaper: pruned ${pruned} expired cron run session(s)`,
+      `cron-reaper: pruned ${pruned} expired cron session(s)`,
     );
   }
 

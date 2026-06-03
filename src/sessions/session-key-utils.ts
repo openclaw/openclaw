@@ -66,6 +66,14 @@ export function isCronRunSessionKey(sessionKey: string | undefined | null): bool
   return /^cron:[^:]+:run:[^:]+$/.test(parsed.rest);
 }
 
+export function isCronBaseSessionKey(sessionKey: string | undefined | null): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return false;
+  }
+  return /^cron:[^:]+$/.test(parsed.rest);
+}
+
 export function isCronSessionKey(sessionKey: string | undefined | null): boolean {
   const parsed = parseAgentSessionKey(sessionKey);
   if (!parsed) {
