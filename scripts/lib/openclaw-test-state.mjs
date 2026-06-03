@@ -345,6 +345,8 @@ export function renderShellSnippet(options = {}) {
   const homeTemplate = `openclaw-${label}-${scenario}-home.XXXXXX`;
   const lines = [
     'OPENCLAW_TEST_STATE_TMP_ROOT="${OPENCLAW_TEST_STATE_TMPDIR:-${TMPDIR:-/tmp}}"',
+    'OPENCLAW_TEST_STATE_TMP_ROOT="${OPENCLAW_TEST_STATE_TMP_ROOT%/}"',
+    '[ -n "$OPENCLAW_TEST_STATE_TMP_ROOT" ] || OPENCLAW_TEST_STATE_TMP_ROOT="/tmp"',
     "export OPENCLAW_TEST_STATE_TMP_ROOT",
     'mkdir -p "$OPENCLAW_TEST_STATE_TMP_ROOT"',
     `OPENCLAW_TEST_STATE_HOME="$(mktemp -d "$OPENCLAW_TEST_STATE_TMP_ROOT/${homeTemplate}")"`,
@@ -388,6 +390,8 @@ export function renderShellFunction() {
       label="$(printf "%s" "$label" | tr -cs "A-Za-z0-9_.-" "-" | sed -e "s/^-*//" -e "s/-*$//")"
       [ -n "$label" ] || label="state"
       local tmp_root="\${OPENCLAW_TEST_STATE_TMPDIR:-\${TMPDIR:-/tmp}}"
+      tmp_root="\${tmp_root%/}"
+      [ -n "$tmp_root" ] || tmp_root="/tmp"
       mkdir -p "$tmp_root"
       OPENCLAW_TEST_STATE_HOME="$(mktemp -d "$tmp_root/openclaw-$label-$scenario-home.XXXXXX")"
       ;;
@@ -400,7 +404,6 @@ export function renderShellFunction() {
   ${renderAuthProfileSecretKeyExport().join("\n  ")}
   export OPENCLAW_TEST_WORKSPACE_DIR="$OPENCLAW_TEST_STATE_HOME/workspace"
   unset OPENCLAW_AGENT_DIR
-  unset PI_CODING_AGENT_DIR
   unset OPENCLAW_SERVICE_REPAIR_POLICY
   mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"
   case "$scenario" in
@@ -651,9 +654,11 @@ async function main(argv = process.argv.slice(2)) {
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 
 if (isMain) {
-  main().catch((error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.stderr.write(usage());
-    process.exitCode = 1;
-  });
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.stderr.write(usage());
+      process.exitCode = 1;
+    },
+  );
 }

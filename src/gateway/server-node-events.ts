@@ -1,4 +1,8 @@
 import { randomUUID } from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -13,10 +17,6 @@ import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -66,8 +66,20 @@ export type NodeEventHandleResult = {
   reason?: string;
 };
 
+type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
+
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+function dispatchNodeAgentCommand(
+  ctx: NodeEventContext,
+  nodeId: string,
+  input: NodeAgentCommandInput,
+): void {
+  void agentCommandFromIngress(input, defaultRuntime, ctx.deps).catch((err: unknown) => {
+    ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+  });
 }
 
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
@@ -293,7 +305,7 @@ function queueSessionStoreTouch(params: {
     entry: params.entry,
     sessionId: params.sessionId,
     now: params.now,
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
 }
@@ -413,26 +425,20 @@ export const handleNodeEvent = async (
         clientRunId: `voice-${randomUUID()}`,
       });
 
-      void agentCommandFromIngress(
-        {
-          runId,
-          message: text,
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: "low",
-          deliver: false,
-          messageChannel: "node",
-          inputProvenance: {
-            kind: "external_user",
-            sourceChannel: "voice",
-            sourceTool: "gateway.voice.transcript",
-          },
-          allowModelOverride: false,
+      dispatchNodeAgentCommand(ctx, nodeId, {
+        runId,
+        message: text,
+        sessionId,
+        sessionKey: canonicalKey,
+        thinking: "low",
+        deliver: false,
+        messageChannel: "node",
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "voice",
+          sourceTool: "gateway.voice.transcript",
         },
-        defaultRuntime,
-        ctx.deps,
-      ).catch((err) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        allowModelOverride: false,
       });
       return undefined;
     }
@@ -459,7 +465,7 @@ export const handleNodeEvent = async (
         key?: string | null;
       };
 
-      let link: AgentDeepLink | null = null;
+      let link: AgentDeepLink | null;
       try {
         link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
       } catch {
@@ -574,7 +580,7 @@ export const handleNodeEvent = async (
           channel: deliveryChannel,
           to: deliveryTo,
           text: receiptText,
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {
@@ -583,27 +589,21 @@ export const handleNodeEvent = async (
         );
       }
 
-      void agentCommandFromIngress(
-        {
-          runId: sessionId,
-          message,
-          images,
-          imageOrder,
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: link?.thinking ?? undefined,
-          deliver,
-          to: deliveryTo,
-          channel: deliveryChannel,
-          timeout:
-            typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
-          messageChannel: "node",
-          allowModelOverride: false,
-        },
-        defaultRuntime,
-        ctx.deps,
-      ).catch((err) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+      dispatchNodeAgentCommand(ctx, nodeId, {
+        runId: sessionId,
+        message,
+        images,
+        imageOrder,
+        sessionId,
+        sessionKey: canonicalKey,
+        thinking: link?.thinking ?? undefined,
+        deliver,
+        to: deliveryTo,
+        channel: deliveryChannel,
+        timeout:
+          typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
+        messageChannel: "node",
+        allowModelOverride: false,
       });
       return undefined;
     }
@@ -733,9 +733,17 @@ export const handleNodeEvent = async (
           : undefined;
       const timedOut = obj.timedOut === true;
       const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
-      const reason = sanitizeInboundSystemTags(normalizeOptionalString(obj.reason) ?? "");
+      // Strip parens from the untrusted RAW reason before sanitizeInboundSystemTags
+      // runs: the `Exec denied (node=..., <reason>): cmd` wire format is parsed by
+      // matching the first balanced `(...)` and stray parens in user-supplied
+      // input would break the metadata/body boundary. We strip pre-sanitize so
+      // that legitimate `[System Message]` style tags can still be converted to
+      // `(System Message)` by sanitizeInboundSystemTags afterward.
+      const reason = sanitizeInboundSystemTags(
+        (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
+      );
 
-      let text = "";
+      let text;
       if (evt.event === "exec.started") {
         text = `Exec started (node=${nodeId}${runId ? ` id=${runId}` : ""})`;
         if (command) {
@@ -820,6 +828,7 @@ export const handleNodeEvent = async (
             topic,
             environment,
             distribution: obj.distribution,
+            relayOrigin: obj.relayOrigin,
             tokenDebugSuffix: obj.tokenDebugSuffix,
           });
         } else {

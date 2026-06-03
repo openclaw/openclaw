@@ -1,5 +1,6 @@
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import type { RawData } from "ws";
+import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
 import { createClickClackClient } from "./http-client.js";
 import { handleClickClackInbound } from "./inbound.js";
@@ -93,7 +94,20 @@ async function processEvent(params: {
   if (message.author?.kind === "bot") {
     return;
   }
-  await handleClickClackInbound({ account: params.account, config: params.config, message });
+  const access = await resolveClickClackInboundAccess({
+    account: params.account,
+    config: params.config,
+    message,
+  });
+  if (!access.shouldDispatch) {
+    return;
+  }
+  await handleClickClackInbound({
+    account: params.account,
+    config: params.config,
+    message,
+    access,
+  });
 }
 
 export async function startClickClackGatewayAccount(
@@ -176,7 +190,9 @@ export async function startClickClackGatewayAccount(
       socket.on("error", reject);
     });
     if (!ctx.abortSignal.aborted) {
-      await new Promise((resolve) => setTimeout(resolve, account.reconnectMs));
+      await new Promise((resolve) => {
+        setTimeout(resolve, account.reconnectMs);
+      });
     }
   }
   ctx.setStatus({ accountId: account.accountId, running: false });

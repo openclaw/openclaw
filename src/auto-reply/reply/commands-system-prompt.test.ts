@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentIds } from "../../agents/agent-scope.js";
+import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
 import { resolveBootstrapContextForRun } from "../../agents/bootstrap-files.js";
-import { createOpenClawCodingTools } from "../../agents/pi-tools.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
 import { buildAgentSystemPrompt } from "../../agents/system-prompt.js";
 import { resolveCommandsSystemPromptBundle } from "./commands-system-prompt.js";
@@ -22,12 +22,16 @@ vi.mock("../../agents/sandbox.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false, mode: "off" })),
 }));
 
-vi.mock("../../agents/skills.js", () => ({
-  buildWorkspaceSkillSnapshot: vi.fn(() => ({ prompt: "", skills: [], resolvedSkills: [] })),
+vi.mock("../../skills/runtime/remote.js", () => ({
+  getRemoteSkillEligibility: vi.fn(() => false),
 }));
 
-vi.mock("../../agents/skills/refresh.js", () => ({
-  getSkillsSnapshotVersion: vi.fn(() => "test-snapshot"),
+vi.mock("../../skills/runtime/session-snapshot.js", () => ({
+  resolveReusableWorkspaceSkillSnapshot: vi.fn(() => ({
+    snapshot: { prompt: "", skills: [], resolvedSkills: [] },
+    shouldRefresh: false,
+    snapshotVersion: "test-snapshot",
+  })),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -52,16 +56,12 @@ vi.mock("../../agents/system-prompt.js", () => ({
   buildAgentSystemPrompt: vi.fn(() => "system prompt"),
 }));
 
-vi.mock("../../agents/pi-tools.js", () => ({
+vi.mock("../../agents/agent-tools.js", () => ({
   createOpenClawCodingTools: createOpenClawCodingToolsMock,
 }));
 
 vi.mock("../../tts/tts.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
-}));
-
-vi.mock("../../infra/skills-remote.js", () => ({
-  getRemoteSkillEligibility: vi.fn(() => false),
 }));
 
 function makeParams(): HandleCommandsParams {

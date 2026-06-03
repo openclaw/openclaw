@@ -14,6 +14,12 @@ describe("listGatewayMethods", () => {
     expect(listGatewayMethods()).toContain("node.pluginSurface.refresh");
   });
 
+  it("advertises ClawHub skill trust methods", () => {
+    const methods = listGatewayMethods();
+    expect(methods).toContain("skills.securityVerdicts");
+    expect(methods).toContain("skills.skillCard");
+  });
+
   it("does not advertise hidden core handlers", () => {
     const methods = listGatewayMethods();
     expect(methods).not.toContain("config.openFile");
@@ -44,6 +50,7 @@ describe("listGatewayMethods", () => {
     const methods = listGatewayMethods();
     expect(methods).toContain("talk.client.create");
     expect(methods).toContain("talk.client.toolCall");
+    expect(methods).toContain("talk.client.steer");
     expect(methods).toContain("talk.session.create");
     expect(methods).toContain("talk.session.join");
     expect(methods).toContain("talk.session.appendAudio");
@@ -52,6 +59,7 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.cancelTurn");
     expect(methods).toContain("talk.session.cancelOutput");
     expect(methods).toContain("talk.session.submitToolResult");
+    expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
   });
 });

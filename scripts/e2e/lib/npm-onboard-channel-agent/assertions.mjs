@@ -1,5 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import {
+  assertAgentReplyContainsMarker,
+  assertOpenAiRequestLogUsed,
+} from "../agent-turn-output.mjs";
 import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const command = process.argv[2];
@@ -36,6 +40,49 @@ function configureMockModel() {
   const cfg = readJson(configPath);
   applyMockOpenAiModelConfig(cfg, { mockPort });
   fs.writeFileSync(configPath, `${JSON.stringify(cfg, null, 2)}\n`);
+}
+
+function assertMockModelConfig() {
+  const mockPort = Number(process.argv[3]);
+  const expectedModelRef = "openai/gpt-5.5";
+  const expectedBaseUrl = `http://127.0.0.1:${mockPort}/v1`;
+  const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
+  const cfg = readJson(configPath);
+  const provider = cfg.models?.providers?.openai;
+  const defaultModel = cfg.agents?.defaults?.model?.primary;
+  const defaultRuntime = cfg.agents?.defaults?.models?.[expectedModelRef]?.agentRuntime?.id;
+  const agent = Array.isArray(cfg.agents?.list)
+    ? (cfg.agents.list.find((entry) => entry?.id === "main") ?? cfg.agents.list[0])
+    : undefined;
+  const agentModel = agent?.model?.primary;
+  const agentRuntime = agent?.models?.[expectedModelRef]?.agentRuntime?.id;
+  if (provider?.baseUrl !== expectedBaseUrl) {
+    throw new Error(
+      `mock OpenAI baseUrl was not preserved; expected ${expectedBaseUrl}, got ${provider?.baseUrl}`,
+    );
+  }
+  if (provider?.api !== "openai-responses") {
+    throw new Error(`mock OpenAI api was not preserved; got ${provider?.api}`);
+  }
+  if (provider?.agentRuntime?.id !== "openclaw") {
+    throw new Error(`mock OpenAI runtime was not preserved; got ${provider?.agentRuntime?.id}`);
+  }
+  if (defaultModel !== expectedModelRef) {
+    throw new Error(
+      `mock default model was not preserved; expected ${expectedModelRef}, got ${defaultModel}`,
+    );
+  }
+  if (defaultRuntime !== "openclaw") {
+    throw new Error(`mock default runtime was not preserved; got ${defaultRuntime}`);
+  }
+  if (agent && agentModel !== expectedModelRef) {
+    throw new Error(
+      `mock agent model was not preserved; expected ${expectedModelRef}, got ${agentModel}`,
+    );
+  }
+  if (agent && agentRuntime !== "openclaw") {
+    throw new Error(`mock agent runtime was not preserved; got ${agentRuntime}`);
+  }
 }
 
 function assertChannelConfig() {
@@ -83,19 +130,14 @@ function assertStatusSurfaces() {
 function assertAgentTurn() {
   const marker = process.argv[3];
   const logPath = process.argv[4];
-  const output = fs.readFileSync("/tmp/openclaw-agent.combined", "utf8");
-  if (!output.includes(marker)) {
-    throw new Error(`agent JSON did not contain success marker. Output: ${output}`);
-  }
-  const requestLog = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
-  if (!/\/v1\/(responses|chat\/completions)/u.test(requestLog)) {
-    throw new Error(`mock OpenAI server was not used. Requests: ${requestLog}`);
-  }
+  assertAgentReplyContainsMarker(marker, "/tmp/openclaw-agent.combined");
+  assertOpenAiRequestLogUsed(logPath);
 }
 
 const commands = {
   "assert-onboard-state": assertOnboardState,
   "configure-mock-model": configureMockModel,
+  "assert-mock-model-config": assertMockModelConfig,
   "assert-channel-config": assertChannelConfig,
   "assert-status-surfaces": assertStatusSurfaces,
   "assert-agent-turn": assertAgentTurn,

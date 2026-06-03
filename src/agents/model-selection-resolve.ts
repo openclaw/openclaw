@@ -1,12 +1,10 @@
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveAgentConfig } from "./agent-scope.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import type { ModelManifestNormalizationContext, ModelRef } from "./model-selection-normalize.js";
 import {
   buildModelAliasIndex,
   getModelRefStatusWithFallbackModels,
-  normalizeModelSelection,
   resolveAllowedModelRefFromAliasIndex,
   type ModelRefStatus,
 } from "./model-selection-shared.js";
@@ -23,18 +21,6 @@ export type { ModelRefStatus } from "./model-selection-shared.js";
 
 function resolveDefaultFallbackModels(cfg: OpenClawConfig): string[] {
   return resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);
-}
-
-export function resolveSubagentConfiguredModelSelection(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-}): string | undefined {
-  const agentConfig = resolveAgentConfig(params.cfg, params.agentId);
-  return (
-    normalizeModelSelection(agentConfig?.subagents?.model) ??
-    normalizeModelSelection(params.cfg.agents?.defaults?.subagents?.model) ??
-    normalizeModelSelection(agentConfig?.model)
-  );
 }
 
 export function getModelRefStatus(

@@ -1,13 +1,13 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { resolveConfiguredTtsMode, shouldCleanTtsDirectiveText } from "../../tts/tts-config.js";
@@ -16,6 +16,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -192,13 +193,18 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   shouldRouteToOriginating: boolean;
   originatingChannel?: string;
   originatingTo?: string;
+  originatingAccountId?: string;
+  originatingThreadId?: string | number;
   onReplyStart?: () => Promise<void> | void;
   abortSignal?: AbortSignal;
+  runId?: string;
 }): AcpDispatchDeliveryCoordinator {
   const directChannel = normalizeOptionalLowercaseString(params.ctx.Provider ?? params.ctx.Surface);
   const routedChannel = normalizeOptionalLowercaseString(params.originatingChannel);
   const deliverySessionKey = normalizeOptionalString(params.sessionKey) ?? params.ctx.SessionKey;
-  const explicitAccountId = normalizeOptionalString(params.ctx.AccountId);
+  const explicitAccountId =
+    normalizeOptionalString(params.originatingAccountId) ??
+    normalizeOptionalString(params.ctx.AccountId);
   const resolvedAccountId =
     explicitAccountId ??
     normalizeOptionalString(
@@ -234,13 +240,25 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     },
     toolMessageByCallId: new Map(),
   };
+  let hasPendingDirectBlockReplyDelivery = false;
+  const waitForPendingDirectBlockReplyDelivery = async () => {
+    if (!hasPendingDirectBlockReplyDelivery) {
+      return;
+    }
+    // ACP direct block replies should not block the common visible-reply path.
+    // Defer the idle wait until a later tool delivery would otherwise overtake
+    // that block reply in user-visible ordering.
+    hasPendingDirectBlockReplyDelivery = false;
+    await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+  };
   const settleDirectVisibleText = async () => {
     if (state.settledDirectVisibleText || state.queuedDirectVisibleTextDeliveries === 0) {
       return;
     }
     state.settledDirectVisibleText = true;
+    hasPendingDirectBlockReplyDelivery = false;
     await params.dispatcher.waitForIdle();
-    const failedCounts = params.dispatcher.getFailedCounts();
+    const failedCounts = readDispatcherFailedCounts(params.dispatcher);
     const failedVisibleCount = failedCounts.block + failedCounts.final;
     if (failedVisibleCount > 0) {
       state.failedVisibleTextDelivery = true;
@@ -260,7 +278,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     if (params.suppressReplyLifecycle) {
       return;
     }
-    void Promise.resolve(params.onReplyStart?.()).catch((error) => {
+    void Promise.resolve(params.onReplyStart?.()).catch((error: unknown) => {
       logVerbose(
         `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -391,10 +409,12 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         routed: true,
       });
       const { routeReply } = await loadRouteReplyRuntime();
-      const threadId = resolveRoutedDeliveryThreadId({
-        ctx: params.ctx,
-        sessionKey: deliverySessionKey,
-      });
+      const threadId =
+        params.originatingThreadId ??
+        resolveRoutedDeliveryThreadId({
+          ctx: params.ctx,
+          sessionKey: deliverySessionKey,
+        });
       const result = await routeReply({
         payload: ttsPayload,
         channel: params.originatingChannel,
@@ -411,6 +431,8 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         threadId,
         cfg: params.cfg,
         mirror: false,
+        replyKind: kind,
+        runId: params.runId,
       });
       if (!result.ok) {
         if (tracksVisibleText) {
@@ -420,6 +442,15 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           `dispatch-acp: route-reply (acp/${kind}) failed: ${result.error ?? "unknown error"}`,
         );
         return false;
+      }
+      if (result.suppressed) {
+        if (kind === "final") {
+          state.deliveredFinalReply = true;
+        }
+        if (tracksVisibleText) {
+          state.deliveredVisibleText = true;
+        }
+        return true;
       }
       if (kind === "tool" && meta?.toolCallId && result.messageId) {
         state.toolMessageByCallId.set(meta.toolCallId, {
@@ -438,6 +469,10 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       }
       state.routedCounts[kind] += 1;
       return true;
+    }
+
+    if (kind === "tool") {
+      await waitForPendingDirectBlockReplyDelivery();
     }
 
     const tracksVisibleText = await shouldTreatDeliveredTextAsVisible({
@@ -462,7 +497,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       state.failedVisibleTextDelivery = true;
     }
     if (kind === "block" && delivered) {
-      await waitForReplyDispatcherIdle(params.dispatcher, params.abortSignal);
+      hasPendingDirectBlockReplyDelivery = true;
     }
     return delivered;
   };

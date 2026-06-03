@@ -1,5 +1,6 @@
 // Shared migration-provider helpers for plan/apply item bookkeeping.
 
+import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import type {
   MigrationDetection,
   MigrationItem,
@@ -90,10 +91,6 @@ function isSecretKey(key: string): boolean {
     return true;
   }
   return SECRET_KEY_MARKERS.some((marker) => normalized.includes(marker));
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 export type MigrationConfigPatchDetails = {

@@ -2,7 +2,10 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as readOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { hasErrnoCode } from "./errors.js";
 import type { NpmSpecResolution } from "./install-source-utils.js";
 import { readJson, readJsonIfExists, writeJson } from "./json-files.js";
 import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
@@ -54,14 +57,6 @@ type ManagedNpmRootLogger = {
 type ManagedNpmRootRunCommand = typeof runCommandWithTimeout;
 
 type ManagedNpmRootOpenClawHostState = "none" | "managed-active-host" | "linked-active-host";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
 
 function readDependencyRecord(value: unknown): Record<string, string> {
   if (!isRecord(value)) {
@@ -924,8 +919,8 @@ async function pathExists(filePath: string): Promise<boolean> {
   return await fs
     .lstat(filePath)
     .then(() => true)
-    .catch((err: NodeJS.ErrnoException) => {
-      if (err.code === "ENOENT") {
+    .catch((err: unknown) => {
+      if (hasErrnoCode(err, "ENOENT")) {
         return false;
       }
       throw err;
@@ -955,10 +950,10 @@ async function scrubManagedNpmRootOpenClawPeer(params: {
     if (isRecord(parsed.packages)) {
       const rootPackage = parsed.packages[""];
       if (isRecord(rootPackage) && isRecord(rootPackage.dependencies)) {
-        const dependencies = { ...rootPackage.dependencies };
-        if ("openclaw" in dependencies) {
-          delete dependencies.openclaw;
-          parsed.packages[""] = { ...rootPackage, dependencies };
+        const dependenciesValue = { ...rootPackage.dependencies };
+        if ("openclaw" in dependenciesValue) {
+          delete dependenciesValue.openclaw;
+          parsed.packages[""] = { ...rootPackage, dependencies: dependenciesValue };
           lockChanged = true;
         }
       }
@@ -968,9 +963,9 @@ async function scrubManagedNpmRootOpenClawPeer(params: {
       }
     }
     if (isRecord(parsed.dependencies) && "openclaw" in parsed.dependencies) {
-      const dependencies = { ...parsed.dependencies };
-      delete dependencies.openclaw;
-      parsed.dependencies = dependencies;
+      const dependenciesLocal = { ...parsed.dependencies };
+      delete dependenciesLocal.openclaw;
+      parsed.dependencies = dependenciesLocal;
       lockChanged = true;
     }
     if (lockChanged) {

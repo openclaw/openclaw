@@ -1,4 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeStringEntries,
+  uniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 
 export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
@@ -46,14 +50,9 @@ function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[]
   if (!Array.isArray(raw)) {
     return undefined;
   }
-  const supported = [
-    ...new Set(
-      raw
-        .filter((value): value is string => typeof value === "string")
-        .map((value) => value.trim())
-        .filter(Boolean),
-    ),
-  ];
+  const supported = uniqueStrings(
+    normalizeStringEntries(raw.filter((value) => typeof value === "string")),
+  );
   return supported.length > 0 ? supported : undefined;
 }
 
@@ -69,9 +68,6 @@ export function resolveOpenAISupportedReasoningEfforts(
     return compatEfforts;
   }
 
-  const provider = normalizeLowercaseStringOrEmpty(
-    typeof model.provider === "string" ? model.provider : "",
-  );
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
   if (id === "gpt-5.1-codex-mini") {
     return GPT_51_CODEX_MINI_REASONING_EFFORTS;
@@ -79,7 +75,7 @@ export function resolveOpenAISupportedReasoningEfforts(
   if (id === "gpt-5.1-codex-max") {
     return GPT_51_CODEX_MAX_REASONING_EFFORTS;
   }
-  if (/^gpt-5(?:\.\d+)?-codex(?:-|$)/u.test(id) || provider === "openai-codex") {
+  if (/^gpt-5(?:\.\d+)?-codex(?:-|$)/u.test(id)) {
     return GPT_CODEX_REASONING_EFFORTS;
   }
   if (id === "gpt-5-pro") {

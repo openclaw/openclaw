@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { CONTEXT_WINDOW_HARD_MIN_TOKENS } from "../agents/context-window-guard.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildModelAliasIndex, modelKey } from "../agents/model-selection.js";
@@ -5,18 +10,13 @@ import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { applyPrimaryModel } from "../plugins/provider-model-primary.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import { normalizeAlias } from "./models/alias-name.js";
 
 /**
  * Wizard default for non-Azure custom APIs when context length is unknown.
  * Mirrors the generic persisted custom-model catalog fallback and leaves enough
- * room above the default compaction reserve floor in `pi-settings.ts`.
+ * room above the default compaction reserve floor in `agent-settings.ts`.
  */
 export const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_CONTEXT_WINDOW = CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
@@ -167,7 +167,7 @@ function hasSameHost(a: string, b: string): boolean {
   }
 }
 
-export type CustomApiCompatibility = "openai" | "anthropic";
+export type CustomApiCompatibility = "openai" | "openai-responses" | "anthropic";
 export type CustomApiResult = {
   config: OpenClawConfig;
   providerId?: string;
@@ -349,7 +349,7 @@ export function normalizeOptionalProviderApiKey(value: unknown): SecretInput | u
 function resolveVerificationEndpoint(params: {
   baseUrl: string;
   modelId: string;
-  endpointPath: "chat/completions" | "messages";
+  endpointPath: "chat/completions" | "responses" | "messages";
 }) {
   const resolvedUrl = isAzureUrl(params.baseUrl)
     ? transformAzureUrl(params.baseUrl, params.modelId)
@@ -368,15 +368,19 @@ export function buildOpenAiVerificationProbeRequest(params: {
   baseUrl: string;
   apiKey: string;
   modelId: string;
+  responsesApi?: boolean;
 }): VerificationRequest {
   const isBaseUrlAzureUrl = isAzureUrl(params.baseUrl);
   const headers = isBaseUrlAzureUrl
     ? buildAzureOpenAiHeaders(params.apiKey)
     : buildOpenAiHeaders(params.apiKey);
-  if (isAzureOpenAiUrl(params.baseUrl)) {
+  if (isAzureOpenAiUrl(params.baseUrl) || params.responsesApi === true) {
     const endpoint = new URL(
       "responses",
-      transformAzureConfigUrl(params.baseUrl).replace(/\/?$/, "/"),
+      (isBaseUrlAzureUrl ? transformAzureConfigUrl(params.baseUrl) : params.baseUrl).replace(
+        /\/?$/,
+        "/",
+      ),
     ).href;
     return {
       endpoint,
@@ -437,8 +441,11 @@ export function buildAnthropicVerificationProbeRequest(params: {
 
 function resolveProviderApi(
   compatibility: CustomApiCompatibility,
-): "openai-completions" | "anthropic-messages" {
-  return compatibility === "anthropic" ? "anthropic-messages" : "openai-completions";
+): "openai-completions" | "openai-responses" | "anthropic-messages" {
+  if (compatibility === "anthropic") {
+    return "anthropic-messages";
+  }
+  return compatibility === "openai-responses" ? "openai-responses" : "openai-completions";
 }
 
 function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
@@ -446,10 +453,14 @@ function parseCustomApiCompatibility(raw?: string): CustomApiCompatibility {
   if (!compatibilityRaw) {
     return "openai";
   }
-  if (compatibilityRaw !== "openai" && compatibilityRaw !== "anthropic") {
+  if (
+    compatibilityRaw !== "openai" &&
+    compatibilityRaw !== "openai-responses" &&
+    compatibilityRaw !== "anthropic"
+  ) {
     throw new CustomApiError(
       "invalid_compatibility",
-      'Invalid --custom-compatibility (use "openai" or "anthropic").',
+      'Invalid --custom-compatibility (use "openai", "openai-responses", or "anthropic").',
     );
   }
   return compatibilityRaw;
@@ -525,10 +536,14 @@ export function applyCustomApiConfig(params: ApplyCustomApiConfigParams): Custom
     throw new CustomApiError("invalid_base_url", "Custom provider base URL must be a valid URL.");
   }
 
-  if (params.compatibility !== "openai" && params.compatibility !== "anthropic") {
+  if (
+    params.compatibility !== "openai" &&
+    params.compatibility !== "openai-responses" &&
+    params.compatibility !== "anthropic"
+  ) {
     throw new CustomApiError(
       "invalid_compatibility",
-      'Custom provider compatibility must be "openai" or "anthropic".',
+      'Custom provider compatibility must be "openai", "openai-responses", or "anthropic".',
     );
   }
 
