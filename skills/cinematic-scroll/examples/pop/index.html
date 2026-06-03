@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>BLOOM — your day, but make it fun · cinematic-scroll example</title>
+<meta name="description" content="A contemporary-pop, Gen-Z cinematic-scroll page — candy-pink + electric-lime gradients, bold rounded sans, fast parallax and a floating app-UI layer. An example for the cinematic-scroll Agent Skill." />
+
+<!-- Open Graph -->
+<meta property="og:title" content="BLOOM — your day, but make it fun" />
+<meta property="og:description" content="Gen-Z pop cinematic scroll — candy pink + electric lime, glassy floating UI, fast parallax. Built with the cinematic-scroll Agent Skill." />
+<meta property="og:type" content="website" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<!-- Plus Jakarta Sans (bold rounded display + UI), Space Grotesk (mono-ish labels) -->
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@500;600;700;800&family=Space+Grotesk:wght@400;500;700&display=swap" rel="stylesheet" />
+
+<!-- GSAP + ScrollTrigger (now 100% free) — powers the dedicated "THE DROP" showcase:
+     a JUMP-SCARE micro (back.out overshoot, taste-guardrails §2) + a VELOCITY-REACTIVE
+     skew (scroll-patterns #3). Deferred + feature-detected: if the CDN fails, the
+     hand-rolled rAF pop engine below still runs and the beat stays at a complete static state. -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
+
+<style>
+  /* ───────────────────────────────────────────────────────────────
+     cinematic-scroll · Contemporary-pop / Gen-Z example  ("BLOOM")
+     Single-file, no build, GitHub-Pages friendly.
+     Visual system: Warm Scrapbook (warmth + Gen-Z heart) crossed with
+     Storybook Geometry snap pacing — fast, playful, but art-directed.
+     Motion grammar = the skill's vanilla engine:
+       sticky pin + rAF-throttled scroll + depth-multiplied parallax
+       (wide gaps 0.15→1.40) + IntersectionObserver scroll-spy + bg morph.
+     Compositor-only: per frame we mutate ONLY transform + opacity.
+     Reduced-motion + touch + mobile (<=680px) degrade to a clean static
+     mid-state (full opacity, words settled, no scrolljack).
+     ─────────────────────────────────────────────────────────────── */
+
+  :root{
+    --pink:#FF2E93; --pink-2:#FF74C0; --lime:#C6FF3D; --lime-2:#9BE000;
+    --violet:#7C3AED; --cyan:#22E0E0;
+    --ink:#160B1F; --paper:#FFF4FB;
+    --bg:#FF2E93; --fg:#160B1F; --fg-muted:#5A2F4E; --panel:#FFFFFF;
+    --accent:var(--lime-2);
+
+    --disp:"Plus Jakarta Sans", system-ui, sans-serif;
+    --mono:"Space Grotesk", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  }
+  *{ margin:0; padding:0; box-sizing:border-box; }
+  html{ scroll-behavior:smooth; }
+  body{
+    background:var(--bg); color:var(--fg);
+    font-family:var(--disp); font-weight:600;
+    -webkit-font-smoothing:antialiased; overflow-x:hidden;
+    transition:background .55s cubic-bezier(.22,1,.36,1);
+  }
+  ::selection{ background:var(--lime); color:var(--ink); }
+  a{ color:inherit; }
+
+  /* gradient wash + grain — fixed, cheap, never animated in scroll loop */
+  .wash{ position:fixed; inset:0; z-index:-2; opacity:.9;
+    background:
+      radial-gradient(120% 90% at 12% 4%, rgba(198,255,61,.55), rgba(198,255,61,0) 46%),
+      radial-gradient(120% 90% at 92% 98%, rgba(124,58,237,.40), rgba(124,58,237,0) 52%);
+    transition:background .55s cubic-bezier(.22,1,.36,1); }
+  .grain{ position:fixed; inset:0; z-index:-1; pointer-events:none; opacity:.06; mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+  /* ── fixed masthead ───────────────────────────────────────── */
+  .masthead{
+    position:fixed; inset:0 0 auto 0; z-index:50;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:clamp(16px,2.4vw,24px) clamp(18px,4vw,52px);
+    padding-top:max(clamp(16px,2.4vw,24px), env(safe-area-inset-top));
+  }
+  .masthead .mark{ display:flex; align-items:center; gap:9px; pointer-events:auto; }
+  .masthead .mark .glyph{
+    width:26px; height:26px; border-radius:9px; flex:none;
+    background:conic-gradient(from 200deg, var(--lime), var(--cyan), var(--pink), var(--lime));
+    box-shadow:0 4px 14px rgba(22,11,31,.25);
+  }
+  .masthead .mark b{ font-family:var(--disp); font-weight:800; font-size:18px; letter-spacing:-.02em; color:var(--ink); }
+  .masthead nav{ display:flex; gap:clamp(8px,1.6vw,18px); align-items:center; }
+  .masthead nav a{
+    font-family:var(--mono); font-size:11px; font-weight:500; letter-spacing:.08em;
+    text-transform:lowercase; text-decoration:none; color:var(--ink); opacity:.78;
+    padding:7px 12px; border-radius:999px; transition:opacity .25s, background .25s;
+  }
+  .masthead nav a:hover{ opacity:1; }
+  .masthead nav a.pill{ background:var(--ink); color:var(--lime); opacity:1; font-weight:700; }
+  @media (max-width:680px){ .masthead nav a:not(.pill){ display:none; } }
+
+  /* ── progress rail ─────────────────────────────────────────── */
+  .rail{
+    position:fixed; right:clamp(12px,2vw,26px); top:50%; transform:translateY(-50%);
+    z-index:40; display:flex; flex-direction:column; gap:14px;
+    padding-right:env(safe-area-inset-right);
+  }
+  .rail .r{ display:flex; align-items:center; gap:10px; justify-content:flex-end;
+    background:none; border:none; cursor:pointer; padding:0;
+    font-family:var(--mono); font-size:11px; font-weight:700; color:var(--ink); opacity:.45;
+    transition:opacity .3s; }
+  .rail .r .dot{ width:9px; height:9px; border-radius:50%; background:currentColor; transition:transform .3s, background .3s; }
+  .rail .r.on{ opacity:1; }
+  .rail .r.on .dot{ transform:scale(1.5); background:var(--ink); box-shadow:0 0 0 4px rgba(22,11,31,.14); }
+  @media (max-width:680px){ .rail{ display:none; } }
+
+  /* ── chapter section ──────────────────────────────────────── */
+  section{ position:relative; min-height:200vh; }   /* short pins → snappy pace */
+  .stage{
+    position:sticky; top:0; height:100vh; overflow:hidden;
+    display:grid; grid-template-columns:1fr; align-content:center;
+    padding:0 clamp(20px,6vw,96px);
+  }
+
+  /* giant rounded type — the hero */
+  .copytext{ position:relative; z-index:6; max-width:min(94vw,1180px); will-change:transform,opacity; }
+  .eyebrow{ display:inline-flex; align-items:center; gap:8px;
+    font-family:var(--mono); font-size:clamp(10px,1vw,12px); font-weight:700; letter-spacing:.12em;
+    text-transform:uppercase; color:var(--ink);
+    background:var(--lime); padding:7px 13px; border-radius:999px; margin-bottom:clamp(16px,2vw,26px);
+    box-shadow:0 6px 18px rgba(155,224,0,.4); }
+  .eyebrow .spark{ width:13px; height:13px; flex:none; }
+  h2.giant{
+    font-family:var(--disp); font-weight:800; line-height:.92; letter-spacing:-.035em;
+    font-size:clamp(2.7rem,10.5vw,9.4rem); color:var(--ink);
+  }
+  h2.giant .w{ display:inline-block; margin-right:.18em; will-change:transform,opacity; }
+  h2.giant .w.accent{
+    background:linear-gradient(100deg, var(--violet), var(--pink) 60%, var(--lime-2));
+    -webkit-background-clip:text; background-clip:text; color:transparent;
+  }
+  /* body copy sits on a solid panel → legible over any gradient */
+  .lede{ margin-top:clamp(20px,2.6vw,32px); max-width:50ch;
+    display:inline-block; padding:16px 20px; border-radius:18px;
+    background:var(--panel); color:#3A2030;
+    font-family:var(--disp); font-weight:600; font-size:clamp(1rem,1.45vw,1.22rem); line-height:1.5;
+    box-shadow:0 14px 40px -18px rgba(22,11,31,.5); }
+  .ctarow{ margin-top:clamp(20px,2.4vw,30px); display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  .btn{ font-family:var(--disp); font-weight:700; font-size:14px; text-decoration:none;
+    padding:13px 24px; border-radius:999px; transition:transform .25s; will-change:transform; }
+  .btn.solid{ background:var(--ink); color:var(--lime); box-shadow:0 12px 30px -10px rgba(22,11,31,.6); }
+  .btn.ghost{ background:rgba(255,255,255,.7); color:var(--ink); }
+  .btn:hover{ transform:translateY(-2px) scale(1.03); }
+  .ctameta{ font-family:var(--mono); font-size:11px; font-weight:500; color:var(--ink); opacity:.7; }
+
+  /* ghost watermark word — deep background, fast horizontal sweep */
+  .ghost{
+    position:absolute; z-index:1; font-family:var(--disp); font-weight:800; text-transform:lowercase;
+    font-size:clamp(8rem,30vw,26rem); line-height:.8; letter-spacing:-.05em;
+    color:#fff; opacity:.14; white-space:nowrap; pointer-events:none;
+    top:50%; left:50%; transform:translate(-50%,-50%); will-change:transform; }
+
+  /* ── the floating app-UI layer (high depth, drifts up fast) ── */
+  .appwrap{ position:absolute; z-index:7; right:clamp(20px,6vw,96px); top:50%;
+    width:clamp(220px,26vw,330px); aspect-ratio:9/19; transform:translateY(-50%);
+    will-change:transform,opacity; }
+  .phone{ position:relative; width:100%; height:100%; border-radius:38px; overflow:hidden;
+    background:#0E0716;
+    border:5px solid #160B1F;
+    box-shadow:0 40px 90px -28px rgba(22,11,31,.7), 0 0 0 1px rgba(255,255,255,.12) inset; }
+  .phone .notch{ position:absolute; top:9px; left:50%; transform:translateX(-50%); z-index:3;
+    width:34%; height:18px; border-radius:999px; background:#160B1F; }
+  /* the screenshot — real image if present, else CSS-only UI mock */
+  .shot{ position:absolute; inset:0; background-size:cover; background-position:center top; }
+  .shot.placeholder{
+    background:
+      radial-gradient(120% 60% at 20% 0%, rgba(198,255,61,.9), rgba(198,255,61,0) 55%),
+      linear-gradient(170deg, var(--pink) 0%, var(--violet) 100%);
+  }
+  /* CSS-only app chrome that reads as a real screen even with NO image */
+  .uimock{ position:absolute; inset:0; padding:34px 14px 16px; display:flex; flex-direction:column; gap:11px; }
+  .uimock .status{ display:flex; justify-content:space-between; align-items:center;
+    font-family:var(--mono); font-size:10px; font-weight:700; color:#fff; opacity:.85; padding:0 4px; }
+  .uimock .hero{ border-radius:18px; padding:13px 14px; background:rgba(255,255,255,.16);
+    backdrop-filter:blur(8px); border:1px solid rgba(255,255,255,.28); color:#fff; }
+  .uimock .hero .big{ font-family:var(--disp); font-weight:800; font-size:21px; line-height:1; letter-spacing:-.02em; }
+  .uimock .hero .sub{ font-family:var(--mono); font-size:9.5px; margin-top:6px; opacity:.85; }
+  .uimock .ring{ width:46px; height:46px; border-radius:50%; flex:none;
+    background:conic-gradient(var(--lime) 0% 72%, rgba(255,255,255,.22) 72% 100%); position:relative; }
+  .uimock .ring::after{ content:""; position:absolute; inset:6px; border-radius:50%; background:rgba(20,7,30,.55); }
+  .uimock .row{ display:flex; align-items:center; gap:11px;
+    border-radius:15px; padding:11px 12px; background:rgba(255,255,255,.14);
+    border:1px solid rgba(255,255,255,.22); }
+  .uimock .row .ic{ width:30px; height:30px; border-radius:10px; flex:none; }
+  .uimock .row .tx{ flex:1; }
+  .uimock .row .tx b{ display:block; font-family:var(--disp); font-weight:700; font-size:12px; color:#fff; }
+  .uimock .row .tx span{ display:block; font-family:var(--mono); font-size:9px; color:#fff; opacity:.7; margin-top:3px; }
+  .uimock .row .chk{ width:18px; height:18px; border-radius:6px; flex:none; }
+  .uimock .tabbar{ margin-top:auto; display:flex; justify-content:space-around;
+    border-radius:18px; padding:11px 8px; background:rgba(255,255,255,.18);
+    border:1px solid rgba(255,255,255,.26); }
+  .uimock .tabbar i{ width:18px; height:18px; border-radius:6px; background:rgba(255,255,255,.5); }
+  .uimock .tabbar i.act{ background:var(--lime); }
+
+  .figcap{ position:absolute; left:0; bottom:-26px; width:100%; display:flex; justify-content:space-between;
+    font-family:var(--mono); font-size:10px; font-weight:500; letter-spacing:.08em; color:var(--ink); opacity:.7; }
+
+  /* playful sticker accents (CSS shapes) — mid-fast depth */
+  .sticker{ position:absolute; z-index:5; will-change:transform; pointer-events:none;
+    font-family:var(--disp); font-weight:800; }
+  .sticker.tag{ display:inline-flex; align-items:center; gap:6px;
+    background:#fff; color:var(--ink); font-size:13px; padding:9px 14px; border-radius:999px;
+    box-shadow:0 12px 30px -10px rgba(22,11,31,.5); transform:rotate(-7deg); }
+  .sticker.tag .em{ width:15px; height:15px; }
+  .blob{ position:absolute; z-index:2; border-radius:46% 54% 60% 40%/ 52% 44% 56% 48%;
+    will-change:transform; pointer-events:none; opacity:.9; mix-blend-mode:overlay; }
+
+  /* floating glassy stat card (foreground, fastest depth) */
+  .glasscard{ position:absolute; z-index:8; left:clamp(20px,6vw,96px); bottom:clamp(56px,11vh,118px);
+    width:min(280px,74vw); padding:15px 17px; border-radius:20px;
+    background:rgba(255,255,255,.62); backdrop-filter:blur(14px);
+    border:1px solid rgba(255,255,255,.7); box-shadow:0 20px 50px -20px rgba(22,11,31,.5);
+    will-change:transform,opacity; }
+  .glasscard .t{ display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:11px; font-weight:700;
+    letter-spacing:.04em; color:var(--violet); margin-bottom:8px; }
+  .glasscard .pulse{ width:8px; height:8px; border-radius:50%; background:var(--lime-2); animation:pulse 1.8s infinite; }
+  .glasscard .b{ font-family:var(--disp); font-weight:600; font-size:12.5px; line-height:1.45; color:#2A1622; }
+  @keyframes pulse{ 0%,100%{ opacity:1; transform:scale(1);} 50%{ opacity:.4; transform:scale(.8);} }
+
+  /* scroll cue (first chapter only) */
+  .cue{ position:absolute; left:50%; bottom:24px; transform:translateX(-50%); z-index:30;
+    display:flex; flex-direction:column; align-items:center; gap:7px;
+    font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--ink); }
+  .cue .bar{ width:2px; height:34px; border-radius:2px; background:var(--ink); transform-origin:top;
+    animation:cuebar 1.8s infinite ease-in-out; }
+  @keyframes cuebar{ 0%,100%{ transform:scaleY(1);} 50%{ transform:scaleY(.4);} }
+
+  /* ── footer ──────────────────────────────────────────────── */
+  footer{ position:relative; padding:16vh clamp(20px,6vw,96px) 14vh; }
+  footer .big{ font-family:var(--disp); font-weight:800; text-transform:none;
+    font-size:clamp(2rem,8vw,5.6rem); line-height:.94; letter-spacing:-.03em; color:var(--ink); }
+  footer .big .grad{ background:linear-gradient(100deg, var(--violet), var(--pink) 55%, var(--lime-2));
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  footer .fcta{ margin-top:30px; display:inline-block;
+    font-family:var(--disp); font-weight:700; font-size:15px; text-decoration:none;
+    padding:15px 30px; border-radius:999px; background:var(--ink); color:var(--lime);
+    box-shadow:0 16px 36px -12px rgba(22,11,31,.6); transition:transform .25s; }
+  footer .fcta:hover{ transform:translateY(-2px) scale(1.03); }
+  footer .meta{ margin-top:30px; font-family:var(--mono); font-size:11px; font-weight:500;
+    letter-spacing:.06em; color:var(--ink); opacity:.78; max-width:60ch; }
+  footer .meta a{ color:var(--violet); text-decoration:underline; text-underline-offset:2px; }
+
+  /* ── mobile (<=680px): clean STATIC mid-state, no scrolljack ── */
+  @media (max-width:680px){
+    section{ min-height:auto; padding:13vh 0; }
+    .stage{ position:static; height:auto; display:block; padding:0 22px; }
+    .ghost{ display:none; }
+    .appwrap{ position:static; width:min(64vw,260px); transform:none!important; opacity:1!important;
+      margin:30px 0 8px; }
+    .figcap{ position:static; margin-top:30px; }
+    .sticker, .blob{ display:none; }
+    .glasscard{ position:static; margin-top:20px; width:100%; transform:none!important; opacity:1!important; }
+    h2.giant{ font-size:15vw; }
+    .copytext .w{ opacity:1!important; transform:none!important; }
+    .lede{ display:block; }
+    .cue{ display:none; }
+  }
+  /* ── reduced motion: settled mid-state, no scroll-driven motion ── */
+  @media (prefers-reduced-motion:reduce){
+    html{ scroll-behavior:auto; }
+    .copytext .w, .copytext, .appwrap, .glasscard, .ghost, .sticker, .blob{
+      opacity:1!important; transform:none!important; }
+    .glasscard .pulse, .cue .bar{ animation:none; }
+  }
+
+  /* ── GSAP SHOWCASE — "THE DROP" ─────────────────────────────────────
+     A dedicated viewport demoing two techniques the rAF pop engine doesn't:
+       • JUMP-SCARE micro (taste-guardrails §2 "Jump scare — Gen-Z energy"):
+         the big sticker snaps scale 0.8→1.05 + rotateZ(-2→0) with back.out(2).
+       • VELOCITY-REACTIVE (scroll-patterns #3): the marquee rows skewX + scaleY
+         react to lerped scroll SPEED (transform-only, capped, desktop-only).
+     GSAP pins .drop-stage; the STATIC DEFAULTS below keep it whole when GSAP is
+     absent / reduced-motion / mobile (sticker landed at rest, rows un-skewed). */
+  section.showcase{ min-height:0; }                 /* GSAP pin owns the scroll room */
+  .drop-stage{ position:relative; height:100vh; overflow:hidden;
+    display:grid; place-items:center; padding:0 clamp(20px,6vw,96px); }
+  /* candy-pink + electric-lime backdrop wash, self-contained to the beat */
+  .drop-stage .dropwash{ position:absolute; inset:-10%; z-index:0; pointer-events:none;
+    background:
+      radial-gradient(80% 60% at 50% 14%, rgba(198,255,61,.6), rgba(198,255,61,0) 56%),
+      radial-gradient(90% 70% at 50% 100%, rgba(124,58,237,.45), rgba(124,58,237,0) 60%),
+      linear-gradient(165deg, var(--pink) 0%, var(--violet) 100%); }
+  .drop-inner{ position:relative; z-index:2; display:flex; flex-direction:column;
+    align-items:center; gap:clamp(22px,3vw,40px); text-align:center; width:100%; }
+  .drop-eyebrow{ display:inline-flex; align-items:center; gap:8px;
+    font-family:var(--mono); font-size:clamp(10px,1vw,12px); font-weight:700; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--ink);
+    background:var(--lime); padding:7px 14px; border-radius:999px;
+    box-shadow:0 6px 18px rgba(155,224,0,.4); }
+  /* the velocity-reactive marquee rows — giant rounded type, skew on scroll speed */
+  .drop-rows{ display:flex; flex-direction:column; gap:clamp(4px,.6vw,10px); width:100%; }
+  .drop-rows .vrow{ font-family:var(--disp); font-weight:800; line-height:.92; letter-spacing:-.04em;
+    font-size:clamp(2.4rem,9vw,8rem); color:#fff; transform-origin:left center; white-space:nowrap; }
+  .drop-rows .vrow.accent{
+    background:linear-gradient(100deg, var(--lime), #fff 55%, var(--cyan));
+    -webkit-background-clip:text; background-clip:text; color:transparent; }
+  /* the JUMP-SCARE sticker / CTA — lands at its resting state by default */
+  .drop-stamp{ position:relative; z-index:3;
+    font-family:var(--disp); font-weight:800; font-size:clamp(1rem,2.2vw,1.5rem);
+    color:var(--ink); background:#fff; text-decoration:none;
+    padding:16px 30px; border-radius:999px; transform:rotate(0deg) scale(1);
+    box-shadow:0 18px 44px -14px rgba(22,11,31,.6); transform-origin:center;
+    display:inline-flex; align-items:center; gap:10px; }
+  .drop-stamp .em{ width:20px; height:20px; flex:none; }
+  @media (max-width:680px){
+    /* static / stacked — no pin, no skew, sticker simply present */
+    .drop-stage{ height:auto; padding:13vh 22px; }
+    .drop-stage .dropwash{ inset:0; }
+    .drop-rows .vrow{ font-size:13vw; white-space:normal; transform:none!important; }
+    .drop-stamp{ transform:none!important; }
+  }
+</style>
+</head>
+<body>
+  <div class="wash" id="wash" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <div class="mark">
+      <span class="glyph" aria-hidden="true"></span>
+      <b>BLOOM</b>
+    </div>
+    <nav>
+      <a href="#focus">focus</a>
+      <a href="#flow">flow</a>
+      <a href="#crew">crew</a>
+      <a class="pill" href="#start">get the app</a>
+    </nav>
+  </header>
+
+  <nav class="rail" id="rail" aria-label="Chapters"></nav>
+
+  <main id="app"></main>
+
+  <footer id="start">
+    <div class="big">your day,<br><span class="grad">but make it bloom.</span></div>
+    <a class="fcta" href="#" aria-label="Download BLOOM (demo link)">Download free → it&rsquo;s giving productive</a>
+    <p class="meta">
+      Built with the <a href="https://github.com/MustBeSimo/cinematic-scroll-skill">cinematic-scroll</a>
+      Agent Skill · BLOOM is a fictional brand for demo purposes · one of many possible aesthetics.
+    </p>
+  </footer>
+
+<script>
+/* ───────────────────────────────────────────────────────────────
+   Manifest — drive the page from data, exactly as the skill teaches.
+   Edit this array to retheme; DOM + motion are generated from it.
+   ─────────────────────────────────────────────────────────────── */
+const CHAPTERS = [
+  {
+    id:'0-hero', n:'01', eyebrow:'new · 2026',
+    title:[['your day,',0],['but make it',0],['fun.',1]],
+    lede:'BLOOM is the productivity app that doesn’t feel like homework. Plan it, track it, share the wins — and actually want to open it tomorrow.',
+    cta:{ a:'Get the app', b:'free, obviously' },
+    sticker:'no more sticky notes',
+    card:{ tag:'streak: 14 days', body:'You just hit a two-week streak. The crew can see it. Flex earned. 🔥' },
+    fig:'BLOOM · v3.0', figLabel:'home',
+    morph:'#FF2E93', cue:true,
+    /* UI mock theme (CSS-only fallback) */
+    ui:{ grad:'linear-gradient(170deg,#FF2E93 0%,#7C3AED 100%)', greet:'Hey, you ✨', sub:'3 things today. you got this.' }
+  },
+  {
+    id:'1-focus', n:'02', eyebrow:'feature · focus',
+    title:[['lock in.',0],['blooms',1],['follow.',0]],
+    lede:'Start a Focus Bloom and a little plant grows while you work. Phone face-down, brain on. Bail early and… well, it wilts. Gentle pressure, big payoff.',
+    cta:{ a:'Try a focus bloom', b:'25 min · zero guilt' },
+    sticker:'+40% deep work',
+    card:{ tag:'focus · live', body:'18:42 left in this Bloom. Your record this week is 4 in a row. Beat it? 🌱' },
+    fig:'BLOOM · focus', figLabel:'session',
+    morph:'#7C3AED',
+    ui:{ grad:'linear-gradient(170deg,#7C3AED 0%,#22E0E0 100%)', greet:'Focus Bloom', sub:'face down. plant up. let it grow.' }
+  },
+  {
+    id:'2-flow', n:'03', eyebrow:'feature · flow',
+    title:[['plans that',0],['actually',1],['flow.',0]],
+    lede:'Drag, drop, done. BLOOM reshuffles your day the second life happens — meeting moved, energy dipped, vibe shifted. Your schedule keeps up with you, not the other way round.',
+    cta:{ a:'See flow mode', b:'auto-reschedule' },
+    sticker:'drag · drop · done',
+    card:{ tag:'flow · synced', body:'Bumped 3 tasks to tomorrow, kept your gym slot. Day re-bloomed in 0.2s. ✅' },
+    fig:'BLOOM · flow', figLabel:'today',
+    morph:'#C6FF3D',
+    ui:{ grad:'linear-gradient(170deg,#9BE000 0%,#22E0E0 100%)', greet:'Today, sorted', sub:'auto-shuffled around your energy.' }
+  },
+  {
+    id:'3-crew', n:'04', eyebrow:'feature · crew',
+    title:[['better',0],['together.',1]],
+    lede:'Add your crew, share streaks, send a little nudge when someone’s slacking (lovingly). Productivity is way more fun when it’s a group chat that gets stuff done.',
+    cta:{ a:'Build your crew', b:'invite 5 friends' },
+    sticker:'group chat that ships',
+    card:{ tag:'crew · 6 online', body:'Maya finished her Bloom. Leo nudged you. The group streak is alive — don’t break it. 💪' },
+    fig:'BLOOM · crew', figLabel:'circle',
+    morph:'#22E0E0',
+    ui:{ grad:'linear-gradient(170deg,#22E0E0 0%,#FF2E93 100%)', greet:'Your crew', sub:'6 blooming right now.' }
+  },
+];
+
+/* per-chapter wash gradients (background morph behind everything) */
+const WASH = {
+  '#FF2E93':'radial-gradient(120% 90% at 12% 4%, rgba(198,255,61,.55), rgba(198,255,61,0) 46%), radial-gradient(120% 90% at 92% 98%, rgba(124,58,237,.40), rgba(124,58,237,0) 52%)',
+  '#7C3AED':'radial-gradient(120% 90% at 88% 6%, rgba(34,224,224,.45), rgba(34,224,224,0) 50%), radial-gradient(120% 90% at 8% 96%, rgba(255,46,147,.42), rgba(255,46,147,0) 52%)',
+  '#C6FF3D':'radial-gradient(120% 90% at 14% 6%, rgba(34,224,224,.45), rgba(34,224,224,0) 50%), radial-gradient(120% 90% at 90% 96%, rgba(124,58,237,.30), rgba(124,58,237,0) 52%)',
+  '#22E0E0':'radial-gradient(120% 90% at 90% 4%, rgba(255,46,147,.48), rgba(255,46,147,0) 50%), radial-gradient(120% 90% at 8% 98%, rgba(198,255,61,.48), rgba(198,255,61,0) 52%)',
+};
+/* foreground color is dark ink on every chapter — gradients are bright */
+
+const SPARK = "<svg class='spark' viewBox='0 0 24 24' fill='none' aria-hidden='true'><path d='M12 2l2.2 6.6L21 12l-6.8 3.4L12 22l-2.2-6.6L3 12l6.8-3.4z' fill='%23160B1F'/></svg>".replace('%23','#');
+
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const smooth=(e0,e1,x)=>{ if(x<=e0)return 0; if(x>=e1)return 1; const t=(x-e0)/(e1-e0); return t*t*(3-2*t); };
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isTouch = matchMedia('(hover: none) and (pointer: coarse)').matches;
+const isMobile = () => innerWidth <= 680;
+
+const app = document.getElementById('app');
+const rail = document.getElementById('rail');
+const wash = document.getElementById('wash');
+
+/* preflight: which real screenshots exist? fall back to CSS UI mock */
+function probe(src){ return new Promise(res=>{ const i=new Image(); i.onload=()=>res(true); i.onerror=()=>res(false); i.src=src; }); }
+
+const ghostWord = t => (t.flat().filter(x=>typeof x==='string').join(' ').split(' ')[0]||'').toLowerCase().replace(/[^a-z]/g,'');
+
+(async () => {
+  for (const ch of CHAPTERS){
+    const sec = document.createElement('section');
+    sec.id = ch.id.replace(/^\d+-/,'');
+    sec.dataset.morph = ch.morph;
+
+    const titleHTML = ch.title.map(([chunk,acc]) =>
+      chunk.split(' ').map(w=>`<span class="w${acc?' accent':''}">${w}</span>`).join(' ')
+    ).join(' ');
+
+    const imgPath = `assets/${ch.id}.jpg`;
+    const hasImg = await probe(imgPath);
+
+    // floating phone — real screenshot, or a CSS-only app mock
+    const screen = hasImg
+      ? `<div class="shot" style="background-image:url('${imgPath}')"></div>`
+      : `<div class="shot placeholder" style="background:${ch.ui.grad}">
+           <div class="uimock">
+             <div class="status"><span>9:41</span><span>BLOOM</span></div>
+             <div class="hero">
+               <div style="display:flex;align-items:center;justify-content:space-between;gap:10px">
+                 <div><div class="big">${ch.ui.greet}</div><div class="sub">${ch.ui.sub}</div></div>
+                 <div class="ring"></div>
+               </div>
+             </div>
+             <div class="row"><span class="ic" style="background:var(--lime)"></span>
+               <span class="tx"><b>Morning bloom</b><span>25 min · deep work</span></span>
+               <span class="chk" style="background:var(--lime)"></span></div>
+             <div class="row"><span class="ic" style="background:var(--pink-2)"></span>
+               <span class="tx"><b>Reply to Maya</b><span>2 min · quick win</span></span>
+               <span class="chk" style="background:rgba(255,255,255,.3)"></span></div>
+             <div class="row"><span class="ic" style="background:var(--cyan)"></span>
+               <span class="tx"><b>Move your body</b><span>20 min · later</span></span>
+               <span class="chk" style="background:rgba(255,255,255,.3)"></span></div>
+             <div class="tabbar"><i class="act"></i><i></i><i></i><i></i></div>
+           </div>
+         </div>`;
+
+    sec.innerHTML = `
+      <div class="stage">
+        <div class="ghost" data-depth="0.15">${ghostWord(ch.title)}</div>
+        <span class="blob" data-depth="0.40" style="left:6%; top:18%; width:clamp(120px,18vw,260px); height:clamp(120px,18vw,260px); background:radial-gradient(circle at 35% 30%, var(--lime), var(--cyan));"></span>
+
+        <div class="appwrap" data-depth="1.40">
+          <div class="phone">
+            <div class="notch"></div>
+            ${screen}
+          </div>
+          <div class="figcap"><span>${ch.fig}</span><span>${ch.figLabel}</span></div>
+        </div>
+
+        <span class="sticker tag" data-depth="0.85" style="right:clamp(20px,12vw,180px); top:24%;">
+          ${SPARK}${ch.sticker}
+        </span>
+
+        <div class="copytext">
+          <div class="eyebrow">${SPARK}${ch.eyebrow}</div>
+          <h2 class="giant">${titleHTML}</h2>
+          <p class="lede">${ch.lede}</p>
+          <div class="ctarow">
+            <a class="btn solid" href="#start">${ch.cta.a} →</a>
+            <span class="ctameta">${ch.cta.b}</span>
+          </div>
+        </div>
+
+        <div class="glasscard" data-depth="1.20">
+          <div class="t"><span class="pulse"></span>${ch.card.tag}</div>
+          <div class="b">${ch.card.body}</div>
+        </div>
+
+        ${ch.cue ? `<div class="cue"><span>scroll</span><span class="bar"></span></div>` : ''}
+      </div>`;
+    app.appendChild(sec);
+
+    const r = document.createElement('button');
+    r.type='button'; r.className='r'; r.dataset.goto=sec.id;
+    r.setAttribute('aria-label', `Go to chapter ${ch.n}`);
+    r.innerHTML = `<span>${ch.n}</span><span class="dot"></span>`;
+    rail.appendChild(r);
+  }
+
+  /* ── INSERT THE GSAP SHOWCASE BEAT ("THE DROP") ─────────────────────
+     Inserted right after the hero so it reads: hero → the drop → focus.
+     Built BEFORE `sections`/`rails` are collected (and the center-spy uses
+     `sections.indexOf` against the parallel `rails` array), so a matching
+     lightweight rail entry is inserted at the SAME index to keep them aligned.
+     Pure markup here; motion is wired at the end (desktop-only, only if GSAP loaded). */
+  const drop = document.createElement('section');
+  drop.className = 'showcase'; drop.id = 'drop';
+  drop.dataset.morph = '#C6FF3D';
+  drop.innerHTML = `
+    <div class="drop-stage">
+      <div class="dropwash" aria-hidden="true"></div>
+      <div class="drop-inner">
+        <span class="drop-eyebrow">${SPARK}the drop</span>
+        <div class="drop-rows" aria-hidden="true">
+          <div class="vrow">make it</div>
+          <div class="vrow accent">loud.</div>
+          <div class="vrow">make it yours.</div>
+        </div>
+        <a class="drop-stamp" href="#start">${SPARK}get the app</a>
+      </div>
+    </div>`;
+  app.insertBefore(drop, app.children[1] || null);   // after hero (index 0)
+  const dr = document.createElement('button');
+  dr.type='button'; dr.className='r'; dr.dataset.goto='drop';
+  dr.setAttribute('aria-label', 'Go to the drop');
+  dr.innerHTML = `<span>✦</span><span class="dot"></span>`;
+  rail.insertBefore(dr, rail.children[1] || null);
+
+  /* nav clicks (rail + masthead anchors handled natively) */
+  document.querySelectorAll('[data-goto]').forEach(el=>{
+    el.addEventListener('click',()=>{ document.getElementById(el.dataset.goto)?.scrollIntoView({ behavior: reduce ? 'auto':'smooth' }); });
+  });
+
+  const sections = [...document.querySelectorAll('section')];
+  const rails = [...rail.querySelectorAll('.r')];
+
+  /* background morph + active rail — collapse observer to a 1px center band
+     via rootMargin so it works even though sections are taller than viewport. */
+  function applyActive(sec){
+    const idx = sections.indexOf(sec);
+    document.body.style.background = sec.dataset.morph;
+    wash.style.background = WASH[sec.dataset.morph] || '';
+    rails.forEach((r,i)=> r.classList.toggle('on', i===idx));
+  }
+  const spy = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{ if (e.isIntersecting) applyActive(e.target); });
+  },{ rootMargin:'-50% 0px -50% 0px', threshold:0 });
+  sections.forEach(s=>spy.observe(s));
+  applyActive(sections[0]); // paint initial state immediately
+
+  /* mobile / reduced-motion: skip the rAF engine entirely → static mid-state */
+  if (reduce || isMobile()) return;
+
+  /* desktop parallax — FAST pop engine.
+     Unified approach→pin→exit timeline T∈[0,1]; never starts invisible.
+     Wide depth gaps (0.15 → 1.40) so layers separate hard and move at very
+     different speeds — the "app" (1.40) drifts UP faster than the title.
+     Compositor-only: per frame we touch ONLY transform + opacity. */
+  let ticking=false;
+  function parallax(){
+    const vh=innerHeight;
+    for(const sec of sections){
+      const rect=sec.getBoundingClientRect();
+      // perf: skip sections fully off-screen
+      if(rect.bottom < -vh*0.2 || rect.top > vh*1.2) continue;
+      const total=sec.offsetHeight+vh;
+      const T=clamp((vh-rect.top)/total,0,1);
+      const enter=smooth(0.06,0.30,T);
+      const exit=1-smooth(0.70,0.90,T);
+      const live=enter*exit;
+      const drift=0.46-T;                 // signed, ~0 at hold
+
+      // floating app — highest depth, big UPWARD travel (faster than title)
+      const appw=sec.querySelector('.appwrap');
+      if(appw){ const d=+appw.dataset.depth;          // 1.40
+        const y = drift*340*d;                         // strong drift
+        const sc = 0.94 + 0.06*enter;
+        const rz = drift*4;                            // tiny playful tilt
+        appw.style.transform=`translateY(calc(-50% + ${y.toFixed(1)}px)) rotate(${rz.toFixed(2)}deg) scale(${sc.toFixed(3)})`;
+        appw.style.opacity=(0.15+0.85*live).toFixed(3);
+      }
+      // ghost watermark — deepest, slow long horizontal sweep
+      const ghost=sec.querySelector('.ghost');
+      if(ghost){ const d=+ghost.dataset.depth;          // 0.15
+        ghost.style.transform=`translate(calc(-50% + ${(drift*520*d).toFixed(0)}px),-50%) scale(${(1.04-0.04*enter).toFixed(3)})`;
+      }
+      // background blob — low-mid depth, gentle counter-drift
+      const blob=sec.querySelector('.blob');
+      if(blob){ const d=+blob.dataset.depth;            // 0.40
+        blob.style.transform=`translate(${(drift*-160*d).toFixed(1)}px, ${(drift*120*d).toFixed(1)}px) scale(${(1+0.08*enter).toFixed(3)})`;
+      }
+      // sticker tag — mid-fast depth, lively drift + wobble
+      const stick=sec.querySelector('.sticker');
+      if(stick){ const d=+stick.dataset.depth;          // 0.85
+        stick.style.transform=`translateY(${(drift*230*d).toFixed(1)}px) rotate(${(-7+drift*9).toFixed(2)}deg)`;
+        stick.style.opacity=(smooth(0.16,0.36,T)*exit).toFixed(3);
+      }
+      // copy / title block + FAST per-word stagger (small offsets)
+      const copy=sec.querySelector('.copytext');
+      if(copy){
+        copy.style.transform=`translateY(${(drift*70).toFixed(1)}px)`;
+        copy.style.opacity=(0.10+0.90*live).toFixed(3);
+        const words=copy.querySelectorAll('h2 .w'); const n=words.length;
+        words.forEach((w,k)=>{
+          const t0=0.05+(k/n)*0.10;                     // tight, quick stagger
+          const wp=smooth(t0,t0+0.09,T);
+          const wy=(1-wp)*42;
+          w.style.opacity=wp.toFixed(3);
+          w.style.transform=`translateY(${wy.toFixed(1)}px)`;
+        });
+      }
+      // glassy stat card — fast foreground depth
+      const card=sec.querySelector('.glasscard');
+      if(card){ const d=+card.dataset.depth;            // 1.20
+        card.style.transform=`translateY(${(drift*150*(d-1)*3.2).toFixed(1)}px) rotate(${(drift*-3).toFixed(2)}deg)`;
+        card.style.opacity=(smooth(0.20,0.42,T)*(1-smooth(0.66,0.86,T))).toFixed(3);
+      }
+    }
+    ticking=false;
+  }
+  function onScroll(){ if(!ticking){ ticking=true; requestAnimationFrame(parallax); } }
+  addEventListener('scroll',onScroll,{passive:true});
+  addEventListener('resize',()=>{ ticking=true; requestAnimationFrame(parallax); },{passive:true});
+  parallax(); // initial paint so nothing starts invisible
+
+  /* pointer micro-tilt on the phone (non-touch only — vestibular-safe) */
+  if(!isTouch && !reduce){
+    document.querySelectorAll('.phone').forEach(phone=>{
+      phone.parentElement.addEventListener('pointermove',ev=>{
+        const r=phone.getBoundingClientRect();
+        const px=(ev.clientX-r.left)/r.width-0.5, py=(ev.clientY-r.top)/r.height-0.5;
+        phone.style.transform=`perspective(900px) rotateY(${px*9}deg) rotateX(${-py*7}deg)`;
+      });
+      phone.parentElement.addEventListener('pointerleave',()=>{ phone.style.transform='perspective(900px) rotateY(0) rotateX(0)'; });
+    });
+  }
+
+  /* ── GSAP SHOWCASE WIRING — "THE DROP" (desktop & non-reduced) ───────
+     Guarded by the early return above (skips on reduce/mobile), then a
+     matchMedia gate so it auto-kills on resize into a small/reduced context.
+     Two techniques, kept ≤3 simultaneous motions in this single viewport:
+       • JUMP-SCARE micro (taste-guardrails §2): the stamp snaps in once at a
+         scroll threshold — scale 0.8→1.05 + rotateZ(-2→0), ease back.out(2),
+         NO scrub (a one-shot toggleActions tween). The signature moment.
+       • VELOCITY-REACTIVE (scroll-patterns #3): the marquee rows skewX +
+         scaleY off lerped scroll SPEED (deltaY/dt, lerp .15, capped), pushed
+         via gsap.quickTo — transform-only, disabled on touch.
+     If GSAP never loads, #drop simply stays at its complete static state. */
+  (function wireShowcase(tries){
+    if(!window.gsap || !window.ScrollTrigger){
+      if(tries>0) requestAnimationFrame(()=>wireShowcase(tries-1));
+      return;
+    }
+    gsap.registerPlugin(ScrollTrigger);
+    ScrollTrigger.defaults({ scrub:0.5, fastScrollEnd:true, invalidateOnRefresh:true });
+    const mm = gsap.matchMedia();
+    mm.add('(min-width:769px) and (prefers-reduced-motion:no-preference)', () => {
+      const stage = document.querySelector('#drop .drop-stage');
+      if(!stage) return;
+      const stamp = stage.querySelector('.drop-stamp');
+      const rows  = [...stage.querySelectorAll('.vrow')];
+
+      /* JUMP-SCARE micro — one-shot, NOT scrubbed; fires when the beat lands.
+         scale 0.8→1.05 + rotateZ(-2→0), back.out(2) overshoot, then settles. */
+      stamp.style.willChange = 'transform';
+      const jump = gsap.fromTo(stamp,
+        { scale:0.8, rotationZ:-2, opacity:0 },
+        { scale:1.05, rotationZ:0, opacity:1, duration:0.5, ease:'back.out(2)', paused:true });
+      const jumpST = ScrollTrigger.create({
+        trigger:'#drop', start:'top 60%',
+        toggleActions:'play none none reverse',
+        onEnter:()=>jump.play(), onLeaveBack:()=>jump.reverse()
+      });
+
+      /* VELOCITY-REACTIVE — lerped scroll-speed → skewX + scaleY on the rows.
+         deltaY/dt tracked in a rAF loop (lerp .15, magnitude capped), applied
+         via gsap.quickTo. Transform-only; never touches width/gap. Desktop here
+         already excludes touch via the (min-width:769px) gate, but guard anyway. */
+      let velRAF=0, lastY=window.scrollY, lastT=performance.now(), v=0;
+      const skewTo  = rows.map(r=>gsap.quickTo(r,'skewX',{duration:0.32, ease:'power3'}));
+      const scaleTo = rows.map(r=>gsap.quickTo(r,'scaleY',{duration:0.32, ease:'power3'}));
+      function trackVel(){
+        const now=performance.now(); const dt=Math.max(now-lastT,1);
+        const dy=window.scrollY-lastY;
+        v += (dy/dt - v)*0.15;                      // lerp toward instantaneous velocity
+        lastY=window.scrollY; lastT=now;
+        const cap=Math.max(-3,Math.min(3,v));       // cap magnitude (px/ms)
+        const skew = -cap*2.2;                       // skewX deg, direction-aware
+        const sY   = 1 - Math.abs(cap)*0.02;        // subtle vertical squash on fast scroll
+        rows.forEach((_,i)=>{ skewTo[i](skew); scaleTo[i](sY); });
+        velRAF=requestAnimationFrame(trackVel);
+      }
+      if(!isTouch) velRAF=requestAnimationFrame(trackVel);
+
+      return () => {
+        cancelAnimationFrame(velRAF);
+        jumpST.kill();
+        gsap.set([stamp, ...rows], { clearProps:'all' });
+      };
+    });
+  })(120);
+})();
+</script>
+</body>
+</html>
