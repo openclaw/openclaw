@@ -121,7 +121,10 @@ export function resolveLastChannelRaw(params: {
   if (
     originatingChannel === INTERNAL_MESSAGE_CHANNEL &&
     !hasEstablishedExternalRoute &&
-    (isMainSessionKey(params.sessionKey) || isDirectSessionKey(params.sessionKey))
+    (isMainSessionKey(params.sessionKey) || isDirectSessionKey(params.sessionKey)) &&
+    (params.originatingChannelRaw === "webchat"
+      ? persistedChannel === "discord" || sessionKeyChannelHint === "discord"
+      : true)
   ) {
     return params.originatingChannelRaw;
   }

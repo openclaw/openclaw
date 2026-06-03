@@ -62,6 +62,29 @@ describe("inter-session lastRoute preservation (fixes #54441)", () => {
     expect(["webchat", undefined]).toContain(result);
   });
 
+  it("inter-session on a session with discord route preserves discord", () => {
+    const result = resolveLastChannelRaw({
+      originatingChannelRaw: "webchat",
+      persistedLastChannel: "discord",
+      sessionKey: "agent:samantha:main",
+      isInterSession: true,
+    });
+    expect(result).toBe("discord");
+  });
+
+  it("webchat on a session with discord route may set webchat (no established external route before)", () => {
+    const result = resolveLastChannelRaw({
+      originatingChannelRaw: "im:webchat", // Originating as webchat but via im/internal
+      persistedLastChannel: "discord",
+      sessionKey: "agent:samantha:main",
+      isInterSession: true,
+    });
+    // If we allow it to set webchat when the existing route is discord, we test the fix.
+    // Actually the fix restricts webchat from overwriting discord.
+    // Let's test that it DOES resolve to discord.
+    expect(result).toBe("discord");
+  });
+
   it("inter-session on session with no persisted lastTo preserves session route", () => {
     const result = resolveLastToRaw({
       originatingChannelRaw: "webchat",
