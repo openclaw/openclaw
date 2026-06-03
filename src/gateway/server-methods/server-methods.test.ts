@@ -21,6 +21,7 @@ import {
   buildSystemRunApprovalBinding,
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
+import { HEARTBEAT_PROMPT } from "../../auto-reply/heartbeat.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
 import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
@@ -1069,6 +1070,69 @@ describe("projectRecentChatDisplayMessages", () => {
     ]);
   });
 
+  it("keeps forwarded sessions_send heartbeat-looking text visible", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "HEARTBEAT_OK" }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 1,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        senderLabel: "Forwarded from main",
+        content: [{ type: "text", text: "HEARTBEAT_OK" }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("keeps forwarded sessions_send heartbeat-looking text visible after a heartbeat prompt", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: HEARTBEAT_PROMPT }],
+        timestamp: 1,
+      },
+      {
+        role: "user",
+        content: [{ type: "text", text: "HEARTBEAT_OK" }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        senderLabel: "Forwarded from main",
+        content: [{ type: "text", text: "HEARTBEAT_OK" }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 2,
+      },
+    ]);
+  });
+
   it("does not project user-authored sessions_send envelope text without provenance", () => {
     const result = projectRecentChatDisplayMessages([
       {
@@ -1099,6 +1163,72 @@ describe("projectRecentChatDisplayMessages", () => {
           },
         ],
         timestamp: 1,
+      },
+    ]);
+  });
+
+  it("does not merge delayed TTS supplements into forwarded sessions_send display messages", () => {
+    const visibleText = "forwarded report";
+    const textSha256 = createHash("sha256").update(visibleText).digest("hex");
+
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: visibleText }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256 },
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "assistant",
+        senderLabel: "Forwarded from main",
+        content: [{ type: "text", text: visibleText }],
+        provenance: {
+          kind: "inter_session",
+          sourceSessionKey: "agent:main:webchat:source",
+          sourceTool: "sessions_send",
+        },
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Audio reply" },
+          {
+            type: "attachment",
+            attachment: {
+              url: "/tmp/tts.mp3",
+              kind: "audio",
+              label: "tts.mp3",
+              mimeType: "audio/mpeg",
+            },
+          },
+        ],
+        openclawTtsSupplement: { textSha256 },
+        timestamp: 2,
       },
     ]);
   });

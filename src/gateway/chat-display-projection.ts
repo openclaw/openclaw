@@ -787,7 +787,10 @@ function mirrorMessageToolVisibleReplies(messages: unknown[]): unknown[] {
       continue;
     }
 
-    if (record.role === "user" && isSessionsSendInterSessionUserMessage(record)) {
+    if (
+      (record.role === "user" && isSessionsSendInterSessionUserMessage(record)) ||
+      isProjectedSessionsSendForwardedMessage(record)
+    ) {
       next.push(message);
       continue;
     }
@@ -1008,6 +1011,9 @@ function ttsSupplementMatchesAssistant(
   if (asRoleContentMessage(message)?.role !== "assistant") {
     return false;
   }
+  if (isProjectedSessionsSendForwardedMessage(message)) {
+    return false;
+  }
   if (readTtsSupplementMarker(message)) {
     return false;
   }
@@ -1114,6 +1120,9 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (isDisplayHiddenProjectedMessage(message)) {
     return true;
   }
+  if (isProjectedSessionsSendForwardedMessage(message)) {
+    return false;
+  }
   const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
     return false;
@@ -1198,7 +1207,8 @@ function filterVisibleProjectedHistoryMessages(
       currentRoleContent &&
       nextRoleContent &&
       isHeartbeatUserMessage(currentRoleContent, HEARTBEAT_PROMPT) &&
-      isHeartbeatOkResponse(nextRoleContent)
+      isHeartbeatOkResponse(nextRoleContent) &&
+      !isProjectedSessionsSendForwardedMessage(next)
     ) {
       changed = true;
       i++;
