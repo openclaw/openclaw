@@ -28,6 +28,7 @@ const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const LONG_RUNNING_VITEST_CONFIGS = new Set([
   "test/vitest/vitest.e2e.config.ts",
   "test/vitest/vitest.ui-e2e.config.ts",
+  "test/vitest/vitest.full-core-contracts.config.ts",
 ]);
 const TOOLING_EXCLUDED_TESTS = new Set([
   ...boundaryTestFiles,

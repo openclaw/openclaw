@@ -4,6 +4,16 @@ import { describe, expect, it, vi } from "vitest";
 import type { SidebarContent } from "./sidebar-content.ts";
 
 describe("OpenClawApp full-message sidebar upgrade", () => {
+  async function createApp() {
+    await import("./app.ts");
+    return document.createElement("openclaw-app") as import("./app.ts").OpenClawApp;
+  }
+
+  it("defaults canvas embeds to strict sandbox before bootstrap config loads", async () => {
+    const app = await createApp();
+
+    expect(app.embedSandboxMode).toBe("strict");
+  });
   it("uses string content returned by chat.message.get", async () => {
     const { OpenClawApp } = await import("./app.ts");
     const content: SidebarContent = {

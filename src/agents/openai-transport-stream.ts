@@ -1807,8 +1807,15 @@ function resolveProviderTransportTurnState(
     transport: "stream" | "websocket";
   },
 ) {
+  const normalizedProvider = model.provider.trim().toLowerCase();
+  const allowRuntimePluginLoad =
+    normalizedProvider === "openai" ||
+    normalizedProvider === "azure-openai" ||
+    normalizedProvider === "azure-openai-responses";
   return resolveProviderTransportTurnStateWithPlugin({
     provider: model.provider,
+    modelId: model.id,
+    allowRuntimePluginLoad,
     context: {
       provider: model.provider,
       modelId: model.id,

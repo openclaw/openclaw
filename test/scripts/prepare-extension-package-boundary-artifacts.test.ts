@@ -1,5 +1,5 @@
-import { EventEmitter } from "node:events";
 import { spawn } from "node:child_process";
+import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -371,10 +371,15 @@ describe("prepare-extension-package-boundary-artifacts", () => {
         OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "450000",
       }),
     ).toBe(450_000);
-    expect(
+    expect(() =>
       resolveBoundaryRootShimsTimeoutMs({
         OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "120s",
       }),
-    ).toBe(300_000);
+    ).toThrow("OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS must be a positive integer");
+    expect(() =>
+      resolveBoundaryRootShimsTimeoutMs({
+        OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS: "0",
+      }),
+    ).toThrow("OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS must be a positive integer");
   });
 });
