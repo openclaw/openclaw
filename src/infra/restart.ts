@@ -12,10 +12,10 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { replaceFileAtomicSync } from "./replace-file.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
-import type { RestartAttempt } from "./restart.types.js";
+import type { GatewayRestartIntent, RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
 
-export type { RestartAttempt } from "./restart.types.js";
+export type { GatewayRestartIntent, RestartAttempt } from "./restart.types.js";
 
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
@@ -93,12 +93,6 @@ type GatewayRestartIntentPayload = {
   kind: "gateway-restart";
   pid: number;
   createdAt: number;
-  reason?: string;
-  force?: boolean;
-  waitMs?: number;
-};
-
-export type GatewayRestartIntent = {
   reason?: string;
   force?: boolean;
   waitMs?: number;

@@ -1,4 +1,4 @@
-import type { GatewayRestartIntent } from "../infra/restart.js";
+import type { GatewayRestartIntent } from "../infra/restart.types.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 
 export type GatewayServiceEnv = Record<string, string | undefined>;
