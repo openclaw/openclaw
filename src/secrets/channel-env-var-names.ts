@@ -18,8 +18,12 @@ const UNSAFE_CHANNEL_ENV_VAR_TRIGGER_NAMES = new Set([
   "USER",
 ]);
 
+/**
+ * Returns whether a channel env var name is safe to treat as a credential/config trigger.
+ */
 export function isSafeChannelEnvVarTriggerName(key: string): boolean {
   const normalized = key.trim().toUpperCase();
+  // Common process env names are too noisy; channel scans should only react to explicit secrets.
   return (
     /^[A-Z][A-Z0-9_]*$/.test(normalized) && !UNSAFE_CHANNEL_ENV_VAR_TRIGGER_NAMES.has(normalized)
   );
