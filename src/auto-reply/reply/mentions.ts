@@ -18,13 +18,27 @@ import type { MsgContext } from "../templating.js";
 import type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 export type { BuildMentionRegexesOptions, ExplicitMentionSignal } from "./mentions.types.js";
 
+const CJK_PATTERN = /[一-鿿㐀-䶿]/;
+
+function wrapWithBoundaries(pattern: string): string {
+  if (!CJK_PATTERN.test(pattern)) {
+    return String.raw`\b@?${pattern}\b`;
+  }
+  // \b does not recognise CJK characters as word characters, so single-char
+  // CJK mention names (e.g. @包) fail to match. Use explicit lookaround
+  // assertions that treat CJK characters as boundary-worthy.
+  const lead = String.raw`(?:(?<=^)|(?<![\w一-鿿㐀-䶿]))`;
+  const trail = String.raw`(?![\w一-鿿㐀-䶿])`;
+  return `${lead}@?${pattern}${trail}`;
+}
+
 function deriveMentionPatterns(identity?: { name?: string; emoji?: string }) {
   const patterns: string[] = [];
   const name = normalizeOptionalString(identity?.name);
   if (name) {
     const parts = name.split(/\s+/).filter(Boolean).map(escapeRegExp);
     const re = parts.length ? parts.join(String.raw`\s+`) : escapeRegExp(name);
-    patterns.push(String.raw`\b@?${re}\b`);
+    patterns.push(wrapWithBoundaries(re));
   }
   const emoji = normalizeOptionalString(identity?.emoji);
   if (emoji) {
