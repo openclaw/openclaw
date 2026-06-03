@@ -2145,9 +2145,13 @@ export function renderChat(props: ChatProps) {
                     <span class="agent-chat__control-label"
                       >${props.realtimeTalkActive
                         ? t("chat.composer.stopTalk")
-                        : t("chat.composer.startTalk")}</span
+                      : t("chat.composer.startTalk")}</span
                     >
                   </button>
+                `
+              : nothing}
+            ${props.onToggleRealtimeTalkOptions
+              ? html`
                   <button
                     class="agent-chat__input-btn ${props.realtimeTalkOptionsOpen
                       ? "agent-chat__input-btn--talk"
