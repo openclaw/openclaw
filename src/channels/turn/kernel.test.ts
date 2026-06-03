@@ -160,6 +160,7 @@ type TurnLogEvent = {
   stage?: string;
   turnState?: {
     completionAllowed?: boolean;
+    currentState?: string;
     errors?: string[];
     visibleDeliveryRequired?: boolean;
     visibleDeliverySent?: boolean;
@@ -1777,6 +1778,7 @@ describe("channel turn kernel", () => {
   });
 
   it("finalizes failed dispatches before rethrowing", async () => {
+    const log = vi.fn();
     const onFinalize = vi.fn();
     const dispatchError = new Error("dispatch failed");
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => {
@@ -1787,6 +1789,7 @@ describe("channel turn kernel", () => {
       runChannelTurn({
         channel: "test",
         raw: {},
+        log,
         adapter: {
           ingest: () => ({ id: "msg-1", rawText: "hello" }),
           resolveTurn: () => ({
@@ -1814,5 +1817,18 @@ describe("channel turn kernel", () => {
     expect(finalizedResult.admission).toEqual({ kind: "dispatch" });
     expect(finalizedResult.dispatched).toBe(false);
     expect(finalizedResult.routeSessionKey).toBe("agent:main:test:peer");
+    const dispatchErrorLog = loggedEvents(log).find(
+      (event) => event.stage === "dispatch" && event.event === "error",
+    );
+    expect(dispatchErrorLog).toMatchObject({
+      stage: "dispatch",
+      event: "error",
+      messageId: "msg-1",
+      turnState: {
+        currentState: "failed",
+        completionAllowed: false,
+        errors: ["dispatch_error"],
+      },
+    });
   });
 });

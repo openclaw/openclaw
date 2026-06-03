@@ -772,6 +772,7 @@ async function runPreparedChannelTurnCoreInTrace<
         },
       },
     });
+    const dispatchErrorTurnState = materializeTurnState(recordedTurnEvents);
     emit({
       ...params,
       event: {
@@ -780,6 +781,8 @@ async function runPreparedChannelTurnCoreInTrace<
         messageId: params.messageId,
         sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
         admission: admission.kind,
+        reason: dispatchErrorTurnState.errors[0],
+        turnState: dispatchErrorTurnState,
         error: err,
       },
     });
