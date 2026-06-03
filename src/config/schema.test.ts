@@ -1017,4 +1017,114 @@ describe("config schema", () => {
   it("returns null for missing config schema paths", () => {
     expect(lookupConfigSchema(baseSchema, "gateway.notReal.path")).toBeNull();
   });
+
+  it("omits unreadable lookup schema maps without throwing", () => {
+    const unreadableProperties = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("lookup properties ownKeys exploded");
+        },
+      },
+    );
+    const response = {
+      schema: {
+        type: "object",
+        properties: {
+          plugin: {
+            type: "object",
+            properties: {
+              config: {
+                type: "object",
+                properties: unreadableProperties,
+              },
+            },
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
+
+    const lookup = lookupConfigSchema(response, "plugin.config");
+
+    expect(lookup?.schema).toEqual({ type: "object" });
+    expect(lookup?.children).toEqual([]);
+  });
+
+  it("returns null when lookup path traversal reaches an unreadable schema map", () => {
+    const unreadableProperties = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error("lookup descriptor exploded");
+        },
+      },
+    );
+    const response = {
+      schema: {
+        type: "object",
+        properties: unreadableProperties,
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
+
+    expect(lookupConfigSchema(response, "plugin")).toBeNull();
+  });
+
+  it("does not fall through to wildcard schemas for false property schemas", () => {
+    const response = {
+      schema: {
+        type: "object",
+        properties: {
+          blocked: false,
+        },
+        additionalProperties: {
+          type: "string",
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
+
+    expect(lookupConfigSchema(response, "blocked")).toBeNull();
+  });
+
+  it("keeps child summaries stable when a child schema has unreadable children", () => {
+    const unreadableProperties = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("child properties ownKeys exploded");
+        },
+      },
+    );
+    const response = {
+      schema: {
+        type: "object",
+        properties: {
+          plugin: {
+            type: "object",
+            properties: unreadableProperties,
+          },
+        },
+      },
+      uiHints: {},
+      version: "test",
+      generatedAt: "test",
+    } as unknown as Parameters<typeof lookupConfigSchema>[0];
+
+    const lookup = lookupConfigSchema(response, ".");
+
+    expect(lookup?.children).toContainEqual(
+      expect.objectContaining({
+        key: "plugin",
+        hasChildren: true,
+      }),
+    );
+  });
 });

@@ -34,6 +34,41 @@ type JsonSchemaObject = JsonSchemaNode & {
 const asJsonSchemaObject = (value: unknown): JsonSchemaObject | null =>
   asSchemaObject(value) as JsonSchemaObject | null;
 
+function readSchemaField<K extends keyof JsonSchemaObject>(
+  schema: JsonSchemaObject,
+  key: K,
+): JsonSchemaObject[K] | undefined {
+  try {
+    return schema[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readObjectEntries<T>(value: Record<string, T>): Array<[string, T]> | undefined {
+  try {
+    return Object.entries(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function readObjectValue<T>(value: Record<string, T>, key: string): T | undefined {
+  try {
+    return Object.hasOwn(value, key) ? value[key] : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readObjectHasOwn(value: Record<string, unknown>, key: string): boolean | undefined {
+  try {
+    return Object.hasOwn(value, key);
+  } catch {
+    return undefined;
+  }
+}
+
 const FORBIDDEN_LOOKUP_SEGMENTS = new Set(["__proto__", "prototype", "constructor"]);
 const LOOKUP_SCHEMA_STRING_KEYS = new Set([
   "$id",
@@ -637,14 +672,15 @@ function resolveUiHintMatch(
 }
 
 function resolveItemsSchema(schema: JsonSchemaObject, index?: number): JsonSchemaObject | null {
-  if (Array.isArray(schema.items)) {
+  const items = readSchemaField(schema, "items");
+  if (Array.isArray(items)) {
     const entry =
       index === undefined
-        ? schema.items.find((candidate) => typeof candidate === "object" && candidate !== null)
-        : schema.items[index];
+        ? items.find((candidate) => typeof candidate === "object" && candidate !== null)
+        : items[index];
     return entry && typeof entry === "object" ? entry : null;
   }
-  return schema.items && typeof schema.items === "object" ? schema.items : null;
+  return items && typeof items === "object" ? items : null;
 }
 
 function resolveLookupChildSchema(
@@ -655,9 +691,16 @@ function resolveLookupChildSchema(
     return null;
   }
 
-  const properties = schema.properties;
-  if (properties && Object.hasOwn(properties, segment)) {
-    return asJsonSchemaObject(properties[segment]);
+  const properties = readSchemaField(schema, "properties");
+  if (properties) {
+    const hasProperty = readObjectHasOwn(properties, segment);
+    if (hasProperty === undefined) {
+      return null;
+    }
+    if (hasProperty) {
+      const propertySchema = readObjectValue(properties, segment);
+      return asJsonSchemaObject(propertySchema);
+    }
   }
 
   const itemIndex = parseConfigPathArrayIndex(segment);
@@ -666,8 +709,9 @@ function resolveLookupChildSchema(
     return items;
   }
 
-  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    return schema.additionalProperties;
+  const additionalProperties = readSchemaField(schema, "additionalProperties");
+  if (additionalProperties && typeof additionalProperties === "object") {
+    return additionalProperties;
   }
 
   return null;
@@ -676,7 +720,7 @@ function resolveLookupChildSchema(
 function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): JsonSchemaNode {
   const next: JsonSchemaNode = {};
 
-  for (const [key, value] of Object.entries(schema)) {
+  for (const [key, value] of readObjectEntries(schema) ?? []) {
     if (LOOKUP_SCHEMA_STRING_KEYS.has(key) && typeof value === "string") {
       next[key] = value;
       continue;
@@ -722,31 +766,37 @@ function stripSchemaForLookup(schema: JsonSchemaObject, nestedFormDepth = 0): Js
   }
 
   if (
-    schema.properties &&
+    readSchemaField(schema, "properties") &&
     ((nestedFormDepth > 0 && nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) ||
-      (schema.additionalProperties && typeof schema.additionalProperties === "object"))
+      (() => {
+        const additionalProperties = readSchemaField(schema, "additionalProperties");
+        return additionalProperties && typeof additionalProperties === "object";
+      })())
   ) {
-    next.properties = Object.fromEntries(
-      Object.entries(schema.properties).map(([key, child]) => [
-        key,
-        stripSchemaForLookup(child, nestedFormDepth + 1),
-      ]),
-    );
+    const properties = readSchemaField(schema, "properties");
+    const propertyEntries = properties ? readObjectEntries(properties) : undefined;
+    if (propertyEntries) {
+      next.properties = Object.fromEntries(
+        propertyEntries.map(([key, child]) => [
+          key,
+          stripSchemaForLookup(child, nestedFormDepth + 1),
+        ]),
+      );
+    }
   }
-  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    next.additionalProperties = stripSchemaForLookup(
-      schema.additionalProperties,
-      nestedFormDepth + 1,
-    );
+  const additionalProperties = readSchemaField(schema, "additionalProperties");
+  if (additionalProperties && typeof additionalProperties === "object") {
+    next.additionalProperties = stripSchemaForLookup(additionalProperties, nestedFormDepth + 1);
   }
-  if (Array.isArray(schema.items)) {
-    next.items = schema.items.map((item) => stripSchemaForLookup(item, nestedFormDepth + 1));
-  } else if (schema.items && typeof schema.items === "object") {
-    next.items = stripSchemaForLookup(schema.items, nestedFormDepth + 1);
+  const items = readSchemaField(schema, "items");
+  if (Array.isArray(items)) {
+    next.items = items.map((item) => stripSchemaForLookup(item, nestedFormDepth + 1));
+  } else if (items && typeof items === "object") {
+    next.items = stripSchemaForLookup(items, nestedFormDepth + 1);
   }
   if (nestedFormDepth <= LOOKUP_SCHEMA_NESTED_FORM_DEPTH) {
     for (const key of LOOKUP_SCHEMA_COMPOSITION_KEYS) {
-      const variants = schema[key];
+      const variants = readSchemaField(schema, key);
       if (!Array.isArray(variants)) {
         continue;
       }
@@ -766,7 +816,8 @@ function buildLookupChildren(
   resolveReloadMetadata?: ConfigSchemaReloadMetadataResolver,
 ): ConfigSchemaLookupChild[] {
   const children: ConfigSchemaLookupChild[] = [];
-  const required = new Set(schema.required ?? []);
+  const requiredValues = readSchemaField(schema, "required");
+  const required = new Set(Array.isArray(requiredValues) ? requiredValues : []);
 
   const pushChild = (key: string, childSchema: JsonSchemaObject, isRequired: boolean) => {
     const childPath = path ? `${path}.${key}` : key;
@@ -784,15 +835,17 @@ function buildLookupChildren(
     });
   };
 
-  for (const [key, childSchema] of Object.entries(schema.properties ?? {})) {
+  const properties = readSchemaField(schema, "properties");
+  for (const [key, childSchema] of properties ? (readObjectEntries(properties) ?? []) : []) {
     pushChild(key, childSchema, required.has(key));
   }
 
+  const additionalProperties = readSchemaField(schema, "additionalProperties");
   const wildcardSchema =
-    (schema.additionalProperties &&
-    typeof schema.additionalProperties === "object" &&
-    !Array.isArray(schema.additionalProperties)
-      ? schema.additionalProperties
+    (additionalProperties &&
+    typeof additionalProperties === "object" &&
+    !Array.isArray(additionalProperties)
+      ? additionalProperties
       : null) ?? resolveItemsSchema(schema);
   if (wildcardSchema) {
     pushChild("*", wildcardSchema, false);

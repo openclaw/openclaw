@@ -19,22 +19,59 @@ export function asSchemaObject(value: unknown): object | null {
   return value;
 }
 
+function readSchemaField<K extends keyof JsonSchemaObject>(
+  schema: JsonSchemaObject,
+  key: K,
+): JsonSchemaObject[K] | undefined {
+  try {
+    return schema[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readObjectKeys(value: Record<string, unknown>): string[] | undefined {
+  try {
+    return Object.keys(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function readObjectEntries<T>(value: Record<string, T>): Array<[string, T]> | undefined {
+  try {
+    return Object.entries(value);
+  } catch {
+    return undefined;
+  }
+}
+
 export function schemaHasChildren(schema: JsonSchemaObject): boolean {
-  if (schema.properties && Object.keys(schema.properties).length > 0) {
+  const properties = readSchemaField(schema, "properties");
+  if (properties) {
+    const keys = readObjectKeys(properties);
+    if (!keys || keys.length > 0) {
+      return true;
+    }
+  }
+  const additionalProperties = readSchemaField(schema, "additionalProperties");
+  if (additionalProperties && typeof additionalProperties === "object") {
     return true;
   }
-  if (schema.additionalProperties && typeof schema.additionalProperties === "object") {
-    return true;
+  const items = readSchemaField(schema, "items");
+  if (Array.isArray(items)) {
+    return items.some((entry) => typeof entry === "object" && entry !== null);
   }
-  if (Array.isArray(schema.items)) {
-    return schema.items.some((entry) => typeof entry === "object" && entry !== null);
-  }
-  for (const branch of [schema.oneOf, schema.anyOf, schema.allOf]) {
+  for (const branch of [
+    readSchemaField(schema, "oneOf"),
+    readSchemaField(schema, "anyOf"),
+    readSchemaField(schema, "allOf"),
+  ]) {
     if (branch?.some((entry) => entry && typeof entry === "object" && schemaHasChildren(entry))) {
       return true;
     }
   }
-  return Boolean(schema.items && typeof schema.items === "object");
+  return Boolean(items && typeof items === "object");
 }
 
 export function findWildcardHintMatch<T>(params: {
@@ -51,7 +88,7 @@ export function findWildcardHintMatch<T>(params: {
       }
     | undefined;
 
-  for (const [hintPath, hint] of Object.entries(params.uiHints)) {
+  for (const [hintPath, hint] of readObjectEntries(params.uiHints) ?? []) {
     const hintParts = params.splitPath(hintPath);
     if (hintParts.length !== targetParts.length) {
       continue;
