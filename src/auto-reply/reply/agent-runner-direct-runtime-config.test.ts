@@ -342,7 +342,10 @@ describe("runReplyAgent runtime config", () => {
     replyParams.storePath = "/tmp/sessions.json";
     replyParams.sessionEntry = sessionEntry;
     replyParams.sessionStore = sessionStore;
-    replyParams.replyOperation = createReplyOperation();
+    const updateSessionIdSpy = vi.fn();
+    const replyOperation = createReplyOperation();
+    replyOperation.updateSessionId = updateSessionIdSpy;
+    replyParams.replyOperation = replyOperation;
     runPreflightCompactionIfNeededMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
     );
@@ -371,16 +374,18 @@ describe("runReplyAgent runtime config", () => {
         onActiveSessionEntry: (entry: typeof sessionEntry) => void;
         onNewSession: (sessionId: string, sessionFile: string) => void;
       };
+      const sessionFile = "/tmp/session-rotated.jsonl";
       const nextEntry = {
         ...resetParams.activeSessionEntry,
         sessionId: "session-rotated",
-        sessionFile: "/tmp/session-rotated.jsonl",
+        updatedAt: 1,
+        memoryFlushFailureCount: 0,
         compactionCount: 0,
       };
       resetParams.followupRun.run.sessionId = nextEntry.sessionId;
-      resetParams.followupRun.run.sessionFile = nextEntry.sessionFile;
+      resetParams.followupRun.run.sessionFile = sessionFile;
       resetParams.onActiveSessionEntry(nextEntry);
-      resetParams.onNewSession(nextEntry.sessionId, nextEntry.sessionFile);
+      resetParams.onNewSession(nextEntry.sessionId, sessionFile);
       return true;
     });
 
@@ -397,7 +402,7 @@ describe("runReplyAgent runtime config", () => {
       queueKey: "main",
     });
     expect(followupRun.run.sessionId).toBe("session-rotated");
-    expect(replyParams.replyOperation!.updateSessionId).toHaveBeenCalledWith("session-rotated");
+    expect(updateSessionIdSpy).toHaveBeenCalledWith("session-rotated");
     expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
   });
 
@@ -419,6 +424,8 @@ describe("runReplyAgent runtime config", () => {
     replyParams.sessionEntry = sessionEntry;
     replyParams.sessionStore = sessionStore;
     const replyOp = createReplyOperation();
+    const updateSessionIdSpy = vi.fn();
+    replyOp.updateSessionId = updateSessionIdSpy;
     replyParams.replyOperation = replyOp;
     runPreflightCompactionIfNeededMock.mockImplementation(
       async (params: { sessionEntry?: unknown }) => params.sessionEntry,
@@ -440,23 +447,25 @@ describe("runReplyAgent runtime config", () => {
         onActiveSessionEntry: (entry: typeof sessionEntry) => void;
         onNewSession: (sessionId: string, sessionFile: string) => void;
       };
+      const sessionFile = "/tmp/session-after-exhaustion.jsonl";
       const nextEntry = {
         ...resetParams.activeSessionEntry,
         sessionId: "session-after-exhaustion",
-        sessionFile: "/tmp/session-after-exhaustion.jsonl",
+        updatedAt: 1,
+        memoryFlushFailureCount: 0,
         compactionCount: 0,
       };
       resetParams.followupRun.run.sessionId = nextEntry.sessionId;
-      resetParams.followupRun.run.sessionFile = nextEntry.sessionFile;
+      resetParams.followupRun.run.sessionFile = sessionFile;
       resetParams.onActiveSessionEntry(nextEntry);
-      resetParams.onNewSession(nextEntry.sessionId, nextEntry.sessionFile);
+      resetParams.onNewSession(nextEntry.sessionId, sessionFile);
       return true;
     });
 
     await runReplyAgent(replyParams);
 
     expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
-    expect(replyOp.updateSessionId).toHaveBeenCalledWith("session-after-exhaustion");
+    expect(updateSessionIdSpy).toHaveBeenCalledWith("session-after-exhaustion");
     expect(followupRun.run.sessionId).toBe("session-after-exhaustion");
   });
 
