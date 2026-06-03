@@ -19,6 +19,7 @@ import {
   startServerWithClient,
   trackConnectChallengeNonce,
 } from "./test-helpers.js";
+import { acknowledgeNodeInvokeRequestForTest } from "./test-helpers.node-invoke.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const NODE_CONNECT_TIMEOUT_MS = 10_000;
@@ -433,27 +434,7 @@ describe("node.invoke approval bypass", () => {
         commands,
         deviceIdentity: resolvedDeviceIdentity,
         onHelloOk: () => readyResolve?.(),
-        onEvent: (evt) => {
-          if (evt.event !== "node.invoke.request") {
-            return;
-          }
-          onInvoke(evt.payload);
-          const payload = evt.payload as {
-            id?: string;
-            nodeId?: string;
-          };
-          const id = typeof payload?.id === "string" ? payload.id : "";
-          const nodeId = typeof payload?.nodeId === "string" ? payload.nodeId : "";
-          if (!id || !nodeId) {
-            return;
-          }
-          void client.request("node.invoke.result", {
-            id,
-            nodeId,
-            ok: true,
-            payloadJSON: JSON.stringify({ ok: true }),
-          });
-        },
+        onEvent: (event) => acknowledgeNodeInvokeRequestForTest({ client, event, onInvoke }),
       });
       client.start();
       let timer: NodeJS.Timeout | undefined;

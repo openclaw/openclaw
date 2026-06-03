@@ -714,6 +714,7 @@ private fun PhoneCapabilitiesScreen(
   val locationPreciseEnabled by viewModel.locationPreciseEnabled.collectAsState()
   val preventSleep by viewModel.preventSleep.collectAsState()
   val canvasDebugStatusEnabled by viewModel.canvasDebugStatusEnabled.collectAsState()
+  val installedAppsSharingEnabled by viewModel.installedAppsSharingEnabled.collectAsState()
   val cameraPermissionLauncher =
     rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
       viewModel.setCameraEnabled(granted)
@@ -768,6 +769,13 @@ private fun PhoneCapabilitiesScreen(
         listOf(
           SettingsToggleRow("Camera", "Allow camera tools when requested.", Icons.Default.CameraAlt, cameraEnabled, ::setCameraAccess),
           SettingsToggleRow("Precise Location", "Share precise location while location is enabled.", Icons.Default.LocationOn, locationPreciseEnabled, ::setPreciseLocation),
+          SettingsToggleRow(
+            "Installed Apps",
+            if (installedAppsSharingEnabled) "OpenClaw can list launcher-visible apps." else "App list stays on this phone.",
+            Icons.Default.Storage,
+            installedAppsSharingEnabled,
+            viewModel::setInstalledAppsSharingEnabled,
+          ),
           SettingsToggleRow("Keep Awake", "Keep the node available during active work.", Icons.Default.Bolt, preventSleep, viewModel::setPreventSleep),
           SettingsToggleRow("Canvas Status", "Show screen-sharing debug state.", Icons.AutoMirrored.Filled.ScreenShare, canvasDebugStatusEnabled, viewModel::setCanvasDebugStatusEnabled),
         ),
@@ -1245,6 +1253,7 @@ private fun cronJobStatus(job: GatewayCronJobSummary): ClawStatus {
   }
 }
 
+/** Applies query/system visibility rules while always preserving selected packages. */
 internal fun filterNotificationAppsForPicker(
   apps: List<InstalledApp>,
   selectedPackages: Set<String>,
@@ -1263,6 +1272,7 @@ internal fun filterNotificationAppsForPicker(
   }
 }
 
+/** Summarizes allowlist/blocklist mode with an empty-state warning when needed. */
 private fun notificationPackageSelectionSummary(
   mode: NotificationPackageFilterMode,
   selectedCount: Int,
@@ -1282,6 +1292,7 @@ private fun notificationPackageSelectionSummary(
       }
   }
 
+/** Builds compact two-letter app badges from package-picker labels. */
 private fun notificationAppBadge(label: String): String {
   val initials =
     label

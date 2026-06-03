@@ -141,6 +141,11 @@ describe("package acceptance workflow", () => {
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
+    expect(hydratePnpm.run).toContain("reset_crabbox_pnpm_path");
+    expect(hydratePnpm.run).toContain("/var/tmp/openclaw-pnpm-*) rm -rf");
+    expect(hydratePnpm.run).toContain(
+      '[ "$(readlink node_modules)" = "${PNPM_CONFIG_MODULES_DIR:-}" ]',
+    );
     expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
       "timeout --signal=TERM --kill-after=10s 30s git",
     );
@@ -1367,11 +1372,13 @@ describe("package artifact reuse", () => {
     expect(npmWorkflow).toContain("Verify full release validation target");
     expect(npmWorkflow).not.toContain("Build and smoke test final Docker runtime image");
     expect(fullReleaseWorkflow).toContain("docker_runtime_assets_preflight");
-    expect(fullReleaseWorkflow).toContain("Build and smoke test final Docker runtime image");
+    expect(fullReleaseWorkflow).not.toContain("Build and smoke test final Docker runtime image");
     expect(fullReleaseWorkflow).toContain("docker build");
-    expect(fullReleaseWorkflow).toContain("node /app/openclaw.mjs agent");
+    expect(fullReleaseWorkflow).toContain("--target runtime-assets");
+    expect(fullReleaseWorkflow).toContain("timeout --kill-after=30s 15m docker build");
+    expect(fullReleaseWorkflow).not.toContain("node /app/openclaw.mjs agent");
     expect(fullReleaseWorkflow).toContain('OPENCLAW_EXTENSIONS="diagnostics-otel,codex"');
-    expect(fullReleaseWorkflow).toContain("/app/src/agents/templates/HEARTBEAT.md");
+    expect(fullReleaseWorkflow).not.toContain("/app/src/agents/templates/HEARTBEAT.md");
     expect(fullReleaseWorkflow).toContain("inputs.rerun_group == 'all'");
     expect(fullReleaseWorkflow).toContain(
       "needs.docker_runtime_assets_preflight.result == 'success'",

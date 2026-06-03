@@ -91,8 +91,8 @@ function runSpawnCall(spawnCall, label) {
   let forwardedSignal = null;
   let forceKillTimer = null;
   // Keep UI dev children in the foreground process group for native TTY
-  // resize/job-control behavior. Only forward direct wrapper termination.
-  const forwardedSignals = ["SIGTERM"];
+  // resize/job-control behavior. Forward direct wrapper shutdown signals.
+  const forwardedSignals = ["SIGTERM", "SIGHUP"];
   const signalHandlers = new Map(
     forwardedSignals.map((signal) => [
       signal,

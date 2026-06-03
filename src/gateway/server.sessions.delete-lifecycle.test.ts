@@ -6,7 +6,7 @@ import {
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionLifecycleHookMocks,
@@ -22,7 +22,12 @@ import {
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const {
+  createConfiguredGlobalAgentSessionStore,
+  createSessionStoreDir,
+  openClient,
+  resetConfiguredGlobalAgentSessionStore,
+} = setupGatewaySessionsTestHarness();
 
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
@@ -178,66 +183,22 @@ test("sessions.delete limits plugin-runtime cleanup to sessions owned by that pl
 });
 
 test("sessions.delete scopes selected global deletes to the requested agent", async () => {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "global" };
-  await writeSessionStore({
-    entries: {},
-    storePath: path.join(dir, "prime-sessions.json"),
-  });
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
-  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
-  await fs.writeFile(
-    mainStorePath,
-    JSON.stringify({ global: sessionStoreEntry("sess-main-global") }, null, 2),
-    "utf-8",
-  );
-  await fs.writeFile(
-    workStorePath,
-    JSON.stringify({ global: sessionStoreEntry("sess-work-global") }, null, 2),
-    "utf-8",
-  );
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required");
-  }
-  await fs.writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-        session: { scope: "global", store: storeTemplate },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf-8",
-  );
-  const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js");
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
 
   await expectSessionDeleteSucceeds({
     key: "global",
     agentId: "work",
     deleteTranscript: false,
   });
-  const mainStore = JSON.parse(await fs.readFile(mainStorePath, "utf-8")) as {
+  const mainStore = JSON.parse(await fs.readFile(globalStores.mainStorePath, "utf-8")) as {
     global?: { sessionId?: string };
   };
-  const workStore = JSON.parse(await fs.readFile(workStorePath, "utf-8")) as {
+  const workStore = JSON.parse(await fs.readFile(globalStores.workStorePath, "utf-8")) as {
     global?: { sessionId?: string };
   };
   expect(mainStore.global?.sessionId).toBe("sess-main-global");
   expect(workStore.global).toBeUndefined();
-  testState.sessionStorePath = undefined;
-  testState.sessionConfig = undefined;
-  await fs.writeFile(configPath, "{}\n", "utf-8");
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
 test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {

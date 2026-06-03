@@ -256,9 +256,22 @@ openclaw_e2e_write_state_env() {
   } >"$target"
 }
 openclaw_e2e_install_trash_shim() {
-  export PATH="/tmp/openclaw-bin:$PATH"
-  mkdir -p /tmp/openclaw-bin
-  cat >/tmp/openclaw-bin/trash <<'TRASH'
+  local shim_dir="${OPENCLAW_E2E_BIN_DIR:-}"
+  if [ -z "$shim_dir" ]; then
+    if [ -n "${OPENCLAW_STATE_DIR:-}" ]; then
+      shim_dir="$OPENCLAW_STATE_DIR/e2e-bin"
+    else
+      shim_dir="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-bin.XXXXXX")"
+    fi
+    OPENCLAW_E2E_BIN_DIR="$shim_dir"
+    export OPENCLAW_E2E_BIN_DIR
+  fi
+  case ":$PATH:" in
+    *":$shim_dir:"*) ;;
+    *) export PATH="$shim_dir:$PATH" ;;
+  esac
+  mkdir -p "$shim_dir"
+  cat >"$shim_dir/trash" <<'TRASH'
 #!/usr/bin/env bash
 set -euo pipefail
 trash_dir="$HOME/.Trash"
@@ -271,7 +284,7 @@ for target in "$@"; do
   mv "$target" "$dest"
 done
 TRASH
-  chmod +x /tmp/openclaw-bin/trash
+  chmod +x "$shim_dir/trash"
 }
 openclaw_e2e_run_script_with_pty() {
   local command="$1"
