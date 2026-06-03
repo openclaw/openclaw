@@ -563,6 +563,16 @@ function createClient(
   if (optionsHeaders) {
     Object.assign(headers, optionsHeaders);
   }
+  console.error(
+    "[fw-cache-proof:request] " +
+      JSON.stringify({
+        provider: model.provider,
+        model: model.id,
+        xSessionAffinity: headers["x-session-affinity"]
+          ? String(headers["x-session-affinity"]).slice(0, 12) + "...redacted"
+          : null,
+      }),
+  );
 
   const defaultHeaders =
     model.provider === "cloudflare-ai-gateway"
