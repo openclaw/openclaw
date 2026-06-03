@@ -1,3 +1,7 @@
+/**
+ * Channel-neutral thread-binding message builders shared by plugins, ACP focus, and subagent flows.
+ * Keep text system-prefixed and compact because callers post it directly into user-visible threads.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { prefixSystemMessage } from "../infra/system-message.js";
 
