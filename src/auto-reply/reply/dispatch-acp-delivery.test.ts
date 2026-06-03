@@ -1123,7 +1123,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(delivered).toBe(true);
     expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-    const routedPayload = deliveryMocks.routeReply.mock.calls[0][0].payload;
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ payload: { mediaUrls?: string[]; text?: string } }]
+    >;
+    const routedPayload = routeParams.payload;
     expect(routedPayload.mediaUrls).toEqual(["https://example.com/image.png"]);
     expect(routedPayload.text).toBeUndefined();
   });
@@ -1156,7 +1159,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(delivered).toBe(true);
     expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-    const routedPayload = deliveryMocks.routeReply.mock.calls[0][0].payload;
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ payload: { mediaUrls?: string[]; text?: string } }]
+    >;
+    const routedPayload = routeParams.payload;
     expect(routedPayload.mediaUrls).toEqual(["https://example.com/tool-image.png"]);
     expect(routedPayload.text).toBeUndefined();
   });
@@ -1186,7 +1192,10 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
 
     expect(delivered).toBe(true);
     expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
-    const routedPayload = deliveryMocks.routeReply.mock.calls[0][0].payload;
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ payload: { text?: string } }]
+    >;
+    const routedPayload = routeParams.payload;
     expect(routedPayload.text).toBe("Searching...");
   });
 
