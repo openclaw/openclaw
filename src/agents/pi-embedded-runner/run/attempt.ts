@@ -15,6 +15,7 @@ import {
   ensureGlobalUndiciEnvProxyDispatcher,
   ensureGlobalUndiciStreamTimeouts,
 } from "../../../infra/net/undici-global-dispatcher.js";
+import { materializeSkillsForUser, resolveSkillUserId } from "../../../infra/skills-mysql.js";
 import { MAX_IMAGE_BYTES } from "../../../media/constants.js";
 import {
   isOllamaCompatProvider,
@@ -61,6 +62,7 @@ import {
   resolveChannelMessageToolHints,
   resolveChannelReactionGuidance,
 } from "../../channel-tools.js";
+import { createContextCaptureLogger } from "../../context-capture-log.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../defaults.js";
 import { resolveOpenClawDocsPath } from "../../docs-path.js";
 import { isTimeoutError } from "../../failover-error.js";
@@ -412,6 +414,19 @@ export async function runEmbeddedAttempt(
 
   let restoreSkillEnv: (() => void) | undefined;
   try {
+    // Materialize the user's DB-backed skills (SKILL.md + executable scripts)
+    // into the real workspace so `read`/`exec` can use them. Best-effort: on DB
+    // failure we fall back to filesystem skills below.
+    const skillUserId = resolveSkillUserId(params.sessionKey, sessionAgentId);
+    if (skillUserId) {
+      try {
+        await materializeSkillsForUser(effectiveWorkspace, skillUserId);
+      } catch (err) {
+        log.warn(
+          `[skills-db] materialize failed for user=${skillUserId}: ${formatErrorMessage(err)}`,
+        );
+      }
+    }
     const { shouldLoadSkillEntries, skillEntries } = resolveEmbeddedRunSkillEntries({
       workspaceDir: effectiveWorkspace,
       config: params.config,
@@ -1117,6 +1132,18 @@ export async function runEmbeddedAttempt(
         modelApi: params.model.api,
         workspaceDir: params.workspaceDir,
       });
+      const contextCaptureLogger = createContextCaptureLogger({
+        env: process.env,
+        runId: params.runId,
+        sessionId: activeSession.sessionId,
+        sessionKey: params.sessionKey,
+        provider: params.provider,
+        modelId: params.modelId,
+        modelApi: params.model.api,
+        // Sandbox-aware, resolved working folder for this turn — this is where
+        // the per-call context log lands (<workspace>/context-log.jsonl).
+        workspaceDir: effectiveWorkspace,
+      });
 
       // Rebuild each turn from the session's original stream base so prior-turn
       // wrappers do not pin us to stale provider/API transport behavior.
@@ -1360,6 +1387,11 @@ export async function runEmbeddedAttempt(
 
       if (anthropicPayloadLogger) {
         activeSession.agent.streamFn = anthropicPayloadLogger.wrapStreamFn(
+          activeSession.agent.streamFn,
+        );
+      }
+      if (contextCaptureLogger) {
+        activeSession.agent.streamFn = contextCaptureLogger.wrapStreamFn(
           activeSession.agent.streamFn,
         );
       }
