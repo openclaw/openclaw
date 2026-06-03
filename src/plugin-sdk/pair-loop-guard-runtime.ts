@@ -44,11 +44,17 @@ type PairLoopGuardEntry = {
 export type PairLoopGuard = {
   /** Records one sender/receiver interaction and reports whether it enters or is inside cooldown. */
   recordAndCheck: (params: {
+    /** Channel/account/provider scope that owns this conversation. */
     scopeId: string;
+    /** Conversation/thread identifier where the bidirectional exchange happened. */
     conversationId: string;
+    /** Sender id for this event; paired with receiverId without direction. */
     senderId: string;
+    /** Receiver id for this event; paired with senderId without direction. */
     receiverId: string;
+    /** Resolved guard thresholds for the current channel/account. */
     settings: PairLoopGuardSettings;
+    /** Optional test/runtime clock override in epoch milliseconds. */
     nowMs?: number;
   }) => PairLoopGuardResult;
   /** Clears all tracked pair state and scheduled pruning state. */
