@@ -21,6 +21,7 @@ const GATEWAY_DISPATCH_TOP_LEVEL_KEYS = [
   "session",
 ] as const;
 
+/** Options for reading the reduced config surface used by Gateway dispatch. */
 type GatewayDispatchConfigReadOptions = {
   configPath?: string;
   env?: NodeJS.ProcessEnv;
@@ -58,6 +59,7 @@ function projectGatewayDispatchConfig(value: unknown): OpenClawConfig {
   return projected as OpenClawConfig;
 }
 
+// Main session keys are process-local; Gateway dispatch always sees the canonical main key.
 function applyGatewayDispatchSessionDefaults(config: OpenClawConfig): OpenClawConfig {
   if (config.session?.mainKey === undefined) {
     return config;
