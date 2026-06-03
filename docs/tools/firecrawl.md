@@ -8,7 +8,7 @@ read_when:
 title: "Firecrawl"
 ---
 
-OpenClaw can use **Firecrawl** in three ways:
+OpenClaw can use **[Firecrawl](https://www.firecrawl.dev)** in three ways:
 
 - as the `web_search` provider
 - as explicit plugin tools: `firecrawl_search` and `firecrawl_scrape`
@@ -19,7 +19,7 @@ which helps with JS-heavy sites or pages that block plain HTTP fetches.
 
 ## Get an API key
 
-1. Create a Firecrawl account and generate an API key.
+1. Create a [Firecrawl account](https://www.firecrawl.dev/app/api-keys) and generate an API key.
 2. Store it in config or set `FIRECRAWL_API_KEY` in the gateway environment.
 
 ## Configure Firecrawl search
