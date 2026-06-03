@@ -625,6 +625,10 @@ function resolvePreferredGlobalManagerCommand(
   return resolvePreferredNpmCommand(pkgRoot) ?? manager;
 }
 
+/**
+ * Resolves the package-manager command to execute for a global install.
+ * npm may use the npm binary beside an existing package root when available.
+ */
 export function resolveGlobalInstallCommand(
   manager: GlobalInstallManager,
   pkgRoot?: string | null,
@@ -655,6 +659,10 @@ function resolveInstallCommandForManager(
     : resolveGlobalInstallCommand(manager, pkgRoot);
 }
 
+/**
+ * Reads the global `node_modules` root for a package manager command.
+ * Bun uses its deterministic install root because it has no `root -g` command.
+ */
 export async function resolveGlobalRoot(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   runCommand: CommandRunner,
@@ -674,6 +682,7 @@ export async function resolveGlobalRoot(
   return root || null;
 }
 
+/** Resolves the OpenClaw package root under a package manager's global root. */
 export async function resolveGlobalPackageRoot(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   runCommand: CommandRunner,
@@ -687,6 +696,10 @@ export async function resolveGlobalPackageRoot(
   return path.join(root, PRIMARY_PACKAGE_NAME);
 }
 
+/**
+ * Resolves the effective global install target, honoring an existing package
+ * root when requested and detecting pnpm or bun layouts before command probes.
+ */
 export async function resolveGlobalInstallTarget(params: {
   manager: GlobalInstallManager | ResolvedGlobalInstallCommand;
   runCommand: CommandRunner;
