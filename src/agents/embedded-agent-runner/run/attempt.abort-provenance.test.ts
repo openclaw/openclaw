@@ -1,38 +1,44 @@
 import { describe, expect, it } from "vitest";
-import { isNonUserAbortReason, shouldSuppressTakeoverErrorOnUserAbort } from "./attempt.js";
+import { isUserAbortReason, shouldSuppressTakeoverErrorOnUserAbort } from "./attempt.js";
 import { EmbeddedAttemptSessionTakeoverError } from "./attempt.session-lock.js";
 
-describe("isNonUserAbortReason", () => {
-  it("returns true for TimeoutError", () => {
+describe("isUserAbortReason", () => {
+  it("returns true for user stop AbortError", () => {
+    const err = new Error("chat run aborted by user stop command");
+    err.name = "AbortError";
+    expect(isUserAbortReason(err)).toBe(true);
+  });
+
+  it("returns false for TimeoutError", () => {
     const err = new Error("chat run timed out");
     err.name = "TimeoutError";
-    expect(isNonUserAbortReason(err)).toBe(true);
+    expect(isUserAbortReason(err)).toBe(false);
   });
 
-  it("returns true for restart AbortError", () => {
+  it("returns false for restart AbortError", () => {
     const err = new Error("chat run aborted for gateway restart");
     err.name = "AbortError";
-    expect(isNonUserAbortReason(err)).toBe(true);
+    expect(isUserAbortReason(err)).toBe(false);
   });
 
-  it("returns true for auth-revoked AbortError", () => {
+  it("returns false for auth-revoked AbortError", () => {
     const err = new Error("chat run aborted for provider auth revocation");
     err.name = "AbortError";
-    expect(isNonUserAbortReason(err)).toBe(true);
+    expect(isUserAbortReason(err)).toBe(false);
   });
 
   it("returns false for undefined", () => {
-    expect(isNonUserAbortReason(undefined)).toBe(false);
+    expect(isUserAbortReason(undefined)).toBe(false);
   });
 
-  it("returns false for plain AbortError without restart/auth-revoked message", () => {
+  it("returns false for plain AbortError without user stop message", () => {
     const err = new Error("user pressed stop");
     err.name = "AbortError";
-    expect(isNonUserAbortReason(err)).toBe(false);
+    expect(isUserAbortReason(err)).toBe(false);
   });
 
   it("returns false for generic Error", () => {
-    expect(isNonUserAbortReason(new Error("something"))).toBe(false);
+    expect(isUserAbortReason(new Error("something"))).toBe(false);
   });
 });
 

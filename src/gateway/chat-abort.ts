@@ -71,6 +71,11 @@ function createChatAbortSignalReason(stopReason: string | undefined): Error | un
     reason.name = "AbortError";
     return reason;
   }
+  if (stopReason === "stop") {
+    const reason = new Error("chat run aborted by user stop command");
+    reason.name = "AbortError";
+    return reason;
+  }
   return undefined;
 }
 
