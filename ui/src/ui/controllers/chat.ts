@@ -171,11 +171,13 @@ function currentLiveToolCallIds(state: ChatState): string[] {
     : [];
 }
 
-function hasPersistedCurrentToolStreamMessages(messages: unknown[], state: ChatState): boolean {
+function persistedCurrentToolStreamIds(messages: unknown[], state: ChatState): Set<string> {
   const liveToolIds = currentLiveToolCallIds(state);
+  const matchedToolIds = new Set<string>();
   if (liveToolIds.length === 0) {
-    return false;
+    return matchedToolIds;
   }
+  const liveToolIdSet = new Set(liveToolIds);
   const persistedToolIds = new Set<string>();
   for (const message of messages.slice(lastUserMessageIndex(messages) + 1)) {
     if (!isPersistedToolHistoryMessage(message)) {
@@ -185,7 +187,12 @@ function hasPersistedCurrentToolStreamMessages(messages: unknown[], state: ChatS
       persistedToolIds.add(id);
     }
   }
-  return liveToolIds.every((id) => persistedToolIds.has(id));
+  for (const id of persistedToolIds) {
+    if (liveToolIdSet.has(id)) {
+      matchedToolIds.add(id);
+    }
+  }
+  return matchedToolIds;
 }
 
 function isTextOnlyContent(content: unknown): boolean {
@@ -546,7 +553,7 @@ function appendVisibleStreamStateMessages(
   messages: unknown[],
   state: ChatState,
   replacementMessages: unknown[] = [],
-  opts?: { includeCurrent?: boolean },
+  opts?: { includeCurrent?: boolean; requirePersistedTool?: boolean },
 ): unknown[] {
   let nextMessages = messages;
   for (const part of visibleAssistantStreamParts(state, opts)) {
@@ -557,6 +564,9 @@ function appendVisibleStreamStateMessages(
       part.source === "segment"
         ? currentToolStreamMessageIndex(nextMessages, state, part.toolCallId)
         : -1;
+    if (opts?.requirePersistedTool && toolIndex < 0) {
+      continue;
+    }
     const insertIndex = toolIndex >= 0 ? toolIndex : nextMessages.length;
     const streamMessage = buildAssistantStreamMessage(
       part.text,
@@ -883,6 +893,57 @@ function clearToolStreamSegments(state: ChatState) {
   }
 }
 
+function prunePersistedToolStreamMessages(state: ChatState, persistedToolIds: Set<string>) {
+  if (persistedToolIds.size === 0) {
+    return;
+  }
+  const toolHost = state as ChatState & {
+    chatStreamSegments?: Array<{ text?: unknown; ts?: unknown; toolCallId?: unknown }>;
+    chatToolMessages?: unknown[];
+    toolStreamById?: Map<string, unknown>;
+    toolStreamOrder?: unknown[];
+  };
+  const liveToolIds = currentLiveToolCallIds(state);
+  if (toolHost.toolStreamById instanceof Map) {
+    for (const id of persistedToolIds) {
+      toolHost.toolStreamById.delete(id);
+    }
+  }
+  if (Array.isArray(toolHost.toolStreamOrder)) {
+    toolHost.toolStreamOrder = toolHost.toolStreamOrder.filter(
+      (id): id is string => typeof id === "string" && !persistedToolIds.has(id),
+    );
+  }
+  if (Array.isArray(toolHost.chatToolMessages)) {
+    toolHost.chatToolMessages = toolHost.chatToolMessages.filter((message) => {
+      const ids = collectToolCallIds(message);
+      return ids.every((id) => !persistedToolIds.has(id));
+    });
+  }
+  if (!Array.isArray(toolHost.chatStreamSegments)) {
+    return;
+  }
+  let lastPrunedAccumulatedText: string | null = null;
+  toolHost.chatStreamSegments = toolHost.chatStreamSegments.flatMap((segment, index) => {
+    const explicitToolCallId =
+      typeof segment.toolCallId === "string" && segment.toolCallId.trim()
+        ? segment.toolCallId.trim()
+        : null;
+    const toolCallId = explicitToolCallId ?? liveToolIds[index] ?? null;
+    const text = typeof segment.text === "string" ? segment.text : "";
+    if (toolCallId && persistedToolIds.has(toolCallId)) {
+      if (text.trim()) {
+        lastPrunedAccumulatedText = text;
+      }
+      return [];
+    }
+    const nextText = lastPrunedAccumulatedText
+      ? trimAccumulatedVisibleStreamText(text, lastPrunedAccumulatedText)
+      : text;
+    return [{ ...segment, text: nextText }];
+  });
+}
+
 function resolveDeltaChatStreamText(
   currentStream: string | null,
   payload: ChatEventPayload,
@@ -1102,18 +1163,19 @@ async function loadChatHistoryUncached(
         visibleStreamParts.every((part) =>
           hasAssistantStreamPartReplacement(state.chatMessages, part),
         );
-      const historyReplacedToolStream = hasPersistedCurrentToolStreamMessages(
-        state.chatMessages,
-        state,
-      );
-      const liveToolStreamReplaced =
-        currentLiveToolCallIds(state).length === 0 || historyReplacedToolStream;
+      const liveToolIds = currentLiveToolCallIds(state);
+      const persistedToolStreamIds = persistedCurrentToolStreamIds(state.chatMessages, state);
+      const historyReplacedToolStream =
+        liveToolIds.length > 0 && liveToolIds.every((id) => persistedToolStreamIds.has(id));
+      const historyReplacedSomeToolStream = persistedToolStreamIds.size > 0;
+      const liveToolStreamReplaced = liveToolIds.length === 0 || historyReplacedToolStream;
       if (visibleStreamParts.length === 0 || historyReplacedStream) {
         if (liveToolStreamReplaced) {
           // Clear all streaming state — history includes tool results and text
           // inline, so keeping streaming artifacts would cause duplicates.
           maybeResetToolStream(state);
         } else {
+          prunePersistedToolStreamMessages(state, persistedToolStreamIds);
           clearToolStreamSegments(state);
         }
         state.chatStream = null;
@@ -1139,6 +1201,17 @@ async function loadChatHistoryUncached(
           state.chatStreamStartedAt = null;
         }
         maybeResetToolStream(state);
+      } else if (historyReplacedSomeToolStream) {
+        const visibleCurrentTail = visibleCurrentAssistantStreamTail(state);
+        state.chatMessages = appendVisibleStreamStateMessages(state.chatMessages, state, [], {
+          includeCurrent: false,
+          requirePersistedTool: true,
+        });
+        state.chatStream = visibleCurrentTail;
+        if (state.chatStream === null) {
+          state.chatStreamStartedAt = null;
+        }
+        prunePersistedToolStreamMessages(state, persistedToolStreamIds);
       }
     }
     recordChatHistoryTiming(state, "applied", startedAtMs, {
