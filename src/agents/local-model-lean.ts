@@ -2,18 +2,31 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
+  "browser",
+  "cron",
+  "message",
+  "web_fetch",
+  "web_search",
+  "x_search",
+]);
 
-function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<string> {
+function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): string[] {
   if (!names) {
-    return new Set();
+    return [];
   }
-  return new Set(
-    expandToolGroups([...names])
-      .map(normalizeToolName)
-      .filter((name) => name && name !== "*"),
+  return expandToolGroups([...names])
+    .map(normalizeToolName)
+    .filter((name) => name && name !== "*");
+}
+
+function isLocalModelLeanToolPreserved(toolName: string, preservedToolNames: string[]): boolean {
+  return (
+    preservedToolNames.length > 0 &&
+    isToolAllowedByPolicyName(toolName, { allow: preservedToolNames })
   );
 }
 
@@ -62,6 +75,32 @@ export function isLocalModelLeanEnabled(params: {
   return resolvedExperimental?.localModelLean ?? false;
 }
 
+export function isLocalModelLeanToolTrimmed(params: {
+  toolName: string;
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  preserveToolNames?: Iterable<string>;
+}): boolean {
+  if (
+    !isLocalModelLeanEnabled({
+      config: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+    })
+  ) {
+    return false;
+  }
+  const normalizedName = normalizeToolName(params.toolName);
+  if (!LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)) {
+    return false;
+  }
+  return !isLocalModelLeanToolPreserved(
+    normalizedName,
+    resolvePreservedLocalModelLeanToolNames(params.preserveToolNames),
+  );
+}
+
 export function filterLocalModelLeanTools(params: {
   tools: AnyAgentTool[];
   config?: OpenClawConfig;
@@ -76,7 +115,7 @@ export function filterLocalModelLeanTools(params: {
   return params.tools.filter((tool) => {
     const normalizedName = normalizeToolName(tool.name);
     return (
-      preservedToolNames.has(normalizedName) ||
+      isLocalModelLeanToolPreserved(normalizedName, preservedToolNames) ||
       !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)
     );
   });

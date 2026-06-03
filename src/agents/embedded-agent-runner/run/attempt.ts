@@ -2570,7 +2570,7 @@ export async function runEmbeddedAttempt(
         params.model,
         agentDir,
         resolvedTransport,
-        { preparedExtraParams: effectiveExtraParams },
+        { preparedExtraParams: effectiveExtraParams, localModelLeanPreserveToolNames },
       );
       if (codeModeControlsEnabledForRun) {
         activeSession.agent.streamFn = createCodexNativeWebSearchWrapper(
@@ -2578,6 +2578,9 @@ export async function runEmbeddedAttempt(
           {
             config: params.config,
             agentDir,
+            agentId: sessionAgentId,
+            sessionKey: params.sessionKey,
+            localModelLeanPreserveToolNames,
             codeModeToolSurfaceEnabled: true,
           },
         );

@@ -11,6 +11,17 @@ function tools(names: string[]): AnyAgentTool[] {
   return names.map((name) => ({ name })) as AnyAgentTool[];
 }
 
+const defaultToolNames = [
+  "read",
+  "web_search",
+  "web_fetch",
+  "x_search",
+  "browser",
+  "cron",
+  "message",
+  "exec",
+];
+
 describe("local model lean tool filtering", () => {
   it("filters heavyweight tools for one configured agent", () => {
     const cfg: OpenClawConfig = {
@@ -29,7 +40,7 @@ describe("local model lean tool filtering", () => {
     expect(isLocalModelLeanEnabled({ config: cfg, agentId: "gemma" })).toBe(true);
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools(defaultToolNames),
         config: cfg,
         agentId: "gemma",
       }).map((tool) => tool.name),
@@ -49,11 +60,31 @@ describe("local model lean tool filtering", () => {
 
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools(defaultToolNames),
         config: cfg,
-        preserveToolNames: ["browser", "cron", "group:messaging"],
+        preserveToolNames: ["group:web", "browser", "cron", "group:messaging"],
       }).map((tool) => tool.name),
-    ).toEqual(["read", "browser", "cron", "message", "exec"]);
+    ).toEqual(defaultToolNames);
+  });
+
+  it("keeps wildcard-preserved web tools when lean mode is enabled", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+    };
+
+    expect(
+      filterLocalModelLeanTools({
+        tools: tools(defaultToolNames),
+        config: cfg,
+        preserveToolNames: ["web_*"],
+      }).map((tool) => tool.name),
+    ).toEqual(["read", "web_search", "web_fetch", "exec"]);
   });
 
   it("adds reply-required message tools to lean preservation", () => {
@@ -88,7 +119,7 @@ describe("local model lean tool filtering", () => {
 
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools(defaultToolNames),
         config: cfg,
         preserveToolNames: ["*"],
       }).map((tool) => tool.name),
@@ -117,11 +148,11 @@ describe("local model lean tool filtering", () => {
     expect(isLocalModelLeanEnabled({ config: cfg, agentId: "main" })).toBe(false);
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools(defaultToolNames),
         config: cfg,
         agentId: "main",
       }).map((tool) => tool.name),
-    ).toEqual(["read", "browser", "cron", "message", "exec"]);
+    ).toEqual(defaultToolNames);
   });
 
   it("inherits global lean mode when an agent experimental block omits the flag", () => {
@@ -144,7 +175,7 @@ describe("local model lean tool filtering", () => {
     expect(isLocalModelLeanEnabled({ config: cfg, agentId: "main" })).toBe(true);
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools(defaultToolNames),
         config: cfg,
         agentId: "main",
       }).map((tool) => tool.name),
@@ -165,7 +196,7 @@ describe("local model lean tool filtering", () => {
     expect(isLocalModelLeanEnabled({ config: cfg, agentId: "ad-hoc" })).toBe(true);
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools(defaultToolNames),
         config: cfg,
         agentId: "ad-hoc",
       }).map((tool) => tool.name),
@@ -190,7 +221,7 @@ describe("local model lean tool filtering", () => {
     expect(isLocalModelLeanEnabled({ config: cfg })).toBe(true);
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools(defaultToolNames),
         config: cfg,
       }).map((tool) => tool.name),
     ).toEqual(["read", "exec"]);
@@ -219,7 +250,7 @@ describe("local model lean tool filtering", () => {
     expect(isLocalModelLeanEnabled({ config: cfg, sessionKey: "agent:gemma:main" })).toBe(true);
     expect(
       filterLocalModelLeanTools({
-        tools: tools(["read", "browser", "cron", "message", "exec"]),
+        tools: tools(defaultToolNames),
         config: cfg,
         sessionKey: "agent:gemma:main",
       }).map((tool) => tool.name),

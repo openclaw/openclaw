@@ -189,6 +189,50 @@ describe("createCodexNativeWebSearchWrapper", () => {
     expect(payloads[0]).toEqual({ model: "gpt-5.5" });
   });
 
+  it("does not inject native web_search when local model lean trims web tools", () => {
+    const payloads: Array<Record<string, unknown>> = [];
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      const payload: Record<string, unknown> = {
+        model: model.id,
+        tools: [{ type: "function", name: "read" }],
+      };
+      options?.onPayload?.(payload, model);
+      payloads.push(structuredClone(payload));
+      return createAssistantMessageEventStream();
+    };
+    const wrapped = createCodexNativeWebSearchWrapper(baseStreamFn, {
+      config: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: true,
+              openaiCodex: { enabled: true, mode: "cached" },
+            },
+          },
+        },
+      },
+    });
+
+    void wrapped(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "gateway",
+        id: "gpt-5.5",
+      } as Model<"openai-chatgpt-responses">,
+      { messages: [] },
+      {},
+    );
+
+    expect(payloads[0]?.tools).toEqual([{ type: "function", name: "read" }]);
+  });
+
   it("enforces the code-mode transport surface when the run enables it at agent scope", () => {
     const observedOptions: Array<Record<string, unknown>> = [];
     const payloads: Array<Record<string, unknown>> = [];

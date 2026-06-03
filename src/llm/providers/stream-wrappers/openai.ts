@@ -612,7 +612,14 @@ export function createOpenAITextVerbosityWrapper(
 /** @deprecated OpenAI Codex provider-owned stream helper; do not use from third-party plugins. */
 export function createCodexNativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
-  params: { config?: OpenClawConfig; agentDir?: string; codeModeToolSurfaceEnabled?: boolean },
+  params: {
+    config?: OpenClawConfig;
+    agentDir?: string;
+    agentId?: string;
+    sessionKey?: string;
+    localModelLeanPreserveToolNames?: string[];
+    codeModeToolSurfaceEnabled?: boolean;
+  },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -649,6 +656,9 @@ export function createCodexNativeWebSearchWrapper(
       modelProvider: readStringValue(model.provider),
       modelApi: readStringValue(model.api),
       agentDir: params.agentDir,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      localModelLeanPreserveToolNames: params.localModelLeanPreserveToolNames,
     });
 
     if (activation.state !== "native_active") {

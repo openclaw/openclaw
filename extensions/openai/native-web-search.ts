@@ -38,11 +38,54 @@ function shouldUseOpenAINativeWebSearchProvider(config: OpenClawConfig | undefin
 function shouldEnableOpenAINativeWebSearch(params: {
   config?: OpenClawConfig;
   model: { api?: unknown; provider?: unknown; baseUrl?: unknown };
+  agentId?: string;
+  localModelLeanPreserveToolNames?: string[];
 }): boolean {
   return (
     params.config?.tools?.web?.search?.enabled !== false &&
     shouldUseOpenAINativeWebSearchProvider(params.config) &&
+    !isLocalModelLeanTrimmingOpenAIWebSearch(params) &&
     isOpenAINativeWebSearchEligibleModel(params.model)
+  );
+}
+
+function normalizeLocalAgentId(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim().toLowerCase() : undefined;
+}
+
+function isLocalModelLeanEnabled(params: { config?: OpenClawConfig; agentId?: string }): boolean {
+  const agents = params.config?.agents;
+  const normalizedAgentId = normalizeLocalAgentId(params.agentId);
+  const agentEntry = normalizedAgentId
+    ? agents?.list?.find((entry) => normalizeLocalAgentId(entry.id) === normalizedAgentId)
+    : undefined;
+  return (
+    agentEntry?.experimental?.localModelLean ??
+    agents?.defaults?.experimental?.localModelLean ??
+    false
+  );
+}
+
+function preservesOpenAIWebSearchTool(names: string[] | undefined): boolean {
+  return (names ?? []).some((name) => {
+    const normalized = name.trim().toLowerCase();
+    return (
+      normalized === "web_search" ||
+      normalized === "web_*" ||
+      normalized === "group:web" ||
+      normalized === "group:openclaw"
+    );
+  });
+}
+
+function isLocalModelLeanTrimmingOpenAIWebSearch(params: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  localModelLeanPreserveToolNames?: string[];
+}): boolean {
+  return (
+    isLocalModelLeanEnabled(params) &&
+    !preservesOpenAIWebSearchTool(params.localModelLeanPreserveToolNames)
   );
 }
 
@@ -86,11 +129,22 @@ export function patchOpenAINativeWebSearchPayload(
 
 export function createOpenAINativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
-  params: { config?: OpenClawConfig },
+  params: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    localModelLeanPreserveToolNames?: string[];
+  },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    if (!shouldEnableOpenAINativeWebSearch({ config: params.config, model })) {
+    if (
+      !shouldEnableOpenAINativeWebSearch({
+        config: params.config,
+        model,
+        agentId: params.agentId,
+        localModelLeanPreserveToolNames: params.localModelLeanPreserveToolNames,
+      })
+    ) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {

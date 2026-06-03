@@ -30,17 +30,17 @@ Treat them differently from normal config:
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
+`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops default web/browser, scheduling, and outbound message tools — `web_search`, `web_fetch`, `x_search`, `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
 
-### Why these three tools
+### Why these tools
 
-These three tools have the largest descriptions and the most parameter shapes in the default OpenClaw runtime. On a small-context or stricter OpenAI-compatible backend that is the difference between:
+These tools have larger schemas, higher prompt-injection exposure, or side effects that make small-model runs more brittle. On a small-context or stricter OpenAI-compatible backend, trimming them can be the difference between:
 
 - Tool schemas fitting cleanly in the prompt vs. crowding out conversation history.
 - The model picking the right tool vs. emitting malformed tool calls because there are too many similar-looking schemas.
 - The Chat Completions adapter staying inside the server's structured-output limits vs. tripping a 400 on tool-call payload size.
 
-Removing them does not silently rewire OpenClaw — it just makes the tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools available.
+Removing them does not silently rewire OpenClaw — it just makes the tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, memory, and session/agent tools available.
 
 ### When to turn it on
 
@@ -94,7 +94,7 @@ Restart the Gateway after changing the flag, then confirm the trimmed tool list 
 openclaw status --deep
 ```
 
-The deep status output lists the active agent tools; `browser`, `cron`, and `message` should be absent when lean mode is on.
+The deep status output lists the active agent tools; `web_search`, `web_fetch`, `x_search`, `browser`, `cron`, and `message` should be absent when lean mode is on.
 
 ## Experimental does not mean hidden
 

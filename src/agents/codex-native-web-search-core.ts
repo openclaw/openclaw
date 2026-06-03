@@ -7,6 +7,7 @@ import {
   type CodexNativeSearchMode,
   resolveCodexNativeWebSearchConfig,
 } from "./codex-native-web-search.shared.js";
+import { isLocalModelLeanToolTrimmed } from "./local-model-lean.js";
 
 type CodexNativeSearchActivation = {
   globalWebSearchEnabled: boolean;
@@ -19,7 +20,8 @@ type CodexNativeSearchActivation = {
     | "globally_disabled"
     | "codex_not_enabled"
     | "model_not_eligible"
-    | "codex_auth_missing";
+    | "codex_auth_missing"
+    | "local_model_lean";
 };
 
 type CodexNativeSearchPayloadPatchResult = {
@@ -90,6 +92,9 @@ export function resolveCodexNativeSearchActivation(params: {
   modelProvider?: string;
   modelApi?: string;
   agentDir?: string;
+  agentId?: string;
+  sessionKey?: string;
+  localModelLeanPreserveToolNames?: string[];
 }): CodexNativeSearchActivation {
   const globalWebSearchEnabled = params.config?.tools?.web?.search?.enabled !== false;
   const codexConfig = resolveCodexNativeWebSearchConfig(params.config);
@@ -144,6 +149,26 @@ export function resolveCodexNativeSearchActivation(params: {
       hasRequiredAuth: false,
       state: "managed_only",
       inactiveReason: "codex_auth_missing",
+    };
+  }
+
+  if (
+    isLocalModelLeanToolTrimmed({
+      toolName: "web_search",
+      config: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      preserveToolNames: params.localModelLeanPreserveToolNames,
+    })
+  ) {
+    return {
+      globalWebSearchEnabled,
+      codexNativeEnabled: true,
+      codexMode: codexConfig.mode,
+      nativeEligible: true,
+      hasRequiredAuth: true,
+      state: "managed_only",
+      inactiveReason: "local_model_lean",
     };
   }
 
@@ -210,6 +235,9 @@ export function shouldSuppressManagedWebSearchTool(params: {
   modelProvider?: string;
   modelApi?: string;
   agentDir?: string;
+  agentId?: string;
+  sessionKey?: string;
+  localModelLeanPreserveToolNames?: string[];
 }): boolean {
   return resolveCodexNativeSearchActivation(params).state === "native_active";
 }

@@ -284,6 +284,45 @@ describe("buildProviderStreamFamilyHooks", () => {
       version: VERSION,
     });
 
+    payloadSeed = { tools: [{ type: "function", name: "read" }] };
+    void requireStreamFn(
+      requireWrapStreamFn(openAiHooks.wrapStreamFn)({
+        streamFn: baseStreamFn,
+        config: {
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+              },
+            },
+          },
+          tools: {
+            web: {
+              search: {
+                enabled: true,
+                openaiCodex: { enabled: true, mode: "cached" },
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/provider-stream-test",
+        localModelLeanPreserveToolNames: ["group:web"],
+      } as never),
+    )(
+      {
+        api: "openai-chatgpt-responses",
+        provider: "gateway",
+        id: "gpt-5.4",
+      } as never,
+      {} as never,
+      {},
+    );
+    const openAiLeanPreservedPayload = requirePayload(capturedPayload);
+    expect(openAiLeanPreservedPayload.tools).toEqual([
+      { type: "function", name: "read" },
+      { type: "web_search", external_web_access: false },
+    ]);
+
     const openRouterHooks = OPENROUTER_THINKING_STREAM_HOOKS;
     void requireStreamFn(
       requireWrapStreamFn(openRouterHooks.wrapStreamFn)({

@@ -37,6 +37,8 @@ vi.mock("openclaw/plugin-sdk/provider-stream-family", async (importOriginal) => 
     nextStreamFn = actual.createCodexNativeWebSearchWrapper(nextStreamFn, {
       config: ctx.config,
       agentDir: ctx.agentDir,
+      agentId: ctx.agentId,
+      localModelLeanPreserveToolNames: ctx.localModelLeanPreserveToolNames,
     });
     return actual.createOpenAIResponsesContextManagementWrapper(
       actual.createOpenAIReasoningCompatibilityWrapper(nextStreamFn),
@@ -63,6 +65,8 @@ function runWrappedPayloadCase(params: {
     | Model<"azure-openai-responses">;
   extraParams?: Record<string, unknown>;
   cfg?: Record<string, unknown>;
+  agentId?: string;
+  localModelLeanPreserveToolNames?: string[];
   payload?: Record<string, unknown>;
 }) {
   const payload = params.payload ?? { store: false };
@@ -79,6 +83,8 @@ function runWrappedPayloadCase(params: {
     extraParams: params.extraParams,
     config: params.cfg as never,
     agentDir: "/tmp/openai-provider-test",
+    agentId: params.agentId,
+    localModelLeanPreserveToolNames: params.localModelLeanPreserveToolNames,
     streamFn: baseStreamFn,
   } as never);
 
@@ -777,6 +783,80 @@ describe("buildOpenAIProvider", () => {
           { type: "function", name: "read" },
           { type: "function", name: "web_search" },
         ],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([
+      { type: "function", name: "read" },
+      { type: "web_search" },
+    ]);
+  });
+
+  it("does not inject native OpenAI web search when local model lean trims web tools", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+      },
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [{ type: "function", name: "read" }],
+      },
+    });
+
+    expect(result.payload.tools).toEqual([{ type: "function", name: "read" }]);
+  });
+
+  it("injects native OpenAI web search when local model lean preserves web tools", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      cfg: {
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+      },
+      localModelLeanPreserveToolNames: ["web_*"],
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4",
+        baseUrl: "https://api.openai.com/v1",
+      } as Model<"openai-responses">,
+      payload: {
+        tools: [{ type: "function", name: "read" }],
       },
     });
 

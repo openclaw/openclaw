@@ -267,6 +267,9 @@ function applyModelProviderToolPolicy(
       modelProvider: params?.modelProvider,
       modelApi: params?.modelApi,
       agentDir: params?.agentDir,
+      agentId: params?.agentId,
+      sessionKey: params?.sessionKey,
+      localModelLeanPreserveToolNames: params?.localModelLeanPreserveToolNames,
     })
   ) {
     return tools.filter((tool) => tool.name !== "web_search");

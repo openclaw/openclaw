@@ -88,6 +88,49 @@ describe("resolveCodexNativeSearchActivation", () => {
     expect(result.state).toBe("native_active");
   });
 
+  it("keeps native Codex search inactive when local model lean trims web_search", () => {
+    const result = resolveCodexNativeSearchActivation({
+      config: {
+        ...baseConfig,
+        agents: {
+          defaults: {
+            experimental: {
+              localModelLean: true,
+            },
+          },
+        },
+      },
+      modelProvider: "gateway",
+      modelApi: "openai-chatgpt-responses",
+    });
+
+    expect(result.state).toBe("managed_only");
+    expect(result.inactiveReason).toBe("local_model_lean");
+  });
+
+  it.each(["group:web", "web_*"])(
+    "keeps native Codex search active when lean mode explicitly preserves %s",
+    (preserveToolName) => {
+      const result = resolveCodexNativeSearchActivation({
+        config: {
+          ...baseConfig,
+          agents: {
+            defaults: {
+              experimental: {
+                localModelLean: true,
+              },
+            },
+          },
+        },
+        modelProvider: "gateway",
+        modelApi: "openai-chatgpt-responses",
+        localModelLeanPreserveToolNames: [preserveToolName],
+      });
+
+      expect(result.state).toBe("native_active");
+    },
+  );
+
   it("keeps all search disabled when global web search is disabled", () => {
     const result = resolveCodexNativeSearchActivation({
       config: {

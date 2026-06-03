@@ -294,6 +294,7 @@ export function resolvePreparedExtraParams(params: {
         config: params.cfg,
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
+        agentId: params.agentId,
         provider: params.provider,
         modelId: params.modelId,
         model: params.model,
@@ -310,6 +311,7 @@ export function resolvePreparedExtraParams(params: {
       config: params.cfg,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      agentId: params.agentId,
       provider: params.provider,
       modelId: params.modelId,
       extraParams: prepared,
@@ -771,11 +773,13 @@ type ApplyExtraParamsContext = {
   modelId: string;
   agentDir?: string;
   workspaceDir?: string;
+  agentId?: string;
   thinkingLevel?: ThinkLevel;
   model?: ProviderRuntimeModel;
   effectiveExtraParams: Record<string, unknown>;
   resolvedExtraParams?: Record<string, unknown>;
   override?: Record<string, unknown>;
+  localModelLeanPreserveToolNames?: string[];
 };
 
 function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
@@ -972,7 +976,10 @@ export function applyExtraParamsToAgent(
   model?: ProviderRuntimeModel,
   agentDir?: string,
   resolvedTransport?: SupportedTransport,
-  options?: { preparedExtraParams?: Record<string, unknown> },
+  options?: {
+    preparedExtraParams?: Record<string, unknown>;
+    localModelLeanPreserveToolNames?: string[];
+  },
 ): { effectiveExtraParams: Record<string, unknown> } {
   const resolvedExtraParams = resolveExtraParams({
     cfg,
@@ -1010,11 +1017,13 @@ export function applyExtraParamsToAgent(
     modelId,
     agentDir,
     workspaceDir,
+    agentId,
     thinkingLevel,
     model,
     effectiveExtraParams,
     resolvedExtraParams,
     override,
+    localModelLeanPreserveToolNames: options?.localModelLeanPreserveToolNames,
   };
 
   const providerStreamBase = agent.streamFn;
@@ -1025,12 +1034,14 @@ export function applyExtraParamsToAgent(
       config: cfg,
       agentDir,
       workspaceDir,
+      agentId,
       provider,
       modelId,
       extraParams: effectiveExtraParams,
       thinkingLevel,
       model,
       streamFn: providerStreamBase,
+      localModelLeanPreserveToolNames: options?.localModelLeanPreserveToolNames,
     },
   });
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
