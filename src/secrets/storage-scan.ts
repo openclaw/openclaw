@@ -13,7 +13,7 @@ export function parseEnvAssignmentValue(raw: string): string {
   return parseEnvValue(raw);
 }
 
-/** Lists auth-profile stores visible to storage scanners. */
+/** Lists canonical auth-profile stores visible to secrets audit/apply storage scanners. */
 export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
   return listAuthProfileStorePathsFromAuthStorePaths(config, stateDir);
 }
@@ -42,10 +42,14 @@ function resolveActiveAgentDir(stateDir: string, env: NodeJS.ProcessEnv = proces
   if (override) {
     return resolveUserPath(override, env);
   }
+  // Storage scans must include the implicit main agent even before config has agent entries.
   return path.join(resolveUserPath(stateDir), "agents", "main", "agent");
 }
 
-/** Lists models.json paths that may contain materialized provider credentials. */
+/**
+ * Lists deduplicated models.json paths that may contain materialized provider credentials.
+ * Includes active env override, implicit main agent, discovered state dirs, and configured agents.
+ */
 export function listAgentModelsJsonPaths(
   config: OpenClawConfig,
   stateDir: string,
@@ -80,11 +84,16 @@ export function listAgentModelsJsonPaths(
 
 /** Limits for safe opportunistic JSON reads during local storage scans. */
 export type ReadJsonObjectOptions = {
+  /** Reject files larger than this byte count before reading content. */
   maxBytes?: number;
+  /** Reject directories, symlinks, and other non-regular paths before JSON parsing. */
   requireRegularFile?: boolean;
 };
 
-/** Reads a JSON object if the file exists, returning parse/stat errors without throwing. */
+/**
+ * Reads a JSON object if the file exists, returning parse/stat errors without throwing.
+ * Non-object JSON values are treated as absent because scanners expect record-shaped stores.
+ */
 export function readJsonObjectIfExists(filePath: string): {
   value: Record<string, unknown> | null;
   error?: string;
