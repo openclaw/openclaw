@@ -8,7 +8,6 @@ import { createHash } from "node:crypto";
 import { promises as fs, readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { setTimeout as delay } from "node:timers/promises";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -41,114 +40,6 @@ function readInstanceIdFromConfig() {
 
 const BRIDGE_VAULT_NAME = readInstanceIdFromConfig() ?? "main";
 const BRIDGE_WIKI_DIR = path.join(OPENCLAW_HOME, "wiki", BRIDGE_VAULT_NAME);
-
-// -- LCM direct read access ------------------------------------------------
-// Read-only access to ~/.openclaw/lcm.db for lcm_grep / lcm_describe surfaces.
-// The lossless-claw plugin's tools are only registered in-process to embedded
-// agents, so external MCP clients (Claude Code, Codex CLI) need their own path
-// to recall historical context. node:sqlite can safely open lcm.db read-only
-// alongside the gateway's own writer connection.
-
-const LCM_DB_PATH = process.env.LCM_DATABASE_PATH ?? path.join(OPENCLAW_HOME, "lcm.db");
-
-let lcmDbConnection = null;
-
-function getLcmDb() {
-  if (lcmDbConnection) {
-    return lcmDbConnection;
-  }
-  lcmDbConnection = new DatabaseSync(LCM_DB_PATH, { readOnly: true });
-  return lcmDbConnection;
-}
-
-async function lcmGrepDirect({ pattern, sessionId, limit = 20 }) {
-  try {
-    const db = getLcmDb();
-    let rows;
-    if (sessionId) {
-      rows = db
-        .prepare(
-          `SELECT m.conversation_id, m.seq, m.role,
-                  substr(m.content, 1, 500) AS excerpt,
-                  length(m.content) AS bytes,
-                  c.session_id
-           FROM messages_fts f
-           JOIN messages m ON m.message_id = f.rowid
-           JOIN conversations c ON c.conversation_id = m.conversation_id
-           WHERE f.content MATCH ? AND c.session_id = ?
-           ORDER BY m.conversation_id, m.seq
-           LIMIT ?`,
-        )
-        .all(pattern, sessionId, limit);
-    } else {
-      rows = db
-        .prepare(
-          `SELECT m.conversation_id, m.seq, m.role,
-                  substr(m.content, 1, 500) AS excerpt,
-                  length(m.content) AS bytes,
-                  c.session_id
-           FROM messages_fts f
-           JOIN messages m ON m.message_id = f.rowid
-           JOIN conversations c ON c.conversation_id = m.conversation_id
-           WHERE f.content MATCH ?
-           ORDER BY m.conversation_id, m.seq
-           LIMIT ?`,
-        )
-        .all(pattern, limit);
-    }
-    const distinctConversations = new Set(rows.map((r) => r.conversation_id)).size;
-    return {
-      ok: true,
-      hits: rows.length,
-      conversations: distinctConversations,
-      results: rows,
-    };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
-
-async function lcmDescribeDirect({ sessionId }) {
-  try {
-    const db = getLcmDb();
-    const conv = db
-      .prepare(
-        `SELECT conversation_id, session_id, title, bootstrapped_at, created_at, updated_at
-         FROM conversations WHERE session_id = ?`,
-      )
-      .get(sessionId);
-    if (!conv) {
-      return { ok: false, error: `no conversation in lcm.db for sessionId=${sessionId}` };
-    }
-    const counts = db
-      .prepare(
-        `SELECT COUNT(*) AS message_count,
-                MIN(seq) AS first_seq,
-                MAX(seq) AS last_seq,
-                SUM(token_count) AS total_tokens
-         FROM messages WHERE conversation_id = ?`,
-      )
-      .get(conv.conversation_id);
-    const recentTail = db
-      .prepare(
-        `SELECT seq, role, substr(content, 1, 200) AS excerpt
-         FROM messages WHERE conversation_id = ?
-         ORDER BY seq DESC LIMIT 3`,
-      )
-      .all(conv.conversation_id);
-    return {
-      ok: true,
-      conversation: conv,
-      message_count: counts?.message_count ?? 0,
-      first_seq: counts?.first_seq ?? null,
-      last_seq: counts?.last_seq ?? null,
-      total_tokens: counts?.total_tokens ?? 0,
-      recent_tail: recentTail,
-    };
-  } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
-  }
-}
 
 // -- Bench Harness Manifest (opt-in) ---------------------------------------
 // When BENCH_HARNESS_MANIFEST_ENFORCE=true, wiki.search / wiki.get responses
@@ -448,8 +339,7 @@ function spawnDetached(command, args) {
 
 // -- Inbox -----------------------------------------------------------------
 
-const INBOX_PATH =
-  process.env.OPENCLAW_BRIDGE_INBOX_PATH ?? path.join(BRIDGE_WIKI_DIR, "inbox.md");
+const INBOX_PATH = process.env.OPENCLAW_BRIDGE_INBOX_PATH ?? path.join(BRIDGE_WIKI_DIR, "inbox.md");
 const DEDUPE_WINDOW_MS = Number(process.env.OPENCLAW_BRIDGE_DEDUPE_WINDOW_S ?? "60") * 1_000;
 const recentAppends = new Map();
 
@@ -780,7 +670,9 @@ function buildServer() {
         agentId: z
           .string()
           .optional()
-          .describe("Target agent id (for example 'main' or a configured alias). Omit for default."),
+          .describe(
+            "Target agent id (for example 'main' or a configured alias). Omit for default.",
+          ),
         label: z.string().optional().describe("Optional session label for later identification."),
         force: z
           .boolean()
@@ -885,56 +777,10 @@ function buildServer() {
     },
   );
 
-  server.registerTool(
-    "openclaw_lcm_grep",
-    {
-      description:
-        "Full-text search the LCM transcript store via FTS5. Returns matching message excerpts with conversation_id, seq, role, source session_id, and per-row excerpt. Reads ~/.openclaw/lcm.db directly (no gateway round-trip). Quote phrases with double-quotes for exact-phrase matching; supports AND/OR/NOT; # and - are special, quote them.",
-      inputSchema: {
-        pattern: z
-          .string()
-          .min(1)
-          .describe(
-            "FTS5 query. Examples: 'roadmap', '\"Phase D2 monorepo\"', 'hammer AND anvil', '\"#477\"'.",
-          ),
-        sessionId: z
-          .string()
-          .optional()
-          .describe(
-            "Optional: scope to a single session by sessionId (UUID). Default: search all conversations.",
-          ),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(100)
-          .optional()
-          .describe("Max results. Default 20, max 100."),
-      },
-    },
-    async ({ pattern, sessionId, limit }) => {
-      return jsonResult(await lcmGrepDirect({ pattern, sessionId, limit }));
-    },
-  );
-
-  server.registerTool(
-    "openclaw_lcm_describe",
-    {
-      description:
-        "Describe an LCM conversation by sessionId. Returns the conversation row + message_count + first/last seq + total tokens + recent message tail. Reads ~/.openclaw/lcm.db directly.",
-      inputSchema: {
-        sessionId: z
-          .string()
-          .min(1)
-          .describe(
-            "Runtime sessionId (UUID). Find via openclaw sessions list or sessions.json. Example: 22a78faf-3e7d-4f0f-bef4-2ab2790bae76.",
-          ),
-      },
-    },
-    async ({ sessionId }) => {
-      return jsonResult(await lcmDescribeDirect({ sessionId }));
-    },
-  );
+  // NOTE: openclaw_lcm_grep / openclaw_lcm_describe were removed 2026-05-28.
+  // They read ~/.openclaw/lcm.db directly, but that store no longer exists and
+  // there is no `openclaw lcm` command. Memory/transcript recall is now served
+  // by openclaw_wiki_search (memory corpus). Re-add only against a live store.
 
   return server;
 }
@@ -964,14 +810,6 @@ if (args.includes("--once-list-tools")) {
       description: "Fetch recent messages from an agent session.",
     },
     { name: "openclaw_wiki_status", description: "Report wiki bridge status." },
-    {
-      name: "openclaw_lcm_grep",
-      description: "Full-text search the LCM transcript store (FTS5).",
-    },
-    {
-      name: "openclaw_lcm_describe",
-      description: "Describe an LCM conversation by sessionId.",
-    },
   ];
   process.stdout.write(JSON.stringify(descriptors, null, 2) + "\n");
   process.exit(0);
