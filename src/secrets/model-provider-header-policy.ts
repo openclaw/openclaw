@@ -14,6 +14,8 @@ const ALWAYS_SENSITIVE_MODEL_PROVIDER_HEADER_NAMES = new Set([
   "secret-key",
 ]);
 
+// Substring matching catches provider-specific auth headers without forcing every plugin to
+// register its own spelling in the shared plaintext-secret audit.
 const SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS = [
   "api-key",
   "apikey",
@@ -23,6 +25,9 @@ const SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS = [
   "credential",
 ];
 
+/**
+ * Returns whether a model-provider header name should be treated as secret-bearing.
+ */
 export function isLikelySensitiveModelProviderHeaderName(value: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(value);
   if (!normalized) {
