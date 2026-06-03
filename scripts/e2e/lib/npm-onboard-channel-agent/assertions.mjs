@@ -8,6 +8,46 @@ import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
 
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+const ansiEscapePattern = new RegExp(String.raw`\u001b\[[0-?]*[ -/]*[@-~]`, "g");
+
+function stripAnsi(text) {
+  return text.replace(ansiEscapePattern, "");
+}
+
+const statusSectionTitles = new Set([
+  "openclaw status",
+  "overview",
+  "plugin compatibility",
+  "model selection",
+  "security audit",
+  "channels",
+  "sessions",
+  "system events",
+  "health",
+  "usage",
+]);
+
+function normalizedStatusHeading(line) {
+  return stripAnsi(line).trim().replace(/^#+\s*/, "").trim().toLowerCase();
+}
+
+function extractStatusSection(text, title) {
+  const target = title.toLowerCase();
+  const lines = text.split(/\r?\n/);
+  const start = lines.findIndex((line) => normalizedStatusHeading(line) === target);
+  if (start === -1) {
+    return null;
+  }
+  const section = [];
+  for (const line of lines.slice(start + 1)) {
+    const normalized = normalizedStatusHeading(line);
+    if (normalized && statusSectionTitles.has(normalized)) {
+      break;
+    }
+    section.push(line);
+  }
+  return stripAnsi(section.join("\n"));
+}
 
 function assertOnboardState() {
   const home = process.argv[3];
@@ -146,8 +186,14 @@ function assertStatusSurfaces() {
   if (!/channels/i.test(statusText)) {
     throw new Error(`plain status output did not render a Channels section. Output: ${statusText}`);
   }
-  if (!statusText.toLowerCase().includes(channel.toLowerCase())) {
-    throw new Error(`plain status output did not mention ${channel}. Output: ${statusText}`);
+  const channelsSection = extractStatusSection(statusText, "channels");
+  if (!channelsSection) {
+    throw new Error(`plain status output did not render a Channels section. Output: ${statusText}`);
+  }
+  if (!channelsSection.toLowerCase().includes(channel.toLowerCase())) {
+    throw new Error(
+      `plain status output did not mention ${channel} in the Channels section. Output: ${statusText}`,
+    );
   }
 }
 

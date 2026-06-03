@@ -37,6 +37,9 @@ const RUNTIME_PATH_ENV_KEYS = [
   "OPENCLAW_TEST_FAST",
 ] as const;
 
+/**
+ * Merges caller env with process path env needed for config and agent-dir resolution.
+ */
 export function mergeSecretsRuntimeEnv(
   env: NodeJS.ProcessEnv | Record<string, string | undefined> | undefined,
 ): Record<string, string | undefined> {
@@ -45,6 +48,7 @@ export function mergeSecretsRuntimeEnv(
     if (merged[key] !== undefined) {
       continue;
     }
+    // Tests often pass narrow env objects; path resolution still needs host path variables.
     const processValue = process.env[key];
     if (processValue !== undefined) {
       merged[key] = processValue;
@@ -53,6 +57,9 @@ export function mergeSecretsRuntimeEnv(
   return merged;
 }
 
+/**
+ * Collects default and named agent directories that may contain auth profile stores.
+ */
 export function collectCandidateAgentDirs(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv | Record<string, string | undefined> = process.env,
@@ -65,6 +72,9 @@ export function collectCandidateAgentDirs(
   return [...dirs];
 }
 
+/**
+ * Combines explicit refresh agent dirs with config-derived dirs for runtime refresh.
+ */
 export function resolveRefreshAgentDirs(
   config: OpenClawConfig,
   context: SecretsRuntimeRefreshContext,
@@ -94,6 +104,9 @@ function hasCandidateAuthProfileStoreSource(agentDir: string): boolean {
   );
 }
 
+/**
+ * Returns whether auth profile files or OAuth state exist for candidate agent dirs.
+ */
 export function hasCandidateAuthProfileStoreSources(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv | Record<string, string | undefined>;
@@ -108,6 +121,9 @@ export function hasCandidateAuthProfileStoreSources(params: {
   );
 }
 
+/**
+ * Creates empty web-tool metadata for snapshots that do not need secret resolution.
+ */
 export function createEmptyRuntimeWebToolsMetadata(): RuntimeWebToolsMetadata {
   return {
     search: {
@@ -178,6 +194,9 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
   });
 }
 
+/**
+ * Returns whether a snapshot can skip full SecretRef/web-tool resolution.
+ */
 export function canUseSecretsRuntimeFastPath(params: {
   sourceConfig: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;
@@ -192,6 +211,9 @@ export function canUseSecretsRuntimeFastPath(params: {
   return !params.authStores.some((entry) => hasSecretRefCandidate(entry.store, defaults));
 }
 
+/**
+ * Prepares a runtime snapshot without resolving refs when config and auth stores contain none.
+ */
 export function prepareSecretsRuntimeFastPathSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

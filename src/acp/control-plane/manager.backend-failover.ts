@@ -1,6 +1,7 @@
 import type { AcpRuntimeErrorCode } from "../runtime/errors.js";
 import { normalizeText } from "./runtime-options.js";
 
+/** Captured backend attempt state used to decide whether failover is safe. */
 export type BackendAttempt = {
   backend: string;
   error: string;

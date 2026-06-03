@@ -38,14 +38,17 @@ import {
 } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
+/** Stable finding codes emitted by `openclaw secrets audit`. */
 export type SecretsAuditCode =
   | "PLAINTEXT_FOUND"
   | "REF_UNRESOLVED"
   | "REF_SHADOWED"
   | "LEGACY_RESIDUE";
 
+/** Audit severity used for CLI output and check-mode exit behavior. */
 export type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
 
+/** One secret audit finding with file/path context. */
 export type SecretsAuditFinding = {
   code: SecretsAuditCode;
   severity: SecretsAuditSeverity;
@@ -56,8 +59,10 @@ export type SecretsAuditFinding = {
   profileId?: string;
 };
 
+/** Overall audit state derived from findings and unresolved refs. */
 export type SecretsAuditStatus = "clean" | "findings" | "unresolved"; // pragma: allowlist secret
 
+/** Structured report returned by the secrets audit command. */
 export type SecretsAuditReport = {
   version: 1;
   status: SecretsAuditStatus;
@@ -496,6 +501,8 @@ async function collectUnresolvedRefFindings(params: {
       // Fall back to per-ref resolution for provider-specific pinpoint errors.
     }
 
+    // Batch resolution is cheaper, but individual fallback gives path-specific diagnostics when
+    // a provider returns mixed id failures.
     const tasks = selectedRefs.refsToResolve.map(
       (ref) => async (): Promise<{ key: string; resolved: unknown }> => ({
         key: secretRefKey(ref),
@@ -606,6 +613,7 @@ function summarizeFindings(findings: SecretsAuditFinding[]): SecretsAuditReport[
   };
 }
 
+/** Runs local storage/config audit and returns a structured report. */
 export async function runSecretsAudit(
   params: {
     env?: NodeJS.ProcessEnv;
@@ -704,6 +712,7 @@ export async function runSecretsAudit(
   };
 }
 
+/** Maps audit results to CLI exit codes. */
 export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: boolean): number {
   if (report.summary.unresolvedRefCount > 0) {
     return 2;

@@ -7,6 +7,7 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-help
 
 const tempDirs: string[] = [];
 
+/** Clears auto-enable plugin caches and temp dirs between tests. */
 export function resetPluginAutoEnableTestState(): void {
   clearCurrentPluginMetadataSnapshot();
   clearPluginSetupRegistryCache();

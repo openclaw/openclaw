@@ -8,6 +8,7 @@ let sessionStoreWriterQueueDrainerForTests: typeof drainSessionStoreWriterQueues
   null;
 let sessionWriteLockDrainerForTests: typeof drainSessionWriteLockStateForTest | null = null;
 
+/** Overrides cleanup hooks so tests can drain mocked session state modules. */
 export function setSessionStateCleanupRuntimeForTests(params: {
   drainFileLockStateForTest?: typeof drainFileLockStateForTest | null;
   drainSessionStoreWriterQueuesForTest?: typeof drainSessionStoreWriterQueuesForTest | null;

@@ -17,6 +17,7 @@ export type AcpRuntimeAdapterContractParams = {
   }) => void | Promise<void>;
 };
 
+/** Runs the shared behavioral contract for ACP runtime adapters. */
 export async function runAcpRuntimeAdapterContract(
   params: AcpRuntimeAdapterContractParams,
 ): Promise<void> {

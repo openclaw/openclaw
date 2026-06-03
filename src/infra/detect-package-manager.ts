@@ -50,6 +50,7 @@ async function isPnpmOwnedPackageRoot(root: string): Promise<boolean> {
   return true;
 }
 
+/** Detects the package manager that owns a package root from manifests, locks, and install layout. */
 export async function detectPackageManager(root: string): Promise<DetectedPackageManager | null> {
   const pm = (await readPackageManagerSpec(root))?.split("@")[0]?.trim();
   const files = await fs.readdir(root).catch((): string[] => []);
@@ -58,6 +59,8 @@ export async function detectPackageManager(root: string): Promise<DetectedPackag
   const hasBunLock = files.includes("bun.lock") || files.includes("bun.lockb");
 
   if (hasNpmShrinkwrap) {
+    // Published npm packages carry npm-shrinkwrap even when their source uses pnpm;
+    // installed pnpm/bun-owned roots need layout proof before overriding npm.
     if (await isBunOwnedPackageRoot(root)) {
       return "bun";
     }

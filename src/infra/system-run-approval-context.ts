@@ -8,6 +8,8 @@ import { normalizeSystemRunApprovalPlan } from "./system-run-approval-binding.js
 import { formatExecCommand, resolveSystemRunCommandRequest } from "./system-run-command.js";
 import { normalizeNonEmptyString, normalizeStringArray } from "./system-run-normalize.js";
 
+// System-run approval context normalizes prepared node-run payloads and legacy
+// command fields before they enter exec approval policy.
 export type PreparedRunExecPolicy = {
   security: ExecSecurity;
   ask: ExecAsk;
@@ -151,6 +153,7 @@ export function parsePreparedSystemRunPayload(payload: unknown): PreparedRunPayl
   };
 }
 
+/** Build the approval request context from tool payload fields. */
 export function resolveSystemRunApprovalRequestContext(params: {
   host?: unknown;
   command?: unknown;
@@ -183,6 +186,7 @@ export function resolveSystemRunApprovalRequestContext(params: {
   };
 }
 
+/** Build the runtime approval context from already-normalized command inputs. */
 export function resolveSystemRunApprovalRuntimeContext(params: {
   plan?: unknown;
   command?: unknown;

@@ -36,6 +36,7 @@ export type AcpSessionStoreEntry = {
   storeReadFailed?: boolean;
 };
 
+// ACP metadata lives in SQLite but is keyed through the legacy JSON session store.
 type AcpSessionsTable = OpenClawStateKyselyDatabase["acp_sessions"];
 type AcpSessionMetaDatabase = Pick<OpenClawStateKyselyDatabase, "acp_sessions">;
 type AcpSessionRow = Selectable<AcpSessionsTable>;
@@ -154,6 +155,7 @@ function selectAcpSessionRow(db: DatabaseSync, sessionKey: string): AcpSessionRo
 }
 
 function acpSessionRowMatchesEntry(row: AcpSessionRow, entry: SessionEntry | undefined): boolean {
+  // Rows tied to a specific sessionId are stale after the JSON session entry rotates.
   return row.session_id == null || row.session_id === entry?.sessionId;
 }
 

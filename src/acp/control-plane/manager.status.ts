@@ -16,6 +16,7 @@ import type {
 import { requireReadySessionMeta } from "./manager.utils.js";
 import { resolveRuntimeOptionsFromMeta } from "./runtime-options.js";
 
+/** Reads a fresh ACP session status and reconciles runtime identifiers from the status response. */
 export async function runManagerGetSessionStatus(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

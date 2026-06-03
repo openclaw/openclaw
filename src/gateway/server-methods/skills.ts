@@ -433,6 +433,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: p.slug,
         version: p.version,
         force: Boolean(p.force),
+        config: cfg,
       });
       respond(
         result.ok,
@@ -492,14 +493,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const p = params as {
       name: string;
       installId: string;
-      dangerouslyForceUnsafeInstall?: boolean;
       timeoutMs?: number;
     };
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,
       installId: p.installId,
-      dangerouslyForceUnsafeInstall: p.dangerouslyForceUnsafeInstall,
       timeoutMs: p.timeoutMs,
       config: cfg,
     });
@@ -543,6 +542,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const results = await updateSkillsFromClawHub({
         workspaceDir,
         slug: p.slug,
+        config: cfg,
       });
       const errors = results.filter((result) => !result.ok);
       respond(

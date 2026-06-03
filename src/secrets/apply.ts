@@ -84,6 +84,7 @@ type MutableAuthProfileStore = Record<string, unknown> & {
   profiles: Record<string, unknown>;
 };
 
+/** Result summary for a secrets apply dry-run or write run. */
 export type SecretsApplyResult = {
   mode: "dry-run" | "write";
   changed: boolean;
@@ -754,6 +755,7 @@ function toJsonWrite(pathname: string, value: Record<string, unknown>): ApplyWri
   };
 }
 
+/** Applies or dry-runs a validated secrets plan across config, auth stores, and scrub targets. */
 export async function runSecretsApply(params: {
   plan: SecretsApplyPlan;
   env?: NodeJS.ProcessEnv;
@@ -844,6 +846,8 @@ export async function runSecretsApply(params: {
       writeTextFileAtomic(writeLocal.path, writeLocal.content, writeLocal.mode);
     }
   } catch (err) {
+    // Apply can touch multiple files; restore captured snapshots so partial writes do not leave
+    // config/auth/env stores out of sync when a later write fails.
     for (const [pathname, snapshot] of snapshots.entries()) {
       try {
         restoreFileSnapshot(pathname, snapshot);

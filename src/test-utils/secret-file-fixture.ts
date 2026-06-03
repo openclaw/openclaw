@@ -7,6 +7,7 @@ type SecretFiles = {
   tokenFile?: string;
 };
 
+/** Writes temporary secret files for config tests and removes the directory afterward. */
 export async function withTempSecretFiles<T>(
   prefix: string,
   secrets: { password?: string; token?: string },

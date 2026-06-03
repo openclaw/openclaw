@@ -37,6 +37,7 @@ vi.mock("../runtime/registry.js", () => ({
 
 export const hoisted = hoistedMocks;
 
+// Shared ACP manager test harness with hoisted runtime/session-meta mocks.
 const managerModule = await import("./manager.js");
 export const AcpSessionManager = managerModule.AcpSessionManager;
 export const resetAcpSessionManagerForTests = () =>
