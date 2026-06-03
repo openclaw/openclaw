@@ -90,6 +90,9 @@ const GEN_AI_OPERATION_DURATION_BUCKETS = [
 ];
 const MAX_RETAINED_TRUSTED_SPAN_CONTEXTS = 1024;
 const RETAINED_TRUSTED_SPAN_CONTEXT_TIMEOUT_MS = 5_000;
+// Bound on the per-OTel-trace root-run-span map used to project model-call I/O onto the trace's
+// root span (see rootRunSpanByOtelTrace). LRU-evicts so a leaked/never-finalized run can't grow it.
+const MAX_TRACKED_ROOT_RUN_SPANS = 20_000;
 
 type OtelContentCapturePolicy = {
   inputMessages: boolean;
@@ -1254,6 +1257,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         { spanContext: SpanContext; token: symbol; owner?: TrustedSpanAliasOwner }
       >();
       const retainedTrustedSpanContextCleanupTimers = new Set<ReturnType<typeof setTimeout>>();
+      // Root openclaw.run span per OTel trace id, so a completed model call can stamp the
+      // conversation onto the trace's root span as langfuse.trace.input/output (see
+      // recordModelCallCompleted). traceIoInputStamped keeps the FIRST input per trace.
+      const rootRunSpanByOtelTrace = new Map<string, ReturnType<typeof tracer.startSpan>>();
+      const traceIoInputStamped = new Set<string>();
       stopActiveTrustedSpans = () => {
         const stopAt = Date.now();
         for (const handle of retainedTrustedSpanContextCleanupTimers) {
@@ -1269,6 +1277,8 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         activeTrustedSpans.clear();
         activeTrustedSpanAliases.clear();
+        rootRunSpanByOtelTrace.clear();
+        traceIoInputStamped.clear();
       };
 
       const tokensCounter = meter.createCounter("openclaw.tokens", {
@@ -2334,6 +2344,19 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             startTimeMs: evt.ts,
           }),
         );
+        // Remember this run span as the root for its OTel trace so model-call completions can
+        // project their I/O onto it (langfuse.trace.input/output). First run per trace wins.
+        const rootTraceId = span.spanContext().traceId;
+        if (!rootRunSpanByOtelTrace.has(rootTraceId)) {
+          rootRunSpanByOtelTrace.set(rootTraceId, span);
+          if (rootRunSpanByOtelTrace.size > MAX_TRACKED_ROOT_RUN_SPANS) {
+            const oldest = rootRunSpanByOtelTrace.keys().next().value;
+            if (oldest !== undefined) {
+              rootRunSpanByOtelTrace.delete(oldest);
+              traceIoInputStamped.delete(oldest);
+            }
+          }
+        }
         const parentSpanId = trustedTraceContext(evt, metadata)?.parentSpanId;
         if (parentSpanId && !activeTrustedSpans.has(parentSpanId)) {
           const owner: TrustedSpanAliasOwner = { kind: "run", id: evt.runId };
@@ -2915,6 +2938,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           });
         setSpanAttrs(span, spanAttrs);
         addUpstreamRequestIdSpanEvent(span, evt.upstreamRequestIdHash);
+        // Langfuse derives a TRACE's input/output from its ROOT span's langfuse.trace.input/output
+        // attributes — but the openclaw.run root span carries no I/O, so the Traces list and trace
+        // header read blank even though the conversation is on this nested model-call span. Mirror
+        // the model-call I/O onto the tracked root run span: first call's input, latest call's output.
+        const rootRunSpan = rootRunSpanByOtelTrace.get(span.spanContext().traceId);
+        if (rootRunSpan && rootRunSpan !== span) {
+          const traceId = span.spanContext().traceId;
+          const inputValue = spanAttrs["input.value"];
+          const outputValue = spanAttrs["output.value"];
+          if (typeof inputValue === "string" && !traceIoInputStamped.has(traceId)) {
+            rootRunSpan.setAttribute("langfuse.trace.input", inputValue);
+            traceIoInputStamped.add(traceId);
+          }
+          if (typeof outputValue === "string") {
+            rootRunSpan.setAttribute("langfuse.trace.output", outputValue);
+          }
+        }
         span.end(evt.ts);
       };
 
