@@ -1,3 +1,7 @@
+/**
+ * Shared string sampling for operator logs and SDK helpers that need bounded readable lists.
+ * This intentionally formats for humans, not for machine parsing.
+ */
 /** Formats a bounded comma-separated sample of string entries with a hidden-count suffix. */
 export function summarizeStringEntries(params: {
   /** Entries to summarize; nullish values are treated as an empty list. */
