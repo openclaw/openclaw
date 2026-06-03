@@ -341,6 +341,32 @@ export type WorkboardDispatchSummary = {
   orchestrated: number;
 };
 
+export type WorkboardAutoRefreshIntervalMs = 0 | 5000 | 15000 | 30000 | 60000;
+
+export type WorkboardRefreshSource = "initial" | "manual" | "poll";
+
+export type WorkboardViewPresetId =
+  | "all"
+  | "default_agent"
+  | "ready"
+  | "running"
+  | "blocked"
+  | "review"
+  | "stale"
+  | "missing_proof"
+  | "recently_done";
+
+export type WorkboardHealthSummary = {
+  running: number;
+  blocked: number;
+  stale: number;
+  readyUnassigned: number;
+  missingProof: number;
+  failedAttempts: number;
+};
+
+export type WorkboardHealthKey = keyof WorkboardHealthSummary;
+
 export type WorkboardUiState = {
   loading: boolean;
   loaded: boolean;
@@ -350,12 +376,21 @@ export type WorkboardUiState = {
   statuses: readonly WorkboardStatus[];
   tasksByCardId: Map<string, WorkboardTaskSummary>;
   lastDispatchSummary: WorkboardDispatchSummary | null;
+  dispatching: boolean;
   query: string;
   priorityFilter: "all" | WorkboardPriority;
   agentFilter: string;
+  viewPreset: WorkboardViewPresetId;
+  activeHealthHighlight: WorkboardHealthKey | null;
   showArchived: boolean;
   layout: "comfortable" | "compact";
-  hideEmptyColumns: boolean;
+  autoRefreshIntervalMs: WorkboardAutoRefreshIntervalMs;
+  lastRefreshAt: number | null;
+  lastRefreshStartedAt: number | null;
+  lastRefreshError: string | null;
+  lastRefreshSource: WorkboardRefreshSource | null;
+  pollRefreshInProgress: boolean;
+  suppressNextLifecycleSync: boolean;
   draftOpen: boolean;
   editingCardId: string | null;
   draftTitle: string;
@@ -378,7 +413,20 @@ export type WorkboardUiState = {
 type WorkboardHost = object;
 
 const workboardStates = new WeakMap<WorkboardHost, WorkboardUiState>();
-const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<void>>();
+const workboardLoadPromises = new WeakMap<WorkboardHost, Promise<boolean>>();
+const workboardLoadGenerations = new WeakMap<WorkboardHost, number>();
+const workboardPollingTimers = new WeakMap<WorkboardHost, ReturnType<typeof setTimeout>>();
+const workboardPollingEntries = new WeakMap<
+  WorkboardHost,
+  {
+    client: GatewayBrowserClient | null;
+    enabled: boolean;
+    intervalMs: WorkboardAutoRefreshIntervalMs;
+    refreshDiagnostics: boolean;
+    requestUpdate?: () => void;
+  }
+>();
+const WORKBOARD_RECENT_DONE_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 const SESSION_CAPTURE_HISTORY_LIMIT = 40;
 const SESSION_CAPTURE_HISTORY_MAX_CHARS = 6000;
 const SESSION_CAPTURE_TEXT_MAX_CHARS = 700;
@@ -387,6 +435,20 @@ const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
 const WORKBOARD_STALE_SESSION_MS = 30 * 60 * 1000;
 const WORKBOARD_TASKS_LIST_LIMIT = 500;
 const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
+
+function nextWorkboardLoadGeneration(host: WorkboardHost): number {
+  const generation = (workboardLoadGenerations.get(host) ?? 0) + 1;
+  workboardLoadGenerations.set(host, generation);
+  return generation;
+}
+
+function isCurrentWorkboardLoadGeneration(host: WorkboardHost, generation: number): boolean {
+  return workboardLoadGenerations.get(host) === generation;
+}
+
+function invalidateWorkboardLoads(host: WorkboardHost) {
+  nextWorkboardLoadGeneration(host);
+}
 
 function createDefaultState(): WorkboardUiState {
   return {
@@ -398,12 +460,21 @@ function createDefaultState(): WorkboardUiState {
     statuses: WORKBOARD_STATUSES,
     tasksByCardId: new Map(),
     lastDispatchSummary: null,
+    dispatching: false,
     query: "",
     priorityFilter: "all",
     agentFilter: "all",
+    viewPreset: "all",
+    activeHealthHighlight: null,
     showArchived: false,
     layout: "compact",
-    hideEmptyColumns: false,
+    autoRefreshIntervalMs: 0,
+    lastRefreshAt: null,
+    lastRefreshStartedAt: null,
+    lastRefreshError: null,
+    lastRefreshSource: null,
+    pollRefreshInProgress: false,
+    suppressNextLifecycleSync: false,
     draftOpen: false,
     editingCardId: null,
     draftTitle: "",
@@ -431,6 +502,146 @@ export function getWorkboardState(host: WorkboardHost): WorkboardUiState {
     workboardStates.set(host, state);
   }
   return state;
+}
+
+export function consumeWorkboardLifecycleSyncSuppression(state: WorkboardUiState): boolean {
+  if (state.pollRefreshInProgress) {
+    return true;
+  }
+  if (!state.suppressNextLifecycleSync) {
+    return false;
+  }
+  state.suppressNextLifecycleSync = false;
+  return true;
+}
+
+function hasWorkboardProofEvidence(card: WorkboardCard): boolean {
+  return Boolean(
+    card.metadata?.proof?.length ||
+    card.metadata?.artifacts?.length ||
+    card.metadata?.attachments?.length,
+  );
+}
+
+function taskFailedTerminal(task: WorkboardTaskSummary | undefined): boolean {
+  return task?.status === "failed" || task?.status === "cancelled" || task?.status === "timed_out";
+}
+
+function countCardFailedAttempts(card: WorkboardCard): number {
+  if (card.metadata?.failureCount !== undefined) {
+    return card.metadata.failureCount;
+  }
+  return (
+    card.metadata?.attempts?.filter(
+      (attempt) =>
+        attempt.status === "failed" || attempt.status === "blocked" || attempt.status === "stopped",
+    ).length ?? 0
+  );
+}
+
+function cardRecentlyDone(card: WorkboardCard): boolean {
+  if (card.status !== "done") {
+    return false;
+  }
+  const doneAt = card.completedAt ?? card.updatedAt;
+  return Date.now() - doneAt <= WORKBOARD_RECENT_DONE_WINDOW_MS;
+}
+
+export function summarizeWorkboardHealth(params: {
+  cards: readonly WorkboardCard[];
+  tasksByCardId: ReadonlyMap<string, WorkboardTaskSummary>;
+  sessions: readonly GatewaySessionRow[];
+}): WorkboardHealthSummary {
+  const summary: WorkboardHealthSummary = {
+    running: 0,
+    blocked: 0,
+    stale: 0,
+    readyUnassigned: 0,
+    missingProof: 0,
+    failedAttempts: 0,
+  };
+  for (const card of params.cards) {
+    const task = params.tasksByCardId.get(card.id);
+    if (workboardCardMatchesHealthKey(card, "running", params.sessions, task)) {
+      summary.running += 1;
+    }
+    if (workboardCardMatchesHealthKey(card, "blocked", params.sessions, task)) {
+      summary.blocked += 1;
+    }
+    if (workboardCardMatchesHealthKey(card, "stale", params.sessions, task)) {
+      summary.stale += 1;
+    }
+    if (workboardCardMatchesHealthKey(card, "readyUnassigned", params.sessions, task)) {
+      summary.readyUnassigned += 1;
+    }
+    if (workboardCardMatchesHealthKey(card, "missingProof", params.sessions, task)) {
+      summary.missingProof += 1;
+    }
+    summary.failedAttempts += countCardFailedAttempts(card);
+    if (taskFailedTerminal(task)) {
+      summary.failedAttempts += 1;
+    }
+  }
+  return summary;
+}
+
+export function workboardCardMatchesHealthKey(
+  card: WorkboardCard,
+  key: WorkboardHealthKey,
+  sessions: readonly GatewaySessionRow[],
+  task?: WorkboardTaskSummary,
+): boolean {
+  const lifecycle = getWorkboardLifecycle(card, sessions, task);
+  switch (key) {
+    case "running":
+      return card.status === "running" || lifecycle.state === "running";
+    case "blocked":
+      return card.status === "blocked";
+    case "stale":
+      return Boolean(card.metadata?.stale || lifecycle.state === "stale");
+    case "readyUnassigned":
+      return card.status === "ready" && !card.agentId?.trim() && !card.metadata?.claim;
+    case "missingProof":
+      return card.status === "done" && !hasWorkboardProofEvidence(card);
+    case "failedAttempts":
+      return countCardFailedAttempts(card) > 0 || taskFailedTerminal(task);
+  }
+}
+
+export function filterWorkboardCardsForPreset(params: {
+  cards: readonly WorkboardCard[];
+  preset: WorkboardViewPresetId;
+  tasksByCardId: ReadonlyMap<string, WorkboardTaskSummary>;
+  sessions: readonly GatewaySessionRow[];
+  defaultAgentId?: string | null;
+}): WorkboardCard[] {
+  const defaultAgentId = params.defaultAgentId?.trim();
+  return params.cards.filter((card) => {
+    const task = params.tasksByCardId.get(card.id);
+    const lifecycle = getWorkboardLifecycle(card, params.sessions, task);
+    switch (params.preset) {
+      case "all":
+        return true;
+      case "default_agent":
+        return defaultAgentId
+          ? card.agentId === defaultAgentId || !card.agentId?.trim()
+          : !card.agentId;
+      case "ready":
+        return card.status === "ready";
+      case "running":
+        return card.status === "running" || lifecycle.state === "running";
+      case "blocked":
+        return card.status === "blocked";
+      case "review":
+        return card.status === "review";
+      case "stale":
+        return Boolean(card.metadata?.stale) || lifecycle.state === "stale";
+      case "missing_proof":
+        return card.status === "done" && !hasWorkboardProofEvidence(card);
+      case "recently_done":
+        return cardRecentlyDone(card);
+    }
+  });
 }
 
 function formatError(error: unknown): string {
@@ -1125,42 +1336,214 @@ export async function loadWorkboard(params: {
   client: GatewayBrowserClient | null;
   requestUpdate?: () => void;
   force?: boolean;
-}) {
+  refreshDiagnostics?: boolean;
+}): Promise<boolean> {
   const state = getWorkboardState(params.host);
   if (!params.client || (!params.force && (state.loaded || state.loadAttempted))) {
-    return;
+    return false;
   }
   const client = params.client;
   const existingLoad = workboardLoadPromises.get(params.host);
   if (existingLoad) {
-    await existingLoad;
-    return;
+    return await existingLoad;
   }
+  const generation = nextWorkboardLoadGeneration(params.host);
   state.loadAttempted = true;
   state.loading = true;
   state.error = null;
   params.requestUpdate?.();
   const loadPromise = (async () => {
     try {
+      if (params.refreshDiagnostics) {
+        try {
+          await client.request("workboard.cards.diagnostics.refresh", {});
+        } catch (error) {
+          if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+            state.lastRefreshError = formatError(error);
+          }
+        }
+      }
       const payload = await client.request("workboard.cards.list", {});
       const normalized = normalizeCardsPayload(payload);
+      if (!isCurrentWorkboardLoadGeneration(params.host, generation)) {
+        return false;
+      }
       state.cards = normalized.cards;
       state.statuses = normalized.statuses;
       state.tasksByCardId = new Map();
-      if (state.cards.length > 0) {
-        applyTaskSummariesToState(state, await listWorkboardTasks(client));
+      if (normalized.cards.length > 0) {
+        try {
+          const tasks = await listWorkboardTasks(client);
+          if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+            applyTaskSummariesToState(state, tasks);
+          }
+        } catch (error) {
+          if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+            state.lastRefreshError = formatError(error);
+          }
+        }
       }
       state.loaded = true;
+      return true;
     } catch (error) {
-      state.error = formatError(error);
+      if (isCurrentWorkboardLoadGeneration(params.host, generation)) {
+        state.error = formatError(error);
+      }
+      return false;
     } finally {
+      if (!isCurrentWorkboardLoadGeneration(params.host, generation) && !state.loaded) {
+        state.loadAttempted = false;
+      }
       state.loading = false;
       workboardLoadPromises.delete(params.host);
       params.requestUpdate?.();
     }
   })();
   workboardLoadPromises.set(params.host, loadPromise);
-  await loadPromise;
+  return await loadPromise;
+}
+
+export async function refreshWorkboard(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  requestUpdate?: () => void;
+  source: WorkboardRefreshSource;
+  refreshDiagnostics?: boolean;
+}) {
+  const state = getWorkboardState(params.host);
+  if (state.dispatching) {
+    return;
+  }
+  const startedAt = Date.now();
+  state.lastRefreshStartedAt = startedAt;
+  state.lastRefreshSource = params.source;
+  state.lastRefreshError = null;
+  if (params.source === "poll") {
+    state.pollRefreshInProgress = true;
+    state.suppressNextLifecycleSync = true;
+  }
+  params.requestUpdate?.();
+  if (!params.client) {
+    state.lastRefreshError = "Gateway client unavailable";
+    if (params.source === "poll") {
+      state.pollRefreshInProgress = false;
+      state.suppressNextLifecycleSync = true;
+    }
+    params.requestUpdate?.();
+    return;
+  }
+  try {
+    const refreshed = await loadWorkboard({
+      host: params.host,
+      client: params.client,
+      requestUpdate: params.requestUpdate,
+      force: true,
+      refreshDiagnostics: params.refreshDiagnostics,
+    });
+    state.lastRefreshSource = params.source;
+    if (state.error) {
+      state.lastRefreshError = state.error;
+    } else if (refreshed) {
+      state.lastRefreshAt = Date.now();
+    }
+  } finally {
+    if (params.source === "poll") {
+      state.pollRefreshInProgress = false;
+      state.suppressNextLifecycleSync = true;
+    }
+    params.requestUpdate?.();
+  }
+}
+
+function workboardDocumentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
+}
+
+function shouldDeferWorkboardPoll(state: WorkboardUiState): boolean {
+  return Boolean(
+    state.draftOpen ||
+    state.editingCardId ||
+    state.busyCardId ||
+    state.dispatching ||
+    state.detailCommentBody.trim() ||
+    state.draftCommentBody.trim(),
+  );
+}
+
+function clearWorkboardPolling(host: WorkboardHost) {
+  const timer = workboardPollingTimers.get(host);
+  if (timer) {
+    clearTimeout(timer);
+    workboardPollingTimers.delete(host);
+  }
+}
+
+function scheduleWorkboardPoll(host: WorkboardHost) {
+  clearWorkboardPolling(host);
+  const entry = workboardPollingEntries.get(host);
+  if (!entry?.enabled || !entry.client || entry.intervalMs <= 0) {
+    return;
+  }
+  const timer = setTimeout(() => {
+    workboardPollingTimers.delete(host);
+    const current = workboardPollingEntries.get(host);
+    const state = getWorkboardState(host);
+    if (!current?.enabled || !current.client || current.intervalMs <= 0) {
+      return;
+    }
+    const run = async () => {
+      if (!workboardDocumentHidden() && !shouldDeferWorkboardPoll(state)) {
+        await refreshWorkboard({
+          host,
+          client: current.client,
+          requestUpdate: current.requestUpdate,
+          source: "poll",
+          refreshDiagnostics: current.refreshDiagnostics,
+        });
+      }
+    };
+    void run().finally(() => scheduleWorkboardPoll(host));
+  }, entry.intervalMs);
+  workboardPollingTimers.set(host, timer);
+}
+
+export function configureWorkboardPolling(params: {
+  host: WorkboardHost;
+  client: GatewayBrowserClient | null;
+  enabled: boolean;
+  refreshDiagnostics?: boolean;
+  requestUpdate?: () => void;
+}) {
+  const state = getWorkboardState(params.host);
+  const intervalMs = state.autoRefreshIntervalMs;
+  const previous = workboardPollingEntries.get(params.host);
+  const enabled = params.enabled && intervalMs > 0;
+  const refreshDiagnostics = params.refreshDiagnostics === true;
+  workboardPollingEntries.set(params.host, {
+    client: params.client,
+    enabled,
+    intervalMs,
+    refreshDiagnostics,
+    requestUpdate: params.requestUpdate,
+  });
+  if (!enabled) {
+    clearWorkboardPolling(params.host);
+    return;
+  }
+  const configChanged =
+    !previous ||
+    previous.enabled !== enabled ||
+    previous.intervalMs !== intervalMs ||
+    previous.refreshDiagnostics !== refreshDiagnostics ||
+    previous.client !== params.client;
+  if (configChanged || !workboardPollingTimers.get(params.host)) {
+    scheduleWorkboardPoll(params.host);
+  }
+}
+
+export function stopWorkboardPolling(host: WorkboardHost) {
+  clearWorkboardPolling(host);
+  workboardPollingEntries.delete(host);
 }
 
 function replaceCard(state: WorkboardUiState, card: WorkboardCard) {
@@ -1682,6 +2065,7 @@ export async function captureSessionToWorkboard(params: {
     );
     if (existing) {
       if (existing.metadata?.archivedAt) {
+        invalidateWorkboardLoads(params.host);
         const payload = await params.client.request("workboard.cards.archive", {
           id: existing.id,
           archived: false,
@@ -1698,6 +2082,7 @@ export async function captureSessionToWorkboard(params: {
     });
     const recentUserText = extractChatHistoryText(messages, "user", "last");
     const lastAssistantText = extractChatHistoryText(messages, "assistant", "last");
+    invalidateWorkboardLoads(params.host);
     const payload = await params.client.request("workboard.cards.create", {
       title: sessionTitle(params.session, recentUserText),
       notes: buildSessionCaptureNotes({
@@ -1795,6 +2180,7 @@ export async function syncWorkboardLifecycle(params: {
     if (syncKeys.get(card.id) === key || state.syncingCardIds.has(card.id)) {
       continue;
     }
+    invalidateWorkboardLoads(params.host);
     state.syncingCardIds.add(card.id);
     params.requestUpdate?.();
     try {
@@ -1836,6 +2222,7 @@ export async function createWorkboardCard(params: {
   if (!params.client || !state.draftTitle.trim()) {
     return;
   }
+  invalidateWorkboardLoads(params.host);
   state.loading = true;
   state.error = null;
   params.requestUpdate?.();
@@ -1864,6 +2251,7 @@ export async function saveWorkboardCardDraft(params: {
   if (!params.client || !state.draftTitle.trim()) {
     return;
   }
+  invalidateWorkboardLoads(params.host);
   state.loading = true;
   state.error = null;
   const cardId = state.editingCardId;
@@ -1902,6 +2290,7 @@ export async function addWorkboardCardComment(params: {
   if (!cardId || !params.client || !body) {
     return;
   }
+  invalidateWorkboardLoads(params.host);
   state.busyCardId = cardId;
   state.error = null;
   params.requestUpdate?.();
@@ -1936,6 +2325,7 @@ export async function moveWorkboardCard(params: {
   if (!params.client) {
     return;
   }
+  invalidateWorkboardLoads(params.host);
   state.busyCardId = params.cardId;
   state.error = null;
   const pendingStatusRecorded = recordPendingStatusTransition(
@@ -1971,6 +2361,7 @@ export async function deleteWorkboardCard(params: {
   if (!params.client) {
     return;
   }
+  invalidateWorkboardLoads(params.host);
   state.busyCardId = params.cardId;
   state.error = null;
   params.requestUpdate?.();
@@ -1996,6 +2387,7 @@ export async function archiveWorkboardCard(params: {
   if (!params.client) {
     return;
   }
+  invalidateWorkboardLoads(params.host);
   state.busyCardId = params.cardId;
   state.error = null;
   params.requestUpdate?.();
@@ -2019,10 +2411,11 @@ export async function dispatchWorkboard(params: {
   requestUpdate?: () => void;
 }) {
   const state = getWorkboardState(params.host);
-  if (!params.client) {
+  if (!params.client || state.dispatching) {
     return;
   }
-  state.loading = true;
+  invalidateWorkboardLoads(params.host);
+  state.dispatching = true;
   state.error = null;
   state.lastDispatchSummary = null;
   params.requestUpdate?.();
@@ -2033,12 +2426,16 @@ export async function dispatchWorkboard(params: {
     state.cards = normalized.cards;
     state.statuses = normalized.statuses;
     state.lastDispatchSummary = normalizeDispatchSummary(dispatchResult);
-    applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
+    try {
+      applyTaskSummariesToState(state, await listWorkboardTasks(params.client));
+    } catch (error) {
+      state.lastRefreshError = formatError(error);
+    }
     state.loaded = true;
   } catch (error) {
     state.error = formatError(error);
   } finally {
-    state.loading = false;
+    state.dispatching = false;
     params.requestUpdate?.();
   }
 }
@@ -2228,6 +2625,7 @@ export async function startWorkboardCard(params: {
     params.requestUpdate?.();
     return null;
   }
+  invalidateWorkboardLoads(params.host);
   state.busyCardId = params.card.id;
   params.requestUpdate?.();
   let preflightCard: WorkboardCard | null = null;
@@ -2373,6 +2771,7 @@ export async function stopWorkboardCard(params: {
   if (!params.client || (!sessionKey && !taskId)) {
     return;
   }
+  invalidateWorkboardLoads(params.host);
   state.busyCardId = params.card.id;
   state.error = null;
   params.requestUpdate?.();

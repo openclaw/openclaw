@@ -5,16 +5,23 @@ import {
   addWorkboardCardComment,
   archiveWorkboardCard,
   captureSessionToWorkboard,
+  configureWorkboardPolling,
+  consumeWorkboardLifecycleSyncSuppression,
   createWorkboardCard,
   deleteWorkboardCard,
+  dispatchWorkboard,
+  filterWorkboardCardsForPreset,
   getWorkboardLifecycle,
   getWorkboardDependencyState,
   getWorkboardState,
   loadWorkboard,
   moveWorkboardCard,
+  refreshWorkboard,
   saveWorkboardCardDraft,
   startWorkboardCard,
+  stopWorkboardPolling,
   stopWorkboardCard,
+  summarizeWorkboardHealth,
   syncWorkboardLifecycle,
   type WorkboardCard,
   type WorkboardTaskSummary,
@@ -93,6 +100,48 @@ describe("workboard controller", () => {
     expect(getWorkboardState(host).cards).toEqual([sampleCard]);
   });
 
+  it("refreshes diagnostics before listing cards when requested", async () => {
+    const host = {};
+    const client = createClient({
+      "workboard.cards.diagnostics.refresh": { diagnostics: [], count: 0 },
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+    });
+
+    await loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      refreshDiagnostics: true,
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.diagnostics.refresh", {});
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.list", {});
+  });
+
+  it("keeps loading cards when diagnostics refresh fails", async () => {
+    const host = {};
+    const client = createClient((method) => {
+      if (method === "workboard.cards.diagnostics.refresh") {
+        throw new Error("diagnostics denied");
+      }
+      return { cards: [sampleCard], statuses: ["todo", "done"] };
+    });
+
+    await loadWorkboard({
+      host,
+      client: client as never,
+      force: true,
+      refreshDiagnostics: true,
+    });
+
+    const state = getWorkboardState(host);
+    expect(client.request).toHaveBeenNthCalledWith(1, "workboard.cards.diagnostics.refresh", {});
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.list", {});
+    expect(state.cards).toEqual([sampleCard]);
+    expect(state.error).toBeNull();
+    expect(state.lastRefreshError).toBe("diagnostics denied");
+  });
+
   it("links loaded cards to matching Gateway tasks", async () => {
     const host = {};
     const linked = {
@@ -114,6 +163,279 @@ describe("workboard controller", () => {
       taskId: "task-1",
       status: "running",
     });
+  });
+
+  it("records refresh state and suppresses lifecycle sync for poll refreshes", async () => {
+    const host = {};
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+    const suppressions: boolean[] = [];
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "poll",
+      requestUpdate: () =>
+        suppressions.push(consumeWorkboardLifecycleSyncSuppression(getWorkboardState(host))),
+    });
+
+    const state = getWorkboardState(host);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+    expect(suppressions.length).toBeGreaterThanOrEqual(3);
+    expect(suppressions.every(Boolean)).toBe(true);
+    expect(state.pollRefreshInProgress).toBe(false);
+    expect(state.lastRefreshSource).toBe("poll");
+    expect(state.lastRefreshAt).toEqual(expect.any(Number));
+    expect(state.lastRefreshError).toBeNull();
+    expect(consumeWorkboardLifecycleSyncSuppression(state)).toBe(false);
+  });
+
+  it("does not mark a disconnected refresh as successful", async () => {
+    const host = {};
+    const updates: Array<string | null> = [];
+
+    await refreshWorkboard({
+      host,
+      client: null,
+      source: "manual",
+      requestUpdate: () => updates.push(getWorkboardState(host).lastRefreshError),
+    });
+
+    const state = getWorkboardState(host);
+    expect(state.lastRefreshAt).toBeNull();
+    expect(state.lastRefreshError).toBe("Gateway client unavailable");
+    expect(updates).toContain("Gateway client unavailable");
+  });
+
+  it("keeps refreshed cards when task enrichment fails", async () => {
+    const host = {};
+    const refreshedCard = { ...sampleCard, title: "Refreshed card" };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return { cards: [refreshedCard], statuses: ["todo", "done"] };
+      }
+      if (method === "tasks.list") {
+        throw new Error("tasks unavailable");
+      }
+      return {};
+    });
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "manual",
+    });
+
+    const state = getWorkboardState(host);
+    expect(state.cards).toMatchObject([{ title: "Refreshed card" }]);
+    expect(state.error).toBeNull();
+    expect(state.lastRefreshError).toBe("tasks unavailable");
+    expect(state.lastRefreshAt).toEqual(expect.any(Number));
+  });
+
+  it("polls through the read refresh path without write methods", async () => {
+    vi.useFakeTimers();
+    const host = {};
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+    const state = getWorkboardState(host);
+    state.autoRefreshIntervalMs = 5000;
+
+    configureWorkboardPolling({
+      host,
+      client: client as never,
+      enabled: true,
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.list", {});
+    expect(client.request).not.toHaveBeenCalledWith("workboard.cards.update", expect.anything());
+    vi.clearAllMocks();
+    stopWorkboardPolling(host);
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(client.request).not.toHaveBeenCalled();
+  });
+
+  it("tracks dispatch independently from refresh loading state", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.loading = true;
+    const requestUpdates: Array<[loading: boolean, dispatching: boolean]> = [];
+    const client = createClient({
+      "workboard.cards.dispatch": {
+        promoted: [],
+        reclaimed: [],
+        blocked: [],
+        orchestrated: [],
+        count: 0,
+      },
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+      "tasks.list": { tasks: [] },
+    });
+
+    await dispatchWorkboard({
+      host,
+      client: client as never,
+      requestUpdate: () => requestUpdates.push([state.loading, state.dispatching]),
+    });
+
+    expect(requestUpdates[0]).toEqual([true, true]);
+    expect(requestUpdates.at(-1)).toEqual([true, false]);
+    expect(state.loading).toBe(true);
+    expect(state.dispatching).toBe(false);
+    expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", {});
+  });
+
+  it("skips refreshes while dispatch is in flight", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    state.dispatching = true;
+    const client = createClient({
+      "workboard.cards.list": { cards: [sampleCard], statuses: ["todo", "done"] },
+    });
+
+    await refreshWorkboard({
+      host,
+      client: client as never,
+      source: "manual",
+    });
+
+    expect(client.request).not.toHaveBeenCalled();
+    expect(state.lastRefreshStartedAt).toBeNull();
+  });
+
+  it("does not let an older refresh overwrite cards listed after dispatch", async () => {
+    const host = {};
+    const refreshList = createDeferred<unknown>();
+    const staleCard = { ...sampleCard, title: "Stale refresh card" };
+    const dispatchedCard = { ...sampleCard, title: "Dispatched card" };
+    let listCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        listCalls += 1;
+        return listCalls === 1
+          ? refreshList.promise
+          : { cards: [dispatchedCard], statuses: ["todo", "done"] };
+      }
+      if (method === "workboard.cards.dispatch") {
+        return {
+          promoted: [],
+          reclaimed: [],
+          blocked: [],
+          orchestrated: [],
+          count: 0,
+        };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+
+    const refresh = refreshWorkboard({
+      host,
+      client: client as never,
+      source: "manual",
+    });
+    await Promise.resolve();
+    expect(getWorkboardState(host).loading).toBe(true);
+
+    await dispatchWorkboard({ host, client: client as never });
+    expect(getWorkboardState(host).cards).toMatchObject([{ title: "Dispatched card" }]);
+
+    refreshList.resolve({ cards: [staleCard], statuses: ["todo", "done"] });
+    await refresh;
+
+    const state = getWorkboardState(host);
+    expect(state.cards).toMatchObject([{ title: "Dispatched card" }]);
+    expect(state.loading).toBe(false);
+    expect(state.lastRefreshAt).toBeNull();
+  });
+
+  it("does not let an older refresh overwrite a card move", async () => {
+    const host = {};
+    const refreshList = createDeferred<unknown>();
+    const staleCard = { ...sampleCard, status: "ready" as const, title: "Stale ready card" };
+    const movedCard = { ...sampleCard, status: "review" as const, title: "Moved card" };
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return refreshList.promise;
+      }
+      if (method === "workboard.cards.move") {
+        return { card: movedCard };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+
+    const refresh = refreshWorkboard({
+      host,
+      client: client as never,
+      source: "manual",
+    });
+    await Promise.resolve();
+
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      status: "review",
+      position: 2000,
+    });
+    refreshList.resolve({ cards: [staleCard], statuses: ["ready", "review"] });
+    await refresh;
+
+    const state = getWorkboardState(host);
+    expect(state.cards).toMatchObject([{ title: "Moved card", status: "review" }]);
+  });
+
+  it("allows automatic reload after an initial load is invalidated by a write", async () => {
+    const host = {};
+    const initialList = createDeferred<unknown>();
+    const movedCard = { ...sampleCard, title: "Moved during initial load" };
+    const reloadedCard = { ...sampleCard, title: "Reloaded canonical card" };
+    let listCalls = 0;
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        listCalls += 1;
+        return listCalls === 1
+          ? initialList.promise
+          : { cards: [reloadedCard], statuses: ["todo", "done"] };
+      }
+      if (method === "workboard.cards.move") {
+        return { card: movedCard };
+      }
+      if (method === "tasks.list") {
+        return { tasks: [] };
+      }
+      return {};
+    });
+
+    const initialLoad = loadWorkboard({ host, client: client as never });
+    await Promise.resolve();
+    await moveWorkboardCard({
+      host,
+      client: client as never,
+      cardId: sampleCard.id,
+      status: "review",
+      position: 2000,
+    });
+    initialList.resolve({ cards: [sampleCard], statuses: ["todo", "done"] });
+    await initialLoad;
+
+    const state = getWorkboardState(host);
+    expect(state.loaded).toBe(false);
+    expect(state.loadAttempted).toBe(false);
+
+    await loadWorkboard({ host, client: client as never });
+    expect(state.cards).toMatchObject([{ title: "Reloaded canonical card" }]);
+    expect(state.loaded).toBe(true);
   });
 
   it("links cards from paginated Gateway task results", async () => {
@@ -184,6 +506,119 @@ describe("workboard controller", () => {
       parentTodo.id,
       "missing-parent",
     ]);
+  });
+
+  it("summarizes health from card metadata, linked tasks, and sessions", () => {
+    const running = {
+      ...sampleCard,
+      id: "running",
+      status: "running",
+      sessionKey: sampleSession.key,
+    } satisfies WorkboardCard;
+    const blocked = { ...sampleCard, id: "blocked", status: "blocked" } satisfies WorkboardCard;
+    const ready = { ...sampleCard, id: "ready", status: "ready" } satisfies WorkboardCard;
+    const missingProof = { ...sampleCard, id: "done", status: "done" } satisfies WorkboardCard;
+    const artifactProof = {
+      ...sampleCard,
+      id: "artifact-proof",
+      status: "done",
+      metadata: { artifacts: [{ id: "artifact-1", createdAt: 1, label: "log" }] },
+    } satisfies WorkboardCard;
+    const failed = {
+      ...sampleCard,
+      id: "failed",
+      metadata: {
+        failureCount: 2,
+        attempts: [{ id: "attempt-1", status: "blocked", startedAt: 1 }],
+        stale: { detectedAt: 2, reason: "old" },
+      },
+    } satisfies WorkboardCard;
+    const recovered = {
+      ...sampleCard,
+      id: "recovered",
+      metadata: {
+        failureCount: 0,
+        attempts: [{ id: "attempt-1", status: "failed", startedAt: 1 }],
+      },
+    } satisfies WorkboardCard;
+    const tasksByCardId = new Map<string, WorkboardTaskSummary>([
+      [
+        "ready",
+        {
+          ...sampleTask,
+          taskId: "task-ready",
+          id: "task-ready",
+          status: "timed_out",
+        },
+      ],
+    ]);
+
+    expect(
+      summarizeWorkboardHealth({
+        cards: [running, blocked, ready, missingProof, artifactProof, failed, recovered],
+        tasksByCardId,
+        sessions: [sampleSession],
+      }),
+    ).toEqual({
+      running: 1,
+      blocked: 1,
+      stale: 1,
+      readyUnassigned: 1,
+      missingProof: 1,
+      failedAttempts: 3,
+    });
+  });
+
+  it("filters built-in Workboard view presets", () => {
+    vi.setSystemTime(new Date("2026-06-03T12:00:00Z"));
+    const now = Date.now();
+    const cards = [
+      { ...sampleCard, id: "default-agent" },
+      { ...sampleCard, id: "assigned", agentId: "agent-1" },
+      { ...sampleCard, id: "ready", status: "ready" },
+      { ...sampleCard, id: "review", status: "review" },
+      { ...sampleCard, id: "done", status: "done", completedAt: now - 60_000 },
+      {
+        ...sampleCard,
+        id: "old-done",
+        status: "done",
+        completedAt: now - 10 * 24 * 60 * 60 * 1000,
+      },
+    ] satisfies WorkboardCard[];
+
+    expect(
+      filterWorkboardCardsForPreset({
+        cards,
+        preset: "default_agent",
+        tasksByCardId: new Map(),
+        sessions: [],
+        defaultAgentId: "agent-1",
+      }).map((card) => card.id),
+    ).toEqual(["default-agent", "assigned", "ready", "review", "done", "old-done"]);
+    expect(
+      filterWorkboardCardsForPreset({
+        cards,
+        preset: "ready",
+        tasksByCardId: new Map(),
+        sessions: [],
+      }).map((card) => card.id),
+    ).toEqual(["ready"]);
+    expect(
+      filterWorkboardCardsForPreset({
+        cards,
+        preset: "missing_proof",
+        tasksByCardId: new Map(),
+        sessions: [],
+      }).map((card) => card.id),
+    ).toEqual(["done", "old-done"]);
+    expect(
+      filterWorkboardCardsForPreset({
+        cards,
+        preset: "recently_done",
+        tasksByCardId: new Map(),
+        sessions: [],
+      }).map((card) => card.id),
+    ).toEqual(["done"]);
   });
 
   it("links unassigned default-agent tasks with canonicalized session keys", async () => {
