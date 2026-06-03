@@ -174,16 +174,18 @@ Notes:
   or `--element`.
 - `existing-session` / `user` profiles support page screenshots and `--ref`
   screenshots from snapshot output, but not CSS `--element` screenshots.
-- `--labels` overlays current snapshot refs on the screenshot. It works with
-  `--full-page` (full-page label overlay), `--ref` (element-clip label overlay
-  by ARIA ref), and `--element` (element-clip label overlay by CSS selector);
-  in element-clip modes, labels are projected relative to the element. The
-  response also includes an `annotations` array with each ref's bounding box
-  (`{ref, number, role, name?, box: {x, y, width, height}}`); coordinates are
-  in the captured image's space (viewport / fullpage / element-relative). The
-  field is omitted when empty. `existing-session` profiles do not include the
-  `annotations` field (overlay still works via chrome-mcp; annotations
-  metadata is a Playwright-path feature).
+- `--labels` overlays current snapshot refs on the screenshot. On
+  Playwright-backed profiles, it works with `--full-page` (full-page label
+  overlay), `--ref` (element-clip label overlay by ARIA ref), and `--element`
+  (element-clip label overlay by CSS selector); in element-clip modes, labels
+  are projected relative to the element. The response also includes an
+  `annotations` array with each ref's bounding box (`{ref, number, role, name?,
+box: {x, y, width, height}}`); coordinates are in the captured image's space
+  (viewport / fullpage / element-relative). The field is omitted when empty.
+  `existing-session` profiles render a chrome-mcp overlay on page screenshots
+  but do not use the Playwright projection helper and do not include
+  `annotations`; CSS `--element` screenshots are unsupported there. Without
+  Playwright or chrome-mcp, labeled screenshots are not available.
 - `snapshot --urls` appends discovered link destinations to AI snapshots so
   agents can choose direct navigation targets instead of guessing from link
   text alone.
