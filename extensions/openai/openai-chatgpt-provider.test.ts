@@ -151,6 +151,65 @@ describe("OpenAI provider Codex transport hooks", () => {
     });
   });
 
+  it("keeps Codex Spark on its 128k context budget when cloned from larger templates", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      providerConfig: { api: "openai-chatgpt-responses" },
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.4"
+            ? {
+                provider: "openai",
+                id: "gpt-5.4",
+                name: "gpt-5.4",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 1, output: 1, cacheRead: 1, cacheWrite: 1 },
+                contextWindow: 1_050_000,
+                contextTokens: 272_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      },
+    } as never);
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.3-codex-spark",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      input: ["text"],
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+    });
+  });
+
+  it("keeps Codex Spark text-only when no template model is available", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "gpt-5.3-codex-spark",
+      providerConfig: { api: "openai-chatgpt-responses" },
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "gpt-5.3-codex-spark",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      input: ["text"],
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+    });
+  });
+
   it("refreshes ChatGPT OAuth credentials under the OpenAI provider", async () => {
     const provider = buildOpenAIProvider();
     refreshOpenAICodexTokenMock.mockResolvedValueOnce({

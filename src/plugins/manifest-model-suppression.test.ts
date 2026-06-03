@@ -283,4 +283,107 @@ describe("manifest model suppression", () => {
       }),
     ).toBeUndefined();
   });
+
+  it("matches native OpenAI direct API defaults without blocking custom proxy base URLs", () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot([
+        {
+          id: "openai",
+          providers: ["openai"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "openai",
+                model: "gpt-5.3-codex-spark",
+                when: {
+                  providerConfigApiIn: ["openai-responses", "openai-completions"],
+                  baseUrlHosts: ["api.openai.com"],
+                },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                baseUrl: "",
+                models: [],
+              },
+            },
+          },
+        },
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                auth: "api-key",
+                baseUrl: "",
+                models: [],
+              },
+            },
+          },
+        },
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                api: "openai-responses",
+                baseUrl: "https://proxy.example.test/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        env: process.env,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+        config: {
+          models: {
+            providers: {
+              openai: {
+                auth: "api-key",
+                baseUrl: "https://proxy.example.test/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        env: process.env,
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "openai",
+        id: "gpt-5.3-codex-spark",
+        env: process.env,
+      }),
+    ).toBeUndefined();
+  });
 });

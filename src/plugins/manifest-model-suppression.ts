@@ -63,7 +63,7 @@ function normalizeSuppressionHost(host: string): string {
 function resolveConfiguredProviderValue(params: {
   provider: string;
   config?: OpenClawConfig;
-}): { api?: string; baseUrl?: string } | undefined {
+}): { api?: string; auth?: string; baseUrl?: string } | undefined {
   const providers = params.config?.models?.providers;
   if (!providers) {
     return undefined;
@@ -74,13 +74,58 @@ function resolveConfiguredProviderValue(params: {
     }
     return {
       api: normalizeLowercaseStringOrEmpty(entry?.api),
+      auth: normalizeLowercaseStringOrEmpty(entry?.auth),
       baseUrl: typeof entry?.baseUrl === "string" ? entry.baseUrl : undefined,
     };
   }
   return undefined;
 }
 
-function manifestSuppressionMatchesConditions(params: {
+function isOpenAINativeApiDefault(params: {
+  provider: string;
+  configuredProvider?: { api?: string; auth?: string; baseUrl?: string };
+}): boolean {
+  if (params.provider !== "openai" || !params.configuredProvider) {
+    return false;
+  }
+  if (normalizeBaseUrlHost(params.configuredProvider.baseUrl)) {
+    return false;
+  }
+  const api = normalizeLowercaseStringOrEmpty(params.configuredProvider.api);
+  if (api === "openai-responses" || api === "openai-completions") {
+    return true;
+  }
+  return !api && normalizeLowercaseStringOrEmpty(params.configuredProvider.auth) === "api-key";
+}
+
+function resolveEffectiveProviderApi(params: {
+  provider: string;
+  configuredProvider?: { api?: string; auth?: string; baseUrl?: string };
+}): string {
+  const configuredApi = normalizeLowercaseStringOrEmpty(params.configuredProvider?.api);
+  if (configuredApi) {
+    return configuredApi;
+  }
+  // OpenAI API-key auth without a custom base URL uses the native Responses API.
+  if (isOpenAINativeApiDefault(params)) {
+    return "openai-responses";
+  }
+  return params.configuredProvider ? "" : params.provider;
+}
+
+function resolveEffectiveBaseUrl(params: {
+  provider: string;
+  baseUrl?: string | null;
+  configuredProvider?: { api?: string; auth?: string; baseUrl?: string };
+}): string | null | undefined {
+  const explicitBaseUrl = params.baseUrl ?? params.configuredProvider?.baseUrl;
+  if (explicitBaseUrl) {
+    return explicitBaseUrl;
+  }
+  return isOpenAINativeApiDefault(params) ? "https://api.openai.com" : explicitBaseUrl;
+}
+
+export function manifestSuppressionMatchesConditions(params: {
   suppression: ManifestModelCatalogSuppressionEntry;
   provider: string;
   baseUrl?: string | null;
@@ -96,15 +141,22 @@ function manifestSuppressionMatchesConditions(params: {
   });
   if (when.providerConfigApiIn?.length) {
     const allowedApis = new Set(when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty));
-    const effectiveApi = configuredProvider
-      ? normalizeLowercaseStringOrEmpty(configuredProvider.api)
-      : params.provider;
+    const effectiveApi = resolveEffectiveProviderApi({
+      provider: params.provider,
+      configuredProvider,
+    });
     if (!effectiveApi || !allowedApis.has(effectiveApi)) {
       return false;
     }
   }
   if (when.baseUrlHosts?.length) {
-    const baseUrlHost = normalizeBaseUrlHost(params.baseUrl ?? configuredProvider?.baseUrl);
+    const baseUrlHost = normalizeBaseUrlHost(
+      resolveEffectiveBaseUrl({
+        provider: params.provider,
+        baseUrl: params.baseUrl,
+        configuredProvider,
+      }),
+    );
     if (!baseUrlHost) {
       return false;
     }

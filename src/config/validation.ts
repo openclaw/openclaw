@@ -14,6 +14,7 @@ import {
 } from "../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
+import { manifestSuppressionMatchesConditions } from "../plugins/manifest-model-suppression.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntry,
@@ -1415,24 +1416,8 @@ function validateConfigObjectWithPluginsBase(
       return;
     }
     const { registry } = ensureRegistry();
-    const suppressedModels = new Map<
-      string,
-      { provider: string; model: string; reason?: string }
-    >();
-    for (const suppression of planManifestModelCatalogSuppressions({ registry }).suppressions) {
-      if (suppression.when) {
-        continue;
-      }
-      const key = `${suppression.provider}/${suppression.model}`;
-      if (!suppressedModels.has(key)) {
-        suppressedModels.set(key, {
-          provider: suppression.provider,
-          model: suppression.model,
-          ...(suppression.reason ? { reason: suppression.reason } : {}),
-        });
-      }
-    }
-    if (suppressedModels.size === 0) {
+    const suppressions = planManifestModelCatalogSuppressions({ registry }).suppressions;
+    if (suppressions.length === 0) {
       return;
     }
     const seen = new Set<string>();
@@ -1441,7 +1426,16 @@ function validateConfigObjectWithPluginsBase(
       if (!parsed) {
         continue;
       }
-      const suppression = suppressedModels.get(`${parsed.provider}/${parsed.model}`);
+      const suppression = suppressions.find(
+        (entry) =>
+          entry.provider === parsed.provider &&
+          entry.model === parsed.model &&
+          manifestSuppressionMatchesConditions({
+            suppression: entry,
+            provider: parsed.provider,
+            config,
+          }),
+      );
       if (!suppression) {
         continue;
       }

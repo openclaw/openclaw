@@ -1068,6 +1068,12 @@ describe("buildOpenAIProvider", () => {
         modelId: "gpt-5.5",
       } as never),
     ).toBe(true);
+    expect(
+      codexProvider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "gpt-5.3-codex-spark",
+      } as never),
+    ).toBe(true);
   });
 
   it("owns replay policy for OpenAI and Codex transports", () => {
