@@ -1799,6 +1799,41 @@ describe("workboard controller", () => {
     expect(state.cards[0]).toMatchObject({ status: "running" });
   });
 
+  it("keeps task lifecycle sync active when task timestamps are missing", async () => {
+    const host = {};
+    const state = getWorkboardState(host);
+    const linked = {
+      ...sampleCard,
+      status: "running",
+      sessionKey: sampleTaskSessionKey,
+      runId: "run-1",
+      taskId: "task-1",
+      updatedAt: 5,
+    } satisfies WorkboardCard;
+    const { updatedAt: _ignored, ...taskWithoutUpdatedAt } = sampleTask;
+    state.loaded = true;
+    state.cards = [linked];
+    state.tasksByCardId.set("card-1", sampleTask);
+    const client = createClient({
+      "tasks.list": { tasks: [{ ...taskWithoutUpdatedAt, status: "completed" }] },
+      "workboard.cards.update": {
+        card: { ...linked, status: "review", updatedAt: 6 },
+      },
+    });
+
+    await syncWorkboardLifecycle({
+      host,
+      client: client as never,
+      sessions: [],
+    });
+
+    expect(client.request).toHaveBeenNthCalledWith(2, "workboard.cards.update", {
+      id: "card-1",
+      patch: { status: "review" },
+    });
+    expect(state.cards[0]).toMatchObject({ status: "review" });
+  });
+
   it("applies fresh failed task lifecycle sync after a newer task update", async () => {
     const host = {};
     const state = getWorkboardState(host);

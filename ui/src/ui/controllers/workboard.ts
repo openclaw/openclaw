@@ -1007,6 +1007,11 @@ function sessionUpdatedAtValue(session: GatewaySessionRow): number | undefined {
   return typeof session.updatedAt === "number" ? session.updatedAt : undefined;
 }
 
+function taskLifecycleSourceUpdatedAt(task: WorkboardTaskSummary): number | undefined {
+  const updatedAt = taskUpdatedAtValue(task);
+  return updatedAt > 0 ? updatedAt : undefined;
+}
+
 function taskSessionKeyMatchesCardSession(
   cardSessionKey: string,
   taskSessionKey: string | undefined,
@@ -1251,14 +1256,14 @@ export function getWorkboardLifecycle(
           session,
           state: "running",
           targetStatus: "running",
-          sourceUpdatedAt: taskUpdatedAtValue(task),
+          sourceUpdatedAt: taskLifecycleSourceUpdatedAt(task),
         };
       case "completed":
         return {
           session,
           state: "succeeded",
           targetStatus: "review",
-          sourceUpdatedAt: taskUpdatedAtValue(task),
+          sourceUpdatedAt: taskLifecycleSourceUpdatedAt(task),
         };
       case "failed":
       case "cancelled":
@@ -1267,7 +1272,7 @@ export function getWorkboardLifecycle(
           session,
           state: "failed",
           targetStatus: "blocked",
-          sourceUpdatedAt: taskUpdatedAtValue(task),
+          sourceUpdatedAt: taskLifecycleSourceUpdatedAt(task),
         };
     }
   }
@@ -1329,6 +1334,7 @@ function shouldSkipStaleLifecycleStatusSync(card: WorkboardCard, lifecycle: Work
   return (
     Boolean(lifecycle.targetStatus) &&
     typeof lifecycle.sourceUpdatedAt === "number" &&
+    lifecycle.sourceUpdatedAt > 0 &&
     lifecycle.sourceUpdatedAt < card.updatedAt
   );
 }
