@@ -2337,7 +2337,7 @@ describe("handleToolExecutionEnd directReply path — media support", () => {
 
   it("directReplyResultWithMedia round-trip: readDirectReply true, mediaUrls extracted", async () => {
     const { directReplyResultWithMedia } = await import("./tools/common.js");
-    const { extractToolResultMediaArtifact } = await import("./pi-embedded-subscribe.tools.js");
+    const { extractToolResultMediaArtifact } = await import("./embedded-agent-subscribe.tools.js");
 
     const result = directReplyResultWithMedia({
       text: "Done",
