@@ -1252,18 +1252,24 @@ export async function updateNpmInstalledPlugins(params: {
         timeoutMs: params.timeoutMs,
       });
       if (metadataResult.ok) {
+        const bypassTrustedOfficialUnchangedNpmCheck = shouldBypassTrustedOfficialUnchangedNpmCheck(
+          {
+            metadata: metadataResult.metadata,
+            spec: effectiveSpec!,
+            trustedSourceLinkedOfficialInstall,
+          },
+        );
         expectedIntegrity = expectedIntegrityForNpmUpdate({
           effectiveSpec,
           metadata: metadataResult.metadata,
           record,
           trustedSourceLinkedOfficialInstall,
         });
+        if (bypassTrustedOfficialUnchangedNpmCheck) {
+          expectedIntegrity = undefined;
+        }
         if (
-          !shouldBypassTrustedOfficialUnchangedNpmCheck({
-            metadata: metadataResult.metadata,
-            spec: effectiveSpec!,
-            trustedSourceLinkedOfficialInstall,
-          }) &&
+          !bypassTrustedOfficialUnchangedNpmCheck &&
           isNpmMetadataCompatibleWithCurrentHost(metadataResult.metadata) &&
           !installedPackageNeedsOpenClawPeerLinkRepair(installPath) &&
           shouldSkipUnchangedNpmInstall({
