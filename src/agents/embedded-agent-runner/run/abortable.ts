@@ -14,6 +14,10 @@ function makeAbortError(signal: AbortSignal): Error {
   return err;
 }
 
+/**
+ * Races an operation against an abort signal while preserving the operation's
+ * result when it wins and surfacing aborts as AbortError failures.
+ */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(makeAbortError(signal));

@@ -13,6 +13,10 @@ import {
   resolveSelectedOpenAIRuntimeProvider,
 } from "../openai-routing.js";
 
+/**
+ * Runtime facts forwarded into a compaction turn so the compacting agent keeps
+ * the same channel, auth, workspace, model, and live-process context.
+ */
 export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
   messageChannel?: string;
@@ -44,8 +48,8 @@ export type EmbeddedCompactionRuntimeContext = {
 };
 
 /**
- * Resolve the effective compaction target from config, falling back to the
- * caller-supplied provider/model and optionally applying runtime defaults.
+ * Resolve the effective compaction target after applying compaction.model
+ * overrides, auth-profile safety, and Codex-runtime OpenAI routing.
  */
 export function resolveEmbeddedCompactionTarget(params: {
   config?: OpenClawConfig;
@@ -139,6 +143,10 @@ function shouldUseCodexRuntimeProviderForCompaction(params: {
   return true;
 }
 
+/**
+ * Build the serialized context for an embedded compaction attempt after target
+ * resolution, including only live process sessions scoped to this agent turn.
+ */
 export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;

@@ -76,6 +76,10 @@ function getAgentSteeringQueueMessages(agent: unknown): unknown[] | undefined {
   return Array.isArray(messages) ? messages : undefined;
 }
 
+/**
+ * Remove one still-pending steering message from the runtime queue and mirrored
+ * UI queue without clearing unrelated queued payloads.
+ */
 export async function cancelQueuedSteeringMessage(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -103,6 +107,10 @@ export async function cancelQueuedSteeringMessage(
   return true;
 }
 
+/**
+ * Steer a live session and wait until the queued user message is committed to
+ * transcript, cancelling only that queued message if the wait cannot complete.
+ */
 export async function steerAndWaitForTranscriptCommit(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,
@@ -189,6 +197,10 @@ export async function steerAndWaitForTranscriptCommit(
   });
 }
 
+/**
+ * Optionally wait for transcript commit when steering an active session; callers
+ * that only need fire-and-forget steering keep the direct runtime behavior.
+ */
 export async function steerActiveSessionWithOptionalDeliveryWait(
   activeSession: EmbeddedAgentActiveSessionSteerTarget,
   text: string,

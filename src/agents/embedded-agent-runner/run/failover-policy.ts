@@ -71,6 +71,9 @@ export type RunFailoverDecisionParams =
   | AssistantDecisionParams;
 
 function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
+  // Retry-limit exhaustion can only replay through fallback when the original
+  // stop reason is safe to resend. Local timeouts and deterministic transcript
+  // failures stay on the retry-limit error path.
   return Boolean(
     reason &&
     reason !== "timeout" &&
@@ -85,6 +88,9 @@ function isTerminalFormatFailure(params: {
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
 }): boolean {
+  // Format failures are deterministic unless the caller opted into one more
+  // retry. Rotating profiles or models without that opt-in usually replays the
+  // same malformed transcript.
   return (
     params.failoverFailure && params.failoverReason === "format" && params.allowFormatRetry !== true
   );
@@ -118,6 +124,9 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   const timeoutFailure = isAssistantTimeoutFailure(params);
   const harnessOwnedTimeout =
     params.harnessOwnsTransport && (timeoutFailure || params.failoverReason === "timeout");
+  // Harness-owned transports do their own timeout handling. Only a concrete
+  // non-timeout provider failure should escape that boundary into profile/model
+  // failover.
   if (harnessOwnedTimeout && !isConcreteNonTimeoutAssistantFailure(params)) {
     return false;
   }
@@ -132,6 +141,10 @@ function assistantFallbackReason(params: AssistantDecisionParams): FailoverReaso
   return isAssistantTimeoutFailure(params) ? "timeout" : (failoverReason ?? "unknown");
 }
 
+/**
+ * Carries the strongest known failover reason into retry-limit handling while
+ * letting a fresh timeout classification override older state.
+ */
 export function mergeRetryFailoverReason(params: {
   previous: FailoverReason | null;
   failoverReason: FailoverReason | null;
@@ -140,6 +153,10 @@ export function mergeRetryFailoverReason(params: {
   return params.failoverReason ?? (params.timedOut ? "timeout" : null) ?? params.previous;
 }
 
+/**
+ * Resolves retry-limit, prompt-build, and assistant-stream failure signals into
+ * the single action the embedded runner should take next.
+ */
 export function resolveRunFailoverDecision(
   params: RetryLimitDecisionParams,
 ): RetryLimitFailoverDecision;

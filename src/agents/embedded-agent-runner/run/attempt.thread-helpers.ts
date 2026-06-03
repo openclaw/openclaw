@@ -4,6 +4,10 @@ import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.j
 
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
+/**
+ * Merges hook-provided system context around the base prompt while preserving
+ * prompt-cache-stable section normalization.
+ */
 export function composeSystemPromptWithHookContext(params: {
   baseSystemPrompt?: string;
   prependSystemContext?: string;
@@ -25,6 +29,10 @@ export function composeSystemPromptWithHookContext(params: {
   });
 }
 
+/**
+ * Returns the real workspace that read-only sandboxed sessions_spawn calls
+ * should inherit, leaving read-write sandbox calls on their current root.
+ */
 export function resolveAttemptSpawnWorkspaceDir(params: {
   sandbox?: {
     enabled?: boolean;
@@ -55,6 +63,10 @@ function shouldAppendAttemptCacheTtl(params: {
   );
 }
 
+/**
+ * Appends a cache-TTL marker only for clean attempts where no compaction
+ * completed, so the marker cannot split a freshly compacted transcript.
+ */
 export function appendAttemptCacheTtlIfNeeded(params: {
   sessionManager: {
     appendCustomEntry?: (customType: string, data: unknown) => void;
@@ -79,6 +91,10 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   return true;
 }
 
+/**
+ * Persists the completed bootstrap marker only after a clean, non-compaction
+ * attempt so later continuation-skip decisions do not trust partial turns.
+ */
 export function shouldPersistCompletedBootstrapTurn(params: {
   shouldRecordCompletedBootstrapTurn: boolean;
   promptError: unknown;

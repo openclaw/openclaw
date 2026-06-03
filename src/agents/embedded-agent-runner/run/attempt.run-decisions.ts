@@ -6,6 +6,10 @@ import {
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+/**
+ * Resolve the session-write lock budget for an embedded attempt using the
+ * compaction timeout as the live-process hold ceiling.
+ */
 export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
   config?: OpenClawConfig;
   compactionTimeoutMs: number;
@@ -22,12 +26,20 @@ export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
   });
 }
 
+/**
+ * Report only the runtime-forwarded auth profile for stream provenance so raw
+ * session auth profiles do not leak into provider-facing telemetry.
+ */
 export function resolveAttemptStreamAuthProfileId(
   params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
 ): string | undefined {
   return params.runtimePlan?.auth.forwardedAuthProfileId;
 }
 
+/**
+ * Resolve the unknown-tool loop threshold that protects provider turns from
+ * repeating objectively unavailable tool calls.
+ */
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
   unknownToolThreshold?: number;
@@ -48,10 +60,18 @@ export function resolveUnknownToolGuardThreshold(loopDetection?: {
   return UNKNOWN_TOOL_THRESHOLD;
 }
 
+/**
+ * Skip llm_output hooks when before_agent_run already blocked the attempt
+ * before any model output could exist.
+ */
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
   return params.promptErrorSource !== "hook:before_agent_run";
 }
 
+/**
+ * Resolve the provider id used for tool-policy checks, preferring an explicit
+ * message provider over the lower-level transport channel.
+ */
 export function resolveAttemptToolPolicyMessageProvider(params: {
   messageProvider?: string;
   messageChannel?: string;

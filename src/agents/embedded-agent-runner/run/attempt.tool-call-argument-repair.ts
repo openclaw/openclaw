@@ -287,6 +287,8 @@ function shouldCloseSmartQuotedValueAt(
       isToolSpecificValueSuccessor({ toolName, valueKey, nextKey })
     );
   }
+  // Freeform edit/content fields may contain JSON-looking prose, so only the
+  // known successor key is allowed to close the smart-quoted value.
   return TOOLCALL_REPAIR_FREEFORM_SUCCESSOR_KEYS[valueKey] === nextKey;
 }
 
@@ -423,6 +425,8 @@ function readObjectValue(
   return readJsonValue(raw, startIndex);
 }
 
+// Parse provider-emitted smart-quoted argument objects without accepting
+// duplicate keys or arbitrary malformed member boundaries.
 function parseSmartQuotedToolCallObject(
   raw: string,
   startIndex: number,
@@ -698,6 +702,8 @@ function wrapStreamRepairMalformedToolCallArguments(
       }
       const nextPartialJson = (partialJsonByIndex.get(event.contentIndex) ?? "") + event.delta;
       if (nextPartialJson.length > MAX_TOOLCALL_REPAIR_BUFFER_CHARS) {
+        // Disable repair for this block once the buffer is too large; continuing
+        // would turn provider junk into an unbounded per-token parse path.
         partialJsonByIndex.delete(event.contentIndex);
         repairedArgsByIndex.delete(event.contentIndex);
         disabledIndices.add(event.contentIndex);
@@ -769,6 +775,10 @@ function wrapStreamRepairMalformedToolCallArguments(
   return stream;
 }
 
+/**
+ * Wrap provider streams whose tool-call argument deltas sometimes include
+ * prefixes, trailing junk, or smart quotes before OpenClaw executes the tool.
+ */
 export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     const maybeStream = baseFn(model, context, options);
@@ -781,6 +791,10 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
   };
 }
 
+/**
+ * Gate malformed argument repair to transports with observed malformed
+ * tool-call argument deltas instead of rewriting every provider stream.
+ */
 export function shouldRepairMalformedToolCallArguments(params: {
   provider?: string;
   modelApi?: string | null;
@@ -793,6 +807,9 @@ export function shouldRepairMalformedToolCallArguments(params: {
   );
 }
 
+/**
+ * Wrap xAI-style streams that HTML-entity encode tool-call argument payloads.
+ */
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }

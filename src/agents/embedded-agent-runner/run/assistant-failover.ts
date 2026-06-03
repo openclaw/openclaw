@@ -32,6 +32,11 @@ type AssistantFailoverOutcome =
       error: FailoverError;
     };
 
+/**
+ * Applies a resolved assistant-stream failover decision, including auth-profile
+ * rotation, same-model idle retries, and FailoverError construction for model
+ * fallback or concrete provider failures.
+ */
 export async function handleAssistantFailover(params: {
   initialDecision: AssistantFailoverDecision;
   aborted: boolean;
@@ -81,6 +86,9 @@ export async function handleAssistantFailover(params: {
   let overloadProfileRotations = params.overloadProfileRotations;
   let decision = params.initialDecision;
   const sameModelIdleTimeoutRetry = (): AssistantFailoverOutcome => {
+    // Idle watchdog retries stay on the same model because no provider error
+    // proved the account or model is bad; the next attempt only needs a fresh
+    // stream after model silence.
     params.warn(
       `[llm-idle-timeout] ${sanitizeForLog(params.provider)}/${sanitizeForLog(params.modelId)} produced no reply before the idle watchdog; retrying same model`,
     );
@@ -155,6 +163,9 @@ export async function handleAssistantFailover(params: {
 
     const rotated = await params.advanceAuthProfile();
     const markFailedProfilePromise = markFailedProfile();
+    // Profile marking is diagnostic state, but profile rotation is on the hot
+    // recovery path. Start the mark after rotation and only wait when no retry
+    // can proceed.
     if (timeoutFailure && !params.isProbeSession && failedProfileId) {
       const timeoutLabel = params.idleTimedOut ? "idle timeout (model silent)" : "timed out";
       params.warn(`Profile ${failedProfileId} ${timeoutLabel}. Trying next account...`);

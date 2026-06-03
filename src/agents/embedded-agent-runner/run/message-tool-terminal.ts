@@ -133,6 +133,8 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
       if (item && typeof item === "object" && !Array.isArray(item)) {
         const text = (item as Record<string, unknown>).text;
         if (typeof text === "string") {
+          // Some tool hooks serialize delivery receipts as text blocks; parse
+          // only object-shaped JSON and keep recursion bounded above.
           const parsed = parseJsonRecord(text);
           if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1)) {
             return true;
@@ -147,6 +149,10 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
   );
 }
 
+/**
+ * Decide whether message-tool-only delivery can end the run after the default
+ * route was actually delivered, excluding dry-runs, explicit routes, and errors.
+ */
 export function shouldTerminateAfterMessageToolOnlySend(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   context: AfterToolCallContext;
@@ -183,6 +189,10 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {
   return true;
 }
 
+/**
+ * Install an after-tool hook that marks successful default-route message sends
+ * as terminal while preserving any existing hook output.
+ */
 export function installMessageToolOnlyTerminalHook(params: {
   agent: Agent;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

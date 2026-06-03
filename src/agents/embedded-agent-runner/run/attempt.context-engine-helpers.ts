@@ -18,6 +18,10 @@ export type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unk
   contextFiles: TContextFile[];
 };
 
+/**
+ * Resolves whether this attempt should inject bootstrap/context files and
+ * whether a successful turn should mark full bootstrap as completed.
+ */
 export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
   contextInjectionMode: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
@@ -37,6 +41,8 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   const isContinuationTurn =
     params.bootstrapMode !== "full" &&
     params.contextInjectionMode === "continuation-skip" &&
+    // Heartbeat runs must still resolve bootstrap context so heartbeat-specific
+    // filtering can run instead of reusing a stale completed-turn marker.
     params.bootstrapContextRunKind !== "heartbeat" &&
     (await params.hasCompletedBootstrapTurn(params.sessionFile));
   const shouldSkipBootstrapInjection =
@@ -58,6 +64,9 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   };
 }
 
+/**
+ * Builds the prompt-cache diagnostics block returned with an embedded attempt.
+ */
 export function buildContextEnginePromptCacheInfo(params: {
   retention?: "none" | "short" | "long";
   lastCallUsage?: NormalizedUsage;
@@ -103,6 +112,9 @@ export function buildContextEnginePromptCacheInfo(params: {
   return Object.keys(promptCache).length > 0 ? promptCache : undefined;
 }
 
+/**
+ * Finds the newest assistant message created after the current attempt started.
+ */
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -145,6 +157,10 @@ export function resolvePromptCacheTouchTimestamp(params: {
   );
 }
 
+/**
+ * Builds loop-level prompt-cache diagnostics from the current attempt assistant
+ * message and any fallback cache-touch timestamp.
+ */
 export function buildLoopPromptCacheInfo(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;

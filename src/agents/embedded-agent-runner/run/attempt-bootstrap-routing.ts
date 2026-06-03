@@ -28,6 +28,10 @@ export type AttemptWorkspaceBootstrapRoutingInput = Omit<
   bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
 
+/**
+ * Maps a resolved bootstrap mode to the context surfaces that may include
+ * BOOTSTRAP.md content for this attempt.
+ */
 export function resolveBootstrapContextTargets(params: {
   bootstrapMode: BootstrapMode;
 }): Pick<
@@ -60,6 +64,10 @@ function resolveAttemptBootstrapRouting(
   };
 }
 
+/**
+ * Detects hook-provided BOOTSTRAP.md content that should count as pending
+ * bootstrap context even before normal workspace file reads run.
+ */
 export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[]): boolean {
   return (
     files?.some(
@@ -72,6 +80,10 @@ export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[
   );
 }
 
+/**
+ * Resolves bootstrap mode and context routing for an attempt, checking the
+ * canonical workspace path while honoring already-loaded hook bootstrap files.
+ */
 export async function resolveAttemptWorkspaceBootstrapRouting(
   params: AttemptWorkspaceBootstrapRoutingInput,
 ): Promise<AttemptBootstrapRouting> {
@@ -81,6 +93,8 @@ export async function resolveAttemptWorkspaceBootstrapRouting(
   const hasHookBootstrapContent = hasBootstrapFileContent(params.bootstrapFiles);
   return resolveAttemptBootstrapRouting({
     ...params,
+    // Hook-provided BOOTSTRAP.md content is already trusted input for this run,
+    // so it both marks bootstrap as pending and satisfies file-access needs.
     workspaceBootstrapPending: workspaceBootstrapPending || hasHookBootstrapContent,
     hasBootstrapFileAccess: params.hasBootstrapFileAccess || hasHookBootstrapContent,
   });

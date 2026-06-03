@@ -45,6 +45,10 @@ type LogLike = {
   warn(message: string): void;
 };
 
+/**
+ * Coordinate auth-profile selection, runtime auth preparation, refresh timers,
+ * and auth-error recovery for one embedded run attempt.
+ */
 export function createEmbeddedRunAuthController(params: {
   config: RunEmbeddedAgentParams["config"];
   agentDir: string;
@@ -199,6 +203,8 @@ export function createEmbeddedRunAuthController(params: {
         activeRuntimeAuthState.profileId !== refreshProfileId ||
         activeRuntimeAuthState.sourceApiKey.trim() !== sourceApiKey
       ) {
+        // Profile rotation or reinitialization won the race; applying this
+        // prepared credential would revert the model to stale auth/base URL.
         params.log.debug(
           `Ignoring stale runtime auth refresh for ${runtimeModel.provider}; auth state advanced before ${reason} refresh completed.`,
         );
@@ -265,6 +271,8 @@ export function createEmbeddedRunAuthController(params: {
       if (params.getRuntimeAuthRefreshCancelled()) {
         return;
       }
+      // Refresh before expiry and reschedule from the returned expiry so
+      // short-lived runtime tokens keep extending while the run is active.
       refreshRuntimeAuth("scheduled")
         .then(() => scheduleRuntimeAuthRefresh())
         .catch(() => {
@@ -566,6 +574,8 @@ export function createEmbeddedRunAuthController(params: {
     if (classifyFailoverReason(errorText, { provider: params.getProvider() }) !== "auth") {
       return false;
     }
+    // Runtime auth plugins can mint short-lived transport credentials; retry
+    // auth-looking failures once before rotating profiles or failing over.
     try {
       await refreshRuntimeAuth("auth-error");
       scheduleRuntimeAuthRefresh();

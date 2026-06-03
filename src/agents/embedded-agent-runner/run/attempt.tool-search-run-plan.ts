@@ -23,6 +23,10 @@ export type ToolSearchRunPlan = {
   emptyAllowlistCallableNames: string[];
 };
 
+/**
+ * Build the names used by the empty-allowlist guard while excluding Tool Search
+ * controls that were auto-added only to expose catalog search.
+ */
 export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   effectiveToolNames: string[];
   autoAddedToolSearchControlNames?: Set<string>;
@@ -39,6 +43,10 @@ export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   ];
 }
 
+/**
+ * Identify Tool Search controls that should not satisfy an explicit allowlist
+ * because the runtime added them implicitly for catalog access.
+ */
 export function buildAutoAddedToolSearchControlNamesForAllowlistCheck(params: {
   toolSearchControlsEnabled: boolean;
   explicitAllowlistSources: Array<{ entries: string[] }>;
@@ -74,6 +82,10 @@ function collectExplicitlyAllowedClientToolNames(params: {
     .filter((name) => explicitNames.has(normalizeToolName(name)));
 }
 
+/**
+ * Build the visible/replay tool-name sets for a Tool Search run while keeping
+ * compact visible controls separate from the full replay-safe tool universe.
+ */
 export function buildToolSearchRunPlan(params: {
   visibleTools: CollectAllowedToolNamesParams["tools"];
   uncompactedTools: CollectAllowedToolNamesParams["tools"];
@@ -95,6 +107,8 @@ export function buildToolSearchRunPlan(params: {
   if (params.controlsEnabled) {
     for (const controlName of params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES) {
       if (visibleAllowedToolNames.has(controlName)) {
+        // Replay still needs visible Tool Search controls even when compaction
+        // hid the backing catalog entries from the immediate prompt.
         replayAllowedToolNames.add(controlName);
       }
     }

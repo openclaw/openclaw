@@ -42,6 +42,10 @@ export type ResolveAttemptTrajectoryTerminalParams = {
   lastAssistantStopReason?: string;
 };
 
+/**
+ * Restores the last safe visible assistant text only for normal stops, keeping
+ * provider-error and abort text out of user-facing terminal delivery checks.
+ */
 export function resolveTerminalAssistantTexts(params: {
   assistantTexts: string[];
   lastAssistantStopReason?: string;
@@ -82,6 +86,11 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
+/**
+ * Classifies a completed attempt by committed delivery/progress evidence rather
+ * than raw tool attempts, so empty or unfinished terminal turns surface as
+ * non-deliverable errors.
+ */
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {
@@ -105,6 +114,8 @@ export function resolveAttemptTrajectoryTerminal(
     params.lastToolError !== undefined ||
     hasAsyncStartedToolActivity(params.toolMetas);
 
+  // A terminal tool-use stop is unfinished unless some downstream path already
+  // committed delivery, progress, or an expected-silent outcome.
   if (params.lastAssistantStopReason === "toolUse" && !hasExplicitTerminalDelivery) {
     return {
       status: "error",

@@ -253,6 +253,10 @@ export function resolveAttemptReplayMetadata(attempt: {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+/**
+ * Builds the user-visible fallback text for terminal turns that ended before a
+ * final answer, using replay metadata to distinguish safe and unsafe retries.
+ */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -321,6 +325,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
+/**
+ * Allows a same-prompt retry only when no assistant turn, tool activity,
+ * lifecycle item, or side-effect evidence has been produced.
+ */
 export function shouldRetryMissingAssistantTurn(params: {
   payloadCount: number;
   aborted: boolean;
@@ -607,6 +615,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   });
 }
 
+/**
+ * Returns the continuation instruction for thinking/reasoning-only turns that
+ * used model budget but produced no visible answer.
+ */
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -645,6 +657,10 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
+/**
+ * Returns the continuation instruction for provider-supported empty responses
+ * where retrying should ask for visible output instead of restarting.
+ */
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -897,6 +913,10 @@ export function resolvePlanningOnlyRetryLimit(
     : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
 }
 
+/**
+ * Returns the retry instruction for plan-only turns when the user asked for
+ * action but the assistant only described intent without durable progress.
+ */
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;

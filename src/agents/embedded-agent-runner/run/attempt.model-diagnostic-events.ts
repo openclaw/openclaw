@@ -481,6 +481,8 @@ function withDiagnosticTraceparentHeader(
     };
   }
 
+  // Replace any caller-supplied propagation header with the trusted child span
+  // while still measuring the post-redaction payload returned by onPayload.
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(options?.headers ?? {})) {
     if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
@@ -553,6 +555,9 @@ async function* observeModelCallIterator<T>(
     throw err;
   } finally {
     if (!terminalEmitted) {
+      // Consumers can stop reading before the provider stream finishes. Give
+      // the underlying iterator a bounded chance to release sockets/files, then
+      // still emit one terminal event so diagnostic activity does not stay live.
       await safeReturnIterator(iterator);
       emitModelCallCompleted(eventBase, startedAt, state);
     }
@@ -611,6 +616,10 @@ function observeModelCallResult(
   return result;
 }
 
+/**
+ * Wraps an agent-core stream function with model-call diagnostics, plugin hook
+ * dispatch, trace propagation, byte accounting, and private content capture.
+ */
 export function wrapStreamFnWithDiagnosticModelCallEvents(
   streamFn: StreamFn,
   ctx: ModelCallDiagnosticContext,

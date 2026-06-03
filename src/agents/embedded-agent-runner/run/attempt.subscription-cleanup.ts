@@ -46,12 +46,17 @@ async function waitForEmbeddedAbortSettle(params: {
   }
 }
 
+/** Preserves the subscription parameter shape for call sites that compose setup. */
 export function buildEmbeddedSubscriptionParams(
   params: SubscribeEmbeddedAgentSessionParams,
 ): SubscribeEmbeddedAgentSessionParams {
   return params;
 }
 
+/**
+ * Releases attempt-owned resources in lock-safe order: flush or skip stale tool
+ * results, release the session lock, then dispose session/runtime resources.
+ */
 export async function cleanupEmbeddedAttemptResources(params: {
   removeToolResultContextGuard?: () => void;
   flushPendingToolResultsAfterIdle: (params: {

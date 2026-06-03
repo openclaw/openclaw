@@ -10,9 +10,15 @@ export type AttemptRuntimeModelContext = NonNullable<
 function asProviderRuntimeModel(
   model: AttemptRuntimeModelContext["model"],
 ): ProviderRuntimeModel | undefined {
+  // Legacy transcript resolution only understands provider runtime model
+  // records; planned model contexts can omit the resolved model entirely.
   return typeof model?.id === "string" ? (model as ProviderRuntimeModel) : undefined;
 }
 
+/**
+ * Resolves the transcript policy for a single model-call attempt, preferring
+ * RuntimePlan policy when available and preserving legacy provider fallback.
+ */
 export function resolveAttemptTranscriptPolicy(params: {
   runtimePlan?: AgentRuntimePlan;
   runtimePlanModelContext: AttemptRuntimeModelContext;

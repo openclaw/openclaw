@@ -112,6 +112,10 @@ function isOpenClawCliImageCachePath(filePath: string): boolean {
   });
 }
 
+/**
+ * Reconstructs prompt image order from inline attachments, offloaded
+ * claim-check media, and image refs typed directly into the current prompt.
+ */
 export function mergePromptAttachmentImages(params: {
   imageOrder?: PromptImageOrderEntry[];
   existingImages?: ImageContent[];
@@ -241,6 +245,10 @@ function extractTrailingAttachmentMediaUris(prompt: string, count: number): stri
   return uris;
 }
 
+/**
+ * Separates refs that came from generated attachment scaffolding from refs the
+ * user wrote in the prompt, preserving explicit prompt refs for fresh loading.
+ */
 export function splitPromptAndAttachmentRefs(params: {
   prompt: string;
   refs: DetectedImageRef[];
@@ -260,6 +268,8 @@ export function splitPromptAndAttachmentRefs(params: {
     extractLeadingInlineAttachmentRefs(params.prompt, inlineAttachmentRefCount),
   );
   const offloadedCount = params.imageOrder?.filter((entry) => entry === "offloaded").length ?? 0;
+  // Offloaded attachments are appended as trailing claim-check lines; only that
+  // suffix is consumed so identical media URIs in prompt text stay explicit.
   const attachmentUris = new Set(
     offloadedCount > 0 ? extractTrailingAttachmentMediaUris(params.prompt, offloadedCount) : [],
   );

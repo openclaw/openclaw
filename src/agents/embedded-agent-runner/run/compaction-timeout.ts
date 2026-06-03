@@ -6,6 +6,10 @@ export type CompactionTimeoutSignal = {
   isCompactionInFlight: boolean;
 };
 
+/**
+ * Classify a run timeout as compaction-related only while compaction is still
+ * pending, retrying, or actively in flight.
+ */
 export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): boolean {
   if (!signal.isTimeout) {
     return false;
@@ -13,6 +17,10 @@ export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): bo
   return signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight;
 }
 
+/**
+ * Decide whether the run timeout should spend its single compaction grace window
+ * or abort because compaction is idle or the grace window was already consumed.
+ */
 export function resolveRunTimeoutDuringCompaction(params: {
   isCompactionPendingOrRetrying: boolean;
   isCompactionInFlight: boolean;
@@ -24,6 +32,10 @@ export function resolveRunTimeoutDuringCompaction(params: {
   return params.graceAlreadyUsed ? "abort" : "extend";
 }
 
+/**
+ * Add exactly one compaction timeout budget to the run timeout so normal agent
+ * execution cannot grow unbounded across repeated compaction waits.
+ */
 export function resolveRunTimeoutWithCompactionGraceMs(params: {
   runTimeoutMs: number;
   compactionTimeoutMs: number;
@@ -68,6 +80,10 @@ function trimToContinuableTail(messages: AgentMessage[]): AgentMessage[] | null 
   return end > 0 ? messages.slice(0, end) : null;
 }
 
+/**
+ * Choose a replay-safe snapshot after compaction timeout, preferring the
+ * pre-compaction transcript when it ends on a message role that can continue.
+ */
 export function selectCompactionTimeoutSnapshot(
   params: SnapshotSelectionParams,
 ): SnapshotSelection {

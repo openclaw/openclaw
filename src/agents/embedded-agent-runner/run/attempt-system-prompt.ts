@@ -27,12 +27,18 @@ export type AttemptSystemPrompt = {
   systemPrompt: string;
 };
 
+/**
+ * Builds the base embedded system prompt and the provider-transformed prompt
+ * used for this attempt.
+ */
 export function buildAttemptSystemPrompt(
   params: BuildAttemptSystemPromptParams,
 ): AttemptSystemPrompt {
   const baseSystemPrompt = buildEmbeddedSystemPrompt(params.embeddedSystemPrompt);
   const systemPrompt = params.isRawModelRun
-    ? ""
+    ? // Raw model probes keep the base prompt for diagnostics/reporting, but do
+      // not send provider-transformed instructions to the model.
+      ""
     : params.transformProviderSystemPrompt({
         provider: params.providerTransform.provider,
         config: params.providerTransform.config,

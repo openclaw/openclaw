@@ -199,6 +199,10 @@ function resolveToolErrorWarningPolicy(params: {
   };
 }
 
+/**
+ * Builds user-deliverable reply payloads from assistant text, source-reply
+ * mirrors, tool metadata, tool errors, and heartbeat responses.
+ */
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];
@@ -446,6 +450,8 @@ export function buildEmbeddedRunPayloads(params: {
   const normalizedFallbackAnswerSourceText = fallbackAnswerSourceText
     ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
     : "";
+  // Prefer the canonical final_answer block over accumulated stream text so
+  // progress/commentary chunks do not leak into the delivered final reply.
   const shouldUseCanonicalFinalAnswer =
     !lastAssistantNeedsErrorSurface &&
     fallbackAnswerSourceText.length > 0 &&

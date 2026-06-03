@@ -111,6 +111,8 @@ function wrapStreamHandleUnhandledStopReason(
             if (!normalizedMessage) {
               throw err;
             }
+            // Turn provider throws into one terminal stream error so callers see
+            // the same structured assistant error path as result() recovery.
             emittedSyntheticTerminal = true;
             return {
               done: false as const,
@@ -135,6 +137,10 @@ function wrapStreamHandleUnhandledStopReason(
   return stream;
 }
 
+/**
+ * Wraps stream creation/result/iteration so provider-specific unhandled stop
+ * reasons become safe, structured assistant errors instead of raw exceptions.
+ */
 export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     try {

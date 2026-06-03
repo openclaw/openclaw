@@ -23,6 +23,7 @@ const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
 export type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
+/** Result of the pre-prompt context pressure check used to choose recovery route. */
 export type PreemptiveCompactionDecision = {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
@@ -34,6 +35,7 @@ export type PreemptiveCompactionDecision = {
   effectiveReserveTokens: number;
 };
 
+/** Token pressure measured at the rendered LLM boundary instead of transcript shape. */
 export type LlmBoundaryTokenPressure = {
   estimatedPromptTokens: number;
   source: string;
@@ -184,6 +186,10 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   return tokens;
 }
 
+/**
+ * Estimates full prompt pressure from replay messages, optional system prompt,
+ * and user prompt using conservative per-boundary overheads and safety margin.
+ */
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
@@ -202,6 +208,10 @@ export function estimateLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((historyTokens + systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+/**
+ * Estimates rendered prompt pressure when the runtime already owns the final
+ * LLM payload shape and transcript-message estimates would undercount it.
+ */
 export function estimateRenderedLlmBoundaryTokenPressure(params: {
   systemPrompt?: string;
   prompt: string;
@@ -215,6 +225,7 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+/** Backward-compatible alias for pre-prompt token pressure estimation. */
 export function estimatePrePromptTokens(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
@@ -239,6 +250,10 @@ function normalizeLlmBoundaryTokenPressure(
   };
 }
 
+/**
+ * Chooses whether to run pre-prompt compaction, direct tool-result truncation,
+ * or both before sending a prompt that is estimated to exceed usable budget.
+ */
 export function shouldPreemptivelyCompactBeforePrompt(params: {
   messages: AgentMessage[];
   unwindowedMessages?: AgentMessage[];
@@ -300,6 +315,8 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
 
   let route: PreemptiveCompactionRoute = "fits";
   if (overflowTokens > 0) {
+    // Route to truncation only when recent tool-result tails can absorb the
+    // overflow plus buffer; otherwise compaction must reduce older context too.
     if (toolResultReducibleChars <= 0) {
       route = "compact_only";
     } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
@@ -320,6 +337,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   };
 }
 
+/** Formats a single-line diagnostic for the pre-prompt context pressure check. */
 export function formatPrePromptPrecheckLog(params: {
   result: PreemptiveCompactionDecision;
   sessionKey?: string;
@@ -352,6 +370,10 @@ export function formatPrePromptPrecheckLog(params: {
   );
 }
 
+/**
+ * Builds the durable session context-budget snapshot shown to operators before
+ * a prompt is submitted or recovered by compaction/truncation.
+ */
 export function buildPrePromptContextBudgetStatus(params: {
   result: PreemptiveCompactionDecision;
   provider: string;

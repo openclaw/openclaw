@@ -130,6 +130,10 @@ function findTerminalTasks(runIds: readonly string[]): {
   return { pendingRunIds, terminalTasks };
 }
 
+/**
+ * Decide whether a cron media run must wait for async artifact-generation tasks
+ * instead of treating the tool-call acknowledgement as completion.
+ */
 export function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -153,6 +157,10 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   );
 }
 
+/**
+ * Wait for cron media async tasks to reach a terminal state, including tasks
+ * discovered from metadata or the task registry after earlier waits complete.
+ */
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;
@@ -171,6 +179,8 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
 
   while (true) {
     throwIfAborted(params.abortSignal);
+    // Recollect each outer loop so follow-up async tasks created after a prior
+    // task completes are included before the attempt reports final completion.
     const runIds = collectAsyncTaskRunIds(params.getToolMetas(), params.sessionKey, waitedRunIds);
     if (runIds.length === 0) {
       return {

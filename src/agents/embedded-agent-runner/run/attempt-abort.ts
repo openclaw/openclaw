@@ -4,6 +4,10 @@ type AbortLockReleaseLog = {
   warn(message: string): void;
 };
 
+/**
+ * Starts abort-time retained-lock release without blocking the abort path;
+ * failures are logged because abort/timeout handling must keep unwinding.
+ */
 export function releaseEmbeddedAttemptSessionLockForAbort(params: {
   sessionLockController: Pick<EmbeddedAttemptSessionLockController, "releaseHeldLockForAbort">;
   log: AbortLockReleaseLog;

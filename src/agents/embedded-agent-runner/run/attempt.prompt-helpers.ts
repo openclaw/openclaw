@@ -93,6 +93,10 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
+/**
+ * Runs prompt-build hooks and merges queued next-turn injections, heartbeat
+ * contributions, and legacy hook surfaces into one prompt-build result.
+ */
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
@@ -243,6 +247,10 @@ export function shouldWarnOnOrphanedUserRepair(
 
 export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
 
+/**
+ * Classifies empty prompt submissions so the caller can distinguish a blank
+ * user turn from a turn with no visible prompt/history/media at all.
+ */
 export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
@@ -463,6 +471,10 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+/**
+ * Folds a trailing queued user message into the visible prompt before removing
+ * it from replay history.
+ */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
@@ -483,6 +495,9 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   };
 }
 
+/**
+ * Resolves the effective filesystem tool scope for this attempt's agent.
+ */
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
@@ -610,6 +625,10 @@ export function buildAfterTurnRuntimeContext(params: {
   };
 }
 
+/**
+ * Builds after-turn runtime context while deriving currentTokenCount from the
+ * last model-call usage payload.
+ */
 export function buildAfterTurnRuntimeContextFromUsage(
   params: Omit<Parameters<typeof buildAfterTurnRuntimeContext>[0], "currentTokenCount"> & {
     lastCallUsage?: NormalizedUsage;

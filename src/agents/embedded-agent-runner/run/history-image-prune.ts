@@ -148,6 +148,10 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
   return prunedMessages;
 }
 
+/**
+ * Installs the pruning pass after any existing context transform so model replay
+ * sees sanitized history without mutating the caller's original transcript.
+ */
 export function installHistoryImagePruneContextTransform(agent: PrunableContextAgent): () => void {
   const originalTransformContext = agent.transformContext;
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {

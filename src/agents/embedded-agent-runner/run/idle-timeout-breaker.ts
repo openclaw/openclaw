@@ -15,20 +15,24 @@
  */
 export const MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT = 5;
 
+/** Mutable outer-loop state that survives attempt/profile retries in one run. */
 export type IdleTimeoutBreakerState = {
   consecutiveIdleTimeoutsBeforeOutput: number;
 };
 
+/** Creates a fresh breaker state for one embedded run loop. */
 export function createIdleTimeoutBreakerState(): IdleTimeoutBreakerState {
   return { consecutiveIdleTimeoutsBeforeOutput: 0 };
 }
 
+/** Attempt outcome facts used to update the idle-timeout breaker. */
 export type IdleTimeoutBreakerInput = {
   idleTimedOut: boolean;
   completedModelProgress: boolean;
   outputTokens?: number;
 };
 
+/** Counter/trip result after applying one attempt outcome. */
 export type IdleTimeoutBreakerStep = {
   consecutive: number;
   tripped: boolean;

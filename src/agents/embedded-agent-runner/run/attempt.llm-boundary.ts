@@ -6,6 +6,10 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
+/**
+ * Normalizes replay messages before provider conversion, stripping metadata and
+ * stale runtime-context messages that should not cross the LLM boundary.
+ */
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripUnsafeBlockedRunMetadata(
     stripToolResultDetails(normalizeAssistantReplayContent(messages)),
@@ -15,6 +19,10 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
 }
 
+/**
+ * Normalizes existing replay history as if the current visible prompt were
+ * appended, while leaving the prompt itself for the caller to submit.
+ */
 export function normalizeMessagesForCurrentPromptBoundary(params: {
   messages: AgentMessage[];
   prompt: string;
@@ -27,6 +35,10 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
   return normalizeMessagesForLlmBoundary([...params.messages, promptMessage]).slice(0, -1);
 }
 
+/**
+ * Installs a prompt-local runtime-context message and restores the session when
+ * the attempt finishes.
+ */
 export function installRuntimeContextMessageForPrompt(params: {
   session: {
     messages: AgentMessage[];
@@ -86,6 +98,10 @@ function appendRuntimeContextMessageForPrompt(params: {
   return [...params.messages, params.message];
 }
 
+/**
+ * Inserts runtime context immediately before the active user prompt so overflow
+ * retries preserve context after rebuilding persisted session state.
+ */
 export function insertRuntimeContextMessageForPrompt(params: {
   message: RuntimeContextCustomMessage;
   messages: AgentMessage[];
@@ -174,6 +190,10 @@ function composeModelPromptContext(params: {
     .join("\n\n");
 }
 
+/**
+ * Temporarily transforms the model-facing prompt while preserving the original
+ * transcript prompt for persisted history.
+ */
 export function installModelPromptTransform(params: {
   session: {
     agent: {

@@ -75,6 +75,10 @@ function classifyBusinessDenialErrorPayloadReason(
   }
 }
 
+/**
+ * Classifies embedded-run terminal results that should trigger model fallback
+ * because no durable user-visible output was produced.
+ */
 export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   provider: string;
   model: string;
@@ -99,6 +103,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (hasOutboundDeliveryEvidence(params.result)) {
     return null;
   }
+  // Hook blocks are explicit policy decisions, not model failures; preserving
+  // them avoids rotating into another model that bypasses the same policy gate.
   if (params.result.meta.error?.kind === "hook_block") {
     return null;
   }
@@ -124,6 +130,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
       code: "incomplete_result",
     };
   }
+  // Provider business-denial payloads are auth/profile health signals even when
+  // they arrive as an embedded error payload rather than a transport exception.
   const failoverReason = classifyBusinessDenialErrorPayloadReason(errorText, params.provider);
   if (failoverReason) {
     return {
@@ -138,6 +146,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
     return null;
   }
 
+  // Legacy GPT-5 handling treats empty/reasoning-only payloads as fallback
+  // candidates, while deliberate silent replies remain successful terminal work.
   if (payloads.length === 0 && hasDeliberateSilentTerminalReply(params.result)) {
     return null;
   }

@@ -24,6 +24,10 @@ export const EMBEDDED_RUN_ATTEMPT_DISPATCH_STAGE = {
 const EMBEDDED_RUN_STAGE_WARN_TOTAL_MS = 10_000;
 const EMBEDDED_RUN_STAGE_WARN_STAGE_MS = 5_000;
 
+/**
+ * Tracks named embedded-run startup spans with both per-stage duration and
+ * elapsed time from tracker creation.
+ */
 export function createEmbeddedRunStageTracker(options?: {
   now?: () => number;
 }): EmbeddedRunStageTracker {
@@ -32,6 +36,8 @@ export function createEmbeddedRunStageTracker(options?: {
   let previousAt = startedAt;
   const stages: EmbeddedRunStageTiming[] = [];
 
+  // Clamp synthetic or system-clock regressions so diagnostics never report
+  // negative stage durations.
   const toMs = (value: number) => Math.max(0, Math.round(value));
 
   return {
@@ -53,6 +59,10 @@ export function createEmbeddedRunStageTracker(options?: {
   };
 }
 
+/**
+ * Decides whether an embedded-run stage summary is slow enough to emit a
+ * warning-level diagnostic.
+ */
 export function shouldWarnEmbeddedRunStageSummary(
   summary: EmbeddedRunStageSummary,
   options?: {
@@ -68,6 +78,9 @@ export function shouldWarnEmbeddedRunStageSummary(
   );
 }
 
+/**
+ * Formats stage timings into the compact one-line shape used by startup logs.
+ */
 export function formatEmbeddedRunStageSummary(
   prefix: string,
   summary: EmbeddedRunStageSummary,

@@ -7,6 +7,10 @@ import type { EmbeddedAgentRunResult } from "../types.js";
 
 type EmbeddedRunPayload = NonNullable<EmbeddedAgentRunResult["payloads"]>[number];
 
+/**
+ * Merges media emitted by tools into the first deliverable reply payload while
+ * preserving reasoning payloads and reply metadata.
+ */
 export function mergeAttemptToolMediaPayloads(params: {
   payloads?: EmbeddedRunPayload[];
   toolMediaUrls?: string[];
@@ -29,6 +33,8 @@ export function mergeAttemptToolMediaPayloads(params: {
       params.sourceReplyDeliveryMode === "message_tool_only" &&
       getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror
     ) {
+      // Message-tool-only mirrors already represent committed delivery; adding
+      // generated media here would make the mirrored transcript payload deliver.
       return payloads;
     }
     const mergedMediaUrls = Array.from(new Set([...(payload.mediaUrls ?? []), ...mediaUrls]));

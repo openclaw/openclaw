@@ -89,6 +89,9 @@ function isKnownLocalCodingToolName(normalized: string): boolean {
   );
 }
 
+/**
+ * Applies the runtime toolsAllow policy to already-materialized attempt tools.
+ */
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
@@ -114,6 +117,10 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
+/**
+ * Ensures message delivery can still materialize when a run must force the
+ * message tool through an otherwise narrow or empty allowlist.
+ */
 export function mergeForcedEmbeddedAttemptToolsAllow(
   toolsAllow: string[] | undefined,
   params: { forceMessageTool?: boolean },
@@ -154,6 +161,8 @@ function resolveCodingToolConstructionPlanForAllowlist(
   const includePluginTools = normalized.some(
     (name) =>
       name === "group:plugins" ||
+      // Unknown local names are treated as plugin/catalog tools so narrow
+      // plugin allowlists still construct the plugin/channel tool surface.
       (!isBundleMcpAllowlistName(name) && !isKnownLocalCodingToolName(name)),
   );
   const includeChannelTools = includePluginTools;
@@ -167,6 +176,10 @@ function resolveCodingToolConstructionPlanForAllowlist(
   };
 }
 
+/**
+ * Resolves which local, channel, and plugin tool families an embedded attempt
+ * needs to construct before the final runtime allowlist filter is applied.
+ */
 export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   disableTools?: boolean;
   isRawModelRun?: boolean;
@@ -206,10 +219,17 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
+/**
+ * Convenience predicate for call sites that only need to know whether local
+ * OpenClaw coding tools must be built for an allowlist.
+ */
 export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
   return resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }).includeCoreTools;
 }
 
+/**
+ * Decides whether the bundled MCP runtime is needed for this attempt's tools.
+ */
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
@@ -233,6 +253,9 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   });
 }
 
+/**
+ * Decides whether the bundled LSP runtime is needed for this attempt's tools.
+ */
 export function shouldCreateBundleLspRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;

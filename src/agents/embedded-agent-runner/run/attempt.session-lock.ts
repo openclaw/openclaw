@@ -428,6 +428,10 @@ function waitForSessionFileOwnerRelease(params: {
   });
 }
 
+/**
+ * Serializes embedded attempts that target the same resolved session file inside
+ * one process, including symlinked paths that point at the same transcript.
+ */
 export async function acquireEmbeddedAttemptSessionFileOwner(params: {
   sessionFile: string;
   timeoutMs?: number;
@@ -468,6 +472,7 @@ export async function acquireEmbeddedAttemptSessionFileOwner(params: {
   }
 }
 
+/** Clears process-wide session-file ownership and rejects any blocked waiters. */
 export function resetEmbeddedAttemptSessionFileOwnersForTest(): void {
   for (const entry of sessionFileOwnerState.owners.values()) {
     for (const waiter of entry.waiters) {
@@ -568,6 +573,10 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
   }
 }
 
+/**
+ * Coordinates the coarse session write lock around provider I/O while fencing
+ * the transcript against unowned edits during the released window.
+ */
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
@@ -710,6 +719,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return;
     }
 
+    // Same-process writers publish exact fingerprints. Trust only newer
+    // generations so a stale controller cannot bless an unrelated edit.
     const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
     if (
       ownedWrite &&
@@ -722,6 +733,8 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       return;
     }
 
+    // Delivery mirror entries may be appended while the model call is in
+    // flight; legacy transcript migration can rewrite the prefix first.
     if (
       (await sessionFenceAdvanceIsBenign({
         sessionFile: params.lockOptions.sessionFile,
@@ -1002,6 +1015,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   };
 }
 
+/**
+ * Wraps provider prompt submission so transcript events drain, the broad lock is
+ * released for model I/O, and post-stream transcript writes reacquire safely.
+ */
 export function installPromptSubmissionLockRelease(params: {
   session: unknown;
   waitForSessionEvents: (session: unknown) => Promise<void>;
