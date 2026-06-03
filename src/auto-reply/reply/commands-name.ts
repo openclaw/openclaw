@@ -97,7 +97,11 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
     storePath,
     (store) => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey });
-      const entry = resolved.existing;
+      // Fall back to the in-memory `params.sessionEntry` so a brand-new native
+      // slash session — whose entry is created by the fast path but not yet
+      // persisted to the store — can still be named from its first `/name`
+      // command. The entry is seeded under the canonical key below.
+      const entry = resolved.existing ?? params.sessionEntry;
       if (!entry) {
         return { ok: false, error: "no active session to name" };
       }
@@ -113,6 +117,16 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
       }
       entry.label = validated.label;
       entry.updatedAt = Math.max(entry.updatedAt ?? 0, Date.now());
+      // Persist through the canonical key and drop any legacy/case-folded
+      // aliases, mirroring `persistResolvedSessionEntry`. Without this the
+      // mutation only touched the in-place row, leaving the rename under a stale
+      // alias key so `sessions.list` would keep surfacing the legacy entry.
+      store[resolved.normalizedKey] = entry;
+      for (const legacyKey of resolved.legacyKeys) {
+        if (legacyKey !== resolved.normalizedKey) {
+          delete store[legacyKey];
+        }
+      }
       return { ok: true, label: validated.label };
     },
     { skipSaveWhenResult: (value) => !value.ok },

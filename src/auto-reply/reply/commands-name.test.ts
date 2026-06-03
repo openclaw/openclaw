@@ -151,6 +151,54 @@ describe("name command", () => {
     expect(result?.reply?.text).toContain("Current session name: Billing rework");
   });
 
+  it("seeds a brand-new native session entry that is not yet persisted", async () => {
+    const storePath = await createStorePath();
+    const params = buildNameParams("/name First native", storePath, { commandSource: "slash" });
+    // Native slash sessions hand the handler an in-memory entry that the fast
+    // path has not written to the store yet. The rename must seed it instead of
+    // reporting "no active session to name".
+    params.sessionEntry = {
+      sessionId: "sess-native",
+      updatedAt: 1,
+      totalTokens: 0,
+      totalTokensFresh: true,
+    };
+
+    const result = await handleNameCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("First native");
+    expect(getSessionEntry({ storePath, sessionKey })?.label).toBe("First native");
+    expect(params.sessionEntry?.label).toBe("First native");
+  });
+
+  it("persists the rename under the canonical key when stored under a legacy alias", async () => {
+    const storePath = await createStorePath();
+    const legacyKey = "agent:main:web:Main";
+    const now = Date.now();
+    await updateSessionStore(storePath, (store) => {
+      store[legacyKey] = {
+        sessionId: "sess-main",
+        updatedAt: now,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      };
+      return null;
+    });
+
+    const params = buildNameParams("/name Canonical", storePath);
+    const result = await handleNameCommand(params, true);
+
+    expect(result?.reply?.text).toContain("Canonical");
+    expect(getSessionEntry({ storePath, sessionKey })?.label).toBe("Canonical");
+
+    const keys = await updateSessionStore(storePath, (store) => Object.keys(store), {
+      skipSaveWhenResult: () => true,
+    });
+    expect(keys).toContain(sessionKey);
+    expect(keys).not.toContain(legacyKey);
+  });
+
   it("does not rename for an unauthorized sender", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry({
