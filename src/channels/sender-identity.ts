@@ -2,6 +2,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeChatType } from "./chat-type.js";
 
+/** Validates trusted sender identity fields before channel contexts reach plugins/tools. */
 export function validateSenderIdentity(ctx: MsgContext): string[] {
   const issues: string[] = [];
 
