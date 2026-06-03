@@ -245,7 +245,7 @@ public actor GatewayNodeSession {
 
         do {
             try await channel.connect()
-            _ = await self.waitForSnapshot(timeoutMs: 500)
+            _ = await self.waitForSnapshot(timeoutMs: 5000)
             await self.notifyConnectedIfNeeded()
         } catch {
             throw error

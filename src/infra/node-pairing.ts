@@ -165,22 +165,26 @@ function newToken() {
 }
 
 export async function listNodePairing(baseDir?: string): Promise<NodePairingList> {
-  const state = await loadState(baseDir);
-  const pending = Object.values(state.pendingById)
-    .toSorted((a, b) => b.ts - a.ts)
-    .map(toPendingNodePairingEntry);
-  const paired = Object.values(state.pairedByNodeId).toSorted(
-    (a, b) => b.approvedAtMs - a.approvedAtMs,
-  );
-  return { pending, paired };
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const pending = Object.values(state.pendingById)
+      .toSorted((a, b) => b.ts - a.ts)
+      .map(toPendingNodePairingEntry);
+    const paired = Object.values(state.pairedByNodeId).toSorted(
+      (a, b) => b.approvedAtMs - a.approvedAtMs,
+    );
+    return { pending, paired };
+  });
 }
 
 export async function getPairedNode(
   nodeId: string,
   baseDir?: string,
 ): Promise<NodePairingPairedNode | null> {
-  const state = await loadState(baseDir);
-  return state.pairedByNodeId[normalizeNodeId(nodeId)] ?? null;
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    return state.pairedByNodeId[normalizeNodeId(nodeId)] ?? null;
+  });
 }
 
 export async function requestNodePairing(
@@ -311,13 +315,15 @@ export async function verifyNodeToken(
   token: string,
   baseDir?: string,
 ): Promise<{ ok: boolean; node?: NodePairingPairedNode }> {
-  const state = await loadState(baseDir);
-  const normalized = normalizeNodeId(nodeId);
-  const node = state.pairedByNodeId[normalized];
-  if (!node) {
-    return { ok: false };
-  }
-  return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
+  return await withLock(async () => {
+    const state = await loadState(baseDir);
+    const normalized = normalizeNodeId(nodeId);
+    const node = state.pairedByNodeId[normalized];
+    if (!node) {
+      return { ok: false };
+    }
+    return verifyPairingToken(token, node.token) ? { ok: true, node } : { ok: false };
+  });
 }
 
 export async function updatePairedNodeMetadata(
