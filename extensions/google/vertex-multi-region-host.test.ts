@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { resolveGoogleVertexBaseOrigin } from "./transport-stream";
-import { isGoogleVertexHostname } from "./provider-policy";
+import { resolveGoogleVertexBaseOrigin } from "./transport-stream.js";
+import { isGoogleVertexHostname } from "./provider-policy.js";
 
 // Minimal Vertex model whose baseUrl carries the {location} template, so the
 // base-origin resolver falls through to location-based host construction
