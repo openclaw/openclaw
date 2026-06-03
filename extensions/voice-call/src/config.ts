@@ -1,5 +1,6 @@
 // Voice Call helper module supports config behavior.
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   buildSecretInputSchema,
   hasConfiguredSecretInput,
@@ -696,7 +697,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
 }
 
 export function resolveVoiceCallSessionKey(params: {
-  config: Pick<VoiceCallConfig, "sessionScope">;
+  config: Pick<VoiceCallConfig, "agentId" | "sessionScope">;
   callId: string;
   phone?: string;
   explicitSessionKey?: string;
@@ -705,11 +706,14 @@ export function resolveVoiceCallSessionKey(params: {
   if (explicit) {
     return explicit;
   }
+  const prefix = `agent:${normalizeAgentId(params.config.agentId)}:voice`;
   if (params.config.sessionScope === "per-call") {
-    return `voice:call:${params.callId}`;
+    return `${prefix}:call:${params.callId}`.toLowerCase();
   }
   const normalizedPhone = params.phone?.replace(/\D/g, "");
-  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+  return (
+    normalizedPhone ? `${prefix}:${normalizedPhone}` : `${prefix}:${params.callId}`
+  ).toLowerCase();
 }
 
 /**

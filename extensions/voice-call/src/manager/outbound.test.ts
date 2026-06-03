@@ -203,7 +203,9 @@ describe("voice-call outbound helpers", () => {
     expect(result.success).toBe(true);
     expect(result.callId).toBeTypeOf("string");
     expect(result.callId).not.toBe("");
-    expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(`voice:call:${result.callId}`);
+    expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(
+      `agent:main:voice:call:${result.callId}`,
+    );
   });
 
   it("initiates conversation calls with pre-connect DTMF TwiML", async () => {
