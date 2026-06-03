@@ -158,23 +158,41 @@ export function createDangerousNameMatchingMutableAllowlistWarningCollector(para
 export function createRestrictSendersChannelSecurity<
   ResolvedAccount extends { accountId?: string | null },
 >(params: {
+  /** Channel config key used for default account lookup and warning collection. */
   channelKey: string;
+  /** Reads the account-level DM policy value before shared defaults are applied. */
   resolveDmPolicy: (account: ResolvedAccount) => string | null | undefined;
+  /** Reads account-level sender allowlist entries for DM policy resolution. */
   resolveDmAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  /** Reads the group policy value used by restrict-senders warnings. */
   resolveGroupPolicy: (account: ResolvedAccount) => GroupPolicy | null | undefined;
+  /** Operator-facing surface name in warning text. */
   surface: string;
+  /** Operator-facing description of who can trigger when group policy is open. */
   openScope: string;
+  /** Config path shown for the group policy field that should be restricted. */
   groupPolicyPath: string;
+  /** Config path shown for the group sender allowlist field. */
   groupAllowFromPath: string;
+  /** Whether group replies require mentions, reducing open-policy warning severity. */
   mentionGated?: boolean;
+  /** Override for channels whose provider presence is not the channel config key itself. */
   providerConfigPresent?: (cfg: OpenClawConfig) => boolean;
+  /** Fallback account id used when scoped config inherits from another account. */
   resolveFallbackAccountId?: (account: ResolvedAccount) => string | null | undefined;
+  /** Default DM policy when the account and shared defaults omit one. */
   defaultDmPolicy?: string;
+  /** Account-scoped allowlist path suffix for warning/proof output. */
   allowFromPathSuffix?: string;
+  /** Account-scoped policy path suffix for warning/proof output. */
   policyPathSuffix?: string;
+  /** Channel id used when formatting pairing approval hints. */
   approveChannelId?: string;
+  /** Explicit pairing approval hint, when the default channel hint is not correct. */
   approveHint?: string;
+  /** Normalizes configured DM allowlist entries before sender matching. */
   normalizeDmEntry?: (raw: string) => string;
+  /** Allows non-default accounts to inherit shared defaults from the default account. */
   inheritSharedDefaultsFromDefaultAccount?: boolean;
 }): ChannelSecurityAdapter<ResolvedAccount> {
   return {
