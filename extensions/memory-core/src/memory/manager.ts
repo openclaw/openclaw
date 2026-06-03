@@ -717,9 +717,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return merged;
     }
     if (merged.length === 0) {
-      // Empty candidate pool: nothing to rerank — do not assert "active" since
-      // no scores could be applied. Leave the existing state untouched.
-      onDebug?.({ backend: "builtin", rerank: this.rerankState });
+      // Empty candidate pool: the reranker did not run, so don't emit a rerank
+      // state — emitting this.rerankState would report a stale "active" from a
+      // prior search. The earlier onDebug({backend}) stands (debug.rerank absent =
+      // accurate for this query); rerankState is left untouched for status().
       return merged;
     }
     const candidates: MemoryRerankCandidate[] = merged.map((r, i) => ({

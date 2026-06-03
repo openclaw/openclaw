@@ -146,12 +146,12 @@ pure `rerankScore`-descending list — tail reordering is intentional.
 
 The rerank state is visible in two places:
 
-**`status().custom.rerank`** — the plugin's own status output exposes the
-current rerank state as one of three values:
+**`status().custom.rerank`** — the plugin's own status output exposes an object
+`{ state, failureCount, lastError }`, where `.state` is one of three values:
 
 - `"disabled"` — no reranker is registered.
-- `"active"` — a reranker is registered and applied scores during this search.
-  This value reliably means reranking actually happened.
+- `"active"` — a reranker is registered and applied scores during the most recent
+  search that had candidates. (For strict per-search state, read `debug.rerank`.)
 - `"degraded"` — a reranker is registered but its response was unusable. This
   covers: provider timeout, thrown error, empty score list, incomplete coverage
   (fewer scores than candidates), duplicate refs, out-of-range refs, and
@@ -160,7 +160,16 @@ current rerank state as one of three values:
   shows `"degraded"`, not a false `"active"`.
 
 **Memory-search debug block** — when memory-search debug output is enabled, the
-`debug.rerank` field carries the same state and timing information.
+`debug.rerank` field carries the rerank state for that search (`"active"`,
+`"degraded"`, or `"disabled"`), and is absent when the search had no candidates to
+rerank. It carries state only — no timing information.
+
+When a reranker is active, the cross-encoder ordering is preserved through to the
+`memory_search` tool output: memory results are ordered by `rerankScore`. For
+`corpus=all`, the memory and supplement corpora are balanced by per-corpus
+selection first, then interleaved best-effort (memory by `rerankScore`, supplements
+by their own `score`) — the two scales are not directly comparable, so cross-corpus
+order is approximate while each corpus stays correctly ordered internally.
 
 ## Related
 

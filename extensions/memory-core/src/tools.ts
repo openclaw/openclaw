@@ -132,8 +132,20 @@ function buildPausedMemoryIndexUnavailableResult(reason: string) {
   });
 }
 
-function sortMemorySearchToolResults<T extends { score: number; path: string }>(results: T[]): T[] {
+// Order by the reranker's signal when present (rerankScore, cross-encoder [0,1]),
+// otherwise by raw fusion score. This keeps a promoted low-fusion-score passage
+// in its reranked position in the tool output, while leaving the no-reranker path
+// byte-for-byte unchanged (rerankScore is undefined -> falls back to score). The
+// score tiebreaker preserves fusion ordering when rerankScores are equal.
+function sortMemorySearchToolResults<
+  T extends { score: number; path: string; rerankScore?: number },
+>(results: T[]): T[] {
   return results.toSorted((left, right) => {
+    const leftKey = left.rerankScore ?? left.score;
+    const rightKey = right.rerankScore ?? right.score;
+    if (leftKey !== rightKey) {
+      return rightKey - leftKey;
+    }
     if (left.score !== right.score) {
       return right.score - left.score;
     }

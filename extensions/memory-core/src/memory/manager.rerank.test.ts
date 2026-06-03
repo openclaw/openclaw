@@ -418,4 +418,39 @@ describe("memory rerank stage", () => {
     expect(custom.rerank?.failureCount).toBe(1);
     expect(custom.rerank?.lastError).toBeTruthy();
   });
+
+  it("(g) empty candidate pool: reranker is not invoked and rerank state is left untouched", async () => {
+    const baseline = await getManager();
+    if (!ftsAvailable(baseline)) {
+      return;
+    }
+    await baseline.sync({ reason: "test" });
+
+    let invocations = 0;
+    seedReranker({
+      rerank: async ({
+        candidates,
+      }: {
+        candidates: ReadonlyArray<MemoryRerankCandidate>;
+      }): Promise<MemoryRerankScore[]> => {
+        invocations += 1;
+        return candidates.map((c) => ({ ref: c.ref, score: 0.5 }));
+      },
+    });
+
+    // Matching query: the reranker runs and state becomes "active".
+    const hits = await baseline.search("alpha", { maxResults: 10 });
+    expect(hits.length).toBeGreaterThan(0);
+    expect(invocations).toBe(1);
+    expect((baseline.status().custom as ManagerStatusCustom).rerank?.state).toBe("active");
+
+    // No-match query -> empty candidate pool: the reranker must NOT be invoked, and
+    // the prior state must be left untouched (no stale flip, no false "degraded").
+    const empty = await baseline.search("zzzznomatchqyx", { maxResults: 10 });
+    expect(empty.length).toBe(0);
+    expect(invocations).toBe(1);
+    const custom = baseline.status().custom as ManagerStatusCustom;
+    expect(custom.rerank?.state).toBe("active");
+    expect(custom.rerank?.failureCount).toBe(0);
+  });
 });
