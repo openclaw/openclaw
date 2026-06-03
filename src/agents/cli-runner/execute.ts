@@ -497,6 +497,10 @@ export async function executePreparedCliRun(
         let commentaryCounter = 0;
         const emitCliCommentaryText = (text: string) => {
           commentaryCounter += 1;
+          const transformedText = applyPluginTextReplacements(
+            text,
+            context.backendResolved.textTransforms?.output,
+          );
           emitAgentEvent({
             runId: params.runId,
             stream: "item",
@@ -506,7 +510,7 @@ export async function executePreparedCliRun(
               phase: "update",
               title: "commentary",
               status: "running",
-              progressText: text,
+              progressText: transformedText,
             },
           });
         };
