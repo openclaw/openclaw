@@ -10,7 +10,12 @@ import {
   sessionStoreEntry,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
+const {
+  createConfiguredGlobalAgentSessionStore,
+  createSessionStoreDir,
+  openClient,
+  resetConfiguredGlobalAgentSessionStore,
+} = setupGatewaySessionsTestHarness();
 
 type MockCalls = {
   mock: { calls: unknown[][] };
@@ -176,114 +181,6 @@ function expectMainPatchBroadcast(
     reason: "patch",
     ...expected,
   });
-}
-
-async function setupGlobalAgentSessionStores({
-  writePrimeStore = false,
-  withTranscripts = false,
-}: {
-  writePrimeStore?: boolean;
-  withTranscripts?: boolean;
-} = {}) {
-  const { dir } = await createSessionStoreDir();
-  const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
-  testState.sessionStorePath = storeTemplate;
-  testState.sessionConfig = { scope: "global" };
-  if (writePrimeStore) {
-    await writeSessionStore({
-      entries: {},
-      storePath: path.join(dir, "prime-sessions.json"),
-    });
-  }
-
-  const mainStorePath = storeTemplate.replace("{agentId}", "main");
-  const workStorePath = storeTemplate.replace("{agentId}", "work");
-  const mainTranscript = path.join(path.dirname(mainStorePath), "sess-main-global.jsonl");
-  const workTranscript = path.join(path.dirname(workStorePath), "sess-work-global.jsonl");
-  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(workStorePath), { recursive: true });
-  if (withTranscripts) {
-    await fs.writeFile(mainTranscript, "main one\nmain two\n", "utf-8");
-    await fs.writeFile(workTranscript, "work one\nwork two\n", "utf-8");
-  }
-  await fs.writeFile(
-    mainStorePath,
-    JSON.stringify(
-      {
-        global: sessionStoreEntry(
-          "sess-main-global",
-          withTranscripts ? { sessionFile: mainTranscript } : undefined,
-        ),
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  await fs.writeFile(
-    workStorePath,
-    JSON.stringify(
-      {
-        global: sessionStoreEntry(
-          "sess-work-global",
-          withTranscripts
-            ? { authProfileOverride: "github-copilot:work", sessionFile: workTranscript }
-            : undefined,
-        ),
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-
-  const configPath = process.env.OPENCLAW_CONFIG_PATH;
-  if (!configPath) {
-    throw new Error("OPENCLAW_CONFIG_PATH is required");
-  }
-  await fs.writeFile(
-    configPath,
-    `${JSON.stringify(
-      {
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
-        session: { scope: "global", store: storeTemplate },
-      },
-      null,
-      2,
-    )}\n`,
-    "utf-8",
-  );
-  const { clearConfigCache, clearRuntimeConfigSnapshot, getRuntimeConfig } =
-    await getGatewayConfigModule();
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-
-  return {
-    clearConfigCache,
-    clearRuntimeConfigSnapshot,
-    configPath,
-    getRuntimeConfig,
-    mainStorePath,
-    mainTranscript,
-    workStorePath,
-    workTranscript,
-  };
-}
-
-async function resetGlobalAgentSessionStores({
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  configPath,
-}: {
-  clearConfigCache: () => void;
-  clearRuntimeConfigSnapshot: () => void;
-  configPath: string;
-}) {
-  testState.sessionStorePath = undefined;
-  testState.sessionConfig = undefined;
-  await fs.writeFile(configPath, "{}\n", "utf-8");
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
 }
 
 async function invokeSessionsCompact({
@@ -629,7 +526,7 @@ test("sessions.changed mutation events include sendPolicy metadata", async () =>
 });
 
 test("sessions.patch scopes selected global mutations and events to the requested agent", async () => {
-  const globalStores = await setupGlobalAgentSessionStores({ writePrimeStore: true });
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ writePrimeStore: true });
 
   const { broadcastToConnIds, responsePayload } = await invokeSessionsPatch({
     key: "global",
@@ -652,11 +549,11 @@ test("sessions.patch scopes selected global mutations and events to the requeste
   };
   expect(mainStore.global?.label).toBeUndefined();
   expect(workStore.global?.label).toBe("Work global");
-  await resetGlobalAgentSessionStores(globalStores);
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
 test("sessions.compact scopes selected global truncation to the requested agent", async () => {
-  const globalStores = await setupGlobalAgentSessionStores({ withTranscripts: true });
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
   const { broadcastToConnIds, responsePayload } = await invokeSessionsCompact({
     getRuntimeConfig: globalStores.getRuntimeConfig,
     params: {
@@ -677,11 +574,11 @@ test("sessions.compact scopes selected global truncation to the requested agent"
     "main one\nmain two\n",
   );
   await expect(fs.readFile(globalStores.workTranscript, "utf-8")).resolves.toBe("work two\n");
-  await resetGlobalAgentSessionStores(globalStores);
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
 test("sessions.compact passes the selected global agent into embedded compaction", async () => {
-  const globalStores = await setupGlobalAgentSessionStores({ withTranscripts: true });
+  const globalStores = await createConfiguredGlobalAgentSessionStore({ withTranscripts: true });
   const { responsePayload } = await invokeSessionsCompact({
     getRuntimeConfig: globalStores.getRuntimeConfig,
     params: {
@@ -699,7 +596,7 @@ test("sessions.compact passes the selected global agent into embedded compaction
     agentId: "work",
     authProfileId: "github-copilot:work",
   });
-  await resetGlobalAgentSessionStores(globalStores);
+  await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
 test("sessions.changed mutation events include subagent ownership metadata", async () => {

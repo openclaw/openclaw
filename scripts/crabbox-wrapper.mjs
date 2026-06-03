@@ -10,6 +10,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  statfsSync,
   statSync,
   utimesSync,
   writeFileSync,
@@ -1658,7 +1659,7 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
     'mkdir -p "$tool_root" || { status=$?; return "$status"; };',
     'install_lock="$tool_root/.node-${node_version}-${node_arch}.lock";',
     "lock_acquired=0;",
-    'lock_deadline=$((SECONDS + 300));',
+    "lock_deadline=$((SECONDS + 300));",
     "while true; do",
     'if mkdir "$install_lock" 2>/dev/null; then lock_acquired=1; printf "%s\\n" "$$" >"$install_lock/pid" || { status=$?; rm -rf "$install_lock"; return "$status"; }; break; fi;',
     'if [ -x "$node_dir/bin/node" ] && [ -f "$ready_marker" ]; then break; fi;',
@@ -1667,11 +1668,11 @@ function remoteAwsMacosJsBootstrap({ packageManager = false } = {}) {
     'if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then echo "timed out waiting for active macOS Node toolchain install lock: $install_lock pid=$lock_pid" >&2; return 1; fi;',
     'echo "reclaiming stale macOS Node toolchain install lock: $install_lock" >&2;',
     'rm -rf "$install_lock" || return 1;',
-    'lock_deadline=$((SECONDS + 300));',
+    "lock_deadline=$((SECONDS + 300));",
     "fi;",
     "sleep 1;",
     "done;",
-    "release_install_lock() { if [ \"$lock_acquired\" = \"1\" ]; then rm -rf \"$install_lock\" 2>/dev/null || true; fi; };",
+    'release_install_lock() { if [ "$lock_acquired" = "1" ]; then rm -rf "$install_lock" 2>/dev/null || true; fi; };',
     'if [ ! -x "$node_dir/bin/node" ] || [ ! -f "$ready_marker" ]; then',
     'tmp_dir="$(mktemp -d)" || { release_install_lock; return 1; };',
     'pkg="node-v${node_version}-darwin-${node_arch}.tar.gz";',
@@ -1937,8 +1938,66 @@ function fullCheckoutSyncRoot() {
   return root;
 }
 
+function parseNonNegativeIntegerEnv(name, fallback, unit) {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${name} must be a non-negative integer ${unit}, got ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(
+      `${name} must be a safe non-negative integer ${unit}, got ${JSON.stringify(raw)}`,
+    );
+  }
+  return parsed;
+}
+
+function formatByteCount(bytes) {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KiB", "MiB", "GiB", "TiB"];
+  let value = bytes / 1024;
+  let unitIndex = 0;
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex += 1;
+  }
+  return `${value.toFixed(value >= 10 ? 1 : 2)} ${units[unitIndex]}`;
+}
+
+function assertFullCheckoutSyncDisk(root) {
+  const requiredBytes = parseNonNegativeIntegerEnv(
+    "OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES",
+    1024 * 1024 * 1024,
+    "byte count",
+  );
+  if (requiredBytes === 0) {
+    return;
+  }
+  const stats = statfsSync(root);
+  const freeBytes = stats.bavail * stats.bsize;
+  if (freeBytes >= requiredBytes) {
+    return;
+  }
+  throw new Error(
+    [
+      "insufficient free disk for Crabbox sparse-sync full checkout",
+      `root=${root}`,
+      `free=${formatByteCount(freeBytes)}`,
+      `required=${formatByteCount(requiredBytes)}`,
+      "set OPENCLAW_CRABBOX_SYNC_TMPDIR to a roomier filesystem or lower OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES if you know this checkout fits",
+    ].join("; "),
+  );
+}
+
 function prepareFullCheckoutForSync(options = {}) {
-  const dir = mkdtempSync(resolve(fullCheckoutSyncRoot(), "openclaw-crabbox-sync-"));
+  const syncRoot = fullCheckoutSyncRoot();
+  assertFullCheckoutSyncDisk(syncRoot);
+  const dir = mkdtempSync(resolve(syncRoot, "openclaw-crabbox-sync-"));
   let active = false;
 
   function create() {
@@ -2013,11 +2072,12 @@ function startFullCheckoutKeepalive(checkout) {
   };
 
   refresh();
-  const intervalMs = Number.parseInt(
-    process.env.OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS ?? "5000",
-    10,
+  const intervalMs = parseNonNegativeIntegerEnv(
+    "OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS",
+    5000,
+    "millisecond interval",
   );
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+  if (intervalMs <= 0) {
     return () => {};
   }
 
@@ -2308,7 +2368,12 @@ const childArgs =
         remoteChangedGateBase,
       );
 if (fullCheckout) {
-  stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout);
+  try {
+    stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout);
+  } catch (error) {
+    cleanupOnce();
+    throw error;
+  }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const child = spawn(childInvocation.command, childInvocation.args, {
