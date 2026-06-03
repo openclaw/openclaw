@@ -16,6 +16,7 @@ type ReadonlySessionManagerForRotation = Pick<
   "buildSessionContext" | "getBranch" | "getCwd" | "getEntries" | "getHeader"
 >;
 
+/** Outcome returned after attempting to rotate a compacted transcript file. */
 export type CompactionTranscriptRotation = {
   rotated: boolean;
   reason?: string;
@@ -26,10 +27,12 @@ export type CompactionTranscriptRotation = {
   entriesWritten?: number;
 };
 
+/** Checks whether compaction should rotate into a trimmed successor transcript. */
 export function shouldRotateCompactionTranscript(config?: OpenClawConfig): boolean {
   return config?.agents?.defaults?.compaction?.truncateAfterCompaction === true;
 }
 
+/** Writes a successor transcript that preserves the latest compaction summary and active branch. */
 export async function rotateTranscriptAfterCompaction(params: {
   sessionManager: ReadonlySessionManagerForRotation;
   sessionFile: string;
@@ -83,6 +86,7 @@ export async function rotateTranscriptAfterCompaction(params: {
   };
 }
 
+/** Loads a persisted transcript and rotates it without reopening a live session manager. */
 export async function rotateTranscriptFileAfterCompaction(params: {
   sessionFile: string;
   now?: () => Date;
@@ -145,6 +149,8 @@ function buildSuccessorEntries(params: {
   }
   for (const entry of allEntries) {
     if (entry.type === "label" && removedIds.has(entry.targetId)) {
+      // Labels point at concrete entry ids; remove labels whose targets were
+      // summarized away so the successor file has no dangling annotations.
       removedIds.add(entry.id);
     }
   }
@@ -167,6 +173,8 @@ function buildSuccessorEntries(params: {
     }
 
     let parentId = entry.parentId;
+    // Reparent around summarized/pruned ancestors so kept branch entries remain
+    // reachable in the successor transcript.
     while (parentId !== null && removedIds.has(parentId)) {
       parentId = entryById.get(parentId)?.parentId ?? null;
     }

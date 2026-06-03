@@ -31,6 +31,7 @@ function hasStringValue(value: unknown): boolean {
   return typeof value === "string" && value.trim().length > 0;
 }
 
+/** Returns true when the message tool targets anything other than the source reply route. */
 function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
   if (EXPLICIT_MESSAGE_ROUTE_KEYS.some((key) => hasStringValue(args[key]))) {
     return true;
@@ -53,6 +54,7 @@ function parseJsonRecord(value: string): Record<string, unknown> | undefined {
   }
 }
 
+/** Detects concrete channel receipts rather than generic ok/success envelopes. */
 function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
   if (hasStringValue(record.messageId)) {
     return true;
@@ -70,6 +72,8 @@ function recordHasDeliveredMessageId(record: Record<string, unknown>): boolean {
 }
 
 function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
+  // Tool results can wrap channel receipts inside nested SDK envelopes or text
+  // JSON blocks; keep the scan bounded so malformed tool output cannot recurse.
   if (!value || typeof value !== "object" || depth > 4) {
     return false;
   }
@@ -109,6 +113,8 @@ function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
 }
 
 function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean {
+  // Prefer concrete delivery receipts over generic success flags: a suppressed
+  // or dry-run send must not end the source reply turn.
   if (!value || typeof value !== "object" || depth > 4) {
     return false;
   }
@@ -147,6 +153,10 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
   );
 }
 
+/**
+ * Returns true only when a same-channel message-tool send should terminate the
+ * current model turn in message-tool-only delivery mode.
+ */
 export function shouldTerminateAfterMessageToolOnlySend(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   context: AfterToolCallContext;
@@ -183,6 +193,10 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {
   return true;
 }
 
+/**
+ * Wraps an agent's after-tool-call hook so message-tool-only replies stop once
+ * the source-channel message tool produced concrete delivery evidence.
+ */
 export function installMessageToolOnlyTerminalHook(params: {
   agent: Agent;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

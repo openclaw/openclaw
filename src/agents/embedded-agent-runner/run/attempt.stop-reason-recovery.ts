@@ -7,10 +7,12 @@ import { buildStreamErrorAssistantMessage } from "../../stream-message-shared.js
 
 const UNHANDLED_STOP_REASON_RE = /^Unhandled stop reason:\s*(.+)$/i;
 
+/** Builds the user-visible assistant error text for provider stop reasons we cannot map yet. */
 function formatUnhandledStopReasonErrorMessage(stopReason: string): string {
   return `The model stopped because the provider returned an unhandled stop reason: ${stopReason}. Please rephrase and try again.`;
 }
 
+/** Extracts SDK "Unhandled stop reason" failures into stable assistant error text. */
 function normalizeUnhandledStopReasonMessage(message: unknown): string | undefined {
   if (typeof message !== "string") {
     return undefined;
@@ -23,6 +25,7 @@ function normalizeUnhandledStopReasonMessage(message: unknown): string | undefin
   return formatUnhandledStopReasonErrorMessage(stopReason);
 }
 
+/** Mutates an assistant error payload in-place so stream result and event paths agree. */
 function patchUnhandledStopReasonInAssistantMessage(message: unknown): void {
   if (!message || typeof message !== "object") {
     return;
@@ -38,6 +41,7 @@ function patchUnhandledStopReasonInAssistantMessage(message: unknown): void {
   assistant.errorMessage = normalizedMessage;
 }
 
+/** Creates a one-shot error stream for failures thrown before a provider stream exists. */
 function buildUnhandledStopReasonErrorStream(
   model: Parameters<StreamFn>[0],
   errorMessage: string,
@@ -61,6 +65,10 @@ function buildUnhandledStopReasonErrorStream(
   return stream;
 }
 
+/**
+ * Wraps both stream result() and async iteration because provider adapters can
+ * surface unhandled stop reasons through either terminal path.
+ */
 function wrapStreamHandleUnhandledStopReason(
   model: Parameters<StreamFn>[0],
   stream: MutableAssistantMessageEventStream,
@@ -111,6 +119,8 @@ function wrapStreamHandleUnhandledStopReason(
             if (!normalizedMessage) {
               throw err;
             }
+            // Iteration failures must still yield one terminal error event so
+            // downstream stream consumers see the same contract as `result()`.
             emittedSyntheticTerminal = true;
             return {
               done: false as const,
@@ -135,6 +145,10 @@ function wrapStreamHandleUnhandledStopReason(
   return stream;
 }
 
+/**
+ * Wraps a provider stream function so unhandled provider stop-reason errors are
+ * converted into ordinary assistant error messages instead of escaping the run.
+ */
 export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     try {

@@ -1,34 +1,31 @@
 /**
- * Cap on consecutive attempts that ended in an idle timeout without completed
- * model progress, before the outer run loop refuses to start another attempt.
- * Distinct from MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES (which gates one extra
- * retry on the same model before failover) and the broad MAX_RUN_LOOP_ITERATIONS
- * backstop in run.ts.
+ * Cap on consecutive idle-timeout attempts without completed model progress
+ * before the outer run loop refuses another attempt.
  *
- * This one fires across profile/auth retries inside the same embedded run so a
- * wedged provider cannot fan out paid model calls across every fallback profile
- * in sequence. Resets when an attempt produces completed text or tool-call
- * progress, but not merely because the provider billed partial output tokens.
- *
- * See issue #76293 for the original report (single heartbeat fire generating
- * 761-1384 paid Anthropic calls in 60 seconds, costing $20-30 per incident).
+ * Distinct from same-model idle retry and broad run-loop backstops: this fires
+ * across profile/auth retries so one wedged provider cannot fan out paid calls
+ * across every fallback profile in sequence (#76293).
  */
 export const MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT = 5;
 
+/** Mutable outer-loop state for the consecutive idle-timeout breaker. */
 export type IdleTimeoutBreakerState = {
   consecutiveIdleTimeoutsBeforeOutput: number;
 };
 
+/** Creates breaker state that survives across embedded-attempt retries. */
 export function createIdleTimeoutBreakerState(): IdleTimeoutBreakerState {
   return { consecutiveIdleTimeoutsBeforeOutput: 0 };
 }
 
+/** Latest attempt outcome used to advance the idle-timeout breaker. */
 export type IdleTimeoutBreakerInput = {
   idleTimedOut: boolean;
   completedModelProgress: boolean;
   outputTokens?: number;
 };
 
+/** Breaker step result returned to the outer run loop. */
 export type IdleTimeoutBreakerStep = {
   consecutive: number;
   tripped: boolean;

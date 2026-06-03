@@ -32,6 +32,10 @@ type AssistantFailoverOutcome =
       error: FailoverError;
     };
 
+/**
+ * Applies an assistant-stage failover decision by rotating auth profiles,
+ * surfacing provider errors, or throwing a model-fallback FailoverError.
+ */
 export async function handleAssistantFailover(params: {
   initialDecision: AssistantFailoverDecision;
   aborted: boolean;
@@ -165,6 +169,8 @@ export async function handleAssistantFailover(params: {
       );
     }
     if (rotated) {
+      // Start the retry as soon as profile rotation succeeds; health marking is
+      // best-effort bookkeeping and must not hold the next provider attempt.
       void markFailedProfilePromise;
       params.logAssistantFailoverDecision("rotate_profile");
       await params.maybeBackoffBeforeOverloadFailover(params.failoverReason);

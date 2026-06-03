@@ -6,6 +6,10 @@ import type { AgentTool } from "../runtime/index.js";
 // and extended toolset remain consistent across providers.
 type AnyAgentTool = AgentTool;
 
+/**
+ * Converts OpenClaw-managed tools into SDK custom tool definitions for both
+ * sandboxed and non-sandboxed sessions.
+ */
 export function splitSdkTools(options: {
   tools: AnyAgentTool[];
   sandboxEnabled: boolean;
@@ -14,6 +18,8 @@ export function splitSdkTools(options: {
   customTools: ReturnType<typeof toToolDefinitions>;
 } {
   const { tools, toolHookContext } = options;
+  // `sandboxEnabled` stays in the call contract because callers decide policy
+  // before this boundary; splitting here would bypass OpenClaw's hook pipeline.
   return {
     customTools: toToolDefinitions(tools, toolHookContext),
   };

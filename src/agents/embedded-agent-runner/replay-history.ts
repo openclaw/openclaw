@@ -335,6 +335,10 @@ function normalizeAssistantReplayBlockContent(message: AgentMessage, replayConte
   return { ...message, content: sanitizedContent } as AgentMessage;
 }
 
+/**
+ * Normalizes persisted transcript messages into the provider replay shape,
+ * removing OpenClaw-only metadata while preserving deliberate silent replies.
+ */
 export function normalizeAssistantReplayContent(messages: AgentMessage[]): AgentMessage[] {
   let touched = false;
   const out: AgentMessage[] = [];

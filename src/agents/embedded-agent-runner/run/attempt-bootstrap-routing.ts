@@ -2,6 +2,7 @@ import type { BootstrapMode } from "../../bootstrap-mode.js";
 import { resolveBootstrapMode } from "../../bootstrap-mode.js";
 import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
 
+/** Inputs for deciding how bootstrap context participates in an attempt. */
 export type AttemptBootstrapRoutingInput = {
   workspaceBootstrapPending: boolean;
   bootstrapContextRunKind?: "default" | "heartbeat" | "cron";
@@ -14,12 +15,14 @@ export type AttemptBootstrapRoutingInput = {
   hasBootstrapFileAccess: boolean;
 };
 
+/** Bootstrap routing result for system prompt and runtime context placement. */
 export type AttemptBootstrapRouting = {
   bootstrapMode: BootstrapMode;
   includeBootstrapInSystemContext: boolean;
   includeBootstrapInRuntimeContext: boolean;
 };
 
+/** Workspace-aware bootstrap routing input with pending-state and hook-file sources. */
 export type AttemptWorkspaceBootstrapRoutingInput = Omit<
   AttemptBootstrapRoutingInput,
   "workspaceBootstrapPending"
@@ -28,6 +31,7 @@ export type AttemptWorkspaceBootstrapRoutingInput = Omit<
   bootstrapFiles?: readonly WorkspaceBootstrapFile[];
 };
 
+/** Maps a resolved bootstrap mode onto concrete context injection targets. */
 export function resolveBootstrapContextTargets(params: {
   bootstrapMode: BootstrapMode;
 }): Pick<
@@ -60,6 +64,7 @@ function resolveAttemptBootstrapRouting(
   };
 }
 
+/** Returns true when hook-provided workspace files include non-empty BOOTSTRAP.md content. */
 export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[]): boolean {
   return (
     files?.some(
@@ -72,6 +77,7 @@ export function hasBootstrapFileContent(files?: readonly WorkspaceBootstrapFile[
   );
 }
 
+/** Resolves attempt bootstrap routing from canonical workspace state and hook files. */
 export async function resolveAttemptWorkspaceBootstrapRouting(
   params: AttemptWorkspaceBootstrapRoutingInput,
 ): Promise<AttemptBootstrapRouting> {

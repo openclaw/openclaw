@@ -11,13 +11,16 @@ export {
   finalizeHarnessContextEngineTurn as finalizeAttemptContextEngineTurn,
 } from "../../harness/context-engine-lifecycle.js";
 
+/** Context-engine implementation used by the embedded attempt lifecycle. */
 export type AttemptContextEngine = ContextEngine;
 
+/** Bootstrap and context files selected for a single attempt. */
 export type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
   bootstrapFiles: TBootstrapFile[];
   contextFiles: TContextFile[];
 };
 
+/** Resolves whether bootstrap/context files should be injected for the current turn. */
 export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
   contextInjectionMode: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
@@ -58,6 +61,7 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   };
 }
 
+/** Builds the prompt-cache metadata returned from an embedded attempt result. */
 export function buildContextEnginePromptCacheInfo(params: {
   retention?: "none" | "short" | "long";
   lastCallUsage?: NormalizedUsage;
@@ -103,6 +107,7 @@ export function buildContextEnginePromptCacheInfo(params: {
   return Object.keys(promptCache).length > 0 ? promptCache : undefined;
 }
 
+/** Finds the latest assistant message produced after this attempt entered the prompt phase. */
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -126,7 +131,7 @@ function parsePromptCacheTouchTimestamp(value: unknown): number | null {
   return null;
 }
 
-/** Resolve the effective prompt-cache touch timestamp for the current assistant turn. */
+/** Resolves the effective prompt-cache touch timestamp for the current assistant turn. */
 export function resolvePromptCacheTouchTimestamp(params: {
   lastCallUsage?: NormalizedUsage;
   assistantTimestamp?: unknown;
@@ -145,6 +150,7 @@ export function resolvePromptCacheTouchTimestamp(params: {
   );
 }
 
+/** Derives prompt-cache metadata from the assistant message produced in the current loop. */
 export function buildLoopPromptCacheInfo(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;

@@ -8,6 +8,7 @@ import {
 
 type CompactionEntry = Extract<SessionEntry, { type: "compaction" }>;
 
+/** Result of hardening a manual /compact leaf into a transcript checkpoint. */
 export type HardenedManualCompactionBoundary = {
   applied: boolean;
   firstKeptEntryId?: string;
@@ -60,6 +61,9 @@ function hasMessagesToSummarizeBeforeKeptTail(params: {
     const previousFirstKeptIndex = params.branch.findIndex(
       (candidate) => candidate.id === entry.firstKeptEntryId,
     );
+    // Only count messages that were outside the previous compaction boundary.
+    // Otherwise back-to-back compactions with no new content would look useful
+    // and rewrite the latest boundary into an empty checkpoint.
     boundaryStartIndex = previousFirstKeptIndex >= 0 ? previousFirstKeptIndex : i + 1;
     break;
   }
@@ -69,6 +73,7 @@ function hasMessagesToSummarizeBeforeKeptTail(params: {
     .some((entry) => entryCreatesCompactionInputMessage(entry));
 }
 
+/** Rewrites the latest manual compaction entry so rebuilt context starts at its summary. */
 export async function hardenManualCompactionBoundary(params: {
   sessionFile: string;
   preserveRecentTail?: boolean;

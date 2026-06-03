@@ -59,6 +59,7 @@ interface OpenRouterApiModel {
   };
 }
 
+/** Normalized OpenRouter catalog data used by model routing and pricing display. */
 export interface OpenRouterModelCapabilities {
   name: string;
   input: Array<"text" | "image">;
@@ -267,6 +268,8 @@ export async function loadOpenRouterModelCapabilities(modelId: string): Promise<
   }
   await fetchPromise;
   if (!cache?.has(modelId)) {
+    // The awaited fetch already missed this model; avoid immediately launching
+    // another refresh when the synchronous resolver checks the same id.
     skipNextMissRefresh.add(modelId);
   }
 }

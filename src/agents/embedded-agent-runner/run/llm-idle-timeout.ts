@@ -11,7 +11,7 @@ import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
- * Default idle timeout for LLM streaming responses in milliseconds.
+ * Default cloud-provider network-silence watchdog for LLM streaming responses.
  */
 export const DEFAULT_LLM_IDLE_TIMEOUT_MS = DEFAULT_LLM_IDLE_TIMEOUT_SECONDS * 1000;
 
@@ -109,8 +109,10 @@ function isOllamaCloudModel(model: { id?: string; provider?: string } | undefine
 }
 
 /**
- * Resolves the LLM idle timeout from configuration.
- * @returns Idle timeout in milliseconds, or 0 to disable
+ * Resolves the effective LLM idle watchdog from provider, run, trigger, model,
+ * and local-baseUrl settings.
+ *
+ * @returns Idle timeout in milliseconds, or 0 to disable the watchdog.
  */
 export function resolveLlmIdleTimeoutMs(params?: {
   cfg?: OpenClawConfig;
@@ -200,8 +202,8 @@ export function resolveLlmIdleTimeoutMs(params?: {
 }
 
 /**
- * Wraps a stream function with idle timeout detection.
- * If no token is received within the specified timeout, the request is aborted.
+ * Wraps a stream function with idle timeout detection for both delayed stream
+ * creation and stalled async iteration.
  *
  * @param baseFn - The base stream function to wrap
  * @param timeoutMs - Idle timeout in milliseconds
@@ -341,6 +343,8 @@ export function streamWithIdleTimeout(
         }
       };
 
+      // Stream construction can hang before an iterator exists, so guard the
+      // promise that creates the stream separately from per-chunk idle timers.
       return Promise.race([
         Promise.resolve(maybeStream),
         createTimeoutPromise((timer) => {

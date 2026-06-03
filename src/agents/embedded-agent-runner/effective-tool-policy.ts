@@ -57,10 +57,13 @@ type FinalEffectiveToolPolicyParams = {
   toolPolicyAuditLogLevel?: "info" | "debug";
 };
 
+/** Applies the second-pass policy filter to bundled MCP/LSP tools after core tools are built. */
 export function applyFinalEffectiveToolPolicy(
   params: FinalEffectiveToolPolicyParams,
 ): AnyAgentTool[] {
   if (params.bundledTools.length === 0) {
+    // Preserve the caller's empty array identity for hot paths that use the
+    // return value only as a maybe-filtered view over already-built tools.
     return params.bundledTools;
   }
   const trustedGroup = resolveTrustedGroupId(params);
@@ -119,6 +122,8 @@ export function applyFinalEffectiveToolPolicy(
     providerProfilePolicy,
     providerProfileAlsoAllow,
   );
+  // Reuse one store lookup for envelope detection, explicit subagent policy,
+  // and inherited parent policy so all three decisions see the same snapshot.
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
     cfg: params.config,
   });

@@ -28,6 +28,8 @@ function buildProviderToolSchemaContext<TSchemaType extends TSchema = TSchema, T
   params: ProviderToolSchemaParams<TSchemaType, TResult>,
   provider: string,
 ) {
+  // Provider hooks receive the raw tool list plus model context, but not
+  // embedded-runner internals, so schema fixes stay provider-owned.
   return {
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -58,6 +60,8 @@ export function normalizeProviderToolSchemas<
     allowRuntimePluginLoad: params.allowRuntimePluginLoad,
     context: buildProviderToolSchemaContext(params, provider),
   });
+  // A provider hook must return a full replacement array. Partial/invalid
+  // returns are ignored so the caller keeps the original tool contract.
   return Array.isArray(pluginNormalized)
     ? (pluginNormalized as AgentTool<TSchemaType, TResult>[])
     : params.tools;
@@ -85,6 +89,8 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
   }
 
   const summary = summarizeProviderToolSchemaDiagnostics(diagnostics);
+  // Keep the structured payload complete enough for debugging while the human
+  // summary stays compact in noisy provider-schema failure loops.
   log.warn(
     `provider tool schema diagnostics: ${diagnostics.length} ${diagnostics.length === 1 ? "tool" : "tools"} for ${params.provider}: ${summary}`,
     {

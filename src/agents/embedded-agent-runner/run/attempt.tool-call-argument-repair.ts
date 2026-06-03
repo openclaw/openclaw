@@ -769,6 +769,7 @@ function wrapStreamRepairMalformedToolCallArguments(
   return stream;
 }
 
+/** Repairs streamed tool-call arguments when providers leak JSON outside the args field. */
 export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     const maybeStream = baseFn(model, context, options);
@@ -781,6 +782,7 @@ export function wrapStreamFnRepairMalformedToolCallArguments(baseFn: StreamFn): 
   };
 }
 
+/** Enables malformed argument repair only for provider APIs with observed split-JSON output. */
 export function shouldRepairMalformedToolCallArguments(params: {
   provider?: string;
   modelApi?: string | null;
@@ -793,6 +795,7 @@ export function shouldRepairMalformedToolCallArguments(params: {
   );
 }
 
+/** Decodes HTML entities inside xAI streamed tool-call argument payloads. */
 export function wrapStreamFnDecodeXaiToolCallArguments(baseFn: StreamFn): StreamFn {
   return createHtmlEntityToolCallArgumentDecodingWrapper(baseFn);
 }

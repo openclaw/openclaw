@@ -32,6 +32,7 @@ export type InlineProviderConfig = {
   localService?: ModelProviderConfig["localService"];
 };
 
+/** Normalizes configured transport API ids into the subset supported by inline providers. */
 export function normalizeResolvedTransportApi(
   api: unknown,
 ): ModelDefinitionConfig["api"] | undefined {
@@ -52,6 +53,7 @@ export function normalizeResolvedTransportApi(
   }
 }
 
+/** Keeps only string model headers, optionally dropping unresolved secret-ref placeholders. */
 export function sanitizeModelHeaders(
   headers: unknown,
   opts?: { stripSecretRefMarkers?: boolean },
@@ -84,6 +86,9 @@ function isLegacyFoundryVisionModelCandidate(params: {
     .filter((value): value is string => typeof value === "string")
     .map((value) => normalizeOptionalLowercaseString(value))
     .filter((value): value is string => Boolean(value));
+  // Older Foundry OpenAI-family entries omitted `image` input even though these
+  // models accept vision payloads; keep them usable until provider catalogs
+  // consistently declare model.input.
   return normalizedCandidates.some(
     (candidate) =>
       candidate.startsWith("gpt-") ||
@@ -94,6 +99,7 @@ function isLegacyFoundryVisionModelCandidate(params: {
   );
 }
 
+/** Resolves a model's declared input modes with legacy Foundry vision compatibility. */
 export function resolveProviderModelInput(params: {
   provider?: string;
   modelId?: string;
@@ -127,6 +133,7 @@ function resolveInlineProviderTransport(params: { api?: Api | null; baseUrl?: st
   };
 }
 
+/** Expands inline provider configs into model entries with inherited transport/request settings. */
 export function buildInlineProviderModels(
   providers: Record<string, InlineProviderConfig>,
 ): InlineModelEntry[] {

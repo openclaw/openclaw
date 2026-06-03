@@ -24,6 +24,7 @@ function execPolicyBlocksFullAccess(params: {
   );
 }
 
+/** Resolves whether "full" elevated execution can actually run under sandbox and host policy. */
 export function resolveEmbeddedFullAccessState(params: {
   execElevated?: ExecElevatedDefaults;
   execPolicy?: EmbeddedFullAccessExecPolicy;
@@ -56,6 +57,7 @@ export function resolveEmbeddedFullAccessState(params: {
   return { available: true };
 }
 
+/** Derives the effective exec policy snapshot used when describing sandbox capabilities. */
 export function resolveEmbeddedSandboxInfoExecPolicy(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -78,6 +80,7 @@ export function resolveEmbeddedSandboxInfoExecPolicy(params: {
   };
 }
 
+/** Converts the sandbox runtime context into the compact prompt-visible sandbox summary. */
 export function buildEmbeddedSandboxInfo(
   sandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>,
   execElevated?: ExecElevatedDefaults,
@@ -102,6 +105,8 @@ export function buildEmbeddedSandboxInfo(
     agentWorkspaceMount: sandbox.workspaceAccess === "ro" ? "/agent" : undefined,
     browserBridgeUrl: sandbox.browser?.bridgeUrl,
     hostBrowserAllowed: sandbox.browserAllowHostControl,
+    // Omit `elevated` entirely when the feature is not configured so prompts do
+    // not imply that host execution is available but disabled.
     ...(elevatedConfigured
       ? {
           elevated: {

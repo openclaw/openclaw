@@ -10,6 +10,7 @@ type ProviderSystemPromptTransform = (params: {
   context: ProviderTransformSystemPromptContext;
 }) => string;
 
+/** Inputs needed to build the embedded base prompt and provider-transformed prompt. */
 export type BuildAttemptSystemPromptParams = {
   isRawModelRun: boolean;
   embeddedSystemPrompt: EmbeddedSystemPromptParams;
@@ -22,11 +23,13 @@ export type BuildAttemptSystemPromptParams = {
   };
 };
 
+/** Pair of raw embedded prompt text and provider-ready system prompt text. */
 export type AttemptSystemPrompt = {
   baseSystemPrompt: string;
   systemPrompt: string;
 };
 
+/** Builds attempt system prompts, omitting provider prompt text for raw model probes. */
 export function buildAttemptSystemPrompt(
   params: BuildAttemptSystemPromptParams,
 ): AttemptSystemPrompt {

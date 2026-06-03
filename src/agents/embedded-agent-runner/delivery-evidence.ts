@@ -65,6 +65,8 @@ function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set
   collectStringValues(record.filePath, output);
   const attachments = record.attachments;
   if (Array.isArray(attachments)) {
+    // Messaging targets can carry media under nested attachment records; walk
+    // them so subagent announcement updates can dedupe already-delivered files.
     for (const attachment of attachments) {
       if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
         collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output);
@@ -73,6 +75,7 @@ function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set
   }
 }
 
+/** Collects media URLs from agent payloads and committed messaging-tool sends. */
 export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string[] {
   const urls = new Set<string>();
   if (Array.isArray(result.payloads)) {
@@ -88,6 +91,7 @@ export function collectDeliveredMediaUrls(result: AgentDeliveryEvidence): string
   return Array.from(urls);
 }
 
+/** Collects media URLs recorded by messaging tools, including nested target attachments. */
 export function collectMessagingToolDeliveredMediaUrls(
   result: Pick<AgentDeliveryEvidence, "messagingToolSentMediaUrls" | "messagingToolSentTargets">,
 ): string[] {
@@ -107,6 +111,7 @@ function hasPositiveNumber(value: unknown): boolean {
   return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
+/** Extracts the agent result shape from either a raw result or a gateway envelope. */
 export function getGatewayAgentResult(response: unknown): AgentDeliveryEvidence | null {
   if (!response || typeof response !== "object") {
     return null;
@@ -134,6 +139,7 @@ function hasAgentDeliveryEvidenceShape(value: object): boolean {
   );
 }
 
+/** Returns true when payloads contain visible user-facing content. */
 export function hasVisibleAgentPayload(
   result: Pick<AgentDeliveryEvidence, "payloads">,
   options: { includeErrorPayloads?: boolean; includeReasoningPayloads?: boolean } = {},
@@ -164,12 +170,14 @@ export function hasVisibleAgentPayload(
   });
 }
 
+/** Returns true when a messaging tool either attempted or committed delivery. */
 export function hasMessagingToolDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     result.didSendViaMessagingTool === true || hasCommittedMessagingToolDeliveryEvidence(result)
   );
 }
 
+/** Returns true only for persisted messaging-tool delivery artifacts. */
 export function hasCommittedMessagingToolDeliveryEvidence(
   result: Pick<
     AgentDeliveryEvidence,
@@ -183,9 +191,12 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   );
 }
 
+/** Returns true when replaying the run could duplicate outbound side effects. */
 export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
+    // Accepted child sessions and cron creations are external side effects even
+    // when no ordinary visible payload was emitted by the parent run.
     (Array.isArray(result.acceptedSessionSpawns) &&
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
     hasPositiveNumber(result.successfulCronAdds) ||
@@ -193,6 +204,7 @@ export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): bool
   );
 }
 
+/** Resolves the user-facing delivery failure message for agent command responses. */
 export function getAgentCommandDeliveryFailure(result: AgentDeliveryEvidence): string | undefined {
   const status = result.deliveryStatus?.status;
   if (status !== "failed" && status !== "partial_failed") {

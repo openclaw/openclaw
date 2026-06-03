@@ -7,11 +7,18 @@ const SESSIONS_YIELD_CONTEXT_CUSTOM_TYPE = "openclaw.sessions_yield";
 
 const SESSIONS_YIELD_ABORT_SETTLE_TIMEOUT_MS = resolveEmbeddedAbortSettleTimeoutMs();
 
-// Persist a hidden context reminder so the next turn knows why the runner stopped.
+/**
+ * Builds the hidden reminder persisted after a yield so the next turn can explain
+ * why the previous runner stopped without showing control text in the visible transcript.
+ */
 function buildSessionsYieldContextMessage(message: string): string {
   return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
 }
 
+/**
+ * Waits briefly for the abort path created by sessions_yield to settle.
+ * The wait is bounded so a yield cleanup failure cannot stall the follow-up turn.
+ */
 export async function waitForSessionsYieldAbortSettle(params: {
   settlePromise: Promise<void> | null;
   runId: string;
@@ -45,7 +52,10 @@ export async function waitForSessionsYieldAbortSettle(params: {
   }
 }
 
-// Return a synthetic aborted response so agent runtime unwinds without a real provider call.
+/**
+ * Returns a synthetic aborted provider response so the agent runtime can unwind
+ * a yielded turn without making another model request or charging token usage.
+ */
 export function createYieldAbortedResponse(model: {
   api?: string;
   provider?: string;
@@ -105,8 +115,10 @@ export function createYieldAbortedResponse(model: {
   };
 }
 
-// Queue a hidden steering message so agent runtime injects it before the next
-// LLM call once the current assistant turn finishes executing its tool calls.
+/**
+ * Queues a hidden steering message that interrupts the runtime before the next
+ * LLM call after the current assistant turn finishes executing tool calls.
+ */
 export function queueSessionsYieldInterruptMessage(activeSession: {
   agent: { steer: (message: AgentMessage) => void };
 }) {
@@ -120,7 +132,10 @@ export function queueSessionsYieldInterruptMessage(activeSession: {
   });
 }
 
-// Append the caller-provided yield payload as a hidden session message once the run is idle.
+/**
+ * Persists the caller-provided yield payload as a hidden custom message once the
+ * run is idle, without triggering a new assistant turn.
+ */
 export async function persistSessionsYieldContextMessage(
   activeSession: {
     sendCustomMessage: (
@@ -146,7 +161,10 @@ export async function persistSessionsYieldContextMessage(
   );
 }
 
-// Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
+/**
+ * Removes the synthetic yield interrupt and aborted assistant response from the
+ * live transcript and persisted session file, preserving the real leaf parent.
+ */
 export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };

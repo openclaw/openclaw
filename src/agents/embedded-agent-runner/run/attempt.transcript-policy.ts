@@ -13,6 +13,10 @@ function asProviderRuntimeModel(
   return typeof model?.id === "string" ? (model as ProviderRuntimeModel) : undefined;
 }
 
+/**
+ * Resolves the transcript policy for an attempt, preferring RuntimePlan-owned
+ * policy and falling back to the legacy provider/model policy resolver.
+ */
 export function resolveAttemptTranscriptPolicy(params: {
   runtimePlan?: AgentRuntimePlan;
   runtimePlanModelContext: AttemptRuntimeModelContext;

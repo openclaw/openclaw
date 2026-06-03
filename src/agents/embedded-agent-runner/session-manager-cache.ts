@@ -18,12 +18,15 @@ function getSessionManagerTtl(): number {
 }
 
 function resolveSessionManagerCachePruneInterval(ttlMs: number): number {
+  // Prune at least once per second for short-lived test caches, but cap long
+  // production TTLs so stale session-file markers do not linger for minutes.
   return Math.min(
     Math.max(ttlMs, MIN_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS),
     MAX_SESSION_MANAGER_CACHE_PRUNE_INTERVAL_MS,
   );
 }
 
+/** Tracks recently opened session files so retry/compaction paths can prewarm disk reads. */
 export type SessionManagerCache = {
   clear: () => void;
   isSessionManagerCached: (sessionFile: string) => boolean;
@@ -32,6 +35,7 @@ export type SessionManagerCache = {
   trackSessionManagerAccess: (sessionFile: string) => void;
 };
 
+/** Creates a TTL-bound session-file cache with injectable clock and fs handles for tests. */
 export function createSessionManagerCache(options?: {
   clock?: () => number;
   fsModule?: Pick<typeof fs, "open">;
@@ -63,7 +67,8 @@ export function createSessionManagerCache(options?: {
       }
 
       try {
-        // Read a small chunk to encourage OS page cache warmup.
+        // Reading a small prefix is enough to populate the OS page cache before
+        // SessionManager reopens the JSONL during compaction/retry recovery.
         const handle = await fsModule.open(sessionFile, "r");
         try {
           const buffer = Buffer.alloc(4096);
@@ -73,7 +78,8 @@ export function createSessionManagerCache(options?: {
         }
         cache.set(sessionFile, true);
       } catch {
-        // File doesn't exist yet, SessionManager will create it
+        // A missing file is expected for first-use sessions; SessionManager will
+        // create it, and the later write path records the access in this cache.
       }
     },
     trackSessionManagerAccess: (sessionFile) => {
@@ -84,10 +90,12 @@ export function createSessionManagerCache(options?: {
 
 const sessionManagerCache = createSessionManagerCache();
 
+/** Records that the live process has touched a session file recently. */
 export function trackSessionManagerAccess(sessionFile: string): void {
   sessionManagerCache.trackSessionManagerAccess(sessionFile);
 }
 
+/** Warms the session file prefix before recovery paths rehydrate SessionManager state. */
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
   await sessionManagerCache.prewarmSessionFile(sessionFile);
 }

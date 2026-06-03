@@ -6,6 +6,11 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
+/**
+ * Normalizes persisted transcript messages before they cross into provider/model input.
+ * Keeps current-turn metadata available while stripping replay-only diagnostics and
+ * historical runtime context that would otherwise leak stale channel/tool state.
+ */
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripUnsafeBlockedRunMetadata(
     stripToolResultDetails(normalizeAssistantReplayContent(messages)),
@@ -15,6 +20,10 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
 }
 
+/**
+ * Computes the replay view for already-persisted messages while treating the in-flight
+ * prompt as the active user turn for metadata stripping decisions.
+ */
 export function normalizeMessagesForCurrentPromptBoundary(params: {
   messages: AgentMessage[];
   prompt: string;
@@ -27,6 +36,10 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
   return normalizeMessagesForLlmBoundary([...params.messages, promptMessage]).slice(0, -1);
 }
 
+/**
+ * Installs prompt-local runtime context for the first send and for overflow retries.
+ * Returns a cleanup callback that restores the wrapped agent continuation hook.
+ */
 export function installRuntimeContextMessageForPrompt(params: {
   session: {
     messages: AgentMessage[];
@@ -86,6 +99,10 @@ function appendRuntimeContextMessageForPrompt(params: {
   return [...params.messages, params.message];
 }
 
+/**
+ * Inserts runtime context immediately before the active user turn so provider replay
+ * keeps the context attached to the prompt even after retry state is rebuilt.
+ */
 export function insertRuntimeContextMessageForPrompt(params: {
   message: RuntimeContextCustomMessage;
   messages: AgentMessage[];
@@ -174,6 +191,10 @@ function composeModelPromptContext(params: {
     .join("\n\n");
 }
 
+/**
+ * Wraps the model transform stage so private model prompt/context can replace the
+ * visible transcript prompt without changing what remains stored for the user.
+ */
 export function installModelPromptTransform(params: {
   session: {
     agent: {
@@ -317,6 +338,8 @@ function stripUnsafeBlockedRunMetadata(messages: AgentMessage[]): AgentMessage[]
 }
 
 function findActiveUserMessageIndex(messages: AgentMessage[]): number {
+  // Tool-call continuations still belong to the last user turn; a normal assistant
+  // reply closes that turn, so earlier user metadata becomes historical.
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
     if (!message) {

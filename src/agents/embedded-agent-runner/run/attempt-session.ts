@@ -1,5 +1,6 @@
 import type { CreateAgentSessionOptions } from "../../sessions/index.js";
 
+/** Options passed from embedded attempts into createAgentSession. */
 export type EmbeddedAgentSessionOptions = {
   cwd: string;
   agentDir: string;
@@ -15,6 +16,7 @@ export type EmbeddedAgentSessionOptions = {
   withSessionWriteLock?: CreateAgentSessionOptions["withSessionWriteLock"];
 };
 
+/** Creates an agent session while preserving the embedded attempt resource loader option. */
 export async function createEmbeddedAgentSessionWithResourceLoader<Result>(params: {
   createAgentSession: (options: EmbeddedAgentSessionOptions) => Promise<Result> | Result;
   options: EmbeddedAgentSessionOptions;

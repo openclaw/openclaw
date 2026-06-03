@@ -10,6 +10,7 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
+/** Error text used when the pre-prompt budget check rejects an overlarge prompt. */
 export const PREEMPTIVE_OVERFLOW_ERROR_TEXT =
   "Context overflow: prompt too large for the model (precheck).";
 
@@ -23,6 +24,7 @@ const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
 export type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
+/** Routing decision for pre-prompt context pressure before the LLM call is attempted. */
 export type PreemptiveCompactionDecision = {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
@@ -34,6 +36,7 @@ export type PreemptiveCompactionDecision = {
   effectiveReserveTokens: number;
 };
 
+/** Token pressure reported by the rendered LLM boundary when it owns final payload shape. */
 export type LlmBoundaryTokenPressure = {
   estimatedPromptTokens: number;
   source: string;
@@ -184,6 +187,7 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
   return tokens;
 }
 
+/** Estimates token pressure for the full transcript, system prompt, and user prompt. */
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
@@ -202,6 +206,7 @@ export function estimateLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((historyTokens + systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+/** Estimates pressure for already-rendered prompt content without replay transcript history. */
 export function estimateRenderedLlmBoundaryTokenPressure(params: {
   systemPrompt?: string;
   prompt: string;
@@ -215,6 +220,7 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
+/** Backward-compatible pre-prompt estimate wrapper used by attempt prechecks. */
 export function estimatePrePromptTokens(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
@@ -239,6 +245,7 @@ function normalizeLlmBoundaryTokenPressure(
   };
 }
 
+/** Chooses whether to compact, truncate tool results, or let the prompt proceed. */
 export function shouldPreemptivelyCompactBeforePrompt(params: {
   messages: AgentMessage[];
   unwindowedMessages?: AgentMessage[];
@@ -292,6 +299,8 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   });
   const overflowChars = overflowTokens * ESTIMATED_CHARS_PER_TOKEN;
   const truncationBufferChars = TRUNCATION_ROUTE_BUFFER_TOKENS * ESTIMATED_CHARS_PER_TOKEN;
+  // Truncation-only needs headroom beyond the exact overflow because token
+  // estimates are approximate and tool-result reducers preserve boundaries.
   const truncateOnlyThresholdChars = Math.max(
     overflowChars + truncationBufferChars,
     Math.ceil(overflowChars * 1.5),
@@ -320,6 +329,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   };
 }
 
+/** Formats a single-line diagnostic for every pre-prompt budget route. */
 export function formatPrePromptPrecheckLog(params: {
   result: PreemptiveCompactionDecision;
   sessionKey?: string;
@@ -352,6 +362,7 @@ export function formatPrePromptPrecheckLog(params: {
   );
 }
 
+/** Builds the durable session budget snapshot stored after pre-prompt estimation. */
 export function buildPrePromptContextBudgetStatus(params: {
   result: PreemptiveCompactionDecision;
   provider: string;

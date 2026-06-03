@@ -8,6 +8,7 @@ import {
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { log } from "../logger.js";
 
+/** Structured fields captured when the run loop observes a failover decision. */
 export type FailoverDecisionLoggerInput = {
   stage: "prompt" | "assistant";
   decision: "rotate_profile" | "fallback_model" | "surface_error";
@@ -23,11 +24,17 @@ export type FailoverDecisionLoggerInput = {
   fallbackConfigured: boolean;
   timedOut?: boolean;
   aborted?: boolean;
+  /** Optional HTTP-style status attached to the concrete decision event. */
   status?: number;
 };
 
+/** Shared observation fields captured once before logging a concrete failover decision. */
 export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
+/**
+ * Fills timeout-derived observation reasons before logging so deadline failures
+ * without provider error text still group under a concrete failover reason.
+ */
 export function normalizeFailoverDecisionObservationBase(
   base: FailoverDecisionLoggerBase,
 ): FailoverDecisionLoggerBase {
@@ -38,6 +45,10 @@ export function normalizeFailoverDecisionObservationBase(
   };
 }
 
+/**
+ * Creates a decision logger that emits both structured failover fields and a
+ * compact console-safe message with redacted profile identifiers.
+ */
 export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (
@@ -62,8 +73,12 @@ export function createFailoverDecisionLogger(
     const rawErrorConsoleSuffix =
       safeRawErrorPreview &&
       !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
-        ? ` rawError=${safeRawErrorPreview}`
+        ? // Keep full structured error fields for telemetry, but suppress noisy or
+          // sensitive previews from the human console line when classified.
+          ` rawError=${safeRawErrorPreview}`
         : "";
+    // Human console text is composed only from sanitized/redacted fragments; the
+    // structured event retains richer raw-error classification for telemetry.
     log.warn("embedded run failover decision", {
       event: "embedded_run_failover_decision",
       tags: ["error_handling", "failover", normalizedBase.stage, decision],

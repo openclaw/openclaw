@@ -1,5 +1,6 @@
 import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../usage.js";
 
+/** Aggregates per-call usage while preserving the final provider-reported call snapshot. */
 export type UsageAccumulator = {
   input: number;
   output: number;
@@ -16,6 +17,7 @@ export type UsageAccumulator = {
   lastTotal: number;
 };
 
+/** Creates the zeroed usage collector shared across fallback/model-switch attempts. */
 export const createUsageAccumulator = (): UsageAccumulator => ({
   input: 0,
   output: 0,
@@ -47,6 +49,7 @@ const hasUsageValues = (usage: MaybeUsage): usage is NormalizedUsage => {
   ].some((value) => typeof value === "number" && Number.isFinite(value) && value > 0);
 };
 
+/** Adds one normalized provider usage report and records it as the latest call snapshot. */
 export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: MaybeUsage) => {
   if (!hasUsageValues(usage)) {
     return;
@@ -68,6 +71,7 @@ export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: Maybe
   target.lastTotal = callTotal;
 };
 
+/** Converts accumulated totals into the billing/status usage shape. */
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
   const hasUsage =
     usage.input > 0 ||
@@ -89,6 +93,7 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
   };
 };
 
+/** Converts only the most recent API-call snapshot into the result usage shape. */
 export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
   const hasUsage =
     usage.lastInput > 0 ||
@@ -110,6 +115,7 @@ export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | unde
   };
 };
 
+/** Prefers raw assistant usage when present, falling back to the accumulator's last call. */
 export const resolveLastCallUsage = (
   rawUsage: UsageLike | null | undefined,
   usageAccumulator: UsageAccumulator,

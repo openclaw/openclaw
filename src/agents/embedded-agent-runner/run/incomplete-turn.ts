@@ -230,6 +230,10 @@ export type PlanningOnlyPlanDetails = {
   steps: string[];
 };
 
+/**
+ * Derives whether an attempt is safe to replay by checking tool, messaging,
+ * spawn, and cron side-effect evidence recorded during the attempt.
+ */
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
@@ -247,12 +251,22 @@ export function buildAttemptReplayMetadata(
   };
 }
 
+/**
+ * Returns recorded replay metadata, falling back to unsafe when older or
+ * partially failed attempt results did not persist the field.
+ */
 export function resolveAttemptReplayMetadata(attempt: {
   replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
 }): EmbeddedRunAttemptResult["replayMetadata"] {
+  // Missing metadata cannot prove no side effects happened, so retry UX must
+  // warn users instead of silently presenting the attempt as replay-safe.
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+/**
+ * Builds the user-visible incomplete-turn warning for attempts that ended
+ * without a trustworthy final assistant reply.
+ */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -321,6 +335,10 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
+/**
+ * Determines whether a completely missing assistant turn can be retried without
+ * duplicating user-visible output or committed side effects.
+ */
 export function shouldRetryMissingAssistantTurn(params: {
   payloadCount: number;
   aborted: boolean;

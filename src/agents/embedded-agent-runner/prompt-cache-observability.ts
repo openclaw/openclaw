@@ -62,6 +62,8 @@ function buildTrackerKey(params: {
 }): string {
   const promptCacheKey = params.promptCacheKey?.trim();
   if (promptCacheKey) {
+    // Cron/isolated runs can rotate session ids while sharing the same stable
+    // prompt cache affinity. Prefer the explicit key when the caller has one.
     return promptCacheKey;
   }
   return params.sessionKey?.trim() || params.sessionId;
@@ -77,6 +79,8 @@ function setTracker(key: string, tracker: PromptCacheTracker): void {
   if (trackers.has(key)) {
     trackers.delete(key);
   } else if (trackers.size >= MAX_TRACKERS) {
+    // Map insertion order gives us a tiny LRU without timers; enough to keep
+    // long-lived gateway processes from retaining stale session diagnostics.
     const oldestKey = trackers.keys().next().value;
     if (typeof oldestKey === "string") {
       trackers.delete(oldestKey);
@@ -137,10 +141,12 @@ function diffSnapshots(
   return changes.length > 0 ? changes : null;
 }
 
+/** Collects stable tool names for prompt-cache diagnostics. */
 export function collectPromptCacheToolNames(tools: Array<{ name?: string }>): string[] {
   return tools.map((tool) => tool.name?.trim()).filter((name): name is string => Boolean(name));
 }
 
+/** Records the prompt-cache inputs for a model call and reports changes from the prior call. */
 export function beginPromptCacheObservation(params: {
   sessionId: string;
   promptCacheKey?: string;
@@ -181,6 +187,7 @@ export function beginPromptCacheObservation(params: {
   };
 }
 
+/** Completes a prompt-cache observation and reports meaningful cache-read drops. */
 export function completePromptCacheObservation(params: {
   sessionId: string;
   promptCacheKey?: string;
@@ -210,6 +217,8 @@ export function completePromptCacheObservation(params: {
   const hasMeaningfulDrop =
     cacheRead < previousCacheRead * MAX_STABLE_CACHE_READ_RATIO &&
     tokenDrop >= MIN_CACHE_BREAK_TOKEN_DROP;
+  // Require both a ratio drop and an absolute token drop so small prompts do
+  // not produce noisy break events when cacheRead naturally jitters.
   const result = hasMeaningfulDrop
     ? {
         previousCacheRead,

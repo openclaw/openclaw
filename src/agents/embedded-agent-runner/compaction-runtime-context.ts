@@ -13,6 +13,7 @@ import {
   resolveSelectedOpenAIRuntimeProvider,
 } from "../openai-routing.js";
 
+/** Runtime facts carried from the interrupted session into the compaction successor run. */
 export type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
   messageChannel?: string;
@@ -139,6 +140,7 @@ function shouldUseCodexRuntimeProviderForCompaction(params: {
   return true;
 }
 
+/** Builds the successor-run context, normalizing nullable routing fields and scoped process refs. */
 export function buildEmbeddedCompactionRuntimeContext(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
@@ -176,6 +178,8 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   });
   const agentHarnessId = params.harnessRuntime?.trim() || undefined;
   const processScopeKey = params.sessionKey?.trim();
+  // Background process continuity is session-scoped; without a safe session key
+  // we omit process references so unrelated shells cannot leak into compaction.
   const activeProcessSessions =
     params.activeProcessSessions ??
     listActiveProcessSessionReferences({

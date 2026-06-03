@@ -3,6 +3,7 @@ import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream
 
 type CacheRetention = "none" | "short" | "long";
 
+/** Returns true for direct Gemini families that accept prompt-cache retention settings. */
 export function isGooglePromptCacheEligible(params: {
   modelApi?: string;
   modelId?: string;
@@ -14,6 +15,7 @@ export function isGooglePromptCacheEligible(params: {
   return normalizedModelId.startsWith("gemini-2.5") || normalizedModelId.startsWith("gemini-3");
 }
 
+/** Resolves the cache retention value that may be forwarded to the model transport. */
 export function resolveCacheRetention(
   extraParams: Record<string, unknown> | undefined,
   provider: string,
@@ -49,6 +51,8 @@ export function resolveCacheRetention(
   }
 
   const legacy = extraParams?.cacheControlTtl;
+  // Legacy TTL aliases map only for Anthropic/Google cache semantics. OpenAI-
+  // compatible cache-key backends require explicit cacheRetention instead.
   if (legacy === "5m" && (family || googleEligible)) {
     return "short";
   }

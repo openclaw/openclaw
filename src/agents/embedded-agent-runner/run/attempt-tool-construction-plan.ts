@@ -89,6 +89,7 @@ function isKnownLocalCodingToolName(normalized: string): boolean {
   );
 }
 
+/** Filters constructed embedded-attempt tools through the runtime allowlist policy. */
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
@@ -114,6 +115,7 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
+/** Adds runtime-forced tools, such as message delivery, without weakening wildcard allowlists. */
 export function mergeForcedEmbeddedAttemptToolsAllow(
   toolsAllow: string[] | undefined,
   params: { forceMessageTool?: boolean },
@@ -167,6 +169,7 @@ function resolveCodingToolConstructionPlanForAllowlist(
   };
 }
 
+/** Decides which tool families must be materialized for an embedded attempt. */
 export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   disableTools?: boolean;
   isRawModelRun?: boolean;
@@ -206,10 +209,12 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
+/** Returns whether the allowlist requires local core coding tool factories. */
 export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
   return resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }).includeCoreTools;
 }
 
+/** Returns whether bundled MCP runtime tools may be needed for this attempt. */
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
@@ -233,6 +238,7 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   });
 }
 
+/** Returns whether bundled LSP runtime tools may be needed for this attempt. */
 export function shouldCreateBundleLspRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;

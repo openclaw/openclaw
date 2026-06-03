@@ -4,6 +4,7 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
+/** Per-message estimate cache keyed by the transcript message object identity. */
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
 function isTextBlock(block: unknown): block is { type: "text"; text: string } {
@@ -36,6 +37,7 @@ function estimateUnknownChars(value: unknown): number {
   }
 }
 
+/** Detects tool-result transcript variants used by SDK and provider replay paths. */
 export function isToolResultMessage(msg: AgentMessage): boolean {
   const role = (msg as { role?: unknown }).role;
   const type = (msg as { type?: unknown }).type;
@@ -67,6 +69,7 @@ function estimateContentBlockChars(content: unknown[]): number {
   return chars;
 }
 
+/** Extracts visible text blocks from a tool result for transcript/context summaries. */
 export function getToolResultText(msg: AgentMessage): string {
   const content = getToolResultContent(msg);
   const chunks: string[] = [];
@@ -130,6 +133,8 @@ function estimateMessageChars(msg: AgentMessage): number {
     // `details` is stripped before provider conversion; estimate only visible content.
     const content = getToolResultContent(msg);
     const chars = estimateContentBlockChars(content);
+    // Tool results compress poorly in model context, so guard pressure uses a
+    // deliberately heavier estimate than ordinary prose.
     const weightedChars = Math.ceil(
       chars * (CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE),
     );
@@ -139,10 +144,12 @@ function estimateMessageChars(msg: AgentMessage): number {
   return 256;
 }
 
+/** Creates the per-run cache used while estimating prompt-history pressure. */
 export function createMessageCharEstimateCache(): MessageCharEstimateCache {
   return new WeakMap<AgentMessage, number>();
 }
 
+/** Returns a cached char estimate for context-pressure decisions without mutating transcript data. */
 export function estimateMessageCharsCached(
   msg: AgentMessage,
   cache: MessageCharEstimateCache,
@@ -156,6 +163,7 @@ export function estimateMessageCharsCached(
   return estimated;
 }
 
+/** Estimates the aggregate prompt-history size using the shared per-run message cache. */
 export function estimateContextChars(
   messages: AgentMessage[],
   cache: MessageCharEstimateCache,
@@ -163,6 +171,7 @@ export function estimateContextChars(
   return messages.reduce((sum, msg) => sum + estimateMessageCharsCached(msg, cache), 0);
 }
 
+/** Clears a cached estimate after a caller rewrites or truncates a message in place. */
 export function invalidateMessageCharsCacheEntry(
   cache: MessageCharEstimateCache,
   msg: AgentMessage,

@@ -2,8 +2,10 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
 
+/** Transcript custom-entry marker for cache-TTL pruning eligibility on this attempt. */
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
+/** Combines plugin system-context sections around the static system prompt. */
 export function composeSystemPromptWithHookContext(params: {
   baseSystemPrompt?: string;
   prependSystemContext?: string;
@@ -25,6 +27,7 @@ export function composeSystemPromptWithHookContext(params: {
   });
 }
 
+/** Exposes the resolved workspace to spawned sessions only when sandbox access is restricted. */
 export function resolveAttemptSpawnWorkspaceDir(params: {
   sandbox?: {
     enabled?: boolean;
@@ -55,6 +58,7 @@ function shouldAppendAttemptCacheTtl(params: {
   );
 }
 
+/** Records cache-TTL eligibility only for completed attempts without compaction churn. */
 export function appendAttemptCacheTtlIfNeeded(params: {
   sessionManager: {
     appendCustomEntry?: (customType: string, data: unknown) => void;
@@ -79,6 +83,7 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   return true;
 }
 
+/** Persists the bootstrap marker only after a clean full bootstrap turn. */
 export function shouldPersistCompletedBootstrapTurn(params: {
   shouldRecordCompletedBootstrapTurn: boolean;
   promptError: unknown;

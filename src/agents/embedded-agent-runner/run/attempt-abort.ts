@@ -4,6 +4,7 @@ type AbortLockReleaseLog = {
   warn(message: string): void;
 };
 
+/** Releases a retained session lock after abort without throwing back into the abort path. */
 export function releaseEmbeddedAttemptSessionLockForAbort(params: {
   sessionLockController: Pick<EmbeddedAttemptSessionLockController, "releaseHeldLockForAbort">;
   log: AbortLockReleaseLog;

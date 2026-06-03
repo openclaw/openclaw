@@ -4,6 +4,11 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
+/**
+ * Builds the runtime context handed from an embedded attempt into tool construction.
+ * The trace snapshot is frozen here so tool calls cannot observe later diagnostic
+ * context mutation from the runner.
+ */
 export function buildEmbeddedAttemptToolRunContext(params: {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;

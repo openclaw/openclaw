@@ -2,6 +2,10 @@ import type { AuthProfileFailureReason } from "../../auth-profiles/types.js";
 import type { FailoverReason } from "../../embedded-agent-helpers/types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 
+/**
+ * Maps a run failover reason to shared auth-profile health only when the
+ * failure is attributable to the provider credentials/profile itself.
+ */
 export function resolveAuthProfileFailureReason(params: {
   failoverReason: FailoverReason | null;
   providerStarted?: boolean;

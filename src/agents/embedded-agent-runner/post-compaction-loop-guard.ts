@@ -5,12 +5,14 @@ const log = createSubsystemLogger("agents/post-compaction-guard");
 
 const DEFAULT_WINDOW_SIZE = 3;
 
+/** Normalized tool-call observation used to detect loops that survive compaction. */
 export type PostCompactionGuardObservation = {
   toolName: string;
   argsHash: string;
   resultHash: string;
 };
 
+/** Verdict returned for one observed post-compaction tool call. */
 export type PostCompactionGuardVerdict =
   | { shouldAbort: false; armed: boolean; remainingAttempts: number }
   | {
@@ -23,6 +25,7 @@ export type PostCompactionGuardVerdict =
       message: string;
     };
 
+/** Small stateful guard armed only for the first tool calls after compaction. */
 export type PostCompactionLoopGuard = {
   armPostCompaction: () => void;
   observe: (call: PostCompactionGuardObservation) => PostCompactionGuardVerdict;
@@ -43,6 +46,7 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
   return value;
 }
 
+/** Creates the guard that aborts when identical tool calls persist after compaction. */
 export function createPostCompactionLoopGuard(
   config?: ToolLoopPostCompactionGuardConfig,
   options?: { enabled?: boolean },
@@ -73,6 +77,8 @@ export function createPostCompactionLoopGuard(
     state.history.push(call);
     const armedAfter = state.remainingAttempts > 0;
 
+    // Require identical tool, argument hash, and result hash; changed output is
+    // considered progress and should not trip the post-compaction abort.
     const matches = state.history.filter(
       (entry) =>
         entry.toolName === call.toolName &&
@@ -106,6 +112,7 @@ export function createPostCompactionLoopGuard(
   return { armPostCompaction, observe, snapshot };
 }
 
+/** Error propagated when compaction failed to break a repeated tool loop. */
 export class PostCompactionLoopPersistedError extends Error {
   readonly detector: "compaction_loop_persisted";
   readonly count: number;

@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
 import {
   extractStandalonePlainTextToolCallText,
   normalizePlainTextToolCallStreamEvents,
@@ -8,8 +10,6 @@ import {
   type PlainTextToolCallNameMatcher,
 } from "../../../../packages/tool-call-repair/src/index.js";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
-import { normalizeLowercaseStringOrEmpty } from "../../../../packages/normalization-core/src/string-coerce.js";
-import { normalizeStringEntries } from "../../../../packages/normalization-core/src/string-normalization.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
   downgradeOpenAIReasoningBlocks,
@@ -1036,6 +1036,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
   return stream;
 }
 
+/** Promotes standalone plaintext tool-call replies into structured tool-call stream events. */
 export function wrapStreamFnPromoteStandaloneTextToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -1105,6 +1106,7 @@ function wrapStreamTrimToolCallNames(
   return stream;
 }
 
+/** Trims and normalizes streamed tool-call names while guarding repeated unknown tools. */
 export function wrapStreamFnTrimToolCallNames(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,
@@ -1137,6 +1139,7 @@ type ReplayToolCallIdSanitizerDecision = {
   isOpenAIResponsesApi: boolean;
 };
 
+/** Gates replay tool-call id sanitization to non-Responses providers with an id mode. */
 export function shouldApplyReplayToolCallIdSanitizer(
   params: ReplayToolCallIdSanitizerDecision,
 ): params is ReplayToolCallIdSanitizerDecision & { toolCallIdMode: ToolCallIdMode } {
@@ -1145,6 +1148,7 @@ export function shouldApplyReplayToolCallIdSanitizer(
   );
 }
 
+/** Rewrites replayed tool-call ids into the provider-required id mode before streaming. */
 export function sanitizeReplayToolCallIdsForStream(params: {
   messages: AgentMessage[];
   mode: ToolCallIdMode;
@@ -1164,12 +1168,14 @@ export function sanitizeReplayToolCallIdsForStream(params: {
   return sanitizeToolUseResultPairing(sanitized);
 }
 
+/** Normalizes OpenAI Responses replay turns without applying generic tool-call id rewriting. */
 export function sanitizeOpenAIResponsesReplayForStream(messages: AgentMessage[]): AgentMessage[] {
   return downgradeOpenAIFunctionCallReasoningPairs(
     normalizeOpenAIResponsesToolCallIds(downgradeOpenAIReasoningBlocks(messages)),
   );
 }
 
+/** Repairs malformed replay tool-call inputs before invoking a provider stream function. */
 export function wrapStreamFnSanitizeMalformedToolCalls(
   baseFn: StreamFn,
   allowedToolNames?: Set<string>,

@@ -4,6 +4,7 @@ import {
   ensureGlobalUndiciEnvProxyDispatcher,
 } from "../../../infra/net/undici-global-dispatcher.js";
 
+/** Configures global Undici proxy and stream timeout behavior for embedded attempts. */
 export function configureEmbeddedAttemptHttpRuntime(params: { timeoutMs: number }): void {
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
   // active EnvHttpProxyAgent instead of being replaced by a bare proxy dispatcher.

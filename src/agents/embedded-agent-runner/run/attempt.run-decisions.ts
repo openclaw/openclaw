@@ -6,6 +6,7 @@ import {
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+/** Resolves session write-lock bounds for embedded attempt post-prompt writes. */
 export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
   config?: OpenClawConfig;
   compactionTimeoutMs: number;
@@ -22,12 +23,14 @@ export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
   });
 }
 
+/** Returns the forwarded auth profile id that should be exposed to stream provenance. */
 export function resolveAttemptStreamAuthProfileId(
   params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
 ): string | undefined {
   return params.runtimePlan?.auth.forwardedAuthProfileId;
 }
 
+/** Resolves the unknown-tool loop guard threshold independently of generic loop detection. */
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
   unknownToolThreshold?: number;
@@ -48,10 +51,12 @@ export function resolveUnknownToolGuardThreshold(loopDetection?: {
   return UNKNOWN_TOOL_THRESHOLD;
 }
 
+/** Skips LLM output hooks only when the attempt was blocked before model submission. */
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
   return params.promptErrorSource !== "hook:before_agent_run";
 }
 
+/** Resolves the provider identity used for channel-aware tool policy lookup. */
 export function resolveAttemptToolPolicyMessageProvider(params: {
   messageProvider?: string;
   messageChannel?: string;

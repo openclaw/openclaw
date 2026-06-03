@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/**
+ * Builds the plugin discovery context for message actions from channel/session
+ * routing facts gathered by the embedded runner.
+ */
 export function buildEmbeddedMessageActionDiscoveryInput(params: {
   cfg?: OpenClawConfig;
   channel: string;
@@ -13,6 +17,8 @@ export function buildEmbeddedMessageActionDiscoveryInput(params: {
   senderId?: string | null;
   senderIsOwner?: boolean | null;
 }) {
+  // Discovery hooks treat undefined as omitted; normalize nullable gateway facts
+  // before they cross into plugin-owned context objects.
   return {
     cfg: params.cfg,
     channel: params.channel,

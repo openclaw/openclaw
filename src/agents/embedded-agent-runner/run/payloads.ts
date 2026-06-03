@@ -60,6 +60,8 @@ const RECOVERABLE_TOOL_ERROR_KEYWORDS = [
 const MUTATING_FAILURE_ACTION_PATTERN =
   "(?:write|edit|update|save|create|delete|remove|modify|change|apply|patch|move|rename|send|reply|message|run|execute|execution|command|script|shell|bash|exec|tool|action|operation)";
 
+// Detect explicit assistant acknowledgements that a mutating operation failed
+// so we do not append a second tool-error warning to an already clear reply.
 const MUTATING_FAILURE_INABILITY_PATTERN = new RegExp(
   `\\b(?:couldn't|could not|can't|cannot|unable to|am unable to|wasn't able to|was not able to|were unable to)\\b.{0,100}\\b${MUTATING_FAILURE_ACTION_PATTERN}\\b`,
   "u",
@@ -199,6 +201,7 @@ function resolveToolErrorWarningPolicy(params: {
   };
 }
 
+/** Builds channel reply payloads from assistant output, tool status, and delivery policy. */
 export function buildEmbeddedRunPayloads(params: {
   assistantTexts: string[];
   toolMetas: ToolMetaEntry[];

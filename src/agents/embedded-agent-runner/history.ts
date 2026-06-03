@@ -6,6 +6,8 @@ import type { AgentMessage } from "../runtime/index.js";
 const THREAD_SUFFIX_REGEX = /^(.*)(?::(?:thread|topic):\d+)$/i;
 
 function stripThreadSuffix(value: string): string {
+  // Telegram-style numeric thread/topic suffixes are routing metadata, not
+  // part of the DM override key stored in config.
   const match = value.match(THREAD_SUFFIX_REGEX);
   return match?.[1] ?? value;
 }
@@ -51,6 +53,8 @@ export function getHistoryLimitFromSessionKey(
   }
 
   const parts = sessionKey.split(":").filter(Boolean);
+  // Agent-bound sessions prefix provider keys with `agent:<id>`; channel
+  // history limits still belong to the underlying provider segment.
   const providerParts = parts.length >= 3 && parts[0] === "agent" ? parts.slice(2) : parts;
 
   const provider = normalizeProviderId(providerParts[0] ?? "");

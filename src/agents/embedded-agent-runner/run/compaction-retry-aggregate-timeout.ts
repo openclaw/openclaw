@@ -1,14 +1,16 @@
-/**
- * Wait for compaction retry completion with an aggregate timeout to avoid
- * holding a session lane indefinitely when retry resolution is lost.
- */
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 
+/**
+ * Waits for compaction retry completion with an aggregate timeout so lost retry
+ * resolution cannot hold a session lane indefinitely.
+ */
 export async function waitForCompactionRetryWithAggregateTimeout(params: {
   waitForCompactionRetry: () => Promise<void>;
   abortable: <T>(promise: Promise<T>) => Promise<T>;
   aggregateTimeoutMs: number;
+  /** Called once when the wait gives up after compaction is no longer active. */
   onTimeout?: () => void;
+  /** Keeps extending the timeout window while compaction is still doing work. */
   isCompactionStillInFlight?: () => boolean;
 }): Promise<{ timedOut: boolean }> {
   const timeoutMs = resolveTimerTimeoutMs(params.aggregateTimeoutMs, 1);

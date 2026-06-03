@@ -14,6 +14,7 @@ function makeAbortError(signal: AbortSignal): Error {
   return err;
 }
 
+/** Wraps a promise so an AbortSignal rejects it with AbortError before inner settlement. */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(makeAbortError(signal));
@@ -44,6 +45,8 @@ function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (typeof value === "string") {
     return new Error(value);
   }
+  // Preserve object-shaped rejection payloads as Error fields so callers keep
+  // provider details while satisfying lint/runtime expectations for Error.
   const error = new Error(fallbackMessage, { cause: value });
   if ((typeof value === "object" && value !== null) || typeof value === "function") {
     Object.assign(error, value);

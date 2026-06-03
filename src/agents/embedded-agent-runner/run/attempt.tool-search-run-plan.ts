@@ -7,6 +7,10 @@ import {
 } from "../../tool-search.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 
+/**
+ * Tool Search controls that may be injected to expose catalog discovery even when
+ * the user did not explicitly name the control tools in an allowlist.
+ */
 export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -16,6 +20,10 @@ export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
 
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
 
+/**
+ * Captures the split between tools visible in the compact model prompt and tools
+ * still valid for replay, plus the callable names used to detect empty allowlists.
+ */
 export type ToolSearchRunPlan = {
   visibleAllowedToolNames: Set<string>;
   replayAllowedToolNames: Set<string>;
@@ -23,6 +31,11 @@ export type ToolSearchRunPlan = {
   emptyAllowlistCallableNames: string[];
 };
 
+/**
+ * Builds the names that count as callable for empty-allowlist validation.
+ * Auto-added Tool Search controls are ignored, but catalog entries behind them
+ * still count so a bad explicit allowlist cannot pass accidentally.
+ */
 export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   effectiveToolNames: string[];
   autoAddedToolSearchControlNames?: Set<string>;
@@ -39,6 +52,10 @@ export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   ];
 }
 
+/**
+ * Identifies Tool Search controls injected by the runtime instead of requested by
+ * an explicit allowlist, so validation can distinguish product defaults from user intent.
+ */
 export function buildAutoAddedToolSearchControlNamesForAllowlistCheck(params: {
   toolSearchControlsEnabled: boolean;
   explicitAllowlistSources: Array<{ entries: string[] }>;
@@ -59,6 +76,10 @@ export function buildAutoAddedToolSearchControlNamesForAllowlistCheck(params: {
   );
 }
 
+/**
+ * Returns client-side tool names that were explicitly allowlisted before the
+ * Tool Search catalog wrapped them behind client catalog entries.
+ */
 function collectExplicitlyAllowedClientToolNames(params: {
   clientTools?: CollectAllowedToolNamesParams["clientTools"];
   explicitAllowlistSources: Array<{ entries: string[] }>;
@@ -74,6 +95,11 @@ function collectExplicitlyAllowedClientToolNames(params: {
     .filter((name) => explicitNames.has(normalizeToolName(name)));
 }
 
+/**
+ * Builds the Tool Search allowlist plan used by the attempt runner. Compact
+ * prompts see only visible controls, while replay keeps the uncompacted tool set
+ * so historical calls remain valid after Tool Search has hidden catalog tools.
+ */
 export function buildToolSearchRunPlan(params: {
   visibleTools: CollectAllowedToolNamesParams["tools"];
   uncompactedTools: CollectAllowedToolNamesParams["tools"];

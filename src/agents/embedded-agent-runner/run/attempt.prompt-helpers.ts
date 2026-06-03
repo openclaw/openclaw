@@ -30,6 +30,7 @@ import { log } from "../logger.js";
 import { shouldInjectHeartbeatPromptForTrigger } from "./trigger-policy.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+/** Runs the plugin hook subset needed while assembling an embedded attempt prompt. */
 export type PromptBuildHookRunner = {
   hasHooks: (
     hookName:
@@ -93,6 +94,7 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
+/** Resolves plugin prompt-build mutations in stable precedence order for one attempt. */
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
@@ -208,6 +210,7 @@ export async function resolvePromptBuildHookResult(params: {
   };
 }
 
+/** Uses compact prompt mode for generated subagent and cron sessions only. */
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
   if (!sessionKey) {
     return "full";
@@ -215,6 +218,7 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
+/** Gates heartbeat system prompt injection to the default agent and supported triggers. */
 export function shouldInjectHeartbeatPrompt(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -235,14 +239,17 @@ export function shouldInjectHeartbeatPrompt(params: {
   );
 }
 
+/** Warns only for user-visible triggers when transcript repair merges a trailing user leaf. */
 export function shouldWarnOnOrphanedUserRepair(
   trigger: EmbeddedRunAttemptParams["trigger"],
 ): boolean {
   return trigger === "user" || trigger === "manual";
 }
 
+/** Reason an empty visible prompt is skipped before provider submission. */
 export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
 
+/** Classifies blank submissions without counting system/tool replay as visible history. */
 export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
@@ -463,6 +470,7 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+/** Merges a trailing replay user leaf into the prompt while preventing duplicate repair text. */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
@@ -483,6 +491,7 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   };
 }
 
+/** Resolves the effective file-system workspace-only policy for the session agent. */
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
@@ -493,6 +502,7 @@ export function resolveAttemptFsWorkspaceOnly(params: {
   });
 }
 
+/** Inserts per-turn system context after the cacheable system-prompt prefix. */
 export function prependSystemPromptAddition(params: {
   systemPrompt: string;
   systemPromptAddition?: string;
@@ -504,6 +514,7 @@ export function prependSystemPromptAddition(params: {
 // be routed BELOW the system-prompt cache boundary (via prependSystemPromptAddition)
 // rather than placed in the static prepend slot — keeping them above the boundary
 // shifted the cacheable prefix turn-to-turn and broke prompt caching (#85203).
+/** Builds live media-task guidance for user/manual turns below the prompt cache boundary. */
 export function resolveAttemptMediaTaskSystemPromptAddition(params: {
   sessionKey?: string;
   trigger?: EmbeddedRunAttemptParams["trigger"];
@@ -544,7 +555,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
 
-/** Build runtime context passed into context-engine afterTurn hooks. */
+/** Builds runtime context passed into context-engine afterTurn hooks. */
 export function buildAfterTurnRuntimeContext(params: {
   attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;
@@ -610,6 +621,7 @@ export function buildAfterTurnRuntimeContext(params: {
   };
 }
 
+/** Derives current token count from provider usage before building afterTurn runtime context. */
 export function buildAfterTurnRuntimeContextFromUsage(
   params: Omit<Parameters<typeof buildAfterTurnRuntimeContext>[0], "currentTokenCount"> & {
     lastCallUsage?: NormalizedUsage;

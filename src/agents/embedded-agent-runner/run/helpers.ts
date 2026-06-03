@@ -16,6 +16,7 @@ type UsageSnapshot = {
   total?: number;
 };
 
+/** Mutable runtime auth state tracked per embedded attempt provider session. */
 export type RuntimeAuthState = {
   generation: number;
   sourceApiKey: string;
@@ -26,22 +27,28 @@ export type RuntimeAuthState = {
   refreshInFlight?: Promise<void>;
 };
 
+/** Refresh runtime auth before provider expiry reaches this margin. */
 export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
+/** Retry delay after a runtime auth refresh failure. */
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
+/** Lower bound for scheduling runtime auth refresh timers. */
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
 const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
 const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
 const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 
+/** Resolves the overload failover cooldown before trying another auth profile. */
 export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
   return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
 }
 
+/** Resolves how many auth profiles may be rotated for overload failures. */
 export function resolveOverloadProfileRotationLimit(cfg?: OpenClawConfig): number {
   return cfg?.auth?.cooldowns?.overloadedProfileRotations ?? DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
 }
 
+/** Resolves how many auth profiles may be rotated for rate-limit failures. */
 export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): number {
   return (
     cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS
@@ -62,6 +69,7 @@ export function scrubAnthropicRefusalMagic(prompt: string): string {
   );
 }
 
+/** Creates a short unique id for compaction overflow diagnostics. */
 export function createCompactionDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
@@ -90,6 +98,7 @@ export function resolveMaxRunRetryIterations(
   return Math.min(maxLimit, Math.max(minLimit, scaled));
 }
 
+/** Resolves the provider/model pair reported on active-attempt error paths. */
 export function resolveActiveErrorContext(params: {
   provider: string;
   model: string;
@@ -101,6 +110,7 @@ export function resolveActiveErrorContext(params: {
   return resolveReportedModelRef(params);
 }
 
+/** Checks whether an assistant message belongs to the requested effective model ref. */
 export function isAssistantForModelRef(
   assistant: { provider?: string; model?: string } | undefined,
   ref: { provider: string; model: string },
@@ -119,6 +129,7 @@ function isEmbeddedHarnessProvider(provider: string): boolean {
   return provider.trim().toLowerCase() === "openclaw";
 }
 
+/** Maps assistant-reported provider/model metadata back to the user-visible model ref. */
 export function resolveReportedModelRef(params: {
   provider: string;
   model: string;
@@ -147,6 +158,7 @@ export function resolveReportedModelRef(params: {
   };
 }
 
+/** Builds usage fields shared by success and error agent metadata paths. */
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
   lastAssistantUsage?: UsageSnapshot | null;
@@ -202,6 +214,7 @@ export function buildErrorAgentMeta(params: {
   };
 }
 
+/** Extracts the visible final assistant text after hidden/internal blocks are removed. */
 export function resolveFinalAssistantVisibleText(
   lastAssistant: AssistantMessage | undefined,
 ): string | undefined {
@@ -212,6 +225,7 @@ export function resolveFinalAssistantVisibleText(
   return visibleText || undefined;
 }
 
+/** Extracts final-answer raw text, preserving explicit final-answer phase markup when present. */
 export function resolveFinalAssistantRawText(
   lastAssistant: AssistantMessage | undefined,
 ): string | undefined {

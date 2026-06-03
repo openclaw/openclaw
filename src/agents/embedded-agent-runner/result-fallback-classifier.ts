@@ -65,6 +65,8 @@ function classifyBusinessDenialErrorPayloadReason(
     return null;
   }
   const failoverReason = classifyFailoverReason(errorText, { provider });
+  // Only business-denial payloads are safe to route into model fallback from
+  // an already-completed embedded run; generic transport/runtime errors stay terminal.
   switch (failoverReason) {
     case "auth":
     case "auth_permanent":
@@ -75,6 +77,7 @@ function classifyBusinessDenialErrorPayloadReason(
   }
 }
 
+/** Classifies embedded run results that should trigger outer model fallback. */
 export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   provider: string;
   model: string;
@@ -85,6 +88,8 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (!isEmbeddedAgentRunResult(params.result)) {
     return null;
   }
+  // Any visible delivery, explicit block reply, or abort means the embedded
+  // run already produced user-facing state and must not be replayed via fallback.
   if (
     params.result.meta.aborted ||
     params.hasDirectlySentBlockReply === true ||
@@ -99,6 +104,7 @@ export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   if (hasOutboundDeliveryEvidence(params.result)) {
     return null;
   }
+  // Hook blocks are intentional policy outcomes, not malformed model output.
   if (params.result.meta.error?.kind === "hook_block") {
     return null;
   }

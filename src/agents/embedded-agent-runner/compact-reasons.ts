@@ -7,10 +7,13 @@ export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
 
 function isGenericCompactionCancelledReason(reason: string): boolean {
+  // Native compaction can surface a generic cancellation even when the
+  // safeguard recorded a more actionable provider/auth-specific reason.
   const normalized = normalizeLowercaseStringOrEmpty(reason);
   return normalized === "compaction cancelled" || normalized === "error: compaction cancelled";
 }
 
+/** Replaces generic cancellation text with the underlying safeguard reason when present. */
 export function resolveCompactionFailureReason(params: {
   reason: string;
   safeguardCancelReason?: string | null;
@@ -21,6 +24,7 @@ export function resolveCompactionFailureReason(params: {
   return params.reason;
 }
 
+/** Maps free-form compaction failure text into stable diagnostic buckets. */
 export function classifyCompactionReason(reason?: string): string {
   const text = normalizeLowercaseStringOrEmpty(reason);
   if (!text) {
@@ -71,7 +75,10 @@ export function classifyCompactionReason(reason?: string): string {
   return "unknown";
 }
 
+/** Sanitizes unknown compaction reasons into bounded single-token diagnostic detail. */
 export function formatUnknownCompactionReasonDetail(reason?: string): string | undefined {
+  // Unknown reasons can contain provider messages, terminal escape codes, or
+  // multiline logs; keep metrics/log tags compact and scanner-safe.
   const sanitized = sanitizeForLog((reason ?? "").replace(/\s+/g, " "))
     .trim()
     .replace(/[^A-Za-z0-9._:@/+~-]+/g, "_")

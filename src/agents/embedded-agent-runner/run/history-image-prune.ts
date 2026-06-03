@@ -1,6 +1,8 @@
 import type { AgentMessage } from "../../runtime/index.js";
 
+/** Replacement text for old image blocks already consumed by earlier model calls. */
 export const PRUNED_HISTORY_IMAGE_MARKER = "[image data removed - already processed by model]";
+/** Replacement text for old textual media references that would otherwise reload as images. */
 export const PRUNED_HISTORY_MEDIA_REFERENCE_MARKER =
   "[media reference removed - already processed by model]";
 
@@ -22,6 +24,11 @@ type PrunableContextAgent = {
  */
 const PRESERVE_RECENT_COMPLETED_TURNS = 3;
 
+/**
+ * Finds the first message index that must be preserved. Tool-result-only loops
+ * stay attached to their owning user turn, so multiple assistant/tool messages
+ * do not make an image-bearing prompt look older than it is.
+ */
 function resolvePruneBeforeIndex(messages: AgentMessage[]): number {
   const completedTurnStarts: number[] = [];
   let currentTurnStart = -1;
@@ -148,6 +155,7 @@ export function pruneProcessedHistoryImages(messages: AgentMessage[]): AgentMess
   return prunedMessages;
 }
 
+/** Installs image-history pruning after any existing context transform and returns cleanup. */
 export function installHistoryImagePruneContextTransform(agent: PrunableContextAgent): () => void {
   const originalTransformContext = agent.transformContext;
   agent.transformContext = async (messages: AgentMessage[], signal?: AbortSignal) => {

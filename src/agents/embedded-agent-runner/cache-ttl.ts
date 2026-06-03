@@ -13,6 +13,7 @@ type CustomEntryLike = { type?: unknown; customType?: unknown; data?: unknown };
 
 const CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
+/** Payload stored in session custom entries when cache-TTL context pruning touches a provider. */
 export type CacheTtlEntryData = {
   timestamp: number;
   provider?: string;
@@ -24,6 +25,7 @@ type CacheTtlContext = {
   modelId?: string;
 };
 
+/** Resolves whether a provider/model pair supports cache-TTL based context pruning. */
 export function isCacheTtlEligibleProvider(
   provider: string,
   modelId: string,
@@ -39,6 +41,8 @@ export function isCacheTtlEligibleProvider(
       modelApi,
     },
   });
+  // Provider plugins are the owner for non-core model families. A defined
+  // answer wins even when core heuristics would otherwise disagree.
   if (pluginEligibility !== undefined) {
     return pluginEligibility;
   }
@@ -57,6 +61,7 @@ function normalizeCacheTtlKey(value: string | undefined): string | undefined {
   return normalizeOptionalLowercaseString(value);
 }
 
+/** Matches stored cache touch metadata against the active provider/model filter. */
 function matchesCacheTtlContext(
   data: Partial<CacheTtlEntryData> | undefined,
   context: CacheTtlContext | undefined,
@@ -75,6 +80,7 @@ function matchesCacheTtlContext(
   return true;
 }
 
+/** Reads the newest matching cache-TTL custom-entry timestamp from a session manager. */
 export function readLastCacheTtlTimestamp(
   sessionManager: unknown,
   context?: CacheTtlContext,
@@ -86,6 +92,8 @@ export function readLastCacheTtlTimestamp(
   try {
     const entries = sm.getEntries();
     let last: number | null = null;
+    // Newest custom entries are at the tail; scanning backwards avoids using a
+    // stale provider/model cache touch after a later matching turn exists.
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
       if (entry?.type !== "custom" || entry?.customType !== CACHE_TTL_CUSTOM_TYPE) {

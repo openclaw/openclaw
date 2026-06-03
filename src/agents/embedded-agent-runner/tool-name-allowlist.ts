@@ -17,6 +17,7 @@ function addName(names: Set<string>, value: unknown): void {
   }
 }
 
+/** Collects every tool name that may appear in the current run or replay guard. */
 export function collectAllowedToolNames(params: {
   tools: AgentTool[];
   clientTools?: ClientToolDefinition[];
@@ -42,6 +43,7 @@ export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set
   return names;
 }
 
+/** Collects host-owned built-ins before Tool Search compaction hides them from the visible list. */
 export function collectCoreBuiltinToolNames(
   tools: Array<{ name?: string }>,
   options?: { isPluginTool?: (tool: { name?: string }) => boolean },
@@ -56,6 +58,7 @@ export function collectCoreBuiltinToolNames(
   return names;
 }
 
+/** Produces the deterministic allowlist persisted onto the embedded agent session. */
 export function toSessionToolAllowlist(allowedToolNames: Iterable<string>): string[] {
   return [...new Set(allowedToolNames)].toSorted((a, b) => a.localeCompare(b));
 }
