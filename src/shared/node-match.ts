@@ -4,11 +4,17 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
+/** Node fields accepted by shared CLI/API node selection helpers. */
 export type NodeMatchCandidate = {
+  /** Stable node id used for RPC/session routing. */
   nodeId: string;
+  /** Human-facing node name used for fuzzy operator input. */
   displayName?: string;
+  /** Tailscale or network address accepted as an exact match. */
   remoteIp?: string;
+  /** Connected nodes win only after the strongest match type is chosen. */
   connected?: boolean;
+  /** Client id used to prefer current OpenClaw nodes over legacy migration ties. */
   clientId?: string;
 };
 
@@ -74,6 +80,7 @@ function resolveMatchScore(
   query: string,
   queryNormalized: string,
 ): number {
+  // Match class outranks selection heuristics: exact ids beat IPs, names, and id prefixes.
   if (node.nodeId === query) {
     return 4_000;
   }
