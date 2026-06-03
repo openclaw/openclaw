@@ -384,7 +384,7 @@ export function canSubmitTuiChatMessage(params: {
   }
   const isSteer = (params.queueMode ?? "steer") === "steer";
   if (isSteer) {
-    if (Boolean(params.pendingChatRunId)) {
+    if (params.pendingChatRunId) {
       return false;
     }
     if (!params.local && params.activeChatRunId) {
