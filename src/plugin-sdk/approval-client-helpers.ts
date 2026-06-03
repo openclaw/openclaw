@@ -16,14 +16,20 @@ type ApprovalTarget = "dm" | "channel" | "both";
 type ChannelExecApprovalEnableMode = boolean | "auto";
 
 type ChannelApprovalConfig = {
+  /** Whether the channel approval client is enabled for this account. */
   enabled?: ChannelExecApprovalEnableMode;
+  /** Preferred approval delivery target for this account. */
   target?: ApprovalTarget;
+  /** Optional agent filters for forwarded approval requests. */
   agentFilter?: string[];
+  /** Optional session filters for forwarded approval requests. */
   sessionFilter?: string[];
 };
 
 type ApprovalProfileParams = {
+  /** Full config used to resolve account-scoped approval settings. */
   cfg: OpenClawConfig;
+  /** Optional channel account id for account-scoped approval settings. */
   accountId?: string | null;
 };
 
@@ -38,7 +44,9 @@ function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
 export { getExecApprovalReplyMetadata, matchesApprovalRequestFilters };
 
 export function isChannelExecApprovalClientEnabledFromConfig(params: {
+  /** Configured channel approval enable mode. */
   enabled?: ChannelExecApprovalEnableMode;
+  /** Number of configured approvers after account resolution. */
   approverCount: number;
 }): boolean {
   if (params.approverCount <= 0) {
@@ -48,11 +56,17 @@ export function isChannelExecApprovalClientEnabledFromConfig(params: {
 }
 
 export function isChannelExecApprovalTargetRecipient(params: {
+  /** Full config containing global exec approval target routing. */
   cfg: OpenClawConfig;
+  /** Sender id or handle to compare with configured forward targets. */
   senderId?: string | null;
+  /** Optional channel account id for account-scoped target matching. */
   accountId?: string | null;
+  /** Channel id receiving the approval action. */
   channel: string;
+  /** Optional sender normalizer; defaults to trimmed string normalization. */
   normalizeSenderId?: (value: string) => string | undefined;
+  /** Channel-specific matcher for normalized sender ids against target records. */
   matchTarget: (params: {
     target: ExecApprovalForwardTarget;
     normalizedSenderId: string;
@@ -90,13 +104,19 @@ export function isChannelExecApprovalTargetRecipient(params: {
 }
 
 export function createChannelExecApprovalProfile(params: {
+  /** Resolves channel approval config for the current account. */
   resolveConfig: (params: ApprovalProfileParams) => ChannelApprovalConfig | undefined;
+  /** Resolves normalized approver ids for the current account. */
   resolveApprovers: (params: ApprovalProfileParams) => string[];
+  /** Optional sender normalizer; defaults to trimmed string normalization. */
   normalizeSenderId?: (value: string) => string | undefined;
+  /** Optional global approval-target matcher for sender authorization. */
   isTargetRecipient?: (params: ApprovalProfileParams & { senderId?: string | null }) => boolean;
+  /** Optional account matcher for filtering forwarded approval requests. */
   matchesRequestAccount?: (params: ApprovalProfileParams & { request: ApprovalRequest }) => boolean;
   // Some channels encode the effective agent only in sessionKey for forwarded approvals.
   fallbackAgentIdFromSessionKey?: boolean;
+  /** Allows local prompt suppression even when the remote approval client is disabled. */
   requireClientEnabledForLocalPromptSuppression?: boolean;
 }) {
   const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
@@ -161,11 +181,17 @@ export function createChannelExecApprovalProfile(params: {
   };
 
   return {
+    /** Whether this account has an enabled channel approval client and approvers. */
     isClientEnabled,
+    /** Whether a sender is in the resolved approver set. */
     isApprover,
+    /** Whether a sender is either an approver or a configured approval target. */
     isAuthorizedSender,
+    /** Preferred delivery target, defaulting to approver DMs. */
     resolveTarget,
+    /** Whether this profile should handle a forwarded approval request. */
     shouldHandleRequest,
+    /** Whether a local approval prompt should be suppressed for an already-rendered payload. */
     shouldSuppressLocalPrompt,
   };
 }
