@@ -1,3 +1,4 @@
+/** Minimal fixed-window limiter interface used by memory and request guard helpers. */
 export type FixedWindowRateLimiter = {
   consume: () => {
     allowed: boolean;
@@ -7,6 +8,7 @@ export type FixedWindowRateLimiter = {
   reset: () => void;
 };
 
+/** Normalizes rate-limit numeric config to a finite integer with a lower bound. */
 export function resolveFixedWindowRateLimitInteger(
   value: number | undefined,
   fallback: number,
@@ -16,6 +18,7 @@ export function resolveFixedWindowRateLimitInteger(
   return Math.max(params.min, Math.floor(candidate));
 }
 
+/** Creates a fixed-window counter that reports allowance, remaining quota, and retry delay. */
 export function createFixedWindowRateLimiter(params: {
   maxRequests: number;
   windowMs: number;
@@ -32,10 +35,12 @@ export function createFixedWindowRateLimiter(params: {
     consume() {
       const nowMs = now();
       if (nowMs - windowStartMs >= windowMs) {
+        // Fixed-window semantics reset all quota at the first request after the window expires.
         windowStartMs = nowMs;
         count = 0;
       }
       if (count >= maxRequests) {
+        // Clamp retryAfterMs for injected clocks that move unexpectedly between consume calls.
         return {
           allowed: false,
           retryAfterMs: Math.max(0, windowStartMs + windowMs - nowMs),
