@@ -21,11 +21,15 @@ export async function fetchAadUserProfile(params: {
   cacheTtlMs?: number;
 }): Promise<GraphUser | null> {
   const { token, aadObjectId } = params;
-  if (!aadObjectId) return null;
+  if (!aadObjectId) {
+    return null;
+  }
 
   const ttl = params.cacheTtlMs ?? DEFAULT_PROFILE_CACHE_TTL_MS;
   const cached = profileCache.get(aadObjectId);
-  if (cached && Date.now() - cached.ts < ttl) return cached.profile;
+  if (cached && Date.now() - cached.ts < ttl) {
+    return cached.profile;
+  }
 
   const select = "id,displayName,mail,userPrincipalName,department,jobTitle";
   const path = `/users/${encodeURIComponent(aadObjectId)}?$select=${select}`;

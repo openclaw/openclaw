@@ -9,7 +9,9 @@ export type SenderIdentityBlock = {
 };
 
 export function buildSenderIdentityBlock(profile: GraphUser): SenderIdentityBlock | null {
-  if (!profile.id) return null;
+  if (!profile.id) {
+    return null;
+  }
   return {
     aadId: profile.id,
     displayName: profile.displayName ?? null,
