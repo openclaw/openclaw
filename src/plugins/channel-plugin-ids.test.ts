@@ -178,6 +178,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
           realtimeVoiceProviders: ["openai"],
           imageGenerationProviders: ["openai"],
           videoGenerationProviders: ["openai"],
+          memoryEmbeddingProviders: ["openai"],
         },
       },
       {
@@ -1030,6 +1031,82 @@ describe("resolveGatewayStartupPluginIds", () => {
         channelIds: ["demo-channel", "demo-other-channel"],
       }),
       ["demo-channel", "demo-other-channel", "browser", "memory-core"],
+    ],
+    [
+      "includes bundled memory embedding providers configured by memorySearch defaults at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "openai",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "memory-core"],
+    ],
+    [
+      "includes bundled memory embedding providers configured by per-agent memorySearch at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {},
+          list: [
+            {
+              id: "reader",
+              memorySearch: {
+                provider: "openai",
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "memory-core"],
+    ],
+    [
+      "honors disabled memorySearch when selecting startup providers",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: {
+              enabled: false,
+              provider: "openai",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "ignores sentinel memorySearch providers at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "local",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "honors explicit plugin disablement for configured memory embedding providers",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "openai",
+            },
+          },
+        },
+        plugins: { entries: { openai: { enabled: false } } },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
     ],
   ] as const)("%s", (_name, config, expected) => {
     expectStartupPluginIdsCase({ config, expected });

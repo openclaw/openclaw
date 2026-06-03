@@ -306,6 +306,94 @@ function manifestOwnsConfiguredWebSearchProvider(params: {
   });
 }
 
+const MEMORY_EMBEDDING_SENTINEL_PROVIDERS = new Set(["auto", "local", "none"]);
+
+function collectConfiguredMemoryEmbeddingProviderIds(config: OpenClawConfig): ReadonlySet<string> {
+  const providerIds = new Set<string>();
+  const pushProvider = (memorySearch: unknown) => {
+    if (!isRecord(memorySearch)) {
+      return;
+    }
+    if (memorySearch.enabled === false) {
+      return;
+    }
+    const provider = normalizeOptionalLowercaseString(memorySearch.provider);
+    if (provider && !MEMORY_EMBEDDING_SENTINEL_PROVIDERS.has(provider)) {
+      providerIds.add(provider);
+    }
+  };
+  pushProvider(config.agents?.defaults?.memorySearch);
+  const agents = Array.isArray(config.agents?.list) ? config.agents.list : [];
+  for (const agent of agents) {
+    if (isRecord(agent)) {
+      pushProvider(agent.memorySearch);
+    }
+  }
+  return providerIds;
+}
+
+function manifestOwnsConfiguredMemoryEmbeddingProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredMemoryEmbeddingProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (params.configuredMemoryEmbeddingProviderIds.size === 0) {
+    return false;
+  }
+  return (params.manifest?.contracts?.memoryEmbeddingProviders ?? []).some((providerId) => {
+    const normalized = normalizeOptionalLowercaseString(providerId);
+    return normalized ? params.configuredMemoryEmbeddingProviderIds.has(normalized) : false;
+  });
+}
+
+function canStartConfiguredMemoryEmbeddingProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredMemoryEmbeddingProviderIds: ReadonlySet<string>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredMemoryEmbeddingProvider({
+      manifest: params.manifest,
+      configuredMemoryEmbeddingProviderIds: params.configuredMemoryEmbeddingProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return (
+    activationState.enabled &&
+    (params.plugin.origin === "bundled" || activationState.explicitlyEnabled)
+  );
+}
+
 function listModelProviderRefs(value: unknown): string[] {
   if (typeof value === "string") {
     return [value];
@@ -579,6 +667,7 @@ function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
   const configuredWebSearchProviderIds = collectConfiguredWebSearchProviderIds(config);
   const configuredGenerationProviderIds = collectConfiguredGenerationProviderIds(config);
   const configuredVoiceProviderIds = collectConfiguredVoiceProviderIds(config);
+  const configuredMemoryEmbeddingProviderIds = collectConfiguredMemoryEmbeddingProviderIds(config);
   return sortUniquePluginIds([
     ...collectConfiguredSpeechProviderIds(config),
     ...configuredWebSearchProviderIds,
@@ -588,6 +677,7 @@ function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
     ...configuredVoiceProviderIds.speechProviders,
     ...configuredVoiceProviderIds.realtimeTranscriptionProviders,
     ...configuredVoiceProviderIds.realtimeVoiceProviders,
+    ...configuredMemoryEmbeddingProviderIds,
   ]);
 }
 
@@ -624,6 +714,20 @@ function collectValidationConfiguredProviderIds(config: OpenClawConfig): string[
   }
   pushProviderId(config.tools?.web?.search?.provider);
   pushProviderId(config.tools?.web?.fetch?.provider);
+  const pushMemorySearchProvider = (memorySearch: unknown) => {
+    if (!isRecord(memorySearch)) {
+      return;
+    }
+    pushProviderId(memorySearch.provider);
+  };
+  pushMemorySearchProvider(config.agents?.defaults?.memorySearch);
+  if (Array.isArray(config.agents?.list)) {
+    for (const agent of config.agents.list) {
+      if (isRecord(agent)) {
+        pushMemorySearchProvider(agent.memorySearch);
+      }
+    }
+  }
   return sortUniquePluginIds(providerIds);
 }
 
@@ -1596,6 +1700,8 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const configuredGenerationProviderIds =
     collectConfiguredGenerationProviderIds(activationSourceConfig);
   const configuredVoiceProviderIds = collectConfiguredVoiceProviderIds(activationSourceConfig);
+  const configuredMemoryEmbeddingProviderIds =
+    collectConfiguredMemoryEmbeddingProviderIds(activationSourceConfig);
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
     manifestRegistry: params.manifestRegistry,
   });
@@ -1724,6 +1830,20 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         pluginsConfig,
         activationSource,
         configuredVoiceProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredMemoryEmbeddingProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredMemoryEmbeddingProviderIds,
         platform: params.platform,
       })
     ) {
