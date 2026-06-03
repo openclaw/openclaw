@@ -472,14 +472,7 @@ private fun ChatBubble(
 ) {
   val normalizedRole = role.trim().lowercase(Locale.US)
   val isUser = normalizedRole == "user"
-  val displayableContent =
-    content.filter { part ->
-      when (part.type) {
-        "text" -> !part.text.isNullOrBlank()
-        "image" -> !part.base64.isNullOrBlank()
-        else -> false
-      }
-    }
+  val displayableContent = displayableChatBubbleContent(content)
   if (displayableContent.isEmpty()) return
 
   Row(
@@ -507,7 +500,7 @@ private fun ChatBubble(
         )
         displayableContent.forEach { part ->
           if (part.type == "text") {
-            ChatText(text = part.text.orEmpty(), textColor = ClawTheme.colors.text)
+            ChatText(text = chatBubbleMarkdownText(part), textColor = ClawTheme.colors.text)
           } else {
             Text(text = part.fileName ?: "Attachment", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
           }
@@ -524,6 +517,17 @@ private fun ChatBubble(
     }
   }
 }
+
+internal fun displayableChatBubbleContent(content: List<ChatMessageContent>): List<ChatMessageContent> =
+  content.filter { part ->
+    when (part.type) {
+      "text" -> !part.text.isNullOrBlank()
+      "image" -> !part.base64.isNullOrBlank()
+      else -> false
+    }
+  }
+
+internal fun chatBubbleMarkdownText(part: ChatMessageContent): String = part.text.orEmpty()
 
 @Composable
 private fun ChatText(
