@@ -1193,6 +1193,13 @@ function convertMessages(
           if (block.type === "text" || block.type === "image") {
             (block as typeof block & { cache_control?: typeof cacheControl }).cache_control =
               cacheControl;
+            if (fallbackToolResult) {
+              (
+                fallbackToolResult as typeof fallbackToolResult & {
+                  cache_control?: typeof cacheControl;
+                }
+              ).cache_control = cacheControl;
+            }
             return params;
           }
           if (block.type === "tool_result" && fallbackToolResult === undefined) {

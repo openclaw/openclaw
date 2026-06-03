@@ -95,12 +95,13 @@ describe("anthropic payload policy", () => {
           type: "tool_result",
           tool_use_id: "tool_1",
           content: "done",
+          cache_control: { type: "ephemeral", ttl: "1h" },
         },
       ],
     });
   });
 
-  it("keeps the conversation cache marker on user text through trailing tool results", () => {
+  it("keeps a stable user marker while advancing through trailing tool results", () => {
     const policy = resolveAnthropicPayloadPolicy({
       provider: "anthropic",
       api: "anthropic-messages",
@@ -152,7 +153,14 @@ describe("anthropic payload policy", () => {
     });
     expect(payload.messages[4]).toEqual({
       role: "user",
-      content: [{ type: "tool_result", tool_use_id: "tool_2", content: "next chunk" }],
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "tool_2",
+          content: "next chunk",
+          cache_control: { type: "ephemeral" },
+        },
+      ],
     });
   });
 

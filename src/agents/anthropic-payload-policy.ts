@@ -179,6 +179,9 @@ function applyAnthropicCacheControlToMessages(
       const blockRecord = block as Record<string, unknown>;
       if (blockRecord.type === "text" || blockRecord.type === "image") {
         blockRecord.cache_control = cacheControl;
+        if (fallbackToolResult) {
+          fallbackToolResult.cache_control = cacheControl;
+        }
         return;
       }
       if (blockRecord.type === "tool_result" && fallbackToolResult === undefined) {
