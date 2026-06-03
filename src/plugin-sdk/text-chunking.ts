@@ -1,6 +1,10 @@
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 
-/** Chunk outbound text while preferring newline boundaries over spaces. */
+/**
+ * Splits outbound channel text into chunks no longer than the requested limit.
+ * Newline boundaries win over spaces; text without usable separators falls back
+ * to a hard character split so channel senders always receive bounded strings.
+ */
 export function chunkTextForOutbound(text: string, limit: number): string[] {
   return chunkTextByBreakResolver(text, limit, (window) => {
     const lastNewline = window.lastIndexOf("\n");
