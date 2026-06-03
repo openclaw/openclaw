@@ -50,6 +50,7 @@ export const WEBHOOK_ANOMALY_STATUS_CODES = Object.freeze([400, 401, 408, 413, 4
 
 /** Records repeated webhook failures and exposes bounded in-memory state controls. */
 export type WebhookAnomalyTracker = {
+  /** Count one tracked status for a key; returns zero when the status/key is ignored. */
   record: (params: {
     /** Stable anomaly key, typically route plus sender or remote identity. */
     key: string;
