@@ -4,6 +4,9 @@ import { normalizeOptionalString } from "../../packages/normalization-core/src/s
 const OPENAI_CODEX_AUTH_CLAIM = "https://api.openai.com/auth";
 const OPENAI_CODEX_PROFILE_CLAIM = "https://api.openai.com/profile";
 
+/**
+ * Identity metadata extracted from OpenAI Codex ChatGPT OAuth tokens.
+ */
 export type OpenAICodexAuthIdentity = {
   accountId?: string;
   chatgptPlanType?: string;
@@ -11,6 +14,9 @@ export type OpenAICodexAuthIdentity = {
   profileName?: string;
 };
 
+/**
+ * Decodes a JWT payload without verifying signatures for local metadata extraction.
+ */
 export function decodeOpenAICodexJwtPayload(token: string): Record<string, unknown> | undefined {
   const payload = token.split(".")[1];
   if (!payload) {
@@ -32,6 +38,9 @@ function readRecord(value: unknown): Record<string, unknown> {
     : {};
 }
 
+/**
+ * Resolves stable account/profile metadata from OpenAI Codex OAuth access-token claims.
+ */
 export function resolveOpenAICodexAuthIdentity(params: {
   access: string;
   accountId?: string;
@@ -52,6 +61,8 @@ export function resolveOpenAICodexAuthIdentity(params: {
   }
 
   const stableSubject =
+    // Prefer account-scoped user ids over generic JWT subject so imports keep
+    // profile names stable across token refreshes and provider migrations.
     normalizeOptionalString(auth.chatgpt_account_user_id) ??
     normalizeOptionalString(auth.chatgpt_user_id) ??
     normalizeOptionalString(auth.user_id) ??
@@ -66,12 +77,18 @@ export function resolveOpenAICodexAuthIdentity(params: {
   };
 }
 
+/**
+ * Resolves the OAuth access-token expiry timestamp in milliseconds.
+ */
 export function resolveOpenAICodexAccessTokenExpiry(access: string): number | undefined {
   const payload = decodeOpenAICodexJwtPayload(access);
   const exp = payload?.exp;
   return resolveExpiresAtMsFromEpochSeconds(exp);
 }
 
+/**
+ * Builds persisted credential metadata for OpenAI Codex OAuth profiles.
+ */
 export function buildOpenAICodexCredentialExtra(
   identity: OpenAICodexAuthIdentity & { idToken?: string },
 ): Record<string, unknown> | undefined {
@@ -83,6 +100,9 @@ export function buildOpenAICodexCredentialExtra(
   return Object.keys(extra).length > 0 ? extra : undefined;
 }
 
+/**
+ * Picks the imported profile name used when migrating OpenAI Codex auth.
+ */
 export function resolveOpenAICodexImportProfileName(
   identity: Pick<OpenAICodexAuthIdentity, "accountId" | "profileName">,
   fallback: string,
