@@ -531,6 +531,7 @@ const lazySkillWorkshop = createLazyView(
   notifyLazyViewChanged,
 );
 const lazySkills = createLazyView(() => import("./views/skills.ts"), notifyLazyViewChanged);
+const lazyUsage = createLazyView(() => import("./views/usage.ts"), notifyLazyViewChanged);
 const lazyWorkboard = createLazyView(() => import("./views/workboard.ts"), notifyLazyViewChanged);
 
 type ChatWorkspaceFilesState = {
@@ -2642,7 +2643,7 @@ export function renderApp(state: AppViewState) {
               });
             })
           : nothing}
-        ${renderUsageTab(state)}
+        ${renderUsageTab(state, lazyUsage)}
         ${state.tab === "cron" ? renderCronQuickCreateForTab(state, requestHostUpdate) : nothing}
         ${state.tab === "cron"
           ? renderLazyView(lazyCron, (m) =>

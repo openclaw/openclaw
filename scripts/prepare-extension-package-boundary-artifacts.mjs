@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path, { resolve } from "node:path";
 import { isLocalCheckEnabled } from "./lib/local-heavy-check-runtime.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
 const runTsgoScript = path.join(repoRoot, "scripts/run-tsgo.mjs");
@@ -257,12 +258,11 @@ export function parseMode(argv = process.argv.slice(2)) {
 }
 
 export function resolveBoundaryRootShimsTimeoutMs(env = process.env) {
-  const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS;
-  if (raw === undefined || raw.trim() === "") {
+  const raw = env.OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS?.trim();
+  if (!raw) {
     return 300_000;
   }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isInteger(parsed) && parsed > 0 && String(parsed) === raw.trim() ? parsed : 300_000;
+  return parsePositiveInt(raw, "OPENCLAW_PLUGIN_SDK_BOUNDARY_ROOT_SHIMS_TIMEOUT_MS");
 }
 
 function collectNewestMtime(paths, params = {}) {
