@@ -19,6 +19,7 @@ import {
   normalizeRootNoColorArgv,
   shouldMigrateStateFromPath,
 } from "./argv.js";
+import { FLAG_TERMINATOR } from "../infra/cli-root-options.js";
 
 describe("argv helpers", () => {
   it.each([
@@ -441,6 +442,23 @@ describe("argv helpers", () => {
     },
   ])("extracts command path: $name", ({ argv, expected }) => {
     expect(getCommandPathWithRootOptions(argv, 2)).toEqual(expected);
+  });
+
+  it("uses FLAG_TERMINATOR constant (not a hardcoded string) to stop command-path parsing", () => {
+    // #83902: getCommandPathInternal was the only function in argv.ts that
+    // used a hardcoded "--" instead of the FLAG_TERMINATOR constant.  If
+    // FLAG_TERMINATOR is changed, command-path resolution would silently
+    // diverge from every other argv helper.  This test uses the imported
+    // constant directly so it breaks if the code regresses to a literal.
+    const argv = ["node", "openclaw", "channels", FLAG_TERMINATOR, "add"];
+    expect(getCommandPath(argv, 2)).toEqual(["channels"]);
+  });
+
+  it("FLAG_TERMINATOR is the canonical '--' string", () => {
+    // Contract: the constant must be '--'.  If this value changes, all
+    // callers (including getCommandPathInternal) must follow suit, and
+    // this assertion makes that dependency explicit.
+    expect(FLAG_TERMINATOR).toBe("--");
   });
 
   it("extracts command path while skipping known root option values", () => {
