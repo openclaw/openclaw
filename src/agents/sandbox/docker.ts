@@ -530,6 +530,10 @@ export function buildSandboxCreateArgs(params: {
   if (gpus) {
     args.push("--gpus", gpus);
   }
+  for (const cap of params.cfg.capAdd ?? []) {
+    const trimmed = cap.trim();
+    if (trimmed) args.push("--cap-add", trimmed);
+  }
   for (const [name, value] of Object.entries(params.cfg.ulimits ?? {})) {
     const formatted = formatUlimitValue(name, value);
     if (formatted) {

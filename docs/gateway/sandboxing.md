@@ -91,6 +91,8 @@ Sandboxing is off by default. If you enable sandboxing and do not choose a backe
 
 To expose host GPUs to Docker sandboxes, set `agents.defaults.sandbox.docker.gpus` or the per-agent `agents.list[].sandbox.docker.gpus` override. The value is passed to Docker's `--gpus` flag as a separate argument, for example `"all"` or `"device=GPU-uuid"`, and requires a compatible host runtime such as NVIDIA Container Toolkit.
 
+To grant specific Linux capabilities to Docker sandbox containers, set `agents.defaults.sandbox.docker.capAdd` (or the per-agent override `agents.list[].sandbox.docker.capAdd`) to an array of capability names, for example `["NET_ADMIN", "SYS_PTRACE"]`. Each entry is passed to Docker as a separate `--cap-add` argument. Adding capabilities weakens sandbox isolation, so prefer the minimum set required for the workload.
+
 <Warning>
 **Docker-out-of-Docker (DooD) constraints**
 

@@ -59,6 +59,29 @@ describe("sandbox config merges", () => {
     expect(sharedScope.gpus).toBe("all");
   });
 
+  it("resolves sandbox docker capAdd with agent precedence", () => {
+    const inherited = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { capAdd: ["NET_ADMIN"] },
+      agentDocker: {},
+    });
+    expect(inherited.capAdd).toEqual(["NET_ADMIN"]);
+
+    const overridden = resolveSandboxDockerConfig({
+      scope: "agent",
+      globalDocker: { capAdd: ["NET_ADMIN"] },
+      agentDocker: { capAdd: ["SYS_PTRACE"] },
+    });
+    expect(overridden.capAdd).toEqual(["SYS_PTRACE"]);
+
+    const sharedScope = resolveSandboxDockerConfig({
+      scope: "shared",
+      globalDocker: { capAdd: ["NET_ADMIN"] },
+      agentDocker: { capAdd: ["SYS_PTRACE"] },
+    });
+    expect(sharedScope.capAdd).toEqual(["NET_ADMIN"]);
+  });
+
   it("resolves docker binds and shared-scope override behavior", () => {
     for (const scenario of [
       {

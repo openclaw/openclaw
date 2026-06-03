@@ -121,6 +121,7 @@ export function resolveSandboxDockerConfig(params: {
     memory: agentDocker?.memory ?? globalDocker?.memory,
     memorySwap: agentDocker?.memorySwap ?? globalDocker?.memorySwap,
     cpus: agentDocker?.cpus ?? globalDocker?.cpus,
+    capAdd: agentDocker?.capAdd ?? globalDocker?.capAdd,
     gpus: normalizeOptionalString(agentDocker?.gpus ?? globalDocker?.gpus),
     ulimits,
     seccompProfile: agentDocker?.seccompProfile ?? globalDocker?.seccompProfile,

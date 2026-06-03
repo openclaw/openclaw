@@ -20,6 +20,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Sandbox/Docker: add opt-in `sandbox.docker.capAdd` passthrough for Docker sandbox containers so workloads that need elevated Linux capabilities (e.g. `NET_ADMIN`, `SYS_PTRACE`) can run inside sandboxed agents. Each capability is emitted as a separate `--cap-add` argument.
 - Docs: add a dedicated Skill Workshop guide covering governed skill creation, reviewable proposals, CLI, Gateway, agent tool behavior, approval policy, support files, and recovery. Thanks @shakkernerd.
 - Skills: let the `skill_workshop` agent tool apply, reject, and quarantine explicit proposals through the guarded review flow. Thanks @shakkernerd.
 - Skills: let proposals carry approved support files under standard skill folders, with scanner, hash, and rollback safeguards. Thanks @shakkernerd.

@@ -527,6 +527,10 @@ export const FIELD_HELP: Record<string, string> = {
     'Optional Docker GPU passthrough value passed to --gpus, for example "all" or "device=GPU-uuid". Requires a compatible host runtime such as NVIDIA Container Toolkit.',
   "agents.list[].sandbox.docker.gpus":
     "Per-agent Docker GPU passthrough override for sandbox containers.",
+  "agents.defaults.sandbox.docker.capAdd":
+    'Optional Linux capabilities to grant via Docker --cap-add (e.g. ["NET_ADMIN", "SYS_PTRACE"]). Each entry is emitted as a separate --cap-add argument. Granting capabilities weakens sandbox isolation; use with care.',
+  "agents.list[].sandbox.docker.capAdd":
+    "Per-agent Docker --cap-add override for sandbox containers.",
   "agents.defaults.sandbox.browser.cdpSourceRange":
     "Optional CIDR allowlist for container-edge CDP ingress (for example 172.21.0.1/32).",
   "agents.list[].sandbox.browser.cdpSourceRange":
