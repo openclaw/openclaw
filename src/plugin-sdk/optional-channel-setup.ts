@@ -4,9 +4,13 @@ import type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js"
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
 type OptionalChannelSetupParams = {
+  /** Channel id used by setup wizard status and routing. */
   channel: string;
+  /** Human-readable plugin label shown in operator-facing install guidance. */
   label: string;
+  /** Package spec operators should install before running real channel setup. */
   npmSpec?: string;
+  /** Docs path linked from validation and wizard status messages. */
   docsPath?: string;
 };
 
@@ -20,6 +24,7 @@ function buildOptionalChannelSetupMessage(params: OptionalChannelSetupParams): s
 }
 
 export function createOptionalChannelSetupAdapter(
+  /** Optional plugin metadata used to build setup validation guidance. */
   params: OptionalChannelSetupParams,
 ): ChannelSetupAdapter {
   const message = buildOptionalChannelSetupMessage(params);
@@ -33,6 +38,7 @@ export function createOptionalChannelSetupAdapter(
 }
 
 export function createOptionalChannelSetupWizard(
+  /** Optional plugin metadata used to build setup wizard status guidance. */
   params: OptionalChannelSetupParams,
 ): ChannelSetupWizard {
   const message = buildOptionalChannelSetupMessage(params);
