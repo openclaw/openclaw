@@ -151,9 +151,9 @@ export function hardenedEnvForChildOomWrap(
  * `journalctl -k`, so failure messages must explain the raised score and the
  * opt-out before users can correlate the SIGKILL with memory pressure.
  *
- * Mirrors `shouldWrapChildForOomScore` minus the `/bin/sh` availability check
- * because callers only need to know whether children would have been *tagged*
- * for preferred OOM victim selection in this process.
+ * Mirrors `shouldWrapChildForOomScore` because callers need to know whether
+ * children spawned by this process would actually have been wrapped and
+ * *tagged* for preferred OOM victim selection.
  */
 export function isLinuxChildOomScoreRaiseActive(options?: OomWrapOptions): boolean {
   const platform = options?.platform ?? process.platform;
