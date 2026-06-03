@@ -16,6 +16,13 @@ import { normalizeMessageChannel } from "./message-channel-core.js";
 import { isDeliverableMessageChannel } from "./message-channel-normalize.js";
 export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
+/**
+ * Delivery-context normalization and projection helpers.
+ *
+ * Sessions still carry route metadata plus older `last*` fields; this module
+ * keeps those shapes converged on the canonical SDK channel-route contract.
+ */
+
 /** Normalizes a delivery context into canonical channel route fields, dropping invalid routes. */
 export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context) {
@@ -118,6 +125,9 @@ function mergeExternalDeliveryContextOverInternalRoute(
   deliveryContext?: DeliveryContext,
   internalContext?: DeliveryContext,
 ): DeliveryContext | undefined {
+  // Internal webchat/heartbeat routes are session plumbing. When a real channel
+  // target is also present, preserve internal account/thread hints but let the
+  // external channel/to pair own delivery.
   return normalizeDeliveryContext({
     channel: deliveryContext?.channel,
     to: deliveryContext?.to,
@@ -155,11 +165,15 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
     threadId: source.lastThreadId,
   });
   const deliveryContext = normalizeDeliveryContext(source.deliveryContext);
+  // Legacy webchat `last*` fields can outlive the external channel that should
+  // receive replies. Prefer an explicit deliverable context when it exists.
   const sessionContext =
     isInternalRouteContext(legacyContext) && hasExternalDeliveryTarget(deliveryContext)
       ? mergeExternalDeliveryContextOverInternalRoute(deliveryContext, legacyContext)
       : mergeDeliveryContext(legacyContext, deliveryContext);
   const routeInternalContext = mergeDeliveryContext(routeContext, legacyContext);
+  // Route metadata normally wins, except for internal fallback routes paired
+  // with an explicit external delivery target from newer session state.
   const routeIsInternalFallback =
     isInternalRouteContext(routeContext) && hasExternalDeliveryTarget(deliveryContext);
   const merged = routeIsInternalFallback
