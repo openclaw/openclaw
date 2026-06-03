@@ -838,24 +838,54 @@ function normalizePlanningToolMetas(
   return toolMetas ?? [];
 }
 
-function countPlanOnlyToolMetas(toolMetas?: PlanningOnlyAttempt["toolMetas"]): number {
-  return normalizePlanningToolMetas(toolMetas).filter((entry) => entry.toolName === "update_plan")
-    .length;
+const PLANNING_ONLY_NO_PROGRESS_EXEC_TOOL_NAMES = new Set(["bash", "bash_exec", "exec"]);
+const PLANNING_ONLY_SLEEP_COMMAND_RE =
+  /^sleep(?:\s+(?:(?:\d+(?:\.\d+)?)|(?:\.\d+))(?:[smhd])?)?\s*;?(?:\s+\([^()]*\))?(?:\s*,\s*(?:pty|elevated))*$/i;
+
+function isPlanningOnlyNoProgressToolMeta(
+  entry: PlanningOnlyAttempt["toolMetas"][number],
+): boolean {
+  const toolName = normalizeLowercaseStringOrEmpty(entry.toolName);
+  if (toolName === "update_plan") {
+    return true;
+  }
+  if (!PLANNING_ONLY_NO_PROGRESS_EXEC_TOOL_NAMES.has(toolName)) {
+    return false;
+  }
+  const meta = entry.meta?.trim();
+  return Boolean(meta && PLANNING_ONLY_SLEEP_COMMAND_RE.test(meta));
 }
 
-function countNonPlanToolCalls(toolMetas?: PlanningOnlyAttempt["toolMetas"]): number {
-  return normalizePlanningToolMetas(toolMetas).filter((entry) => entry.toolName !== "update_plan")
-    .length;
+function countPlanningOnlyNoProgressToolMetas(
+  toolMetas?: PlanningOnlyAttempt["toolMetas"],
+): number {
+  return normalizePlanningToolMetas(toolMetas).filter(isPlanningOnlyNoProgressToolMeta).length;
 }
 
-function hasNonPlanToolActivity(toolMetas?: PlanningOnlyAttempt["toolMetas"]): boolean {
-  return normalizePlanningToolMetas(toolMetas).some((entry) => entry.toolName !== "update_plan");
+function countProgressToolCalls(toolMetas?: PlanningOnlyAttempt["toolMetas"]): number {
+  return normalizePlanningToolMetas(toolMetas).filter(
+    (entry) => !isPlanningOnlyNoProgressToolMeta(entry),
+  ).length;
+}
+
+function hasProgressToolActivity(toolMetas?: PlanningOnlyAttempt["toolMetas"]): boolean {
+  return normalizePlanningToolMetas(toolMetas).some(
+    (entry) => !isPlanningOnlyNoProgressToolMeta(entry),
+  );
+}
+
+function hasOnlyPlanningNoProgressToolActivity(
+  toolMetas?: PlanningOnlyAttempt["toolMetas"],
+): boolean {
+  const normalized = normalizePlanningToolMetas(toolMetas);
+  return normalized.length > 0 && normalized.every(isPlanningOnlyNoProgressToolMeta);
 }
 
 function hasSingleRetrySafeNonPlanTool(toolMetas?: PlanningOnlyAttempt["toolMetas"]): boolean {
   const nonPlanToolNames = normalizePlanningToolMetas(toolMetas)
+    .filter((entry) => !isPlanningOnlyNoProgressToolMeta(entry))
     .map((entry) => normalizeLowercaseStringOrEmpty(entry.toolName))
-    .filter((toolName) => toolName && toolName !== "update_plan");
+    .filter((toolName) => toolName);
   return (
     nonPlanToolNames.length === 1 &&
     SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES.has(nonPlanToolNames[0] ?? "")
@@ -872,7 +902,7 @@ function isSingleActionThenNarrativePattern(params: {
   toolMetas?: PlanningOnlyAttempt["toolMetas"];
   assistantTexts?: readonly string[];
 }): boolean {
-  const nonPlanCount = countNonPlanToolCalls(params.toolMetas);
+  const nonPlanCount = countProgressToolCalls(params.toolMetas);
   if (nonPlanCount !== 1) {
     return false;
   }
@@ -906,13 +936,16 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   timedOut: boolean;
   attempt: PlanningOnlyAttempt;
 }): string | null {
-  const planOnlyToolMetaCount = countPlanOnlyToolMetas(params.attempt.toolMetas);
+  const noProgressToolMetaCount = countPlanningOnlyNoProgressToolMetas(params.attempt.toolMetas);
   const singleActionNarrative = isSingleActionThenNarrativePattern({
     toolMetas: params.attempt.toolMetas,
     assistantTexts: params.attempt.assistantTexts,
   });
   const allowSingleActionRetryBypass =
     singleActionNarrative && hasSingleRetrySafeNonPlanTool(params.attempt.toolMetas);
+  const onlyNoProgressToolActivity = hasOnlyPlanningNoProgressToolActivity(
+    params.attempt.toolMetas,
+  );
   if (
     !shouldApplyPlanningOnlyRetryGuard({
       provider: params.provider,
@@ -927,16 +960,19 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     hasMessagingToolDeliveryEvidence(params.attempt) ||
     params.attempt.lastToolError ||
-    (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
-    ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&
+    (hasProgressToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
+    ((params.attempt.itemLifecycle?.startedCount ?? 0) > noProgressToolMetaCount &&
       !allowSingleActionRetryBypass) ||
-    resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
+    (resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects &&
+      !onlyNoProgressToolActivity)
   ) {
     return null;
   }
 
   const stopReason = params.attempt.lastAssistant?.stopReason;
-  if (stopReason && stopReason !== "stop") {
+  const allowToolUseTerminalRetry =
+    stopReason === "toolUse" && (onlyNoProgressToolActivity || allowSingleActionRetryBypass);
+  if (stopReason && stopReason !== "stop" && !allowToolUseTerminalRetry) {
     return null;
   }
 

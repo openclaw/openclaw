@@ -1189,6 +1189,80 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toContain("Act now");
   });
 
+  it("treats a dummy sleep tool-use turn as planning-only in strict-agentic runs", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      executionContract: "strict-agentic",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll update the code now."],
+        toolMetas: [{ toolName: "bash", meta: "sleep 0.1" }],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "I'll update the code now." },
+            {
+              type: "tool_use",
+              id: "tool_1",
+              name: "bash",
+              input: { command: "sleep 0.1" },
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toContain("Act now");
+  });
+
+  it("does not treat ordinary bash tool-use turns as planning-only", () => {
+    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+      provider: "openai",
+      modelId: "gpt-5.4",
+      executionContract: "strict-agentic",
+      prompt: "Please inspect the code, make the change, and run the checks.",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: ["I'll update the code now."],
+        toolMetas: [{ toolName: "bash", meta: "pnpm test" }],
+        itemLifecycle: {
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        },
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "toolUse",
+          provider: "openai",
+          model: "gpt-5.4",
+          content: [
+            { type: "text", text: "I'll update the code now." },
+            {
+              type: "tool_use",
+              id: "tool_1",
+              name: "bash",
+              input: { command: "pnpm test" },
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("allows one retry by default and two retries for strict-agentic runs", () => {
     expect(resolvePlanningOnlyRetryLimit("default")).toBe(1);
     expect(resolvePlanningOnlyRetryLimit("strict-agentic")).toBe(2);
