@@ -35,6 +35,11 @@ type RequireOpenAllowFromFn = (params: {
   message: string;
 }) => void;
 
+/**
+ * Builds the standard passive-channel status object used by plugin status surfaces.
+ * Missing lifecycle fields are normalized to stable defaults so callers can merge
+ * plugin-specific extras without leaking `undefined` into status responses.
+ */
 export function buildPassiveChannelStatusSummary<TExtra extends object>(
   snapshot: PassiveChannelStatusSnapshot,
   extra?: TExtra,
@@ -49,6 +54,7 @@ export function buildPassiveChannelStatusSummary<TExtra extends object>(
   };
 }
 
+/** Adds probe state to the standard passive-channel status summary. */
 export function buildPassiveProbedChannelStatusSummary<TExtra extends object>(
   snapshot: PassiveChannelStatusSnapshot,
   extra?: TExtra,
@@ -60,6 +66,7 @@ export function buildPassiveProbedChannelStatusSummary<TExtra extends object>(
   };
 }
 
+/** Normalizes optional traffic timestamps for channel status payloads. */
 export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | null) {
   return {
     lastInboundAt: snapshot?.lastInboundAt ?? null,
@@ -67,6 +74,10 @@ export function buildTrafficStatusSummary(snapshot?: TrafficStatusSnapshot | nul
   };
 }
 
+/**
+ * Runs a passive monitor until the supplied abort signal fires, then calls `stop()`.
+ * This adapts simple plugin monitors to the shared passive account lifecycle.
+ */
 export async function runStoppablePassiveMonitor<TMonitor extends StoppableMonitor>(params: {
   abortSignal: AbortSignal;
   start: () => Promise<TMonitor>;
@@ -80,6 +91,10 @@ export async function runStoppablePassiveMonitor<TMonitor extends StoppableMonit
   });
 }
 
+/**
+ * Returns the provided runtime or creates a logger-backed fallback for monitor-only paths.
+ * The fallback cannot exit the process, so command/runtime callers should inject a real runtime.
+ */
 export function resolveLoggerBackedRuntime<TRuntime>(
   runtime: TRuntime | undefined,
   logger: Parameters<typeof createLoggerBackedRuntime>[0]["logger"],
