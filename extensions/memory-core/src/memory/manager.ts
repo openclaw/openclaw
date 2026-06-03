@@ -185,7 +185,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected override sessionWatchTimer: NodeJS.Timeout | null = null;
   protected override sessionUnsubscribe: (() => void) | null = null;
   protected override intervalTimer: NodeJS.Timeout | null = null;
-  protected override memoryWatchPressureTimer: NodeJS.Timeout | null = null;
   protected override closed = false;
   protected override dirty = false;
   protected override sessionsDirty = false;
@@ -1120,10 +1119,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (this.intervalTimer) {
       clearInterval(this.intervalTimer);
       this.intervalTimer = null;
-    }
-    if (this.memoryWatchPressureTimer) {
-      clearTimeout(this.memoryWatchPressureTimer);
-      this.memoryWatchPressureTimer = null;
     }
     if (this.watcher) {
       await this.watcher.close();

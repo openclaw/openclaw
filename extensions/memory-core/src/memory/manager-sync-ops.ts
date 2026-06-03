@@ -106,8 +106,6 @@ const SESSION_SYNC_YIELD_EVERY = 10;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 // Warn only after real watcher state is high; #86613 reproduced FD pressure in large trees.
 const MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD = 2_000;
-const MEMORY_WATCH_PRESSURE_RECHECK_INTERVAL_MS = 250;
-const MEMORY_WATCH_PRESSURE_RECHECK_ATTEMPTS = 20;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -251,7 +249,6 @@ export abstract class MemoryManagerSyncOps {
   protected sessionUnsubscribe: (() => void) | null = null;
   protected fallbackReason?: string;
   protected intervalTimer: NodeJS.Timeout | null = null;
-  protected memoryWatchPressureTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
   protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
@@ -649,28 +646,6 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
     this.warnIfMemoryWatchPressure(countChokidarWatchedEntries(watcher), "paths");
-  }
-
-  private scheduleChokidarMemoryWatchPressureCheck(watcher: FSWatcher, attempt = 1): void {
-    if (this.memoryWatchPressureWarningShown || this.closed) {
-      return;
-    }
-    if (this.memoryWatchPressureTimer) {
-      clearTimeout(this.memoryWatchPressureTimer);
-    }
-    this.memoryWatchPressureTimer = setTimeout(() => {
-      this.memoryWatchPressureTimer = null;
-      if (this.closed || this.watcher !== watcher || this.memoryWatchPressureWarningShown) {
-        return;
-      }
-      this.warnIfChokidarMemoryWatchPressure(watcher);
-      if (
-        !this.memoryWatchPressureWarningShown &&
-        attempt < MEMORY_WATCH_PRESSURE_RECHECK_ATTEMPTS
-      ) {
-        this.scheduleChokidarMemoryWatchPressureCheck(watcher, attempt + 1);
-      }
-    }, MEMORY_WATCH_PRESSURE_RECHECK_INTERVAL_MS);
   }
 
   private warnIfMemoryWatchPressure(count: number, unit: "directories" | "paths"): void {
@@ -1139,9 +1114,10 @@ export abstract class MemoryManagerSyncOps {
     try {
       if (this.watcher) {
         // Existing chokidar watcher (handling MEMORY.md and/or other file
-        // paths) — extend it to cover this directory too.
+        // paths) — extend it to cover this directory too. The pressure warning
+        // is startup-only for now; add a delayed check here if runtime fallback
+        // pressure needs its own warning later.
         this.watcher.add(dir);
-        this.scheduleChokidarMemoryWatchPressureCheck(this.watcher);
         return;
       }
       // No chokidar watcher exists yet. Spin one up just for this directory
