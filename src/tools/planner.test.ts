@@ -79,6 +79,61 @@ describe("buildToolPlan", () => {
     expect(contractError.toolName).toBe("read");
   });
 
+  it("fails with a contract error when descriptor names are unreadable", () => {
+    const unreadable = descriptor("unreadable");
+    Object.defineProperty(unreadable, "name", {
+      enumerable: true,
+      get() {
+        throw new Error("planner descriptor name getter exploded");
+      },
+    });
+
+    let error: unknown;
+    try {
+      buildToolPlan({
+        descriptors: [unreadable, descriptor("healthy")],
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(error).toBeInstanceOf(ToolPlanContractError);
+    const contractError = error as ToolPlanContractError;
+    expect(contractError.code).toBe("invalid-descriptor");
+    expect(contractError.toolName).toBe("tool[0]");
+    expect(contractError.message).toBe("Tool descriptor name is unreadable: tool[0]");
+  });
+
+  it("does not re-read descriptor names while reporting missing executors", () => {
+    const stateful = descriptor("stateful", { executor: undefined });
+    let nameReads = 0;
+    Object.defineProperty(stateful, "name", {
+      enumerable: true,
+      get() {
+        nameReads += 1;
+        if (nameReads > 1) {
+          throw new Error("planner descriptor name was read twice");
+        }
+        return "stateful";
+      },
+    });
+
+    let error: unknown;
+    try {
+      buildToolPlan({
+        descriptors: [stateful],
+      });
+    } catch (caught) {
+      error = caught;
+    }
+
+    expect(nameReads).toBe(1);
+    expect(error).toBeInstanceOf(ToolPlanContractError);
+    const contractError = error as ToolPlanContractError;
+    expect(contractError.code).toBe("missing-executor");
+    expect(contractError.toolName).toBe("stateful");
+  });
+
   it("does not require an executor for unavailable descriptors", () => {
     const plan = buildToolPlan({
       descriptors: [

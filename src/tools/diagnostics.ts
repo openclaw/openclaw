@@ -1,4 +1,7 @@
-export type ToolPlanContractErrorCode = "duplicate-tool-name" | "missing-executor";
+export type ToolPlanContractErrorCode =
+  | "duplicate-tool-name"
+  | "invalid-descriptor"
+  | "missing-executor";
 
 export class ToolPlanContractError extends Error {
   readonly code: ToolPlanContractErrorCode;
