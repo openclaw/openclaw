@@ -74,6 +74,9 @@ const UPDATE_CHANNEL_SWITCH_ASSERTIONS_PATH =
   "scripts/e2e/lib/update-channel-switch/assertions.mjs";
 const RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH =
   "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh";
+const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
+  "scripts/e2e/lib/release-typed-onboarding/scenario.sh";
+const RELEASE_USER_JOURNEY_SCENARIO_PATH = "scripts/e2e/lib/release-user-journey/scenario.sh";
 const UPGRADE_SURVIVOR_RUN_SCRIPT = "scripts/e2e/lib/upgrade-survivor/run.sh";
 const UPGRADE_SURVIVOR_UPDATE_RESTART_AUTH_PATH =
   "scripts/e2e/lib/upgrade-survivor/update-restart-auth.sh";
@@ -1319,32 +1322,80 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
   it("keeps append-only mock E2E state under per-run scratch roots", () => {
     const scripts = [
       {
-        path: "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
+        path: RELEASE_TYPED_ONBOARDING_SCENARIO_PATH,
         scratch:
           'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-typed-onboarding.XXXXXX")"',
+        logDir: 'LOG_DIR="$scenario_tmp/logs"',
         requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"',
-        removed: ["/tmp/openclaw-release-typed-onboarding-openai.jsonl"],
+        expectedPaths: [
+          'INSTALL_LOG="$LOG_DIR/install.log"',
+          'ONBOARD_LOG="$LOG_DIR/onboard.log"',
+          'OPENAI_LOG="$LOG_DIR/openai.log"',
+          'AGENT_LOG="$LOG_DIR/agent.log"',
+          'input_fifo_dir="$(mktemp -d "$scenario_tmp/input.XXXXXX")"',
+        ],
+        removed: [
+          "/tmp/openclaw-release-typed-onboarding-openai.jsonl",
+          "/tmp/openclaw-release-typed-onboarding-install.log",
+          "/tmp/openclaw-release-typed-onboarding.log",
+          "/tmp/openclaw-release-typed-onboarding-openai.log",
+          "/tmp/openclaw-release-typed-onboarding-agent.log",
+          'mktemp -d "/tmp/openclaw-release-typed-onboarding.XXXXXX"',
+        ],
       },
       {
-        path: "scripts/e2e/lib/release-user-journey/scenario.sh",
+        path: RELEASE_USER_JOURNEY_SCENARIO_PATH,
         scratch:
           'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-user-journey.XXXXXX")"',
+        logDir: 'LOG_DIR="$scenario_tmp/logs"',
         requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"',
         extraState: 'CLICKCLACK_STATE="$scenario_tmp/clickclack.json"',
+        expectedPaths: [
+          'INSTALL_LOG="$LOG_DIR/install.log"',
+          'ONBOARD_LOG="$LOG_DIR/onboard.log"',
+          'OPENAI_LOG="$LOG_DIR/openai.log"',
+          'AGENT_LOG="$LOG_DIR/agent.log"',
+          'PLUGIN_A_INSTALL_PATH_FILE="$scenario_tmp/plugin-a-install-path.txt"',
+          'PLUGIN_A_SOURCE_PATH_FILE="$scenario_tmp/plugin-a-source-path.txt"',
+          'plugin_a_dir="$(mktemp -d "$scenario_tmp/plugin-a.XXXXXX")"',
+          'plugin_b_dir="$(mktemp -d "$scenario_tmp/plugin-b.XXXXXX")"',
+        ],
         removed: [
           "/tmp/openclaw-release-user-journey-openai.jsonl",
           "/tmp/openclaw-release-user-journey-clickclack.json",
+          "/tmp/openclaw-release-user-journey-install.log",
+          "/tmp/openclaw-release-user-journey-onboard.log",
+          "/tmp/openclaw-release-user-journey-agent.log",
+          "/tmp/openclaw-release-user-journey-plugin-a-install-path.txt",
+          "/tmp/openclaw-release-user-journey-plugin-a-source-path.txt",
+          'mktemp -d "/tmp/openclaw-release-journey-plugin-a.XXXXXX"',
+          'mktemp -d "/tmp/openclaw-release-journey-plugin-b.XXXXXX"',
         ],
       },
       {
         path: RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH,
         scratch:
           'scenario_tmp="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-release-upgrade-user-journey.XXXXXX")"',
+        logDir: 'LOG_DIR="$scenario_tmp/logs"',
         requestLog: 'MOCK_REQUEST_LOG="$scenario_tmp/openai-requests.jsonl"',
         extraState: 'CLICKCLACK_STATE="$scenario_tmp/clickclack.json"',
+        expectedPaths: [
+          'BASELINE_INSTALL_LOG="$LOG_DIR/baseline-install.log"',
+          'CANDIDATE_INSTALL_LOG="$LOG_DIR/candidate-install.log"',
+          'ONBOARD_LOG="$LOG_DIR/onboard.log"',
+          'OPENAI_LOG="$LOG_DIR/openai.log"',
+          'PLUGIN_INSTALL_LOG="$LOG_DIR/plugin-install.log"',
+          'AGENT_LOG="$LOG_DIR/agent.log"',
+          'plugin_dir="$(mktemp -d "$scenario_tmp/plugin.XXXXXX")"',
+        ],
         removed: [
           "/tmp/openclaw-release-upgrade-user-journey-openai.jsonl",
           "/tmp/openclaw-release-upgrade-user-journey-clickclack.json",
+          "/tmp/openclaw-release-upgrade-baseline-install.log",
+          "/tmp/openclaw-release-upgrade-candidate-install.log",
+          "/tmp/openclaw-release-upgrade-onboard.log",
+          "/tmp/openclaw-release-upgrade-agent.log",
+          'mktemp -d "/tmp/openclaw-release-upgrade-plugin.XXXXXX"',
         ],
       },
       {
@@ -1356,18 +1407,33 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
       },
     ];
 
-    for (const { path, scratch, requestLog, extraState, removed } of scripts) {
+    for (const {
+      path,
+      scratch,
+      logDir,
+      requestLog,
+      extraState,
+      expectedPaths,
+      removed,
+    } of scripts) {
       const script = readFileSync(path, "utf8");
 
       expect(script, path).toContain(scratch);
+      if (logDir) {
+        expect(script, path).toContain(logDir);
+      }
       expect(script, path).toContain(requestLog);
       expect(script, path).toContain('rm -rf "$scenario_tmp"');
       if (extraState) {
         expect(script, path).toContain(extraState);
       }
+      for (const expectedPath of expectedPaths ?? []) {
+        expect(script, path).toContain(expectedPath);
+      }
       for (const stalePath of removed) {
         expect(script, path).not.toContain(stalePath);
       }
+      expect(script, path).not.toMatch(/\/tmp\/openclaw-release-[\w-]+\.(?:log|json|err|txt)/u);
     }
   });
 
