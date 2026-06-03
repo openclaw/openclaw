@@ -243,6 +243,16 @@ export const registerTelegramHandlers = ({
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
+  const resolveTelegramQueueMode = (runtimeCfg: OpenClawConfig): string | undefined => {
+    const queueCfg = runtimeCfg.messages?.queue;
+    const channelMode = queueCfg?.byChannel?.telegram;
+    if (typeof channelMode === "string") {
+      return channelMode;
+    }
+    return typeof queueCfg?.mode === "string" ? queueCfg.mode : undefined;
+  };
+  const shouldBypassInboundDebounceForPrivateInterruptDm = (msg: Message): boolean =>
+    msg.chat.type === "private" && resolveTelegramQueueMode(cfg) === "interrupt";
   type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
     ctx: TelegramContext;
@@ -1942,7 +1952,10 @@ export const registerTelegramHandlers = ({
       allMedia,
       storeAllowFrom,
       receivedAtMs: Date.now(),
-      debounceKey: isAbortControlMessage ? null : debounceKey,
+      debounceKey:
+        isAbortControlMessage || shouldBypassInboundDebounceForPrivateInterruptDm(msg)
+          ? null
+          : debounceKey,
       debounceLane,
       botUsername,
       ...promptContextBoundaryOptions(promptContextMinTimestampMs),

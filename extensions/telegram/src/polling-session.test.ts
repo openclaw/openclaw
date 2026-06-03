@@ -2867,7 +2867,7 @@ describe("TelegramPollingSession", () => {
         regularTurnDone,
         waitForTestReplyFenceAbort({
           key: "test-status-session:dm",
-          laneKey: "telegram:123",
+          laneKey: "telegram:-100:topic:10",
         }),
       ]);
     });
@@ -2883,10 +2883,7 @@ describe("TelegramPollingSession", () => {
     for (const updateId of [42, 43]) {
       await writeTelegramSpooledUpdate({
         spoolDir: tempDir,
-        update: {
-          update_id: updateId,
-          message: { text: `dm ${updateId}`, chat: { id: 123, type: "private" } },
-        },
+        update: topicUpdate(updateId, 10, `topic ${updateId}`),
       });
     }
 
