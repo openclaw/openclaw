@@ -31,6 +31,7 @@ function withDuplex(
   if (init && "duplex" in (init as Record<string, unknown>)) {
     return init;
   }
+  // Node requires `duplex: "half"` for streaming request bodies; browsers ignore it.
   return init
     ? ({ ...init, duplex: "half" as const } as RequestInitWithDuplex)
     : ({ duplex: "half" as const } as RequestInitWithDuplex);
