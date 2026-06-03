@@ -268,6 +268,7 @@ async function clearPluginOwnedSessionStores(params: {
       {
         skipSaveWhenResult: (clearedInStore) => clearedInStore === 0,
         takeCacheOwnership: true,
+        allowDropPluginSessionExtensionState: true,
       },
     );
   }
@@ -312,6 +313,7 @@ async function clearPromotedSessionEntrySlotStores(params: {
       {
         skipSaveWhenResult: (clearedInStore) => clearedInStore === 0,
         takeCacheOwnership: true,
+        allowDropPluginSessionExtensionState: true,
       },
     );
   }

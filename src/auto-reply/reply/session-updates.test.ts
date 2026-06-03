@@ -11,6 +11,7 @@ const {
   resolveAgentConfigMock,
   resolveSessionAgentIdMock,
   resolveAgentIdFromSessionKeyMock,
+  updateSessionStoreMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
     prompt: "",
@@ -28,6 +29,7 @@ const {
   resolveAgentConfigMock: vi.fn(() => undefined),
   resolveSessionAgentIdMock: vi.fn(() => "writer"),
   resolveAgentIdFromSessionKeyMock: vi.fn(() => "main"),
+  updateSessionStoreMock: vi.fn(),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -53,7 +55,7 @@ vi.mock("../../skills/runtime/refresh-state.js", () => ({
 }));
 
 vi.mock("../../config/sessions.js", () => ({
-  updateSessionStore: vi.fn(),
+  updateSessionStore: updateSessionStoreMock,
   resolveSessionFilePath: vi.fn(),
   resolveSessionFilePathOptions: vi.fn(),
 }));
@@ -80,6 +82,9 @@ describe("ensureSkillSnapshot", () => {
     resolveAgentConfigMock.mockReturnValue(undefined);
     resolveSessionAgentIdMock.mockReturnValue("writer");
     resolveAgentIdFromSessionKeyMock.mockReturnValue("main");
+    updateSessionStoreMock.mockImplementation(async (_storePath: string, mutator: unknown) =>
+      typeof mutator === "function" ? await mutator({}) : undefined,
+    );
   });
 
   afterEach(() => {
@@ -114,5 +119,66 @@ describe("ensureSkillSnapshot", () => {
     expect(workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(snapshotParams.agentId).toBe("writer");
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves plugin session extension state when first-turn skill snapshot uses a stale entry", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    const sessionKey = "agent:main:plugin-patch-smoke";
+    const permissionScope = {
+      scope: ["web_search"],
+      reread_policy: "request_only",
+      write_policy: "deny",
+    };
+    const sessionStore = {
+      [sessionKey]: {
+        sessionId: "session-1",
+        updatedAt: 100,
+        pluginExtensions: {
+          "jh-external-admission-guard": {
+            external_admission_permission_scope: permissionScope,
+          },
+        },
+        pluginExtensionSlotKeys: {
+          "jh-external-admission-guard": {
+            external_admission_permission_scope: "externalAdmissionPermissionScope",
+          },
+        },
+        externalAdmissionPermissionScope: permissionScope,
+      },
+    };
+    updateSessionStoreMock.mockImplementation(async (_storePath: string, mutator: unknown) =>
+      typeof mutator === "function" ? await mutator(sessionStore) : undefined,
+    );
+
+    await ensureSkillSnapshot({
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 150,
+        systemSent: false,
+      },
+      sessionStore,
+      sessionKey,
+      storePath: "/tmp/sessions.json",
+      sessionId: "session-1",
+      isFirstTurnInSession: true,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: {},
+    });
+
+    expect(sessionStore[sessionKey]?.pluginExtensions).toEqual({
+      "jh-external-admission-guard": {
+        external_admission_permission_scope: permissionScope,
+      },
+    });
+    expect(sessionStore[sessionKey]?.pluginExtensionSlotKeys).toEqual({
+      "jh-external-admission-guard": {
+        external_admission_permission_scope: "externalAdmissionPermissionScope",
+      },
+    });
+    expect(
+      (sessionStore[sessionKey] as Record<string, unknown>)?.externalAdmissionPermissionScope,
+    ).toEqual(permissionScope);
+    expect(sessionStore[sessionKey]?.systemSent).toBe(true);
+    expect(sessionStore[sessionKey]?.skillsSnapshot).toBeDefined();
   });
 });

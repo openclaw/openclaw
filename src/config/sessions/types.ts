@@ -531,6 +531,43 @@ function normalizeMergedUpdatedAt(value: number | undefined, now: number): numbe
   return Math.min(value, now);
 }
 
+function preservePluginSessionExtensionState(
+  existing: SessionEntry | undefined,
+  patch: Partial<SessionEntry>,
+  next: SessionEntry,
+): void {
+  if (!existing) {
+    return;
+  }
+  if (existing.pluginExtensions !== undefined) {
+    next.pluginExtensions = {
+      ...existing.pluginExtensions,
+      ...patch.pluginExtensions,
+    };
+  }
+  if (existing.pluginExtensionSlotKeys !== undefined) {
+    next.pluginExtensionSlotKeys = {
+      ...existing.pluginExtensionSlotKeys,
+      ...patch.pluginExtensionSlotKeys,
+    };
+  }
+
+  const existingRecord = existing as Record<string, unknown>;
+  const patchRecord = patch as Record<string, unknown>;
+  const nextRecord = next as Record<string, unknown>;
+  for (const pluginSlots of Object.values(existing.pluginExtensionSlotKeys ?? {})) {
+    for (const slotKey of Object.values(pluginSlots)) {
+      if (!slotKey || patchRecord[slotKey] !== undefined) {
+        continue;
+      }
+      const existingValue = existingRecord[slotKey];
+      if (existingValue !== undefined) {
+        nextRecord[slotKey] = existingValue;
+      }
+    }
+  }
+}
+
 export function mergeSessionEntryWithPolicy(
   existing: SessionEntry | undefined,
   patch: Partial<SessionEntry>,
@@ -555,6 +592,7 @@ export function mergeSessionEntryWithPolicy(
       patch.sessionStartedAt ??
       (existing.sessionId === sessionId ? existing.sessionStartedAt : updatedAt),
   };
+  preservePluginSessionExtensionState(existing, patch, next);
 
   if (existing.sessionId !== sessionId) {
     const patchHasSessionFile = Object.hasOwn(patch, "sessionFile");

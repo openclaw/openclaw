@@ -897,6 +897,143 @@ describe("session store writer queue", () => {
     expect(merged.modelProvider).toBeUndefined();
   });
 
+  it("preserves plugin session extension state when metadata patches omit plugin fields", () => {
+    const permissionScope = {
+      scope: ["web_search"],
+      reread_policy: "request_only",
+      write_policy: "deny",
+    };
+    const existing = {
+      sessionId: "sess-plugin-state",
+      updatedAt: 100,
+      pluginExtensions: {
+        "jh-external-admission-guard": {
+          external_admission_permission_scope: permissionScope,
+        },
+      },
+      pluginExtensionSlotKeys: {
+        "jh-external-admission-guard": {
+          external_admission_permission_scope: "externalAdmissionPermissionScope",
+        },
+      },
+      externalAdmissionPermissionScope: permissionScope,
+    } as SessionEntry & Record<string, unknown>;
+
+    const merged = mergeSessionEntry(existing, {
+      updatedAt: 200,
+      pluginExtensions: {},
+      pluginExtensionSlotKeys: {},
+    });
+
+    expect(merged.pluginExtensions).toEqual(existing.pluginExtensions);
+    expect(merged.pluginExtensionSlotKeys).toEqual(existing.pluginExtensionSlotKeys);
+    expect((merged as Record<string, unknown>).externalAdmissionPermissionScope).toEqual(
+      permissionScope,
+    );
+  });
+
+  it("preserves plugin session extension state when a stale full-entry writer omits plugin fields", async () => {
+    const key = "agent:main:stale-plugin-entry";
+    const permissionScope = {
+      scope: ["web_search"],
+      reread_policy: "request_only",
+      write_policy: "deny",
+    };
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-stale-plugin-entry",
+        updatedAt: 100,
+        pluginExtensions: {
+          "jh-external-admission-guard": {
+            external_admission_permission_scope: permissionScope,
+          },
+        },
+        pluginExtensionSlotKeys: {
+          "jh-external-admission-guard": {
+            external_admission_permission_scope: "externalAdmissionPermissionScope",
+          },
+        },
+        externalAdmissionPermissionScope: permissionScope,
+      },
+    });
+
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        store[key] = {
+          sessionId: "sess-stale-plugin-entry",
+          updatedAt: 200,
+          systemSent: true,
+        };
+      },
+      { skipMaintenance: true },
+    );
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.pluginExtensions).toEqual({
+      "jh-external-admission-guard": {
+        external_admission_permission_scope: permissionScope,
+      },
+    });
+    expect(store[key]?.pluginExtensionSlotKeys).toEqual({
+      "jh-external-admission-guard": {
+        external_admission_permission_scope: "externalAdmissionPermissionScope",
+      },
+    });
+    expect((store[key] as Record<string, unknown>).externalAdmissionPermissionScope).toEqual(
+      permissionScope,
+    );
+    expect(store[key]?.systemSent).toBe(true);
+  });
+
+  it("allows cleanup writers to drop plugin session extension state explicitly", async () => {
+    const key = "agent:main:drop-plugin-entry";
+    const permissionScope = {
+      scope: ["web_search"],
+      reread_policy: "request_only",
+      write_policy: "deny",
+    };
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-drop-plugin-entry",
+        updatedAt: 100,
+        pluginExtensions: {
+          "jh-external-admission-guard": {
+            external_admission_permission_scope: permissionScope,
+          },
+        },
+        pluginExtensionSlotKeys: {
+          "jh-external-admission-guard": {
+            external_admission_permission_scope: "externalAdmissionPermissionScope",
+          },
+        },
+        externalAdmissionPermissionScope: permissionScope,
+      },
+    });
+
+    await updateSessionStore(
+      storePath,
+      (store) => {
+        const entry = store[key] as SessionEntry & Record<string, unknown>;
+        delete entry.pluginExtensions;
+        delete entry.pluginExtensionSlotKeys;
+        delete entry.externalAdmissionPermissionScope;
+        entry.updatedAt = 200;
+      },
+      {
+        skipMaintenance: true,
+        allowDropPluginSessionExtensionState: true,
+      },
+    );
+
+    const store = loadSessionStore(storePath, { skipCache: true });
+    expect(store[key]?.pluginExtensions).toBeUndefined();
+    expect(store[key]?.pluginExtensionSlotKeys).toBeUndefined();
+    expect(
+      (store[key] as Record<string, unknown>).externalAdmissionPermissionScope,
+    ).toBeUndefined();
+  });
+
   it("rewrites generated sessionFile paths when session id changes", () => {
     const previousSessionId = "11111111-1111-4111-8111-111111111111";
     const nextSessionId = "22222222-2222-4222-8222-222222222222";

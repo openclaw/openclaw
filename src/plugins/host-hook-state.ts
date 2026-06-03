@@ -481,66 +481,70 @@ export async function patchPluginSessionExtension(params: {
     );
   }
   const slotKey = normalizedSlotKey?.ok === true ? normalizedSlotKey.key : undefined;
-  const nextValue = await updateSessionStore(loaded.storePath, (store) => {
-    const entry = store[loaded.storeKey];
-    if (!entry) {
-      return undefined;
-    }
-    const entryRecord = entry as Record<string, unknown>;
-    const pluginExtensions = { ...entry.pluginExtensions };
-    const pluginState = { ...pluginExtensions[pluginId] };
-    if (params.unset === true) {
-      delete pluginState[namespace];
-    } else {
-      pluginState[namespace] = copyJsonValue(nextPluginValue);
-    }
-    if (Object.keys(pluginState).length > 0) {
-      pluginExtensions[pluginId] = pluginState;
-    } else {
-      delete pluginExtensions[pluginId];
-    }
-    if (Object.keys(pluginExtensions).length > 0) {
-      entry.pluginExtensions = pluginExtensions;
-    } else {
-      delete entry.pluginExtensions;
-    }
-    const storedSlotKeys = { ...entry.pluginExtensionSlotKeys };
-    const pluginSlotKeys = { ...storedSlotKeys[pluginId] };
-    const previousSlotKey = normalizeSessionEntrySlotKey(pluginSlotKeys[namespace]);
-    if (previousSlotKey.ok && previousSlotKey.key !== slotKey) {
-      delete entryRecord[previousSlotKey.key];
-    }
-    if (slotKey && params.unset !== true) {
-      pluginSlotKeys[namespace] = slotKey;
-    } else {
-      delete pluginSlotKeys[namespace];
-    }
-    if (Object.keys(pluginSlotKeys).length > 0) {
-      storedSlotKeys[pluginId] = pluginSlotKeys;
-    } else {
-      delete storedSlotKeys[pluginId];
-    }
-    if (Object.keys(storedSlotKeys).length > 0) {
-      entry.pluginExtensionSlotKeys = storedSlotKeys;
-    } else {
-      delete entry.pluginExtensionSlotKeys;
-    }
-    if (slotKey) {
-      const projected = projectSessionExtensionValueForSlot({
-        registration,
-        sessionKey: canonicalKey,
-        sessionId: entry.sessionId,
-        nextValue: params.unset === true ? undefined : nextPluginValue,
-      });
-      if (projected === undefined) {
-        delete entryRecord[slotKey];
-      } else {
-        entryRecord[slotKey] = projected;
+  const nextValue = await updateSessionStore(
+    loaded.storePath,
+    (store) => {
+      const entry = store[loaded.storeKey];
+      if (!entry) {
+        return undefined;
       }
-    }
-    entry.updatedAt = Date.now();
-    return pluginState[namespace] as PluginJsonValue | undefined;
-  });
+      const entryRecord = entry as Record<string, unknown>;
+      const pluginExtensions = { ...entry.pluginExtensions };
+      const pluginState = { ...pluginExtensions[pluginId] };
+      if (params.unset === true) {
+        delete pluginState[namespace];
+      } else {
+        pluginState[namespace] = copyJsonValue(nextPluginValue);
+      }
+      if (Object.keys(pluginState).length > 0) {
+        pluginExtensions[pluginId] = pluginState;
+      } else {
+        delete pluginExtensions[pluginId];
+      }
+      if (Object.keys(pluginExtensions).length > 0) {
+        entry.pluginExtensions = pluginExtensions;
+      } else {
+        delete entry.pluginExtensions;
+      }
+      const storedSlotKeys = { ...entry.pluginExtensionSlotKeys };
+      const pluginSlotKeys = { ...storedSlotKeys[pluginId] };
+      const previousSlotKey = normalizeSessionEntrySlotKey(pluginSlotKeys[namespace]);
+      if (previousSlotKey.ok && previousSlotKey.key !== slotKey) {
+        delete entryRecord[previousSlotKey.key];
+      }
+      if (slotKey && params.unset !== true) {
+        pluginSlotKeys[namespace] = slotKey;
+      } else {
+        delete pluginSlotKeys[namespace];
+      }
+      if (Object.keys(pluginSlotKeys).length > 0) {
+        storedSlotKeys[pluginId] = pluginSlotKeys;
+      } else {
+        delete storedSlotKeys[pluginId];
+      }
+      if (Object.keys(storedSlotKeys).length > 0) {
+        entry.pluginExtensionSlotKeys = storedSlotKeys;
+      } else {
+        delete entry.pluginExtensionSlotKeys;
+      }
+      if (slotKey) {
+        const projected = projectSessionExtensionValueForSlot({
+          registration,
+          sessionKey: canonicalKey,
+          sessionId: entry.sessionId,
+          nextValue: params.unset === true ? undefined : nextPluginValue,
+        });
+        if (projected === undefined) {
+          delete entryRecord[slotKey];
+        } else {
+          entryRecord[slotKey] = projected;
+        }
+      }
+      entry.updatedAt = Date.now();
+      return pluginState[namespace] as PluginJsonValue | undefined;
+    },
+    { takeCacheOwnership: true, allowDropPluginSessionExtensionState: true },
+  );
   return { ok: true, key: canonicalKey, value: nextValue };
 }
 

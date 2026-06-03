@@ -37,7 +37,7 @@ import {
   takeMutableSessionStoreCache,
   writeSessionStoreCache,
 } from "./store-cache.js";
-import { resolveSessionStoreEntry } from "./store-entry.js";
+import { normalizeStoreSessionKey, resolveSessionStoreEntry } from "./store-entry.js";
 import {
   loadSessionStore,
   normalizeSessionStore,
@@ -166,6 +166,14 @@ type SaveSessionStoreOptions = {
   maintenanceConfig?: ResolvedSessionMaintenanceConfig;
   /** Changed top-level entry when a hot path only updated one existing session. */
   singleEntryPersistence?: SingleEntryPersistencePatch;
+  /**
+   * Session keys that are allowed to drop plugin session extension state during
+   * this update. Other updates preserve existing extension blocks when callers
+   * replace a whole stale entry without carrying plugin state forward.
+   */
+  allowDropPluginSessionExtensionStateSessionKeys?: string[];
+  /** Allow this update to intentionally clear plugin session extension state. */
+  allowDropPluginSessionExtensionState?: boolean;
 };
 
 type UpdateSessionStoreOptions<T> = SaveSessionStoreOptions & {
@@ -496,6 +504,106 @@ function sessionEntriesHaveSameSerializedForm(
   return previous !== undefined && JSON.stringify(previous) === JSON.stringify(next);
 }
 
+type PluginSessionExtensionStateSnapshot = {
+  pluginExtensions?: SessionEntry["pluginExtensions"];
+  pluginExtensionSlotKeys?: SessionEntry["pluginExtensionSlotKeys"];
+  promotedSlots: Record<string, unknown>;
+};
+
+function resolveMutableSessionStoreKey(
+  store: Record<string, SessionEntry>,
+  sessionKey: string,
+): string | undefined {
+  const trimmed = sessionKey.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  if (Object.hasOwn(store, trimmed)) {
+    return trimmed;
+  }
+  const normalized = normalizeStoreSessionKey(trimmed);
+  if (Object.hasOwn(store, normalized)) {
+    return normalized;
+  }
+  return Object.keys(store).find((key) => normalizeStoreSessionKey(key) === normalized);
+}
+
+function collectPluginSessionExtensionStateSnapshot(
+  store: Record<string, SessionEntry>,
+): Map<string, PluginSessionExtensionStateSnapshot> {
+  const snapshot = new Map<string, PluginSessionExtensionStateSnapshot>();
+  for (const [sessionKey, entry] of Object.entries(store)) {
+    if (!entry?.pluginExtensions && !entry?.pluginExtensionSlotKeys) {
+      continue;
+    }
+    const promotedSlots: Record<string, unknown> = {};
+    for (const pluginSlots of Object.values(entry.pluginExtensionSlotKeys ?? {})) {
+      for (const slotKey of Object.values(pluginSlots)) {
+        if (!slotKey) {
+          continue;
+        }
+        const value = (entry as Record<string, unknown>)[slotKey];
+        if (value !== undefined) {
+          promotedSlots[slotKey] = value;
+        }
+      }
+    }
+    snapshot.set(sessionKey, {
+      pluginExtensions: entry.pluginExtensions,
+      pluginExtensionSlotKeys: entry.pluginExtensionSlotKeys,
+      promotedSlots,
+    });
+  }
+  return snapshot;
+}
+
+function preserveExistingPluginSessionExtensionState(params: {
+  previousByKey: Map<string, PluginSessionExtensionStateSnapshot>;
+  nextStore: Record<string, SessionEntry>;
+  allowDropAll?: boolean;
+  allowDropSessionKeys?: readonly string[];
+}): void {
+  if (params.allowDropAll) {
+    return;
+  }
+  const allowDrop = new Set(
+    (params.allowDropSessionKeys ?? []).map((key) => normalizeStoreSessionKey(key)),
+  );
+  for (const [previousKey, previous] of params.previousByKey.entries()) {
+    const normalizedKey = normalizeStoreSessionKey(previousKey);
+    if (allowDrop.has(normalizedKey)) {
+      continue;
+    }
+    const nextKey = resolveMutableSessionStoreKey(params.nextStore, previousKey);
+    if (!nextKey) {
+      continue;
+    }
+    const nextEntry = params.nextStore[nextKey];
+    if (!nextEntry) {
+      continue;
+    }
+    const merged = nextEntry as SessionEntry & Record<string, unknown>;
+    if (previous.pluginExtensions) {
+      merged.pluginExtensions = {
+        ...previous.pluginExtensions,
+        ...merged.pluginExtensions,
+      };
+    }
+    if (previous.pluginExtensionSlotKeys) {
+      merged.pluginExtensionSlotKeys = {
+        ...previous.pluginExtensionSlotKeys,
+        ...merged.pluginExtensionSlotKeys,
+      };
+    }
+    for (const [slotKey, value] of Object.entries(previous.promotedSlots)) {
+      if (merged[slotKey] === undefined) {
+        merged[slotKey] = value;
+      }
+    }
+    params.nextStore[nextKey] = merged;
+  }
+}
+
 async function saveSessionStoreUnlocked(
   storePath: string,
   store: Record<string, SessionEntry>,
@@ -795,7 +903,14 @@ export async function updateSessionStore<T>(
 ): Promise<T> {
   return await runExclusiveSessionStoreWrite(storePath, async () => {
     const store = loadMutableSessionStoreForWriter(storePath);
+    const previousPluginExtensionsByKey = collectPluginSessionExtensionStateSnapshot(store);
     const result = await mutator(store);
+    preserveExistingPluginSessionExtensionState({
+      previousByKey: previousPluginExtensionsByKey,
+      nextStore: store,
+      allowDropAll: opts?.allowDropPluginSessionExtensionState,
+      allowDropSessionKeys: opts?.allowDropPluginSessionExtensionStateSessionKeys,
+    });
     if (opts?.skipSaveWhenResult?.(result)) {
       restoreUnchangedSessionStoreCache(storePath, store);
       return result;

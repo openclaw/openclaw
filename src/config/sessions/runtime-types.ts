@@ -40,6 +40,8 @@ export type SessionMaintenanceApplyReportRuntime = {
 export type SaveSessionStoreOptions = {
   skipMaintenance?: boolean;
   activeSessionKey?: string;
+  allowDropPluginSessionExtensionState?: boolean;
+  allowDropPluginSessionExtensionStateSessionKeys?: string[];
   onWarn?: (warning: SessionMaintenanceWarningRuntime) => void | Promise<void>;
   onMaintenanceApplied?: (report: SessionMaintenanceApplyReportRuntime) => void | Promise<void>;
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfigRuntime>;

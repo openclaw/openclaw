@@ -26,6 +26,47 @@ import { buildSessionEndHookPayload, buildSessionStartHookPayload } from "./sess
 export { drainFormattedSystemEvents } from "./session-system-events.js";
 export { resetResolvedSkillsCacheForTests } from "../../skills/runtime/session-snapshot.js";
 
+function mergeSessionEntryPreservingPluginState(
+  existing: SessionEntry | undefined,
+  nextEntry: SessionEntry,
+): SessionEntry {
+  if (!existing) {
+    return nextEntry;
+  }
+  const merged: SessionEntry = {
+    ...existing,
+    ...nextEntry,
+  };
+  if (existing.pluginExtensions !== undefined) {
+    merged.pluginExtensions = {
+      ...existing.pluginExtensions,
+      ...nextEntry.pluginExtensions,
+    };
+  }
+  if (existing.pluginExtensionSlotKeys !== undefined) {
+    merged.pluginExtensionSlotKeys = {
+      ...existing.pluginExtensionSlotKeys,
+      ...nextEntry.pluginExtensionSlotKeys,
+    };
+  }
+
+  const existingRecord = existing as Record<string, unknown>;
+  const nextRecord = nextEntry as Record<string, unknown>;
+  const mergedRecord = merged as Record<string, unknown>;
+  for (const pluginSlots of Object.values(existing.pluginExtensionSlotKeys ?? {})) {
+    for (const slotKey of Object.values(pluginSlots)) {
+      if (!slotKey || nextRecord[slotKey] !== undefined) {
+        continue;
+      }
+      const existingValue = existingRecord[slotKey];
+      if (existingValue !== undefined) {
+        mergedRecord[slotKey] = existingValue;
+      }
+    }
+  }
+  return merged;
+}
+
 async function persistSessionEntryUpdate(params: {
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
@@ -35,17 +76,20 @@ async function persistSessionEntryUpdate(params: {
   if (!params.sessionStore || !params.sessionKey) {
     return;
   }
-  params.sessionStore[params.sessionKey] = {
-    ...params.sessionStore[params.sessionKey],
-    ...params.nextEntry,
-  };
+  params.sessionStore[params.sessionKey] = mergeSessionEntryPreservingPluginState(
+    params.sessionStore[params.sessionKey],
+    params.nextEntry,
+  );
   if (!params.storePath) {
     return;
   }
   await updateSessionStore(
     params.storePath,
     (store) => {
-      const next = { ...store[params.sessionKey!], ...params.nextEntry };
+      const next = mergeSessionEntryPreservingPluginState(
+        store[params.sessionKey!],
+        params.nextEntry,
+      );
       store[params.sessionKey!] = next;
       return next;
     },
