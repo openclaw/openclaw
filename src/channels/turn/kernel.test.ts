@@ -145,6 +145,13 @@ type FinalizeResult = {
   admission?: unknown;
   dispatched?: boolean;
   routeSessionKey?: string;
+  turnState?: {
+    completionAllowed?: boolean;
+    currentState?: string;
+    errors?: string[];
+    visibleDeliveryRequired?: boolean;
+    visibleDeliverySent?: boolean;
+  };
 };
 
 type TurnLogEvent = {
@@ -1285,6 +1292,7 @@ describe("channel turn kernel", () => {
   });
 
   it("marks telegram direct turns without visible delivery as invalid", async () => {
+    const onFinalize = vi.fn();
     const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
     const result = await runChannelTurn({
       channel: "telegram",
@@ -1307,6 +1315,7 @@ describe("channel turn kernel", () => {
             counts: { tool: 0, block: 0, final: 0 },
           }),
         }),
+        onFinalize,
       },
     });
 
@@ -1321,6 +1330,15 @@ describe("channel turn kernel", () => {
       completionAllowed: false,
     });
     expect(result.turnState?.errors).toContain("missing_visible_delivery");
+    expect(onFinalize).toHaveBeenCalledTimes(1);
+    const [finalized] = requireFirstMockCall(onFinalize, "finalize");
+    expect(finalizeResult(finalized).turnState).toMatchObject({
+      currentState: "failed",
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+      completionAllowed: false,
+    });
+    expect(finalizeResult(finalized).turnState?.errors).toContain("missing_visible_delivery");
     const events = turnEvents.list("telegram:message:msg-1");
     expect(events.map((event) => event.type)).toEqual([
       "message.received",
