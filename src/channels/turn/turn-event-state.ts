@@ -96,6 +96,7 @@ export class InMemoryTurnEventStore implements TurnEventRecorder {
 }
 
 export function materializeTurnState(events: readonly TurnEvent[]): TurnState {
+  const errors = new Set<string>();
   const state: TurnState = {
     turnId: events[0]?.turnId,
     currentState: "idle",
@@ -126,11 +127,11 @@ export function materializeTurnState(events: readonly TurnEvent[]): TurnState {
         break;
       case "delivery.failed":
         state.currentState = "failed";
-        state.errors.push(String(event.metadata?.reason ?? "delivery_failed"));
+        errors.add(String(event.metadata?.reason ?? "delivery_failed"));
         break;
       case "turn.failed":
         state.currentState = "failed";
-        state.errors.push(String(event.metadata?.reason ?? "turn_failed"));
+        errors.add(String(event.metadata?.reason ?? "turn_failed"));
         break;
       case "turn.completed":
         if (state.currentState !== "failed") {
@@ -148,7 +149,10 @@ export function materializeTurnState(events: readonly TurnEvent[]): TurnState {
     completionAllowed: true,
     errors: [],
   });
-  state.errors = [...state.errors, ...completionErrors];
+  for (const error of completionErrors) {
+    errors.add(error);
+  }
+  state.errors = [...errors];
   state.completionAllowed = state.currentState !== "failed" && completionErrors.length === 0;
   return state;
 }

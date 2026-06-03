@@ -1503,6 +1503,42 @@ describe("channel turn kernel", () => {
     expect(state.errors).toContain("missing_visible_delivery");
   });
 
+  it("deduplicates materialized turn errors while preserving first-seen order", () => {
+    const state = materializeTurnState([
+      {
+        id: "evt-1",
+        type: "delivery.required",
+        timestamp: 1,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "required",
+      },
+      {
+        id: "evt-2",
+        type: "delivery.failed",
+        timestamp: 2,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "failed",
+        metadata: { reason: "missing_visible_delivery" },
+      },
+      {
+        id: "evt-3",
+        type: "turn.failed",
+        timestamp: 3,
+        turnId: "telegram:message:msg-1",
+        actor: "runtime",
+        channel: "telegram",
+        status: "invalid",
+        metadata: { reason: "missing_visible_delivery" },
+      },
+    ]);
+
+    expect(state.errors).toEqual(["missing_visible_delivery"]);
+  });
+
   it("models tool call and result causality inside the same turn", () => {
     const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
     const called = turnEvents.append({
