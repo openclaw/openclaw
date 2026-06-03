@@ -36,6 +36,7 @@ const unsupportedSecretRefSurfacePatterns = [
   ...bundledChannelUnsupportedSecretRefSurfacePatterns,
 ];
 
+// Candidate scanning only sees openclaw.json; auth-profile-only surfaces are audited elsewhere.
 const unsupportedSecretRefConfigCandidatePatterns = [
   ...CORE_UNSUPPORTED_SECRETREF_CONFIG_CANDIDATE_PATTERNS,
   ...bundledChannelUnsupportedSecretRefSurfacePatterns,
@@ -150,15 +151,24 @@ function collectPatternCandidates(params: {
   });
 }
 
+/**
+ * Returns canonical config/auth-profile path patterns that do not support SecretRef values.
+ */
 export function getUnsupportedSecretRefSurfacePatterns(): string[] {
   return [...unsupportedSecretRefSurfacePatterns];
 }
 
+/**
+ * Concrete unsupported config value discovered from an openclaw.json-like object.
+ */
 export type UnsupportedSecretRefConfigCandidate = {
   path: string;
   value: unknown;
 };
 
+/**
+ * Finds configured openclaw.json values whose surfaces currently reject SecretRef objects.
+ */
 export function collectUnsupportedSecretRefConfigCandidates(
   raw: unknown,
 ): UnsupportedSecretRefConfigCandidate[] {
