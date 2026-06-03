@@ -904,6 +904,13 @@ export class TelegramPollingSession {
         .then(() => undefined)
         .catch(() => undefined);
     };
+    const clearForceCycleTimer = () => {
+      if (!forceCycleTimer) {
+        return;
+      }
+      clearTimeout(forceCycleTimer);
+      forceCycleTimer = undefined;
+    };
     const requestStopForRestart = () => {
       if (restartRequested) {
         return;
@@ -989,6 +996,7 @@ export class TelegramPollingSession {
     try {
       try {
         await Promise.race([worker.task(), forceCyclePromise]);
+        clearForceCycleTimer();
       } catch (err) {
         if (this.opts.abortSignal?.aborted) {
           return "exit";
@@ -1003,6 +1011,7 @@ export class TelegramPollingSession {
         const message = formatErrorMessage(err);
         this.opts.log(`[telegram][diag] isolated polling ingress failed: ${message}`);
         this.#status.notePollingError(message);
+        clearForceCycleTimer();
         const shouldRestart = await this.#waitBeforeRestart(
           (delay) => `Telegram isolated polling ingress failed; restarting in ${delay}.`,
         );
@@ -1034,9 +1043,7 @@ export class TelegramPollingSession {
     } finally {
       clearInterval(watchdog);
       clearInterval(drainTimer);
-      if (forceCycleTimer) {
-        clearTimeout(forceCycleTimer);
-      }
+      clearForceCycleTimer();
       unsubscribe();
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       await stopWorker();
@@ -1092,6 +1099,13 @@ export class TelegramPollingSession {
     const forceCyclePromise = new Promise<void>((resolve) => {
       forceCycleResolve = resolve;
     });
+    const clearForceCycleTimer = () => {
+      if (!forceCycleTimer) {
+        return;
+      }
+      clearTimeout(forceCycleTimer);
+      forceCycleTimer = undefined;
+    };
     const stopRunner = () => {
       fetchAbortController?.abort();
       stopPromise ??= Promise.resolve(runner.stop())
@@ -1154,6 +1168,7 @@ export class TelegramPollingSession {
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     try {
       await Promise.race([runner.task(), forceCyclePromise]);
+      clearForceCycleTimer();
       if (this.opts.abortSignal?.aborted) {
         return "exit";
       }
@@ -1200,15 +1215,14 @@ export class TelegramPollingSession {
       this.opts.log(
         `[telegram][diag] polling cycle error reason=${reason} ${liveness.formatDiagnosticFields("lastGetUpdatesError")} err=${errMsg}${conflictHint}`,
       );
+      clearForceCycleTimer();
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram ${reason}: ${errMsg};${conflictHint} retrying in ${delay}.`,
       );
       return shouldRestart ? "continue" : "exit";
     } finally {
       clearInterval(watchdog);
-      if (forceCycleTimer) {
-        clearTimeout(forceCycleTimer);
-      }
+      clearForceCycleTimer();
       this.opts.abortSignal?.removeEventListener("abort", abortFetch);
       this.opts.abortSignal?.removeEventListener("abort", stopOnAbort);
       await waitForGracefulStop(stopRunner);

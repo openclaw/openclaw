@@ -217,11 +217,12 @@ function installPollingStallWatchdogHarness(dateNowSequence: readonly number[] =
     return 1 as unknown as ReturnType<typeof setInterval>;
   });
   const clearIntervalSpy = vi.spyOn(globalThis, "clearInterval").mockImplementation(() => {});
-  const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation((fn) => {
-    void Promise.resolve().then(() => (fn as () => void)());
-    return 1 as unknown as ReturnType<typeof setTimeout>;
+  const setTimeoutSpy = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation((fn) => realSetTimeout(fn as () => void, 0));
+  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation((timeoutId) => {
+    realClearTimeout(timeoutId);
   });
-  const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
   const dateNowSpy = vi.spyOn(Date, "now");
   for (const value of dateNowSequence) {
     dateNowSpy.mockImplementationOnce(() => value);
@@ -1136,6 +1137,7 @@ describe("TelegramPollingSession", () => {
 
       expectLogIncludes(log, "Polling stall detected");
       expectLogIncludes(log, "isolated polling ingress finished reason=polling stall detected");
+      expectLogExcludes(log, "Isolated polling ingress stop timed out");
     } finally {
       watchdogHarness.restore();
       abort.abort();
@@ -3034,6 +3036,7 @@ describe("TelegramPollingSession", () => {
       expect(botStop).toHaveBeenCalledTimes(1);
       expectLogIncludes(log, "Polling stall detected");
       expectLogIncludes(log, "polling stall detected");
+      expectLogExcludes(log, "Polling runner stop timed out");
     } finally {
       watchdogHarness.restore();
     }
