@@ -7,13 +7,13 @@ const { publicArtifactModule } = vi.hoisted(() => ({
 vi.mock("./public-surface-loader.js", () => ({
   loadBundledPluginPublicArtifactModuleSync: vi.fn(() => publicArtifactModule),
   resolveBundledPluginPublicArtifactPath: vi.fn(
-    () => "/repo/extensions/demo/document-extractor.ts",
+    () => "/repo/extensions/demo/web-content-extractor.ts",
   ),
 }));
 
-import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
+import { loadBundledWebContentExtractorEntriesFromDir } from "./web-content-extractor-public-artifacts.js";
 
-describe("loadBundledDocumentExtractorEntriesFromDir", () => {
+describe("loadBundledWebContentExtractorEntriesFromDir", () => {
   beforeEach(() => {
     for (const key of Object.keys(publicArtifactModule)) {
       delete publicArtifactModule[key];
@@ -22,26 +22,24 @@ describe("loadBundledDocumentExtractorEntriesFromDir", () => {
 
   it("isolates a throwing factory when another extractor factory succeeds", () => {
     const extract = vi.fn();
-    publicArtifactModule.createBrokenDocumentExtractor = () => {
+    publicArtifactModule.createBrokenWebContentExtractor = () => {
       throw new Error("native probe failed");
     };
-    publicArtifactModule.createPdfDocumentExtractor = () => ({
-      id: "pdf",
-      label: "PDF",
-      mimeTypes: ["application/pdf"],
+    publicArtifactModule.createReadabilityWebContentExtractor = () => ({
+      id: "readability",
+      label: "Readability",
       extract,
     });
 
     expect(
-      loadBundledDocumentExtractorEntriesFromDir({
+      loadBundledWebContentExtractorEntriesFromDir({
         dirName: "demo",
         pluginId: "demo",
       }),
     ).toStrictEqual([
       {
-        id: "pdf",
-        label: "PDF",
-        mimeTypes: ["application/pdf"],
+        id: "readability",
+        label: "Readability",
         extract,
         pluginId: "demo",
       },
@@ -50,42 +48,40 @@ describe("loadBundledDocumentExtractorEntriesFromDir", () => {
 
   it("surfaces initialization failure when every matching factory throws", () => {
     const cause = new Error("native probe failed");
-    publicArtifactModule.createPdfDocumentExtractor = () => {
+    publicArtifactModule.createReadabilityWebContentExtractor = () => {
       throw cause;
     };
 
     expect(() =>
-      loadBundledDocumentExtractorEntriesFromDir({
+      loadBundledWebContentExtractorEntriesFromDir({
         dirName: "demo",
         pluginId: "demo",
       }),
-    ).toThrow("Unable to initialize document extractors for plugin demo");
+    ).toThrow("Unable to initialize web content extractors for plugin demo");
   });
 
   it("isolates a malformed descriptor when another extractor factory succeeds", () => {
     const extract = vi.fn();
-    publicArtifactModule.createBrokenDocumentExtractor = () => ({
+    publicArtifactModule.createBrokenWebContentExtractor = () => ({
       get id() {
         throw new Error("descriptor read failed");
       },
     });
-    publicArtifactModule.createPdfDocumentExtractor = () => ({
-      id: "pdf",
-      label: "PDF",
-      mimeTypes: ["application/pdf"],
+    publicArtifactModule.createReadabilityWebContentExtractor = () => ({
+      id: "readability",
+      label: "Readability",
       extract,
     });
 
     expect(
-      loadBundledDocumentExtractorEntriesFromDir({
+      loadBundledWebContentExtractorEntriesFromDir({
         dirName: "demo",
         pluginId: "demo",
       }),
     ).toStrictEqual([
       {
-        id: "pdf",
-        label: "PDF",
-        mimeTypes: ["application/pdf"],
+        id: "readability",
+        label: "Readability",
         extract,
         pluginId: "demo",
       },

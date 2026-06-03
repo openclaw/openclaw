@@ -22,6 +22,7 @@ export function resolvePluginWebContentExtractors(params?: {
   onlyPluginIds?: readonly string[];
 }): PluginWebContentExtractorEntry[] {
   const extractors: PluginWebContentExtractorEntry[] = [];
+  const loadErrors: unknown[] = [];
   for (const plugin of resolveEnabledBundledManifestContractPlugins({
     config: params?.config,
     workspaceDir: params?.workspaceDir,
@@ -33,13 +34,24 @@ export function resolvePluginWebContentExtractors(params?: {
       vitest: true,
     },
   })) {
-    const loaded = loadBundledWebContentExtractorEntriesFromDir({
-      dirName: plugin.id,
-      pluginId: plugin.id,
-    });
+    let loaded: PluginWebContentExtractorEntry[] | null;
+    try {
+      loaded = loadBundledWebContentExtractorEntriesFromDir({
+        dirName: plugin.id,
+        pluginId: plugin.id,
+      });
+    } catch (error) {
+      loadErrors.push(error);
+      continue;
+    }
     if (loaded) {
       extractors.push(...loaded);
     }
+  }
+  if (extractors.length === 0 && loadErrors.length > 0) {
+    throw new Error("Unable to load web content extractor plugins", {
+      cause: loadErrors.length === 1 ? loadErrors[0] : new AggregateError(loadErrors),
+    });
   }
   return extractors.toSorted(compareExtractors);
 }

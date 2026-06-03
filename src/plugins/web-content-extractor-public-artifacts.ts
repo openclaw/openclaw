@@ -10,14 +10,28 @@ const WEB_CONTENT_EXTRACTOR_ARTIFACT_CANDIDATES = [
   "web-content-extractor-api.js",
 ] as const;
 
-function isWebContentExtractorPlugin(value: unknown): value is WebContentExtractorPlugin {
-  return (
-    isRecord(value) &&
-    typeof value.id === "string" &&
-    typeof value.label === "string" &&
-    (value.autoDetectOrder === undefined || typeof value.autoDetectOrder === "number") &&
-    typeof value.extract === "function"
-  );
+function normalizeWebContentExtractorPlugin(value: unknown): WebContentExtractorPlugin | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = value.id;
+  const label = value.label;
+  const autoDetectOrder = value.autoDetectOrder;
+  const extract = value.extract;
+  if (
+    typeof id !== "string" ||
+    typeof label !== "string" ||
+    (autoDetectOrder !== undefined && typeof autoDetectOrder !== "number") ||
+    typeof extract !== "function"
+  ) {
+    return null;
+  }
+  return {
+    id,
+    label,
+    ...(autoDetectOrder === undefined ? {} : { autoDetectOrder }),
+    extract,
+  };
 }
 
 function tryLoadBundledPublicArtifactModule(params: {
@@ -42,8 +56,12 @@ function tryLoadBundledPublicArtifactModule(params: {
   return null;
 }
 
-function collectExtractorFactories(mod: Record<string, unknown>): WebContentExtractorPlugin[] {
+function collectExtractorFactories(mod: Record<string, unknown>): {
+  extractors: WebContentExtractorPlugin[];
+  errors: unknown[];
+} {
   const extractors: WebContentExtractorPlugin[] = [];
+  const errors: unknown[] = [];
   for (const [name, exported] of Object.entries(mod).toSorted(([left], [right]) =>
     left.localeCompare(right),
   )) {
@@ -55,12 +73,17 @@ function collectExtractorFactories(mod: Record<string, unknown>): WebContentExtr
     ) {
       continue;
     }
-    const candidate = exported();
-    if (isWebContentExtractorPlugin(candidate)) {
-      extractors.push(candidate);
+    try {
+      const candidate = exported();
+      const extractor = normalizeWebContentExtractorPlugin(candidate);
+      if (extractor) {
+        extractors.push(extractor);
+      }
+    } catch (error) {
+      errors.push(error);
     }
   }
-  return extractors;
+  return { extractors, errors };
 }
 
 export function loadBundledWebContentExtractorEntriesFromDir(params: {
@@ -71,8 +94,13 @@ export function loadBundledWebContentExtractorEntriesFromDir(params: {
   if (!mod) {
     return null;
   }
-  const extractors = collectExtractorFactories(mod);
+  const { extractors, errors } = collectExtractorFactories(mod);
   if (extractors.length === 0) {
+    if (errors.length > 0) {
+      throw new Error(`Unable to initialize web content extractors for plugin ${params.pluginId}`, {
+        cause: errors.length === 1 ? errors[0] : new AggregateError(errors),
+      });
+    }
     return null;
   }
   return extractors.map((extractor) => Object.assign({}, extractor, { pluginId: params.pluginId }));
