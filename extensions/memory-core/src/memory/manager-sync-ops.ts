@@ -737,8 +737,8 @@ export abstract class MemoryManagerSyncOps {
       }
       // Force a broad re-sync to cover the gap, then restore directory
       // coverage by reattaching to chokidar so subsequent file changes
-      // still drive watch sync (intervalMinutes defaults to 0; without
-      // a watcher the directory would stop being indexed).
+      // still drive watch sync (intervalMinutes defaults to 30;
+      // without a watcher the directory would stop being indexed).
       markDirty();
       this.attachMemoryChokidarFallback(dir, markDirty);
     });
@@ -1450,7 +1450,14 @@ export abstract class MemoryManagerSyncOps {
       return;
     }
     this.intervalTimer = setInterval(() => {
-      runDetachedMemorySync(() => this.sync({ reason: "interval" }), "interval");
+      runDetachedMemorySync(async () => {
+        // Force dirty so interval rescans memory files even when the
+        // watcher silently failed or events were missed. Without this,
+        // a silent watcher failure leaves dirty=false and the interval
+        // tick becomes a no-op.
+        this.dirty = true;
+        return this.sync({ reason: "interval" });
+      }, "interval");
     }, ms);
   }
 

@@ -67,7 +67,12 @@ class IntervalSyncHarness extends MemoryManagerSyncOps {
     return "test";
   }
 
-  protected async sync(): Promise<void> {}
+  async sync(): Promise<void> {}
+
+  /** Public accessor for test assertions on the protected parent dirty state. */
+  get isDirty(): boolean {
+    return this.dirty;
+  }
 
   protected async withTimeout<T>(promise: Promise<T>): Promise<T> {
     return await promise;
@@ -109,5 +114,20 @@ describe("MemoryManagerSyncOps interval sync", () => {
     });
 
     expect(harness.batchConfig().timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("sets dirty=true and calls sync when interval fires", async () => {
+    vi.useFakeTimers();
+    const harness = new IntervalSyncHarness({ intervalMinutes: 5 });
+    const syncSpy = vi.spyOn(harness, "sync").mockResolvedValue(undefined);
+
+    harness.arm();
+
+    // Advance past the interval
+    await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+
+    expect(harness.isDirty).toBe(true);
+    expect(syncSpy).toHaveBeenCalledWith({ reason: "interval" });
+    harness.stop();
   });
 });
