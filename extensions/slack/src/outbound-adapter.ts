@@ -15,7 +15,6 @@ import {
   sendPayloadMediaSequenceAndFinalize,
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseSlackBlocksInput } from "./blocks-input.js";
 import {
   buildSlackInteractiveBlocks,
@@ -52,18 +51,14 @@ function resolveRenderedInteractiveBlocks(
   return blocks.length > 0 ? blocks : undefined;
 }
 
-function resolveSlackSendIdentity(identity?: OutboundIdentity): SlackSendIdentity | undefined {
-  if (!identity) {
-    return undefined;
-  }
-  const username = normalizeOptionalString(identity.name);
-  const iconUrl = normalizeOptionalString(identity.avatarUrl);
-  const rawEmoji = normalizeOptionalString(identity.emoji);
-  const iconEmoji = !iconUrl && rawEmoji && /^:[^:\s]+:$/.test(rawEmoji) ? rawEmoji : undefined;
-  if (!username && !iconUrl && !iconEmoji) {
-    return undefined;
-  }
-  return { username, iconUrl, iconEmoji };
+function resolveSlackSendIdentity(_identity?: OutboundIdentity): SlackSendIdentity | undefined {
+  // In multi-bot Slack workspaces each agent has its own bot user with a real_name
+  // and avatar. The OutboundIdentity arriving here is the *originating agent's*
+  // identity, not the bot's — forwarding it as username/icon_url makes sub-agent
+  // posts render under the parent agent's name, breaking attribution in shared
+  // channels. Returning undefined lets Slack fall back to each bot's own profile.
+  // Per-message identity override should be opt-in via cfg, not the default.
+  return undefined;
 }
 
 async function sendSlackOutboundMessage(params: {
