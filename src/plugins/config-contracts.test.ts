@@ -265,6 +265,97 @@ describe("resolvePluginConfigContractsById", () => {
     );
   });
 
+  it("keeps healthy config contract records after unreadable registry plugin metadata", () => {
+    const unreadableRecord = {
+      get id() {
+        throw new Error("config contract plugin id getter exploded");
+      },
+      origin: "config",
+      configContracts: {
+        compatibilityMigrationPaths: ["plugins.entries.broken.config"],
+      },
+    } as never;
+    mocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue(
+      createRegistry([
+        unreadableRecord,
+        createPluginRecord({
+          id: "healthy",
+          origin: "config",
+          configContracts: {
+            compatibilityMigrationPaths: ["plugins.entries.healthy.config"],
+          },
+        }),
+      ]),
+    );
+
+    expect(
+      resolvePluginConfigContractsById({
+        pluginIds: ["healthy"],
+        fallbackToBundledMetadata: false,
+      }),
+    ).toEqual(
+      new Map([
+        [
+          "healthy",
+          {
+            origin: "config",
+            configContracts: {
+              compatibilityMigrationPaths: ["plugins.entries.healthy.config"],
+            },
+          },
+        ],
+      ]),
+    );
+  });
+
+  it("keeps bundled config contract fallback after unreadable bundled plugin metadata", () => {
+    const unreadableRecord = {
+      get id() {
+        throw new Error("bundled config contract plugin id getter exploded");
+      },
+      origin: "bundled",
+      configContracts: {
+        secretInputs: {
+          paths: [{ path: "broken.secret", expected: "string" }],
+        },
+      },
+    } as never;
+    mocks.loadBundledManifestRegistry.mockReturnValue(
+      createRegistry([
+        unreadableRecord,
+        createPluginRecord({
+          id: "healthy-bundled",
+          origin: "bundled",
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "healthy.secret", expected: "string" }],
+            },
+          },
+        }),
+      ]),
+    );
+
+    expect(
+      resolvePluginConfigContractsById({
+        pluginIds: ["healthy-bundled"],
+      }),
+    ).toEqual(
+      new Map([
+        [
+          "healthy-bundled",
+          {
+            origin: "bundled",
+            configContracts: {
+              secretInputs: {
+                paths: [{ path: "healthy.secret", expected: "string" }],
+              },
+            },
+          },
+        ],
+      ]),
+    );
+  });
+
   it("can skip bundled metadata fallback for registry-scoped callers", () => {
     expect(
       resolvePluginConfigContractsById({

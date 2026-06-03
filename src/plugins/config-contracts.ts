@@ -1,7 +1,7 @@
 import { normalizeSortedUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
-import { loadPluginManifestRegistry } from "./manifest-registry.js";
+import { loadPluginManifestRegistry, type PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginManifestConfigContracts } from "./manifest.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
@@ -14,6 +14,30 @@ export type PluginConfigContractMetadata = {
   origin: PluginOrigin;
   configContracts: PluginManifestConfigContracts;
 };
+
+type PluginConfigContractRecordRead =
+  | {
+      ok: true;
+      id: string;
+      origin: PluginOrigin;
+      configContracts?: PluginManifestConfigContracts;
+    }
+  | { ok: false };
+
+function readPluginConfigContractRecord(
+  plugin: PluginManifestRegistry["plugins"][number],
+): PluginConfigContractRecordRead {
+  try {
+    return {
+      ok: true,
+      id: plugin.id,
+      origin: plugin.origin,
+      configContracts: plugin.configContracts,
+    };
+  } catch {
+    return { ok: false };
+  }
+}
 
 export function resolvePluginConfigContractsById(params: {
   config?: OpenClawConfig;
@@ -54,7 +78,11 @@ export function resolvePluginConfigContractsById(params: {
       diagnostics: discovery.diagnostics,
     });
     for (const plugin of registry.plugins) {
-      bundledContractFallbacks.set(plugin.id, plugin.configContracts);
+      const record = readPluginConfigContractRecord(plugin);
+      if (!record.ok) {
+        continue;
+      }
+      bundledContractFallbacks.set(record.id, record.configContracts);
     }
     if (!bundledContractFallbacks.has(pluginId)) {
       bundledContractFallbacks.set(pluginId, undefined);
@@ -70,16 +98,17 @@ export function resolvePluginConfigContractsById(params: {
     includeDisabled: true,
   });
   for (const plugin of registry.plugins) {
-    if (!pluginIds.includes(plugin.id)) {
+    const record = readPluginConfigContractRecord(plugin);
+    if (!record.ok || !pluginIds.includes(record.id)) {
       continue;
     }
-    resolvedPluginOrigins.set(plugin.id, plugin.origin);
-    if (!plugin.configContracts) {
+    resolvedPluginOrigins.set(record.id, record.origin);
+    if (!record.configContracts) {
       continue;
     }
-    matches.set(plugin.id, {
-      origin: plugin.origin,
-      configContracts: plugin.configContracts,
+    matches.set(record.id, {
+      origin: record.origin,
+      configContracts: record.configContracts,
     });
   }
 
