@@ -14,14 +14,17 @@ type ProviderEnableConfigCarrier = {
 };
 
 export type PluginEnableResult<TConfig extends ProviderEnableConfigCarrier> = {
+  /** Config object to persist after the enable attempt. Unchanged when policy blocks the plugin. */
   config: TConfig;
+  /** Whether the plugin was enabled and allowlisted. */
   enabled: boolean;
+  /** Human-readable policy reason when the plugin cannot be enabled. */
   reason?: string;
 };
 
 /**
- * Provider contract surfaces only ever enable provider plugins, so they do not
- * need the built-in channel normalization path from plugins/enable.ts.
+ * Enables provider plugins for provider contract setup without applying channel
+ * normalization from the core plugin enable path.
  */
 export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier>(
   cfg: TConfig,
