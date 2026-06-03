@@ -2328,6 +2328,65 @@ describe("openai transport stream", () => {
     expect(output.content).toEqual([]);
   });
 
+  it("discards oversized DeepSeek DSML recovery buffer as text", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    // Build an oversized DSML body that exceeds 256KB
+    const hugeBody =
+      '<｜DSML｜invoke name="session_status"><｜DSML｜parameter name="key" string="true">' +
+      "x".repeat(300_000) +
+      "</｜DSML｜parameter></｜DSML｜invoke>";
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-oversized",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<｜DSML｜tool_calls>" + hugeBody,
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-dsml-oversized",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "</｜DSML｜tool_calls>",
+              },
+              logprobs: null,
+              finish_reason: "stop",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      {
+        push(event: unknown) {
+          events.push(event as CapturedStreamEvent);
+        },
+      },
+    );
+
+    // The oversized DSML block should be discarded; no tool calls recovered
+    expect(output.content.filter((b) => b.type === "toolCall")).toEqual([]);
+  });
+
   it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
     const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
