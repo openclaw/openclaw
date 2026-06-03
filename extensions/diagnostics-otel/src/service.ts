@@ -2938,10 +2938,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           });
         setSpanAttrs(span, spanAttrs);
         addUpstreamRequestIdSpanEvent(span, evt.upstreamRequestIdHash);
-        // Langfuse derives a TRACE's input/output from its ROOT span's langfuse.trace.input/output
-        // attributes — but the openclaw.run root span carries no I/O, so the Traces list and trace
-        // header read blank even though the conversation is on this nested model-call span. Mirror
-        // the model-call I/O onto the tracked root run span: first call's input, latest call's output.
+        // Mirror this model call's I/O onto the trace's ROOT openclaw.run span so the conversation
+        // shows at the trace level — first call's input (kept), latest call's output. We set BOTH:
+        //   - langfuse.trace.input/output: drives the Langfuse Traces list + the synthetic trace node.
+        //   - input.value/output.value: the OpenInference observation attrs, so the openclaw.run node
+        //     itself renders the conversation (Langfuse's IOPreview reads trace.input only for the
+        //     trace node; the root observation would otherwise be blank until you drill into a child).
         const rootRunSpan = rootRunSpanByOtelTrace.get(span.spanContext().traceId);
         if (rootRunSpan && rootRunSpan !== span) {
           const traceId = span.spanContext().traceId;
@@ -2949,10 +2951,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           const outputValue = spanAttrs["output.value"];
           if (typeof inputValue === "string" && !traceIoInputStamped.has(traceId)) {
             rootRunSpan.setAttribute("langfuse.trace.input", inputValue);
+            rootRunSpan.setAttribute("input.value", inputValue);
             traceIoInputStamped.add(traceId);
           }
           if (typeof outputValue === "string") {
             rootRunSpan.setAttribute("langfuse.trace.output", outputValue);
+            rootRunSpan.setAttribute("output.value", outputValue);
           }
         }
         span.end(evt.ts);
