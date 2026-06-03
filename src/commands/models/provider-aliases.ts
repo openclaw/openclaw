@@ -12,12 +12,9 @@ type ProviderAliasSource = {
 };
 
 function listManifestPlugins(params: ProviderAliasSource): readonly PluginManifestRecord[] {
-  return (
-    params.metadataSnapshot?.manifestRegistry.plugins ??
-    loadPluginManifestRegistry({
-      config: params.cfg,
-    }).plugins
-  );
+  return params.metadataSnapshot?.manifestRegistry.plugins ?? loadPluginManifestRegistry({
+    config: params.cfg,
+  }).plugins;
 }
 
 function buildProviderAliasMap(params: ProviderAliasSource): ReadonlyMap<string, string> {

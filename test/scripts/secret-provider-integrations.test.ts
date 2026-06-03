@@ -199,44 +199,47 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")("kills timed-out command process groups", async () => {
-    const root = makeTempDir();
-    const markerPath = path.join(root, "command-descendant-marker.txt");
-    const scriptPath = path.join(root, "spawn-descendant.mjs");
-    const descendantScript = [
-      "import fs from 'node:fs';",
-      `fs.appendFileSync(${JSON.stringify(markerPath)}, "x");`,
-      "process.on('SIGTERM', () => {});",
-      `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
-    ].join("\n");
-    fs.writeFileSync(
-      scriptPath,
-      [
-        "import childProcess from 'node:child_process';",
-        "import { setTimeout as delay } from 'node:timers/promises';",
-        `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-          descendantScript,
-        )}], { stdio: "ignore" });`,
-        "process.on('SIGTERM', () => process.exit(0));",
-        "await delay(60_000);",
-        "",
-      ].join("\n"),
-    );
-    const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=timeout-${Date.now()}`);
+  it.runIf(process.platform !== "win32")(
+    "kills timed-out command process groups",
+    async () => {
+      const root = makeTempDir();
+      const markerPath = path.join(root, "command-descendant-marker.txt");
+      const scriptPath = path.join(root, "spawn-descendant.mjs");
+      const descendantScript = [
+        "import fs from 'node:fs';",
+        `fs.appendFileSync(${JSON.stringify(markerPath)}, "x");`,
+        "process.on('SIGTERM', () => {});",
+        `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
+      ].join("\n");
+      fs.writeFileSync(
+        scriptPath,
+        [
+          "import childProcess from 'node:child_process';",
+          "import { setTimeout as delay } from 'node:timers/promises';",
+          `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+            descendantScript,
+          )}], { stdio: "ignore" });`,
+          "process.on('SIGTERM', () => process.exit(0));",
+          "await delay(60_000);",
+          "",
+        ].join("\n"),
+      );
+      const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=timeout-${Date.now()}`);
 
-    await expect(
-      proof.runCommand(process.execPath, [scriptPath], {
-        timeoutMs: 150,
-      }),
-    ).rejects.toThrow(/command timed out/u);
+      await expect(
+        proof.runCommand(process.execPath, [scriptPath], {
+          timeoutMs: 150,
+        }),
+      ).rejects.toThrow(/command timed out/u);
 
-    const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-    await new Promise((resolve) => {
-      setTimeout(resolve, 250);
-    });
-    const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-    expect(sizeAfterWait).toBe(sizeAfterReturn);
-  });
+      const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      await new Promise((resolve) => {
+        setTimeout(resolve, 250);
+      });
+      const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+      expect(sizeAfterWait).toBe(sizeAfterReturn);
+    },
+  );
 
   it("detects startup secret leaks after the retained output cap", () => {
     const root = makeTempDir();

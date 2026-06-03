@@ -768,7 +768,7 @@ setInterval(() => {}, 1000);
       [
         'const fs = require("node:fs");',
         'const path = require("node:path");',
-        "const stateDir = process.env.OPENCLAW_STATE_DIR ?? process.cwd();",
+        'const stateDir = process.env.OPENCLAW_STATE_DIR ?? process.cwd();',
         'const marker = path.join(stateDir, "workboard-enabled");',
         "const args = process.argv.slice(2);",
         'if (args[0] === "plugins") {',
@@ -815,7 +815,8 @@ setInterval(() => {}, 1000);
     );
     expect(summary.failures).toEqual([]);
     const slashHelpRow = summary.rows.find(
-      (row: { label?: string; logPath?: string }) => row.label === "workboard-slash-help:workboard",
+      (row: { label?: string; logPath?: string }) =>
+        row.label === "workboard-slash-help:workboard",
     );
     expect(summary.rows).toEqual(
       expect.arrayContaining([

@@ -3,8 +3,8 @@ import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.j
 import { AuthStorage, ModelRegistry } from "../agents/sessions/index.js";
 import type { AssistantMessage, Model, Usage } from "../llm/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-import type { SpeechModelOverridePolicy } from "./provider-types.js";
 import { summarizeText } from "./tts-core.js";
+import type { SpeechModelOverridePolicy } from "./provider-types.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 
 const modelOverridePolicy: SpeechModelOverridePolicy = {

@@ -450,6 +450,67 @@ describe("exec shell snapshots", () => {
     await expect(runAlias()).resolves.toBe("new");
   });
 
+  it("refreshes fresh cached snapshots that no longer parse", async () => {
+    const bash = resolveBashForTest();
+    if (!bash) {
+      return;
+    }
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-corrupt-home-"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-corrupt-state-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-corrupt-cwd-"));
+    tempDirs.push(home, stateDir, cwd);
+    setSnapshotStateForTest(stateDir, { home });
+    fs.writeFileSync(path.join(home, ".bashrc"), "alias oc_clean_alias='printf ok'\n");
+
+    const env = {
+      ...process.env,
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const shellArgs = getPosixShellArgs(bash);
+    const wrap = async (): Promise<string> =>
+      await maybeWrapCommandWithShellSnapshot({
+        command: "oc_clean_alias",
+        shell: bash,
+        shellArgs,
+        cwd,
+        env,
+      });
+
+    const firstWrapped = await wrap();
+    expect(firstWrapped).not.toBe("oc_clean_alias");
+    const snapshotDir = resolveShellSnapshotDir(env);
+    const snapshotFiles = fs.readdirSync(snapshotDir).filter((entry) => entry.endsWith(".sh"));
+    expect(snapshotFiles).toHaveLength(1);
+    const snapshotPath = path.join(snapshotDir, snapshotFiles[0]);
+    fs.writeFileSync(
+      snapshotPath,
+      [
+        "# OpenClaw exec shell snapshot. Generated; do not edit.",
+        "unalias -a 2>/dev/null || true",
+        "oc_broken_fn() {",
+        "        --!(no-*)dir*",
+        "}",
+        "",
+      ].join("\n"),
+    );
+    resetShellSnapshotCacheForTests();
+
+    const wrapped = await wrap();
+    const result = spawnSync(bash, [...shellArgs, wrapped], {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("ok");
+    expect(result.stderr).toBe("");
+    expect(fs.readFileSync(snapshotPath, "utf8")).not.toContain("--!(no-*)dir*");
+  });
+
   it("refuses to persist aliases or functions with literal secret-looking values", async () => {
     const bash = resolveBashForTest();
     if (!bash) {
