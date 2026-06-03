@@ -768,6 +768,24 @@ describe("removeOwnReactionsDiscord", () => {
       Routes.channelMessageOwnReaction("chan1", "msg1", "party_blob%3A123"),
     );
   });
+
+  it("surfaces a failed deletion instead of reporting false success", async () => {
+    const { rest, getMock, deleteMock } = makeDiscordRest();
+    getMock.mockResolvedValue({
+      reactions: [
+        { emoji: { name: "✅", id: null } },
+        { emoji: { name: "party_blob", id: "123" } },
+      ],
+    });
+    const apiError = new Error("Discord API 500");
+    deleteMock.mockResolvedValueOnce(undefined);
+    deleteMock.mockRejectedValueOnce(apiError);
+    await expect(
+      removeOwnReactionsDiscord("chan1", "msg1", { rest, token: "t", cfg: DISCORD_TEST_CFG }),
+    ).rejects.toThrow("Discord API 500");
+    // Both deletions are still attempted; the rejection just propagates.
+    expect(deleteMock).toHaveBeenCalledTimes(2);
+  });
 });
 
 describe("fetchReactionsDiscord", () => {
