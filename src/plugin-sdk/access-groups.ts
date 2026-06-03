@@ -59,6 +59,7 @@ export type ResolvedAccessGroupAllowFromState = {
   hasMatch: boolean;
 };
 
+/** Resolve the concrete sender allowlist entries for static message-sender groups. */
 function resolveMessageSenderGroupEntries(params: {
   group: AccessGroupConfig;
   channel: ChannelId;
@@ -123,6 +124,8 @@ export async function resolveAccessGroupAllowFromState(params: {
       continue;
     }
 
+    // Static sender groups are fully decided above; resolver hooks cover future
+    // group types or integration-backed membership without rechecking static entries.
     if (!params.resolveMembership) {
       if (group.type !== "message.senders") {
         state.unsupported.push(name);
