@@ -1,11 +1,10 @@
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
-import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IMessageRpcClient } from "./client.js";
 
 // U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR
-const LINE_SEP = " ";
-const PARA_SEP = " ";
+// Written as escape sequences to avoid oxlint no-multi-str on literal line/paragraph breaks.
+const LINE_SEP = "\u2028";
+const PARA_SEP = "\u2029";
 
 // Replicates the LF-only framing logic from IMessageRpcClient.start()
 // so tests exercise the same path the production data handler uses.
@@ -26,29 +25,12 @@ function feedLines(client: IMessageRpcClient, data: string): void {
   }
 }
 
-function makeFakeChild(): {
-  child: ChildProcessWithoutNullStreams;
-  stdout: EventEmitter;
-  stderr: EventEmitter;
-  stdin: { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn>; on: EventEmitter["on"] };
-} {
-  const stdout = new EventEmitter();
-  const stderr = new EventEmitter();
-  const stdinEmitter = new EventEmitter();
-  const stdin = {
-    write: vi.fn(),
-    end: vi.fn(),
-    on: stdinEmitter.on.bind(stdinEmitter),
+function makeRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
   };
-  const child = {
-    stdout: stdout as unknown as NodeJS.ReadableStream,
-    stderr: stderr as unknown as NodeJS.WritableStream,
-    stdin: stdin as unknown as NodeJS.WritableStream,
-    on: vi.fn(),
-    kill: vi.fn(),
-    killed: false,
-  } as unknown as ChildProcessWithoutNullStreams;
-  return { child, stdout, stderr, stdin };
 }
 
 describe("IMessageRpcClient stdout framing", () => {
@@ -64,18 +46,14 @@ describe("IMessageRpcClient stdout framing", () => {
         "handleLine",
       );
 
-      feedLines(
-        client,
-        `{"jsonrpc":"2.0","id":1,"result":{"text":"line one${LINE_SEP}line two"}}\n`,
-      );
+      const textWithLineSep = "line one" + LINE_SEP + "line two";
+      const response = '{"jsonrpc":"2.0","id":1,"result":{"text":"' + textWithLineSep + '"}}\n';
+
+      feedLines(client, response);
 
       expect(handleLineSpy).toHaveBeenCalledTimes(1);
-      expect(handleLineSpy).toHaveBeenCalledWith(
-        `{"jsonrpc":"2.0","id":1,"result":{"text":"line one${LINE_SEP}line two"}}`,
-      );
-
       const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
-      expect(parsed.result.text).toBe(`line one${LINE_SEP}line two`);
+      expect(parsed.result.text).toBe(textWithLineSep);
     });
 
     it("does not split on U+2029 PARAGRAPH SEPARATOR", () => {
@@ -85,14 +63,14 @@ describe("IMessageRpcClient stdout framing", () => {
         "handleLine",
       );
 
-      feedLines(
-        client,
-        `{"jsonrpc":"2.0","id":2,"result":{"text":"para one${PARA_SEP}para two"}}\n`,
-      );
+      const textWithParaSep = "para one" + PARA_SEP + "para two";
+      const response = '{"jsonrpc":"2.0","id":2,"result":{"text":"' + textWithParaSep + '"}}\n';
+
+      feedLines(client, response);
 
       expect(handleLineSpy).toHaveBeenCalledTimes(1);
       const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
-      expect(parsed.result.text).toBe(`para one${PARA_SEP}para two`);
+      expect(parsed.result.text).toBe(textWithParaSep);
     });
 
     it("handles mixed U+2028 and U+2029 in a single response", () => {
@@ -102,14 +80,14 @@ describe("IMessageRpcClient stdout framing", () => {
         "handleLine",
       );
 
-      feedLines(
-        client,
-        `{"jsonrpc":"2.0","id":3,"result":{"text":"a${LINE_SEP}b${PARA_SEP}c${LINE_SEP}d"}}\n`,
-      );
+      const textMixed = "a" + LINE_SEP + "b" + PARA_SEP + "c" + LINE_SEP + "d";
+      const response = '{"jsonrpc":"2.0","id":3,"result":{"text":"' + textMixed + '"}}\n';
+
+      feedLines(client, response);
 
       expect(handleLineSpy).toHaveBeenCalledTimes(1);
       const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
-      expect(parsed.result.text).toBe(`a${LINE_SEP}b${PARA_SEP}c${LINE_SEP}d`);
+      expect(parsed.result.text).toBe(textMixed);
     });
   });
 
@@ -121,9 +99,9 @@ describe("IMessageRpcClient stdout framing", () => {
         "handleLine",
       );
 
-      const r1 = `{"jsonrpc":"2.0","id":1,"result":"a"}`;
-      const r2 = `{"jsonrpc":"2.0","id":2,"result":"b"}`;
-      feedLines(client, `${r1}\n${r2}\n`);
+      const r1 = '{"jsonrpc":"2.0","id":1,"result":"a"}';
+      const r2 = '{"jsonrpc":"2.0","id":2,"result":"b"}';
+      feedLines(client, r1 + "\n" + r2 + "\n");
 
       expect(handleLineSpy).toHaveBeenCalledTimes(2);
       expect(handleLineSpy).toHaveBeenNthCalledWith(1, r1);
@@ -138,7 +116,7 @@ describe("IMessageRpcClient stdout framing", () => {
         "handleLine",
       );
 
-      const fullLine = `{"jsonrpc":"2.0","id":1,"result":"done"}\n`;
+      const fullLine = '{"jsonrpc":"2.0","id":1,"result":"done"}\n';
       const chunk1 = fullLine.slice(0, 20);
       const chunk2 = fullLine.slice(20);
 
@@ -148,7 +126,7 @@ describe("IMessageRpcClient stdout framing", () => {
 
       feedLines(client, chunk2);
       expect(handleLineSpy).toHaveBeenCalledTimes(1);
-      expect(handleLineSpy).toHaveBeenCalledWith(`{"jsonrpc":"2.0","id":1,"result":"done"}`);
+      expect(handleLineSpy).toHaveBeenCalledWith('{"jsonrpc":"2.0","id":1,"result":"done"}');
     });
 
     it("skips empty lines", () => {
@@ -160,7 +138,7 @@ describe("IMessageRpcClient stdout framing", () => {
 
       feedLines(
         client,
-        `{"jsonrpc":"2.0","id":1,"result":"x"}\n\n\n{"jsonrpc":"2.0","id":2,"result":"y"}\n`,
+        '{"jsonrpc":"2.0","id":1,"result":"x"}\n\n\n{"jsonrpc":"2.0","id":2,"result":"y"}\n',
       );
 
       expect(handleLineSpy).toHaveBeenCalledTimes(2);
@@ -176,7 +154,7 @@ describe("IMessageRpcClient stdout framing", () => {
       pending.set("42", { resolve: resolveSpy, reject: rejectSpy, timer: null });
 
       (client as unknown as { handleLine: (line: string) => void }).handleLine(
-        `{"jsonrpc":"2.0","id":42,"result":{"ok":true}}`,
+        '{"jsonrpc":"2.0","id":42,"result":{"ok":true}}',
       );
 
       expect(resolveSpy).toHaveBeenCalledWith({ ok: true });
@@ -191,7 +169,7 @@ describe("IMessageRpcClient stdout framing", () => {
       pending.set("99", { resolve: resolveSpy, reject: rejectSpy, timer: null });
 
       (client as unknown as { handleLine: (line: string) => void }).handleLine(
-        `{"jsonrpc":"2.0","id":99,"error":{"code":-1,"message":"failed"}}`,
+        '{"jsonrpc":"2.0","id":99,"error":{"code":-1,"message":"failed"}}',
       );
 
       expect(rejectSpy).toHaveBeenCalledWith(expect.any(Error));
@@ -204,7 +182,7 @@ describe("IMessageRpcClient stdout framing", () => {
       const client = new IMessageRpcClient({ onNotification });
 
       (client as unknown as { handleLine: (line: string) => void }).handleLine(
-        `{"jsonrpc":"2.0","method":"watch.subscribe","params":{"chat_id":1}}`,
+        '{"jsonrpc":"2.0","method":"watch.subscribe","params":{"chat_id":1}}',
       );
 
       expect(onNotification).toHaveBeenCalledWith({
@@ -214,7 +192,7 @@ describe("IMessageRpcClient stdout framing", () => {
     });
 
     it("logs error for unparseable line", () => {
-      const runtime = { error: vi.fn() };
+      const runtime = makeRuntime();
       const client = new IMessageRpcClient({ runtime });
 
       (client as unknown as { handleLine: (line: string) => void }).handleLine("this is not json");
@@ -226,27 +204,18 @@ describe("IMessageRpcClient stdout framing", () => {
   });
 
   describe("realistic U+2028 scenario (issue #89830)", () => {
-    it("a messages.history response with U+2028 resolves the pending request", async () => {
-      const runtime = { error: vi.fn() };
+    it("a messages.history response with U+2028 resolves the pending request", () => {
+      const runtime = makeRuntime();
       const client = new IMessageRpcClient({ runtime });
       const pending = (client as unknown as { pending: Map<string, unknown> }).pending;
 
-      let resolved: unknown;
-      const promise = new Promise((r) => {
-        resolved = r;
-      });
-      pending.set("1", {
-        resolve: (v: unknown) => {
-          resolved = v;
-        },
-        reject: vi.fn(),
-        timer: null,
-      });
+      const resolveSpy = vi.fn();
+      pending.set("1", { resolve: resolveSpy, reject: vi.fn(), timer: null });
 
       const messages = [
         {
           id: 100,
-          text: `Promo line one:${LINE_SEP}✦ Promo line two:${LINE_SEP}Offer details`,
+          text: "Promo line one:" + LINE_SEP + "✦ Promo line two:" + LINE_SEP + "Offer details",
           is_from_me: false,
         },
         { id: 101, text: "Normal message", is_from_me: true },
@@ -257,9 +226,9 @@ describe("IMessageRpcClient stdout framing", () => {
         result: { messages },
       });
 
-      feedLines(client, `${response}\n`);
+      feedLines(client, response + "\n");
 
-      expect(resolved).toEqual({ messages });
+      expect(resolveSpy).toHaveBeenCalledWith({ messages });
       expect(runtime.error).not.toHaveBeenCalled();
     });
   });
