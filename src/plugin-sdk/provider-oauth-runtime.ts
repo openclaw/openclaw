@@ -202,6 +202,9 @@ function renderOAuthPage(options: {
 </html>`;
 }
 
+/**
+ * Renders the local OAuth callback success page after provider authentication completes.
+ */
 export function oauthSuccessHtml(
   /** Success message rendered in the local OAuth completion page. */
   message: string,
@@ -213,6 +216,9 @@ export function oauthSuccessHtml(
   });
 }
 
+/**
+ * Renders the local OAuth callback error page without exposing raw credential material.
+ */
 export function oauthErrorHtml(
   /** Error message rendered in the local OAuth completion page. */
   message: string,
@@ -323,6 +329,9 @@ export function resolveOAuthTokenExpiresAt(
       });
 }
 
+/**
+ * Creates the shared cancellation error used by abortable OAuth login flows.
+ */
 export function createOAuthLoginCancelledError(): Error {
   return new Error("Login cancelled");
 }
