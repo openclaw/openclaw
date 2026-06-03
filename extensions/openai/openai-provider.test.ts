@@ -165,7 +165,10 @@ describe("buildOpenAIProvider", () => {
     if (!result || !("provider" in result)) {
       throw new Error("expected OpenAI static provider catalog");
     }
-    expect(result.provider.models.map((model) => model.id)).toContain("gpt-5.5");
+    const gpt55 = result.provider.models.find((model) => model.id === "gpt-5.5");
+    expect(gpt55?.mediaInput).toEqual({
+      image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
+    });
   });
 
   it("filters the OpenAI API-key catalog against live model ids", async () => {

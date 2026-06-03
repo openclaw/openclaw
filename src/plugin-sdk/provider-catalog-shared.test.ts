@@ -247,6 +247,9 @@ describe("provider-catalog-shared manifest provider configs", () => {
           contextWindow: 128_000,
           contextTokens: 64_000,
           maxTokens: 8192,
+          mediaInput: {
+            image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
+          },
           cost: {
             input: 1,
             output: 2,
@@ -295,6 +298,9 @@ describe("provider-catalog-shared manifest provider configs", () => {
           contextWindow: 128_000,
           contextTokens: 64_000,
           maxTokens: 8192,
+          mediaInput: {
+            image: { maxSidePx: 2048, preferredSidePx: 1024, tokenMode: "detail" },
+          },
           compat: { supportsUsageInStreaming: true },
         },
       ],

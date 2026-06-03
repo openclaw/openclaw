@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import type {
   ModelCatalogCost,
+  ModelCatalogMediaInputConfig,
   ModelCatalogModel,
   ModelCatalogTieredCost,
 } from "@openclaw/model-catalog-core/model-catalog-types";
@@ -142,6 +143,17 @@ function buildManifestCatalogModelInput(model: ModelCatalogModel): ModelDefiniti
   return model.input?.filter((item): item is "text" | "image" => item !== "document") ?? ["text"];
 }
 
+function cloneManifestCatalogMediaInput(
+  mediaInput?: ModelCatalogMediaInputConfig,
+): ModelDefinitionConfig["mediaInput"] | undefined {
+  if (!mediaInput) {
+    return undefined;
+  }
+  return {
+    ...(mediaInput.image ? { image: { ...mediaInput.image } } : {}),
+  };
+}
+
 function buildManifestCatalogModel(
   providerId: string,
   model: ModelCatalogModel,
@@ -168,6 +180,7 @@ function buildManifestCatalogModel(
     maxTokens: model.maxTokens,
     ...(model.headers ? { headers: { ...model.headers } } : {}),
     ...(model.compat ? { compat: { ...model.compat } } : {}),
+    ...(model.mediaInput ? { mediaInput: cloneManifestCatalogMediaInput(model.mediaInput) } : {}),
   };
 }
 
