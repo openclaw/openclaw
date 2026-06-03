@@ -40,9 +40,10 @@ function createDiscordUnknownPayloadResult(target: string) {
 function resolveDiscordDeliveryOptions(
   ctx: DiscordOutboundPayloadContext,
   sendContext: DiscordPayloadSendContext,
+  options?: { replyTo?: string },
 ) {
   return {
-    replyTo: sendContext.resolveReplyTo(),
+    replyTo: options?.replyTo ?? sendContext.resolveReplyTo(),
     accountId: ctx.accountId ?? undefined,
     silent: ctx.silent ?? undefined,
     cfg: ctx.cfg,
@@ -52,9 +53,10 @@ function resolveDiscordDeliveryOptions(
 function resolveDiscordFormattedDeliveryOptions(
   ctx: DiscordOutboundPayloadContext,
   sendContext: DiscordPayloadSendContext,
+  options?: { replyTo?: string },
 ) {
   return {
-    ...resolveDiscordDeliveryOptions(ctx, sendContext),
+    ...resolveDiscordDeliveryOptions(ctx, sendContext, options),
     ...sendContext.formatting,
   };
 }
@@ -84,12 +86,15 @@ async function sendDiscordPayloadText(params: {
   ctx: DiscordOutboundPayloadContext;
   sendContext: DiscordPayloadSendContext;
   text: string;
+  replyTo?: string;
 }): Promise<DiscordPayloadSendResult> {
   return await params.sendContext.withRetry(
     async () =>
       await params.sendContext.send(params.sendContext.target, params.text, {
         verbose: false,
-        ...resolveDiscordFormattedDeliveryOptions(params.ctx, params.sendContext),
+        ...resolveDiscordFormattedDeliveryOptions(params.ctx, params.sendContext, {
+          replyTo: params.replyTo,
+        }),
       }),
   );
 }
@@ -114,13 +119,14 @@ async function sendDiscordVoiceOrTextFallback(params: {
   mediaUrl: string;
   fallbackText?: string;
 }): Promise<{ result: DiscordPayloadSendResult; deliveredVoice: boolean }> {
+  const replyTo = params.sendContext.resolveReplyTo();
   try {
     const result = await params.sendContext.withRetry(
       async () =>
         await params.sendContext.sendVoice(
           params.sendContext.target,
           params.mediaUrl,
-          resolveDiscordDeliveryOptions(params.ctx, params.sendContext),
+          resolveDiscordDeliveryOptions(params.ctx, params.sendContext, { replyTo }),
         ),
     );
     return { result, deliveredVoice: true };
@@ -132,6 +138,7 @@ async function sendDiscordVoiceOrTextFallback(params: {
       ctx: params.ctx,
       sendContext: params.sendContext,
       text: params.fallbackText,
+      replyTo,
     });
     return { result, deliveredVoice: false };
   }

@@ -399,6 +399,9 @@ describe("discordOutbound", () => {
     const messageCall = mockCall(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0);
     expect(messageCall[0]).toBe("channel:123456");
     expect(messageCall[1]).toBe(expectedText);
+    expect(mockObjectArg(hoisted.sendMessageDiscordMock, "sendMessageDiscord", 0, 2).replyTo).toBe(
+      "reply-1",
+    );
     expect(result).toEqual({
       channel: "discord",
       messageId: "msg-1",
