@@ -1,17 +1,17 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import * as piCodingAgent from "@earendil-works/pi-coding-agent";
+import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { ExtensionContext } from "openclaw/plugin-sdk/agent-sessions";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as agentSessions from "./sessions/index.js";
 
-vi.mock("@earendil-works/pi-coding-agent", async () => {
-  const actual = await vi.importActual<typeof piCodingAgent>("@earendil-works/pi-coding-agent");
+vi.mock("./sessions/index.js", async () => {
+  const actual = await vi.importActual<typeof agentSessions>("./sessions/index.js");
   return {
     ...actual,
     generateSummary: vi.fn(),
   };
 });
 
-const mockGenerateSummary = vi.mocked(piCodingAgent.generateSummary);
+const mockGenerateSummary = vi.mocked(agentSessions.generateSummary);
 type SummarizeInStagesInput = Parameters<typeof import("./compaction.js").summarizeInStages>[0];
 
 const { buildCompactionSummarizationInstructions, summarizeInStages } =
@@ -57,8 +57,16 @@ describe("compaction identifier-preservation instructions", () => {
     });
   }
 
+  function summaryCall(index: number): unknown[] | undefined {
+    return mockGenerateSummary.mock.calls[index];
+  }
+
+  function latestSummaryCall(): unknown[] | undefined {
+    return mockGenerateSummary.mock.calls[mockGenerateSummary.mock.calls.length - 1];
+  }
+
   function firstSummaryInstructions() {
-    return extractSummaryInstructions(mockGenerateSummary.mock.calls[0]);
+    return extractSummaryInstructions(summaryCall(0));
   }
 
   it("injects identifier-preservation guidance even without custom instructions", async () => {
@@ -112,7 +120,7 @@ describe("compaction identifier-preservation instructions", () => {
     });
 
     expect(mockGenerateSummary).toHaveBeenCalledTimes(3);
-    const mergedCall = mockGenerateSummary.mock.calls.at(-1);
+    const mergedCall = latestSummaryCall();
     const instructions = extractSummaryInstructions(mergedCall);
     expect(instructions).toContain("Merge these partial summaries into a single cohesive summary.");
     expect(instructions).toContain("Prioritize customer-visible regressions.");

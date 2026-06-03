@@ -50,9 +50,9 @@ OpenClaw persists sessions in two layers:
    - Append-only transcript with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
-   - Large pre-compaction debug checkpoints are skipped once the active
-     transcript exceeds the checkpoint size cap, avoiding a second giant
-     `.checkpoint.*.jsonl` copy.
+   - Compaction checkpoints are metadata over the compacted successor
+     transcript. New compactions do not write a second `.checkpoint.*.jsonl`
+     copy.
 
 Gateway history readers should avoid materializing the whole transcript unless
 the surface explicitly needs arbitrary historical access. First-page history,
@@ -78,7 +78,7 @@ OpenClaw resolves these via `src/config/sessions.ts`.
 
 Session persistence has automatic maintenance controls (`session.maintenance`) for `sessions.json`, transcript artifacts, and trajectory sidecars:
 
-- `mode`: `warn` (default) or `enforce`
+- `mode`: `enforce` (default) or `warn`
 - `pruneAfter`: stale-entry age cutoff (default `30d`)
 - `maxEntries`: cap entries in `sessions.json` (default `500`)
 - `resetArchiveRetention`: retention for `*.reset.<timestamp>` transcript archives (default: same as `pruneAfter`; `false` disables cleanup)
@@ -97,7 +97,11 @@ OpenClaw no longer creates automatic `sessions.json.bak.*` rotation backups duri
 Transcript mutations use a session write lock on the transcript file. Lock acquisition waits up to
 `session.writeLock.acquireTimeoutMs` before surfacing a busy-session error; the default is `60000`
 ms. Raise this only when legitimate prep, cleanup, compaction, or transcript mirror work contends
-longer on slow machines. Stale-lock detection and maximum hold warnings remain separate policies.
+longer on slow machines. `session.writeLock.staleMs` controls when an existing lock can be
+reclaimed as stale; the default is `1800000` ms. `session.writeLock.maxHoldMs` controls the
+in-process watchdog release threshold; the default is `300000` ms. Emergency env overrides are
+`OPENCLAW_SESSION_WRITE_LOCK_ACQUIRE_TIMEOUT_MS`, `OPENCLAW_SESSION_WRITE_LOCK_STALE_MS`, and
+`OPENCLAW_SESSION_WRITE_LOCK_MAX_HOLD_MS`.
 
 Enforcement order for disk budget cleanup (`mode: "enforce"`):
 
@@ -121,7 +125,7 @@ openclaw sessions cleanup --enforce
 Isolated cron runs also create session entries/transcripts, and they have dedicated retention controls:
 
 - `cron.sessionRetention` (default `24h`) prunes old isolated cron run sessions from the session store (`false` disables).
-- `cron.runLog.maxBytes` + `cron.runLog.keepLines` prune `~/.openclaw/cron/runs/<jobId>.jsonl` files (defaults: `2_000_000` bytes and `2000` lines).
+- `cron.runLog.keepLines` prunes retained SQLite run-history rows per cron job (default: `2000`). `cron.runLog.maxBytes` remains accepted for older file-backed run logs.
 
 When cron force-creates a new isolated run session, it sanitizes the previous
 `cron:<jobId>` session entry before writing the new row. It carries safe
@@ -159,7 +163,7 @@ Rules of thumb:
 - **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
-- **Parent fork policy** uses PI's active branch when creating a thread or subagent fork. If that branch is too large, OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. The sizing policy is automatic; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
+- **Parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large, OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. The sizing policy is automatic; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
 
 Implementation detail: the decision happens in `initSessionState()` in `src/auto-reply/reply/session.ts`.
 
@@ -200,7 +204,7 @@ The store is safe to edit, but the Gateway is the authority: it may rewrite or r
 
 ## Transcript structure (`*.jsonl`)
 
-Transcripts are managed by `@earendil-works/pi-coding-agent`'s `SessionManager`.
+Transcripts are managed by `openclaw/plugin-sdk/agent-sessions`'s `SessionManager`.
 
 The file is JSONL:
 
@@ -244,6 +248,10 @@ After compaction, future turns see:
 - The compaction summary
 - Messages after `firstKeptEntryId`
 
+AGENTS.md section reinjection after compaction is opt-in via
+`agents.defaults.compaction.postCompactionSections`; when unset or `[]`,
+OpenClaw does not append AGENTS.md excerpts on top of the compaction summary.
+
 Compaction is **persistent** (unlike session pruning). See [/concepts/session-pruning](/concepts/session-pruning).
 
 ## Compaction chunk boundaries and tool pairing
@@ -261,15 +269,24 @@ assistant tool calls paired with their matching `toolResult` entries.
 
 ---
 
-## When auto-compaction happens (Pi runtime)
+## When auto-compaction happens (OpenClaw runtime)
 
-In the embedded Pi agent, auto-compaction triggers in two cases:
+In the embedded OpenClaw agent, auto-compaction triggers in two cases:
 
 1. **Overflow recovery**: the model returns a context overflow error
    (`request_too_large`, `context length exceeded`, `input exceeds the maximum
 number of tokens`, `input token count exceeds the maximum number of input
 tokens`, `input is too long for the model`, `ollama error: context length
 exceeded`, and similar provider-shaped variants) → compact → retry.
+   When the provider reports the attempted token count, OpenClaw forwards that
+   observed count into overflow recovery compaction. If the provider confirms
+   overflow but does not expose a parseable count, OpenClaw passes a minimally
+   over-budget synthetic count to compaction engines and diagnostics.
+   If overflow recovery still fails, OpenClaw surfaces explicit guidance to the
+   user and preserves the current session mapping instead of silently rotating
+   the session key to a fresh session id. The next step is operator-controlled:
+   retry the message, run `/compact`, or run `/new` when a fresh session is
+   preferred.
 2. **Threshold maintenance**: after a successful turn, when:
 
 `contextTokens > contextWindow - reserveTokens`
@@ -279,7 +296,7 @@ Where:
 - `contextWindow` is the model's context window
 - `reserveTokens` is headroom reserved for prompts + the next model output
 
-These are Pi runtime semantics (OpenClaw consumes the events, but Pi decides when to compact).
+These are OpenClaw runtime semantics.
 
 OpenClaw can also trigger a preflight local compaction before opening the next
 run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
@@ -288,25 +305,25 @@ reopen cost, not raw archival: OpenClaw still runs normal semantic compaction,
 and it requires `truncateAfterCompaction` so the compacted summary can become a
 new successor transcript.
 
-For embedded Pi runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
+For embedded OpenClaw runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
 adds an opt-in tool-loop guard. After a tool result is appended and before the
 next model call, OpenClaw estimates the prompt pressure using the same preflight
 budget logic used at turn start. If the context no longer fits, the guard does
-not compact inside Pi's `transformContext` hook. It raises a structured
+not compact inside OpenClaw runtime's `transformContext` hook. It raises a structured
 mid-turn precheck signal, stops the current prompt submission, and lets the
 outer run loop use the existing recovery path: truncate oversized tool results
 when that is enough, or trigger the configured compaction mode and retry. The
 option is disabled by default and works with both `default` and `safeguard`
 compaction modes, including provider-backed safeguard compaction.
 This is independent of `maxActiveTranscriptBytes`: the byte-size guard runs
-before a turn opens, while mid-turn precheck runs later in the embedded Pi tool
+before a turn opens, while mid-turn precheck runs later in the embedded OpenClaw tool
 loop after new tool results have been appended.
 
 ---
 
 ## Compaction settings (`reserveTokens`, `keepRecentTokens`)
 
-Pi's compaction settings live in Pi settings:
+OpenClaw runtime's compaction settings live in agent settings:
 
 ```json5
 {
@@ -325,7 +342,7 @@ OpenClaw also enforces a safety floor for embedded runs:
 - Set `agents.defaults.compaction.reserveTokensFloor: 0` to disable the floor.
 - If it's already higher, OpenClaw leaves it alone.
 - Manual `/compact` honors an explicit `agents.defaults.compaction.keepRecentTokens`
-  and keeps Pi's recent-tail cut point. Without an explicit keep budget,
+  and keeps OpenClaw runtime's recent-tail cut point. Without an explicit keep budget,
   manual compaction remains a hard checkpoint and rebuilt context starts from
   the new summary.
 - Set `agents.defaults.compaction.midTurnPrecheck.enabled: true` to run the
@@ -340,13 +357,13 @@ OpenClaw also enforces a safety floor for embedded runs:
   disable.
 - When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
   OpenClaw rotates the active transcript to a compacted successor JSONL after
-  compaction. The old full transcript remains archived and linked from the
-  compaction checkpoint instead of being rewritten in place.
+  compaction. Branch/restore checkpoint actions use that compacted successor;
+  legacy pre-compaction checkpoint files remain readable while referenced.
 
 Why: leave enough headroom for multi-turn "housekeeping" (like memory writes) before compaction becomes unavoidable.
 
-Implementation: `ensurePiCompactionReserveTokens()` in `src/agents/pi-settings.ts`
-(called from `src/agents/pi-embedded-runner.ts`).
+Implementation: `ensureAgentCompactionReserveTokens()` in `src/agents/agent-settings.ts`
+(called from `src/agents/embedded-agent-runner.ts`).
 
 ---
 
@@ -365,7 +382,7 @@ Plugins can register a compaction provider via `registerCompactionProvider()` on
 - If the provider fails or returns an empty result, OpenClaw falls back to built-in LLM summarization automatically.
 - Abort/timeout signals are re-thrown (not swallowed) to respect caller cancellation.
 
-Source: `src/plugins/compaction-provider.ts`, `src/agents/pi-hooks/compaction-safeguard.ts`.
+Source: `src/plugins/compaction-provider.ts`, `src/agents/agent-hooks/compaction-safeguard.ts`.
 
 ---
 
@@ -410,7 +427,7 @@ erase critical context.
 OpenClaw uses the **pre-threshold flush** approach:
 
 1. Monitor session context usage.
-2. When it crosses a "soft threshold" (below Pi's compaction threshold), run a silent
+2. When it crosses a "soft threshold" (below OpenClaw runtime's compaction threshold), run a silent
    "write memory now" directive to the agent.
 3. Use the exact silent token `NO_REPLY` / `no_reply` so the user sees
    nothing.
@@ -431,11 +448,11 @@ Notes:
   active session fallback chain, so local-only housekeeping does not silently
   fall back to a paid conversation model.
 - The flush runs once per compaction cycle (tracked in `sessions.json`).
-- The flush runs only for embedded Pi sessions (CLI backends skip it).
+- The flush runs only for embedded OpenClaw sessions (CLI backends skip it).
 - The flush is skipped when the session workspace is read-only (`workspaceAccess: "ro"` or `"none"`).
 - See [Memory](/concepts/memory) for the workspace file layout and write patterns.
 
-Pi also exposes a `session_before_compact` hook in the extension API, but OpenClaw's
+OpenClaw also exposes a `session_before_compact` hook in the extension API, but OpenClaw's
 flush logic lives on the Gateway side today.
 
 ---

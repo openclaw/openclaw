@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { listDevicePairing } from "../../infra/device-pairing.js";
 import { listNodePairing } from "../../infra/node-pairing.js";
-import { ErrorCodes } from "../protocol/index.js";
 import { environmentsHandlers } from "./environments.js";
 
 vi.mock("../../infra/device-pairing.js", () => ({
@@ -40,7 +40,11 @@ async function callEnvironmentMethod(
     respond,
     context: mockContext(),
   } as never);
-  return respond.mock.calls[0];
+  const call = respond.mock.calls.at(0);
+  if (call === undefined) {
+    throw new Error("expected environments handler to respond");
+  }
+  return call;
 }
 
 beforeEach(() => {

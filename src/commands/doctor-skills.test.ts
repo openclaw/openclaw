@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
-import type { SkillStatusEntry, SkillStatusReport } from "../agents/skills-status.js";
-import type { GhConfigDiscoveryInput } from "../agents/skills/gh-config-discovery.js";
 import { createEmptyInstallChecks } from "../cli/requirements-test-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SkillStatusEntry, SkillStatusReport } from "../skills/discovery/status.js";
+import type { GhConfigDiscoveryInput } from "../skills/lifecycle/gh-config-discovery.js";
 import {
   collectUnavailableAgentSkills,
   describeGhConfigDirHintFromDiscovery,
@@ -103,9 +103,10 @@ describe("doctor skills", () => {
     };
 
     const lines = describeGhConfigDirHintFromDiscovery([githubSkill], discovery);
+    const output = lines.join("\n");
 
-    expect(lines.some((line) => line.includes("/root/.config/gh"))).toBe(true);
-    expect(lines.join("\n")).toContain("GH_CONFIG_DIR=/root/.config/gh");
+    expect(output).toContain("/root/.config/gh");
+    expect(output).toContain("GH_CONFIG_DIR=/root/.config/gh");
   });
 
   it("does not surface the GH_CONFIG_DIR hint when the github skill is missing the gh binary", () => {

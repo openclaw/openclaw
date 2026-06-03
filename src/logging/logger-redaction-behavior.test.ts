@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
 import {
   createDiagnosticTraceContext,
   resetDiagnosticTraceContextForTest,
@@ -8,7 +9,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { __test__ as loggerTest } from "./logger.js";
+import { testApi as loggerTest } from "./logger.js";
 import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
 
 const secret = "sk-testsecret1234567890abcd";
@@ -21,6 +22,10 @@ const originalTestFileLog = process.env.OPENCLAW_TEST_FILE_LOG;
 
 beforeAll(async () => {
   await logPathTracker.setup();
+});
+
+beforeEach(() => {
+  resetDiagnosticEventsForTest();
 });
 
 afterEach(() => {
@@ -39,6 +44,7 @@ afterEach(() => {
   } else {
     process.env.OPENCLAW_TEST_FILE_LOG = originalTestFileLog;
   }
+  resetDiagnosticEventsForTest();
   resetDiagnosticTraceContextForTest();
   resetLogger();
   setLoggerOverride(null);
@@ -199,6 +205,39 @@ describe("file log redaction", () => {
     expect(record.hostname).toBeTypeOf("string");
     expect(record.hostname).not.toBe("");
     expect(record.message).toBe("request completed");
+  });
+
+  it("retries hostname resolution after an empty value and caches the first real value", () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const hostnames = ["", "lr-macbook", "changed-host"];
+    const resolvedHostnames: string[] = [];
+    loggerTest.setHostnameResolverForTests(() => {
+      const hostname = hostnames.shift() ?? "changed-host";
+      resolvedHostnames.push(hostname);
+      return hostname;
+    });
+
+    getLogger().info({ route: "/api/health" }, "first request");
+    getLogger().info({ route: "/api/health" }, "second request");
+    getLogger().info({ route: "/api/health" }, "third request");
+
+    const records = fs
+      .readFileSync(logPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(records).toHaveLength(3);
+    expect(resolvedHostnames).toEqual(["", "lr-macbook"]);
+    expect(records[0]?.hostname).toBe("unknown");
+    expect(records[0]?.message).toBe("first request");
+    expect(records[1]?.hostname).toBe("lr-macbook");
+    expect(records[1]?.message).toBe("second request");
+    expect(records[2]?.hostname).toBe("lr-macbook");
+    expect(records[2]?.message).toBe("third request");
+    expect((records[1]?.["_meta"] as Record<string, unknown> | undefined)?.hostname).toBe(
+      "lr-macbook",
+    );
   });
 
   it("promotes agent, session, and channel context to top-level JSONL fields", () => {

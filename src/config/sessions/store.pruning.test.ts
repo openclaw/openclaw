@@ -2,6 +2,10 @@ import crypto from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import {
+  collectSessionMaintenancePreserveKeys,
+  registerSessionMaintenancePreserveKeysProvider,
+} from "./store-maintenance-preserve.js";
+import {
   isProtectedSessionMaintenanceEntry,
   resolveMaintenanceConfigFromInput,
   resolveSessionEntryMaintenanceHighWater,
@@ -39,7 +43,7 @@ describe("pruneStaleEntries", () => {
     const now = Date.now();
     const store = makeStore([
       ["old", makeEntry(now - 31 * DAY_MS)],
-      ["fresh", makeEntry(now - 1 * DAY_MS)],
+      ["fresh", makeEntry(now - DAY_MS)],
     ]);
 
     const pruned = pruneStaleEntries(store, 30 * DAY_MS);
@@ -79,7 +83,7 @@ describe("capEntryCount", () => {
       ["oldest", makeEntry(now - 4 * DAY_MS)],
       ["old", makeEntry(now - 3 * DAY_MS)],
       ["mid", makeEntry(now - 2 * DAY_MS)],
-      ["recent", makeEntry(now - 1 * DAY_MS)],
+      ["recent", makeEntry(now - DAY_MS)],
       ["newest", makeEntry(now)],
     ]);
 
@@ -101,7 +105,7 @@ describe("capEntryCount", () => {
       [threadKey, makeEntry(now - 5 * DAY_MS)],
       ["oldest", makeEntry(now - 4 * DAY_MS)],
       ["old", makeEntry(now - 3 * DAY_MS)],
-      ["recent", makeEntry(now - 1 * DAY_MS)],
+      ["recent", makeEntry(now - DAY_MS)],
       ["newest", makeEntry(now)],
     ]);
 
@@ -114,6 +118,82 @@ describe("capEntryCount", () => {
     expect(store).toHaveProperty("recent");
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
+  });
+
+  it("preserves runtime-provided pending subagent sessions when capping", () => {
+    const now = Date.now();
+    const childKey = "agent:main:subagent:child";
+    const store = makeStore([
+      [childKey, { ...makeEntry(now - 10 * DAY_MS), spawnedBy: "agent:main:slack:direct:U1" }],
+      ["recent-1", makeEntry(now)],
+      ["recent-2", makeEntry(now - 1)],
+      ["old", makeEntry(now - 2)],
+    ]);
+    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [childKey]);
+
+    try {
+      const evicted = capEntryCount(store, 2, {
+        preserveKeys: collectSessionMaintenancePreserveKeys(),
+      });
+
+      expect(evicted).toBe(2);
+      expect(Object.keys(store)).toHaveLength(2);
+      expect(store).toHaveProperty(childKey);
+      expect(store).toHaveProperty("recent-1");
+      expect(store["recent-2"]).toBeUndefined();
+      expect(store.old).toBeUndefined();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("normalizes runtime-provided preserve keys to match lowercased store keys", () => {
+    const now = Date.now();
+    const childKey = "agent:main:subagent:child";
+    const store = makeStore([
+      [childKey, { ...makeEntry(now - 10 * DAY_MS), spawnedBy: "agent:main:slack:direct:U1" }],
+      ["recent-1", makeEntry(now)],
+      ["old", makeEntry(now - 1)],
+    ]);
+    // Provider returns the key in mixed case + with surrounding whitespace;
+    // normalization must match the lowercased store key during maintenance.
+    const unregister = registerSessionMaintenancePreserveKeysProvider(() => [
+      "  Agent:Main:Subagent:CHILD  ",
+    ]);
+
+    try {
+      const evicted = capEntryCount(store, 2, {
+        preserveKeys: collectSessionMaintenancePreserveKeys(),
+      });
+
+      expect(evicted).toBe(1);
+      expect(Object.keys(store)).toHaveLength(2);
+      expect(store).toHaveProperty(childKey);
+      expect(store).toHaveProperty("recent-1");
+      expect(store.old).toBeUndefined();
+    } finally {
+      unregister();
+    }
+  });
+
+  it("can temporarily exceed the cap when every candidate is runtime-protected", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["agent:main:subagent:child-a", makeEntry(now - 2)],
+      ["agent:main:subagent:child-b", makeEntry(now - 1)],
+    ]);
+    const unregister = registerSessionMaintenancePreserveKeysProvider(() => Object.keys(store));
+
+    try {
+      const evicted = capEntryCount(store, 1, {
+        preserveKeys: collectSessionMaintenancePreserveKeys(),
+      });
+
+      expect(evicted).toBe(0);
+      expect(Object.keys(store)).toHaveLength(2);
+    } finally {
+      unregister();
+    }
   });
 });
 

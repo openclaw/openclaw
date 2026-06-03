@@ -1,7 +1,7 @@
 import type { PromptRequest } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import {
   createChatEvent,
@@ -22,11 +22,11 @@ function requireValue<T>(value: T | undefined, label: string): T {
 function requireFirstRequestIdempotencyKey(requestMock: {
   mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> };
 }): string {
-  const firstCall = requestMock.mock.calls.at(0);
+  const firstCall = requestMock.mock.calls[0];
   if (!firstCall) {
     throw new Error("expected request mock call");
   }
-  const params = firstCall.at(1);
+  const params = firstCall[1];
   if (!params || typeof params !== "object") {
     throw new Error("expected request params");
   }
@@ -473,7 +473,6 @@ describe("acp translator stop reason mapping", () => {
   it("finishes terminal prompts while rejecting stale pre-ack prompts", async () => {
     vi.useFakeTimers();
     try {
-      let acceptedRunId: string | undefined;
       let acceptedWaitCount = 0;
       const requestMock = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "chat.send") {
@@ -520,7 +519,7 @@ describe("acp translator stop reason mapping", () => {
       void preAckPrompt.catch(() => {});
 
       await Promise.resolve();
-      acceptedRunId = requestMock.mock.calls.find((call) => {
+      const acceptedRunId: string | undefined = requestMock.mock.calls.find((call) => {
         const [method, requestParams] = call;
         return method === "chat.send" && requestParams?.sessionKey === "agent:main:first";
       })?.[1]?.idempotencyKey as string | undefined;

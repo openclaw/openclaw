@@ -1,11 +1,11 @@
 // Lightweight ACP runtime backend helpers for startup-loaded plugins.
 
+import { hasExplicitCommandContextText } from "../auto-reply/reply/context-text.js";
 import type {
   PluginHookReplyDispatchContext,
   PluginHookReplyDispatchEvent,
   PluginHookReplyDispatchResult,
 } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
 export { AcpRuntimeError, isAcpRuntimeError } from "../acp/runtime/errors.js";
 export type { AcpRuntimeErrorCode } from "../acp/runtime/errors.js";
@@ -23,10 +23,13 @@ export type {
   AcpRuntimeEvent,
   AcpRuntimeHandle,
   AcpRuntimeStatus,
+  AcpRuntimeTurn,
   AcpRuntimeTurnAttachment,
   AcpRuntimeTurnInput,
+  AcpRuntimeTurnResult,
+  AcpRuntimeTurnResultError,
   AcpSessionUpdateTag,
-} from "../acp/runtime/types.js";
+} from "@openclaw/acp-core/runtime/types";
 
 let dispatchAcpRuntimePromise: Promise<
   typeof import("../auto-reply/reply/dispatch-acp.runtime.js")
@@ -35,20 +38,6 @@ let dispatchAcpRuntimePromise: Promise<
 function loadDispatchAcpRuntime() {
   dispatchAcpRuntimePromise ??= import("../auto-reply/reply/dispatch-acp.runtime.js");
   return dispatchAcpRuntimePromise;
-}
-
-function hasExplicitCommandCandidate(ctx: PluginHookReplyDispatchEvent["ctx"]): boolean {
-  const commandBody = normalizeOptionalString(ctx.CommandBody);
-  if (commandBody) {
-    return true;
-  }
-
-  const normalized = normalizeOptionalString(ctx.BodyForCommands);
-  if (!normalized) {
-    return false;
-  }
-
-  return normalized.startsWith("!") || normalized.startsWith("/");
 }
 
 export async function tryDispatchAcpReplyHook(
@@ -61,7 +50,7 @@ export async function tryDispatchAcpReplyHook(
   if (
     event.sendPolicy === "deny" &&
     !event.suppressUserDelivery &&
-    !hasExplicitCommandCandidate(event.ctx) &&
+    !hasExplicitCommandContextText(event.ctx) &&
     !event.isTailDispatch
   ) {
     return;
@@ -95,7 +84,10 @@ export async function tryDispatchAcpReplyHook(
     shouldRouteToOriginating: event.shouldRouteToOriginating,
     originatingChannel: event.originatingChannel,
     originatingTo: event.originatingTo,
+    originatingAccountId: event.originatingAccountId,
+    originatingThreadId: event.originatingThreadId,
     shouldSendToolSummaries: event.shouldSendToolSummaries,
+    shouldSendToolSummariesNow: () => event.shouldSendToolSummaries,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
     recordProcessed: ctx.recordProcessed,

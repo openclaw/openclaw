@@ -14,6 +14,16 @@ function expectButtonByText(container: Element, text: string): HTMLButtonElement
   return button;
 }
 
+function expectRowByLabel(container: Element, text: string): HTMLElement {
+  const row = Array.from(container.querySelectorAll<HTMLElement>(".qs-row")).find(
+    (candidate) => candidate.querySelector(".qs-row__label")?.textContent?.trim() === text,
+  );
+  if (!(row instanceof HTMLElement)) {
+    throw new Error(`Expected quick settings row "${text}"`);
+  }
+  return row;
+}
+
 function expectFileInput(input: Element | null | undefined): HTMLInputElement {
   if (!(input instanceof HTMLInputElement)) {
     throw new Error("Expected file input");
@@ -54,10 +64,12 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     hasCustomTheme: false,
     customThemeLabel: null,
     borderRadius: 50,
+    textScale: 100,
     setTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
     setThemeMode: vi.fn(),
     setBorderRadius: vi.fn(),
+    setTextScale: vi.fn(),
     userAvatar: null,
     onUserAvatarChange: vi.fn(),
     configObject: {},
@@ -95,6 +107,14 @@ function collectQuickSettingsCardKinds(container: Element): string[] {
   return kinds;
 }
 
+function expectAssistantAvatarSource(container: Element): { label: string; source: string } {
+  const source = container.querySelector(".qs-identity-card--assistant .qs-identity-card__source");
+  return {
+    label: source?.querySelector("span")?.textContent?.trim() ?? "",
+    source: source?.querySelector("code")?.textContent?.trim() ?? "",
+  };
+}
+
 describe("renderQuickSettings", () => {
   it("uses direct dashboard cards for the compact settings layout", () => {
     const container = document.createElement("div");
@@ -111,6 +131,21 @@ describe("renderQuickSettings", () => {
     ]);
     expect(container.querySelectorAll(".qs-side-stack .qs-card")).toHaveLength(2);
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
+  });
+
+  it("shows the current bootstrap default when config omits the explicit limit", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ configObject: {} })), container);
+
+    const stat = Array.from(container.querySelectorAll<HTMLElement>(".qs-profile-stat")).find(
+      (candidate) =>
+        candidate.querySelector(".qs-profile-stat__label")?.textContent?.trim() ===
+        "Bootstrap Per File",
+    );
+    expect(stat?.querySelector(".qs-profile-stat__value")?.textContent?.trim()).toBe(
+      "20,000 chars",
+    );
   });
 
   it("lets operators change browser and tool profile from Security quick settings", () => {
@@ -135,9 +170,9 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    const browserInput = Array.from(container.querySelectorAll("input")).find((input) =>
-      input.closest(".qs-row")?.textContent?.includes("Browser enabled"),
-    );
+    const browserRow = expectRowByLabel(container, "Browser enabled");
+    expect(browserRow.querySelector(".qs-toggle__hint")?.textContent).toBe("Disabled");
+    const browserInput = browserRow.querySelector("input");
     expect(browserInput).toBeInstanceOf(HTMLInputElement);
     expect((browserInput as HTMLInputElement).checked).toBe(false);
 
@@ -147,9 +182,27 @@ describe("renderQuickSettings", () => {
 
     expectButtonByText(container, "full").click();
     expect(onToolProfileChange).toHaveBeenCalledWith("full");
-    expect(expectButtonByText(container, "messaging").classList).toContain(
+    expect([...expectButtonByText(container, "messaging").classList]).toEqual([
+      "qs-segmented__btn",
+      "qs-segmented__btn--compact",
       "qs-segmented__btn--active",
+    ]);
+  });
+
+  it("lets operators change text size from Appearance quick settings", () => {
+    const setTextScale = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
+
+    const textSizeRow = expectRowByLabel(container, "Text size");
+    const active = Array.from(textSizeRow.querySelectorAll("button")).find((button) =>
+      button.classList.contains("qs-segmented__btn--active"),
     );
+    expect(active?.textContent?.trim()).toBe("XL");
+
+    expectButtonByText(textSizeRow, "XXL").click();
+    expect(setTextScale).toHaveBeenCalledWith(140);
   });
 
   it("keeps the local user name fixed and shows the assistant identity", () => {
@@ -169,8 +222,7 @@ describe("renderQuickSettings", () => {
     const titles = Array.from(container.querySelectorAll(".qs-identity-card__title")).map((node) =>
       node.textContent?.trim(),
     );
-    expect(titles).toContain("You");
-    expect(titles).toContain("Nova");
+    expect(titles).toEqual(["You", "Nova"]);
     expect(container.querySelector('input[placeholder="You"]')).toBeNull();
     expect(
       Array.from(container.querySelectorAll(".qs-row__label")).some(
@@ -219,11 +271,12 @@ describe("renderQuickSettings", () => {
     );
 
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "apple-touch-icon.png",
+      "/apple-touch-icon.png",
     );
-    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
-      "assets/avatars/nova-portrait.png",
-    );
+    expect(expectAssistantAvatarSource(container)).toEqual({
+      label: "IDENTITY.md",
+      source: "assets/avatars/nova-portrait.png",
+    });
     expect(container.querySelector(".qs-identity-card__issue")?.textContent?.trim()).toBe(
       "File not found",
     );
@@ -315,9 +368,10 @@ describe("renderQuickSettings", () => {
       container,
     );
 
-    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
-      "UI override",
-    );
+    expect(expectAssistantAvatarSource(container)).toEqual({
+      label: "UI override",
+      source: "data:image/png;base64,...",
+    });
     expectButtonByText(container, "Clear override").dispatchEvent(new Event("click"));
 
     expect(onAssistantAvatarClearOverride).toHaveBeenCalledTimes(1);
@@ -343,9 +397,10 @@ describe("renderQuickSettings", () => {
     );
 
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(dataUrl);
-    expect(container.querySelector(".qs-identity-card__source")?.textContent).toContain(
-      "UI override",
-    );
+    expect(expectAssistantAvatarSource(container)).toEqual({
+      label: "UI override",
+      source: "data:image/png;base64,...",
+    });
     expect(container.querySelector(".qs-identity-card__issue")).toBeNull();
     expect(
       Array.from(container.querySelectorAll("label.btn")).some(

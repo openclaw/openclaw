@@ -4,6 +4,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -15,6 +16,7 @@ import {
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
+  isMcpHttpBodyTooLargeError,
   readMcpHttpBody,
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
@@ -47,10 +49,6 @@ function logMcpLoopbackTraffic(step: string, details: Record<string, unknown>): 
     return;
   }
   console.error(`[mcp-loopback] ${step} ${JSON.stringify(details)}`);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function createRequestAbortSignal(req: IncomingMessage, res: ServerResponse) {
@@ -109,7 +107,13 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           cfg,
           sessionKey: requestContext.sessionKey,
           messageProvider: requestContext.messageProvider,
+          currentChannelId: requestContext.currentChannelId,
+          currentThreadTs: requestContext.currentThreadTs,
+          currentMessageId: requestContext.currentMessageId,
+          currentInboundAudio: requestContext.currentInboundAudio,
           accountId: requestContext.accountId,
+          inboundEventKind: requestContext.inboundEventKind,
+          sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           senderIsOwner: requestContext.senderIsOwner,
         });
 
@@ -118,7 +122,8 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           batchSize: messages.length,
           methods: messages.map((message) => message.method),
           sessionKey: requestContext.sessionKey,
-          senderIsOwner: requestContext.senderIsOwner,
+          inboundEventKind: requestContext.inboundEventKind,
+          senderIsOwner: requestContext.senderIsOwner === true,
           toolCount: scopedTools.toolSchema.length,
           cronVisible: scopedTools.toolSchema.some((tool) => tool.name === "cron"),
         });
@@ -168,8 +173,15 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           message: formatErrorMessage(error),
         });
         if (!res.headersSent) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
+          if (isMcpHttpBodyTooLargeError(error)) {
+            res.writeHead(413, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "payload_too_large" }), () => {
+              req.destroy();
+            });
+          } else {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
+          }
         }
       } finally {
         requestAbort.cleanup();

@@ -39,6 +39,7 @@ function sessionsTableHtml() {
     "Fast",
     "Verbose",
     "Reasoning",
+    "Actions",
   ];
   return `
     <section class="card">
@@ -95,9 +96,10 @@ function sessionsTableHtml() {
                 <td><select><option>on</option></select></td>
                 <td><select><option>full</option></select></td>
                 <td><select><option>stream</option></select></td>
+                <td><button class="icon-btn" title="Add to Workboard"></button></td>
               </tr>
               <tr class="session-checkpoint-details-row">
-                <td colspan="13">
+                <td colspan="14">
                   <div class="session-details-panel">
                     <div class="session-details-panel__hero">
                       <div>
@@ -210,7 +212,7 @@ describeBrowserLayout("sessions responsive browser layout", () => {
     });
 
     expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
-    expect(metrics.compactionText).toContain("1 Checkpoint");
+    expect(metrics.compactionText).toBe("1 Checkpoint");
     expect(metrics.statusText).toBe("Live");
     expect(metrics.runtimeText).toBe("claude-cli (fallback none)");
     expect(metrics.keyWhiteSpace).toBe("nowrap");

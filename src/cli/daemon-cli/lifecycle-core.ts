@@ -3,6 +3,7 @@ import { readBestEffortConfig, readConfigFileSnapshot } from "../../config/confi
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveIsNixMode } from "../../config/paths.js";
+import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../../config/recovery-policy.js";
 import { checkTokenDrift } from "../../daemon/service-audit.js";
 import type { GatewayServiceRestartResult } from "../../daemon/service-types.js";
 import type { GatewayServiceStartRepairIssue, GatewayServiceState } from "../../daemon/service.js";
@@ -19,6 +20,10 @@ import {
 import { isWSL } from "../../infra/wsl.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
+import {
+  formatInvalidConfigRecoveryHint,
+  formatPluginPackagingRuntimeOutputRecoveryHint,
+} from "../config-recovery-hints.js";
 import { resolveGatewayTokenForDriftCheck } from "./gateway-token-drift.js";
 import {
   buildDaemonServiceSnapshot,
@@ -138,6 +143,10 @@ type ConfigActionPreflightFailure = {
   hints?: string[];
 };
 
+function formatPluginPackagingRuntimeOutputRecoveryHints(): string[] {
+  return formatPluginPackagingRuntimeOutputRecoveryHint().split("\n");
+}
+
 async function getConfigActionPreflightFailure(
   action: string,
 ): Promise<ConfigActionPreflightFailure | null> {
@@ -145,11 +154,15 @@ async function getConfigActionPreflightFailure(
   try {
     snapshot = await readConfigFileSnapshot();
     if (snapshot.exists && !snapshot.valid) {
+      const message =
+        snapshot.issues.length > 0
+          ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
+          : "Unknown validation issue.";
       return {
-        message:
-          snapshot.issues.length > 0
-            ? formatConfigIssueLines(snapshot.issues, "", { normalizeRoot: true }).join("\n")
-            : "Unknown validation issue.",
+        message,
+        ...(isPluginPackagingRuntimeOutputInvalidConfigSnapshot(snapshot)
+          ? { hints: formatPluginPackagingRuntimeOutputRecoveryHints() }
+          : {}),
       };
     }
   } catch {
@@ -190,7 +203,7 @@ export async function runServiceUninstall(params: {
     }
   }
 
-  let loaded = false;
+  let loaded;
   try {
     loaded = await params.service.isLoaded({ env: process.env });
   } catch {
@@ -209,8 +222,6 @@ export async function runServiceUninstall(params: {
     fail(`${params.serviceNoun} uninstall failed: ${String(err)}`);
     return;
   }
-
-  loaded = false;
   try {
     loaded = await params.service.isLoaded({ env: process.env });
   } catch {
@@ -254,7 +265,7 @@ export async function runServiceStart(params: {
       fail(
         preflight.hints
           ? `${params.serviceNoun} start blocked: ${preflight.message}`
-          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\n${formatInvalidConfigRecoveryHint()}`,
         preflight.hints,
       );
       return;
@@ -354,7 +365,6 @@ export async function runServiceStart(params: {
   } catch (err) {
     const hints = params.renderStartHints();
     fail(`${params.serviceNoun} start failed: ${String(err)}`, hints);
-    return;
   }
 }
 
@@ -435,7 +445,7 @@ export async function runServiceStop(params: {
     return;
   }
 
-  let stopped = false;
+  let stopped;
   try {
     stopped = await params.service.isLoaded({ env: process.env });
   } catch {
@@ -498,7 +508,7 @@ export async function runServiceRestart(params: {
       fail(
         preflight.hints
           ? `${params.serviceNoun} restart blocked: ${preflight.message}`
-          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\nFix the config and retry, or run "openclaw doctor" to repair.`,
+          : `${params.serviceNoun} aborted: config is invalid.\n${preflight.message}\n${formatInvalidConfigRecoveryHint()}`,
         preflight.hints,
       );
       return false;
@@ -573,6 +583,7 @@ export async function runServiceRestart(params: {
         const runtime = await params.service.readRuntime(process.env).catch(() => null);
         wroteRestartIntent = writeGatewayRestartIntentSync({
           targetPid: runtime?.pid,
+          reason: "gateway.restart",
           ...(restartIntent ? { intent: restartIntent } : {}),
         });
       }

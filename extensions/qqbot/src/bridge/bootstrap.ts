@@ -38,10 +38,18 @@ import {
 import type { FetchMediaOptions, FetchMediaResult } from "../engine/adapter/types.js";
 import { getBridgeLogger } from "./logger.js";
 
+let mediaRuntimeModulePromise: Promise<typeof import("openclaw/plugin-sdk/media-runtime")> | null =
+  null;
+
+const loadMediaRuntimeModule = async () => {
+  mediaRuntimeModulePromise ??= import("openclaw/plugin-sdk/media-runtime");
+  return await mediaRuntimeModulePromise;
+};
+
 function createBuiltinAdapter(): PlatformAdapter {
   return {
     async validateRemoteUrl(_url: string, _options?: { allowPrivate?: boolean }): Promise<void> {
-      // Built-in version delegates SSRF validation to fetchRemoteMedia's ssrfPolicy.
+      // Built-in version delegates SSRF validation to readRemoteMediaBuffer's ssrfPolicy.
     },
 
     async resolveSecret(value): Promise<string | undefined> {
@@ -52,8 +60,8 @@ function createBuiltinAdapter(): PlatformAdapter {
     },
 
     async downloadFile(url: string, destDir: string, filename?: string): Promise<string> {
-      const { fetchRemoteMedia } = await import("openclaw/plugin-sdk/media-runtime");
-      const result = await fetchRemoteMedia({ url, filePathHint: filename });
+      const { readRemoteMediaBuffer } = await loadMediaRuntimeModule();
+      const result = await readRemoteMediaBuffer({ url, filePathHint: filename });
       const fs = await import("node:fs");
       const path = await import("node:path");
       if (!fs.existsSync(destDir)) {
@@ -65,8 +73,8 @@ function createBuiltinAdapter(): PlatformAdapter {
     },
 
     async fetchMedia(options: FetchMediaOptions): Promise<FetchMediaResult> {
-      const { fetchRemoteMedia } = await import("openclaw/plugin-sdk/media-runtime");
-      const result = await fetchRemoteMedia({
+      const { readRemoteMediaBuffer } = await loadMediaRuntimeModule();
+      const result = await readRemoteMediaBuffer({
         url: options.url,
         filePathHint: options.filePathHint,
         maxBytes: options.maxBytes,

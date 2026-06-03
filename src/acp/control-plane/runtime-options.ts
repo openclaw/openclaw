@@ -1,10 +1,11 @@
 import { isAbsolute } from "node:path";
+import { normalizeText } from "@openclaw/acp-core/normalize-text";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { normalizeText } from "../normalize-text.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import { AcpRuntimeError } from "../runtime/errors.js";
 
-export { normalizeText } from "../normalize-text.js";
+export { normalizeText } from "@openclaw/acp-core/normalize-text";
 
 const MAX_RUNTIME_MODE_LENGTH = 64;
 const MAX_MODEL_LENGTH = 200;
@@ -134,7 +135,7 @@ export function parseRuntimeTimeoutSecondsInput(rawTimeout: unknown): number {
   if (!normalized || !/^\d+$/.test(normalized)) {
     failInvalidOption("Timeout must be a positive integer in seconds.");
   }
-  return validateRuntimeTimeoutSecondsInput(Number.parseInt(normalized, 10));
+  return validateRuntimeTimeoutSecondsInput(parseStrictPositiveInteger(normalized) ?? 0);
 }
 
 export function validateRuntimeConfigOptionInput(
@@ -340,7 +341,10 @@ export function buildRuntimeConfigOptionPairs(
       normalized.permissionProfile,
     );
   }
-  if (typeof normalized.timeoutSeconds === "number") {
+  if (
+    typeof normalized.timeoutSeconds === "number" &&
+    shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys)
+  ) {
     pairs.set(
       resolveRuntimeConfigOptionKey("timeout", advertisedConfigOptionKeys),
       String(normalized.timeoutSeconds),
@@ -353,6 +357,16 @@ export function buildRuntimeConfigOptionPairs(
     }
   }
   return [...pairs.entries()];
+}
+
+function shouldEmitTimeoutConfigOption(advertisedConfigOptionKeys?: readonly string[]): boolean {
+  const advertisedKeys = buildAdvertisedConfigOptionKeyMap(advertisedConfigOptionKeys);
+  return (
+    advertisedKeys.size === 0 ||
+    RUNTIME_CONFIG_OPTION_ALIASES.timeoutSeconds.some((alias) =>
+      advertisedKeys.has(normalizeLowercaseStringOrEmpty(alias)),
+    )
+  );
 }
 
 function buildAdvertisedConfigOptionKeyMap(

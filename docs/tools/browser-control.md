@@ -34,6 +34,11 @@ one-shot headless launch for local managed profiles without changing persisted
 browser config; attach-only, remote CDP, and existing-session profiles reject
 that override because OpenClaw does not launch those browser processes.
 
+For tab endpoints, `targetId` is the compatibility field name. Prefer passing
+`suggestedTargetId` from `GET /tabs` or `POST /tabs/open`; labels and `tabId`
+handles such as `t1` are also accepted. Raw CDP target ids and unique raw
+target-id prefixes still work, but they are volatile diagnostic handles.
+
 If shared-secret gateway auth is configured, browser HTTP routes require auth too:
 
 - `Authorization: Bearer <gateway token>`
@@ -191,11 +196,14 @@ openclaw browser select 9 OptionA OptionB
 openclaw browser download e12 report.pdf
 openclaw browser waitfordownload report.pdf
 openclaw browser upload /tmp/openclaw/uploads/file.pdf
+openclaw browser upload media://inbound/file.pdf
 openclaw browser fill --fields '[{"ref":"1","type":"text","value":"Ada"}]'
 openclaw browser dialog --accept
+openclaw browser dialog --dismiss --dialog-id d1
 openclaw browser wait --text "Done"
 openclaw browser wait "#main" --url "**/dash" --load networkidle --fn "window.ready===true"
 openclaw browser evaluate --fn '(el) => el.textContent' --ref 7
+openclaw browser evaluate --timeout-ms 30000 --fn 'async () => { await window.ready; return true; }'
 openclaw browser highlight e12
 openclaw browser trace start
 openclaw browser trace stop
@@ -228,9 +236,14 @@ openclaw browser set device "iPhone 14"
 
 Notes:
 
-- `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog.
+- `upload` and `dialog` are **arming** calls; run them before the click/press that triggers the chooser/dialog. If an action opens a modal, the action response includes `blockedByDialog` and `browserState.dialogs.pending`; pass that `dialogId` to respond directly. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
 - `click`/`type`/etc require a `ref` from `snapshot` (numeric `12`, role ref `e12`, or actionable ARIA ref `ax12`). CSS selectors are intentionally not supported for actions. Use `click-coords` when the visible viewport position is the only reliable target.
-- Download, trace, and upload paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads,/uploads}` (fallback: `${os.tmpdir()}/openclaw/...`).
+- Download and trace paths are constrained to OpenClaw temp roots: `/tmp/openclaw{,/downloads}` (fallback: `${os.tmpdir()}/openclaw/...`).
+- `upload` accepts files from the OpenClaw temp uploads root and
+  OpenClaw-managed inbound media. Managed inbound media can be referenced as
+  `media://inbound/<id>`, sandbox-relative `media/inbound/<id>`, or a resolved
+  path inside the managed inbound media directory. Nested media refs,
+  traversal, symlinks, hardlinks, and arbitrary local paths are still rejected.
 - `upload` can also set file inputs directly via `--input-ref` or `--element`.
 
 Stable tab ids and labels survive Chromium raw-target replacement when OpenClaw
@@ -244,7 +257,7 @@ Snapshot flags at a glance:
 - `--format aria`: accessibility tree with `axN` refs. When Playwright is available, OpenClaw binds refs with backend DOM ids to the live page so follow-up actions can use them; otherwise treat the output as inspection-only.
 - `--efficient` (or `--mode efficient`): compact role snapshot preset. Set `browser.snapshotDefaults.mode: "efficient"` to make this the default (see [Gateway configuration](/gateway/configuration-reference#browser)).
 - `--interactive`, `--compact`, `--depth`, `--selector` force a role snapshot with `ref=e12` refs. `--frame "<iframe>"` scopes role snapshots to an iframe.
-- `--labels` adds a viewport-only screenshot with overlayed ref labels (prints `MEDIA:<path>`).
+- `--labels` adds a viewport-only screenshot with overlayed ref labels and prints the saved path.
 - `--urls` appends discovered link destinations to AI snapshots.
 
 ## Snapshots and refs
@@ -361,6 +374,8 @@ These are useful for "make the site behave like X" workflows:
 - `browser act kind=evaluate` / `openclaw browser evaluate` and `wait --fn`
   execute arbitrary JavaScript in the page context. Prompt injection can steer
   this. Disable it with `browser.evaluateEnabled=false` if you do not need it.
+- Use `openclaw browser evaluate --timeout-ms <ms>` when the page-side function
+  may need longer than the default evaluate timeout.
 - For logins and anti-bot notes (X/Twitter, etc.), see [Browser login + X/Twitter posting](/tools/browser-login).
 - Keep the Gateway/node host private (loopback or tailnet-only).
 - Remote CDP endpoints are powerful; tunnel and protect them.

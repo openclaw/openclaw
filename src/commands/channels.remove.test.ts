@@ -35,6 +35,7 @@ vi.mock("../channels/plugins/catalog.js", async () => {
   return {
     ...actual,
     listChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
+    listRawChannelPluginCatalogEntries: catalogMocks.listChannelPluginCatalogEntries,
   };
 });
 
@@ -64,6 +65,12 @@ vi.mock("../gateway/call.js", () => ({
 }));
 
 const runtime = createTestRuntime();
+
+function firstWrittenChannelsConfig() {
+  return configMocks.writeConfigFile.mock.calls[0]?.[0] as
+    | { channels?: Record<string, unknown> }
+    | undefined;
+}
 
 describe("channelsRemoveCommand", () => {
   beforeAll(async () => {
@@ -171,9 +178,7 @@ describe("channelsRemoveCommand", () => {
 
     expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
     expect(registryRefreshMocks.refreshPluginRegistryAfterConfigMutation).not.toHaveBeenCalled();
-    const writtenConfig = configMocks.writeConfigFile.mock.calls[0]?.[0] as
-      | { channels?: Record<string, unknown> }
-      | undefined;
+    const writtenConfig = firstWrittenChannelsConfig();
     expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
@@ -237,9 +242,7 @@ describe("channelsRemoveCommand", () => {
       clientName: "gateway-client",
       deviceIdentity: null,
     });
-    const writtenConfig = configMocks.writeConfigFile.mock.calls[0]?.[0] as
-      | { channels?: Record<string, unknown> }
-      | undefined;
+    const writtenConfig = firstWrittenChannelsConfig();
     expect(writtenConfig?.channels?.["external-chat"]).toBeUndefined();
   });
 });

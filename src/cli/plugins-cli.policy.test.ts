@@ -15,7 +15,6 @@ const ORIGINAL_OPENCLAW_NIX_MODE = process.env.OPENCLAW_NIX_MODE;
 
 describe("plugins cli policy mutations", () => {
   const compatibilityPluginIds = [
-    { alias: "openai-codex", pluginId: "openai" },
     { alias: "google-gemini-cli", pluginId: "google" },
     { alias: "minimax-portal-auth", pluginId: "minimax" },
   ] as const;
@@ -42,7 +41,7 @@ describe("plugins cli policy mutations", () => {
   }
 
   function requireFirstWrittenConfig(): OpenClawConfig {
-    const call = writeConfigFile.mock.calls.at(0);
+    const call = writeConfigFile.mock.calls[0];
     if (!call) {
       throw new Error("expected writeConfigFile to be called");
     }

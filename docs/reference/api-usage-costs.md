@@ -15,7 +15,9 @@ OpenClaw features that can generate provider usage or paid API calls.
 **Per-session cost snapshot**
 
 - `/status` shows the current session model, context usage, and last response tokens.
-- If the model uses **API-key auth**, `/status` also shows **estimated cost** for the last reply.
+- If OpenClaw has usage metadata and local pricing for the active model,
+  `/status` also shows **estimated cost** for the last reply. This can include
+  explicitly priced non-API-key providers such as Bedrock `aws-sdk` models.
 - If live session metadata is sparse, `/status` can recover token/cache
   counters and the active runtime model label from the latest transcript usage
   entry. Existing nonzero live values still take precedence, and prompt-sized
@@ -23,8 +25,12 @@ OpenClaw features that can generate provider usage or paid API calls.
 
 **Per-message cost footer**
 
-- `/usage full` appends a usage footer to every reply, including **estimated cost** (API-key only).
-- `/usage tokens` shows tokens only; subscription-style OAuth/token and CLI flows hide dollar cost.
+- `/usage full` appends a usage footer to every reply, including **estimated cost**
+  when local pricing is configured for the active model and usage metadata is
+  available.
+- `/usage tokens` shows tokens only; subscription-style OAuth/token and CLI flows
+  still show tokens only unless that runtime supplies compatible usage metadata
+  and an explicit local price is configured.
 - Gemini CLI note: when the CLI returns JSON output, OpenClaw reads usage from
   `stats`, normalizes `stats.cached` into `cacheRead`, and derives input tokens
   from `stats.input_tokens - stats.cached` when needed.
@@ -128,7 +134,7 @@ See [Memory](/concepts/memory).
 - **Exa**: `EXA_API_KEY` or `plugins.entries.exa.config.webSearch.apiKey`
 - **Firecrawl**: `FIRECRAWL_API_KEY` or `plugins.entries.firecrawl.config.webSearch.apiKey`
 - **Gemini (Google Search)**: `GEMINI_API_KEY` or `plugins.entries.google.config.webSearch.apiKey`
-- **Grok (xAI)**: `XAI_API_KEY` or `plugins.entries.xai.config.webSearch.apiKey`
+- **Grok (xAI)**: xAI OAuth profile, `XAI_API_KEY`, or `plugins.entries.xai.config.webSearch.apiKey`
 - **Kimi (Moonshot)**: `KIMI_API_KEY`, `MOONSHOT_API_KEY`, or `plugins.entries.moonshot.config.webSearch.apiKey`
 - **MiniMax Search**: `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, `MINIMAX_API_KEY`, or `plugins.entries.minimax.config.webSearch.apiKey`
 - **Ollama Web Search**: key-free for a reachable signed-in local Ollama host; direct `https://ollama.com` search uses `OLLAMA_API_KEY`, and auth-protected hosts can reuse normal Ollama provider bearer auth

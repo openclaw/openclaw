@@ -1,11 +1,11 @@
 import path from "node:path";
+import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import type { ZodIssue } from "zod";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
-import { resolvePrimaryStringValue } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
 
 type UnrecognizedKeysIssue = ZodIssue & {
@@ -13,8 +13,8 @@ type UnrecognizedKeysIssue = ZodIssue & {
   keys: PropertyKey[];
 };
 
-function normalizeIssuePath(path: PropertyKey[]): Array<string | number> {
-  return path.filter((part): part is string | number => typeof part !== "symbol");
+function normalizeIssuePath(pathValue: PropertyKey[]): Array<string | number> {
+  return pathValue.filter((part): part is string | number => typeof part !== "symbol");
 }
 
 function isUnrecognizedKeysIssue(issue: ZodIssue): issue is UnrecognizedKeysIssue {
@@ -36,9 +36,9 @@ export function formatConfigPath(parts: Array<string | number>): string {
   return out || "<root>";
 }
 
-export function resolveConfigPathTarget(root: unknown, path: Array<string | number>): unknown {
+export function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number>): unknown {
   let current: unknown = root;
-  for (const part of path) {
+  for (const part of pathLocal) {
     if (typeof part === "number") {
       if (!Array.isArray(current)) {
         return null;
@@ -61,10 +61,24 @@ export function resolveConfigPathTarget(root: unknown, path: Array<string | numb
   return current;
 }
 
+function isUpdateInProgress(): boolean {
+  const value = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
+  return value === "1" || value === "true";
+}
+
+const ROOT_STRIP_PROTECTED_KEYS = new Set(["defaultModel"]);
+const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
+  plugins: new Set(["installs"]),
+};
+
 export function stripUnknownConfigKeys(config: OpenClawConfig): {
   config: OpenClawConfig;
   removed: string[];
 } {
+  if (isUpdateInProgress()) {
+    return { config, removed: [] };
+  }
+
   const parsed = OpenClawSchema.safeParse(config);
   if (parsed.success) {
     return { config, removed: [] };
@@ -82,8 +96,19 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       continue;
     }
     const record = target as Record<string, unknown>;
+    const parentKey =
+      issuePath.length === 1 && typeof issuePath[0] === "string" ? issuePath[0] : undefined;
+    const protectedSet =
+      issuePath.length === 0
+        ? ROOT_STRIP_PROTECTED_KEYS
+        : parentKey
+          ? STRIP_PROTECTED_KEYS[parentKey]
+          : undefined;
     for (const key of issue.keys) {
       if (typeof key !== "string" || !(key in record)) {
+        continue;
+      }
+      if (protectedSet?.has(key)) {
         continue;
       }
       delete record[key];

@@ -58,7 +58,11 @@ function rawWsDataToBuffer(data: RawData): Buffer {
 }
 
 function defaultParseMessage(payload: Buffer): unknown {
-  return JSON.parse(payload.toString());
+  try {
+    return JSON.parse(payload.toString()) as unknown;
+  } catch {
+    throw new Error("Realtime transcription websocket received malformed JSON.");
+  }
 }
 
 class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscriptionSession {
@@ -346,7 +350,9 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
     const delay = this.reconnectDelayMs * 2 ** (this.reconnectAttempts - 1);
     this.reconnecting = true;
     try {
-      await new Promise((resolve) => setTimeout(resolve, delay));
+      await new Promise((resolve) => {
+        setTimeout(resolve, delay);
+      });
       if (!this.closed) {
         await this.doConnect();
       }
@@ -354,7 +360,6 @@ class WebSocketRealtimeTranscriptionSession<Event> implements RealtimeTranscript
       if (!this.closed) {
         this.reconnecting = false;
         await this.attemptReconnect();
-        return;
       }
     } finally {
       this.reconnecting = false;

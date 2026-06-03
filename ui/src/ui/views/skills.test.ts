@@ -63,6 +63,13 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     busyKey: null,
     messages: {},
     detailKey: null,
+    detailTab: "overview",
+    clawhubVerdicts: {},
+    clawhubVerdictsLoading: false,
+    clawhubVerdictsError: null,
+    skillCardContents: {},
+    skillCardLoadingKey: null,
+    skillCardErrors: {},
     clawhubQuery: "",
     clawhubResults: null,
     clawhubSearchLoading: false,
@@ -82,6 +89,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     onInstall: () => undefined,
     onDetailOpen: () => undefined,
     onDetailClose: () => undefined,
+    onDetailTabChange: () => undefined,
     onClawHubQueryChange: () => undefined,
     onClawHubDetailOpen: () => undefined,
     onClawHubDetailClose: () => undefined,
@@ -177,15 +185,16 @@ describe("renderSkills", () => {
     );
     await Promise.resolve();
 
-    let text = normalizeText(container);
-    expect(text).toContain("GitHub");
-    expect(text).toContain("GitHub integration for OpenClaw");
-    expect(text).toContain("v1.2.3");
-
     const resultItem = container.querySelector<HTMLElement>(".list-item");
     const installButton = container.querySelector<HTMLButtonElement>(".list-item .btn.btn--sm");
     expect(resultItem).toBeInstanceOf(HTMLElement);
     expect(installButton).toBeInstanceOf(HTMLButtonElement);
+    expect(resultItem?.querySelector(".list-title")?.textContent?.trim()).toBe("GitHub");
+    expect(resultItem?.querySelector(".list-sub")?.textContent?.trim()).toBe(
+      "GitHub integration for OpenClaw",
+    );
+    expect(resultItem?.querySelector(".list-meta .muted")?.textContent?.trim()).toBe("v1.2.3");
+    expect(installButton?.textContent?.trim()).toBe("Install");
     resultItem!.click();
     installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
@@ -232,13 +241,12 @@ describe("renderSkills", () => {
     await Promise.resolve();
 
     expect(showModal).toHaveBeenCalledTimes(1);
-    text = normalizeText(container);
-    expect(text).toContain("rate limited");
-    expect(text).toContain("Installed github");
-    expect(text).toContain("By OpenClaw (@openclaw)");
-    expect(text).toContain("Latest: v1.2.3");
-    expect(text).toContain("Platforms: macos, linux");
-    expect(text).toContain("Added search support");
+    expect(
+      Array.from(container.querySelectorAll(".callout")).map((node) => normalizeText(node)),
+    ).toEqual(["rate limited", "Installed github"]);
+    expect(normalizeText(container.querySelector(".md-preview-dialog__body")!)).toBe(
+      "GitHub integration for OpenClaw By OpenClaw (@openclaw) Latest: v1.2.3 Added search support Platforms: macos, linux Install GitHub",
+    );
 
     const detailInstallButton = container.querySelector<HTMLButtonElement>(
       ".md-preview-dialog__body .btn.primary",
@@ -248,6 +256,164 @@ describe("renderSkills", () => {
 
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
+  });
+
+  it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+
+    const linkedSkill = createSkill({
+      skillKey: "agentreceipt",
+      name: "AgentReceipt",
+      clawhub: {
+        status: "linked",
+        valid: true,
+        registry: "https://clawhub.ai",
+        slug: "agentreceipt",
+        installedVersion: "1.2.3",
+        installedAt: 123,
+      },
+      skillCard: {
+        present: true,
+        path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
+        sizeBytes: 30,
+      },
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [linkedSkill],
+    };
+    const verdictKey = "https://clawhub.ai\u0000agentreceipt\u00001.2.3";
+
+    render(
+      renderSkills(
+        createProps({
+          report,
+          detailKey: "agentreceipt",
+          clawhubVerdicts: {
+            [verdictKey]: {
+              registry: "https://clawhub.ai",
+              ok: false,
+              decision: "fail",
+              reasons: ["security.suspicious"],
+              requestedSlug: "agentreceipt",
+              requestedVersion: "1.2.3",
+              slug: "agentreceipt",
+              version: "1.2.3",
+              securityAuditUrl:
+                "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
+              securityStatus: "suspicious",
+              securityPassed: false,
+            },
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(normalizeText(container)).toContain("Review");
+    expect(normalizeText(container)).toContain("security.suspicious");
+    expect(
+      container.querySelector<HTMLAnchorElement>('a[href*="security-audit"]')?.textContent?.trim(),
+    ).toBe("Full security report");
+
+    render(
+      renderSkills(
+        createProps({
+          report,
+          detailKey: "agentreceipt",
+          detailTab: "card",
+          skillCardContents: {
+            agentreceipt: "# AgentReceipt\n\nLocal **trust** card.",
+          },
+          clawhubVerdicts: {
+            [verdictKey]: {
+              registry: "https://clawhub.ai",
+              ok: false,
+              decision: "fail",
+              reasons: ["security.suspicious"],
+              requestedSlug: "agentreceipt",
+              requestedVersion: "1.2.3",
+              securityAuditUrl:
+                "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
+              securityStatus: "suspicious",
+              securityPassed: false,
+            },
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("trust");
+    expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
+  });
+
+  it("fails closed for inconsistent ClawHub verdict envelopes", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+
+    const linkedSkill = createSkill({
+      skillKey: "agentreceipt",
+      name: "AgentReceipt",
+      clawhub: {
+        status: "linked",
+        valid: true,
+        registry: "https://clawhub.ai",
+        slug: "agentreceipt",
+        installedVersion: "1.2.3",
+        installedAt: 123,
+      },
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [linkedSkill],
+    };
+    const verdictKey = "https://clawhub.ai\u0000agentreceipt\u00001.2.3";
+
+    render(
+      renderSkills(
+        createProps({
+          report,
+          detailKey: "agentreceipt",
+          clawhubVerdicts: {
+            [verdictKey]: {
+              registry: "https://clawhub.ai",
+              ok: false,
+              decision: "pass",
+              reasons: [],
+              requestedSlug: "agentreceipt",
+              requestedVersion: "1.2.3",
+              slug: "agentreceipt",
+              version: "1.2.3",
+              securityStatus: "clean",
+              securityPassed: true,
+            },
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const chips = Array.from(container.querySelectorAll(".chip"));
+    const verdictChip = chips.find((chip) => normalizeText(chip) === "Unavailable");
+    expect(verdictChip).toBeDefined();
+    expect(chips.map((chip) => normalizeText(chip))).toContain("Unavailable");
+    expect(chips.some((chip) => normalizeText(chip) === "Clean")).toBe(false);
+    expect(verdictChip?.classList.contains("chip-ok")).toBe(false);
   });
 });
 

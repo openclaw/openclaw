@@ -101,7 +101,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(side.command, "side command", { key: "btw", name: "btw" });
     expect(
       requireArray(requireRecord(side.command, "side command").aliases, "side aliases"),
-    ).toContain("side");
+    ).toEqual(["side"]);
     expect(side.args).toBe("what changed?");
   });
 
@@ -114,9 +114,7 @@ describe("parseSlashCommand", () => {
     expectRecordFields(think, "think command", {
       name: "think",
     });
-    const aliases = requireArray(think.aliases, "think aliases");
-    expect(aliases).toContain("thinking");
-    expect(aliases).toContain("t");
+    expect(requireArray(think.aliases, "think aliases")).toEqual(["thinking", "t"]);
   });
 
   it("keeps a single local /steer entry with the control-ui metadata", () => {
@@ -126,14 +124,10 @@ describe("parseSlashCommand", () => {
     expectRecordFields(steer, "steer command", {
       key: "steer",
       description: "Inject a message into the active run",
-      args: "[id] <message>",
+      args: "<message>",
       executeLocal: true,
     });
-    expect(requireArray(steer.aliases, "steer aliases")).toContain("tell");
-  });
-
-  it("keeps focus as a local slash command", () => {
-    expectParsedSlash("/focus", { key: "focus", executeLocal: true }, "");
+    expect(requireArray(steer.aliases, "steer aliases")).toEqual(["tell"]);
   });
 
   it("refreshes runtime commands from commands.list so docks, plugins, and direct skills appear", async () => {
@@ -202,14 +196,6 @@ describe("parseSlashCommand", () => {
           scope: "both",
           acceptsArgs: true,
         },
-        {
-          name: "kill",
-          textAliases: ["/kill"],
-          description: "Remote kill impostor.",
-          source: "plugin",
-          scope: "both",
-          acceptsArgs: true,
-        },
       ],
     });
 
@@ -222,11 +208,6 @@ describe("parseSlashCommand", () => {
       key: "redirect",
       executeLocal: true,
       description: "Abort and restart with a new message",
-    });
-    expectRecordFields(requireCommandByName("kill"), "kill command", {
-      key: "kill",
-      executeLocal: true,
-      description: "Kill a running subagent (or all).",
     });
   });
 
@@ -279,7 +260,7 @@ describe("parseSlashCommand", () => {
         name: `${longName}-${argIndex}`,
         description: longDescription,
         type: "string" as const,
-        choices: Array.from({ length: 55 }, (_, choiceIndex) => ({
+        choices: Array.from({ length: 55 }, (_Local, choiceIndex) => ({
           value: `${longName}-${choiceIndex}`,
           label: `${longName}-${choiceIndex}`,
         })),
@@ -336,7 +317,12 @@ describe("parseSlashCommand", () => {
       includeArgs: true,
       scope: "text",
     });
-    expect(SLASH_COMMANDS.map((entry) => entry.name)).toContain("pair");
+    expectRecordFields(requireCommandByName("pair"), "pair command", {
+      name: "pair",
+      description: "Generate setup codes.",
+      executeLocal: false,
+      tier: "standard",
+    });
   });
 
   it("falls back safely when the gateway returns malformed command payload shapes", async () => {
@@ -374,7 +360,11 @@ describe("parseSlashCommand", () => {
       agentId: "main",
     });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "pair")).toBeUndefined();
-    expect(SLASH_COMMANDS.map((entry) => entry.name)).toContain("help");
+    expectRecordFields(requireCommandByName("help"), "help command", {
+      key: "help",
+      name: "help",
+      executeLocal: true,
+    });
 
     await refreshSlashCommands({
       client: { request } as never,
@@ -389,15 +379,42 @@ describe("parseSlashCommand", () => {
     });
   });
 
-  it("ignores stale refresh responses and keeps the latest command set", async () => {
+  it("keeps local fallback commands after repeated gateway failures", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("offline"));
+    const client = { request } as never;
+
+    await refreshSlashCommands({ client, agentId: "main" });
+    expectRecordFields(requireCommandByName("help"), "first fallback help command", {
+      key: "help",
+      executeLocal: true,
+    });
+
+    await refreshSlashCommands({ client, agentId: "main" });
+    expect(request).toHaveBeenCalledTimes(2);
+    expectRecordFields(requireCommandByName("help"), "second fallback help command", {
+      key: "help",
+      executeLocal: true,
+    });
+  });
+
+  it("coalesces duplicate refreshes for the same agent", async () => {
     let resolveFirst: ((value: unknown) => void) | undefined;
     const first = new Promise((resolve) => {
       resolveFirst = resolve;
     });
-    const request = vi
-      .fn()
-      .mockImplementationOnce(async () => await first)
-      .mockImplementationOnce(async () => ({
+    const request = vi.fn().mockImplementationOnce(async () => await first);
+    const client = { request } as never;
+
+    const pending = refreshSlashCommands({
+      client,
+      agentId: "main",
+    });
+    const duplicate = refreshSlashCommands({
+      client,
+      agentId: "main",
+    });
+    if (resolveFirst) {
+      resolveFirst({
         commands: [
           {
             name: "pair",
@@ -408,33 +425,89 @@ describe("parseSlashCommand", () => {
             acceptsArgs: true,
           },
         ],
-      }));
+      });
+    }
+    await pending;
+    await duplicate;
 
-    const pending = refreshSlashCommands({
-      client: { request } as never,
-      agentId: "main",
+    expect(request).toHaveBeenCalledTimes(1);
+    expectRecordFields(requireCommandByName("pair"), "pair command", {
+      name: "pair",
+      description: "Generate setup codes.",
+      executeLocal: false,
+      tier: "standard",
     });
-    await refreshSlashCommands({
-      client: { request } as never,
-      agentId: "main",
+  });
+
+  it("ignores stale refresh responses after switching agents", async () => {
+    let resolveFirst: ((value: unknown) => void) | undefined;
+    const first = new Promise((resolve) => {
+      resolveFirst = resolve;
     });
-    if (resolveFirst) {
-      resolveFirst({
+    const request = vi.fn((_: string, params: { agentId?: string }) => {
+      if (params.agentId === "main") {
+        return first;
+      }
+      return Promise.resolve({
         commands: [
           {
-            name: "dreaming",
-            textAliases: ["/dreaming"],
-            description: "Enable or disable memory dreaming.",
+            name: "pair",
+            textAliases: ["/pair"],
+            description: "Generate setup codes.",
             source: "plugin",
             scope: "both",
             acceptsArgs: true,
           },
         ],
       });
-    }
+    });
+    const client = { request } as never;
+
+    const pending = refreshSlashCommands({ client, agentId: "main" });
+    await refreshSlashCommands({ client, agentId: "other" });
+    resolveFirst?.({
+      commands: [
+        {
+          name: "dreaming",
+          textAliases: ["/dreaming"],
+          description: "Enable or disable memory dreaming.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+        },
+      ],
+    });
     await pending;
 
-    expect(SLASH_COMMANDS.map((entry) => entry.name)).toContain("pair");
+    expectRecordFields(requireCommandByName("pair"), "pair command", {
+      name: "pair",
+      description: "Generate setup codes.",
+    });
     expect(SLASH_COMMANDS.find((entry) => entry.name === "dreaming")).toBeUndefined();
+  });
+
+  it("uses the fresh remote command cache for repeated refreshes", async () => {
+    const request = vi.fn().mockResolvedValue({
+      commands: [
+        {
+          name: "pair",
+          textAliases: ["/pair"],
+          description: "Generate setup codes.",
+          source: "plugin",
+          scope: "both",
+          acceptsArgs: true,
+        },
+      ],
+    });
+    const client = { request } as never;
+
+    await refreshSlashCommands({ client, agentId: "main" });
+    await refreshSlashCommands({ client, agentId: "main" });
+
+    expect(request).toHaveBeenCalledTimes(1);
+    expectRecordFields(requireCommandByName("pair"), "pair command", {
+      name: "pair",
+      description: "Generate setup codes.",
+    });
   });
 });

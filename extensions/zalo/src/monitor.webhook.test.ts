@@ -34,14 +34,16 @@ const DEFAULT_ACCOUNT: ResolvedZaloAccount = {
 };
 
 function createWebhookRequestHandler(processUpdate?: ZaloWebhookProcessUpdate): RequestListener {
-  return async (req, res) => {
-    const handled = processUpdate
-      ? await handleZaloWebhookRequestInternal(req, res, processUpdate)
-      : await handleZaloWebhookRequest(req, res);
-    if (!handled) {
-      res.statusCode = 404;
-      res.end("not found");
-    }
+  return (req, res) => {
+    void (async () => {
+      const handled = processUpdate
+        ? await handleZaloWebhookRequestInternal(req, res, processUpdate)
+        : await handleZaloWebhookRequest(req, res);
+      if (!handled) {
+        res.statusCode = 404;
+        res.end("not found");
+      }
+    })();
   };
 }
 
@@ -549,7 +551,8 @@ describe("handleZaloWebhookRequest", () => {
       core,
       finalizeInboundContextMock,
       recordInboundSessionMock,
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
     } = createImageLifecycleCore();
     const unregister = registerTarget({
@@ -582,9 +585,11 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
 
-    await vi.waitFor(() => expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(saveRemoteMediaMock).toHaveBeenCalledTimes(1));
+    expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
     expectImageLifecycleDelivery({
-      fetchRemoteMediaMock,
+      readRemoteMediaBufferMock,
+      saveRemoteMediaMock,
       saveMediaBufferMock,
       finalizeInboundContextMock,
       recordInboundSessionMock,

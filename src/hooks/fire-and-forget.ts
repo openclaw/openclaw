@@ -1,6 +1,7 @@
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 const DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS = 16;
 const DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS = 256;
@@ -38,6 +39,13 @@ function positiveIntegerOrDefault(value: number | undefined, fallback: number): 
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+function resolveFireAndForgetHookTimeoutMs(value: number | undefined): number {
+  if (typeof value === "number" && Number.isInteger(value) && value > 0) {
+    return resolveTimerTimeoutMs(value, DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS);
+  }
+  return resolveTimerTimeoutMs(DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS, 1);
+}
+
 function replaceLogControlCharacters(value: string): string {
   let result = "";
   for (const char of value) {
@@ -69,7 +77,7 @@ export function fireAndForgetHook(
   label: string,
   logger: (message: string) => void = logVerbose,
 ): void {
-  void task.catch((err) => {
+  void task.catch((err: unknown) => {
     logger(`${label}: ${formatHookErrorForLog(err)}`);
   });
 }
@@ -91,7 +99,7 @@ function runFireAndForgetHookJob(
 
   void Promise.resolve()
     .then(job.task)
-    .catch((err) => {
+    .catch((err: unknown) => {
       if (!didLogTimeout) {
         job.logger(`${job.label}: ${formatHookErrorForLog(err)}`);
       }
@@ -133,10 +141,7 @@ export function fireAndForgetBoundedHook(
     options.maxQueue,
     DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS,
   );
-  const timeoutMs = positiveIntegerOrDefault(
-    options.timeoutMs,
-    DEFAULT_FIRE_AND_FORGET_HOOK_TIMEOUT_MS,
-  );
+  const timeoutMs = resolveFireAndForgetHookTimeoutMs(options.timeoutMs);
 
   if (state.active >= maxConcurrency && state.queue.length >= maxQueue) {
     logger(`${label}: queue full; dropping hook`);

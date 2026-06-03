@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { beforeAll, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import {
   BACKEND_GATEWAY_CLIENT,
@@ -41,14 +41,6 @@ function expectArrayIncludes(actual: unknown, expectedValues: string[]): void {
   }
 }
 
-function expectArrayExcludes(actual: unknown, deniedValues: string[]): void {
-  expect(Array.isArray(actual)).toBe(true);
-  const values = actual as unknown[];
-  for (const denied of deniedValues) {
-    expect(values).not.toContain(denied);
-  }
-}
-
 export function registerControlUiAndPairingSuite(): void {
   const trustedProxyControlUiCases: Array<{
     name: string;
@@ -82,6 +74,7 @@ export function registerControlUiAndPairingSuite(): void {
       expectedErrorSubstring: "unauthorized",
     },
   ];
+  const trustedProxyControlUiResults = new Map<string, Awaited<ReturnType<typeof connectReq>>>();
 
   const buildSignedDeviceForIdentity = async (params: {
     identityPath: string;
@@ -249,7 +242,7 @@ export function registerControlUiAndPairingSuite(): void {
     return { identityPath, identity: { deviceId: identity.deviceId } };
   };
 
-  test("rejects untrusted trusted-proxy control ui device identity states", async () => {
+  beforeAll(async () => {
     await configureTrustedProxyControlUiAuth();
     await withControlUiGatewayServer(async ({ port }) => {
       for (const tc of trustedProxyControlUiCases) {
@@ -271,29 +264,39 @@ export function registerControlUiAndPairingSuite(): void {
               nonce: challengeNonce,
             }));
           }
-          const res = await connectReq(ws, {
-            skipDefaultAuth: true,
-            role: tc.role,
-            scopes,
-            device,
-            client: { ...CONTROL_UI_CLIENT },
-          });
-          expect(res.ok, tc.name).toBe(tc.expectedOk);
-          if (!tc.expectedOk) {
-            if (tc.expectedErrorSubstring) {
-              expect(res.error?.message ?? "", tc.name).toContain(tc.expectedErrorSubstring);
-            }
-            if (tc.expectedErrorCode) {
-              expect((res.error?.details as { code?: string } | undefined)?.code, tc.name).toBe(
-                tc.expectedErrorCode,
-              );
-            }
-          }
+          trustedProxyControlUiResults.set(
+            tc.name,
+            await connectReq(ws, {
+              skipDefaultAuth: true,
+              role: tc.role,
+              scopes,
+              device,
+              client: { ...CONTROL_UI_CLIENT },
+            }),
+          );
         } finally {
           ws.close();
         }
       }
     });
+  });
+
+  test.each(trustedProxyControlUiCases)("$name", (tc) => {
+    const res = trustedProxyControlUiResults.get(tc.name);
+    if (!res) {
+      throw new Error(`missing trusted-proxy result for ${tc.name}`);
+    }
+    expect(res.ok, tc.name).toBe(tc.expectedOk);
+    if (!tc.expectedOk) {
+      if (tc.expectedErrorSubstring) {
+        expect(res.error?.message ?? "", tc.name).toContain(tc.expectedErrorSubstring);
+      }
+      if (tc.expectedErrorCode) {
+        expect((res.error?.details as { code?: string } | undefined)?.code, tc.name).toBe(
+          tc.expectedErrorCode,
+        );
+      }
+    }
   });
 
   test("rejects trusted-proxy control ui without device identity even with self-declared scopes", async () => {
@@ -331,7 +334,7 @@ export function registerControlUiAndPairingSuite(): void {
     });
   });
 
-  test("preserves trusted-proxy control ui scopes for unpaired device identity", async () => {
+  test("requires pairing for trusted-proxy control ui device identity", async () => {
     const { replaceConfigFile } = await import("../config/config.js");
     testState.gatewayAuth = undefined;
     testState.gatewayControlUi = {
@@ -375,17 +378,64 @@ export function registerControlUiAndPairingSuite(): void {
           device,
           client: { ...CONTROL_UI_CLIENT },
         });
+        expect(res.ok).toBe(false);
+        expect(res.error?.message ?? "").toContain("pairing required");
+        expect((res.error?.details as { code?: string } | undefined)?.code).toBe(
+          ConnectErrorDetailCodes.PAIRING_REQUIRED,
+        );
+      } finally {
+        ws.close();
+      }
+    });
+  });
+
+  test("clears trusted-proxy control ui scopes without device identity", async () => {
+    const { replaceConfigFile } = await import("../config/config.js");
+    testState.gatewayAuth = undefined;
+    testState.gatewayControlUi = {
+      ...testState.gatewayControlUi,
+      allowedOrigins: ["https://localhost"],
+    };
+    await replaceConfigFile({
+      nextConfig: {
+        gateway: {
+          auth: {
+            mode: "trusted-proxy",
+            trustedProxy: {
+              userHeader: "x-forwarded-user",
+              requiredHeaders: ["x-forwarded-proto"],
+              allowLoopback: true,
+            },
+          },
+          trustedProxies: ["127.0.0.1"],
+          controlUi: {
+            allowedOrigins: ["https://localhost"],
+          },
+        },
+      },
+      afterWrite: { mode: "auto" },
+    });
+    await withControlUiGatewayServer(async ({ port }) => {
+      const ws = await openWs(port, TRUSTED_PROXY_CONTROL_UI_HEADERS);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          scopes: ["operator.admin", "operator.read"],
+          device: null,
+          client: { ...CONTROL_UI_CLIENT },
+        });
         expect(res.ok).toBe(true);
         const payload = res.payload as
           | {
               auth?: { scopes?: string[]; deviceToken?: string };
             }
           | undefined;
-        expect(payload?.auth?.scopes).toEqual(["operator.admin", "operator.read"]);
+        expect(payload?.auth?.scopes).toEqual([]);
         expect(payload?.auth?.deviceToken).toBeUndefined();
 
         const admin = await rpcReq(ws, "set-heartbeats", { enabled: false });
-        expect(admin.ok).toBe(true);
+        expect(admin.ok).toBe(false);
+        expect(admin.error?.message ?? "").toContain("missing scope");
       } finally {
         ws.close();
       }
@@ -419,6 +469,14 @@ export function registerControlUiAndPairingSuite(): void {
       afterWrite: { mode: "auto" },
     });
     await withControlUiGatewayServer(async ({ port }) => {
+      const seeded = await seedApprovedOperatorReadPairing({
+        identityPrefix: "openclaw-control-ui-trusted-proxy-bounded-",
+        clientId: CONTROL_UI_CLIENT.id,
+        clientMode: CONTROL_UI_CLIENT.mode,
+        displayName: "Control UI",
+        platform: "web",
+        scopes: ["operator.admin", "operator.read"],
+      });
       const ws = await openWs(port, {
         ...TRUSTED_PROXY_CONTROL_UI_HEADERS,
         "x-openclaw-scopes": "operator.read",
@@ -431,6 +489,7 @@ export function registerControlUiAndPairingSuite(): void {
           scopes: ["operator.admin", "operator.read"],
           clientId: CONTROL_UI_CLIENT.id,
           clientMode: CONTROL_UI_CLIENT.mode,
+          identityPath: seeded.identityPath,
           nonce: challengeNonce,
         });
         const res = await connectReq(ws, {
@@ -523,7 +582,9 @@ export function registerControlUiAndPairingSuite(): void {
           ws,
           (o) => o.type === "event" && o.event === "connect.challenge",
         );
-        await new Promise<void>((resolve) => ws.once("open", resolve));
+        await new Promise<void>((resolve) => {
+          ws.once("open", resolve);
+        });
         const challenge = await challengePromise;
         const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
         expect(typeof nonce).toBe("string");
@@ -641,7 +702,9 @@ export function registerControlUiAndPairingSuite(): void {
 
   test("device token auth matrix", async () => {
     const { server, ws, port, prevToken } = await startControlUiServerWithClient("secret");
-    const { deviceToken, deviceIdentityPath } = await ensurePairedDeviceTokenForCurrentIdentity(ws);
+    const { identity, deviceToken, deviceIdentityPath } =
+      await ensurePairedDeviceTokenForCurrentIdentity(ws);
+    const { getPairedDevice } = await import("../infra/device-pairing.js");
     ws.close();
 
     const scenarios: Array<{
@@ -724,6 +787,9 @@ export function registerControlUiAndPairingSuite(): void {
           ws2.close();
         }
       }
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.lastSeenReason).toBe("connect");
+      expect(typeof paired?.lastSeenAtMs).toBe("number");
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);
@@ -821,9 +887,12 @@ export function registerControlUiAndPairingSuite(): void {
       (entry) => entry.deviceId === identity.deviceId,
     );
     expect(pendingAfterRead).toHaveLength(0);
-    if (!(await getPairedDevice(identity.deviceId))) {
+    const pairedAfterRead = await getPairedDevice(identity.deviceId);
+    if (!pairedAfterRead) {
       throw new Error(`expected paired device ${identity.deviceId}`);
     }
+    expect(pairedAfterRead.lastSeenReason).toBe("connect");
+    expect(typeof pairedAfterRead.lastSeenAtMs).toBe("number");
     wsRemoteRead.close();
 
     const ws2 = await openWs(port, { host: "gateway.example" });
@@ -980,7 +1049,7 @@ export function registerControlUiAndPairingSuite(): void {
     }
   });
 
-  test("auto-approves fresh node bootstrap pairing from qr setup code", async () => {
+  test("qr setup code returns node token plus bounded operator handoff", async () => {
     const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
       await import("../infra/device-bootstrap.js");
     const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
@@ -1011,7 +1080,7 @@ export function registerControlUiAndPairingSuite(): void {
         deviceIdentityPath: identityPath,
       });
       expect(initial.ok).toBe(true);
-      const initialPayload = initial.payload as
+      const approvedPayload = initial.payload as
         | {
             type?: string;
             auth?: {
@@ -1026,62 +1095,57 @@ export function registerControlUiAndPairingSuite(): void {
             };
           }
         | undefined;
-      expect(initialPayload?.type).toBe("hello-ok");
-      const issuedDeviceToken = initialPayload?.auth?.deviceToken;
-      const issuedOperatorToken = initialPayload?.auth?.deviceTokens?.find(
-        (entry) => entry.role === "operator",
-      )?.deviceToken;
-      if (!issuedDeviceToken || !issuedOperatorToken) {
-        throw new Error("expected issued device and operator tokens");
+      expect(approvedPayload?.type).toBe("hello-ok");
+      const issuedDeviceToken = approvedPayload?.auth?.deviceToken;
+      if (!issuedDeviceToken) {
+        throw new Error("expected issued device token");
       }
-      expect(initialPayload?.auth?.role).toBe("node");
-      expect(initialPayload?.auth?.scopes ?? []).toEqual([]);
-      expect(initialPayload?.auth?.deviceTokens?.some((entry) => entry.role === "node")).toBe(
-        false,
-      );
-      const operatorBootstrapScopes = initialPayload?.auth?.deviceTokens?.find(
+      expect(approvedPayload?.auth?.role).toBe("node");
+      expect(approvedPayload?.auth?.scopes ?? []).toEqual([]);
+      const operatorHandoff = approvedPayload?.auth?.deviceTokens?.find(
         (entry) => entry.role === "operator",
-      )?.scopes;
-      expectArrayIncludes(operatorBootstrapScopes, [
+      );
+      const issuedOperatorToken = operatorHandoff?.deviceToken;
+      if (!issuedOperatorToken) {
+        throw new Error("expected handed-off operator device token");
+      }
+      expect(operatorHandoff?.scopes).toEqual([
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ]);
-      expectArrayExcludes(operatorBootstrapScopes, [
-        "node.camera",
-        "node.display",
-        "node.exec",
-        "node.voice",
-      ]);
-      expectArrayExcludes(operatorBootstrapScopes, ["operator.admin", "operator.pairing"]);
+      expect(operatorHandoff?.scopes).not.toContain("operator.admin");
+      expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
+
+      const pendingAfterInitial = await listDevicePairing();
+      const pendingForDevice = pendingAfterInitial.pending.filter(
+        (entry) => entry.deviceId === identity.deviceId,
+      );
+      expect(pendingForDevice).toEqual([]);
+      wsBootstrap.close();
 
       const afterBootstrap = await listDevicePairing();
       expect(
         afterBootstrap.pending.filter((entry) => entry.deviceId === identity.deviceId),
       ).toEqual([]);
       const paired = await getPairedDevice(identity.deviceId);
-      expectArrayIncludes(paired?.roles, ["node", "operator"]);
-      expectArrayIncludes(paired?.approvedScopes, [
+      expect(paired?.roles).toEqual(["node", "operator"]);
+      expect(paired?.approvedScopes).toEqual([
         "operator.approvals",
         "operator.read",
         "operator.talk.secrets",
         "operator.write",
       ]);
       expect(paired?.tokens?.node?.token).toBe(issuedDeviceToken);
+      expect(paired?.tokens?.node?.scopes).toEqual([]);
       expect(paired?.tokens?.operator?.token).toBe(issuedOperatorToken);
-      if (!issuedDeviceToken || !issuedOperatorToken) {
-        throw new Error("expected hello-ok auth.deviceTokens for bootstrap onboarding");
-      }
-
-      await new Promise<void>((resolve) => {
-        if (wsBootstrap.readyState === WebSocket.CLOSED) {
-          resolve();
-          return;
-        }
-        wsBootstrap.once("close", () => resolve());
-        wsBootstrap.close();
-      });
+      expect(paired?.tokens?.operator?.scopes).toEqual([
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ]);
 
       const wsReplay = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       const replay = await connectReq(wsReplay, {
@@ -1141,6 +1205,185 @@ export function registerControlUiAndPairingSuite(): void {
           ],
         }),
       ).resolves.toEqual({ ok: true });
+      await expect(
+        verifyDeviceToken({
+          deviceId: identity.deviceId,
+          token: issuedOperatorToken,
+          role: "operator",
+          scopes: ["operator.admin"],
+        }),
+      ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+      await expect(
+        verifyDeviceToken({
+          deviceId: identity.deviceId,
+          token: issuedOperatorToken,
+          role: "operator",
+          scopes: ["operator.pairing"],
+        }),
+      ).resolves.toEqual({ ok: false, reason: "scope-mismatch" });
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("qr bootstrap retry keeps bounded operator handoff after paired approval", async () => {
+    const { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } =
+      await import("../infra/device-bootstrap.js");
+    const { publicKeyRawBase64UrlFromPem } = await import("../infra/device-identity.js");
+    const { approveBootstrapDevicePairing, requestDevicePairing } =
+      await import("../infra/device-pairing.js");
+    const { PAIRING_SETUP_BOOTSTRAP_PROFILE } =
+      await import("../shared/device-bootstrap-profile.js");
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-node-retry-",
+    );
+    const client = {
+      id: "openclaw-ios",
+      version: "2026.3.30",
+      platform: "iOS 26.3.1",
+      mode: "node",
+      deviceFamily: "iPhone",
+    };
+
+    try {
+      const issued = await issueDeviceBootstrapToken();
+      const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+      const pending = await requestDevicePairing({
+        deviceId: identity.deviceId,
+        publicKey,
+        role: "node",
+        roles: ["node", "operator"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
+        clientId: client.id,
+        clientMode: client.mode,
+        displayName: client.id,
+        platform: client.platform,
+        deviceFamily: client.deviceFamily,
+        silent: true,
+      });
+      await approveBootstrapDevicePairing(
+        pending.request.requestId,
+        PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      );
+
+      const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const retry = await connectReq(wsRetry, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(retry.ok).toBe(true);
+      const payload = retry.payload as
+        | {
+            auth?: {
+              deviceToken?: string;
+              deviceTokens?: Array<{ deviceToken?: string; role?: string; scopes?: string[] }>;
+            };
+          }
+        | undefined;
+      expect(payload?.auth?.deviceToken).toBeTruthy();
+      const operatorHandoff = payload?.auth?.deviceTokens?.find(
+        (entry) => entry.role === "operator",
+      );
+      expect(operatorHandoff?.deviceToken).toBeTruthy();
+      expect(operatorHandoff?.scopes).toEqual([
+        "operator.approvals",
+        "operator.read",
+        "operator.talk.secrets",
+        "operator.write",
+      ]);
+      expect(operatorHandoff?.scopes).not.toContain("operator.admin");
+      expect(operatorHandoff?.scopes).not.toContain("operator.pairing");
+      wsRetry.close();
+
+      await expect(
+        verifyDeviceBootstrapToken({
+          token: issued.token,
+          deviceId: identity.deviceId,
+          publicKey,
+          role: "node",
+          scopes: [],
+        }),
+      ).resolves.toEqual({ ok: false, reason: "bootstrap_token_invalid" });
+    } finally {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
+  test("rejected non-baseline bootstrap request cannot recreate pending node pairing", async () => {
+    const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { listDevicePairing, rejectDevicePairing } = await import("../infra/device-pairing.js");
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    const { identityPath, identity } = await createOperatorIdentityFixture(
+      "openclaw-bootstrap-node-reject-",
+    );
+    const client = {
+      id: "openclaw-ios",
+      version: "2026.3.30",
+      platform: "iOS 26.3.1",
+      mode: "node",
+      deviceFamily: "iPhone",
+    };
+
+    try {
+      const issued = await issueDeviceBootstrapToken({
+        profile: {
+          roles: ["node"],
+          scopes: [],
+        },
+      });
+      const wsInitial = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const initial = await connectReq(wsInitial, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(initial.ok).toBe(false);
+      expect(
+        initial.error?.details as { code?: string; pauseReconnect?: boolean } | undefined,
+      ).toMatchObject({
+        code: ConnectErrorDetailCodes.PAIRING_REQUIRED,
+        pauseReconnect: false,
+      });
+      wsInitial.close();
+
+      const pending = (await listDevicePairing()).pending.find(
+        (entry) => entry.deviceId === identity.deviceId,
+      );
+      if (!pending) {
+        throw new Error("expected pending bootstrap pairing request");
+      }
+      await expect(rejectDevicePairing(pending.requestId)).resolves.toEqual({
+        requestId: pending.requestId,
+        deviceId: identity.deviceId,
+      });
+
+      const wsRetry = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const retry = await connectReq(wsRetry, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client,
+        deviceIdentityPath: identityPath,
+      });
+      expect(retry.ok).toBe(false);
+      expect((retry.error?.details as { code?: string } | undefined)?.code).toBe(
+        ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID,
+      );
+      wsRetry.close();
+      expect(
+        (await listDevicePairing()).pending.filter((entry) => entry.deviceId === identity.deviceId),
+      ).toEqual([]);
     } finally {
       await server.close();
       restoreGatewayToken(prevToken);
@@ -1149,6 +1392,7 @@ export function registerControlUiAndPairingSuite(): void {
 
   test("does not consume bootstrap token when node reconcile fails before hello-ok", async () => {
     const { issueDeviceBootstrapToken } = await import("../infra/device-bootstrap.js");
+    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
     const reconcileModule = await import("./node-connect-reconcile.js");
     const reconcileSpy = vi
       .spyOn(reconcileModule, "reconcileNodePairingOnConnect")
@@ -1171,6 +1415,25 @@ export function registerControlUiAndPairingSuite(): void {
           scopes: [],
         },
       });
+
+      const wsInitial = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
+      const initial = await connectReq(wsInitial, {
+        skipDefaultAuth: true,
+        bootstrapToken: issued.token,
+        role: "node",
+        scopes: [],
+        client: nodeClient,
+        deviceIdentityPath: identityPath,
+      });
+      expect(initial.ok).toBe(false);
+      wsInitial.close();
+      const pending = (await listDevicePairing()).pending.find(
+        (entry) => entry.clientId === nodeClient.id,
+      );
+      if (!pending) {
+        throw new Error("expected pending bootstrap pairing request");
+      }
+      await approveDevicePairing(pending.requestId, { callerScopes: ["operator.pairing"] });
 
       const wsFail = await openWs(port, REMOTE_BOOTSTRAP_HEADERS);
       await expect(
@@ -1356,7 +1619,9 @@ export function registerControlUiAndPairingSuite(): void {
         socket,
         (o) => o.type === "event" && o.event === "connect.challenge",
       );
-      await new Promise<void>((resolve) => socket.once("open", resolve));
+      await new Promise<void>((resolve) => {
+        socket.once("open", resolve);
+      });
       const challenge = await challengePromise;
       const nonce = (challenge.payload as { nonce?: unknown } | undefined)?.nonce;
       expect(typeof nonce).toBe("string");

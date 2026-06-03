@@ -1,7 +1,6 @@
 import { rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { stripAnsi } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -42,9 +41,11 @@ vi.mock("./session.js", async () => {
   const authDir = resolveTestAuthDir();
   const sockA = { ws: { close: vi.fn() } };
   const sockB = { ws: { close: vi.fn() } };
-  const createWaSocket = vi.fn(async () => (createWaSocket.mock.calls.length <= 1 ? sockA : sockB));
-  const waitForWaConnection = vi.fn();
-  const formatError = vi.fn((err: unknown) => `formatted:${String(err)}`);
+  const createWaSocketLocal = vi.fn(async () =>
+    createWaSocketLocal.mock.calls.length <= 1 ? sockA : sockB,
+  );
+  const waitForWaConnectionLocal = vi.fn();
+  const formatErrorLocal = vi.fn((err: unknown) => `formatted:${String(err)}`);
   const getStatusCode = vi.fn(
     (err: unknown) =>
       (err as { output?: { statusCode?: number } })?.output?.statusCode ??
@@ -53,11 +54,10 @@ vi.mock("./session.js", async () => {
   );
   return {
     ...actual,
-    createWaSocket,
-    waitForWaConnection,
-    formatError,
+    createWaSocket: createWaSocketLocal,
+    waitForWaConnection: waitForWaConnectionLocal,
+    formatError: formatErrorLocal,
     getStatusCode,
-    WA_WEB_AUTH_DIR: authDir,
     logoutWeb: vi.fn(async (params: { authDir?: string }) => {
       await fs.rm(params.authDir ?? authDir, {
         recursive: true,
@@ -87,6 +87,18 @@ function runtimeMessageCalls(fn: RuntimeEnv["log"]) {
   return calls.map((call) => sanitizeTerminalText(String(call[0])));
 }
 
+function createWaSocketCall(index: number) {
+  const call = createWaSocketMock.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected createWaSocket call ${index}`);
+  }
+  return call;
+}
+
+function createWaSocketOptions(index: number): { onQr?: (qr: string) => void } | undefined {
+  return createWaSocketCall(index)[2] as { onQr?: (qr: string) => void } | undefined;
+}
+
 describe("loginWeb coverage", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -111,9 +123,6 @@ describe("loginWeb coverage", () => {
 
     const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const pendingLogin = loginWeb(false, waitForWaConnectionMock as never, runtime);
-    await flushTasks();
-
-    expect(createWaSocketMock).toHaveBeenCalledTimes(2);
     await pendingLogin;
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
@@ -136,13 +145,9 @@ describe("loginWeb coverage", () => {
     await loginWeb(false, waitForWaConnectionMock as never, runtime);
 
     expect(createWaSocketMock).toHaveBeenCalledTimes(2);
-    expect(createWaSocketMock.mock.calls[0]?.[0]).toBe(false);
-    const initialOpts = createWaSocketMock.mock.calls[0]?.[2] as
-      | { onQr?: (qr: string) => void }
-      | undefined;
-    const restartOpts = createWaSocketMock.mock.calls[1]?.[2] as
-      | { onQr?: (qr: string) => void }
-      | undefined;
+    expect(createWaSocketCall(0)[0]).toBe(false);
+    const initialOpts = createWaSocketOptions(0);
+    const restartOpts = createWaSocketOptions(1);
     expect(initialOpts?.onQr).toBe(restartOpts?.onQr);
 
     initialOpts?.onQr?.("initial-qr");

@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import "./agent-command.test-mocks.js";
 import * as acpManagerModule from "../acp/control-plane/manager.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
-import * as embeddedModule from "../agents/pi-embedded.js";
+import * as embeddedModule from "../agents/embedded-agent.js";
 import * as configIoModule from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -34,6 +34,8 @@ const attemptExecutionMocks = vi.hoisted(() => ({
   emitAcpLifecycleStart: vi.fn(),
   emitAcpLifecycleEnd: vi.fn(),
   emitAcpLifecycleError: vi.fn(),
+  emitAcpPromptSubmitted: vi.fn(),
+  emitAcpRuntimeEvent: vi.fn(),
   persistAcpTurnTranscript: vi.fn(
     async ({ sessionEntry }: { sessionEntry?: unknown }) => sessionEntry,
   ),
@@ -74,6 +76,8 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
     emitAcpLifecycleStart: attemptExecutionMocks.emitAcpLifecycleStart,
     emitAcpLifecycleEnd: attemptExecutionMocks.emitAcpLifecycleEnd,
     emitAcpLifecycleError: attemptExecutionMocks.emitAcpLifecycleError,
+    emitAcpPromptSubmitted: attemptExecutionMocks.emitAcpPromptSubmitted,
+    emitAcpRuntimeEvent: attemptExecutionMocks.emitAcpRuntimeEvent,
     emitAcpAssistantDelta: ({
       runId,
       text,
@@ -111,7 +115,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
 });
 
 const loadConfigSpy = vi.spyOn(configIoModule, "loadConfig");
-const runEmbeddedPiAgentSpy = vi.spyOn(embeddedModule, "runEmbeddedPiAgent");
+const runEmbeddedAgentSpy = vi.spyOn(embeddedModule, "runEmbeddedAgent");
 const getAcpSessionManagerSpy = vi.spyOn(acpManagerModule, "getAcpSessionManager");
 
 const runtime = createThrowingTestRuntime();
@@ -297,11 +301,18 @@ async function runAcpTurnWithTextDeltas(params: { message?: string; chunks: stri
 }
 
 function expectPersistedAcpTranscript(params: { userContent: string; assistantText: string }) {
-  const transcript = attemptExecutionMocks.persistAcpTurnTranscript.mock.calls.at(-1)?.[0] as
+  const calls = attemptExecutionMocks.persistAcpTurnTranscript.mock.calls;
+  const transcript = calls[calls.length - 1]?.[0] as
     | { body?: string; finalText?: string }
     | undefined;
   expect(transcript?.body).toBe(params.userContent);
   expect(transcript?.finalText).toBe(params.assistantText);
+}
+
+function firstRunTurnInput(runTurn: { mock: { calls: unknown[][] } }) {
+  return runTurn.mock.calls[0]?.[0] as
+    | { mode?: string; sessionKey?: string; text?: string }
+    | undefined;
 }
 
 async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
@@ -321,7 +332,7 @@ async function runAcpSessionWithPolicyOverridesAndExpectBlocked(params: {
 
     await expectAcpCommandRejects("agent:codex:acp:test", "ACP_DISPATCH_DISABLED");
     expect(runTurn).not.toHaveBeenCalled();
-    expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
   });
 }
 
@@ -346,7 +357,7 @@ async function expectAcpCommandRejects(
 describe("agentCommand ACP runtime routing", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    runEmbeddedPiAgentSpy.mockResolvedValue({
+    runEmbeddedAgentSpy.mockResolvedValue({
       payloads: [{ text: "embedded" }],
       meta: {
         durationMs: 5,
@@ -360,13 +371,11 @@ describe("agentCommand ACP runtime routing", () => {
         message: "  ping\n",
         chunks: ["  ACP_OK\n"],
       });
-      const runTurnInput = runTurn.mock.calls[0]?.[0] as
-        | { mode?: string; sessionKey?: string; text?: string }
-        | undefined;
+      const runTurnInput = firstRunTurnInput(runTurn);
       expect(runTurnInput?.sessionKey).toBe("agent:codex:acp:test");
       expect(runTurnInput?.text).toBe("  ping\n");
       expect(runTurnInput?.mode).toBe("prompt");
-      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
       const hasAckLog = vi
         .mocked(runtime.log)
         .mock.calls.some(([first]) => typeof first === "string" && first.includes("ACP_OK"));
@@ -386,7 +395,7 @@ describe("agentCommand ACP runtime routing", () => {
         { text: "bo", delta: "bo" },
         { text: "book", delta: "ok" },
       ]);
-      expect(repeated.logLines.some((line) => line.includes("book"))).toBe(true);
+      expect(repeated.logLines.join("\n")).toContain("book");
     });
   });
 
@@ -395,7 +404,7 @@ describe("agentCommand ACP runtime routing", () => {
       const { assistantEvents, logLines } = await runAcpTurnWithAssistantEvents(["NO_REPLY"]);
 
       expect(assistantEvents.every((event) => !event.text)).toBe(true);
-      expect(logLines.some((line) => line.includes("NO_REPLY"))).toBe(false);
+      expect(logLines.join("\n")).not.toContain("NO_REPLY");
       expect(logLines).toStrictEqual([]);
     });
   });
@@ -436,7 +445,7 @@ describe("agentCommand ACP runtime routing", () => {
         "ACP metadata is missing",
       );
       expect(runTurn).not.toHaveBeenCalled();
-      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -469,7 +478,7 @@ describe("agentCommand ACP runtime routing", () => {
         "not allowed by policy",
       );
       expect(runTurn).not.toHaveBeenCalled();
-      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
     });
   });
 
@@ -489,12 +498,10 @@ describe("agentCommand ACP runtime routing", () => {
 
       await agentCommand({ message: "ping", sessionKey: "agent:kimi:acp:test" }, runtime);
 
-      const runTurnInput = runTurn.mock.calls[0]?.[0] as
-        | { sessionKey?: string; text?: string }
-        | undefined;
+      const runTurnInput = firstRunTurnInput(runTurn);
       expect(runTurnInput?.sessionKey).toBe("agent:kimi:acp:test");
       expect(runTurnInput?.text).toBe("ping");
-      expect(runEmbeddedPiAgentSpy).not.toHaveBeenCalled();
+      expect(runEmbeddedAgentSpy).not.toHaveBeenCalled();
     });
   });
 });

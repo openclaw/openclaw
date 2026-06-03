@@ -63,6 +63,7 @@ const mockConfig = vi.hoisted(() => {
         return {
           path: state.path,
           previousHash: before.hash ?? null,
+          persistedHash: before.hash ?? null,
           snapshot: before,
           nextConfig: cloneConfig(),
           result: undefined,
@@ -128,7 +129,7 @@ function commandContext(overrides: Partial<CommandContext> = {}): CommandContext
 }
 
 function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
-  const call = mock.mock.calls.at(0);
+  const call = mock.mock.calls[0];
   if (!call) {
     throw new Error(`expected ${label} call`);
   }
@@ -294,6 +295,52 @@ describe("Crestodian rescue message", () => {
     expect(audit.details?.rescue).toBe(true);
     expect(audit.details?.channel).toBe("whatsapp");
     expect(audit.details?.senderId).toBe("user:owner");
+  });
+
+  it("does not queue persistent rescue approval when expiry would exceed the Date range", async () => {
+    const tempDir = await makeStateDir("overflow-expiry-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+
+      await expect(
+        runRescue("/crestodian restart gateway", cfg, commandContext()),
+      ).resolves.toContain("expiry clock is invalid");
+
+      await expect(fs.readdir(path.join(tempDir, "crestodian", "rescue-pending"))).rejects.toThrow(
+        /ENOENT/,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects pending rescue approvals with invalid persisted expiry", async () => {
+    const tempDir = await makeStateDir("invalid-expiry-");
+    vi.stubEnv("OPENCLAW_STATE_DIR", tempDir);
+    const cfg: OpenClawConfig = { crestodian: { rescue: { enabled: true } } };
+    const deps = { runGatewayRestart: vi.fn(async () => {}) };
+
+    await expect(
+      runRescue("/crestodian restart gateway", cfg, commandContext(), deps),
+    ).resolves.toContain("Reply /crestodian yes to apply");
+    const pendingDir = path.join(tempDir, "crestodian", "rescue-pending");
+    const [pendingFile] = await fs.readdir(pendingDir);
+    if (!pendingFile) {
+      throw new Error("expected pending rescue file");
+    }
+    const pendingPath = path.join(pendingDir, pendingFile);
+    const pending = JSON.parse(await fs.readFile(pendingPath, "utf8")) as { expiresAt?: string };
+    pending.expiresAt = "not-a-date";
+    await fs.writeFile(pendingPath, `${JSON.stringify(pending, null, 2)}\n`, "utf8");
+
+    await expect(runRescue("/crestodian yes", cfg, commandContext(), deps)).resolves.toBe(
+      "No pending Crestodian rescue change is waiting for approval.",
+    );
+    expect(deps.runGatewayRestart).not.toHaveBeenCalled();
+    await expect(fs.stat(pendingPath)).rejects.toThrow(/ENOENT/);
   });
 
   it("queues and applies agent creation through conversational approval", async () => {

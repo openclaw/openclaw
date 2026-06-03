@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -95,6 +98,24 @@ vi.mock("../../agents/acp-spawn.js", () => ({
     params.cfg?.agents?.defaults?.sandbox?.mode === "all"
       ? 'Sandboxed sessions cannot spawn ACP sessions because runtime="acp" runs on the host. Use runtime="subagent" from sandboxed sessions.'
       : undefined,
+  resolveRuntimeCwdForAcpSpawn: async (params: { explicitCwd?: string; resolvedCwd?: string }) => {
+    if (params.explicitCwd) {
+      return params.resolvedCwd;
+    }
+    if (!params.resolvedCwd) {
+      return undefined;
+    }
+    try {
+      await fs.access(params.resolvedCwd);
+      return params.resolvedCwd;
+    } catch (error) {
+      const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+      if (code === "ENOENT" || code === "ENOTDIR") {
+        return undefined;
+      }
+      throw error;
+    }
+  },
 }));
 
 vi.mock("../../config/sessions.js", async () => {
@@ -120,8 +141,8 @@ vi.mock("../../infra/outbound/session-binding-service.js", async () => {
 
 const { handleAcpCommand } = await import("./commands-acp.js");
 const { buildCommandTestParams } = await import("./commands-spawn.test-harness.js");
-const { __testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
-const { __testing: acpResetTargetTesting, resolveEffectiveResetTargetSessionKey } =
+const { testing: acpManagerTesting } = await import("../../acp/control-plane/manager.js");
+const { testing: acpResetTargetTesting, resolveEffectiveResetTargetSessionKey } =
   await import("./acp-reset-target.js");
 const { createTaskRecord, resetTaskRegistryForTests } =
   await import("../../tasks/task-registry.js");
@@ -535,6 +556,11 @@ function createAcpSessionEntry(options?: {
   return {
     sessionKey,
     storeSessionKey: sessionKey,
+    entry: {
+      sessionId: "sess-acp",
+      updatedAt: Date.now(),
+      label: "codex-main",
+    },
     acp: {
       backend: "acpx",
       agent: "codex",
@@ -1143,8 +1169,8 @@ describe("/acp command", () => {
     expect(introText).toContain("cwd: /home/bob/clawd");
     expectBoundIntroTextToExclude("session ids: pending (available after the first reply)");
     expectGatewayMethodNotCalled("sessions.patch");
-    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
-    const upsertArgs = hoisted.upsertAcpSessionMetaMock.mock.calls[0]?.[0] as
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
+    const upsertArgs = mockCallArg(hoisted.upsertAcpSessionMetaMock) as
       | {
           sessionKey: string;
           mutate: (
@@ -1160,6 +1186,73 @@ describe("/acp command", () => {
     const seededWithoutEntry = upsertArgs?.mutate(undefined, undefined);
     expect(seededWithoutEntry?.backend).toBe("acpx");
     expect(seededWithoutEntry?.runtimeSessionName).toContain(":runtime");
+  });
+
+  it("inherits the target agent workspace when /acp spawn omits --cwd", async () => {
+    hoisted.ensureSessionMock.mockResolvedValueOnce({
+      sessionKey: "agent:codex:acp:s2",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:s2:runtime",
+      agentSessionId: "codex-inner-2",
+      backendSessionId: "acpx-2",
+    });
+
+    const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-"));
+    try {
+      const cfg = {
+        ...baseCfg,
+        agents: {
+          list: [
+            {
+              id: "codex",
+              workspace,
+            },
+          ],
+        },
+      } satisfies OpenClawConfig;
+
+      const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
+
+      expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+      expectMockCallFields(hoisted.ensureSessionMock, {
+        agent: "codex",
+        mode: "persistent",
+        cwd: workspace,
+      });
+    } finally {
+      await fs.rm(workspace, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the backend default cwd when the inherited target workspace is missing", async () => {
+    hoisted.ensureSessionMock.mockResolvedValueOnce({
+      sessionKey: "agent:codex:acp:s3",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:s3:runtime",
+      agentSessionId: "codex-inner-3",
+      backendSessionId: "acpx-3",
+    });
+
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [
+          {
+            id: "codex",
+            workspace: "/home/bob/codex-workspace-missing",
+          },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    const result = await runDiscordAcpCommand("/acp spawn codex", cfg);
+
+    expect(result?.reply?.text).toContain("Spawned ACP session agent:codex:acp:");
+    expectMockCallFields(hoisted.ensureSessionMock, {
+      agent: "codex",
+      mode: "persistent",
+      cwd: undefined,
+    });
   });
 
   it("persists ACP spawn labels without a nested gateway self-call", async () => {
@@ -1631,7 +1724,15 @@ describe("/acp command", () => {
       targetSessionKey: defaultAcpSessionKey,
       reason: "manual",
     });
-    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalled();
+    expect(hoisted.upsertAcpSessionMetaMock).toHaveBeenCalledTimes(1);
+    const clearMetaArgs = mockCallArg(hoisted.upsertAcpSessionMetaMock) as
+      | {
+          sessionKey: string;
+          mutate: (current: unknown, entry: { sessionId: string; updatedAt: number }) => unknown;
+        }
+      | undefined;
+    expect(clearMetaArgs?.sessionKey).toBe(defaultAcpSessionKey);
+    expect(clearMetaArgs?.mutate(undefined, { sessionId: "session-1", updatedAt: 0 })).toBeNull();
     expect(result?.reply?.text).toContain("Removed 1 binding");
   });
 
@@ -1703,25 +1804,7 @@ describe("/acp command", () => {
     hoisted.sessionBindingListBySessionMock.mockImplementation((key: string) =>
       key === defaultAcpSessionKey ? [createBoundThreadSession(key) as SessionBindingRecord] : [],
     );
-    hoisted.loadSessionStoreMock.mockReturnValue({
-      [defaultAcpSessionKey]: {
-        sessionId: "sess-1",
-        updatedAt: Date.now(),
-        label: "codex-main",
-        acp: {
-          backend: "acpx",
-          agent: "codex",
-          runtimeSessionName: "runtime-1",
-          mode: "persistent",
-          state: "idle",
-          lastActivityAt: Date.now(),
-        },
-      },
-      "agent:main:main": {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-      },
-    });
+    hoisted.listAcpSessionEntriesMock.mockResolvedValue([createAcpSessionEntry()]);
 
     const result = await runDiscordAcpCommand("/acp sessions", baseCfg);
 
@@ -1760,6 +1843,33 @@ describe("/acp command", () => {
     expect(result?.reply?.text).toContain("taskProgress: Fetching the latest runtime state");
     expect(result?.reply?.text).toContain("capabilities:");
     expect(hoisted.getStatusMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("tolerates Date-invalid ACP status timestamps", async () => {
+    mockBoundThreadSession();
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      ...createAcpSessionEntry(),
+      acp: {
+        ...createAcpSessionEntry().acp,
+        lastActivityAt: 8_700_000_000_000_000,
+      },
+    });
+    createTaskRecord({
+      runtime: "acp",
+      ownerKey: "agent:main:main",
+      scopeKind: "session",
+      childSessionKey: defaultAcpSessionKey,
+      runId: "acp-run-1",
+      task: "Inspect ACP backlog",
+      status: "running",
+      lastEventAt: 8_700_000_000_000_000,
+    });
+
+    const result = await runThreadAcpCommand("/acp status", baseCfg);
+
+    expect(result?.reply?.text).toContain("ACP status:");
+    expect(result?.reply?.text).toContain("lastActivityAt: n/a");
+    expect(result?.reply?.text).not.toContain("taskUpdatedAt:");
   });
 
   it("sanitizes leaked task and runtime details in ACP status output", async () => {

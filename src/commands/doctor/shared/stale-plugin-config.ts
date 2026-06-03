@@ -1,11 +1,12 @@
+import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
+import { shouldSuppressMissingCodexPluginDiagnostics } from "../../../config/codex-plugin-diagnostics.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { normalizePluginId } from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import { defaultSlotIdForKey, type PluginSlotKey } from "../../../plugins/slots.js";
-import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { asObjectRecord } from "./object.js";
 
 const CHANNEL_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
@@ -146,6 +147,9 @@ function scanStalePluginConfigWithState(
     for (const rawPluginId of Object.keys(entries)) {
       const pluginId = normalizePluginId(rawPluginId);
       if (!pluginId || knownIds.has(pluginId) || registryState.knownChannelIds.has(pluginId)) {
+        continue;
+      }
+      if (pluginId === "codex" && shouldSuppressMissingCodexPluginDiagnostics(cfg)) {
         continue;
       }
       hits.push({
@@ -325,6 +329,7 @@ export function collectStalePluginConfigWarnings(params: {
 export function maybeRepairStalePluginConfig(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
+  params?: { preservePluginIds?: Iterable<string> },
 ): {
   config: OpenClawConfig;
   changes: string[];
@@ -337,7 +342,14 @@ export function maybeRepairStalePluginConfig(
     return { config: cfg, changes: [] };
   }
 
-  const hits = scanStalePluginConfigWithState(cfg, registryState);
+  const preservePluginIds = new Set(
+    [...(params?.preservePluginIds ?? [])]
+      .map((pluginId) => normalizePluginId(pluginId))
+      .filter((pluginId): pluginId is string => Boolean(pluginId)),
+  );
+  const hits = scanStalePluginConfigWithState(cfg, registryState).filter(
+    (hit) => !preservePluginIds.has(normalizePluginId(hit.pluginId)),
+  );
   if (hits.length === 0) {
     return { config: cfg, changes: [] };
   }

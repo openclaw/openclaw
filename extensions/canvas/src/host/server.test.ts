@@ -217,6 +217,20 @@ describe("canvas host", () => {
     }
   });
 
+  it("falls back to the default mount when the configured base path is malformed", async () => {
+    const dir = await createCaseDir();
+    await fs.writeFile(path.join(dir, "index.html"), "<html><body>fallback</body></html>", "utf8");
+    const handler = await createTestCanvasHostHandler(dir, { basePath: "/%E0%A4%A" });
+
+    try {
+      const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
+      expect(response.status).toBe(200);
+      expect(response.body).toContain("fallback");
+    } finally {
+      await handler.close();
+    }
+  });
+
   it("serves canvas content from the mounted base path and reuses handlers without double close", async () => {
     const dir = await createCaseDir();
     await fs.writeFile(path.join(dir, "index.html"), "<html><body>v1</body></html>", "utf8");
@@ -231,6 +245,10 @@ describe("canvas host", () => {
       expect(response.status).toBe(200);
       expect(response.body).toContain("v1");
       expect(response.body).toContain(CANVAS_WS_PATH);
+
+      const malformed = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/%E0%A4%A`);
+      expect(malformed.status).toBe(404);
+      expect(malformed.body).toBe("not found");
 
       const miss = await captureHandlerResponse(handler, "/");
       expect(miss.handled).toBe(false);
@@ -356,7 +374,7 @@ describe("canvas host", () => {
       }
 
       await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
-      watcher.__emit("all", "change", index);
+      watcher["__emit"]("all", "change", index);
       await reloadSent;
       expect(ws.sent[0]).toBe("reload");
     } finally {
@@ -370,7 +388,6 @@ describe("canvas host", () => {
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
     let createdBundle = false;
-    let createdLink = false;
 
     try {
       await fs.stat(bundlePath);
@@ -380,7 +397,6 @@ describe("canvas host", () => {
     }
 
     await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
-    createdLink = true;
 
     try {
       const res = await captureA2uiResponse(`${A2UI_PATH}/`);
@@ -396,13 +412,14 @@ describe("canvas host", () => {
       const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");
+      const malformedRes = await captureA2uiResponse(`${A2UI_PATH}/%E0%A4%A`);
+      expect(malformedRes.status).toBe(404);
+      expect(malformedRes.body).toBe("not found");
       const symlinkRes = await captureA2uiResponse(`${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
-      if (createdLink) {
-        await fs.rm(linkPath, { force: true });
-      }
+      await fs.rm(linkPath, { force: true });
       if (createdBundle) {
         await fs.rm(bundlePath, { force: true });
       }

@@ -25,6 +25,10 @@ export type MarkdownSidebarProps = {
 
 export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
   const content = props.content;
+  const markdownHtml =
+    content?.kind === "markdown" && content.content.trim()
+      ? toSanitizedMarkdownHtml(content.content)
+      : "";
   return html`
     <div class="sidebar-panel">
       <div class="sidebar-header">
@@ -49,14 +53,18 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
         ${props.error
           ? html`
               <div class="callout danger">${props.error}</div>
-              <button
-                @click=${props.onViewRawText}
-                class="btn"
-                type="button"
-                style="margin-top: 12px;"
-              >
-                View Raw Text
-              </button>
+              ${content?.rawText?.trim()
+                ? html`
+                    <button
+                      @click=${props.onViewRawText}
+                      class="btn"
+                      type="button"
+                      style="margin-top: 12px;"
+                    >
+                      View Raw Text
+                    </button>
+                  `
+                : nothing}
             `
           : content
             ? content.kind === "canvas"
@@ -107,9 +115,15 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                         View Raw Text
                       </button>
                     </div>
-                    <article class="sidebar-markdown-reader sidebar-markdown">
-                      ${unsafeHTML(toSanitizedMarkdownHtml(content.content))}
-                    </article>
+                    ${markdownHtml
+                      ? html`
+                          <article class="sidebar-markdown-reader sidebar-markdown">
+                            ${unsafeHTML(markdownHtml)}
+                          </article>
+                        `
+                      : html`
+                          <div class="sidebar-markdown-empty">No previewable markdown content.</div>
+                        `}
                   </section>
                 `
             : html` <div class="muted">No content available</div> `}

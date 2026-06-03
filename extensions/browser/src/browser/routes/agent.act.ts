@@ -40,11 +40,14 @@ import {
 } from "./agent.shared.js";
 import { resolveTargetIdAfterNavigate } from "./agent.snapshot-target.js";
 import { EXISTING_SESSION_LIMITS } from "./existing-session-limits.js";
+import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toNumber, toStringOrEmpty } from "./utils.js";
+import { asyncBrowserRoute, jsonError, toStringOrEmpty } from "./utils.js";
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 const EXISTING_SESSION_INTERACTION_NAVIGATION_RECHECK_DELAYS_MS = [0, 250, 500] as const;
@@ -175,7 +178,7 @@ async function runExistingSessionActionWithNavigationGuard<T>(params: {
   }
 
   if (actionError) {
-    throw actionError;
+    throw toLintErrorObject(actionError, "Non-Error thrown");
   }
 
   return result as T;
@@ -276,6 +279,12 @@ const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
   "type",
   "wait",
 ]);
+
+function shouldEnforceCurrentUrlForAct(action: BrowserActRequest): boolean {
+  // Batch stays guarded because nested actions can read or return page data.
+  return action.kind !== "resize" && action.kind !== "close";
+}
+
 function getExistingSessionUnsupportedMessage(action: BrowserActRequest): string | null {
   switch (action.kind) {
     case "click":
@@ -387,6 +396,7 @@ export function registerBrowserAgentActRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: shouldEnforceCurrentUrlForAct(action),
         run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
           const evaluateEnabled = ctx.state().resolved.evaluateEnabled;
           const ssrfPolicy = ctx.state().resolved.ssrfPolicy;
@@ -654,6 +664,12 @@ export function registerBrowserAgentActRoutes(
             ssrfPolicy,
             signal: req.signal,
           });
+          if (result.blockedByDialog) {
+            return await jsonOk({
+              blockedByDialog: true,
+              browserState: result.browserState,
+            });
+          }
           switch (action.kind) {
             case "batch":
               return await jsonOk(
@@ -684,8 +700,14 @@ export function registerBrowserAgentActRoutes(
       const body = readBody(req);
       const targetId = resolveTargetIdFromBody(body);
       const url = toStringOrEmpty(body.url);
-      const timeoutMs = toNumber(body.timeoutMs);
-      const maxChars = toNumber(body.maxChars);
+      let timeoutMs: number | undefined;
+      let maxChars: number | undefined;
+      try {
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs);
+        maxChars = readRoutePositiveInteger(body.maxChars, "maxChars");
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
       if (!url) {
         return jsonError(res, 400, "url is required");
       }
@@ -738,6 +760,7 @@ export function registerBrowserAgentActRoutes(
         res,
         ctx,
         targetId,
+        enforceCurrentUrlAllowed: true,
         run: async ({ profileCtx, cdpUrl, tab, resolveTabUrl }) => {
           const jsonOk = async () => {
             const currentUrl = await resolveTabUrl(tab.url);
@@ -785,4 +808,18 @@ export function registerBrowserAgentActRoutes(
       });
     }),
   );
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

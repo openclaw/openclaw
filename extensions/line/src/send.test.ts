@@ -13,36 +13,36 @@ const {
   logVerboseMock,
   resolvePinnedHostnameWithPolicyMock,
 } = vi.hoisted(() => {
-  const pushMessageMock = vi.fn();
-  const replyMessageMock = vi.fn();
-  const showLoadingAnimationMock = vi.fn();
-  const getProfileMock = vi.fn();
-  const MessagingApiClientMock = vi.fn(function () {
+  const pushMessageMockLocal = vi.fn();
+  const replyMessageMockLocal = vi.fn();
+  const showLoadingAnimationMockLocal = vi.fn();
+  const getProfileMockLocal = vi.fn();
+  const MessagingApiClientMockLocal = vi.fn(function () {
     return {
-      pushMessage: pushMessageMock,
-      replyMessage: replyMessageMock,
-      showLoadingAnimation: showLoadingAnimationMock,
-      getProfile: getProfileMock,
+      pushMessage: pushMessageMockLocal,
+      replyMessage: replyMessageMockLocal,
+      showLoadingAnimation: showLoadingAnimationMockLocal,
+      getProfile: getProfileMockLocal,
     };
   });
-  const requireRuntimeConfigMock = vi.fn((cfg: unknown) => cfg ?? {});
-  const resolveLineAccountMock = vi.fn(() => ({ accountId: "default" }));
-  const resolveLineChannelAccessTokenMock = vi.fn(() => "line-token");
-  const recordChannelActivityMock = vi.fn();
-  const logVerboseMock = vi.fn();
-  const resolvePinnedHostnameWithPolicyMock = vi.fn();
+  const requireRuntimeConfigMockLocal = vi.fn((cfg: unknown) => cfg ?? {});
+  const resolveLineAccountMockLocal = vi.fn(() => ({ accountId: "default" }));
+  const resolveLineChannelAccessTokenMockLocal = vi.fn(() => "line-token");
+  const recordChannelActivityMockLocal = vi.fn();
+  const logVerboseMockLocal = vi.fn();
+  const resolvePinnedHostnameWithPolicyMockLocal = vi.fn();
   return {
-    pushMessageMock,
-    replyMessageMock,
-    showLoadingAnimationMock,
-    getProfileMock,
-    MessagingApiClientMock,
-    requireRuntimeConfigMock,
-    resolveLineAccountMock,
-    resolveLineChannelAccessTokenMock,
-    recordChannelActivityMock,
-    logVerboseMock,
-    resolvePinnedHostnameWithPolicyMock,
+    pushMessageMock: pushMessageMockLocal,
+    replyMessageMock: replyMessageMockLocal,
+    showLoadingAnimationMock: showLoadingAnimationMockLocal,
+    getProfileMock: getProfileMockLocal,
+    MessagingApiClientMock: MessagingApiClientMockLocal,
+    requireRuntimeConfigMock: requireRuntimeConfigMockLocal,
+    resolveLineAccountMock: resolveLineAccountMockLocal,
+    resolveLineChannelAccessTokenMock: resolveLineChannelAccessTokenMockLocal,
+    recordChannelActivityMock: recordChannelActivityMockLocal,
+    logVerboseMock: logVerboseMockLocal,
+    resolvePinnedHostnameWithPolicyMock: resolvePinnedHostnameWithPolicyMockLocal,
   };
 });
 
@@ -358,6 +358,33 @@ describe("LINE send helpers", () => {
     );
   });
 
+  it("rejects lowercased LINE-shaped recipients (#81628 safety net)", async () => {
+    // 33-char value with lowercase leading char — what an upstream session-key
+    // fragment looked like before the cron-tool fix. LINE rejects with HTTP 400
+    // anyway; throwing locally keeps the failure permanent so delivery-recovery
+    // moves the entry to failed/ immediately instead of silently retrying 5×.
+    await expect(
+      sendModule.pushMessagesLine(
+        "cabcdef0123456789abcdef0123456789",
+        [{ type: "text", text: "hello" }],
+        { cfg: LINE_TEST_CFG },
+      ),
+    ).rejects.toThrow(/Recipient is not a valid LINE id/);
+    expect(pushMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts case-exact LINE recipients with the leading capital preserved", async () => {
+    await sendModule.pushMessagesLine(
+      "Cabcdef0123456789abcdef0123456789",
+      [{ type: "text", text: "hello" }],
+      { cfg: LINE_TEST_CFG },
+    );
+    expect(pushMessageMock).toHaveBeenCalledWith({
+      to: "Cabcdef0123456789abcdef0123456789",
+      messages: [{ type: "text", text: "hello" }],
+    });
+  });
+
   it("logs HTTP body when push fails", async () => {
     const err = new Error("LINE push failed") as Error & {
       status: number;
@@ -418,7 +445,7 @@ describe("LINE send helpers", () => {
     );
 
     expect(pushMessageMock).toHaveBeenCalledTimes(1);
-    const firstCall = pushMessageMock.mock.calls[0] as [
+    const firstCall = pushMessageMock.mock.calls.at(0) as [
       { messages: Array<{ quickReply?: { items: unknown[] } }> },
     ];
     expect(firstCall[0].messages[0].quickReply?.items).toHaveLength(13);

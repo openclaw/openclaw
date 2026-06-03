@@ -1,8 +1,23 @@
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyDefaultModel, applyProviderAuthConfigPatch } from "./provider-auth-choice-helpers.js";
 
 describe("applyProviderAuthConfigPatch", () => {
+  beforeAll(() => {
+    applyProviderAuthConfigPatch(
+      {},
+      {
+        models: {
+          providers: {
+            google: {
+              models: [],
+            },
+          },
+        },
+      },
+    );
+  });
+
   const base = {
     agents: {
       defaults: {
@@ -62,13 +77,13 @@ describe("applyProviderAuthConfigPatch", () => {
         params: { maxTokens: 12000 },
       },
     });
-    expect(Object.prototype.hasOwnProperty.call(models, "__proto__")).toBe(false);
+    expect(Object.hasOwn(models ?? {}, "__proto__")).toBe(false);
     expect(Object.getPrototypeOf(Object.assign({}, models)).polluted).toBeUndefined();
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
   it("keeps normal recursive merges for unrelated provider auth patch fields", () => {
-    const base = {
+    const baseLocal = {
       agents: {
         defaults: {
           contextPruning: {
@@ -88,7 +103,7 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     };
 
-    const next = applyProviderAuthConfigPatch(base, patch);
+    const next = applyProviderAuthConfigPatch(baseLocal, patch);
 
     expect(next).toEqual({
       agents: {
@@ -133,6 +148,39 @@ describe("applyProviderAuthConfigPatch", () => {
       "google/gemini-3.1-pro-preview": {
         alias: "gemini",
         params: { thinking: "high", maxTokens: 12_000 },
+      },
+    });
+  });
+
+  it("normalizes retired Google Gemini per-agent refs from provider config patches", () => {
+    const patch = {
+      agents: {
+        list: [
+          {
+            id: "ops",
+            model: {
+              primary: "google/gemini-3-pro-preview",
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": {
+                alias: "ops-gemini",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch({}, patch);
+
+    expect(next.agents?.list?.[0]?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview"],
+    });
+    expect(next.agents?.list?.[0]?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "ops-gemini",
       },
     });
   });

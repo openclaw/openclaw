@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -10,10 +14,6 @@ import {
   resolveInputFileLimits,
 } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type { ActiveMediaModel } from "./active-model.types.js";
 import { resolveAttachmentKind } from "./attachments.js";
 import { runWithConcurrency } from "./concurrency.js";
@@ -522,11 +522,14 @@ async function extractFileBlocks(params: {
 export async function applyMediaUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
+  workspaceDir?: string;
   providers?: Record<string, MediaUnderstandingProvider>;
   activeModel?: ActiveMediaModel;
 }): Promise<ApplyMediaUnderstandingResult> {
   const { ctx, cfg } = params;
+  const mediaWorkspaceDir = ctx.MediaWorkspaceDir ?? params.workspaceDir;
   const commandCandidates = [ctx.CommandBody, ctx.RawBody, ctx.Body];
   const originalUserText =
     commandCandidates
@@ -536,9 +539,13 @@ export async function applyMediaUnderstanding(params: {
   const attachments = normalizeMediaAttachments(ctx);
   const providerRegistry = buildProviderRegistry(params.providers, cfg);
   const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: resolveMediaAttachmentLocalRoots({ cfg, ctx }),
+    localPathRoots: resolveMediaAttachmentLocalRoots({
+      cfg,
+      ctx,
+      workspaceDir: params.workspaceDir,
+    }),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
-    workspaceDir: ctx.MediaWorkspaceDir,
+    workspaceDir: mediaWorkspaceDir,
   });
 
   try {
@@ -550,7 +557,9 @@ export async function applyMediaUnderstanding(params: {
         ctx,
         attachments: cache,
         media: attachments,
+        agentId: params.agentId,
         agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
         providerRegistry,
         config,
         activeModel: params.activeModel,

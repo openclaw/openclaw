@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   browserPluginNodeHostCommands,
   browserPluginReload,
@@ -25,6 +25,7 @@ const runtimeApiMocks = vi.hoisted(() => ({
   handleBrowserGatewayRequest: vi.fn(),
   registerBrowserCli: vi.fn(),
   runBrowserProxyCommand: vi.fn(async () => "ok"),
+  stopBrowserControlService: vi.fn(async () => undefined),
 }));
 
 vi.mock("./register.runtime.js", async () => {
@@ -44,6 +45,22 @@ vi.mock("./src/cli/browser-cli.js", () => ({
   registerBrowserCli: runtimeApiMocks.registerBrowserCli,
 }));
 
+vi.mock("./src/control-service.js", () => ({
+  stopBrowserControlService: runtimeApiMocks.stopBrowserControlService,
+}));
+
+beforeAll(async () => {
+  await import("./register.runtime.js");
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
 function createApi() {
   const registerCli = vi.fn();
   const registerGatewayMethod = vi.fn();
@@ -61,6 +78,14 @@ function createApi() {
     registerTool,
   });
   return { api, registerCli, registerGatewayMethod, registerService, registerTool };
+}
+
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls.at(index);
+  if (!call) {
+    throw new Error(`expected mock call ${index}`);
+  }
+  return call[argIndex];
 }
 
 function registerBrowserAutoEnableProbe(): BrowserAutoEnableProbe {
@@ -103,7 +128,7 @@ describe("browser plugin", () => {
     const { api, registerTool } = createApi();
     registerBrowserPlugin(api);
 
-    const factory = registerTool.mock.calls[0]?.[0];
+    const factory = mockCallArg(registerTool);
     if (typeof factory !== "function") {
       throw new Error("expected browser plugin to register a tool factory");
     }
@@ -126,6 +151,72 @@ describe("browser plugin", () => {
       sandboxBridgeUrl: "http://127.0.0.1:9999",
       allowHostControl: true,
       agentSessionKey: "agent:main:webchat:direct:123",
+      mediaScope: {
+        sessionKey: "agent:main:webchat:direct:123",
+        chatType: "direct",
+      },
+    });
+  });
+
+  it("passes runtime context needed for screenshot image understanding", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    const tool = factory({
+      sessionKey: "agent:main:webchat:direct:123",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      activeModel: { provider: "openai", modelId: "gpt-5.5" },
+      deliveryContext: { channel: "telegram" },
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "status" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      agentSessionKey: "agent:main:webchat:direct:123",
+      agentDir: "/tmp/agent",
+      workspaceDir: "/tmp/workspace",
+      activeModel: { provider: "openai", model: "gpt-5.5" },
+      mediaScope: {
+        sessionKey: "agent:main:webchat:direct:123",
+        channel: "telegram",
+        chatType: "direct",
+      },
+    });
+  });
+
+  it("derives group chat type for browser media scope", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    const tool = factory({
+      sessionKey: "agent:main:telegram:group:chat-123",
+      messageChannel: "telegram",
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "status" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      agentSessionKey: "agent:main:telegram:group:chat-123",
+      mediaScope: {
+        sessionKey: "agent:main:telegram:group:chat-123",
+        channel: "telegram",
+        chatType: "group",
+      },
     });
   });
 
@@ -134,9 +225,9 @@ describe("browser plugin", () => {
     registerBrowserPlugin(api);
 
     expect(registerCli).toHaveBeenCalledTimes(1);
-    const registrar = registerCli.mock.calls[0]?.[0];
+    const registrar = mockCallArg(registerCli) as (params: { program: never }) => unknown;
     expect(typeof registrar).toBe("function");
-    expect(registerCli.mock.calls[0]?.[1]).toEqual({
+    expect(mockCallArg(registerCli, 0, 1)).toEqual({
       commands: ["browser"],
       descriptors: [
         {
@@ -155,10 +246,12 @@ describe("browser plugin", () => {
     registerBrowserPlugin(api);
 
     expect(registerGatewayMethod).toHaveBeenCalledTimes(1);
-    expect(registerGatewayMethod.mock.calls[0]?.[0]).toBe("browser.request");
-    const handler = registerGatewayMethod.mock.calls[0]?.[1];
+    expect(mockCallArg(registerGatewayMethod)).toBe("browser.request");
+    const handler = mockCallArg(registerGatewayMethod, 0, 1) as (request: {
+      method: string;
+    }) => unknown;
     expect(typeof handler).toBe("function");
-    expect(registerGatewayMethod.mock.calls[0]?.[2]).toEqual({
+    expect(mockCallArg(registerGatewayMethod, 0, 2)).toEqual({
       scope: "operator.admin",
     });
     await handler({ method: "browser.request" });
@@ -175,19 +268,56 @@ describe("browser plugin", () => {
     expect(runtimeApiMocks.collectBrowserSecurityAuditFindings).toHaveBeenCalled();
   });
 
-  it("lazy-loads the browser service on start", async () => {
+  it("registers a lazy browser control service", async () => {
     const { api, registerService } = createApi();
     registerBrowserPlugin(api);
 
-    const service = registerService.mock.calls[0]?.[0];
+    const service = mockCallArg(registerService) as {
+      id: string;
+      start: (...args: unknown[]) => unknown;
+      stop: (...args: unknown[]) => unknown;
+    };
     expect(service?.id).toBe("browser-control");
     expect(typeof service?.start).toBe("function");
     expect(typeof service?.stop).toBe("function");
     expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
 
     await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+    expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+
+    await service.stop({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+    expect(runtimeApiMocks.stopBrowserControlService).toHaveBeenCalledOnce();
+  });
+
+  it("eager-loads the browser control service when explicitly requested", async () => {
+    vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", "1");
+    const { api, registerService } = createApi();
+    registerBrowserPlugin(api);
+
+    const service = mockCallArg(registerService) as {
+      id: string;
+      start: (...args: unknown[]) => unknown;
+    };
+
+    await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
     expect(runtimeApiMocks.createBrowserPluginService).toHaveBeenCalledOnce();
   });
+
+  for (const value of ["false", "", "disabled"]) {
+    it(`keeps browser control service env value ${JSON.stringify(value)} lazy`, async () => {
+      vi.stubEnv("OPENCLAW_EAGER_BROWSER_CONTROL_SERVER", value);
+      const { api, registerService } = createApi();
+      registerBrowserPlugin(api);
+
+      const service = mockCallArg(registerService) as {
+        id: string;
+        start: (...args: unknown[]) => unknown;
+      };
+
+      await service.start({ config: {}, stateDir: "/tmp/openclaw", logger: { warn: vi.fn() } });
+      expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+    });
+  }
 
   it("declares setup auto-enable reasons for browser config surfaces", () => {
     const probe = registerBrowserAutoEnableProbe();

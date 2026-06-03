@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { parseAgentSessionKey } from "./session-key-utils.js";
 
 export type SessionKeyChatType = "direct" | "group" | "channel" | "unknown";
@@ -8,6 +8,12 @@ function deriveBuiltInLegacySessionChatType(
 ): SessionKeyChatType | undefined {
   if (/^group:[^:]+$/.test(scopedSessionKey)) {
     return "group";
+  }
+  if (/^(?:whatsapp:)?[^:]+@g\.us$/.test(scopedSessionKey)) {
+    return "group";
+  }
+  if (/^discord:(?:[^:]+:)?guild-[^:]+:channel-[^:]+$/.test(scopedSessionKey)) {
+    return "channel";
   }
   return undefined;
 }

@@ -90,23 +90,23 @@ Not every agent run creates a task. Heartbeat turns and normal interactive chat 
 
 ## What creates a task
 
-| Source                 | Runtime type | When a task record is created                          | Default notify policy |
-| ---------------------- | ------------ | ------------------------------------------------------ | --------------------- |
-| ACP background runs    | `acp`        | Spawning a child ACP session                           | `done_only`           |
-| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`               | `done_only`           |
-| Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)       | `silent`              |
-| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway | `silent`              |
-| Agent media jobs       | `cli`        | Session-backed `music_generate`/`video_generate` runs  | `silent`              |
+| Source                 | Runtime type | When a task record is created                                          | Default notify policy |
+| ---------------------- | ------------ | ---------------------------------------------------------------------- | --------------------- |
+| ACP background runs    | `acp`        | Spawning a child ACP session                                           | `done_only`           |
+| Subagent orchestration | `subagent`   | Spawning a subagent via `sessions_spawn`                               | `done_only`           |
+| Cron jobs (all types)  | `cron`       | Every cron execution (main-session and isolated)                       | `silent`              |
+| CLI operations         | `cli`        | `openclaw agent` commands that run through the gateway                 | `silent`              |
+| Agent media jobs       | `cli`        | Session-backed `image_generate`/`music_generate`/`video_generate` runs | `silent`              |
 
 <AccordionGroup>
   <Accordion title="Notify defaults for cron and media">
     Main-session cron tasks use `silent` notify policy by default - they create records for tracking but do not generate notifications. Isolated cron tasks also default to `silent` but are more visible because they run in their own session.
 
-    Session-backed `music_generate` and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. Group/channel completions follow the normal visible-reply policy, so the agent uses the message tool when source delivery requires it. If the completion agent fails to produce message-tool delivery evidence in a tool-only route, OpenClaw sends the completion fallback directly to the original channel instead of leaving the media private.
+    Session-backed `image_generate`, `music_generate`, and `video_generate` runs also use `silent` notify policy. They still create task records, but completion is handed back to the original agent session as an internal wake so the agent can write the follow-up message and attach the finished media itself. The requester agent follows its normal visible-reply contract: automatic final reply when configured, or `message(action="send")` plus `NO_REPLY` when the session requires message-tool replies. If the requester session is no longer active or its active wake fails, and the completion agent misses some or all generated media, OpenClaw sends an idempotent direct fallback with only the missing media to the original channel target.
 
   </Accordion>
-  <Accordion title="Concurrent video_generate guardrail">
-    While a session-backed `video_generate` task is still active, the tool also acts as a guardrail: repeated `video_generate` calls in that same session return the active task status instead of starting a second concurrent generation. Use `action: "status"` when you want an explicit progress/status lookup from the agent side.
+  <Accordion title="Concurrent media-generation guardrail">
+    While a session-backed media-generation task is still active, media tools also act as guardrails for accidental retries. Repeated `image_generate` calls for the same prompt return the matching active task status, while a distinct image prompt can start its own task. `music_generate` and `video_generate` calls still return the active task status for that session instead of starting a second concurrent generation. Use `action: "status"` when you want an explicit progress/status lookup from the agent side.
   </Accordion>
   <Accordion title="What does not create tasks">
     - Heartbeat turns - main-session; see [Heartbeat](/gateway/heartbeat)
@@ -257,7 +257,7 @@ openclaw tasks notify <lookup> state_changes
     - Subagent completion best-effort closes tracked browser tabs/processes for the child session before announce cleanup continues.
     - Isolated cron completion best-effort closes tracked browser tabs/processes for the cron session before the run fully tears down.
     - Isolated cron delivery waits out descendant subagent follow-up when needed and suppresses stale parent acknowledgement text instead of announcing it.
-    - Subagent completion delivery prefers the latest visible assistant text; if that is empty it falls back to sanitized latest tool/toolResult text, and timeout-only tool-call runs can collapse to a short partial-progress summary. Terminal failed runs announce failure status without replaying captured reply text.
+    - Subagent completion delivery uses the child's latest visible assistant text only. Tool/toolResult output is not promoted into child result text. Terminal failed runs announce failure status without replaying captured reply text.
     - Cleanup failures do not mask the real task outcome.
 
     When applying maintenance, OpenClaw also removes stale `cron:<jobId>:run:<uuid>` session registry rows older than 7 days, while preserving rows for currently running cron jobs and leaving non-cron session rows untouched.
@@ -346,7 +346,7 @@ A sweeper runs every **60 seconds** and handles four things:
 
   </Accordion>
   <Accordion title="Tasks and cron">
-    A cron job **definition** lives in `~/.openclaw/cron/jobs.json`; runtime execution state lives beside it in `~/.openclaw/cron/jobs-state.json`. **Every** cron execution creates a task record - both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
+    Cron job definitions, runtime execution state, and run history live in OpenClaw's shared SQLite state database. **Every** cron execution creates a task record - both main-session and isolated. Main-session cron tasks default to `silent` notify policy so they track without generating notifications.
 
     See [Cron Jobs](/automation/cron-jobs).
 
