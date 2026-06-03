@@ -613,7 +613,10 @@ export function isGoogleGemini3ThinkingLevelModel(modelId: string): boolean {
   return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
+/**
+ * Maps legacy numeric/semantic thinking input onto Gemini 3's provider enum.
+ * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
+ */
 export function resolveGoogleGemini3ThinkingLevel(params: {
   modelId?: string;
   thinkingLevel?: GoogleThinkingInputLevel;
@@ -684,7 +687,10 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
   return "HIGH";
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
+/**
+ * Removes `thinkingBudget=0` only for Gemini models that reject disabled thinking.
+ * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
+ */
 export function stripInvalidGoogleThinkingBudget(params: {
   thinkingConfig: Record<string, unknown>;
   modelId?: string;
@@ -740,7 +746,10 @@ function normalizeGemma4ThinkingLevel(value: unknown): "MINIMAL" | "HIGH" | unde
   }
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
+/**
+ * Normalizes Google thinking config across SDK payload shapes before provider transport.
+ * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
+ */
 export function sanitizeGoogleThinkingPayload(params: {
   payload: unknown;
   modelId?: string;
@@ -778,6 +787,8 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
 
   if (typeof params.modelId === "string" && isGemma4Model(params.modelId)) {
+    // Gemma 4 accepts thinkingLevel but not thinkingBudget; map legacy budget
+    // inputs before deleting the unsupported numeric field.
     const normalizedThinkingLevel = normalizeGemma4ThinkingLevel(thinkingConfigObj.thinkingLevel);
     const explicitMappedLevel = mapThinkLevelToGemma4ThinkingLevel(params.thinkingLevel);
     const disabledViaBudget =
@@ -822,6 +833,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     typeof params.modelId === "string" &&
     isGoogleGemini3ThinkingLevelModel(params.modelId)
   ) {
+    // Gemini 3 adaptive mode means omit both controls so the provider chooses.
     delete thinkingConfigObj.thinkingBudget;
     delete thinkingConfigObj.thinkingLevel;
     if (Object.keys(thinkingConfigObj).length === 0) {
@@ -838,6 +850,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     });
     delete thinkingConfigObj.thinkingBudget;
     if (mappedLevel) {
+      // Gemini 3 uses thinkingLevel; leaving thinkingBudget would make mixed-mode payloads.
       thinkingConfigObj.thinkingLevel = mappedLevel;
     }
     if (Object.keys(thinkingConfigObj).length === 0) {
