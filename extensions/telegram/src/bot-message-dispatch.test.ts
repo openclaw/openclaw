@@ -4180,7 +4180,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
   it("does not emit an error fallback when a final reply is already queued", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      dispatcherOptions.onError?.(new Error("queued final delivery warning"), { kind: "final" });
+      await dispatcherOptions.onError?.(new Error("queued final delivery warning"), {
+        kind: "final",
+      });
       return {
         queuedFinal: true,
         counts: { block: 0, final: 1, tool: 0 },
