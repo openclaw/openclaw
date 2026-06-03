@@ -691,6 +691,52 @@ describe("discordPlugin outbound", () => {
     await discordPlugin.gateway!.startAccount!(zetaContext);
     expect(sleepWithAbortMock).toHaveBeenCalledWith(10_000, zetaContext.abortSignal);
   });
+
+  it("starts the configured default account before staggering secondary accounts", async () => {
+    probeDiscordMock.mockResolvedValue({
+      ok: true,
+      bot: { username: "Jarvis" },
+      application: {
+        intents: {
+          messageContent: "limited",
+          guildMembers: "disabled",
+          presence: "disabled",
+        },
+      },
+      elapsedMs: 1,
+    });
+    monitorDiscordProviderMock.mockResolvedValue(undefined);
+
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "main",
+          accounts: {
+            billy: { token: "Bot billy-token", enabled: true },
+            farber: { token: "Bot farber-token", enabled: true },
+            main: { token: "Bot main-token", enabled: true },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await startDiscordAccount(cfg, "main");
+    expect(sleepWithAbortMock).not.toHaveBeenCalled();
+
+    const billyContext = createStartAccountContext({
+      account: resolveAccount(cfg, "billy"),
+      cfg,
+    });
+    await discordPlugin.gateway!.startAccount!(billyContext);
+    expect(sleepWithAbortMock).toHaveBeenLastCalledWith(10_000, billyContext.abortSignal);
+
+    const farberContext = createStartAccountContext({
+      account: resolveAccount(cfg, "farber"),
+      cfg,
+    });
+    await discordPlugin.gateway!.startAccount!(farberContext);
+    expect(sleepWithAbortMock).toHaveBeenLastCalledWith(20_000, farberContext.abortSignal);
+  });
 });
 
 describe("discordPlugin bindings", () => {
