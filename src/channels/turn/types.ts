@@ -453,6 +453,8 @@ export type ChannelTurnLogEvent = {
   admission?: ChannelTurnAdmission["kind"];
   reason?: string;
   error?: unknown;
+  /** Payload-free health projection for finalized dispatched turns. */
+  turnState?: TurnState;
 };
 
 /** Final result for a channel turn, dispatched or admitted without dispatch. */

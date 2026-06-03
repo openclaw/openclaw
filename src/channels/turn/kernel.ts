@@ -1085,6 +1085,12 @@ export async function runChannelTurn<
         messageId: input.id,
         sessionKey: resolved.routeSessionKey,
         admission: admission.kind,
+        ...(result.dispatched && result.turnState
+          ? {
+              reason: result.turnState.errors[0],
+              turnState: result.turnState,
+            }
+          : {}),
       },
     });
   } catch (err) {

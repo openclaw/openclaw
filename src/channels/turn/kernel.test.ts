@@ -158,6 +158,12 @@ type TurnLogEvent = {
   event?: string;
   messageId?: string;
   stage?: string;
+  turnState?: {
+    completionAllowed?: boolean;
+    errors?: string[];
+    visibleDeliveryRequired?: boolean;
+    visibleDeliverySent?: boolean;
+  };
 };
 
 function latestDurableSendRequest(): DurableSendRequest {
@@ -195,6 +201,7 @@ function loggedEvents(log: ReturnType<typeof vi.fn>): TurnLogEvent[] {
       stage: entry.stage,
       event: entry.event,
       ...(entry.messageId === undefined ? {} : { messageId: entry.messageId }),
+      ...(entry.turnState === undefined ? {} : { turnState: entry.turnState }),
     };
   });
 }
@@ -1292,11 +1299,13 @@ describe("channel turn kernel", () => {
   });
 
   it("marks telegram direct turns without visible delivery as invalid", async () => {
+    const log = vi.fn();
     const onFinalize = vi.fn();
     const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
     const result = await runChannelTurn({
       channel: "telegram",
       raw: {},
+      log,
       turnEvents,
       adapter: {
         ingest: () => ({ id: "msg-1", rawText: "hello" }),
@@ -1339,6 +1348,17 @@ describe("channel turn kernel", () => {
       completionAllowed: false,
     });
     expect(finalizeResult(finalized).turnState?.errors).toContain("missing_visible_delivery");
+    expect(loggedEvents(log).at(-1)).toMatchObject({
+      stage: "finalize",
+      event: "done",
+      messageId: "msg-1",
+      turnState: {
+        visibleDeliveryRequired: true,
+        visibleDeliverySent: false,
+        completionAllowed: false,
+        errors: ["missing_visible_delivery"],
+      },
+    });
     const events = turnEvents.list("telegram:message:msg-1");
     expect(events.map((event) => event.type)).toEqual([
       "message.received",
