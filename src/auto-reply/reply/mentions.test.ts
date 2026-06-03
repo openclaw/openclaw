@@ -64,28 +64,28 @@ describe("CJK single-char mention matching (regression #87303)", () => {
   } as Parameters<typeof buildMentionRegexes>[0];
 
   it("matches single-char CJK name with @ prefix in Chinese text", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkName, undefined);
+    const regexes = buildMentionRegexes(cfgWithCjkName, "default");
     expect(regexes.length).toBeGreaterThan(0);
     expect(matchesMentionPatterns("@包 你好", regexes)).toBe(true);
   });
 
   it("matches single-char CJK name without @ prefix", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkName, undefined);
+    const regexes = buildMentionRegexes(cfgWithCjkName, "default");
     expect(matchesMentionPatterns("包 你好", regexes)).toBe(true);
   });
 
   it("does not match single-char CJK name inside a longer CJK word", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkName, undefined);
+    const regexes = buildMentionRegexes(cfgWithCjkName, "default");
     expect(matchesMentionPatterns("面包好吃", regexes)).toBe(false);
   });
 
   it("matches two-char CJK name with @ prefix", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkTwoChar, undefined);
+    const regexes = buildMentionRegexes(cfgWithCjkTwoChar, "default");
     expect(matchesMentionPatterns("@苏苏 你好", regexes)).toBe(true);
   });
 
   it("does not match two-char CJK name as substring", () => {
-    const regexes = buildMentionRegexes(cfgWithCjkTwoChar, undefined);
+    const regexes = buildMentionRegexes(cfgWithCjkTwoChar, "default");
     expect(matchesMentionPatterns("紫苏苏叶", regexes)).toBe(false);
   });
 });
