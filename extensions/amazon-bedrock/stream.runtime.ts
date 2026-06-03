@@ -214,6 +214,11 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
           ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
           ...(options.temperature !== undefined &&
             !sendsAdaptiveThinking && { temperature: options.temperature }),
+          // Forward the contract stop sequences to Bedrock Converse's native
+          // stopSequences. Empty/undefined stop omits the field so unset requests
+          // stay byte-identical to before.
+          ...(options.stop !== undefined &&
+            options.stop.length > 0 && { stopSequences: options.stop }),
         },
         toolConfig: convertToolConfig(
           context.tools,
