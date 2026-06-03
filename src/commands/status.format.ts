@@ -8,9 +8,11 @@ import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
-/** Formats a token count in thousands for compact status rows. */
+// Sub-1000 counts render as plain integers (matching formatTokenCount); the "k"
+// suffix only kicks in at >=1000 so e.g. 999 stays "999" instead of rounding up
+// across the boundary to a misleading "1.0k".
 export const formatKTokens = (value: number) =>
-  `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+  value < 1000 ? String(Math.round(value)) : `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
 
 /** Formats a duration or returns `unknown` for missing/non-finite values. */
 export const formatDuration = (ms: number | null | undefined) => {
