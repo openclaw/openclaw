@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   hardenedEnvForChildOomWrap,
+  isLinuxChildOomScoreRaiseActive,
   prepareOomScoreAdjustedSpawn,
   wrapArgvForChildOomScoreRaise,
 } from "./linux-oom-score.js";
@@ -83,6 +84,35 @@ describe("prepareOomScoreAdjustedSpawn", () => {
       env,
       wrapped: false,
     });
+  });
+});
+
+describe("isLinuxChildOomScoreRaiseActive", () => {
+  it("is true on linux when /bin/sh exists and the opt-out is unset", () => {
+    expect(isLinuxChildOomScoreRaiseActive(linux)).toBe(true);
+  });
+
+  it("is false on non-linux platforms regardless of env or shell", () => {
+    for (const platform of ["darwin", "win32", "freebsd"] as const) {
+      expect(
+        isLinuxChildOomScoreRaiseActive({ platform, env: {}, shellAvailable: () => true }),
+      ).toBe(false);
+    }
+  });
+
+  it("is false on linux when /bin/sh is unavailable (distroless/scratch)", () => {
+    expect(isLinuxChildOomScoreRaiseActive(linuxNoShell)).toBe(false);
+  });
+
+  it("honours the OPENCLAW_CHILD_OOM_SCORE_ADJ opt-out", () => {
+    for (const value of ["0", "false", "FALSE", "no", "off"]) {
+      expect(
+        isLinuxChildOomScoreRaiseActive({
+          ...linux,
+          env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: value },
+        }),
+      ).toBe(false);
+    }
   });
 });
 
