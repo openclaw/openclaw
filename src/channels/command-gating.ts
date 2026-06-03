@@ -1,10 +1,13 @@
+/** One channel-specific authorization source for text control commands. */
 export type CommandAuthorizer = {
   configured: boolean;
   allowed: boolean;
 };
 
+/** Fallback policy for channels that have access groups globally disabled. */
 export type CommandGatingModeWhenAccessGroupsOff = "allow" | "deny" | "configured";
 
+/** Resolves whether any configured authorizer permits a control command. */
 export function resolveCommandAuthorizedFromAuthorizers(params: {
   useAccessGroups: boolean;
   authorizers: CommandAuthorizer[];
@@ -28,6 +31,7 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
   return authorizers.some((entry) => entry.configured && entry.allowed);
 }
 
+/** Resolves command authorization and whether the current text command should be blocked. */
 export function resolveControlCommandGate(params: {
   useAccessGroups: boolean;
   authorizers: CommandAuthorizer[];
@@ -44,6 +48,7 @@ export function resolveControlCommandGate(params: {
   return { commandAuthorized, shouldBlock };
 }
 
+/** Convenience gate for channels that check primary and secondary text command identities. */
 export function resolveDualTextControlCommandGate(params: {
   useAccessGroups: boolean;
   primaryConfigured: boolean;
