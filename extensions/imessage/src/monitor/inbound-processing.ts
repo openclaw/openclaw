@@ -193,6 +193,54 @@ function resolveInboundEchoMessageIds(message: IMessagePayload): string[] {
   return ids;
 }
 
+export function rememberIMessageSkippedFromMeForSelfChatDedupe(params: {
+  accountId: string;
+  message: IMessagePayload;
+  bodyText: string;
+  selfChatCache?: SelfChatCache;
+}): void {
+  if (params.message.is_from_me !== true) {
+    return;
+  }
+  const sender = params.message.sender?.trim();
+  if (!sender) {
+    return;
+  }
+  const chatId = params.message.chat_id ?? undefined;
+  const isGroup = Boolean(params.message.is_group);
+  const chatIdentifierNormalized =
+    normalizeIMessageHandle(params.message.chat_identifier ?? "") || undefined;
+  const destinationCallerIdNormalized =
+    normalizeIMessageHandle(params.message.destination_caller_id ?? "") || undefined;
+  const senderNormalized = normalizeIMessageHandle(sender);
+  const createdAt = params.message.created_at ? Date.parse(params.message.created_at) : undefined;
+  const lookup = {
+    accountId: params.accountId,
+    isGroup,
+    chatId,
+    sender,
+    text: params.bodyText.trim(),
+    createdAt,
+  };
+  const matchesSelfChatDestination =
+    destinationCallerIdNormalized != null && destinationCallerIdNormalized === senderNormalized;
+  const isSelfChat =
+    !isGroup &&
+    chatIdentifierNormalized != null &&
+    senderNormalized === chatIdentifierNormalized &&
+    matchesSelfChatDestination;
+  const isAmbiguousSelfThread =
+    !isGroup &&
+    chatIdentifierNormalized != null &&
+    senderNormalized === chatIdentifierNormalized &&
+    destinationCallerIdNormalized == null;
+  if (isSelfChat) {
+    params.selfChatCache?.remember({ ...lookup, allowCreatedAtSkew: true });
+  } else if (isAmbiguousSelfThread) {
+    params.selfChatCache?.remember(lookup);
+  }
+}
+
 function hasIMessageEchoMatch(params: {
   echoCache: {
     has: (
