@@ -1745,16 +1745,22 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         };
 
         const pushProgressLine = (line: ChannelProgressDraftLine | undefined) => {
-          if (!line) return;
+          if (!line) {
+            return;
+          }
           const maxLines = resolveChannelProgressDraftMaxLines(account.config);
           const next = mergeChannelProgressDraftLine(progressLines, line, { maxLines });
-          if (next === progressLines) return;
+          if (next === progressLines) {
+            return;
+          }
           progressLines = next;
           const rendered = formatChannelProgressDraftText({
             entry: account.config,
             lines: progressLines,
           });
-          if (rendered) draftStream.update(rendered);
+          if (rendered) {
+            draftStream.update(rendered);
+          }
         };
 
         const resetProgressLines = () => {
