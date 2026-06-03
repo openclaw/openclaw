@@ -801,17 +801,27 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
       const lock = heldLock;
       heldLock = undefined;
-      const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
-      const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
-      const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
-      fenceFingerprint = fingerprint;
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceGeneration =
-        ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
-          ? ownedWrite.generation
-          : (trustedGeneration ?? fenceGeneration);
-      fenceActive = true;
-      await lock.release();
+      // Once `heldLock` is cleared the controller no longer tracks this lock, so the
+      // underlying file lock MUST be released even if the fence bookkeeping below
+      // throws. The fence reads perform filesystem I/O that can fail with a transient
+      // non-ENOENT error (e.g. EIO/EMFILE under load); without this guard such a throw
+      // would orphan the lock on the live gateway process for the full maxHoldMs lease
+      // (~17 min), wedging every subsequent interactive turn with
+      // SessionWriteLockTimeoutError until the watchdog reclaims it. See FAD-845.
+      try {
+        const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
+        const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
+        const trustedGeneration = trustSessionFileState(sessionFileFenceKey, fingerprint);
+        fenceFingerprint = fingerprint;
+        fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+        fenceGeneration =
+          ownedWrite && sameSessionFileFingerprint(ownedWrite.fingerprint, fingerprint)
+            ? ownedWrite.generation
+            : (trustedGeneration ?? fenceGeneration);
+        fenceActive = true;
+      } finally {
+        await lock.release();
+      }
     } finally {
       finishHeldLockDrain(drainOwner);
     }

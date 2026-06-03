@@ -136,6 +136,31 @@ describe("embedded attempt session lock lifecycle", () => {
     expect(releases).toEqual(["held"]);
   });
 
+  it("releases the eagerly-held lock even when the fence read throws during prompt release (FAD-845)", async () => {
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalFad845 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalFad845,
+      lockOptions,
+    });
+
+    // Simulate a transient, non-ENOENT filesystem error (e.g. EIO/EMFILE) while the
+    // prompt-release path reads the session-file fence. This fires AFTER the controller
+    // has cleared its in-memory `heldLock` reference but BEFORE the underlying file lock
+    // is released, which is the window that orphans the lock.
+    const statError = Object.assign(new Error("simulated I/O failure"), { code: "EIO" });
+    const statSpy = vi.spyOn(fs, "stat").mockRejectedValueOnce(statError);
+
+    await expect(controller.releaseForPrompt()).rejects.toThrow();
+
+    // The underlying file lock MUST still be released; otherwise it is orphaned on the
+    // live gateway process for the full maxHoldMs lease (~17 min), wedging every
+    // subsequent interactive turn with SessionWriteLockTimeoutError. See FAD-845.
+    expect(release).toHaveBeenCalledTimes(1);
+
+    statSpy.mockRestore();
+  });
+
   it("releaseHeldLockForAbort and dispose are idempotent in succession (#86816)", async () => {
     const release = vi.fn(async () => {});
     const acquireSessionWriteLockLocal26 = vi.fn(async () => ({ release }));
