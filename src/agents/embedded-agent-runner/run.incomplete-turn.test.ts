@@ -1256,13 +1256,18 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(sleepMeta).toBe("sleep 0.1");
     expect(ordinaryMeta).toBe("run tests");
     expect(shellGroupMeta).toBe(shellGroupCommand);
-    expect(scopedSleepMeta).toBe("sleep 0.1 (in /tmp), node: builder-1");
+    expect(scopedSleepMeta).toMatch(/^sleep 0\.1 \(in \/tmp\)(?:,| ·) node: builder-1$/u);
     expect(resolveStrictAgenticBashRetryInstruction("sleep 0.1")).toContain("Act now");
     expect(
       resolveStrictAgenticBashRetryInstruction("sleep 0.1", { meta: `${sleepMeta} · pty` }),
     ).toContain("Act now");
     expect(
       resolveStrictAgenticBashRetryInstruction("sleep 0.1", { meta: scopedSleepMeta }),
+    ).toContain("Act now");
+    expect(
+      resolveStrictAgenticBashRetryInstruction("sleep 0.1", {
+        meta: "sleep 0.1 (in /tmp) · node: builder-1",
+      }),
     ).toContain("Act now");
     expect(resolveStrictAgenticBashRetryInstruction("pnpm test")).toBeNull();
     expect(resolveStrictAgenticBashRetryInstruction(shellGroupCommand)).toBeNull();
