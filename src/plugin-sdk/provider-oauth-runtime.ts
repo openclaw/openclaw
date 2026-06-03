@@ -23,8 +23,11 @@ export type OAuthProviderId = string;
 export type OAuthProvider = OAuthProviderId;
 
 export type OAuthPrompt = {
+  /** Prompt text shown to the operator. */
   message: string;
+  /** Optional placeholder for manual text entry. */
   placeholder?: string;
+  /** Whether empty input should be accepted instead of reprompting. */
   allowEmpty?: boolean;
 };
 
@@ -43,12 +46,16 @@ export type OAuthAuthInfo = {
 };
 
 export type OAuthSelectOption = {
+  /** Stable option id returned when the operator selects this entry. */
   id: string;
+  /** Human-readable option label shown in the selector. */
   label: string;
 };
 
 export type OAuthSelectPrompt = {
+  /** Prompt text shown above the selectable options. */
   message: string;
+  /** Options available for the operator to choose from. */
   options: OAuthSelectOption[];
 };
 
@@ -68,7 +75,9 @@ export interface OAuthLoginCallbacks {
 }
 
 export interface OAuthProviderInterface {
+  /** Stable provider id used for credential and config routing. */
   readonly id: OAuthProviderId;
+  /** Human-readable provider name shown in login flows. */
   readonly name: string;
 
   /** Run the login flow and return credentials to persist. */
@@ -89,8 +98,11 @@ export interface OAuthProviderInterface {
 
 /** @deprecated Use OAuthProviderInterface instead. */
 export interface OAuthProviderInfo {
+  /** Stable provider id used for credential and config routing. */
   id: OAuthProviderId;
+  /** Human-readable provider name shown in login flows. */
   name: string;
+  /** Whether this provider can currently start OAuth login. */
   available: boolean;
 }
 
@@ -190,7 +202,10 @@ function renderOAuthPage(options: {
 </html>`;
 }
 
-export function oauthSuccessHtml(message: string): string {
+export function oauthSuccessHtml(
+  /** Success message rendered in the local OAuth completion page. */
+  message: string,
+): string {
   return renderOAuthPage({
     title: "Authentication successful",
     heading: "Authentication successful",
@@ -198,7 +213,12 @@ export function oauthSuccessHtml(message: string): string {
   });
 }
 
-export function oauthErrorHtml(message: string, details?: string): string {
+export function oauthErrorHtml(
+  /** Error message rendered in the local OAuth completion page. */
+  message: string,
+  /** Optional provider-specific error details rendered below the message. */
+  details?: string,
+): string {
   return renderOAuthPage({
     title: "Authentication failed",
     heading: "Authentication failed",
@@ -240,7 +260,10 @@ export function generateOAuthState(): string {
  * Parses callback URLs, raw query strings, `code#state`, or plain pasted codes.
  * Empty input returns an empty object so callers can keep prompting.
  */
-export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationInput {
+export function parseOAuthAuthorizationInput(
+  /** Raw callback URL, query string, `code#state`, or pasted code. */
+  input: string,
+): OAuthAuthorizationInput {
   const value = input.trim();
   if (!value) {
     return {};
@@ -273,14 +296,23 @@ export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationI
 }
 
 /** Converts provider `expires_in` seconds into safe positive milliseconds. */
-export function resolveOAuthTokenLifetimeMs(value: unknown): number | undefined {
+export function resolveOAuthTokenLifetimeMs(
+  /** Provider `expires_in` value in seconds. */
+  value: unknown,
+): number | undefined {
   return positiveSecondsToSafeMilliseconds(value);
 }
 
 /** Resolves provider token lifetime into an absolute expiry timestamp with optional refresh skew. */
 export function resolveOAuthTokenExpiresAt(
+  /** Provider `expires_in` value in seconds. */
   value: unknown,
-  options: { nowMs?: number; refreshSkewMs?: number } = {},
+  options: {
+    /** Current timestamp override for deterministic expiry calculations. */
+    nowMs?: number;
+    /** Milliseconds to subtract so refresh happens before provider expiry. */
+    refreshSkewMs?: number;
+  } = {},
 ): number | undefined {
   const lifetimeMs = resolveOAuthTokenLifetimeMs(value);
   return lifetimeMs === undefined
@@ -295,15 +327,21 @@ export function createOAuthLoginCancelledError(): Error {
   return new Error("Login cancelled");
 }
 
-export function throwIfOAuthLoginAborted(signal?: AbortSignal): void {
+export function throwIfOAuthLoginAborted(
+  /** Abort signal attached to the OAuth login flow. */
+  signal?: AbortSignal,
+): void {
   if (signal?.aborted) {
     throw createOAuthLoginCancelledError();
   }
 }
 
 export function withOAuthLoginAbort<T>(
+  /** Pending OAuth login operation to race against abort. */
   promise: Promise<T>,
+  /** Abort signal attached to the OAuth login flow. */
   signal?: AbortSignal,
+  /** Optional cleanup hook called when the login is aborted. */
   onAbort?: () => void,
 ): Promise<T> {
   if (!signal) {
@@ -340,7 +378,9 @@ export function withOAuthLoginAbort<T>(
 }
 
 export function buildOAuthRequestSignal(options: {
+  /** Optional caller-provided signal to combine with the timeout signal. */
   signal?: AbortSignal;
+  /** Request timeout in milliseconds before the generated signal aborts. */
   timeoutMs: number;
 }): AbortSignal {
   const timeoutSignal = AbortSignal.timeout(resolveTimerTimeoutMs(options.timeoutMs, 0, 0));
