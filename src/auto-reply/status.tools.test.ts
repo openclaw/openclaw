@@ -106,6 +106,47 @@ describe("tools product copy", () => {
     expect(text).toContain('Add tools.alsoAllow: ["browser"].');
   });
 
+  it("omits unreadable tool inventory notices instead of failing the whole tools response", () => {
+    const text = buildToolsMessage({
+      agentId: "main",
+      profile: "coding",
+      groups: [
+        {
+          id: "core",
+          label: "Built-in tools",
+          source: "core",
+          tools: [
+            {
+              id: "exec",
+              label: "Exec",
+              description: "Run shell commands",
+              rawDescription: "Run shell commands",
+              source: "core",
+            },
+          ],
+        },
+      ],
+      notices: [
+        {
+          id: "healthy-notice",
+          severity: "info",
+          message: "Healthy notice",
+        },
+        {
+          id: "broken-notice",
+          severity: "warning",
+          get message(): string {
+            throw new Error("notice unavailable");
+          },
+        },
+      ],
+    });
+
+    expect(text).toContain("exec");
+    expect(text).toContain("Healthy notice");
+    expect(text).not.toContain("notice unavailable");
+  });
+
   it("keeps detailed descriptions in verbose mode", () => {
     const text = buildToolsMessage(
       {
@@ -136,6 +177,117 @@ describe("tools product copy", () => {
     expect(text).toContain("Exec - Run shell commands");
     expect(text).toContain("Tool availability depends on this agent's configuration.");
     expect(text).not.toContain("unavailable right now");
+  });
+
+  it("omits unreadable tool inventory entries instead of failing the whole tools response", () => {
+    const text = buildToolsMessage(
+      {
+        agentId: "main",
+        profile: "coding",
+        groups: [
+          {
+            id: "core",
+            label: "Built-in tools",
+            source: "core",
+            tools: [
+              {
+                id: "exec",
+                label: "Exec",
+                description: "Run shell commands",
+                rawDescription: "Run shell commands",
+                source: "core",
+              },
+              {
+                id: "broken",
+                get label(): string {
+                  throw new Error("descriptor unavailable");
+                },
+                description: "Broken descriptor",
+                rawDescription: "Broken descriptor",
+                source: "core",
+              },
+            ],
+          },
+        ],
+      },
+      { verbose: true },
+    );
+
+    expect(text).toContain("Exec - Run shell commands");
+    expect(text).not.toContain("descriptor unavailable");
+    expect(text).not.toContain("Broken descriptor");
+  });
+
+  it("omits unreadable tool inventory array slots instead of failing the whole tools response", () => {
+    const tools = [
+      {
+        id: "exec",
+        label: "Exec",
+        description: "Run shell commands",
+        rawDescription: "Run shell commands",
+        source: "core" as const,
+      },
+    ];
+    Object.defineProperty(tools, "1", {
+      get() {
+        throw new Error("tool slot unavailable");
+      },
+    });
+
+    const text = buildToolsMessage(
+      {
+        agentId: "main",
+        profile: "coding",
+        groups: [
+          {
+            id: "core",
+            label: "Built-in tools",
+            source: "core",
+            tools,
+          },
+        ],
+      },
+      { verbose: true },
+    );
+
+    expect(text).toContain("Exec - Run shell commands");
+    expect(text).not.toContain("tool slot unavailable");
+  });
+
+  it("omits unreadable tool inventory group slots instead of failing the whole tools response", () => {
+    const groups = [
+      {
+        id: "core" as const,
+        label: "Built-in tools",
+        source: "core" as const,
+        tools: [
+          {
+            id: "exec",
+            label: "Exec",
+            description: "Run shell commands",
+            rawDescription: "Run shell commands",
+            source: "core" as const,
+          },
+        ],
+      },
+    ];
+    Object.defineProperty(groups, "1", {
+      get() {
+        throw new Error("group slot unavailable");
+      },
+    });
+
+    const text = buildToolsMessage(
+      {
+        agentId: "main",
+        profile: "coding",
+        groups,
+      },
+      { verbose: true },
+    );
+
+    expect(text).toContain("Exec - Run shell commands");
+    expect(text).not.toContain("group slot unavailable");
   });
 
   it("trims verbose output before schema-like doc blocks", () => {
