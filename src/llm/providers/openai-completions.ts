@@ -1242,6 +1242,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
   const baseUrl = model.baseUrl;
 
   const isZai = provider === "zai" || baseUrl.includes("api.z.ai");
+  const isFireworks = provider === "fireworks" || provider === "fireworks-ai";
   const isTogether =
     provider === "together" ||
     baseUrl.includes("api.together.ai") ||
@@ -1301,7 +1302,7 @@ function detectCompat(model: Model<"openai-completions">): ResolvedOpenAIComplet
     zaiToolStream: false,
     supportsStrictMode: !isMoonshot && !isTogether && !isCloudflareAiGateway,
     cacheControlFormat,
-    sendSessionAffinityHeaders: false,
+    sendSessionAffinityHeaders: isFireworks,
     supportsPromptCacheKey: false,
     supportsLongCacheRetention: !(isTogether || isCloudflareWorkersAI || isCloudflareAiGateway),
   };
