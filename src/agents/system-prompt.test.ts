@@ -216,14 +216,17 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("<final>...</final>");
   });
 
-  it("includes a CLI quick reference section", () => {
+  it("uses the Public Opinion Guardian identity and omits the CLI quick reference section", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("## OpenClaw CLI Quick Reference");
-    expect(prompt).toContain("openclaw gateway restart");
-    expect(prompt).toContain("Do not invent commands");
+    expect(prompt).toContain(
+      "You are a Public Opinion Guardian Assistant running inside OpenClaw.",
+    );
+    // CLI Quick Reference section was intentionally removed for the Guardian build.
+    expect(prompt).not.toContain("## OpenClaw CLI Quick Reference");
+    expect(prompt).not.toContain("openclaw gateway restart");
   });
 
   it("guides runtime completion events without exposing internal metadata", () => {

@@ -623,13 +623,16 @@ export function buildAgentSystemPrompt(params: {
   });
   const workspaceNotes = (params.workspaceNotes ?? []).map((note) => note.trim()).filter(Boolean);
 
+  // Base identity line, shared by "none" mode and the full prompt.
+  const baseIdentityLine = "You are a Public Opinion Guardian Assistant running inside OpenClaw.";
+
   // For "none" mode, return just the basic identity line
   if (promptMode === "none") {
-    return "You are a personal assistant running inside OpenClaw.";
+    return baseIdentityLine;
   }
 
   const lines = [
-    "You are a personal assistant running inside OpenClaw.",
+    baseIdentityLine,
     "",
     "## Tooling",
     "Tool availability (filtered by policy):",
@@ -701,15 +704,6 @@ export function buildAgentSystemPrompt(params: {
       fallback: [],
     }),
     ...safetySection,
-    "## OpenClaw CLI Quick Reference",
-    "OpenClaw is controlled via subcommands. Do not invent commands.",
-    "To manage the Gateway daemon service (start/stop/restart):",
-    "- openclaw gateway status",
-    "- openclaw gateway start",
-    "- openclaw gateway stop",
-    "- openclaw gateway restart",
-    "If unsure, ask the user to run `openclaw help` (or `openclaw gateway --help`) and paste the output.",
-    "",
     ...skillsSection,
     ...memorySection,
     // Skip self-update for subagent/none modes
