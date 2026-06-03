@@ -11,6 +11,7 @@ import {
   resolveInboundDebounceMs,
   type InboundDebounceCreateParams,
 } from "../auto-reply/inbound-debounce.js";
+import { resolveDirectControlLanePriority } from "../auto-reply/reply/control-lane-priority.js";
 import type { OpenClawConfig } from "../config/types.js";
 
 /** Returns true when an inbound text event is safe to debounce before dispatch. */
@@ -18,6 +19,7 @@ export function shouldDebounceTextInbound(params: {
   text: string | null | undefined;
   cfg: OpenClawConfig;
   hasMedia?: boolean;
+  chatType?: string;
   commandOptions?: CommandNormalizeOptions;
   allowDebounce?: boolean;
 }): boolean {
@@ -33,8 +35,17 @@ export function shouldDebounceTextInbound(params: {
   if (!text) {
     return false;
   }
-  // Control commands must dispatch immediately so stop/abort/status requests are not delayed
-  // behind normal conversation text.
+  // Control-lane messages must dispatch immediately so stop/abort/override requests are not
+  // delayed behind normal conversation text.
+  if (
+    resolveDirectControlLanePriority({
+      text,
+      chatType: params.chatType,
+      hasMedia: params.hasMedia,
+    })
+  ) {
+    return false;
+  }
   return !isControlCommandMessage(text, params.cfg, params.commandOptions);
 }
 
