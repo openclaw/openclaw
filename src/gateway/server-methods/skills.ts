@@ -1,3 +1,4 @@
+// Gateway RPC handlers for skill discovery, install/update, and proposal workflows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -141,6 +142,7 @@ async function runSkillsProposalWorkspaceHandler<TParams, TResult>(params: {
   }
 }
 
+/** Gateway request handlers for skill status, catalogs, installs, updates, and workshop proposals. */
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsUploadHandlers,
   "skills.status": ({ params, respond, context }) => {

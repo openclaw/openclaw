@@ -1652,9 +1652,14 @@ lives on the [Models FAQ](/help/faq-models).
   </Accordion>
 
   <Accordion title="I closed my terminal on Windows - how do I restart OpenClaw?">
-    There are **two Windows install modes**:
+    There are **three Windows install modes**:
 
-    **1) WSL2 (recommended):** the Gateway runs inside Linux.
+    **1) Windows Hub local setup:** the native app manages a local app-owned WSL Gateway.
+
+    Open **OpenClaw Companion** from the Start menu or tray, then use
+    **Gateway Setup** or the Connections tab.
+
+    **2) Manual WSL2 Gateway:** the Gateway runs inside Linux.
 
     Open PowerShell, enter WSL, then restart:
 
@@ -1670,7 +1675,7 @@ lives on the [Models FAQ](/help/faq-models).
     openclaw gateway run
     ```
 
-    **2) Native Windows (not recommended):** the Gateway runs directly in Windows.
+    **3) Native Windows CLI/Gateway:** the Gateway runs directly in Windows.
 
     Open PowerShell and run:
 
@@ -1685,7 +1690,7 @@ lives on the [Models FAQ](/help/faq-models).
     openclaw gateway run
     ```
 
-    Docs: [Windows (WSL2)](/platforms/windows), [Gateway service runbook](/gateway).
+    Docs: [Windows](/platforms/windows), [Gateway service runbook](/gateway).
 
   </Accordion>
 

@@ -14,6 +14,7 @@ import type {
   WithManagerSessionActor,
 } from "./manager.types.js";
 
+/** Resolves pending ACP session identities opportunistically during manager startup. */
 export async function runManagerStartupIdentityReconcile(params: {
   cfg: OpenClawConfig;
   deps: Pick<AcpSessionManagerDeps, "listAcpSessions">;

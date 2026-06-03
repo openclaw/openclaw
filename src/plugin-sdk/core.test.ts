@@ -1,3 +1,6 @@
+/**
+ * Tests core plugin SDK exports and channel plugin construction.
+ */
 import { describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";

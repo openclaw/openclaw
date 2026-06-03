@@ -3,6 +3,9 @@ import type { WebSocket } from "ws";
 import type { GatewayClient } from "./client.js";
 import { rpcReq } from "./test-helpers.js";
 
+/**
+ * Node invoke acknowledgement helper for gateway tests.
+ */
 export function acknowledgeNodeInvokeRequestForTest(params: {
   client: GatewayClient;
   event: { event?: string; payload?: unknown };

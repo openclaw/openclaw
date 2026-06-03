@@ -20,6 +20,10 @@ import {
 
 const PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS = "allow" as const;
 
+/**
+ * Captures one package-manager or filesystem step from the global update flow.
+ * Callers surface these records directly in update diagnostics.
+ */
 export type PackageUpdateStepResult = {
   name: string;
   command: string;
@@ -486,6 +490,10 @@ async function swapStagedNpmInstall(params: {
   }
 }
 
+/**
+ * Runs the global package update flow, including npm staging when possible,
+ * package verification, optional post-verification, and cleanup.
+ */
 export async function runGlobalPackageUpdateSteps(params: {
   installTarget: ResolvedGlobalInstallTarget;
   installSpec: string;

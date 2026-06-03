@@ -3,6 +3,7 @@ import { restoreRedactedValues as restoreRedactedValues_orig } from "./redact-sn
 import type { ConfigUiHints } from "./schema.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
+/** Complete snapshot shape used by redaction tests. */
 export type TestSnapshot<TConfig extends Record<string, unknown>> = ConfigFileSnapshot & {
   parsed: TConfig;
   sourceConfig: TConfig;

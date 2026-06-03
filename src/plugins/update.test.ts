@@ -2188,6 +2188,52 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.outcomes[0]?.message).toBe(
       "Updated openclaw-codex-app-server: unknown -> 0.2.6. (warning: beta channel fallback used openclaw-codex-app-server because openclaw-codex-app-server@beta could not be used).",
     );
+    expect(result.outcomes[0]?.channelFallback).toEqual({
+      requestedSpec: "openclaw-codex-app-server@beta",
+      usedSpec: "openclaw-codex-app-server",
+      requestedLabel: "@beta",
+      usedLabel: "@latest",
+      reason: "unavailable",
+      message:
+        "plugin channel fallback: openclaw-codex-app-server used @latest because @beta was unavailable",
+    });
+  });
+
+  it("reports npm beta fallback as tentative during dry-run checks", async () => {
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error:
+          "npm ERR! code ETARGET\nnpm ERR! No matching version found for openclaw-codex-app-server@beta.",
+      })
+      .mockResolvedValueOnce(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "openclaw-codex-app-server",
+          targetDir: "/tmp/openclaw-codex-app-server",
+          version: "0.2.6",
+          npmResolution: {
+            name: "openclaw-codex-app-server",
+            version: "0.2.6",
+            resolvedSpec: "openclaw-codex-app-server@0.2.6",
+          },
+        }),
+      );
+
+    const result = await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
+      dryRun: true,
+    });
+
+    expect(result.outcomes[0]?.message).toBe(
+      "Would update openclaw-codex-app-server: unknown -> 0.2.6. (warning: beta channel fallback would use openclaw-codex-app-server because openclaw-codex-app-server@beta could not be used).",
+    );
+    expect(result.outcomes[0]?.channelFallback?.message).toBe(
+      "plugin channel fallback: openclaw-codex-app-server would use @latest because @beta was unavailable",
+    );
   });
 
   it("falls back to the default npm spec when the beta package exists but is invalid", async () => {
@@ -2233,6 +2279,12 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.outcomes[0]?.message).toBe(
       "Updated openclaw-codex-app-server: unknown -> 0.2.6. (warning: beta channel fallback used openclaw-codex-app-server because openclaw-codex-app-server@beta could not be used).",
     );
+    expect(result.outcomes[0]?.channelFallback).toMatchObject({
+      requestedLabel: "@beta",
+      usedLabel: "@latest",
+      reason: "failed",
+      message: "plugin channel fallback: openclaw-codex-app-server used @latest after @beta failed",
+    });
   });
 
   it("reports the fallback npm spec when beta fallback also fails", async () => {
@@ -2262,6 +2314,55 @@ describe("updateNpmInstalledPlugins", () => {
         status: "error",
         message:
           "Failed to update openclaw-codex-app-server: npm package not found for openclaw-codex-app-server.",
+        channelFallback: {
+          requestedSpec: "openclaw-codex-app-server@beta",
+          usedSpec: "openclaw-codex-app-server",
+          requestedLabel: "@beta",
+          usedLabel: "@latest",
+          reason: "failed",
+          message:
+            "plugin channel fallback: openclaw-codex-app-server used @latest after @beta failed",
+        },
+      },
+    ]);
+  });
+
+  it("keeps fallback metadata when a dry-run beta fallback also fails", async () => {
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "Installed plugin package uses a TypeScript entry without compiled runtime output.",
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        code: "npm_package_not_found",
+        error: "npm package not found",
+      });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createCodexAppServerInstallConfig({
+        spec: "openclaw-codex-app-server",
+      }),
+      pluginIds: ["openclaw-codex-app-server"],
+      updateChannel: "beta",
+      dryRun: true,
+    });
+
+    expect(result.outcomes).toEqual([
+      {
+        pluginId: "openclaw-codex-app-server",
+        status: "error",
+        message:
+          "Failed to check openclaw-codex-app-server: npm package not found for openclaw-codex-app-server.",
+        channelFallback: {
+          requestedSpec: "openclaw-codex-app-server@beta",
+          usedSpec: "openclaw-codex-app-server",
+          requestedLabel: "@beta",
+          usedLabel: "@latest",
+          reason: "failed",
+          message:
+            "plugin channel fallback: openclaw-codex-app-server would use @latest after @beta failed",
+        },
       },
     ]);
   });

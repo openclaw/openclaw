@@ -48,8 +48,8 @@ function normalizeCacheDir(dirname: string | undefined): string | undefined {
 
 function authFingerprint(agentDir: string): object {
   return {
-    authJson: fileFingerprint(path.join(agentDir, "auth.json")),
-    authProfilesJson: fileFingerprint(path.join(agentDir, "auth-profiles.json")),
+    authProfilesSqlite: fileFingerprint(path.join(agentDir, "openclaw-agent.sqlite")),
+    authProfilesSqliteWal: fileFingerprint(path.join(agentDir, "openclaw-agent.sqlite-wal")),
   };
 }
 

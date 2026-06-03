@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 
+/** Test-only bootstrap registry mock for inactive channel secret surface variants. */
 const googleChatSecrets = loadBundledChannelSecretContractApi("googlechat");
 const ircSecrets = loadBundledChannelSecretContractApi("irc");
 const slackSecrets = loadBundledChannelSecretContractApi("slack");
@@ -30,6 +31,8 @@ function resolveAssignments(id: string) {
   return undefined;
 }
 
+// Runtime collectors resolve bootstrap channel contracts by id. This mock keeps
+// the tested inactive variants on real bundled contracts without loading plugins.
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
   getBootstrapChannelPlugin: (id: string) => {
     const collectRuntimeConfigAssignments = resolveAssignments(id);
