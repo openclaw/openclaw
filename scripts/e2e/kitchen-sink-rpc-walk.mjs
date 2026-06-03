@@ -936,7 +936,7 @@ export function extractPluginCommandNames(payload) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
-function extractToolEntries(payload) {
+export function extractToolEntries(payload) {
   return (Array.isArray(payload?.groups) ? payload.groups : []).flatMap((group) =>
     Array.isArray(group?.tools) ? group.tools : [],
   );
@@ -959,6 +959,31 @@ function assertIncludesAll(actual, expected, label) {
   }
 }
 
+export function assertExpectedKitchenSinkToolEntries(
+  entries,
+  label,
+  { requirePluginProvenance = false } = {},
+) {
+  const ids = entries.map((entry) => entry?.id).filter(isNonEmptyString);
+  assertIncludesAll(ids, EXPECTED_TOOLS, label);
+  if (requirePluginProvenance) {
+    const wrongProvenance = entries
+      .filter((entry) => EXPECTED_TOOLS.includes(entry?.id))
+      .filter((entry) => entry.source !== "plugin" || entry.pluginId !== PLUGIN_ID)
+      .map((entry) => ({
+        id: entry?.id,
+        pluginId: entry?.pluginId,
+        source: entry?.source,
+      }));
+    if (wrongProvenance.length > 0) {
+      throw new Error(
+        `${label} plugin provenance mismatch: ${JSON.stringify(wrongProvenance)}`,
+      );
+    }
+  }
+  return ids;
+}
+
 function assertChannelAccountRunning(payload) {
   const accounts = Array.isArray(payload?.channelAccounts?.[CHANNEL_ID])
     ? payload.channelAccounts[CHANNEL_ID]
@@ -970,13 +995,27 @@ function assertChannelAccountRunning(payload) {
   return account;
 }
 
-function assertToolInvokeResult(payload) {
+export function assertKitchenSinkSearchInvokeResult(payload) {
   if (payload?.ok !== true || payload?.source !== "plugin") {
-    throw new Error(`Kitchen Sink tool invoke failed: ${JSON.stringify(payload)}`);
+    throw new Error(`Kitchen Sink search tool invoke failed: ${JSON.stringify(payload)}`);
   }
   const text = JSON.stringify(payload.output ?? payload);
   if (!text.includes("Kitchen Sink image fixture")) {
-    throw new Error(`Kitchen Sink tool output missed expected fixture: ${text.slice(0, 1000)}`);
+    throw new Error(
+      `Kitchen Sink search tool output missed expected fixture: ${text.slice(0, 1000)}`,
+    );
+  }
+}
+
+export function assertKitchenSinkTextInvokeResult(payload) {
+  if (payload?.ok !== true || payload?.source !== "plugin") {
+    throw new Error(`Kitchen Sink text tool invoke failed: ${JSON.stringify(payload)}`);
+  }
+  const text = JSON.stringify(payload.output ?? payload);
+  if (!text.includes("tool:kitchen_sink_text") || !text.includes("Kitchen Sink")) {
+    throw new Error(
+      `Kitchen Sink text tool output missed expected fixture: ${text.slice(0, 1000)}`,
+    );
   }
 }
 
@@ -1608,12 +1647,11 @@ export async function main() {
       rpcOptions,
     );
     const catalogTools = extractToolEntries(catalog);
-    const catalogToolIds = catalogTools.map((entry) => entry?.id).filter(isNonEmptyString);
-    assertIncludesAny(catalogToolIds, EXPECTED_TOOLS, "tools.catalog plugin tools");
-    const pluginTool = catalogTools.find((entry) => EXPECTED_TOOLS.includes(entry?.id));
-    if (pluginTool?.source !== "plugin" || pluginTool?.pluginId !== PLUGIN_ID) {
-      throw new Error(`tools.catalog plugin provenance missing: ${JSON.stringify(pluginTool)}`);
-    }
+    const catalogToolIds = assertExpectedKitchenSinkToolEntries(
+      catalogTools,
+      "tools.catalog plugin tools",
+      { requirePluginProvenance: true },
+    );
 
     const createdSession = await retryRpcCall(
       "sessions.create",
@@ -1625,10 +1663,12 @@ export async function main() {
       { sessionKey: createdSession.key, agentId: "main" },
       rpcOptions,
     );
-    const effectiveToolIds = extractToolEntries(effective).map((entry) => entry?.id);
-    assertIncludesAny(effectiveToolIds, EXPECTED_TOOLS, "tools.effective plugin tools");
+    assertExpectedKitchenSinkToolEntries(
+      extractToolEntries(effective),
+      "tools.effective plugin tools",
+    );
 
-    const invoked = await retryRpcCall(
+    const searchInvoked = await retryRpcCall(
       "tools.invoke",
       {
         name: "kitchen_sink_search",
@@ -1639,7 +1679,20 @@ export async function main() {
       },
       rpcOptions,
     );
-    assertToolInvokeResult(invoked);
+    assertKitchenSinkSearchInvokeResult(searchInvoked);
+
+    const textInvoked = await retryRpcCall(
+      "tools.invoke",
+      {
+        name: "kitchen_sink_text",
+        args: { prompt: "explain kitchen sink rpc walk" },
+        sessionKey: createdSession.key,
+        agentId: "main",
+        idempotencyKey: "kitchen-sink-rpc-text",
+      },
+      rpcOptions,
+    );
+    assertKitchenSinkTextInvokeResult(textInvoked);
 
     const ttsProviders = await retryRpcCall("tts.providers", {}, rpcOptions);
     const ttsStatus = await retryRpcCall("tts.status", {}, rpcOptions);

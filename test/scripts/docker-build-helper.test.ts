@@ -1,6 +1,7 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -10,6 +11,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
 
 const HELPER_PATH = "scripts/lib/docker-build.sh";
@@ -288,6 +290,105 @@ output="$(docker_build_run e2e-build -t demo-image .)"
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("stops the tracked build command without retrying when interrupted", async () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-signal-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/bash
+set -euo pipefail
+count=0
+if [ -f "$TMPDIR/docker-count" ]; then
+  count="$(<"$TMPDIR/docker-count")"
+fi
+count="$((count + 1))"
+printf '%s\\n' "$count" >"$TMPDIR/docker-count"
+printf '%s\\n' "$$" >"$TMPDIR/docker.pid"
+printf 'rpc error: code = Unavailable\\n'
+trap 'printf "term\\n" >"$TMPDIR/docker.term"; exit 0' TERM
+while true; do
+  /bin/sleep 1
+done
+`,
+      );
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      writeFileSync(
+        join(workDir, "runner.sh"),
+        `#!/bin/bash
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_DOCKER_BUILD_RETRIES=3
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+docker_build_run e2e-build -t demo-image .
+`,
+      );
+      chmodSync(join(workDir, "runner.sh"), 0o755);
+
+      const waitForFile = async (filePath: string) => {
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          if (existsSync(filePath)) {
+            return;
+          }
+          await delay(100);
+        }
+        throw new Error(`file was not written: ${filePath}`);
+      };
+      const waitForExit = async (child: ReturnType<typeof spawn>) =>
+        await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+          child.once("exit", (code, signal) => resolve({ code, signal }));
+        });
+      const waitForDead = async (pid: number) => {
+        for (let attempt = 0; attempt < 50; attempt += 1) {
+          try {
+            process.kill(pid, 0);
+          } catch {
+            return;
+          }
+          await delay(100);
+        }
+        throw new Error(`process stayed alive: ${pid}`);
+      };
+      const runInterruptedBuild = async (signal: NodeJS.Signals, expectedCode: number) => {
+        rmSync(join(workDir, "docker.pid"), { force: true });
+        rmSync(join(workDir, "docker.term"), { force: true });
+        rmSync(join(workDir, "docker-count"), { force: true });
+        const runner = spawn(join(workDir, "runner.sh"), {
+          env: { ...process.env, TMPDIR: workDir },
+          stdio: "ignore",
+        });
+        try {
+          const pidPath = join(workDir, "docker.pid");
+          await waitForFile(pidPath);
+          const buildPid = Number.parseInt(readFileSync(pidPath, "utf8"), 10);
+
+          runner.kill(signal);
+          const exit = await waitForExit(runner);
+
+          expect(exit).toEqual({ code: expectedCode, signal: null });
+          await waitForFile(join(workDir, "docker.term"));
+          expect(readFileSync(join(workDir, "docker-count"), "utf8").trim()).toBe("1");
+          await waitForDead(buildPid);
+        } finally {
+          if (runner.exitCode === null && runner.signalCode === null) {
+            runner.kill("SIGKILL");
+          }
+        }
+      };
+
+      await runInterruptedBuild("SIGTERM", 143);
+      await runInterruptedBuild("SIGINT", 130);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }

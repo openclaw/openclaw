@@ -423,35 +423,32 @@ describe("scripts/run-vitest", () => {
     });
   });
 
-  it("uses a longer default stall watchdog for broad e2e configs", () => {
+  it("uses a longer default stall watchdog for broad e2e and project shard configs", () => {
     const timeout = String(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
 
-    expect(
-      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
-        "run",
-        "--config",
-        "test/vitest/vitest.e2e.config.ts",
-      ]),
-    ).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
-    });
-    expect(
-      resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, [
-        "run",
-        "--config=./test/vitest/vitest.ui-e2e.config.ts",
-      ]),
-    ).toEqual({
-      PATH: "/usr/bin",
-      OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
-      OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
-    });
+    for (const configArg of [
+      "--config=test/vitest/vitest.e2e.config.ts",
+      "--config=./test/vitest/vitest.ui-e2e.config.ts",
+      "--config=test/vitest/vitest.full-core-contracts.config.ts",
+    ]) {
+      expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", configArg])).toEqual({
+        PATH: "/usr/bin",
+        OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS: "60000",
+        OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
+      });
+    }
     expect(
       resolveDefaultVitestNoOutputTimeoutMs([
         "run",
         "-c",
         "/repo/test/vitest/vitest.e2e.config.ts",
+      ]),
+    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.full-core-contracts.config.ts",
       ]),
     ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
   });
