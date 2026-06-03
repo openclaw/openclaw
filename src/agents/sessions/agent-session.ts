@@ -32,6 +32,7 @@ import type {
   TextContent,
 } from "../../llm/types.js";
 import { isContextOverflow } from "../../llm/utils/overflow.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   Agent,
   AgentEvent,
@@ -51,6 +52,10 @@ import {
   prepareCompaction,
   shouldCompact,
 } from "../runtime/index.js";
+import {
+  filterRuntimeCompatibleTools,
+  type RuntimeToolSchemaDiagnostic,
+} from "../tool-schema-projection.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { sleep } from "../utils/sleep.js";
 import { formatNoApiKeyFoundMessage, formatNoModelSelectedMessage } from "./auth-guidance.js";
@@ -95,6 +100,8 @@ import { createLocalBashOperations } from "./tools/bash.js";
 import { createAllToolDefinitions } from "./tools/index.js";
 import { createToolDefinitionFromAgentTool } from "./tools/tool-definition-wrapper.js";
 
+const log = createSubsystemLogger("agents/sessions");
+
 function unwrapCoreResult<T>(result: { ok: true; value: T } | { ok: false; error: Error }): T {
   if (result.ok) {
     return result.value;
@@ -120,6 +127,201 @@ function normalizeBranchSummaryResult(
     return { aborted: true, error: result.error.message };
   }
   return { error: result.error.message };
+}
+
+function readToolDefinitionName(definition: ToolDefinition, fallback: string): string {
+  try {
+    return typeof definition.name === "string" && definition.name ? definition.name : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readToolDefinitionField(
+  definition: ToolDefinition,
+  field: keyof ToolDefinition,
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: definition[field] };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function toolDefinitionDiagnostic(
+  toolIndex: number,
+  toolName: string,
+  violation: string,
+): RuntimeToolSchemaDiagnostic {
+  return {
+    toolName,
+    toolIndex,
+    violations: [violation],
+  };
+}
+
+function formatToolSchemaDiagnostic(diagnostic: RuntimeToolSchemaDiagnostic): string {
+  return `${diagnostic.toolName}: ${diagnostic.violations.join(", ")}`;
+}
+
+function formatToolSource(sourceInfo: SourceInfo | undefined): string {
+  return sourceInfo?.path ?? "unknown source";
+}
+
+function materializeToolDefinitionEntry(
+  entry: ToolDefinitionEntry,
+  toolIndex: number,
+): ToolDefinitionRead {
+  const fallbackName = `tool[${toolIndex}]`;
+  const nameRead = readToolDefinitionField(entry.definition, "name");
+  const toolName =
+    nameRead.ok && typeof nameRead.value === "string" && nameRead.value
+      ? nameRead.value
+      : fallbackName;
+  if (!nameRead.ok) {
+    return {
+      ok: false,
+      sourceInfo: entry.sourceInfo,
+      diagnostic: toolDefinitionDiagnostic(toolIndex, toolName, `${toolName}.name is unreadable`),
+    };
+  }
+  if (typeof nameRead.value !== "string" || !nameRead.value) {
+    return {
+      ok: false,
+      sourceInfo: entry.sourceInfo,
+      diagnostic: toolDefinitionDiagnostic(
+        toolIndex,
+        toolName,
+        `${toolName}.name must be a non-empty string`,
+      ),
+    };
+  }
+
+  const labelRead = readToolDefinitionField(entry.definition, "label");
+  if (!labelRead.ok || typeof labelRead.value !== "string") {
+    return {
+      ok: false,
+      sourceInfo: entry.sourceInfo,
+      diagnostic: toolDefinitionDiagnostic(
+        toolIndex,
+        toolName,
+        `${toolName}.label must be a string`,
+      ),
+    };
+  }
+
+  const descriptionRead = readToolDefinitionField(entry.definition, "description");
+  if (!descriptionRead.ok || typeof descriptionRead.value !== "string") {
+    return {
+      ok: false,
+      sourceInfo: entry.sourceInfo,
+      diagnostic: toolDefinitionDiagnostic(
+        toolIndex,
+        toolName,
+        `${toolName}.description must be a string`,
+      ),
+    };
+  }
+
+  const parametersRead = readToolDefinitionField(entry.definition, "parameters");
+  if (!parametersRead.ok) {
+    return {
+      ok: false,
+      sourceInfo: entry.sourceInfo,
+      diagnostic: toolDefinitionDiagnostic(
+        toolIndex,
+        toolName,
+        `${toolName}.parameters is unreadable`,
+      ),
+    };
+  }
+
+  const parameters = parametersRead.value === undefined ? {} : parametersRead.value;
+  const executeRead = readToolDefinitionField(entry.definition, "execute");
+  if (!executeRead.ok || typeof executeRead.value !== "function") {
+    return {
+      ok: false,
+      sourceInfo: entry.sourceInfo,
+      diagnostic: toolDefinitionDiagnostic(
+        toolIndex,
+        toolName,
+        `${toolName}.execute must be a function`,
+      ),
+    };
+  }
+
+  const definition: ToolDefinition = {
+    name: nameRead.value,
+    label: labelRead.value,
+    description: descriptionRead.value,
+    parameters: parameters as ToolDefinition["parameters"],
+    execute: executeRead.value.bind(entry.definition) as ToolDefinition["execute"],
+  };
+
+  const promptSnippetRead = readToolDefinitionField(entry.definition, "promptSnippet");
+  if (promptSnippetRead.ok && typeof promptSnippetRead.value === "string") {
+    definition.promptSnippet = promptSnippetRead.value;
+  }
+  const promptGuidelinesRead = readToolDefinitionField(entry.definition, "promptGuidelines");
+  if (
+    promptGuidelinesRead.ok &&
+    Array.isArray(promptGuidelinesRead.value) &&
+    promptGuidelinesRead.value.every(
+      (guideline): guideline is string => typeof guideline === "string",
+    )
+  ) {
+    definition.promptGuidelines = promptGuidelinesRead.value;
+  }
+  const renderShellRead = readToolDefinitionField(entry.definition, "renderShell");
+  if (
+    renderShellRead.ok &&
+    (renderShellRead.value === "default" || renderShellRead.value === "self")
+  ) {
+    definition.renderShell = renderShellRead.value;
+  }
+  const prepareArgumentsRead = readToolDefinitionField(entry.definition, "prepareArguments");
+  if (prepareArgumentsRead.ok && typeof prepareArgumentsRead.value === "function") {
+    definition.prepareArguments = prepareArgumentsRead.value.bind(
+      entry.definition,
+    ) as ToolDefinition["prepareArguments"];
+  }
+  const executionModeRead = readToolDefinitionField(entry.definition, "executionMode");
+  if (
+    executionModeRead.ok &&
+    (executionModeRead.value === "sequential" || executionModeRead.value === "parallel")
+  ) {
+    definition.executionMode = executionModeRead.value;
+  }
+  const renderCallRead = readToolDefinitionField(entry.definition, "renderCall");
+  if (renderCallRead.ok && typeof renderCallRead.value === "function") {
+    definition.renderCall = renderCallRead.value.bind(
+      entry.definition,
+    ) as ToolDefinition["renderCall"];
+  }
+  const renderResultRead = readToolDefinitionField(entry.definition, "renderResult");
+  if (renderResultRead.ok && typeof renderResultRead.value === "function") {
+    definition.renderResult = renderResultRead.value.bind(
+      entry.definition,
+    ) as ToolDefinition["renderResult"];
+  }
+
+  return {
+    ok: true,
+    entry: {
+      definition,
+      sourceInfo: entry.sourceInfo,
+    },
+  };
+}
+
+function createToolDefinitionSchemaCandidate(
+  entry: ToolDefinitionEntry,
+): ToolDefinitionSchemaCandidate {
+  return {
+    entry,
+    name: entry.definition.name,
+    parameters: entry.definition.parameters,
+  };
 }
 
 // ============================================================================
@@ -282,6 +484,23 @@ interface ToolDefinitionEntry {
   definition: ToolDefinition;
   sourceInfo: SourceInfo;
 }
+
+type ToolDefinitionSchemaCandidate = {
+  readonly entry: ToolDefinitionEntry;
+  readonly name: string;
+  readonly parameters: ToolDefinition["parameters"];
+};
+
+type ToolDefinitionRead =
+  | {
+      readonly ok: true;
+      readonly entry: ToolDefinitionEntry;
+    }
+  | {
+      readonly ok: false;
+      readonly diagnostic: RuntimeToolSchemaDiagnostic;
+      readonly sourceInfo: SourceInfo;
+    };
 
 type ActiveToolPromptMetadata = {
   validToolNames: string[];
@@ -2377,6 +2596,48 @@ export class AgentSession {
     );
   }
 
+  private reportToolSchemaDiagnostics(
+    candidates: readonly ToolDefinitionSchemaCandidate[],
+    diagnostics: readonly RuntimeToolSchemaDiagnostic[],
+  ): void {
+    for (const diagnostic of diagnostics) {
+      const sourceInfo = candidates[diagnostic.toolIndex]?.entry.sourceInfo;
+      const source = formatToolSource(sourceInfo);
+      const message = `quarantined unsupported session tool schema from ${source}: ${formatToolSchemaDiagnostic(diagnostic)}`;
+      log.warn(message);
+      this.currentExtensionRunner.emitError({
+        extensionPath: source,
+        event: "tool_schema",
+        error: message,
+      });
+    }
+  }
+
+  private filterRuntimeCompatibleToolDefinitions(
+    entries: readonly ToolDefinitionEntry[],
+  ): ToolDefinitionEntry[] {
+    const reads = entries.map(materializeToolDefinitionEntry);
+    const materializedEntries: ToolDefinitionEntry[] = [];
+    for (const read of reads) {
+      if (read.ok) {
+        materializedEntries.push(read.entry);
+        continue;
+      }
+      const message = `quarantined unsupported session tool schema from ${formatToolSource(read.sourceInfo)}: ${formatToolSchemaDiagnostic(read.diagnostic)}`;
+      log.warn(message);
+      this.currentExtensionRunner.emitError({
+        extensionPath: formatToolSource(read.sourceInfo),
+        event: "tool_schema",
+        error: message,
+      });
+    }
+
+    const candidates = materializedEntries.map(createToolDefinitionSchemaCandidate);
+    const projection = filterRuntimeCompatibleTools(candidates);
+    this.reportToolSchemaDiagnostics(candidates, projection.diagnostics);
+    return projection.tools.map((candidate) => candidate.entry);
+  }
+
   private refreshToolRegistry(options?: {
     activeToolNames?: string[];
     includeAllExtensionTools?: boolean;
@@ -2388,15 +2649,28 @@ export class AgentSession {
       this.disableBuiltInTools && this.baseToolDefinitions.has(name);
     const isAllowedTool = (name: string): boolean =>
       !isDisabledBuiltInToolName(name) && (!allowedToolNames || allowedToolNames.has(name));
+    const shouldInspectCustomTool = (tool: ToolDefinitionEntry): boolean => {
+      const name = readToolDefinitionName(tool.definition, "");
+      if (name) {
+        return isAllowedTool(name);
+      }
+      return !allowedToolNames;
+    };
 
     const registeredTools = this.currentExtensionRunner.getAllRegisteredTools();
-    const allCustomTools = [
+    const candidateCustomTools = [
       ...registeredTools,
-      ...this.customTools.map((definition) => ({
-        definition,
-        sourceInfo: createSyntheticSourceInfo(`<sdk:${definition.name}>`, { source: "sdk" }),
-      })),
-    ].filter((tool) => isAllowedTool(tool.definition.name));
+      ...this.customTools.map((definition, index) => {
+        const name = readToolDefinitionName(definition, `tool[${index}]`);
+        return {
+          definition,
+          sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, { source: "sdk" }),
+        };
+      }),
+    ];
+    const allCustomTools = this.filterRuntimeCompatibleToolDefinitions(
+      candidateCustomTools.filter(shouldInspectCustomTool),
+    );
     const definitionRegistry = new Map<string, ToolDefinitionEntry>(
       Array.from(this.baseToolDefinitions.entries())
         .filter(([name]) => isAllowedTool(name))

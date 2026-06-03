@@ -128,6 +128,14 @@ export {
 
 // Helper Functions
 
+function readCustomToolName(tool: ToolDefinition): string | undefined {
+  try {
+    return typeof tool.name === "string" && tool.name ? tool.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function getDefaultAgentDir(): string {
   return getAgentDir();
 }
@@ -283,7 +291,8 @@ export async function createAgentSession(
   }
 
   const defaultActiveToolNames: ToolName[] = ["read", "bash", "edit", "write"];
-  const customToolNames = options.customTools?.map((tool) => tool.name) ?? [];
+  const customToolNames =
+    options.customTools?.flatMap((tool) => readCustomToolName(tool) ?? []) ?? [];
   const allowedToolNames = options.tools ?? (options.noTools === "all" ? [] : undefined);
   const disableBuiltInTools = !options.tools && options.noTools === "builtin";
   const initialActiveToolNames: string[] = options.tools
