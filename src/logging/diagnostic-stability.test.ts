@@ -501,24 +501,36 @@ describe("diagnostic stability recorder", () => {
         slowCount: 1,
         latestMs: 30_000,
         maxMs: 30_000,
+        p50Ms: 30_000,
+        p90Ms: 30_000,
+        p95Ms: 30_000,
       },
       receivedToTurnStartMs: {
         count: 1,
         slowCount: 1,
         latestMs: 12_000,
         maxMs: 12_000,
+        p50Ms: 12_000,
+        p90Ms: 12_000,
+        p95Ms: 12_000,
       },
       startToDeliveryMs: {
         count: 1,
         slowCount: 0,
         latestMs: 2_500,
         maxMs: 2_500,
+        p50Ms: 2_500,
+        p90Ms: 2_500,
+        p95Ms: 2_500,
       },
       startToCompletionMs: {
         count: 1,
         slowCount: 0,
         latestMs: 2_700,
         maxMs: 2_700,
+        p50Ms: 2_700,
+        p90Ms: 2_700,
+        p95Ms: 2_700,
       },
     });
     expect(snapshot.summary.channelTurns?.latency?.recentSlow).toEqual([
@@ -578,6 +590,33 @@ describe("diagnostic stability recorder", () => {
     expect(JSON.stringify(snapshot)).not.toContain("C123456789");
     expect(JSON.stringify(snapshot)).not.toContain("-100123456789");
     expect(JSON.stringify(snapshot)).not.toContain("+49123456789");
+  });
+
+  it("computes channel turn latency percentiles across samples", async () => {
+    startDiagnosticStabilityRecorder();
+
+    for (const [index, valueMs] of [100, 200, 300, 400, 500].entries()) {
+      emitDiagnosticEvent({
+        type: "channel.turn.event",
+        channel: "telegram",
+        turnId: `turn-${index}`,
+        turnEventType: "turn.started",
+        receivedToTurnStartMs: valueMs,
+      });
+    }
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.channelTurns?.latency?.receivedToTurnStartMs).toMatchObject({
+      count: 5,
+      slowCount: 0,
+      latestMs: 500,
+      maxMs: 500,
+      p50Ms: 300,
+      p90Ms: 500,
+      p95Ms: 500,
+    });
   });
 
   it("keeps the newest events when capacity is exceeded", () => {

@@ -707,6 +707,9 @@ function readOptionalLatencyMetric(
       ? { latestMs: readNumber(metric.latestMs, `${label}.latestMs`) }
       : {}),
     ...(metric.maxMs !== undefined ? { maxMs: readNumber(metric.maxMs, `${label}.maxMs`) } : {}),
+    ...(metric.p50Ms !== undefined ? { p50Ms: readNumber(metric.p50Ms, `${label}.p50Ms`) } : {}),
+    ...(metric.p90Ms !== undefined ? { p90Ms: readNumber(metric.p90Ms, `${label}.p90Ms`) } : {}),
+    ...(metric.p95Ms !== undefined ? { p95Ms: readNumber(metric.p95Ms, `${label}.p95Ms`) } : {}),
   };
 }
 

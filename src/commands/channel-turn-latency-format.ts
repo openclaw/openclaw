@@ -37,6 +37,7 @@ export function formatChannelTurnLatencyMetric(
   const fields = [
     `latest${style.assign}${formatChannelTurnLatencyMs(metric.latestMs)}`,
     `max${style.assign}${formatChannelTurnLatencyMs(metric.maxMs)}`,
+    `p95${style.assign}${formatChannelTurnLatencyMs(metric.p95Ms)}`,
     `slow${style.assign}${metric.slowCount}/${metric.count}`,
   ];
   return `${label} ${fields.join(style.separator)}`;

@@ -20,6 +20,9 @@ type DiagnosticStabilityLatencyMetric = {
   slowCount: number;
   latestMs?: number;
   maxMs?: number;
+  p50Ms?: number;
+  p90Ms?: number;
+  p95Ms?: number;
 };
 
 type DiagnosticStabilityChannelTurnLatencySummary = {
@@ -37,6 +40,11 @@ type DiagnosticStabilityChannelTurnLatencySummary = {
     valueMs: number;
   }>;
 };
+
+type DiagnosticStabilityChannelTurnLatencyMetricKey = Exclude<
+  keyof DiagnosticStabilityChannelTurnLatencySummary,
+  "recentSlow"
+>;
 
 export type DiagnosticStabilityHealthStatus = "ok" | "warning" | "degraded";
 
@@ -734,6 +742,15 @@ function summarizeRecords(
       issues: [],
     },
   };
+  const channelTurnLatencySamples: Record<
+    DiagnosticStabilityChannelTurnLatencyMetricKey,
+    number[]
+  > = {
+    messageAgeMs: [],
+    receivedToTurnStartMs: [],
+    startToDeliveryMs: [],
+    startToCompletionMs: [],
+  };
 
   function pushChannelTurnHealthIssue(issue: DiagnosticStabilityChannelTurnHealthIssue): void {
     channelTurns.health.issues.push(issue);
@@ -746,13 +763,14 @@ function summarizeRecords(
 
   function recordChannelTurnLatency(
     record: DiagnosticStabilityEventRecord,
-    metric: Exclude<keyof DiagnosticStabilityChannelTurnLatencySummary, "recentSlow">,
+    metric: DiagnosticStabilityChannelTurnLatencyMetricKey,
     valueMs: number | undefined,
   ): void {
     if (typeof valueMs !== "number" || !Number.isFinite(valueMs) || valueMs < 0) {
       return;
     }
     const latency = channelTurns.latency;
+    channelTurnLatencySamples[metric].push(valueMs);
     const current = latency[metric] as DiagnosticStabilityLatencyMetric | undefined;
     const slow = valueMs >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS;
     latency[metric] = {
@@ -774,6 +792,32 @@ function summarizeRecords(
       if (latency.recentSlow.length > 10) {
         latency.recentSlow.shift();
       }
+    }
+  }
+
+  function computePercentile(values: readonly number[], percentile: number): number | undefined {
+    if (values.length === 0) {
+      return undefined;
+    }
+    const sorted = [...values].sort((a, b) => a - b);
+    const index = Math.ceil((percentile / 100) * sorted.length) - 1;
+    return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
+  }
+
+  function finalizeChannelTurnLatencyMetrics(): void {
+    for (const [metric, values] of Object.entries(channelTurnLatencySamples) as Array<
+      [DiagnosticStabilityChannelTurnLatencyMetricKey, number[]]
+    >) {
+      const current = channelTurns.latency[metric];
+      if (!current) {
+        continue;
+      }
+      channelTurns.latency[metric] = {
+        ...current,
+        p50Ms: computePercentile(values, 50),
+        p90Ms: computePercentile(values, 90),
+        p95Ms: computePercentile(values, 95),
+      };
     }
   }
 
@@ -852,6 +896,7 @@ function summarizeRecords(
       recordChannelTurnLatency(record, "startToCompletionMs", record.startToCompletionMs);
     }
   }
+  finalizeChannelTurnLatencyMetrics();
 
   if (channelTurns.missingVisibleDelivery > 0) {
     pushChannelTurnHealthIssue({
