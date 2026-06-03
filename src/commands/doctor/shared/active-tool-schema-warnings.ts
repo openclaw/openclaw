@@ -182,6 +182,7 @@ export function collectActiveToolSchemaProjectionWarnings(params: {
         modelId: modelRef.model,
         modelApi: runtimeModelContext.modelApi,
         model: runtimeModelContext.model,
+        throwOnProviderToolSchemaError: true,
         onPreNormalizationSchemaDiagnostics: (diagnostics) =>
           preNormalizationDiagnostics.push(...diagnostics),
       });

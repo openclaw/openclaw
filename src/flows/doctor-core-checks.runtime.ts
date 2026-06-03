@@ -620,6 +620,7 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
       modelId: params.modelRef.model,
       modelApi: params.model.api,
       model: params.model,
+      throwOnProviderToolSchemaError: true,
       onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
         preNormalizationFindings.push(
           ...diagnostics.map((diagnostic) =>
@@ -714,6 +715,7 @@ function collectAgentRuntimeToolSchemaFindings(params: {
       modelId: params.modelRef.model,
       modelApi: params.model.api,
       model: params.model,
+      throwOnProviderToolSchemaError: true,
       onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
         preNormalizationFindings.push(
           ...diagnostics.map((diagnostic) =>

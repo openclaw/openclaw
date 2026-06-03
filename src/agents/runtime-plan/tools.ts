@@ -27,6 +27,7 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
   allowProviderRuntimePluginLoad?: boolean;
+  throwOnProviderToolSchemaError?: boolean;
   onPreNormalizationSchemaDiagnostics?: (
     diagnostics: readonly RuntimeToolSchemaDiagnostic[],
     tools: readonly AgentTool<TSchemaType, TResult>[],
@@ -110,6 +111,9 @@ export function normalizeAgentRuntimeTools<
       model: params.model,
       runtimeHandle: params.runtimeHandle,
       allowRuntimePluginLoad: params.allowProviderRuntimePluginLoad,
+      ...(params.throwOnProviderToolSchemaError !== undefined
+        ? { throwOnProviderToolSchemaError: params.throwOnProviderToolSchemaError }
+        : {}),
     });
   const normalizedTools = Array.isArray(normalized) ? normalized : normalizableTools;
   return preserveRuntimeToolMetadata(normalizableTools, normalizedTools);
