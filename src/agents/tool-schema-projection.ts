@@ -50,6 +50,19 @@ function unreadableRuntimeToolEntry(
   };
 }
 
+function invalidRuntimeToolEntry(
+  toolIndex: number,
+): RuntimeToolEntryRead<Pick<AnyAgentTool, "name" | "parameters">> {
+  return {
+    ok: false,
+    diagnostic: {
+      toolName: `tool[${toolIndex}]`,
+      toolIndex,
+      violations: [`tool[${toolIndex}] is not an object tool descriptor`],
+    },
+  };
+}
+
 function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "parameters">>(
   tools: readonly TTool[],
 ): RuntimeToolEntryRead<TTool>[] {
@@ -62,7 +75,12 @@ function readRuntimeToolEntries<TTool extends Pick<AnyAgentTool, "name" | "param
   const entries: RuntimeToolEntryRead<TTool>[] = [];
   for (let toolIndex = 0; toolIndex < length; toolIndex += 1) {
     try {
-      entries.push({ ok: true, tool: tools[toolIndex], toolIndex });
+      const tool = tools[toolIndex];
+      if (!tool || typeof tool !== "object" || Array.isArray(tool)) {
+        entries.push(invalidRuntimeToolEntry(toolIndex) as RuntimeToolEntryRead<TTool>);
+        continue;
+      }
+      entries.push({ ok: true, tool, toolIndex });
     } catch {
       entries.push(unreadableRuntimeToolEntry(toolIndex) as RuntimeToolEntryRead<TTool>);
     }

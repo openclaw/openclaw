@@ -208,4 +208,27 @@ describe("runtime tool input schema projection", () => {
       ],
     });
   });
+
+  it("quarantines primitive tool descriptors before provider normalization", () => {
+    const healthy = {
+      name: "healthy",
+      parameters: { type: "object", properties: {} },
+    };
+
+    expect(
+      filterProviderNormalizableTools([
+        "fuzzplugin primitive tool entry" as unknown as Pick<AnyAgentTool, "name" | "parameters">,
+        healthy,
+      ]),
+    ).toEqual({
+      tools: [healthy],
+      diagnostics: [
+        {
+          toolName: "tool[0]",
+          toolIndex: 0,
+          violations: ["tool[0] is not an object tool descriptor"],
+        },
+      ],
+    });
+  });
 });

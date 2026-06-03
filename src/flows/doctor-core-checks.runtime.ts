@@ -1,3 +1,4 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import {
   type McpToolCatalogDiagnostic,
@@ -553,26 +554,29 @@ function toolSchemaDiagnosticToFinding(params: {
   } catch {
     tool = undefined;
   }
-  const pluginId = tool ? getPluginToolMeta(tool)?.pluginId : undefined;
+  const rawPluginId = tool ? getPluginToolMeta(tool)?.pluginId : undefined;
+  const pluginId = rawPluginId ? sanitizeForLog(rawPluginId) : undefined;
+  const toolName = sanitizeForLog(params.diagnostic.toolName);
+  const requirement = sanitizeForLog(params.diagnostic.violations.join(", "));
   const owner = pluginId ? ` from plugin ${pluginId}` : "";
   const agent = `Agent ${params.agentId} `;
   const path =
-    pluginId === "bundle-mcp"
+    rawPluginId === "bundle-mcp"
       ? "mcp.servers"
       : pluginId
         ? `plugins.entries.${pluginId}`
-        : `tools.${params.diagnostic.toolName}`;
+        : `tools.${toolName}`;
   const fixHint =
-    pluginId === "bundle-mcp"
+    rawPluginId === "bundle-mcp"
       ? "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor."
       : "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.";
   return {
     checkId: "core/doctor/runtime-tool-schemas",
     severity: "error",
-    message: `${agent}tool ${params.diagnostic.toolName}${owner} has an unsupported input schema for runtime projection.`,
+    message: `${agent}tool ${toolName}${owner} has an unsupported input schema for runtime projection.`,
     path,
-    target: params.diagnostic.toolName,
-    requirement: params.diagnostic.violations.join(", "),
+    target: toolName,
+    requirement,
     fixHint,
   };
 }

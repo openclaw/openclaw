@@ -141,6 +141,44 @@ describe("doctor runtime tool schema error handling", () => {
     expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
   });
 
+  it("reports primitive agent runtime tool entries without aborting doctor", async () => {
+    mocks.createOpenClawCodingTools.mockReturnValueOnce([
+      "fuzzplugin primitive tool entry" as unknown as AnyAgentTool,
+      tool("healthy", { type: "object", properties: {} }),
+    ]);
+
+    await expect(collectRuntimeToolSchemaFindings({})).resolves.toContainEqual({
+      checkId: "core/doctor/runtime-tool-schemas",
+      severity: "error",
+      message: "Agent main tool tool[0] has an unsupported input schema for runtime projection.",
+      path: "tools.tool[0]",
+      target: "tool[0]",
+      requirement: "tool[0] is not an object tool descriptor",
+      fixHint:
+        "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
+    });
+    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("sanitizes plugin-controlled runtime tool schema finding text", async () => {
+    mocks.createOpenClawCodingTools.mockReturnValueOnce([
+      tool("fuzzplugin_\u001B[31mmove\nangles", { type: "array", items: { type: "number" } }),
+    ]);
+
+    await expect(collectRuntimeToolSchemaFindings({})).resolves.toContainEqual({
+      checkId: "core/doctor/runtime-tool-schemas",
+      severity: "error",
+      message:
+        "Agent main tool fuzzplugin_moveangles has an unsupported input schema for runtime projection.",
+      path: "tools.fuzzplugin_moveangles",
+      target: "fuzzplugin_moveangles",
+      requirement: 'fuzzplugin_moveangles.parameters.type must be "object"',
+      fixHint:
+        "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.",
+    });
+    expect(mocks.disposeBundleRuntime).toHaveBeenCalledTimes(1);
+  });
+
   it("reports bundle MCP runtime tool normalization failures without aborting doctor", async () => {
     mocks.createBundleMcpToolRuntime.mockResolvedValueOnce({
       tools: [bundleMcpTool("fuzzplugin__move_angles", { type: "object", properties: {} })],
