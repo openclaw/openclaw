@@ -840,7 +840,7 @@ function normalizePlanningToolMetas(
 
 const PLANNING_ONLY_NO_PROGRESS_EXEC_TOOL_NAMES = new Set(["bash", "bash_exec", "exec"]);
 const PLANNING_ONLY_SLEEP_COMMAND_RE =
-  /^sleep(?:\s+(?:(?:\d+(?:\.\d+)?)|(?:\.\d+))(?:[smhd])?)?\s*;?(?:\s+\([^()]*\))?(?:\s*,\s*(?:pty|elevated))*$/i;
+  /^sleep(?:\s+(?:(?:\d+(?:\.\d+)?)|(?:\.\d+))(?:[smhd])?)?(?:\s*,\s*(?:pty|elevated))*$/i;
 
 function isPlanningOnlyNoProgressToolMeta(
   entry: PlanningOnlyAttempt["toolMetas"][number],
