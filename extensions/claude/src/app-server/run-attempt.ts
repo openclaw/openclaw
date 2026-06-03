@@ -745,6 +745,20 @@ class IdleTimeoutError extends Error {
   }
 }
 
+// Codex-consistent "no real progress" watchdog (mirrors the progress/attempt-idle
+// watch in extensions/codex/src/app-server/attempt-turn-watches.ts). The
+// turnIdleTimeoutMs watch resets on ANY turn notification — including the bridge's
+// periodic keepalive heartbeat (turn-runner.ts emits turn/progress {kind:"heartbeat"}
+// every ~30s) — so once heartbeats flow it can no longer catch a turn that is
+// alive-but-hung (heartbeating with zero real output); only the hard turnTimeoutMs
+// ceiling would. This second watch advances its deadline ONLY on real activity
+// (item/delta/tool/assistant, or an SDK-activity turn/progress whose kind !==
+// "heartbeat") and, like codex's getActiveTurnItemCount() > 0 guard, fires only when
+// no turn items are in flight — so a legitimately-slow native subagent (an open tool
+// item, silent on this SDK version) is never killed, while a genuine
+// no-progress/no-work-in-flight hang is torn down well before the hard ceiling.
+const CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS = 5 * 60_000;
+
 type Accumulator = {
   assistantTexts: string[];
   toolMetas: Array<{ toolName: string; meta?: string }>;
@@ -849,12 +863,24 @@ async function runTurn(
     let unsubscribe: () => void = () => {};
     let unsubscribeExit: () => void = () => {};
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    // Codex-consistent progress-watch state. lastProgressAt advances only on REAL
+    // activity (NOT the periodic keepalive heartbeat); openItems counts started-but-
+    // not-completed turn items (tool calls / native subagents) so the watch can
+    // suppress itself while work is genuinely in flight. See
+    // CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS above.
+    let progressTimer: ReturnType<typeof setTimeout> | null = null;
+    let lastProgressAt = Date.now();
+    let openItems = 0;
 
     const cleanup = () => {
       if (idleTimer) {
         clearTimeout(idleTimer);
       }
       idleTimer = null;
+      if (progressTimer) {
+        clearTimeout(progressTimer);
+      }
+      progressTimer = null;
       ac.signal.removeEventListener("abort", onAbort);
       unsubscribe();
       unsubscribeExit();
@@ -888,6 +914,45 @@ async function runTurn(
       idleTimer.unref?.();
     };
 
+    // Self-reschedules against lastProgressAt; tears the turn down only when the full
+    // window has elapsed with NO work in flight (openItems === 0), else re-arms for
+    // the remainder. See CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS above.
+    const scheduleProgressWatch = () => {
+      if (progressTimer) {
+        clearTimeout(progressTimer);
+      }
+      const delay = Math.max(
+        1,
+        CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS - (Date.now() - lastProgressAt),
+      );
+      progressTimer = setTimeout(() => {
+        if (settled) {
+          return;
+        }
+        const idleMs = Date.now() - lastProgressAt;
+        if (idleMs < CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS || openItems > 0) {
+          scheduleProgressWatch();
+          return;
+        }
+        settled = true;
+        projector.markSettled();
+        cleanup();
+        embeddedAgentLog.warn("claude-bridge: turn made no progress; tearing down", {
+          sessionId: params.sessionId,
+          turnId,
+          progressIdleTimeoutMs: CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS,
+          openItems,
+        });
+        client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
+        reject(
+          new IdleTimeoutError(
+            `Claude turn made no progress for ${CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS}ms with no work in flight`,
+          ),
+        );
+      }, delay);
+      progressTimer.unref?.();
+    };
+
     // If the shared bridge child dies (crash or forced restart) mid-turn, fail
     // fast with the real exit cause instead of waiting out the idle watchdog and
     // reporting a misleading "model idle timeout". A plain Error here (not
@@ -908,6 +973,24 @@ async function runTurn(
       // our deadline.
       if (projector.matchesTurn(notif)) {
         resetIdleTimer();
+        // Advance the progress watch on REAL activity only. The bridge's periodic
+        // keepalive (turn/progress {kind:"heartbeat"}) must NOT count as progress, or
+        // a hung turn would never be torn down before the hard ceiling. Track open
+        // turn items so the watch suppresses itself while a tool/subagent is running.
+        if (notif.method === "turn/progress") {
+          const kind = (notif.params as { kind?: unknown } | undefined)?.kind;
+          if (kind !== "heartbeat") {
+            lastProgressAt = Date.now();
+          }
+        } else {
+          lastProgressAt = Date.now();
+          if (notif.method === "item/started") {
+            openItems += 1;
+          } else if (notif.method === "item/completed") {
+            openItems = Math.max(0, openItems - 1);
+          }
+        }
+        scheduleProgressWatch();
       }
       const outcome = projector.processNotification(notif);
       if (!outcome) {
@@ -925,6 +1008,7 @@ async function runTurn(
       }
     });
     resetIdleTimer();
+    scheduleProgressWatch();
   });
 
   projector.finalize();
