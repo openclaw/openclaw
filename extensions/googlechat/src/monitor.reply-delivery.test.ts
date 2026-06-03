@@ -179,6 +179,36 @@ describe("Google Chat reply delivery", () => {
     expect(runtime.error).not.toHaveBeenCalled();
   });
 
+  it("propagates 403 upload errors for local media paths", async () => {
+    const core = createCore({
+      media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "image.png" },
+    });
+    const runtime = createRuntime();
+    mocks.deleteGoogleChatMessage.mockResolvedValue(undefined);
+    mocks.uploadGoogleChatAttachment.mockRejectedValueOnce(
+      new Error("Google Chat upload 403: PERMISSION_DENIED"),
+    );
+
+    await deliverGoogleChatReply({
+      payload: {
+        text: "caption",
+        mediaUrl: "/tmp/workspace/image.png",
+        replyToId: "spaces/AAA/threads/root",
+      },
+      account,
+      spaceId: "spaces/AAA",
+      runtime,
+      core,
+      config,
+      typingMessageName: "spaces/AAA/messages/typing",
+    });
+
+    expect(mocks.sendGoogleChatMessage).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Google Chat attachment send failed"),
+    );
+  });
+
   it("propagates non-403 upload errors to the error handler", async () => {
     const core = createCore({
       media: { buffer: Buffer.from("image"), contentType: "image/png", fileName: "reply.png" },

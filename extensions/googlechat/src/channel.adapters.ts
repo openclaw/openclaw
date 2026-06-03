@@ -321,6 +321,9 @@ export const googlechatOutboundAdapter = {
         });
       } catch (uploadErr) {
         if (/\b403\b/.test(String(uploadErr))) {
+          if (!/^https?:\/\//i.test(mediaUrl)) {
+            throw uploadErr;
+          }
           // App-auth service accounts lack the chat.messages.create scope
           // required for media uploads. Fall back to sending the URL as text.
           const fallbackText = text ? `${text}\n${mediaUrl}` : (mediaUrl ?? "");

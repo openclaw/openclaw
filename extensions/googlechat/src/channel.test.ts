@@ -440,6 +440,32 @@ describe("googlechatPlugin outbound sendMedia", () => {
     expect(result.chatId).toBe("spaces/AAA");
   });
 
+  it("propagates 403 upload errors for local media paths", async () => {
+    loadOutboundMediaFromUrlMock.mockResolvedValue({
+      buffer: Buffer.from("image"),
+      contentType: "image/png",
+      fileName: "image.png",
+    });
+    uploadGoogleChatAttachmentMock.mockRejectedValueOnce(
+      new Error("Google Chat upload 403: PERMISSION_DENIED"),
+    );
+
+    const cfg = createGoogleChatCfg();
+
+    await expect(
+      googlechatOutboundAdapter.attachedResults.sendMedia({
+        cfg,
+        to: "spaces/AAA",
+        text: "caption",
+        mediaUrl: "/tmp/workspace/image.png",
+        mediaLocalRoots: ["/tmp/workspace"],
+        accountId: "default",
+      }),
+    ).rejects.toThrow("403");
+
+    expect(sendGoogleChatMessageMock).not.toHaveBeenCalled();
+  });
+
   it("propagates non-403 upload errors", async () => {
     readRemoteMediaBufferMock.mockResolvedValue({
       buffer: Buffer.from("image"),

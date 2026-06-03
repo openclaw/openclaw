@@ -122,6 +122,9 @@ export async function deliverGoogleChatReply(params: {
           });
         } catch (uploadErr) {
           if (/\b403\b/.test(String(uploadErr))) {
+            if (!/^https?:\/\//i.test(mediaUrl)) {
+              throw uploadErr;
+            }
             // App-auth scope insufficient for media upload; fall back to URL as text.
             const fallbackText = caption ? `${caption}\n${mediaUrl}` : mediaUrl;
             await sendGoogleChatMessage({
