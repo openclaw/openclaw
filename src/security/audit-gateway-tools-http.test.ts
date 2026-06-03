@@ -130,4 +130,34 @@ describe("security audit gateway HTTP tool findings", () => {
       expect(hasFinding(findings, "gateway.tools_invoke_http.host_read_allow")).toBe(false);
     });
   });
+
+  // PR #85664 [P2] regression: inert `allow: ["read"]` (legacy config shape,
+  // without directInvoke.hostFsRead) must NOT trigger the generic
+  // `dangerous_allow` finding. The `read` tool is dual-key gated and stays
+  // unreachable in that state, so the generic warning is a false positive.
+  describe("dangerous_allow exempts dual-key-gated tools", () => {
+    it("does NOT fire dangerous_allow when only allow:['read'] is set (inert config)", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "lan", // would normally trigger critical if read were counted
+          auth: { token: "secret" },
+          tools: { allow: ["read"] },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow")).toBe(false);
+    });
+
+    it("still fires dangerous_allow when allow includes a non-dual-key-gated tool alongside read", () => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          bind: "loopback",
+          auth: { token: "secret" },
+          tools: { allow: ["read", "sessions_spawn"] },
+        },
+      };
+      const findings = collectGatewayConfigFindings(cfg, cfg, {});
+      expect(hasFinding(findings, "gateway.tools_invoke_http.dangerous_allow", "warn")).toBe(true);
+    });
+  });
 });
