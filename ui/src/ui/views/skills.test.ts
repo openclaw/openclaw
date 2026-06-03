@@ -106,6 +106,48 @@ describe("renderSkills", () => {
     }
   });
 
+  it("does not leak a toggled checkbox state onto the skill that replaces it when the list filters (regression #89661)", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    const report = (skills: SkillStatusEntry[]): SkillStatusReport => ({
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills,
+    });
+    const skillA = createSkill({ skillKey: "skill-a", name: "Skill A", disabled: true });
+    const skillB = createSkill({ skillKey: "skill-b", name: "Skill B", disabled: true });
+
+    // Disabled tab shows both disabled skills; both toggles start unchecked.
+    render(
+      renderSkills(createProps({ statusFilter: "disabled", report: report([skillA, skillB]) })),
+      container,
+    );
+    const before = [...container.querySelectorAll<HTMLInputElement>("input.skill-toggle")];
+    expect(before.map((checkbox) => checkbox.checked)).toEqual([false, false]);
+
+    // The user flips Skill A on: the browser mutates the checkbox DOM directly.
+    before[0].checked = true;
+
+    // Skill A is now enabled, so it leaves the Disabled tab; only Skill B remains.
+    render(
+      renderSkills(
+        createProps({
+          statusFilter: "disabled",
+          report: report([{ ...skillA, disabled: false }, skillB]),
+        }),
+      ),
+      container,
+    );
+
+    const after = [...container.querySelectorAll<HTMLInputElement>("input.skill-toggle")];
+    expect(after).toHaveLength(1);
+    // The remaining toggle must reflect Skill B (still disabled → unchecked), not
+    // Skill A's leftover "on" state carried over by a position-reused DOM node.
+    expect(after[0].checked).toBe(false);
+  });
+
   it("defers detail dialog opening until the dialog is connected", async () => {
     const container = document.createElement("div");
     const showModal = vi.fn(function (this: HTMLDialogElement) {
