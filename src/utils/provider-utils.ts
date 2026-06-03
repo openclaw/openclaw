@@ -5,9 +5,9 @@ import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.typ
 import { resolveProviderReasoningOutputModeWithPlugin } from "../plugins/provider-runtime.js";
 
 /**
- * Utility functions for provider-specific logic and capabilities.
+ * Resolves whether a provider should emit reasoning via native fields or tagged text,
+ * using provider runtime hooks when available and defaulting to native output.
  */
-
 export function resolveReasoningOutputMode(params: {
   provider: string | undefined | null;
   config?: OpenClawConfig;
