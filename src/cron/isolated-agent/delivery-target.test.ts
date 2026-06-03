@@ -749,6 +749,42 @@ describe("resolveDeliveryTarget", () => {
     expect(result.threadId).toBeUndefined();
   });
 
+  it("preserves resolver-proven Slack directory names as aliases for canonical channel IDs", async () => {
+    setMainSessionEntry(undefined);
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          source: "test",
+          plugin: {
+            ...createOutboundTestPlugin({
+              id: "slack",
+              outbound: createStubOutbound("Slack"),
+              messaging: {
+                targetPrefixes: ["slack", "channel"],
+                normalizeTarget: (raw) => raw.trim() || undefined,
+              },
+            }),
+            directory: {
+              listGroups: async () => [
+                { id: "channel:C0AHNV28LQJ", name: "abel-channel", rank: 1 },
+              ],
+            },
+          },
+        },
+      ]),
+    );
+
+    const result = await resolveDeliveryTarget(makeCfg({ bindings: [] }), AGENT_ID, {
+      channel: "slack",
+      to: "abel-channel",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.to).toBe("channel:C0AHNV28LQJ");
+    expect(result.aliases).toEqual(["abel-channel"]);
+  });
+
   it("uses canonical route targets even when the route has no thread", async () => {
     setMainSessionEntry(undefined);
     setActivePluginRegistry(
