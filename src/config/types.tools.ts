@@ -191,6 +191,15 @@ export type ToolLoopDetectionConfig = {
   postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
 
+export type ToolMemoryGuardConfig = {
+  /** Enable early low-memory blocking before tool calls. Default: true. */
+  enabled?: boolean;
+  /** Minimum available memory required before starting a tool call. Default: 268435456 (256 MiB). */
+  minAvailableBytes?: number;
+  /** Minimum available memory percentage required before starting a tool call. Default: 2. */
+  minAvailablePercent?: number;
+};
+
 export type ToolSearchConfig =
   | boolean
   | {
@@ -406,6 +415,8 @@ export type AgentToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Early low-memory guard for tool calls. */
+  memoryGuard?: ToolMemoryGuardConfig;
   /** Message tool configuration for this agent. */
   message?: MessageToolsConfig;
   sandbox?: {
@@ -707,6 +718,8 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Early low-memory guard for tool calls. */
+  memoryGuard?: ToolMemoryGuardConfig;
   /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
   toolSearch?: ToolSearchConfig;
   /** Generic code mode: expose exec/wait and hide normal tools behind a QuickJS catalog bridge. */

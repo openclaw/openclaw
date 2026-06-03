@@ -743,6 +743,14 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.loopDetection.detectors.pingPong": "Enable ping-pong loop detection (default: true).",
   "tools.loopDetection.postCompactionGuard.windowSize":
     "Number of post-compaction attempts during which the guard stays armed (default: 3). Lower values are stricter; higher values give the agent more attempts before abort.",
+  "tools.memoryGuard":
+    "Early low-memory guard for tool calls. Blocks the next tool call with a clear resource message when host memory is already below the configured floor.",
+  "tools.memoryGuard.enabled":
+    "Enable low-memory blocking before tool calls (default: true).",
+  "tools.memoryGuard.minAvailableBytes":
+    "Minimum available host memory required before starting a tool call (default: 268435456 bytes).",
+  "tools.memoryGuard.minAvailablePercent":
+    "Minimum available host memory percentage required before starting a tool call (default: 2).",
   "tools.exec.notifyOnExit":
     "When true (default), backgrounded exec sessions on exit and node exec lifecycle events enqueue a system event and request a heartbeat.",
   "tools.exec.notifyOnExitEmptySuccess":
