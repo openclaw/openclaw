@@ -24,25 +24,38 @@ import type {
 import type { AnyAgentTool } from "./tools/common.js";
 
 function resolveEffectiveToolLabel(tool: AnyAgentTool): string {
-  const rawLabel = normalizeOptionalString(tool.label) ?? "";
+  const toolName = readEffectiveToolName(tool);
+  const rawLabel = normalizeOptionalString(readEffectiveToolField(tool, "label")) ?? "";
   if (
     rawLabel &&
-    normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(tool.name)
+    normalizeLowercaseStringOrEmpty(rawLabel) !== normalizeLowercaseStringOrEmpty(toolName)
   ) {
     return rawLabel;
   }
-  return resolveToolDisplay({ name: tool.name }).title;
+  return resolveToolDisplay({ name: toolName }).title;
 }
 
 function resolveRawToolDescription(tool: AnyAgentTool): string {
-  return normalizeOptionalString(tool.description) ?? "";
+  return normalizeOptionalString(readEffectiveToolField(tool, "description")) ?? "";
 }
 
 function summarizeToolDescription(tool: AnyAgentTool): string {
   return summarizeToolDescriptionText({
     rawDescription: resolveRawToolDescription(tool),
-    displaySummary: tool.displaySummary,
+    displaySummary: normalizeOptionalString(readEffectiveToolField(tool, "displaySummary")),
   });
+}
+
+function readEffectiveToolField(tool: AnyAgentTool, field: string): unknown {
+  try {
+    return (tool as Record<string, unknown>)[field];
+  } catch {
+    return undefined;
+  }
+}
+
+function readEffectiveToolName(tool: AnyAgentTool, fallback = "tool"): string {
+  return normalizeOptionalString(readEffectiveToolField(tool, "name")) ?? fallback;
 }
 
 function resolveEffectiveToolSource(
@@ -131,7 +144,10 @@ function buildReadableRawToolsByName(
   for (let index = 0; index < toolCount; index += 1) {
     try {
       const tool = tools[index];
-      toolsByName.set(tool.name, tool);
+      const toolName = readEffectiveToolName(tool, "");
+      if (toolName) {
+        toolsByName.set(toolName, tool);
+      }
     } catch {
       // Unreadable entries are reported by the schema projection diagnostics.
     }
@@ -168,14 +184,15 @@ export function buildEffectiveToolInventoryEntries(
 
   return disambiguateLabels(
     tools
-      .map((tool) => {
-        const source = resolveEffectiveToolSource(tool, rawToolsByName.get(tool.name));
+      .map((tool, index) => {
+        const toolName = readEffectiveToolName(tool, `tool[${index}]`);
+        const source = resolveEffectiveToolSource(tool, rawToolsByName.get(toolName));
         const metadata = source.pluginId
-          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, tool.name))
+          ? pluginToolMetadata.get(buildPluginToolMetadataKey(source.pluginId, toolName))
           : undefined;
         return Object.assign(
           {
-            id: tool.name,
+            id: toolName,
             label:
               normalizeOptionalString(metadata?.displayName) ?? resolveEffectiveToolLabel(tool),
             description:

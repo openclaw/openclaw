@@ -1938,6 +1938,191 @@ describe("resolvePluginTools optional tools", () => {
     );
   });
 
+  it("skips plugin tools with unreadable required fields while keeping valid siblings", () => {
+    const unreadableTool = {
+      description: "bad",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [{ type: "text", text: "bad" }] };
+      },
+    };
+    Object.defineProperty(unreadableTool, "name", {
+      get() {
+        throw new Error("name exploded");
+      },
+    });
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [unreadableTool, makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): missing non-empty name",
+    );
+  });
+
+  it("skips plugin tools with unreadable execute accessors before wrapping siblings", () => {
+    const unreadableTool = {
+      name: "broken_tool",
+      description: "bad",
+      parameters: { type: "object", properties: {} },
+    };
+    Object.defineProperty(unreadableTool, "execute", {
+      get() {
+        throw new Error("execute exploded");
+      },
+    });
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [unreadableTool, makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool missing execute function",
+    );
+  });
+
+  it("rejects transient unreadable execute accessors after wrapper probing", () => {
+    let executeReads = 0;
+    const transientTool = {
+      name: "broken_tool",
+      description: "bad",
+      parameters: { type: "object", properties: {} },
+    };
+    Object.defineProperty(transientTool, "execute", {
+      get() {
+        executeReads += 1;
+        if (executeReads === 1) {
+          throw new Error("execute exploded once");
+        }
+        return async () => ({ content: [{ type: "text", text: "bad" }] });
+      },
+    });
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [transientTool, makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool missing execute function",
+    );
+  });
+
+  it("caches plugin descriptors without reading hostile optional fields", () => {
+    const tool = makeTool("cached_tool");
+    Object.defineProperty(tool, "displaySummary", {
+      get() {
+        throw new Error("display summary exploded");
+      },
+    });
+    Object.defineProperty(tool, "label", {
+      get() {
+        throw new Error("label exploded");
+      },
+    });
+    const factory = vi.fn(() => tool);
+    setRegistry([
+      {
+        pluginId: "cache-test",
+        optional: false,
+        source: "/tmp/cache-test.js",
+        names: ["cached_tool"],
+        factory,
+      },
+    ]);
+
+    const first = resolvePluginTools(createResolveToolsParams());
+    const second = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(first, ["cached_tool"]);
+    expectResolvedToolNames(second, ["cached_tool"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips plugin tools with unreadable required descriptions", () => {
+    const tool = makeTool("broken_tool");
+    Object.defineProperty(tool, "description", {
+      get() {
+        throw new Error("description exploded");
+      },
+    });
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [tool, makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool missing description string",
+    );
+  });
+
+  it("skips plugin tools whose required descriptor fields fail during cache capture", () => {
+    let descriptionReads = 0;
+    const tool = makeTool("broken_tool");
+    Object.defineProperty(tool, "description", {
+      get() {
+        descriptionReads += 1;
+        if (descriptionReads === 1) {
+          return "Broken tool";
+        }
+        throw new Error("description exploded during capture");
+      },
+    });
+    const registry = setRegistry([
+      {
+        pluginId: "schema-bug",
+        optional: false,
+        source: "/tmp/schema-bug.js",
+        names: ["broken_tool", "valid_tool"],
+        factory: () => [tool, makeTool("valid_tool")],
+      },
+    ]);
+
+    const tools = resolvePluginTools(createResolveToolsParams());
+
+    expectResolvedToolNames(tools, ["valid_tool"]);
+    expectSingleDiagnosticMessage(
+      registry.diagnostics,
+      "plugin tool is malformed (schema-bug): broken_tool has unreadable descriptor fields",
+    );
+  });
+
   it("warns with plugin factory timing details when a factory is slow", () => {
     vi.useFakeTimers({ now: 0 });
     const warnSpy = installConsoleMethodSpy("warn");

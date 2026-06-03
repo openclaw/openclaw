@@ -861,6 +861,32 @@ describe("resolveEffectiveToolInventory", () => {
     });
   });
 
+  it("falls back to raw description when displaySummary is unreadable", async () => {
+    const tool = mockTool({
+      name: "cron",
+      label: "Cron",
+      description: "Long raw description\n\nACTIONS:\n- status",
+    });
+    Object.defineProperty(tool, "displaySummary", {
+      get() {
+        throw new Error("display summary exploded");
+      },
+    });
+    const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryItem } = await loadHarness({
+      tools: [tool],
+    });
+
+    const result = resolveEffectiveToolInventoryItem({ cfg: {} });
+
+    expect(result.groups[0]?.tools[0]).toEqual({
+      id: "cron",
+      label: "Cron",
+      description: "Long raw description",
+      rawDescription: "Long raw description\n\nACTIONS:\n- status",
+      source: "core",
+    });
+  });
+
   it("falls back to a sanitized summary for multi-line raw descriptions", async () => {
     const { resolveEffectiveToolInventory: resolveEffectiveToolInventoryCandidate } =
       await loadHarness({

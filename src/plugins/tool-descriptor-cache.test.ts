@@ -16,6 +16,7 @@ vi.mock("../config/runtime-snapshot.js", () => ({
 
 import {
   buildPluginToolDescriptorCacheKey,
+  capturePluginToolDescriptor,
   createPluginToolDescriptorConfigCacheKeyMemo,
   resetPluginToolDescriptorCache,
 } from "./tool-descriptor-cache.js";
@@ -167,5 +168,70 @@ describe("plugin tool descriptor cache keys", () => {
     });
 
     expect(firstKey).toBe(secondKey);
+  });
+
+  it("captures plugin descriptors without reading hostile optional fields", () => {
+    const tool = {
+      name: "healthy_tool",
+      description: "Healthy tool",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    };
+    Object.defineProperty(tool, "displaySummary", {
+      get() {
+        throw new Error("display summary exploded");
+      },
+    });
+    Object.defineProperty(tool, "label", {
+      get() {
+        throw new Error("label exploded");
+      },
+    });
+
+    const captured = capturePluginToolDescriptor({
+      pluginId: "descriptor-fuzz",
+      tool: tool as never,
+      optional: false,
+    });
+
+    expect(captured).toStrictEqual({
+      optional: false,
+      descriptor: {
+        name: "healthy_tool",
+        description: "Healthy tool",
+        inputSchema: { type: "object", properties: {} },
+        owner: { kind: "plugin", pluginId: "descriptor-fuzz" },
+        executor: {
+          kind: "plugin",
+          pluginId: "descriptor-fuzz",
+          toolName: "healthy_tool",
+        },
+      },
+    });
+  });
+
+  it("does not cache descriptors with unreadable required descriptions", () => {
+    const tool = {
+      name: "healthy_tool",
+      parameters: { type: "object", properties: {} },
+      async execute() {
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    };
+    Object.defineProperty(tool, "description", {
+      get() {
+        throw new Error("description exploded");
+      },
+    });
+
+    expect(
+      capturePluginToolDescriptor({
+        pluginId: "descriptor-fuzz",
+        tool: tool as never,
+        optional: false,
+      }),
+    ).toBeUndefined();
   });
 });
