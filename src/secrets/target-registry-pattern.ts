@@ -24,6 +24,9 @@ function countDynamicPatternTokens(tokens: PathPatternToken[]): number {
   return tokens.filter((token) => token.kind === "wildcard" || token.kind === "array").length;
 }
 
+/**
+ * Parses a dotted target pattern into literal, wildcard, and array traversal tokens.
+ */
 export function parsePathPattern(pathPattern: string): PathPatternToken[] {
   const segments = parseDotPath(pathPattern);
   return segments.map((segment) => {
@@ -41,6 +44,9 @@ export function parsePathPattern(pathPattern: string): PathPatternToken[] {
   });
 }
 
+/**
+ * Compiles a registry entry and verifies its value path/ref path wildcard shape matches.
+ */
 export function compileTargetRegistryEntry(
   entry: SecretTargetRegistryEntry,
 ): CompiledTargetRegistryEntry {
@@ -64,6 +70,9 @@ export function compileTargetRegistryEntry(
   };
 }
 
+/**
+ * Matches concrete path segments against compiled pattern tokens and returns dynamic captures.
+ */
 export function matchPathTokens(
   segments: string[],
   tokens: PathPatternToken[],
@@ -85,6 +94,7 @@ export function matchPathTokens(
       if (!value) {
         return null;
       }
+      // Capture order must match materializePathTokens for sibling ref path reconstruction.
       captures.push(value);
       index += 1;
       continue;
@@ -102,6 +112,9 @@ export function matchPathTokens(
   return index === segments.length ? { captures } : null;
 }
 
+/**
+ * Rebuilds a concrete path from tokens and captures produced by matchPathTokens/expandPathTokens.
+ */
 export function materializePathTokens(
   tokens: PathPatternToken[],
   captures: string[],
@@ -132,6 +145,9 @@ export function materializePathTokens(
   return captureIndex === captures.length ? out : null;
 }
 
+/**
+ * Expands a pattern across a config object and returns every matching value with captures.
+ */
 export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): ExpandedPathMatch[] {
   const out: ExpandedPathMatch[] = [];
   const walk = (
