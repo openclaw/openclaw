@@ -8,9 +8,11 @@ import {
   type ReplyPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { markdownToIRWithMeta } from "openclaw/plugin-sdk/text-chunking";
 import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import type { MarkdownTableMode, MSTeamsReplyStyle, OpenClawConfig } from "../runtime-api.js";
+import { buildAdaptiveCardTable, splitTextAndTables } from "./adaptive-card-table.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { classifyMSTeamsSendError } from "./errors.js";
@@ -77,10 +79,12 @@ export type MSTeamsReplyRenderOptions = {
 /**
  * A rendered message that preserves media vs text distinction.
  * When mediaUrl is present, it will be sent as a Bot Framework attachment.
+ * When adaptiveCard is present, it will be sent as an Adaptive Card attachment.
  */
 export type MSTeamsRenderedMessage = {
   text?: string;
   mediaUrl?: string;
+  adaptiveCard?: Record<string, unknown>;
 };
 
 export type MSTeamsSendRetryOptions = {
@@ -211,6 +215,34 @@ function shouldRetry(classification: ReturnType<typeof classifyMSTeamsSendError>
   return classification.kind === "throttled" || classification.kind === "transient";
 }
 
+function renderAdaptiveTablePayload(
+  rawText: string,
+  out: MSTeamsRenderedMessage[],
+  opts: { chunkText: boolean; chunkLimit: number; chunkMode: ChunkMode },
+): void {
+  const { ir, tables } = markdownToIRWithMeta(rawText, {
+    linkify: false,
+    autolink: false,
+    headingStyle: "none",
+    blockquotePrefix: "",
+    tableMode: "block",
+  });
+
+  if (tables.length === 0) {
+    pushTextMessages(out, rawText, opts);
+    return;
+  }
+
+  const segments = splitTextAndTables(ir.text, tables);
+  for (const segment of segments) {
+    if (segment.kind === "text") {
+      pushTextMessages(out, segment.text, opts);
+    } else {
+      out.push({ adaptiveCard: buildAdaptiveCardTable(segment.table) });
+    }
+  }
+}
+
 export function renderReplyPayloadsToMessages(
   replies: ReplyPayload[],
   options: MSTeamsReplyRenderOptions,
@@ -227,9 +259,15 @@ export function renderReplyPayloadsToMessages(
       channel: "msteams",
     });
 
+  const isAdaptive = tableMode === "adaptive";
+  const effectiveTableMode = isAdaptive ? "off" : tableMode;
+
   for (const payload of replies) {
+    const rawText = payload.text ?? "";
     const reply = resolveSendableOutboundReplyParts(payload, {
-      text: getMSTeamsRuntime().channel.text.convertMarkdownTables(payload.text ?? "", tableMode),
+      text: isAdaptive
+        ? rawText
+        : getMSTeamsRuntime().channel.text.convertMarkdownTables(rawText, effectiveTableMode),
     });
 
     if (!reply.hasContent) {
@@ -237,21 +275,25 @@ export function renderReplyPayloadsToMessages(
     }
 
     if (!reply.hasMedia) {
-      pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+      if (isAdaptive) {
+        renderAdaptiveTablePayload(rawText, out, { chunkText, chunkLimit, chunkMode });
+      } else {
+        pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+      }
       continue;
     }
 
     if (mediaMode === "inline") {
-      // For inline mode, combine text with first media as attachment
       const firstMedia = reply.mediaUrls[0];
       if (firstMedia) {
         out.push({ text: reply.text || undefined, mediaUrl: firstMedia });
-        // Additional media URLs as separate messages
         for (let i = 1; i < reply.mediaUrls.length; i++) {
           if (reply.mediaUrls[i]) {
             out.push({ mediaUrl: reply.mediaUrls[i] });
           }
         }
+      } else if (isAdaptive) {
+        renderAdaptiveTablePayload(rawText, out, { chunkText, chunkLimit, chunkMode });
       } else {
         pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
       }
@@ -259,7 +301,11 @@ export function renderReplyPayloadsToMessages(
     }
 
     // mediaMode === "split"
-    pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+    if (isAdaptive) {
+      renderAdaptiveTablePayload(rawText, out, { chunkText, chunkLimit, chunkMode });
+    } else {
+      pushTextMessages(out, reply.text, { chunkText, chunkLimit, chunkMode });
+    }
     for (const mediaUrl of reply.mediaUrls) {
       if (!mediaUrl) {
         continue;
@@ -297,6 +343,16 @@ export async function buildActivity(
     activity.entities = [...(entities.length > 0 ? entities : []), AI_GENERATED_ENTITY];
   } else {
     activity.entities = [AI_GENERATED_ENTITY];
+  }
+
+  if (msg.adaptiveCard) {
+    activity.attachments = [
+      {
+        contentType: "application/vnd.microsoft.card.adaptive",
+        content: msg.adaptiveCard,
+      },
+    ];
+    return activity;
   }
 
   if (msg.mediaUrl) {

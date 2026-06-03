@@ -12,7 +12,7 @@ const MARKDOWN_STYLE_MARKERS = {
 
 /** Converts markdown tables into the configured plaintext/code rendering mode. */
 export function convertMarkdownTables(markdown: string, mode: MarkdownTableMode): string {
-  if (!markdown || mode === "off") {
+  if (!markdown || mode === "off" || mode === "adaptive") {
     return markdown;
   }
   const effectiveMode = mode === "block" ? "code" : mode;

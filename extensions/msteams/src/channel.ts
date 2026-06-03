@@ -507,6 +507,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       setup: msteamsSetupAdapter,
       messaging: {
         targetPrefixes: ["msteams", "teams"],
+        defaultMarkdownTableMode: "adaptive",
         normalizeTarget: normalizeMSTeamsMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
         targetResolver: {
