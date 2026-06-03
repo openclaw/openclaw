@@ -169,6 +169,13 @@ const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
 const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+// #85714: drive the stranded-reply recovery loop deterministically. Turn 1
+// matches the scenario prompt and returns a long plain-text final WITHOUT the
+// message tool (stranding under message_tool_only). The retry turn re-prompt is
+// emitted verbatim by agent-runner.ts with this needle, so the retry matches and
+// delivers via message(action=send).
+const QA_STRANDED_FINAL_PROMPT_RE = /qa stranded final recovery check/i;
+const QA_STRANDED_RETRY_PROMPT_RE = /you did not call message\(action=send\)/i;
 const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
 const QA_TELEGRAM_CURRENT_SESSION_STATUS_PROMPT_RE = /telegram current session_status qa check/i;
@@ -2491,6 +2498,29 @@ async function buildResponsesPayload(
         text: blockStreamingMarkers.second,
       },
     ]);
+  }
+  // #85714: stranded-reply recovery. The retry re-prompt needle is checked
+  // first because turn 2's request history also contains the original prompt.
+  if (QA_STRANDED_RETRY_PROMPT_RE.test(allInputText)) {
+    const marker = exactMarkerDirective ?? "QA-STRANDED-85714";
+    if (!toolOutput && hasDeclaredTool(body, "message")) {
+      return buildToolCallEventsWithArgs("message", {
+        action: "send",
+        message: marker,
+      });
+    }
+    return buildAssistantEvents("");
+  }
+  if (QA_STRANDED_FINAL_PROMPT_RE.test(allInputText)) {
+    const marker = exactMarkerDirective ?? "QA-STRANDED-85714";
+    // Long, multi-sentence plain-text final with NO message tool call: this is
+    // the stranded substantive reply that agent-runner.ts must detect.
+    return buildAssistantEvents(
+      `${marker}: here is the full answer you asked for. It runs well past the substantive ` +
+        `private-final threshold so the runner treats it as a real user-facing reply. The agent ` +
+        `wrote this answer but never called the configured delivery tool, so under message_tool_only ` +
+        `it would stay private unless recovery re-prompts the agent to deliver it visibly.`,
+    );
   }
   if (QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE.test(allInputText)) {
     const marker = exactMarkerDirective ?? exactReplyDirective ?? "QA-GROUP-TOOL-OK";
