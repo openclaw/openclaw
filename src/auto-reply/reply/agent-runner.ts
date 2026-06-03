@@ -15,6 +15,7 @@ import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
 } from "../../agents/embedded-agent-runner/runs.js";
+import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveModelAuthMode } from "../../agents/model-auth.js";
 import { isCliProvider } from "../../agents/model-selection.js";
 import { deriveContextPromptTokens, hasNonzeroUsage, normalizeUsage } from "../../agents/usage.js";
@@ -39,6 +40,8 @@ import {
   freezeDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
+import { getProviderUsageLimitsCached } from "../../infra/provider-usage.limits.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
@@ -117,6 +120,7 @@ import { createReplyMediaContext } from "./reply-media-paths.js";
 import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
 import { createReplyToModeFilterForChannel, resolveReplyToMode } from "./reply-threading.js";
 import { admitReplyTurn, resolveReplyTurnKind } from "./reply-turn-admission.js";
+import { recordReplyUsageState } from "./reply-usage-state.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { resolveSourceReplyVisibilityPolicy } from "./source-reply-delivery-mode.js";
@@ -1735,6 +1739,74 @@ export async function runReplyAgent(params: {
     const modelUsed = runResult.meta?.agentMeta?.model ?? fallbackModel ?? defaultModel;
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
+
+    // Hand the turn's execution state to the reply_payload_sending hook (harness-
+    // agnostic: every harness produces runResult.meta). A footer/readout plugin
+    // reads it at deliver time, correlated by runId/sessionKey.
+    {
+      const winnerProvider = runResult.meta?.executionTrace?.winnerProvider ?? providerUsed;
+      const winnerModel = runResult.meta?.executionTrace?.winnerModel ?? modelUsed;
+      const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
+      const compactions = runResult.meta?.agentMeta?.compactionCount;
+      recordReplyUsageState(
+        { runId, sessionKey },
+        {
+          provider: providerUsed,
+          model: modelUsed,
+          resolvedRef:
+            winnerProvider && winnerModel ? `${winnerProvider}/${winnerModel}` : undefined,
+          reasoningEffort:
+            typeof followupRun.run.thinkLevel === "string" ? followupRun.run.thinkLevel : undefined,
+          fastMode: resolveFastModeState({
+            cfg,
+            provider: providerUsed ?? "",
+            model: modelUsed ?? "",
+            agentId: followupRun.run.agentId,
+            sessionEntry: activeSessionEntry,
+          }).enabled,
+          fallbackUsed: runResult.meta?.executionTrace?.fallbackUsed === true,
+          // Richer per-turn atoms for usage rendering (/usage + plugins).
+          agentId: followupRun.run.agentId,
+          sessionId: followupRun.run.sessionId,
+          chatType: typeof sessionCtx.ChatType === "string" ? sessionCtx.ChatType : undefined,
+          authMode: runResult.meta?.requestShaping?.authMode ?? undefined,
+          overrideSource: activeSessionEntry?.modelOverrideSource ?? undefined,
+          requested:
+            followupRun.run.provider && followupRun.run.model
+              ? `${followupRun.run.provider}/${followupRun.run.model}`
+              : undefined,
+          turnUsd: usage
+            ? estimateUsageCost({
+                usage,
+                cost: resolveModelCostConfig({
+                  provider: providerUsed,
+                  model: modelUsed,
+                  config: cfg,
+                }),
+              })
+            : undefined,
+          durationMs: Date.now() - runStartedAt,
+          identity: resolveAgentIdentity(cfg, followupRun.run.agentId),
+          compactionCount: typeof compactions === "number" ? compactions : undefined,
+          contextTokenBudget:
+            typeof ctxTokens === "number" && Number.isFinite(ctxTokens) ? ctxTokens : undefined,
+          usage: usage
+            ? {
+                input: usage.input,
+                output: usage.output,
+                cacheRead: usage.cacheRead,
+                cacheWrite: usage.cacheWrite,
+                total: usage.total,
+              }
+            : undefined,
+          // Provider subscription/limit windows for the 📊 readout. Non-blocking
+          // (stale-while-revalidate): returns cached windows or undefined on a
+          // cold cache and refreshes in the background, so it never delays the
+          // reply. Undefined for api-key / unmapped providers.
+          limits: getProviderUsageLimitsCached(providerUsed),
+        },
+      );
+    }
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
       followupRun.run.inputProvenance,

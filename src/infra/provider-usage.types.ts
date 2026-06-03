@@ -29,3 +29,21 @@ export type UsageProviderId =
   | "xiaomi"
   | "xiaomi-token-plan"
   | "zai";
+
+/**
+ * Subscription/limit windows shaped for the reply usage-state contract (the
+ * `limits` field on `reply_payload_sending` `usageState`). Snake-cased to match
+ * the rest of the plugin-facing contract; percentages are 0–100.
+ */
+export type ReplyUsageLimitWindow = {
+  label: string;
+  used_pct: number;
+  pct_left: number;
+  resets_in_s?: number;
+};
+export type ReplyUsageLimits = {
+  available: boolean;
+  source: string;
+  display_name?: string;
+  windows: ReplyUsageLimitWindow[];
+};
