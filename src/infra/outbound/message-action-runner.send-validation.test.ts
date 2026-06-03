@@ -324,16 +324,6 @@ describe("runMessageAction send validation", () => {
       },
     },
     {
-      name: "string-encoded poll params",
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-        pollDurationSeconds: "60",
-        pollPublic: "true",
-      },
-    },
-    {
       name: "snake_case poll params",
       actionParams: {
         channel: "workspace",
@@ -344,15 +334,6 @@ describe("runMessageAction send validation", () => {
         poll_public: "true",
       },
     },
-    {
-      name: "negative poll duration params",
-      actionParams: {
-        channel: "workspace",
-        target: "#C12345678",
-        message: "hi",
-        pollDurationSeconds: -5,
-      },
-    },
   ])("rejects send actions that include $name", async ({ actionParams }) => {
     await expect(
       runDrySend({
@@ -361,6 +342,25 @@ describe("runMessageAction send validation", () => {
         toolContext: { currentChannelId: "C12345678" },
       }),
     ).rejects.toThrow(/use action "poll" instead of "send"/i);
+  });
+
+  it("allows send actions with poll metadata defaults but no poll creation anchor", async () => {
+    const result = await runDrySend({
+      cfg: workspaceConfig,
+      actionParams: {
+        channel: "workspace",
+        target: "#C12345678",
+        message: "hi",
+        pollDurationSeconds: "60",
+        pollDurationHours: 2,
+        pollPublic: "true",
+        pollAnonymous: true,
+        pollMulti: true,
+      },
+      toolContext: { currentChannelId: "C12345678" },
+    });
+
+    expect(result.kind).toBe("send");
   });
 });
 

@@ -14,6 +14,7 @@ const EXCLUDED_CORE_BUNDLED_PLUGIN_DIRS = new Set(["qqbot", "whatsapp"]);
 const BUNDLED_PLUGIN_BUILD_IDS_ENV = "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS";
 const TOP_LEVEL_PRIVATE_TEST_SURFACE_RE =
   /(?:^|[._-])(?:test|spec|test-support|test-helpers|test-fixtures|test-harness|mock-setup)(?:[._-]|$)/u;
+const MANIFESTLESS_CORE_RUNTIME_SUPPORT_DIRS = new Set(["speech-core"]);
 const toPosixPath = (value) => value.replaceAll("\\", "/");
 
 function parseBundledPluginBuildIdFilter(env = process.env) {
@@ -41,6 +42,9 @@ function readBundledPluginPackageJson(packageJsonPath, options = {}) {
 }
 
 function isManifestlessBundledRuntimeSupportPackage(params) {
+  if (MANIFESTLESS_CORE_RUNTIME_SUPPORT_DIRS.has(params.dirName)) {
+    return params.topLevelPublicSurfaceEntries.length > 0;
+  }
   if (params.packageJson?.openclaw?.release?.publishToNpm === true) {
     return false;
   }
