@@ -35,7 +35,7 @@ import type {
 interface MemoryRerankCandidate {
   ref: number; // core-assigned index; stable within a single search call
   snippet: string; // text excerpt for the cross-encoder
-  source: string; // source tag (e.g. "sqlite-vec")
+  source: "memory" | "sessions"; // the candidate's memory source (a MemorySource)
 }
 
 interface MemoryRerankScore {
