@@ -111,12 +111,15 @@ export function createFixedWindowRateLimiter(options: {
       const existing = state.get(key);
       if (!existing || nowMs - existing.windowStartMs >= windowMs) {
         touch(key, { count: 1, windowStartMs: nowMs });
+        // Bound key cardinality after accepting the new key so high-cardinality webhook traffic
+        // cannot grow this pre-auth limiter without limit.
         pruneMapToMaxSize(state, maxTrackedKeys);
         return false;
       }
 
       const nextCount = existing.count + 1;
       touch(key, { count: nextCount, windowStartMs: existing.windowStartMs });
+      // Refreshing the key before pruning keeps active keys newer than stale one-off probes.
       pruneMapToMaxSize(state, maxTrackedKeys);
       return nextCount > maxRequests;
     },
@@ -180,6 +183,7 @@ export function createBoundedCounter(options: {
       const baseCount = existing && !isExpired(existing, nowMs) ? existing.count : 0;
       const nextCount = baseCount + 1;
       touch(key, { count: nextCount, updatedAtMs: nowMs });
+      // Counters are diagnostic only; prefer bounded memory over retaining every anomaly key.
       pruneMapToMaxSize(counters, maxTrackedKeys);
       return nextCount;
     },
@@ -223,6 +227,7 @@ export function createWebhookAnomalyTracker(options?: {
       }
       const next = counter.increment(key, nowMs);
       if (log && (next === 1 || next % logEvery === 0)) {
+        // Log the first hit for visibility, then sample repeated failures to avoid noisy bursts.
         log(message(next));
       }
       return next;
