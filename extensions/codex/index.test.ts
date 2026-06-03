@@ -407,6 +407,160 @@ describe("codex plugin", () => {
     await expect(answered).resolves.toBe("1");
   });
 
+  it("sends partial Discord Codex input callbacks as follow-up replies", async () => {
+    const registerInteractiveHandler = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler,
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+
+    let resolved = false;
+    const prompt = createCodexUserInputPrompt({
+      scope: {
+        sessionFile: "/tmp/session.jsonl",
+        threadId: "thread-1",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+      },
+      resolveText: () => {
+        resolved = true;
+      },
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Small Patch", description: "" },
+            { label: "Feature Slice", description: "" },
+          ],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: true,
+          isSecret: false,
+          options: [
+            { label: "Approve", description: "" },
+            { label: "Hold", description: "" },
+          ],
+        },
+      ],
+    });
+    const buttonValue = prompt.presentation?.blocks
+      .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
+      .at(0)?.value;
+    const discordRegistration = registerInteractiveHandler.mock.calls
+      .map((call) => call[0])
+      .find((registration) => registration?.channel === "discord");
+
+    const reply = vi.fn(async () => undefined);
+    const followUp = vi.fn(async () => undefined);
+    const clearComponents = vi.fn(async () => undefined);
+    const disableComponents = vi.fn(async () => undefined);
+    await discordRegistration.handler({
+      accountId: "default",
+      senderId: "user-1",
+      interaction: { payload: buttonValue?.slice("codex:".length) },
+      respond: { reply, followUp, clearComponents, disableComponents },
+    });
+
+    expect(disableComponents).not.toHaveBeenCalled();
+    expect(clearComponents).not.toHaveBeenCalled();
+    expect(reply).not.toHaveBeenCalled();
+    expect(followUp).toHaveBeenCalledWith({
+      text: "Recorded answer for Plan.",
+      ephemeral: true,
+    });
+    expect(resolved).toBe(false);
+  });
+
+  it("rejects Discord Codex input callbacks from a different thread", async () => {
+    const registerInteractiveHandler = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "codex",
+        name: "Codex",
+        source: "test",
+        config: {},
+        pluginConfig: {},
+        runtime: {} as never,
+        registerAgentHarness: vi.fn(),
+        registerCommand: vi.fn(),
+        registerInteractiveHandler,
+        registerMediaUnderstandingProvider: vi.fn(),
+        registerMigrationProvider: vi.fn(),
+        registerProvider: vi.fn(),
+        on: vi.fn(),
+      }),
+    );
+
+    let resolved = false;
+    const prompt = createCodexUserInputPrompt({
+      scope: {
+        sessionFile: "/tmp/session.jsonl",
+        threadId: "thread-1",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        messageThreadId: "thread-1",
+      },
+      resolveText: () => {
+        resolved = true;
+      },
+      questions: [
+        {
+          id: "target",
+          header: "Target",
+          question: "Pick one",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Workspace", description: "" }],
+        },
+      ],
+    });
+    const buttonValue = prompt.presentation?.blocks
+      .flatMap((block) => (block.type === "buttons" ? block.buttons : []))
+      .at(0)?.value;
+    const discordRegistration = registerInteractiveHandler.mock.calls
+      .map((call) => call[0])
+      .find((registration) => registration?.channel === "discord");
+
+    const reply = vi.fn(async () => undefined);
+    const disableComponents = vi.fn(async () => undefined);
+    await discordRegistration.handler({
+      accountId: "default",
+      senderId: "user-1",
+      threadId: "thread-2",
+      interaction: { payload: buttonValue?.slice("codex:".length) },
+      respond: { reply, disableComponents },
+    });
+
+    expect(disableComponents).not.toHaveBeenCalled();
+    expect(reply).toHaveBeenCalledWith({
+      text: "This Codex control belongs to a different thread.",
+      ephemeral: true,
+    });
+    expect(resolved).toBe(false);
+  });
+
   it("keeps Discord Codex input callbacks handled when disabling controls fails", async () => {
     const registerInteractiveHandler = vi.fn();
     plugin.register(

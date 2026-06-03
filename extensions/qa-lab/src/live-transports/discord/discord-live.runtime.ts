@@ -53,7 +53,8 @@ type DiscordQaScenarioId =
   | "discord-native-help-command-registration"
   | "discord-voice-autojoin"
   | "discord-thread-reply-filepath-attachment"
-  | "discord-status-reactions-tool-only";
+  | "discord-status-reactions-tool-only"
+  | "discord-codex-user-input-other";
 
 type DiscordQaScenarioRun =
   | {
@@ -80,10 +81,23 @@ type DiscordQaScenarioRun =
       expectedAttachmentFilename: string;
       input: string;
       replyContent: string;
+    }
+  | {
+      kind: "codex-user-input-other";
+      answerText: string;
+      bindInput: string;
+      expectedFinalTextIncludes: string[];
+      expectedPromptTextIncludes: string[];
+      promptInput: string;
     };
 
 type DiscordQaScenarioDefinition = LiveTransportScenarioDefinition<DiscordQaScenarioId> & {
   buildRun: (sutApplicationId: string) => DiscordQaScenarioRun;
+};
+
+type CodexUserInputOtherFixtureAppServer = {
+  command: string;
+  args: string[];
 };
 
 type DiscordUser = {
@@ -320,6 +334,19 @@ const DISCORD_QA_SCENARIOS: DiscordQaScenarioDefinition[] = [
     },
   },
   {
+    id: "discord-codex-user-input-other",
+    title: "Discord Codex typed Other user input",
+    timeoutMs: 75_000,
+    buildRun: (sutApplicationId) => ({
+      kind: "codex-user-input-other",
+      answerText: `<@${sutApplicationId}> discord typed Other answer`,
+      bindInput: `<@${sutApplicationId}> /codex bind`,
+      expectedFinalTextIncludes: ["OPENCLAW_QA_CODEX_USER_INPUT_OK", "discord typed Other answer"],
+      expectedPromptTextIncludes: ["Codex needs input:", "Other: reply with your own answer."],
+      promptInput: `<@${sutApplicationId}> Trigger Codex request_user_input Other QA.`,
+    }),
+  },
+  {
     id: "discord-native-help-command-registration",
     title: "Discord native help command is registered",
     timeoutMs: 45_000,
@@ -373,7 +400,8 @@ const DISCORD_QA_DEFAULT_SCENARIOS = DISCORD_QA_SCENARIOS.filter(
   (scenario) =>
     scenario.id !== "discord-status-reactions-tool-only" &&
     scenario.id !== "discord-voice-autojoin" &&
-    scenario.id !== "discord-thread-reply-filepath-attachment",
+    scenario.id !== "discord-thread-reply-filepath-attachment" &&
+    scenario.id !== "discord-codex-user-input-other",
 );
 
 const DISCORD_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
@@ -459,6 +487,7 @@ function buildDiscordQaConfig(
     sutBotToken: string;
   },
   options: {
+    codexUserInputOther?: CodexUserInputOtherFixtureAppServer;
     statusReactionsToolOnly?: boolean;
     voiceAutoJoin?: {
       channelId: string;
@@ -466,10 +495,30 @@ function buildDiscordQaConfig(
     };
   } = {},
 ): OpenClawConfig {
-  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "discord"]);
+  const pluginAllow = uniqueStrings([
+    ...(baseCfg.plugins?.allow ?? []),
+    "discord",
+    ...(options.codexUserInputOther ? ["codex"] : []),
+  ]);
   const pluginEntries = {
     ...baseCfg.plugins?.entries,
     discord: { enabled: true },
+    ...(options.codexUserInputOther
+      ? {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: {
+                command: options.codexUserInputOther.command,
+                args: options.codexUserInputOther.args,
+                transport: "stdio" as const,
+                requestTimeoutMs: 5_000,
+                turnCompletionIdleTimeoutMs: 5_000,
+              },
+            },
+          },
+        }
+      : {}),
   };
   const requireMention = !options.statusReactionsToolOnly;
   const messages = options.statusReactionsToolOnly
@@ -1493,6 +1542,19 @@ function findScenario(ids?: string[]) {
   });
 }
 
+function buildCodexUserInputOtherFixtureAppServer(
+  repoRoot: string,
+): CodexUserInputOtherFixtureAppServer {
+  return {
+    command: process.execPath,
+    args: [
+      path.join(repoRoot, "scripts/e2e/codex-user-input-fixture-app-server.mjs"),
+      "--scenario",
+      "user-input-other",
+    ],
+  };
+}
+
 function matchesDiscordScenarioReply(params: {
   channelId: string;
   message: DiscordObservedMessage;
@@ -1555,6 +1617,122 @@ async function assertDiscordApplicationCommandsRegistered(params: {
   );
 }
 
+async function runDiscordCodexUserInputOtherScenario(params: {
+  channelId: string;
+  driverToken: string;
+  observedMessages: DiscordObservedMessage[];
+  scenario: DiscordQaScenarioDefinition;
+  scenarioRun: Extract<DiscordQaScenarioRun, { kind: "codex-user-input-other" }>;
+  sutBotId: string;
+}) {
+  const bind = await sendChannelMessage(
+    params.driverToken,
+    params.channelId,
+    params.scenarioRun.bindInput,
+  );
+  const bindMatched = await pollChannelMessages({
+    token: params.driverToken,
+    channelId: params.channelId,
+    afterSnowflake: bind.id,
+    timeoutMs: params.scenario.timeoutMs,
+    observedMessages: params.observedMessages,
+    observationScenarioId: params.scenario.id,
+    observationScenarioTitle: params.scenario.title,
+    triggerMessageId: bind.id,
+    triggerTimestamp: bind.timestamp,
+    predicate: (message) =>
+      matchesDiscordScenarioReply({
+        channelId: params.channelId,
+        matchText: "Bound this conversation to Codex thread",
+        message,
+        sutBotId: params.sutBotId,
+      }),
+  });
+  assertDiscordScenarioReply({
+    expectedTextIncludes: ["Bound this conversation to Codex thread"],
+    message: bindMatched.message,
+  });
+
+  const prompt = await sendChannelMessage(
+    params.driverToken,
+    params.channelId,
+    params.scenarioRun.promptInput,
+  );
+  const promptMatched = await pollChannelMessages({
+    token: params.driverToken,
+    channelId: params.channelId,
+    afterSnowflake: prompt.id,
+    timeoutMs: params.scenario.timeoutMs,
+    observedMessages: params.observedMessages,
+    observationScenarioId: params.scenario.id,
+    observationScenarioTitle: params.scenario.title,
+    triggerMessageId: prompt.id,
+    triggerTimestamp: prompt.timestamp,
+    predicate: (message) =>
+      matchesDiscordScenarioReply({
+        channelId: params.channelId,
+        matchText: "Codex needs input:",
+        message,
+        sutBotId: params.sutBotId,
+      }),
+  });
+  assertDiscordScenarioReply({
+    expectedTextIncludes: params.scenarioRun.expectedPromptTextIncludes,
+    message: promptMatched.message,
+  });
+
+  const answer = await sendChannelMessage(
+    params.driverToken,
+    params.channelId,
+    params.scenarioRun.answerText,
+  );
+  const finalMatched = await pollChannelMessages({
+    token: params.driverToken,
+    channelId: params.channelId,
+    afterSnowflake: answer.id,
+    timeoutMs: params.scenario.timeoutMs,
+    observedMessages: params.observedMessages,
+    observationScenarioId: params.scenario.id,
+    observationScenarioTitle: params.scenario.title,
+    triggerMessageId: answer.id,
+    triggerTimestamp: answer.timestamp,
+    predicate: (message) =>
+      matchesDiscordScenarioReply({
+        channelId: params.channelId,
+        matchText: "OPENCLAW_QA_CODEX_USER_INPUT_OK",
+        message,
+        sutBotId: params.sutBotId,
+      }),
+  });
+  assertDiscordScenarioReply({
+    expectedTextIncludes: params.scenarioRun.expectedFinalTextIncludes,
+    message: finalMatched.message,
+  });
+
+  const requestStartedAt = prompt.timestamp;
+  const responseObservedAt = finalMatched.message.timestamp;
+  const rttMs = computeDiscordRttMs(requestStartedAt, responseObservedAt);
+  return {
+    id: params.scenario.id,
+    title: params.scenario.title,
+    status: "pass" as const,
+    details: `typed Other answer matched in message ${finalMatched.message.messageId}`,
+    ...(requestStartedAt === undefined ? {} : { requestStartedAt }),
+    ...(responseObservedAt === undefined ? {} : { responseObservedAt }),
+    ...(rttMs === undefined || requestStartedAt === undefined || responseObservedAt === undefined
+      ? {}
+      : {
+          rttMs,
+          rttMeasurement: {
+            finalMatchedReplyRttMs: rttMs,
+            requestStartedAt,
+            responseObservedAt,
+            source: "request-to-observed-message" as const,
+          },
+        }),
+  };
+}
+
 export async function runDiscordQaLive(params: {
   repoRoot?: string;
   outputDir?: string;
@@ -1585,6 +1763,9 @@ export async function runDiscordQaLive(params: {
   );
   const voiceAutoJoinScenarioRequested = scenarios.some(
     (scenario) => scenario.id === "discord-voice-autojoin",
+  );
+  const codexUserInputOtherScenarioRequested = scenarios.some(
+    (scenario) => scenario.id === "discord-codex-user-input-other",
   );
   if (statusReactionScenarioRequested && scenarios.length > 1) {
     throw new Error(
@@ -1664,13 +1845,25 @@ export async function runDiscordQaLive(params: {
           },
           voiceChannel
             ? {
+                ...(codexUserInputOtherScenarioRequested
+                  ? {
+                      codexUserInputOther: buildCodexUserInputOtherFixtureAppServer(repoRoot),
+                    }
+                  : {}),
                 voiceAutoJoin: {
                   guildId: runtimeEnv.guildId,
                   channelId: voiceChannel.id,
                 },
                 statusReactionsToolOnly: statusReactionScenarioRequested,
               }
-            : { statusReactionsToolOnly: statusReactionScenarioRequested },
+            : {
+                ...(codexUserInputOtherScenarioRequested
+                  ? {
+                      codexUserInputOther: buildCodexUserInputOtherFixtureAppServer(repoRoot),
+                    }
+                  : {}),
+                statusReactionsToolOnly: statusReactionScenarioRequested,
+              },
         ),
     });
     try {
@@ -1736,6 +1929,18 @@ export async function runDiscordQaLive(params: {
               scenario,
               scenarioRun,
               sutAccountId,
+              sutBotId: sutIdentity.id,
+            });
+            scenarioResults.push(result);
+            continue;
+          }
+          if (scenarioRun.kind === "codex-user-input-other") {
+            const result = await runDiscordCodexUserInputOtherScenario({
+              channelId: runtimeEnv.channelId,
+              driverToken: runtimeEnv.driverBotToken,
+              observedMessages,
+              scenario,
+              scenarioRun,
               sutBotId: sutIdentity.id,
             });
             scenarioResults.push(result);

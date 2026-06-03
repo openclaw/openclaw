@@ -14,6 +14,8 @@ export type DiscordInteractiveHandlerContext = {
   interactionId: string;
   conversationId: string;
   parentConversationId?: string;
+  sessionKey?: string;
+  threadId?: string;
   guildId?: string;
   senderId?: string;
   senderUsername?: string;

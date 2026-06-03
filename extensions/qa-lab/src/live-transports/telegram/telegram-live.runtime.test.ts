@@ -248,6 +248,38 @@ describe("telegram live qa runtime", () => {
     });
   });
 
+  it("injects the QA Codex fixture for the user input scenario", () => {
+    const next = testing.buildTelegramQaConfig(
+      {},
+      {
+        groupId: "-100123",
+        sutToken: "sut-token",
+        driverBotId: 42,
+        sutAccountId: "sut",
+      },
+      {
+        codexUserInputOther: {
+          command: "/usr/bin/node",
+          args: ["/repo/scripts/e2e/codex-user-input-fixture-app-server.mjs"],
+        },
+      },
+    );
+
+    expect(next.plugins?.allow).toContain("codex");
+    expect(next.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: {
+        appServer: {
+          command: "/usr/bin/node",
+          args: ["/repo/scripts/e2e/codex-user-input-fixture-app-server.mjs"],
+          transport: "stdio",
+          requestTimeoutMs: 5_000,
+          turnCompletionIdleTimeoutMs: 5_000,
+        },
+      },
+    });
+  });
+
   it("normalizes observed Telegram messages", () => {
     expect(
       testing.normalizeTelegramObservedMessage({
@@ -392,6 +424,7 @@ describe("telegram live qa runtime", () => {
       "telegram-long-final-reuses-preview",
       "telegram-long-final-three-chunks",
       "telegram-mention-gating",
+      "telegram-codex-user-input-other",
     ]);
     expect(scenarios.map((scenario) => scenario.id)).toEqual([
       "telegram-help-command",
@@ -410,6 +443,7 @@ describe("telegram live qa runtime", () => {
       "telegram-long-final-reuses-preview",
       "telegram-long-final-three-chunks",
       "telegram-mention-gating",
+      "telegram-codex-user-input-other",
     ]);
     expect(
       scenarios.find((scenario) => scenario.id === "telegram-status-command")?.buildRun("sut_bot")
@@ -504,6 +538,26 @@ describe("telegram live qa runtime", () => {
     ]);
     expect(longThreeChunksStep?.expectedSutMessageCount).toBe(3);
     expect(longThreeChunksStep?.replyToLatestSutMessage).toBe(true);
+    expect(
+      requireScenario(scenarios, "telegram-codex-user-input-other").buildRun("sut_bot").steps,
+    ).toEqual([
+      {
+        expectReply: true,
+        input: "/codex bind@sut_bot",
+        expectedTextIncludes: ["Bound this conversation to Codex thread"],
+      },
+      {
+        expectReply: true,
+        input: "Trigger Codex request_user_input Other QA.",
+        expectedTextIncludes: ["Codex needs input:", "Other: reply with your own answer."],
+      },
+      {
+        expectReply: true,
+        input: "telegram typed Other answer",
+        expectedTextIncludes: ["OPENCLAW_QA_CODEX_USER_INPUT_OK", "telegram typed Other answer"],
+        replyToLatestSutMessage: true,
+      },
+    ]);
   });
 
   it("keeps mock-scripted Telegram checks out of the default live-frontier set", () => {

@@ -67,7 +67,8 @@ type TelegramQaScenarioId =
   | "telegram-long-final-reuses-preview"
   | "telegram-reply-chain-exact-marker"
   | "telegram-mentioned-message-reply"
-  | "telegram-mention-gating";
+  | "telegram-mention-gating"
+  | "telegram-codex-user-input-other";
 
 type TelegramQaScenarioStep = {
   allowAnySutReply?: boolean;
@@ -94,6 +95,11 @@ type TelegramQaScenarioDefinition = LiveTransportScenarioDefinition<TelegramQaSc
   defaultProviderModes?: readonly QaProviderMode[];
   regressionRefs?: readonly string[];
   rationale: string;
+};
+
+type CodexUserInputOtherFixtureAppServer = {
+  command: string;
+  args: string[];
 };
 
 type TelegramObservedMessage = {
@@ -533,6 +539,34 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
       });
     },
   },
+  {
+    id: "telegram-codex-user-input-other",
+    title: "Telegram Codex typed Other user input",
+    rationale:
+      "Exercises Codex request_user_input typed Other answers through the live Telegram channel.",
+    timeoutMs: 75_000,
+    defaultEnabled: false,
+    buildRun: (sutUsername) => ({
+      steps: [
+        {
+          expectReply: true,
+          input: `/codex bind@${sutUsername}`,
+          expectedTextIncludes: ["Bound this conversation to Codex thread"],
+        },
+        {
+          expectReply: true,
+          input: "Trigger Codex request_user_input Other QA.",
+          expectedTextIncludes: ["Codex needs input:", "Other: reply with your own answer."],
+        },
+        {
+          expectReply: true,
+          input: "telegram typed Other answer",
+          expectedTextIncludes: ["OPENCLAW_QA_CODEX_USER_INPUT_OK", "telegram typed Other answer"],
+          replyToLatestSutMessage: true,
+        },
+      ],
+    }),
+  },
 ];
 
 const TELEGRAM_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
@@ -744,11 +778,34 @@ function buildTelegramQaConfig(
     driverBotId: number;
     sutAccountId: string;
   },
+  options: {
+    codexUserInputOther?: CodexUserInputOtherFixtureAppServer;
+  } = {},
 ): OpenClawConfig {
-  const pluginAllow = uniqueStrings([...(baseCfg.plugins?.allow ?? []), "telegram"]);
+  const pluginAllow = uniqueStrings([
+    ...(baseCfg.plugins?.allow ?? []),
+    "telegram",
+    ...(options.codexUserInputOther ? ["codex"] : []),
+  ]);
   const pluginEntries = {
     ...baseCfg.plugins?.entries,
     telegram: { enabled: true },
+    ...(options.codexUserInputOther
+      ? {
+          codex: {
+            enabled: true,
+            config: {
+              appServer: {
+                command: options.codexUserInputOther.command,
+                args: options.codexUserInputOther.args,
+                transport: "stdio" as const,
+                requestTimeoutMs: 5_000,
+                turnCompletionIdleTimeoutMs: 5_000,
+              },
+            },
+          },
+        }
+      : {}),
   };
   return {
     ...baseCfg,
@@ -1277,6 +1334,19 @@ function findScenario(
   });
 }
 
+function buildCodexUserInputOtherFixtureAppServer(
+  repoRoot: string,
+): CodexUserInputOtherFixtureAppServer {
+  return {
+    command: process.execPath,
+    args: [
+      path.join(repoRoot, "scripts/e2e/codex-user-input-fixture-app-server.mjs"),
+      "--scenario",
+      "user-input-other",
+    ],
+  };
+}
+
 export function listTelegramQaScenarioCatalog(
   providerMode: QaProviderMode = DEFAULT_QA_LIVE_PROVIDER_MODE,
 ) {
@@ -1678,6 +1748,9 @@ export async function runTelegramQaLive(params: {
   const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findScenario(params.scenarioIds, providerMode);
+  const codexUserInputOtherScenarioRequested = scenarios.some(
+    (scenario) => scenario.id === "telegram-codex-user-input-other",
+  );
   const progressEnabled = shouldLogTelegramQaLiveProgress();
   writeTelegramQaProgress(
     progressEnabled,
@@ -1760,12 +1833,18 @@ export async function runTelegramQaLive(params: {
       fastMode: params.fastMode,
       controlUiEnabled: false,
       mutateConfig: (cfg) =>
-        buildTelegramQaConfig(cfg, {
-          groupId: runtimeEnv.groupId,
-          sutToken: runtimeEnv.sutToken,
-          driverBotId: driverIdentity.id,
-          sutAccountId,
-        }),
+        buildTelegramQaConfig(
+          cfg,
+          {
+            groupId: runtimeEnv.groupId,
+            sutToken: runtimeEnv.sutToken,
+            driverBotId: driverIdentity.id,
+            sutAccountId,
+          },
+          codexUserInputOtherScenarioRequested
+            ? { codexUserInputOther: buildCodexUserInputOtherFixtureAppServer(repoRoot) }
+            : {},
+        ),
     });
     try {
       await waitForTelegramChannelRunning(gatewayHarness.gateway, sutAccountId);

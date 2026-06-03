@@ -129,6 +129,7 @@ export class DiscordComponentModal extends Modal {
         kind: "modal",
         fields,
         messageId: consumed.messageId,
+        sessionKey: consumed.sessionKey,
       });
       if (pluginDispatch === "handled") {
         return;

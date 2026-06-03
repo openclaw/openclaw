@@ -146,6 +146,7 @@ async function handleDiscordComponentEvent(params: {
       kind: consumed.kind === "select" ? "select" : "button",
       values,
       messageId: consumed.messageId ?? params.interaction.message?.id,
+      sessionKey: consumed.sessionKey,
     });
     if (pluginDispatch === "handled") {
       return;

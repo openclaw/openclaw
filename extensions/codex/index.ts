@@ -393,10 +393,13 @@ function registerCodexUserInputInteractiveHandlers(
       const ctx = rawCtx as {
         accountId: string;
         senderId?: string;
+        sessionKey?: string;
+        threadId?: string;
         interaction: { payload: string };
         auth?: { isAuthorizedSender?: boolean };
         respond: {
           reply: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
+          followUp?: (params: { text: string; ephemeral?: boolean }) => Promise<void>;
           clearComponents?: (params?: { text?: string }) => Promise<void>;
           disableComponents?: () => Promise<void>;
         };
@@ -407,13 +410,16 @@ function registerCodexUserInputInteractiveHandlers(
           channel: "discord",
           accountId: ctx.accountId,
           senderId: ctx.senderId,
+          sessionKey: ctx.sessionKey,
+          messageThreadId: ctx.threadId,
         },
       });
       if (result.matched) {
         if (shouldClearResolvedCodexControl(result)) {
           await resolveDiscordCodexControls(ctx.respond);
         }
-        await ctx.respond.reply({ text: result.message, ephemeral: true });
+        const respond = result.consumed ? ctx.respond.reply : ctx.respond.followUp;
+        await (respond ?? ctx.respond.reply)({ text: result.message, ephemeral: true });
         return { handled: true };
       }
       const planResult = await handleCodexPlanDecisionCallbackLazy({
@@ -421,6 +427,8 @@ function registerCodexUserInputInteractiveHandlers(
           channel: "discord",
           accountId: ctx.accountId,
           senderId: ctx.senderId,
+          sessionKey: ctx.sessionKey,
+          messageThreadId: ctx.threadId,
           isAuthorizedSender: ctx.auth?.isAuthorizedSender,
           config: options.resolveCurrentConfig?.() ?? api.config ?? {},
           bindingHelpers: ctx,

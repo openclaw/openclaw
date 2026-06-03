@@ -42,6 +42,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
   values?: string[];
   fields?: Array<{ id: string; name: string; values: string[] }>;
   messageId?: string;
+  sessionKey?: string;
 }): Promise<"handled" | "unmatched"> {
   const normalizedConversationId =
     params.interactionCtx.rawGuildId || params.channelCtx.channelType === ChannelType.GroupDM
@@ -180,6 +181,8 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
       interactionId: resolveDiscordInteractionId(params.interaction),
       conversationId: normalizedConversationId,
       parentConversationId: params.channelCtx.parentId,
+      sessionKey: params.sessionKey,
+      threadId: params.channelCtx.isThread ? params.interactionCtx.channelId : undefined,
       guildId: params.interactionCtx.rawGuildId,
       senderId: params.interactionCtx.userId,
       senderUsername: params.interactionCtx.username,

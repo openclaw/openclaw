@@ -219,6 +219,39 @@ describe("discord live qa runtime", () => {
     ).toBe(false);
   });
 
+  it("injects the QA Codex fixture for the user input scenario", () => {
+    const next = testing.buildDiscordQaConfig(
+      {},
+      {
+        guildId: "123456789012345678",
+        channelId: "223456789012345678",
+        driverBotId: "423456789012345678",
+        sutAccountId: "sut",
+        sutBotToken: "sut-token",
+      },
+      {
+        codexUserInputOther: {
+          command: "/usr/bin/node",
+          args: ["/repo/scripts/e2e/codex-user-input-fixture-app-server.mjs"],
+        },
+      },
+    );
+
+    expect(next.plugins?.allow).toContain("codex");
+    expect(next.plugins?.entries?.codex).toEqual({
+      enabled: true,
+      config: {
+        appServer: {
+          command: "/usr/bin/node",
+          args: ["/repo/scripts/e2e/codex-user-input-fixture-app-server.mjs"],
+          transport: "stdio",
+          requestTimeoutMs: 5_000,
+          turnCompletionIdleTimeoutMs: 5_000,
+        },
+      },
+    });
+  });
+
   it("normalizes observed Discord messages", () => {
     expect(
       testing.normalizeDiscordObservedMessage({
@@ -302,6 +335,30 @@ describe("discord live qa runtime", () => {
         .findScenario(["discord-thread-reply-filepath-attachment"])
         .map((scenario) => scenario.id),
     ).toEqual(["discord-thread-reply-filepath-attachment"]);
+    expect(
+      testing.findScenario(["discord-codex-user-input-other"]).map((scenario) => {
+        const run = scenario.buildRun("323456789012345678");
+        return {
+          id: scenario.id,
+          run,
+        };
+      }),
+    ).toEqual([
+      {
+        id: "discord-codex-user-input-other",
+        run: {
+          kind: "codex-user-input-other",
+          answerText: "<@323456789012345678> discord typed Other answer",
+          bindInput: "<@323456789012345678> /codex bind",
+          expectedFinalTextIncludes: [
+            "OPENCLAW_QA_CODEX_USER_INPUT_OK",
+            "discord typed Other answer",
+          ],
+          expectedPromptTextIncludes: ["Codex needs input:", "Other: reply with your own answer."],
+          promptInput: "<@323456789012345678> Trigger Codex request_user_input Other QA.",
+        },
+      },
+    ]);
   });
 
   it("collects the status reaction sequence across timeline snapshots", () => {

@@ -211,6 +211,120 @@ describe("codex conversation chat controls", () => {
     await expect(answered).resolves.toBe("3");
   });
 
+  it("records multi-question option buttons until every option question is answered", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const reply = createCodexUserInputPrompt({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Small Patch", description: "Narrow" },
+            { label: "Feature Slice", description: "Broad" },
+          ],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Approve", description: "Proceed" },
+            { label: "Hold", description: "Wait" },
+          ],
+        },
+      ],
+    });
+    const buttons = readButtons(reply);
+
+    expect(buttons.map((button) => button.label)).toEqual([
+      "Plan: Small Patch",
+      "Plan: Feature Slice",
+      "Approval: Approve",
+      "Approval: Hold",
+    ]);
+    expect(normalizeMessagePresentation(reply.presentation)).toBeDefined();
+
+    expect(
+      resolveCodexUserInputCallback({ payload: buttons[0]?.value?.slice(6) ?? "", ctx }),
+    ).toEqual({
+      matched: true,
+      consumed: false,
+      message: "Recorded answer for Plan.",
+    });
+    expect(
+      resolveCodexUserInputCallback({ payload: buttons[2]?.value?.slice(6) ?? "", ctx }),
+    ).toEqual({
+      matched: true,
+      consumed: true,
+      message: "Sent answer to Codex.",
+    });
+    await expect(answered).resolves.toBe("shape: Small Patch\napproval: Approve");
+  });
+
+  it("completes multi-question prompts with a button answer and a typed other answer", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const reply = createCodexUserInputPrompt({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Small Patch", description: "Narrow" },
+            { label: "Feature Slice", description: "Broad" },
+          ],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: true,
+          isSecret: false,
+          options: [
+            { label: "Approve", description: "Proceed" },
+            { label: "Hold", description: "Wait" },
+          ],
+        },
+      ],
+    });
+    const buttons = readButtons(reply);
+
+    expect(
+      resolveCodexUserInputCallback({ payload: buttons[0]?.value?.slice(6) ?? "", ctx }),
+    ).toEqual({
+      matched: true,
+      consumed: false,
+      message: "Recorded answer for Plan.",
+    });
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "approve after updating the fake plan",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: true, consumed: true, message: "Sent answer to Codex." });
+    await expect(answered).resolves.toBe(
+      "shape: Small Patch\napproval: approve after updating the fake plan",
+    );
+  });
+
   it("consumes scoped freeform replies only for prompts that allow other answers", async () => {
     let resolveText: (text: string) => void = () => undefined;
     const answered = new Promise<string>((resolve) => {
@@ -273,6 +387,45 @@ describe("codex conversation chat controls", () => {
     ).toEqual({ matched: false });
   });
 
+  it("leaves incomplete multi-question freeform text alone", () => {
+    createCodexUserInputPrompt({
+      scope,
+      resolveText: () => undefined,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: true,
+          isSecret: false,
+          options: [
+            { label: "Small Patch", description: "Narrow" },
+            { label: "Feature Slice", description: "Broad" },
+          ],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: true,
+          isSecret: false,
+          options: [
+            { label: "Approve", description: "Proceed" },
+            { label: "Hold", description: "Wait" },
+          ],
+        },
+      ],
+    });
+
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "the questions should have interactive buttons",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: false });
+  });
+
   it("does not consume freeform replies from another control scope", () => {
     createCodexUserInputPrompt({
       scope,
@@ -298,7 +451,7 @@ describe("codex conversation chat controls", () => {
     ).toEqual({ matched: false });
   });
 
-  it("omits buttons for secret, freeform-only, or multi-question prompts", () => {
+  it("omits buttons for secret or freeform-only prompts", () => {
     const secret = createCodexUserInputPrompt({
       scope,
       resolveText: () => undefined,
@@ -327,32 +480,35 @@ describe("codex conversation chat controls", () => {
         },
       ],
     });
-    const multi = createCodexUserInputPrompt({
+    expect(secret.presentation).toBeUndefined();
+    expect(freeform.presentation).toBeUndefined();
+  });
+
+  it("omits buttons for mixed multi-question prompts that cannot be completed by controls", () => {
+    const mixed = createCodexUserInputPrompt({
       scope,
       resolveText: () => undefined,
       questions: [
         {
-          id: "q1",
-          header: "First",
-          question: "One?",
+          id: "mode",
+          header: "Mode",
+          question: "Pick a mode",
           isOther: false,
           isSecret: false,
-          options: [{ label: "Yes", description: "" }],
+          options: [{ label: "Fast", description: "" }],
         },
         {
-          id: "q2",
-          header: "Second",
-          question: "Two?",
-          isOther: false,
+          id: "note",
+          header: "Note",
+          question: "Add a note",
+          isOther: true,
           isSecret: false,
-          options: [{ label: "No", description: "" }],
+          options: null,
         },
       ],
     });
 
-    expect(secret.presentation).toBeUndefined();
-    expect(freeform.presentation).toBeUndefined();
-    expect(multi.presentation).toBeUndefined();
+    expect(mixed.presentation).toBeUndefined();
   });
 });
 

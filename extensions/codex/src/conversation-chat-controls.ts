@@ -38,6 +38,7 @@ type PendingPlanDecision = ControlScope & {
 type PendingUserInput = ControlScope & {
   token: string;
   questions: UserInputQuestion[];
+  selectedAnswers: Record<string, string>;
   createdAt: number;
   resolveText: (text: string) => void;
 };
@@ -226,6 +227,7 @@ export function resolveCodexUserInputCallback(params: {
   const result = consumeCodexUserInput({
     token: parsed.token,
     answerText: parsed.answerText,
+    questionIndex: parsed.questionIndex,
     ctx: params.ctx,
     sessionFile: params.sessionFile,
     now: params.now,
@@ -251,6 +253,9 @@ export function answerCodexUserInputFreeform(params: {
     if (!pending.questions.some((question) => question.isOther)) {
       return false;
     }
+    if (!buildCodexMergedFreeformAnswerText(pending, answerText)) {
+      return false;
+    }
     return !readControlScopeMismatch(pending, params.ctx, params.sessionFile);
   });
   if (matches.length === 0) {
@@ -268,8 +273,12 @@ export function answerCodexUserInputFreeform(params: {
   if (!pending) {
     return { matched: false };
   }
+  const mergedAnswerText = buildCodexMergedFreeformAnswerText(pending, answerText);
+  if (!mergedAnswerText) {
+    return { matched: false };
+  }
   pendingUserInputs.delete(pending.token);
-  pending.resolveText(answerText);
+  pending.resolveText(mergedAnswerText);
   void resolveCodexControlDelivery(pending.token).catch(() => undefined);
   return { matched: true, consumed: true, message: "Sent answer to Codex." };
 }
@@ -373,6 +382,7 @@ function createPendingUserInput(params: {
     ...params.scope,
     token,
     questions: params.questions,
+    selectedAnswers: {},
     resolveText: params.resolveText,
     createdAt: Date.now(),
   });
@@ -383,6 +393,7 @@ function createPendingUserInput(params: {
 function consumeCodexUserInput(params: {
   token: string;
   answerText: string;
+  questionIndex?: number;
   ctx: Pick<
     PluginCommandContext,
     "senderId" | "channel" | "accountId" | "sessionKey" | "messageThreadId"
@@ -402,6 +413,32 @@ function consumeCodexUserInput(params: {
   if (mismatch) {
     return { consumed: false, message: mismatch };
   }
+  if (params.questionIndex != null && pending.questions.length > 1) {
+    const question = pending.questions[params.questionIndex];
+    const optionIndex = /^\d+$/.test(params.answerText.trim())
+      ? Number(params.answerText.trim()) - 1
+      : -1;
+    const answer = question?.options?.[optionIndex]?.label;
+    if (!question || !answer) {
+      return {
+        consumed: false,
+        message: "No pending Codex input request was found. The request may have expired.",
+      };
+    }
+    pending.selectedAnswers[question.id] = answer;
+    const complete = pending.questions.every((entry) => pending.selectedAnswers[entry.id]);
+    if (!complete) {
+      return { consumed: false, message: `Recorded answer for ${question.header}.` };
+    }
+    pendingUserInputs.delete(params.token);
+    pending.resolveText(
+      pending.questions
+        .map((entry) => `${entry.id}: ${pending.selectedAnswers[entry.id]}`)
+        .join("\n"),
+    );
+    void resolveCodexControlDelivery(params.token).catch(() => undefined);
+    return { consumed: true, message: "Sent answer to Codex." };
+  }
   pendingUserInputs.delete(params.token);
   pending.resolveText(params.answerText);
   void resolveCodexControlDelivery(params.token).catch(() => undefined);
@@ -412,16 +449,33 @@ function buildUserInputInteractive(
   questions: UserInputQuestion[],
   token: string,
 ): MessagePresentation | undefined {
-  const question = questions.length === 1 ? questions[0] : undefined;
-  if (!question || question.isSecret || !question.options?.length) {
+  if (
+    questions.length > 1 &&
+    !questions.every((question) => !question.isSecret && question.options?.length)
+  ) {
     return undefined;
   }
-  const buttons = question.options.slice(0, 8).map((option, index) => ({
-    label: option.label,
-    value: buildCodexUserInputCallbackValue({ token, answerIndex: index + 1 }),
-    style: index === 0 ? ("primary" as const) : ("secondary" as const),
-  }));
-  return buttons.length > 0 ? { blocks: [{ type: "buttons", buttons }] } : undefined;
+  const buttons = questions.flatMap((question, questionIndex) => {
+    if (question.isSecret || !question.options?.length) {
+      return [];
+    }
+    return question.options.slice(0, 8).map((option, index) => ({
+      label: questions.length === 1 ? option.label : `${question.header}: ${option.label}`,
+      value:
+        questions.length === 1
+          ? buildCodexUserInputCallbackValue({ token, answerIndex: index + 1 })
+          : buildCodexUserInputQuestionCallbackValue({
+              token,
+              questionIndex,
+              answerIndex: index + 1,
+            }),
+      style: index === 0 ? ("primary" as const) : ("secondary" as const),
+    }));
+  });
+  if (buttons.length === 0) {
+    return undefined;
+  }
+  return { blocks: [{ type: "buttons", buttons }] };
 }
 
 export function buildCodexUserInputAnswerText(
@@ -467,18 +521,144 @@ function readControlScopeMismatch(
 
 function parseCodexUserInputCallback(
   payload: string,
-): { token: string; answerText: string } | undefined {
+): { token: string; answerText: string; questionIndex?: number } | undefined {
   if (!payload.startsWith(CODEX_USER_INPUT_CALLBACK_PREFIX)) {
     return undefined;
   }
   const remainder = payload.slice(CODEX_USER_INPUT_CALLBACK_PREFIX.length);
-  const separator = remainder.lastIndexOf(":");
-  if (separator <= 0 || separator === remainder.length - 1) {
+  const parts = remainder.split(":");
+  if (parts.length !== 2 && parts.length !== 3) {
     return undefined;
   }
-  const token = remainder.slice(0, separator);
-  const answerText = remainder.slice(separator + 1);
-  return token && answerText ? { token, answerText } : undefined;
+  const token = parts[0];
+  if (!token) {
+    return undefined;
+  }
+  if (parts.length === 2) {
+    const answerText = parts[1];
+    return answerText ? { token, answerText } : undefined;
+  }
+  const questionIndex = Number(parts[1]) - 1;
+  const answerText = parts[2];
+  return Number.isInteger(questionIndex) && questionIndex >= 0 && answerText
+    ? { token, questionIndex, answerText }
+    : undefined;
+}
+
+function buildCodexUserInputQuestionCallbackValue(params: {
+  token: string;
+  questionIndex: number;
+  answerIndex: number;
+}): string {
+  return `${CODEX_INTERACTIVE_NAMESPACE}:${CODEX_USER_INPUT_CALLBACK_PREFIX}${params.token}:${
+    params.questionIndex + 1
+  }:${params.answerIndex}`;
+}
+
+function buildCodexMergedFreeformAnswerText(
+  pending: Pick<PendingUserInput, "questions" | "selectedAnswers">,
+  answerText: string,
+): string | undefined {
+  const questions = pending.questions;
+  if (questions.length <= 1) {
+    return answerText;
+  }
+  const selectedAnswerCount = Object.keys(pending.selectedAnswers).length;
+  if (selectedAnswerCount === 0) {
+    return canFreeformAnswerAllQuestions(questions, answerText) ? answerText : undefined;
+  }
+  const freeformAnswers = parseCodexFreeformAnswersForUnselectedQuestions(
+    questions,
+    pending.selectedAnswers,
+    answerText,
+  );
+  if (!freeformAnswers) {
+    return undefined;
+  }
+  return questions
+    .map(
+      (question) =>
+        `${question.id}: ${pending.selectedAnswers[question.id] ?? freeformAnswers[question.id]}`,
+    )
+    .join("\n");
+}
+
+function parseCodexFreeformAnswersForUnselectedQuestions(
+  questions: UserInputQuestion[],
+  selectedAnswers: Record<string, string>,
+  answerText: string,
+): Record<string, string> | undefined {
+  const pendingQuestions = questions.filter((question) => !selectedAnswers[question.id]);
+  if (pendingQuestions.length === 0 || pendingQuestions.some((question) => !question.isOther)) {
+    return undefined;
+  }
+  const lines = readCodexFreeformAnswerLines(answerText);
+  const keyed = readCodexFreeformKeyedAnswers(lines);
+  const answers: Record<string, string> = {};
+  const usePendingLineOrder =
+    lines.length === pendingQuestions.length ||
+    (pendingQuestions.length === 1 &&
+      !readKeyedAnswerForQuestion(keyed, questions, pendingQuestions[0]));
+  for (const question of pendingQuestions) {
+    const questionIndex = questions.indexOf(question);
+    const pendingQuestionIndex = pendingQuestions.indexOf(question);
+    const answer =
+      readKeyedAnswerForQuestion(keyed, questions, question) ??
+      (usePendingLineOrder ? lines[pendingQuestionIndex] : lines[questionIndex]);
+    if (!answer) {
+      return undefined;
+    }
+    answers[question.id] = answer;
+  }
+  return answers;
+}
+
+function canFreeformAnswerAllQuestions(
+  questions: UserInputQuestion[],
+  answerText: string,
+): boolean {
+  const lines = readCodexFreeformAnswerLines(answerText);
+  if (lines.length >= questions.length) {
+    return true;
+  }
+  const keyed = readCodexFreeformKeyedAnswers(lines);
+  return questions.every((question) => {
+    return Boolean(readKeyedAnswerForQuestion(keyed, questions, question));
+  });
+}
+
+function readCodexFreeformAnswerLines(answerText: string): string[] {
+  return answerText
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function readCodexFreeformKeyedAnswers(lines: string[]): Map<string, string> {
+  const keyed = new Map<string, string>();
+  for (const line of lines) {
+    const match = line.match(/^\s*([^:=-]+?)\s*[:=-]\s*(.+?)\s*$/);
+    const key = match?.[1]?.trim().toLowerCase();
+    const value = match?.[2]?.trim();
+    if (key && value) {
+      keyed.set(key, value);
+    }
+  }
+  return keyed;
+}
+
+function readKeyedAnswerForQuestion(
+  keyed: Map<string, string>,
+  questions: UserInputQuestion[],
+  question: UserInputQuestion,
+): string | undefined {
+  const index = questions.indexOf(question);
+  return (
+    keyed.get(question.id.toLowerCase()) ??
+    keyed.get(question.header.toLowerCase()) ??
+    keyed.get(question.question.toLowerCase()) ??
+    keyed.get(String(index + 1))
+  );
 }
 
 function pruneExpiredControls(now = Date.now()): void {

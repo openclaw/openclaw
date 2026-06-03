@@ -509,11 +509,64 @@ describe("discord component interactions", () => {
       dispatchPluginInteractiveHandlerMock,
       -1,
       "dispatchPluginInteractiveHandler",
-    ) as { data?: unknown; ctx?: { interaction?: { values?: unknown } } };
+    ) as {
+      data?: unknown;
+      ctx?: {
+        interaction?: { values?: unknown };
+        sessionKey?: unknown;
+        threadId?: unknown;
+      };
+    };
     expect(pluginDispatch.data).toBe("inspect:123");
     expect(pluginDispatch.ctx?.interaction?.values).toEqual(["Inspect"]);
+    expect(pluginDispatch.ctx?.sessionKey).toBe("session-1");
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Selected Inspect from "Pick".');
+  });
+
+  it("passes Discord thread scope to plugin interactive handlers", async () => {
+    registerDiscordComponentEntries({
+      entries: [
+        {
+          id: "btn_1",
+          kind: "button",
+          label: "Approve",
+          messageId: "msg-1",
+          sessionKey: "session-1",
+          agentId: "agent-1",
+          accountId: "default",
+          callbackDataKind: "callback",
+          callbackData: "codex:input:token:1",
+        },
+      ],
+      modals: [],
+    });
+
+    const button = createDiscordComponentButton(createComponentContext());
+    const { interaction } = createComponentButtonInteraction({
+      rawData: {
+        channel_id: "thread-1",
+        guild_id: "guild-1",
+        id: "interaction-thread-1",
+        member: { roles: [] },
+      } as unknown as ButtonInteraction["rawData"],
+      channel: {
+        id: "thread-1",
+        type: ChannelType.PublicThread,
+        parent_id: "parent-1",
+        name: "plan-thread",
+      } as unknown as ButtonInteraction["channel"],
+    });
+
+    await button.run(interaction, { cid: "btn_1" } as ComponentData);
+
+    const pluginDispatch = mockCallArg(
+      dispatchPluginInteractiveHandlerMock,
+      -1,
+      "dispatchPluginInteractiveHandler",
+    ) as { ctx?: { sessionKey?: unknown; threadId?: unknown } };
+    expect(pluginDispatch.ctx?.sessionKey).toBe("session-1");
+    expect(pluginDispatch.ctx?.threadId).toBe("thread-1");
   });
 
   it("keeps reusable buttons active after use", async () => {
