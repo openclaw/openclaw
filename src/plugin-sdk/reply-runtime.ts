@@ -37,6 +37,8 @@ export {
   createInboundDebouncer,
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
+export { resolveQueueSettings } from "../auto-reply/reply/queue.js";
+export type { QueueSettings } from "../auto-reply/reply/queue.js";
 export {
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchReplyWithDispatcher,
