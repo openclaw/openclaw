@@ -92,6 +92,10 @@ function loadDaemonStatusGatherModule() {
 function gatewayCallOpts(cmd: Command): Command {
   return cmd
     .option("--url <url>", "Gateway WebSocket URL (defaults to gateway.remote.url when configured)")
+    .option(
+      "--port <port>",
+      "Local gateway port override (patches config.gateway.port; preserves configured auth/TLS, alternative to --url)",
+    )
     .option("--token <token>", "Gateway token (if required)")
     .option("--password <password>", "Gateway password (password auth)")
     .option("--timeout <ms>", "Timeout in ms", "10000")
