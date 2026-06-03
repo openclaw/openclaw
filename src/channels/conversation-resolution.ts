@@ -1,3 +1,7 @@
+/**
+ * Canonical conversation resolution for command and inbound channel flows.
+ * This module turns channel targets, thread ids, aliases, and plugin hooks into stable binding ids.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
