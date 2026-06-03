@@ -781,7 +781,7 @@ describe("handleChatEvent", () => {
     const assignments = trackChatMessagesAssignments(state);
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(assignments).toMatchObject([{ chatRunId: null, chatStream: null }]);
+    expect(assignments).toMatchObject([{ chatRunId: "run-1", chatStream: "Here is my reply" }]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
@@ -999,7 +999,10 @@ describe("handleChatEvent", () => {
     const assignments = trackChatMessagesAssignments(state);
 
     expect(handleChatEvent(state, payload)).toBe("aborted");
-    expect(assignments).toMatchObject([{ chatRunId: null, chatStream: null }]);
+    expect(assignments.at(-1)).toMatchObject({
+      chatRunId: "run-1",
+      chatStream: "Partial reply",
+    });
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
     expect(state.chatStreamStartedAt).toBe(null);
