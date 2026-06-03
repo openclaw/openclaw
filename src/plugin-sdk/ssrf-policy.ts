@@ -24,9 +24,11 @@ export type PrivateNetworkOptInInput =
   | undefined
   | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
   | {
+      /** Canonical explicit opt-in for private/internal network targets. */
       dangerouslyAllowPrivateNetwork?: boolean | null;
       /** @deprecated Compatibility alias; prefer dangerouslyAllowPrivateNetwork. */
       allowPrivateNetwork?: boolean | null;
+      /** Nested channel config shape used by current plugin network settings. */
       network?:
         | Pick<SsrFPolicy, "allowPrivateNetwork" | "dangerouslyAllowPrivateNetwork">
         | null
