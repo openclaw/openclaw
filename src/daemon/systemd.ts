@@ -847,7 +847,7 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
-async function retireConflictingSystemScopeUnitBeforeUserUnitInstall(
+async function readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(
   env: GatewayServiceEnv,
 ): Promise<InstalledSystemdGatewayConflict | null> {
   if (isNodeSystemdEnvironment(env)) {
@@ -858,14 +858,28 @@ async function retireConflictingSystemScopeUnitBeforeUserUnitInstall(
   if (!unitPath) {
     return null;
   }
-  const res = await execSystemctl(["disable", "--now", unitName], env);
+  const isLiveConflict = await isSystemdUnitActiveOrEnabled(env, unitName, "system");
+  if (!isLiveConflict) {
+    return null;
+  }
+  return { scope: "system", unitName, unitPath };
+}
+
+async function retireConflictingSystemScopeUnitBeforeUserUnitInstall(
+  env: GatewayServiceEnv,
+  unit: InstalledSystemdGatewayConflict | null,
+): Promise<InstalledSystemdGatewayConflict | null> {
+  if (!unit) {
+    return null;
+  }
+  const res = await execSystemctl(["disable", "--now", unit.unitName], env);
   if (res.code !== 0) {
     const detail = readSystemctlDetail(res);
     throw new Error(
-      `system-scope ${unitName} already exists at ${unitPath}; run \`sudo systemctl disable --now ${unitName}\` before installing the user service: ${detail || "unknown error"}`,
+      `system-scope ${unit.unitName} already exists at ${unit.unitPath}; run \`sudo systemctl disable --now ${unit.unitName}\` before installing the user service: ${detail || "unknown error"}`,
     );
   }
-  return { scope: "system", unitName, unitPath };
+  return unit;
 }
 
 async function writeSystemdUnit({
@@ -1117,54 +1131,91 @@ export async function stageSystemdService({
   return { unitPath };
 }
 
-async function activateSystemdService(params: { env: GatewayServiceEnv }) {
-  const serviceName = resolveSystemdServiceName(params.env);
-  const unitName = `${serviceName}.service`;
-  const reloadSystemd = async () => await execSystemctlUser(params.env, ["daemon-reload"]);
-  const throwActivationFailure = (
-    action: "daemon-reload" | "enable" | "restart",
-    result: { stdout: string; stderr: string },
-  ): never => {
-    const detail = readSystemctlDetail(result);
-    if (isSystemdUserScopeUnavailable(detail)) {
-      throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
-    }
-    throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
-  };
-  const reload = await reloadSystemd();
+function throwSystemdActivationFailure(
+  action: "daemon-reload" | "enable" | "restart",
+  result: { stdout: string; stderr: string },
+): never {
+  const detail = readSystemctlDetail(result);
+  if (isSystemdUserScopeUnavailable(detail)) {
+    throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+  }
+  throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
+}
+
+async function reloadSystemdUserManager(env: GatewayServiceEnv) {
+  const reload = await execSystemctlUser(env, ["daemon-reload"]);
   if (reload.code !== 0) {
-    throwActivationFailure("daemon-reload", reload);
+    throwSystemdActivationFailure("daemon-reload", reload);
   }
+}
 
-  const runAfterReloadRetry = async (action: "enable" | "restart") => {
-    const result = await execSystemctlUser(params.env, [action, unitName]);
-    if (result.code === 0 || !isSystemdUnitMissingDetail(readSystemctlDetail(result))) {
-      return result;
-    }
-    const retryReload = await reloadSystemd();
-    if (retryReload.code !== 0) {
-      throwActivationFailure("daemon-reload", retryReload);
-    }
-    return await execSystemctlUser(params.env, [action, unitName]);
-  };
+async function runSystemdUserActivationAction(
+  env: GatewayServiceEnv,
+  action: "enable" | "restart",
+) {
+  const unitName = `${resolveSystemdServiceName(env)}.service`;
+  const result = await execSystemctlUser(env, [action, unitName]);
+  if (result.code === 0 || !isSystemdUnitMissingDetail(readSystemctlDetail(result))) {
+    return result;
+  }
+  await reloadSystemdUserManager(env);
+  return await execSystemctlUser(env, [action, unitName]);
+}
 
-  const enable = await runAfterReloadRetry("enable");
+async function enablePreparedSystemdService(params: { env: GatewayServiceEnv }) {
+  const enable = await runSystemdUserActivationAction(params.env, "enable");
   if (enable.code !== 0) {
-    throwActivationFailure("enable", enable);
+    throwSystemdActivationFailure("enable", enable);
   }
+}
 
-  const restart = await runAfterReloadRetry("restart");
+async function restartPreparedSystemdService(params: { env: GatewayServiceEnv }) {
+  const restart = await runSystemdUserActivationAction(params.env, "restart");
   if (restart.code !== 0) {
-    throwActivationFailure("restart", restart);
+    throwSystemdActivationFailure("restart", restart);
   }
+}
+
+async function restoreRetiredSystemUnitAfterUserActivationFailure(
+  env: GatewayServiceEnv,
+  unit: InstalledSystemdGatewayConflict,
+): Promise<string | null> {
+  const userDisable = await execSystemctlUser(env, ["disable", "--now", unit.unitName]);
+  if (userDisable.code !== 0) {
+    return `failed to disable replacement user unit ${unit.unitName}: ${readSystemctlDetail(userDisable) || "unknown error"}`;
+  }
+  const restore = await execSystemctl(["enable", "--now", unit.unitName], env);
+  if (restore.code !== 0) {
+    return `failed to restore system-scope ${unit.unitName}: ${readSystemctlDetail(restore) || "unknown error"}`;
+  }
+  return null;
 }
 
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
-  const retiredSystemUnit = await retireConflictingSystemScopeUnitBeforeUserUnitInstall(args.env);
+  const liveSystemUnit = await readLiveConflictingSystemScopeUnitBeforeUserUnitInstall(args.env);
   const { unitPath, backedUp } = await writeSystemdUnit(args);
-  await activateSystemdService({ env: args.env });
+  await reloadSystemdUserManager(args.env);
+  const retiredSystemUnit = await retireConflictingSystemScopeUnitBeforeUserUnitInstall(
+    args.env,
+    liveSystemUnit,
+  );
+  try {
+    await enablePreparedSystemdService({ env: args.env });
+    await restartPreparedSystemdService({ env: args.env });
+  } catch (error) {
+    if (retiredSystemUnit) {
+      const restoreError = await restoreRetiredSystemUnitAfterUserActivationFailure(
+        args.env,
+        retiredSystemUnit,
+      );
+      if (restoreError) {
+        throw new Error(`${formatErrorMessage(error)}; ${restoreError}`);
+      }
+    }
+    throw error;
+  }
   writeFormattedLines(
     args.stdout,
     [
