@@ -220,6 +220,7 @@ describe("run-tsgo pressure guard", () => {
         CI: "",
         GITHUB_ACTIONS: "",
         OPENCLAW_LOCAL_CHECK_MODE: "",
+        OPENCLAW_REFUSE_LOCAL_NATIVE_TYPECHECK: "1",
         OPENCLAW_LOCAL_HEAVY_CHECK_TMPDIR: tmpDir,
       },
     });
