@@ -3,9 +3,14 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
+import type {
+  PluginNodeHostCommandRegistration,
+  PluginNodeInvokePolicyRegistration,
+  PluginRegistry,
+} from "../plugins/registry-types.js";
 import type {
   OpenClawPluginNodeInvokePolicyContext,
+  OpenClawPluginNodeInvokePolicy,
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
@@ -30,17 +35,258 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   }
 }
 
-function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command: string) {
-  const normalizedCommand = command.trim();
-  if (!normalizedCommand) {
+type ReadResult<T> = { ok: true; value: T } | { ok: false };
+
+type MatchedNodeInvokePolicy = {
+  commandList: string[];
+  handle: OpenClawPluginNodeInvokePolicy["handle"];
+  pluginId: string;
+  pluginConfig?: Record<string, unknown>;
+  policy: OpenClawPluginNodeInvokePolicy;
+};
+
+type PolicyReadResult =
+  | { ok: true; entry: MatchedNodeInvokePolicy }
+  | { ok: false; pluginId?: string };
+
+type PolicyLookupResult =
+  | { kind: "matched"; entry: MatchedNodeInvokePolicy }
+  | { kind: "blocked"; pluginId?: string }
+  | { kind: "none" };
+
+type DangerousCommandLookupResult =
+  | { kind: "matched"; pluginId: string }
+  | { kind: "blocked"; pluginId?: string }
+  | { kind: "none" };
+
+function readField<T>(read: () => T): ReadResult<T> {
+  try {
+    return { ok: true, value: read() };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readArrayLength(value: readonly unknown[]): number | null {
+  const length = readField(() => value.length);
+  if (
+    !length.ok ||
+    typeof length.value !== "number" ||
+    !Number.isInteger(length.value) ||
+    length.value < 0
+  ) {
     return null;
   }
-  return (
-    registry?.nodeHostCommands?.find(
-      (entry) =>
-        entry.command.dangerous === true && entry.command.command.trim() === normalizedCommand,
-    ) ?? null
-  );
+  return length.value;
+}
+
+function stringArrayIncludes(values: readonly unknown[], target: string): boolean {
+  const length = readArrayLength(values);
+  if (length === null) {
+    return false;
+  }
+  let index = 0;
+  while (index < length) {
+    const value = readField(() => values[index]);
+    if (value.ok && value.value === target) {
+      return true;
+    }
+    index += 1;
+  }
+  return false;
+}
+
+function readStringArray(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  const length = readArrayLength(value);
+  if (length === null) {
+    return null;
+  }
+  const out: string[] = [];
+  let index = 0;
+  while (index < length) {
+    const entry = readField(() => value[index]);
+    if (!entry.ok || typeof entry.value !== "string") {
+      return null;
+    }
+    out.push(entry.value);
+    index += 1;
+  }
+  return out;
+}
+
+function listNodeInvokePolicies(registry: PluginRegistry | null): ReadResult<readonly unknown[]> {
+  const policies = readField(() => registry?.nodeInvokePolicies);
+  if (!policies.ok) {
+    return { ok: false };
+  }
+  if (policies.value === undefined) {
+    return { ok: true, value: [] };
+  }
+  return Array.isArray(policies.value) ? { ok: true, value: policies.value } : { ok: false };
+}
+
+function listNodeHostCommands(registry: PluginRegistry | null): ReadResult<readonly unknown[]> {
+  const commands = readField(() => registry?.nodeHostCommands);
+  if (!commands.ok) {
+    return { ok: false };
+  }
+  if (commands.value === undefined) {
+    return { ok: true, value: [] };
+  }
+  return Array.isArray(commands.value) ? { ok: true, value: commands.value } : { ok: false };
+}
+
+function readPolicyPluginId(registration: unknown): string | undefined {
+  if (!isRecord(registration)) {
+    return undefined;
+  }
+  const typedRegistration = registration as PluginNodeInvokePolicyRegistration;
+  const pluginId = readField(() => typedRegistration.pluginId);
+  return pluginId.ok && typeof pluginId.value === "string" && pluginId.value.trim()
+    ? pluginId.value
+    : undefined;
+}
+
+function readNodeInvokePolicy(registration: unknown): PolicyReadResult {
+  if (!isRecord(registration)) {
+    return { ok: false };
+  }
+  const typedRegistration = registration as PluginNodeInvokePolicyRegistration;
+  const pluginId = readPolicyPluginId(registration);
+  if (!pluginId) {
+    return { ok: false };
+  }
+  const policy = readField(() => typedRegistration.policy);
+  if (!policy.ok || !isRecord(policy.value)) {
+    return { ok: false, pluginId };
+  }
+  const typedPolicy = policy.value as OpenClawPluginNodeInvokePolicy;
+  const commands = readField(() => typedPolicy.commands);
+  const commandList = commands.ok ? readStringArray(commands.value) : null;
+  if (!commandList) {
+    return { ok: false, pluginId };
+  }
+  const handle = readField(() => typedPolicy.handle);
+  if (!handle.ok || typeof handle.value !== "function") {
+    return { ok: false, pluginId };
+  }
+  const pluginConfig = readField(() => typedRegistration.pluginConfig);
+  return {
+    ok: true,
+    entry: {
+      commandList,
+      handle: handle.value,
+      pluginId,
+      policy: typedPolicy,
+      ...(pluginConfig.ok && isRecord(pluginConfig.value)
+        ? { pluginConfig: pluginConfig.value }
+        : {}),
+    },
+  };
+}
+
+function findMatchingPluginNodeInvokePolicy(
+  registry: PluginRegistry | null,
+  command: string,
+): PolicyLookupResult {
+  const policies = listNodeInvokePolicies(registry);
+  if (!policies.ok) {
+    return { kind: "blocked" };
+  }
+  const length = readArrayLength(policies.value);
+  if (length === null) {
+    return { kind: "blocked" };
+  }
+  let hasBlockedPolicy = false;
+  let blockedPluginId: string | undefined;
+  let index = 0;
+  while (index < length) {
+    const registration = readField(() => policies.value[index]);
+    const policy: PolicyReadResult = registration.ok
+      ? readNodeInvokePolicy(registration.value)
+      : { ok: false };
+    if (!policy.ok) {
+      hasBlockedPolicy = true;
+      blockedPluginId ??= policy.pluginId;
+      index += 1;
+      continue;
+    }
+    if (stringArrayIncludes(policy.entry.commandList, command)) {
+      return { kind: "matched", entry: policy.entry };
+    }
+    index += 1;
+  }
+  return hasBlockedPolicy ? { kind: "blocked", pluginId: blockedPluginId } : { kind: "none" };
+}
+
+function findDangerousPluginNodeCommand(
+  registry: PluginRegistry | null,
+  command: string,
+): DangerousCommandLookupResult {
+  const normalizedCommand = command.trim();
+  if (!normalizedCommand) {
+    return { kind: "none" };
+  }
+  const commands = listNodeHostCommands(registry);
+  if (!commands.ok) {
+    return { kind: "blocked" };
+  }
+  const length = readArrayLength(commands.value);
+  if (length === null) {
+    return { kind: "blocked" };
+  }
+  let hasBlockedCommand = false;
+  let blockedPluginId: string | undefined;
+  let index = 0;
+  while (index < length) {
+    const entry = readField(() => commands.value[index]);
+    if (!entry.ok || !isRecord(entry.value)) {
+      hasBlockedCommand = true;
+      index += 1;
+      continue;
+    }
+    const typedEntry = entry.value as PluginNodeHostCommandRegistration;
+    const pluginId = readField(() => typedEntry.pluginId);
+    const hostCommand = readField(() => typedEntry.command);
+    if (
+      !pluginId.ok ||
+      typeof pluginId.value !== "string" ||
+      !hostCommand.ok ||
+      !isRecord(hostCommand.value)
+    ) {
+      hasBlockedCommand = true;
+      if (pluginId.ok && typeof pluginId.value === "string" && pluginId.value.trim()) {
+        blockedPluginId ??= pluginId.value;
+      }
+      index += 1;
+      continue;
+    }
+    const typedCommand = hostCommand.value as PluginNodeHostCommandRegistration["command"];
+    const dangerous = readField(() => typedCommand.dangerous);
+    const commandValue = readField(() => typedCommand.command);
+    if (
+      dangerous.ok &&
+      dangerous.value === true &&
+      commandValue.ok &&
+      typeof commandValue.value === "string" &&
+      commandValue.value.trim() === normalizedCommand
+    ) {
+      return { kind: "matched", pluginId: pluginId.value };
+    }
+    if (!dangerous.ok || !commandValue.ok || typeof commandValue.value !== "string") {
+      hasBlockedCommand = true;
+      blockedPluginId ??= pluginId.value;
+    }
+    index += 1;
+  }
+  return hasBlockedCommand ? { kind: "blocked", pluginId: blockedPluginId } : { kind: "none" };
 }
 
 function createApprovalRuntime(params: {
@@ -120,12 +366,26 @@ export async function applyPluginNodeInvokePolicy(params: {
   idempotencyKey?: string;
 }): Promise<OpenClawPluginNodeInvokePolicyResult | null> {
   const registry = getActiveRuntimePluginRegistry();
-  const entry = registry?.nodeInvokePolicies?.find((candidate) =>
-    candidate.policy.commands.includes(params.command),
-  );
-  if (!entry) {
+  const policyLookup = findMatchingPluginNodeInvokePolicy(registry, params.command);
+  if (policyLookup.kind === "blocked") {
+    return {
+      ok: false,
+      code: "PLUGIN_POLICY_UNREADABLE",
+      message: `node.invoke ${params.command} cannot be checked because a plugin node.invoke policy registration is unreadable`,
+      details: { pluginId: policyLookup.pluginId ?? null },
+    };
+  }
+  if (policyLookup.kind === "none") {
     const dangerousCommand = findDangerousPluginNodeCommand(registry, params.command);
-    if (dangerousCommand) {
+    if (dangerousCommand.kind === "blocked") {
+      return {
+        ok: false,
+        code: "PLUGIN_COMMAND_UNREADABLE",
+        message: `node.invoke ${params.command} cannot be checked because a plugin node command registration is unreadable`,
+        details: { pluginId: dangerousCommand.pluginId ?? null },
+      };
+    }
+    if (dangerousCommand.kind === "matched") {
       return {
         ok: false,
         code: "PLUGIN_POLICY_MISSING",
@@ -134,6 +394,7 @@ export async function applyPluginNodeInvokePolicy(params: {
     }
     return null;
   }
+  const entry = policyLookup.entry;
 
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
@@ -160,7 +421,7 @@ export async function applyPluginNodeInvokePolicy(params: {
     };
   };
 
-  return await entry.policy.handle({
+  return await entry.handle.call(entry.policy, {
     nodeId: params.nodeSession.nodeId,
     command: params.command,
     params: params.params,

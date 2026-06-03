@@ -116,6 +116,32 @@ function createDemoPolicy(handle: NodeInvokePolicyHandler): NodeInvokePolicyRegi
   };
 }
 
+function createUnreadablePolicyRegistration(): NodeInvokePolicyRegistration {
+  return {
+    pluginId: "bad-policy",
+    get policy() {
+      throw new Error("node invoke policy getter exploded");
+    },
+    pluginConfig: {},
+    source: "test",
+  } as NodeInvokePolicyRegistration;
+}
+
+function createReceiverSensitivePolicy(): NodeInvokePolicyRegistration {
+  const policy = {
+    commands: [DEMO_COMMAND],
+    receiverPayload: { fromReceiver: true },
+    handle(this: { receiverPayload: { fromReceiver: boolean } }) {
+      return { ok: true, payload: this.receiverPayload };
+    },
+  };
+  return {
+    pluginId: DEMO_PLUGIN_ID,
+    policy: policy as NodeInvokePolicyRegistration["policy"],
+    source: "test",
+  };
+}
+
 function createApprovalRequestPolicy(params?: {
   timeoutMs?: number;
 }): NodeInvokePolicyRegistration {
@@ -138,6 +164,47 @@ function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[
           command: DEMO_COMMAND,
           dangerous: true,
           handle: async () => "{}",
+        },
+        source: "test",
+      },
+    ],
+    nodeInvokePolicies: policies,
+  } as unknown as PluginRegistry;
+}
+
+function setDangerousDemoCommandRegistryWithUnreadableSibling(
+  policies: NodeInvokePolicyRegistration[] = [],
+) {
+  registryState.current = {
+    nodeHostCommands: [
+      {
+        pluginId: "bad-command",
+        get command() {
+          throw new Error("node host command getter exploded");
+        },
+        source: "test",
+      },
+      {
+        pluginId: DEMO_PLUGIN_ID,
+        command: {
+          command: DEMO_COMMAND,
+          dangerous: true,
+          handle: async () => "{}",
+        },
+        source: "test",
+      },
+    ],
+    nodeInvokePolicies: policies,
+  } as unknown as PluginRegistry;
+}
+
+function setUnreadableDemoCommandRegistry(policies: NodeInvokePolicyRegistration[] = []) {
+  registryState.current = {
+    nodeHostCommands: [
+      {
+        pluginId: "bad-command",
+        get command() {
+          throw new Error("node host command getter exploded");
         },
         source: "test",
       },
@@ -222,6 +289,81 @@ describe("applyPluginNodeInvokePolicy", () => {
       timeoutMs: undefined,
       idempotencyKey: undefined,
     });
+  });
+
+  it("skips unreadable sibling policies while preserving a matching plugin policy", async () => {
+    setDangerousDemoCommandRegistry([
+      createUnreadablePolicyRegistration(),
+      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
+    ]);
+    const { context, invoke } = createContext();
+
+    const result = await invokeDemoPolicy(context);
+
+    expect(result).toStrictEqual({ ok: true, payload: { ok: true, value: 1 }, payloadJSON: null });
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when policy registration cannot be checked", async () => {
+    setDangerousDemoCommandRegistry([createUnreadablePolicyRegistration()]);
+    const { context, invoke } = createContext();
+
+    const result = await invokeDemoPolicy(context);
+
+    if (result === null) {
+      throw new Error("expected plugin policy failure");
+    }
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected plugin policy failure");
+    }
+    expect(result.code).toBe("PLUGIN_POLICY_UNREADABLE");
+    expect(result.details).toStrictEqual({ pluginId: "bad-policy" });
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("preserves the original policy receiver when invoking handlers", async () => {
+    setDangerousDemoCommandRegistry([createReceiverSensitivePolicy()]);
+    const { context } = createContext();
+
+    const result = await invokeDemoPolicy(context);
+
+    expect(result).toStrictEqual({ ok: true, payload: { fromReceiver: true } });
+  });
+
+  it("skips unreadable dangerous command siblings while preserving missing-policy failures", async () => {
+    setDangerousDemoCommandRegistryWithUnreadableSibling();
+    const { context, invoke } = createContext();
+
+    const result = await invokeDemoPolicy(context);
+
+    if (result === null) {
+      throw new Error("expected plugin policy failure");
+    }
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected plugin policy failure");
+    }
+    expect(result.code).toBe("PLUGIN_POLICY_MISSING");
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when dangerous command registrations cannot be checked", async () => {
+    setUnreadableDemoCommandRegistry();
+    const { context, invoke } = createContext();
+
+    const result = await invokeDemoPolicy(context);
+
+    if (result === null) {
+      throw new Error("expected plugin policy failure");
+    }
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected plugin policy failure");
+    }
+    expect(result.code).toBe("PLUGIN_COMMAND_UNREADABLE");
+    expect(result.details).toStrictEqual({ pluginId: "bad-command" });
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("binds plugin policy approval requests to the invoking client", async () => {
