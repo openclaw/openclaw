@@ -55,7 +55,6 @@ export {
   listMemoryRerankProviders,
   registerMemoryCapability,
   registerMemoryCorpusSupplement,
-  registerMemoryRerankProvider,
 } from "../plugins/memory-state.js";
 export type { OpenClawPluginApi } from "../plugins/types.js";
 export { parseAgentSessionKey } from "../routing/session-key.js";

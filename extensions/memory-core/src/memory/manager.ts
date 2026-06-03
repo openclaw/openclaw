@@ -745,15 +745,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       });
       rerankPromise.catch(() => {});
       const scores = await Promise.race([rerankPromise, deadline]);
-      if (!this.isValidRerankScores(scores, merged.length)) {
-        throw new Error("reranker returned invalid or duplicate refs");
-      }
-      // An empty scores array means the provider chose not to rank (e.g.
-      // kill-switch on, endpoint down). Treat this as degraded so a
-      // registered-but-not-reranking plugin is visible in observability.
-      // This is intentional: kill-switched = "registered but not reranking" = degraded.
+      // Empty [] (kill-switch / endpoint down) is a degraded failure, not a no-op.
+      // Check it BEFORE the validator: isValidRerankScores requires length === poolSize,
+      // so [] would otherwise read as "invalid refs" instead of the no-scores reason.
       if (scores.length === 0) {
         throw new Error("reranker returned no scores");
+      }
+      if (!this.isValidRerankScores(scores, merged.length)) {
+        throw new Error("reranker returned invalid or duplicate refs");
       }
       const reranked = this.reorderByRerankScores(merged, scores);
       // Re-arm the latch: a recovered provider returns to "active" only when

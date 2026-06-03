@@ -8,10 +8,14 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import {
   clearMemoryPluginState,
-  registerMemoryRerankProvider,
   type MemoryRerankCandidate,
+  type MemoryRerankProvider,
   type MemoryRerankScore,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
@@ -44,6 +48,24 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 const RERANK_PLUGIN_ID = "test-reranker";
+
+// Seed the exclusive rerank slot through the GATED registration path (the same
+// harness the contract test uses): declare contracts.memoryRerankProviders and
+// register via api.registerMemoryRerankProvider. Keeps this unit test honest —
+// it cannot seed the slot in a way a real third-party plugin couldn't.
+function seedReranker(provider: MemoryRerankProvider, pluginId = RERANK_PLUGIN_ID): void {
+  const { config, registry } = createPluginRegistryFixture();
+  registerVirtualTestPlugin({
+    registry,
+    config,
+    id: pluginId,
+    name: pluginId,
+    contracts: { memoryRerankProviders: [pluginId] },
+    register(api) {
+      api.registerMemoryRerankProvider(provider);
+    },
+  });
+}
 
 type ManagerStatusCustom = {
   rerank?: { state: string; failureCount: number; lastError?: string };
@@ -140,7 +162,7 @@ describe("memory rerank stage", () => {
 
     // Assign ascending scores in candidate (pre-rerank pool) order so descending
     // rerankScore reverses the merge order.
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async ({
         candidates,
       }: {
@@ -165,7 +187,7 @@ describe("memory rerank stage", () => {
     await baseline.sync({ reason: "test" });
     const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
 
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async (): Promise<MemoryRerankScore[]> => {
         throw new Error("reranker boom");
       },
@@ -188,7 +210,7 @@ describe("memory rerank stage", () => {
     const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
 
     let abortedFromSignal = false;
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async ({ signal }: { signal: AbortSignal }): Promise<MemoryRerankScore[]> =>
         await new Promise<MemoryRerankScore[]>((_resolve, reject) => {
           // Never resolve on its own; only the core deadline can abort it.
@@ -218,7 +240,7 @@ describe("memory rerank stage", () => {
     await baseline.sync({ reason: "test" });
     const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
 
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async ({
         candidates,
       }: {
@@ -245,7 +267,7 @@ describe("memory rerank stage", () => {
     const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
     expect(preOrder.length).toBeGreaterThan(0);
 
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async ({
         candidates,
       }: {
@@ -272,7 +294,7 @@ describe("memory rerank stage", () => {
     await baseline.sync({ reason: "test" });
     const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
 
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async ({
         candidates,
       }: {
@@ -297,7 +319,7 @@ describe("memory rerank stage", () => {
     await baseline.sync({ reason: "test" });
     const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
 
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async ({
         candidates,
       }: {
@@ -322,7 +344,7 @@ describe("memory rerank stage", () => {
     await baseline.sync({ reason: "test" });
     const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
 
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async ({
         candidates,
       }: {
@@ -348,7 +370,7 @@ describe("memory rerank stage", () => {
     const preOrder = (await baseline.search("alpha", { maxResults: 10 })).map((r) => r.path);
     expect(preOrder.length).toBeGreaterThan(1);
 
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async ({
         candidates,
       }: {
@@ -381,7 +403,7 @@ describe("memory rerank stage", () => {
     expect(preOrder.length).toBeGreaterThan(0);
 
     // Kill-switched or fail-open plugin returns [] without throwing.
-    registerMemoryRerankProvider(RERANK_PLUGIN_ID, {
+    seedReranker({
       rerank: async (): Promise<MemoryRerankScore[]> => [],
     });
 
