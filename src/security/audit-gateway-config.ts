@@ -100,8 +100,15 @@ export function collectGatewayConfigFindings(
   const gatewayToolsAllow = new Set(
     gatewayToolsAllowRaw.map((v) => normalizeOptionalLowercaseString(v) ?? "").filter(Boolean),
   );
-  const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) =>
-    gatewayToolsAllow.has(name),
+  // Dual-key gated tools must NOT count toward `dangerous_allow`. Their
+  // `allow` entry alone is INERT (the tool is not materialized into the
+  // candidate set without the matching `directInvoke.<flag>` opt-in). The
+  // dedicated `host_read_allow` / `host_write_allow` findings handle the
+  // actual exposure when both gates are set. See ClawSweeper [P2] on PR
+  // #85664: "Keep inert read allow entries out of dangerous_allow".
+  const DUAL_KEY_GATED_TOOLS = new Set<string>(["read"]);
+  const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+    (name) => gatewayToolsAllow.has(name) && !DUAL_KEY_GATED_TOOLS.has(name),
   );
   if (reenabledOverHttp.length > 0) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
