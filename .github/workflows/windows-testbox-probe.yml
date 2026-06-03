@@ -46,6 +46,7 @@ env:
 
 jobs:
   probe:
+    if: github.repository == 'openclaw/openclaw'
     name: Windows probe
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 75

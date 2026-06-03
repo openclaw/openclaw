@@ -21,6 +21,7 @@ env:
 
 jobs:
   windows:
+    if: github.repository == 'openclaw/openclaw'
     name: windows
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 75
