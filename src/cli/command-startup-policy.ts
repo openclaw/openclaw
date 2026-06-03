@@ -68,7 +68,8 @@ export function resolveCliStartupPolicy(params: {
   env?: NodeJS.ProcessEnv;
   routeMode?: boolean;
 }) {
-  const suppressDoctorStdout = params.jsonOutputMode;
+  const mcpServeMode = params.commandPath[0] === "mcp" && params.commandPath[1] === "serve";
+  const suppressDoctorStdout = params.jsonOutputMode || mcpServeMode;
   const commandPolicy = resolveCliCommandPathPolicy(params.commandPath);
   const env = params.env ?? process.env;
   return {

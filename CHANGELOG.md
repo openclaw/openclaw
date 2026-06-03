@@ -45,6 +45,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- MCP: keep `openclaw mcp serve` startup diagnostics off stdout so stdio clients receive only JSON-RPC frames.
 - Discord: match the shipped `libopus-wasm` error shape so corrupt voice packets are treated as decode noise instead of crashing receive recovery.
 - Canvas: restore A2UI Google, X, and legacy Granola compatibility image assets in the bundled host payload.
 - Agents/providers: avoid loading owner plugin runtimes for explicitly configured custom provider models during OpenAI-compatible transport setup.
