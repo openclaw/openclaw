@@ -351,6 +351,7 @@ export function mapChannelIngressDecisionToTurnAdmission(
     : { kind: "drop", reason: decision.reasonCode };
 }
 
+/** Brand a non-empty plugin id for channel ingress diagnostics and gate ids. */
 export function createChannelIngressPluginId(id: string): ChannelIngressPluginId {
   const trimmed = id.trim();
   if (!trimmed) {
@@ -359,6 +360,10 @@ export function createChannelIngressPluginId(id: string): ChannelIngressPluginId
   return trimmed as ChannelIngressPluginId;
 }
 
+/**
+ * Create a channel ingress subject from one or more identifiers.
+ * Missing opaque ids are generated deterministically so redacted match output stays stable.
+ */
 export function createChannelIngressSubject(
   input:
     | ChannelIngressSubjectIdentifierInput
@@ -376,6 +381,10 @@ export function createChannelIngressSubject(
   };
 }
 
+/**
+ * Create an adapter for channels that match allowlist entries against one normalized string id.
+ * Wildcards are preserved as `*`; empty normalized values are omitted from matchable entries.
+ */
 export function createChannelIngressStringAdapter(
   params: CreateChannelIngressStringAdapterParams = {},
 ): ChannelIngressAdapter {
@@ -427,6 +436,10 @@ export function createChannelIngressStringAdapter(
   };
 }
 
+/**
+ * Create an adapter for channels that match one allowlist entry against multiple identifier kinds.
+ * This is useful when a channel supports stable ids plus aliases such as email or username.
+ */
 export function createChannelIngressMultiIdentifierAdapter(
   params: CreateChannelIngressMultiIdentifierAdapterParams,
 ): ChannelIngressAdapter {
@@ -466,11 +479,16 @@ export function createChannelIngressMultiIdentifierAdapter(
   };
 }
 
+/** Exhaustiveness helper for switch statements over ingress reason codes. */
 export function assertNeverChannelIngressReason(reasonCode: never): never {
   throw new Error(`Unhandled channel ingress reason code: ${String(reasonCode)}`);
 }
 
-/** @deprecated Use `senderAccess.reasonCode` from `resolveChannelMessageIngress(...)` or typed gate selectors. */
+/**
+ * Read the sender gate reason code for legacy callers.
+ *
+ * @deprecated Use `senderAccess.reasonCode` from `resolveChannelMessageIngress(...)` or typed gate selectors.
+ */
 export function findChannelIngressSenderReasonCode(
   decision: ChannelIngressDecision,
   params: { isGroup: boolean },
@@ -478,7 +496,11 @@ export function findChannelIngressSenderReasonCode(
   return findChannelIngressSenderGate(decision, params)?.reasonCode ?? decision.reasonCode;
 }
 
-/** @deprecated Use `senderAccess.reasonCode` from `resolveChannelMessageIngress(...)`. */
+/**
+ * Map channel-ingress reason codes back to legacy DM/group access reason codes.
+ *
+ * @deprecated Use `senderAccess.reasonCode` from `resolveChannelMessageIngress(...)`.
+ */
 export function mapChannelIngressReasonCodeToDmGroupAccessReason(params: {
   reasonCode: IngressReasonCode;
   isGroup: boolean;
@@ -507,7 +529,11 @@ export function mapChannelIngressReasonCodeToDmGroupAccessReason(params: {
   }
 }
 
-/** @deprecated Use `senderAccess.reason` from `resolveChannelMessageIngress(...)`. */
+/**
+ * Format a legacy DM/group policy reason string from a mapped ingress reason code.
+ *
+ * @deprecated Use `senderAccess.reason` from `resolveChannelMessageIngress(...)`.
+ */
 export function formatChannelIngressPolicyReason(params: {
   reasonCode: DmGroupAccessReasonCode;
   dmPolicy: string;
@@ -537,7 +563,11 @@ export function formatChannelIngressPolicyReason(params: {
   return exhaustive;
 }
 
-/** @deprecated Use `senderAccess.groupAccess` from `resolveChannelMessageIngress(...)`. */
+/**
+ * Project a sender ingress reason into the legacy group-access compatibility shape.
+ *
+ * @deprecated Use `senderAccess.groupAccess` from `resolveChannelMessageIngress(...)`.
+ */
 export function projectChannelIngressSenderGroupAccess(params: {
   reasonCode: IngressReasonCode;
   decisionAllowed: boolean;
@@ -564,7 +594,11 @@ export function projectChannelIngressSenderGroupAccess(params: {
   };
 }
 
-/** @deprecated Use `senderAccess` from `resolveChannelMessageIngress(...)`. */
+/**
+ * Project a full ingress decision into the legacy DM/group access compatibility shape.
+ *
+ * @deprecated Use `senderAccess` from `resolveChannelMessageIngress(...)`.
+ */
 export function projectChannelIngressDmGroupAccess(params: {
   ingress: ChannelIngressDecision;
   isGroup: boolean;
@@ -593,13 +627,18 @@ export function projectChannelIngressDmGroupAccess(params: {
   };
 }
 
+/** Resolve and normalize channel ingress state from SDK input. */
 export async function resolveChannelIngressState(
   input: ChannelIngressStateInput,
 ): Promise<ChannelIngressState> {
   return await resolveChannelIngressStateInternal(input);
 }
 
-/** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
+/**
+ * Resolve legacy ingress access with compatibility projections and effective allowlists.
+ *
+ * @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`.
+ */
 export async function resolveChannelIngressAccess(
   params: ResolveChannelIngressAccessParams,
 ): Promise<ResolvedChannelIngressAccess> {
