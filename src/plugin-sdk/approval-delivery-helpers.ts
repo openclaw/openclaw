@@ -80,6 +80,7 @@ type ApproverRestrictedNativeApprovalParams = {
   describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];
 };
 
+/** Build the canonical approval capability for channels that restrict approvals to configured approvers. */
 function buildApproverRestrictedNativeApprovalCapability(
   params: ApproverRestrictedNativeApprovalParams,
 ): ChannelApprovalCapability {
@@ -212,13 +213,14 @@ function buildApproverRestrictedNativeApprovalCapability(
   });
 }
 
+/** Build the legacy split approval adapter shape for approver-restricted native channels. */
 export function createApproverRestrictedNativeApprovalAdapter(
-  /** Channel-specific native approval hooks and authorization rules. */
   params: ApproverRestrictedNativeApprovalParams,
 ) {
   return splitChannelApprovalCapability(buildApproverRestrictedNativeApprovalCapability(params));
 }
 
+/** Assemble a channel approval capability from its auth, delivery, render, and native surfaces. */
 export function createChannelApprovalCapability(params: {
   /** Authorizes actors attempting approval actions. */
   authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
@@ -241,6 +243,8 @@ export function createChannelApprovalCapability(params: {
   /** @deprecated Pass delivery/nativeRuntime/render/native directly. */
   approvals?: Partial<ChannelApprovalCapabilitySurfaces>;
 }): ChannelApprovalCapability {
+  // Keep the approvals alias for shipped plugin-sdk callers; registry tests track
+  // this compatibility marker until the public deprecation window closes.
   const surfaces: ChannelApprovalCapabilitySurfaces = {
     delivery: params.delivery ?? params.approvals?.delivery,
     nativeRuntime: params.nativeRuntime ?? params.approvals?.nativeRuntime,
@@ -260,6 +264,7 @@ export function createChannelApprovalCapability(params: {
   };
 }
 
+/** Split the canonical approval capability into the adapter shape older channel loaders consume. */
 export function splitChannelApprovalCapability(capability: ChannelApprovalCapability): {
   auth: {
     authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
@@ -288,6 +293,7 @@ export function splitChannelApprovalCapability(capability: ChannelApprovalCapabi
   };
 }
 
+/** Build the canonical approval capability for approver-restricted native delivery channels. */
 export function createApproverRestrictedNativeApprovalCapability(
   params: ApproverRestrictedNativeApprovalParams,
 ): ChannelApprovalCapability {
