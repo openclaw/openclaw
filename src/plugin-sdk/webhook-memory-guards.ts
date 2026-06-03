@@ -11,32 +11,38 @@ type CounterState = {
   updatedAtMs: number;
 };
 
+/** In-memory fixed-window limiter used by webhook ingress handlers. */
 export type FixedWindowRateLimiter = {
   isRateLimited: (key: string, nowMs?: number) => boolean;
   size: () => number;
   clear: () => void;
 };
 
+/** Bounded keyed counter for sampled webhook anomaly tracking. */
 export type BoundedCounter = {
   increment: (key: string, nowMs?: number) => number;
   size: () => number;
   clear: () => void;
 };
 
+/** Default webhook ingress rate-limit settings for plugin monitors. */
 export const WEBHOOK_RATE_LIMIT_DEFAULTS = Object.freeze({
   windowMs: 60_000,
   maxRequests: 120,
   maxTrackedKeys: 4_096,
 });
 
+/** Default cardinality and sampling settings for webhook anomaly counters. */
 export const WEBHOOK_ANOMALY_COUNTER_DEFAULTS = Object.freeze({
   maxTrackedKeys: 4_096,
   ttlMs: 6 * 60 * 60_000,
   logEvery: 25,
 });
 
+/** HTTP status codes counted as anomalous webhook request outcomes. */
 export const WEBHOOK_ANOMALY_STATUS_CODES = Object.freeze([400, 401, 408, 413, 415, 429]);
 
+/** Records repeated webhook failures and exposes bounded in-memory state controls. */
 export type WebhookAnomalyTracker = {
   record: (params: {
     key: string;
