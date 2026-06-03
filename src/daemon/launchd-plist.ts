@@ -11,6 +11,7 @@ export const LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = 20;
 export const LAUNCH_AGENT_UMASK_DECIMAL = 0o077;
 export const LAUNCH_AGENT_PROCESS_TYPE = "Interactive";
 export const LAUNCH_AGENT_STDIN_PATH = "/dev/null";
+export const LAUNCH_AGENT_ENV_WRAPPER_SHELL = "/bin/sh";
 
 const plistEscape = (value: string): string =>
   value
@@ -68,12 +69,11 @@ function resolveSiblingGeneratedEnvFilePath(
   return `${envFilePath.slice(0, serviceEnvDirEnd)}/${label}.env`;
 }
 
-function isGeneratedEnvWrapperArgs(
-  programArguments: string[],
+function isExpectedGeneratedEnvWrapperPair(
+  wrapperPath: string | undefined,
+  envFilePath: string | undefined,
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): boolean {
-  const wrapperPath = programArguments[0];
-  const envFilePath = programArguments[1];
   if (!wrapperPath || !envFilePath) {
     return false;
   }
@@ -102,14 +102,34 @@ function isGeneratedEnvWrapperArgs(
   );
 }
 
+function resolveGeneratedEnvWrapperLayout(
+  programArguments: string[],
+  options?: ReadLaunchAgentProgramArgumentsOptions,
+): { envFilePath: string; commandStartIndex: number } | null {
+  if (programArguments[0] === LAUNCH_AGENT_ENV_WRAPPER_SHELL) {
+    const wrapperPath = programArguments[1];
+    const envFilePath = programArguments[2];
+    if (isExpectedGeneratedEnvWrapperPair(wrapperPath, envFilePath, options) && envFilePath) {
+      return { envFilePath, commandStartIndex: 3 };
+    }
+  }
+  const wrapperPath = programArguments[0];
+  const envFilePath = programArguments[1];
+  if (isExpectedGeneratedEnvWrapperPair(wrapperPath, envFilePath, options) && envFilePath) {
+    return { envFilePath, commandStartIndex: 2 };
+  }
+  return null;
+}
+
 async function readLaunchAgentEnvironmentFile(
   programArguments: string[],
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): Promise<Record<string, string>> {
-  const envFilePath = programArguments[1];
-  if (!isGeneratedEnvWrapperArgs(programArguments, options) || !envFilePath) {
+  const layout = resolveGeneratedEnvWrapperLayout(programArguments, options);
+  if (!layout) {
     return {};
   }
+  const envFilePath = layout.envFilePath;
   let content = "";
   const candidateEnvFilePaths = Array.from(
     new Set(
@@ -157,10 +177,11 @@ function unwrapGeneratedEnvWrapperArgs(
   programArguments: string[],
   options?: ReadLaunchAgentProgramArgumentsOptions,
 ): string[] {
-  if (!isGeneratedEnvWrapperArgs(programArguments, options)) {
+  const layout = resolveGeneratedEnvWrapperLayout(programArguments, options);
+  if (!layout) {
     return programArguments;
   }
-  return programArguments.slice(2);
+  return programArguments.slice(layout.commandStartIndex);
 }
 
 const renderEnvDict = (env: Record<string, string | undefined> | undefined): string => {
