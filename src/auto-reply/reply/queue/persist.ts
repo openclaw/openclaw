@@ -26,9 +26,9 @@ const FOLLOWUP_QUEUES = resolveGlobalMap<string, FollowupQueueState>(
 
 /**
  * Keys of non-empty queues restored from disk on this process start.
- * Entries are removed as drains are scheduled; drain.ts sweeps this set
- * inside rememberFollowupDrainCallback so restored items drain as soon as
- * a valid callback is registered for the queue's channel route.
+ * Entries are removed when kickFollowupDrainIfIdle runs for the route.
+ * Production drains restored items after restart when agent-runner enqueues
+ * with restartIfIdle=true, or when gateway startup wakes the session.
  */
 const restoredPendingDrainKeys = new Set<string>();
 

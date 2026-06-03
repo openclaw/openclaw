@@ -461,6 +461,63 @@ describe("followup queue drain restart after idle window", () => {
     }
   });
 
+  it("drains restored items via production enqueue idle-kick after restart", async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queue-prod-kick-"));
+    const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+
+    const key = `test-restored-prod-kick-${Date.now()}`;
+    const settings: QueueSettings = { mode: "followup", debounceMs: 0, cap: 50 };
+    const drainCalls: FollowupRun[] = [];
+
+    try {
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "survived restart" }),
+        settings,
+        "message-id",
+        undefined,
+        false,
+      );
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      restoreFollowupQueues();
+
+      const runFollowup = async (run: FollowupRun) => {
+        drainCalls.push(run);
+      };
+      // Mirrors agent-runner after the active turn finishes: enqueue registers
+      // the callback and restartIfIdle=true kicks the restored queue.
+      enqueueFollowupRun(
+        key,
+        createRun({ prompt: "next inbound turn" }),
+        settings,
+        "message-id",
+        runFollowup,
+        true,
+      );
+
+      for (let i = 0; i < 10 && drainCalls.length === 0; i++) {
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+      }
+      expect(drainCalls.length).toBeGreaterThanOrEqual(1);
+      expect(drainCalls[0]?.prompt).toBe("survived restart");
+    } finally {
+      FOLLOWUP_QUEUES.delete(key);
+      clearRestoredPendingDrainKeysForTest();
+      clearFollowupQueuesRestoredFlagForTest();
+      if (originalStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = originalStateDir;
+      }
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not drain restored items just because a callback is registered (active-turn race)", async () => {
     // Models the race the bot's [P1] flagged: when enqueueFollowupRun is called
     // mid-turn with restartIfIdle=false, it still calls rememberFollowupDrainCallback.
