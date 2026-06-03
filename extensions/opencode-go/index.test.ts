@@ -97,6 +97,7 @@ describe("opencode-go provider plugin", () => {
       "qwen3.5-plus",
       "qwen3.6-plus",
       "qwen3.7-max",
+      "qwen3.7-plus",
     ];
     const models = new Map<string, ProviderRuntimeModel>();
     for (const modelId of expectedModelIds) {
@@ -172,6 +173,14 @@ describe("opencode-go provider plugin", () => {
     expect(qwenPlus.api).toBe("anthropic-messages");
     expect(qwenPlus.baseUrl).toBe("https://opencode.ai/zen/go");
 
+    const qwen37Plus = requireMapEntry(models, "qwen3.7-plus");
+    expect(qwen37Plus.api).toBe("anthropic-messages");
+    expect(qwen37Plus.baseUrl).toBe("https://opencode.ai/zen/go");
+    expect(qwen37Plus.input).toEqual(["text", "image"]);
+    expect(qwen37Plus.reasoning).toBe(true);
+    expect(qwen37Plus.contextWindow).toBe(1_000_000);
+    expect(qwen37Plus.maxTokens).toBe(65_536);
+
     const dynamicModel = requireRecord(
       provider.resolveDynamicModel?.({
         modelId: "deepseek-v4-pro",
@@ -211,6 +220,7 @@ describe("opencode-go provider plugin", () => {
           data: [
             { id: "minimax-m3", object: "model" },
             { id: "qwen3.7-max", object: "model" },
+            { id: "qwen3.7-plus", object: "model" },
           ],
         }),
       ),
@@ -231,8 +241,16 @@ describe("opencode-go provider plugin", () => {
 
     expect(fetchGuard).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("OPENCODE_API_KEY");
-    expect(first.models.map((model) => model.id)).toEqual(["minimax-m3", "qwen3.7-max"]);
-    expect(second.models.map((model) => model.id)).toEqual(["minimax-m3", "qwen3.7-max"]);
+    expect(first.models.map((model) => model.id)).toEqual([
+      "minimax-m3",
+      "qwen3.7-max",
+      "qwen3.7-plus",
+    ]);
+    expect(second.models.map((model) => model.id)).toEqual([
+      "minimax-m3",
+      "qwen3.7-max",
+      "qwen3.7-plus",
+    ]);
 
     clearLiveCatalogCacheForTests();
     fetchGuard.mockRejectedValueOnce(new Error("network unavailable"));
