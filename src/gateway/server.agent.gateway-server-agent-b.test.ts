@@ -360,10 +360,11 @@ describe("gateway server agent", () => {
   });
 
   test("agent errors when deliver=true and last channel is webchat", async () => {
+    testState.allowFrom = ["+1555"];
     await writeMainSessionEntry({
       sessionId: "sess-main-webchat",
       lastChannel: "webchat",
-      lastTo: "webchat-room",
+      lastTo: "+1555",
     });
     const res = await rpcReq(ws, "agent", {
       message: "hi",
