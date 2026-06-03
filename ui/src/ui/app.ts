@@ -112,6 +112,7 @@ import type {
 } from "./controllers/skills.ts";
 import { importCustomThemeFromUrl } from "./custom-theme.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "./gateway.ts";
+import { canAccessTab } from "./navigation-permissions.ts";
 import type { Tab } from "./navigation.ts";
 import { resolveAgentIdFromSessionKey } from "./session-key.ts";
 import type { SidebarContent } from "./sidebar-content.ts";
@@ -932,6 +933,9 @@ export class OpenClawApp extends LitElement {
   }
 
   setTab(next: Tab) {
+    if (!canAccessTab(next, this.hello?.auth ?? null)) {
+      return;
+    }
     setTabInternal(this as unknown as Parameters<typeof setTabInternal>[0], next);
     if (next !== "chat") {
       this.setChatMobileControlsOpen(false);
