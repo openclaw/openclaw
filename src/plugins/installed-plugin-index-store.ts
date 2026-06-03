@@ -13,6 +13,7 @@ import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
+import { hasRecoverableInstallRecordsMissingFromIndex } from "./installed-plugin-index-recovery.js";
 import {
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
@@ -446,6 +447,11 @@ function canRefreshPersistedPolicyState(
     params.installRecords &&
     hashJson(params.installRecords) !== hashJson(persisted.installRecords ?? {})
   ) {
+    return false;
+  }
+  const installRecords =
+    params.installRecords ?? extractPluginInstallRecordsFromInstalledPluginIndex(persisted);
+  if (hasRecoverableInstallRecordsMissingFromIndex(persisted, installRecords, env)) {
     return false;
   }
   return hasPolicyRefreshTargets(persisted, params.policyPluginIds);

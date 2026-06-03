@@ -15,6 +15,7 @@ import {
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -591,6 +592,119 @@ describe("installed plugin index persistence", () => {
     });
 
     expect(refreshed.plugins.map((plugin) => plugin.pluginId)).toContain("next-demo");
+  });
+
+  it("rebuilds policy refreshes when install records are missing from plugins", async () => {
+    const stateDir = makeTempDir();
+    const installPath = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@openclaw/whatsapp",
+      pluginId: "whatsapp",
+      version: "2026.5.2",
+    });
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          whatsapp: {
+            source: "npm",
+            spec: "@openclaw/whatsapp@2026.5.2",
+            installPath,
+          },
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+      config: {
+        plugins: {
+          entries: {
+            whatsapp: {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expectPluginIds(refreshed, ["whatsapp"]);
+    expectPluginFields(refreshed, "whatsapp", {
+      pluginId: "whatsapp",
+      origin: "global",
+      enabled: true,
+    });
+    expectInstallRecord(refreshed, "whatsapp", {
+      source: "npm",
+      spec: "@openclaw/whatsapp@2026.5.2",
+      installPath,
+    });
+    await expectPersistedIndex(stateDir, {
+      refreshReason: "policy-changed",
+      pluginIds: ["whatsapp"],
+    });
+  });
+
+  it("rebuilds policy refreshes from linked path install records", async () => {
+    const stateDir = makeTempDir();
+    const pluginDir = path.join(stateDir, "plugins", "local-plugin");
+    fs.mkdirSync(pluginDir, { recursive: true });
+    createCandidate(pluginDir, { id: "local-plugin" });
+    const env = {
+      OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_VERSION: "2026.4.25",
+      VITEST: "true",
+    };
+    await writePersistedInstalledPluginIndex(
+      createIndex({
+        installRecords: {
+          "local-plugin": {
+            source: "path",
+            sourcePath: pluginDir,
+            installPath: pluginDir,
+          },
+        },
+        plugins: [],
+      }),
+      { stateDir },
+    );
+
+    const refreshed = await refreshPersistedInstalledPluginIndex({
+      reason: "policy-changed",
+      stateDir,
+      env,
+      config: {
+        plugins: {
+          entries: {
+            "local-plugin": {
+              enabled: true,
+            },
+          },
+        },
+      },
+    });
+
+    expectPluginIds(refreshed, ["local-plugin"]);
+    expectPluginFields(refreshed, "local-plugin", {
+      pluginId: "local-plugin",
+      origin: "global",
+      enabled: true,
+    });
+    expectInstallRecord(refreshed, "local-plugin", {
+      source: "path",
+      sourcePath: pluginDir,
+      installPath: pluginDir,
+    });
   });
 
   it("preserves existing install records when refreshing the manifest cache", async () => {
