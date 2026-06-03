@@ -43,7 +43,9 @@ export function createClientHarness() {
     const result = destroyStdin(error);
     if (!exitEmitted) {
       exitEmitted = true;
-      queueMicrotask(emitProcessExit);
+      // Let stdin surface pipe errors before the harness emits the fake child exit.
+      // Otherwise close-reason tests can race EPIPE against a synthetic clean exit.
+      setImmediate(emitProcessExit);
     }
     return result;
   }) as typeof stdin.destroy;
