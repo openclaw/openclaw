@@ -17,6 +17,7 @@ import { isCliProvider } from "../../agents/model-selection.js";
 import { resolveContextConfigProviderForRuntime } from "../../agents/openai-routing.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { resolveSandboxConfigForAgent, resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
+import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import {
   derivePromptTokens,
   hasNonzeroUsage,
@@ -713,16 +714,24 @@ export async function runPreflightCompactionIfNeeded(params: {
     params.followupRun.run,
     params.followupRun.run.provider,
   );
-  // Three-tier runtime resolution mirroring runReplyAgent's dispatch path:
+  // Three-tier runtime resolution mirroring runReplyAgent's dispatch path
+  // (agent-runner-execution.ts:2056, followup-runner.ts:726):
   //   1. agentRuntimeOverride === "pi" forces canonical-provider routing,
   //      so the gate does NOT short-circuit (preflight runs).
-  //   2. agentRuntimeOverride that is itself a CLI provider for the cfg
-  //      pins the session to that CLI runtime — short-circuit applies.
+  //   2. resolveSessionRuntimeOverrideForProvider honors a persisted runtime
+  //      override only when it is provider-compatible (a CLI backend bound to
+  //      the active provider, or codex/openclaw). A stale/mismatched CLI
+  //      override returns undefined so we fall through, not skip.
   //   3. Fall through to the auth-profile-aware resolver, which inspects
   //      models.providers.<provider>.agentRuntime and auth-order routing.
-  const sessionRuntimeOverride = normalizeLowercaseStringOrEmpty(entry.agentRuntimeOverride);
+  // Honoring a stale CLI override here would skip embedded compaction on a
+  // turn that dispatch actually runs embedded.
+  const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+    provider: params.followupRun.run.provider,
+    entry,
+  });
   const cliExecutionProvider =
-    sessionRuntimeOverride === "pi"
+    normalizeLowercaseStringOrEmpty(entry.agentRuntimeOverride) === "pi"
       ? params.followupRun.run.provider
       : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
           ? sessionRuntimeOverride
@@ -1029,16 +1038,24 @@ export async function runMemoryFlushIfNeeded(params: {
     params.followupRun.run,
     params.followupRun.run.provider,
   );
-  // Three-tier runtime resolution mirroring runReplyAgent's dispatch path:
+  // Three-tier runtime resolution mirroring runReplyAgent's dispatch path
+  // (agent-runner-execution.ts:2056, followup-runner.ts:726):
   //   1. agentRuntimeOverride === "pi" forces canonical-provider routing,
   //      so the gate does NOT short-circuit (memory flush runs).
-  //   2. agentRuntimeOverride that is itself a CLI provider for the cfg
-  //      pins the session to that CLI runtime — short-circuit applies.
+  //   2. resolveSessionRuntimeOverrideForProvider honors a persisted runtime
+  //      override only when it is provider-compatible (a CLI backend bound to
+  //      the active provider, or codex/openclaw). A stale/mismatched CLI
+  //      override returns undefined so we fall through, not skip.
   //   3. Fall through to the auth-profile-aware resolver, which inspects
   //      models.providers.<provider>.agentRuntime and auth-order routing.
-  const sessionRuntimeOverride = normalizeLowercaseStringOrEmpty(entry?.agentRuntimeOverride);
+  // Honoring a stale CLI override here would skip embedded flush on a turn
+  // that dispatch actually runs embedded.
+  const sessionRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+    provider: params.followupRun.run.provider,
+    entry,
+  });
   const cliExecutionProvider =
-    sessionRuntimeOverride === "pi"
+    normalizeLowercaseStringOrEmpty(entry?.agentRuntimeOverride) === "pi"
       ? params.followupRun.run.provider
       : ((sessionRuntimeOverride && isCliProvider(sessionRuntimeOverride, params.cfg)
           ? sessionRuntimeOverride
