@@ -3,6 +3,7 @@ import { normalizeChatChannelId } from "../channels/ids.js";
 import { normalizeAnyChannelId } from "../channels/registry-normalize.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 
+/** Normalizes raw channel names, aliases, and internal webchat into canonical ids. */
 export function normalizeMessageChannel(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
   if (!normalized) {
@@ -18,6 +19,7 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
   return normalizeAnyChannelId(normalized) ?? normalized;
 }
 
+/** Returns true only when a value is already a normalized, non-internal delivery channel id. */
 export function isDeliverableMessageChannel(value: string): boolean {
   const normalized = normalizeMessageChannel(value);
   return (
