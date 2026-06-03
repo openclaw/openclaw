@@ -255,6 +255,36 @@ function expectedIntegrityForNpmUpdate(params: {
   );
 }
 
+async function expectedIntegrityForNpmFallback(params: {
+  fallbackSpec: string | undefined;
+  record: PluginInstallRecord;
+  timeoutMs?: number;
+  trustedSourceLinkedOfficialInstall: boolean;
+}): Promise<string | undefined> {
+  if (params.record.source !== "npm" || !params.fallbackSpec) {
+    return undefined;
+  }
+  if (params.fallbackSpec === params.record.spec) {
+    return expectedIntegrityForUpdate(params.record.spec, params.record.integrity);
+  }
+  if (!params.trustedSourceLinkedOfficialInstall) {
+    return undefined;
+  }
+  const fallbackMetadata = await resolveNpmSpecMetadata({
+    spec: params.fallbackSpec,
+    timeoutMs: params.timeoutMs,
+  });
+  if (!fallbackMetadata.ok) {
+    return undefined;
+  }
+  return expectedIntegrityForNpmUpdate({
+    effectiveSpec: params.fallbackSpec,
+    metadata: fallbackMetadata.metadata,
+    record: params.record,
+    trustedSourceLinkedOfficialInstall: true,
+  });
+}
+
 function isNpmMetadataCompatibleWithCurrentHost(metadata: NpmSpecResolution): boolean {
   const hostVersion = resolveCompatibilityHostVersion();
   const installMetadata = metadata.packageOpenClaw?.install;
@@ -1158,10 +1188,20 @@ export async function updateNpmInstalledPlugins(params: {
       record,
       trustedSourceLinkedOfficialInstall,
     });
-    const fallbackExpectedIntegrity =
-      record.source === "npm" && npmSpecs?.fallbackSpec === record.spec
-        ? expectedIntegrityForUpdate(record.spec, record.integrity)
-        : undefined;
+    let fallbackExpectedIntegrityLoaded = false;
+    let fallbackExpectedIntegrity: string | undefined;
+    const getFallbackExpectedIntegrity = async () => {
+      if (!fallbackExpectedIntegrityLoaded) {
+        fallbackExpectedIntegrity = await expectedIntegrityForNpmFallback({
+          fallbackSpec: npmSpecs?.fallbackSpec,
+          record,
+          timeoutMs: params.timeoutMs,
+          trustedSourceLinkedOfficialInstall,
+        });
+        fallbackExpectedIntegrityLoaded = true;
+      }
+      return fallbackExpectedIntegrity;
+    };
 
     if (record.source === "npm" && !effectiveSpec) {
       outcomes.push({
@@ -1391,7 +1431,7 @@ export async function updateNpmInstalledPlugins(params: {
           dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
           trustedSourceLinkedOfficialInstall,
           expectedPluginId: pluginId,
-          expectedIntegrity: fallbackExpectedIntegrity,
+          expectedIntegrity: await getFallbackExpectedIntegrity(),
           onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
             pluginId,
             dryRun: true,
@@ -1639,7 +1679,7 @@ export async function updateNpmInstalledPlugins(params: {
         dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
         trustedSourceLinkedOfficialInstall,
         expectedPluginId: pluginId,
-        expectedIntegrity: fallbackExpectedIntegrity,
+        expectedIntegrity: await getFallbackExpectedIntegrity(),
         onIntegrityDrift: createPluginUpdateIntegrityDriftHandler({
           pluginId,
           dryRun: false,
