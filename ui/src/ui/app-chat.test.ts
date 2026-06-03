@@ -2143,7 +2143,7 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
     await Promise.resolve();
-    await loadSessions(host as Parameters<typeof loadSessions>[0]);
+    await loadSessions(host as unknown as Parameters<typeof loadSessions>[0]);
 
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
