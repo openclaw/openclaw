@@ -1,5 +1,4 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
-import { createInterface, type Interface } from "node:readline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -67,7 +66,7 @@ export class IMessageRpcClient {
   private readonly closed: Promise<void>;
   private closedResolve: (() => void) | null = null;
   private child: ChildProcessWithoutNullStreams | null = null;
-  private reader: Interface | null = null;
+  private stdoutBuffer = "";
   private nextId = 1;
   private publicProcessError: string | null = null;
 
@@ -96,14 +95,24 @@ export class IMessageRpcClient {
       stdio: ["pipe", "pipe", "pipe"],
     });
     this.child = child;
-    this.reader = createInterface({ input: child.stdout });
+    this.stdoutBuffer = "";
 
-    this.reader.on("line", (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        return;
+    // Split ONLY on U+000A LINE FEED — never on U+2028 LINE SEPARATOR or
+    // U+2029 PARAGRAPH SEPARATOR.  Node readline treats all three as line
+    // terminators, which fractures valid JSON-RPC responses when message
+    // text contains raw U+2028.  A plain \n split preserves the framing
+    // contract (one JSON object per LF-terminated line) without depending
+    // on V8's Unicode line-break set.
+    child.stdout.setEncoding("utf-8");
+    child.stdout.on("data", (chunk: string) => {
+      this.stdoutBuffer += chunk;
+      let idx: number;
+      while ((idx = this.stdoutBuffer.indexOf("\n")) !== -1) {
+        const line = this.stdoutBuffer.slice(0, idx).trim();
+        this.stdoutBuffer = this.stdoutBuffer.slice(idx + 1);
+        if (!line) continue;
+        this.handleLine(line);
       }
-      this.handleLine(trimmed);
     });
 
     child.stderr?.on("data", (chunk) => {
@@ -139,8 +148,7 @@ export class IMessageRpcClient {
     if (!this.child) {
       return;
     }
-    this.reader?.close();
-    this.reader = null;
+    this.stdoutBuffer = "";
     this.child.stdin?.end();
     const child = this.child;
     this.child = null;

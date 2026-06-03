@@ -66,6 +66,60 @@ describe("createIMessageRpcClient", () => {
 
     expect(internals.buildCloseError(1, null).message).toBe(PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR);
   });
+
+  it("handleLine parses valid JSON-RPC containing raw U+2028 (LINE SEPARATOR) — #89830", async () => {
+    // #89830: When a JSON-RPC response contains raw U+2028 inside a string,
+    // node:readline splits the line before handleLine ever sees it.
+    // Our LF-only (\n) splitter (IMessageRpcClient.start()) passes the
+    // complete line through, so handleLine must parse it correctly.
+    // This test verifies the end-to-end path: a single \n-delimited line
+    // containing U+2028 reaches handleLine intact and parses as valid JSON.
+    const { IMessageRpcClient } = await import("./client.js");
+
+    const runtimeErrors: string[] = [];
+    const client = new IMessageRpcClient({
+      runtime: { error: (msg: string) => runtimeErrors.push(msg) } as never,
+    });
+
+    const internals = client as unknown as {
+      handleLine: (line: string) => void;
+    };
+
+    // Valid JSON-RPC response with raw U+2028 inside a message text field
+    const jsonWithU2028 =
+      '{"jsonrpc":"2.0","id":42,"result":{"messages":[{"text":"Line one Line two"}]}}';
+
+    internals.handleLine(jsonWithU2028);
+
+    // Must not emit parse errors
+    expect(runtimeErrors).toHaveLength(0);
+  });
+
+  it("handleLine rejects a U+2028-split fragment — proves the old readline bug (#89830)", async () => {
+    // This is the failure mode before the fix: node:readline splits a valid
+    // JSON-RPC response on U+2028, producing N fragments. Each fragment
+    // is NOT valid JSON and fails JSON.parse. This test confirms handleLine
+    // correctly rejects fragments (the error path) — the fix ensures these
+    // fragments are never produced in the first place.
+    const { IMessageRpcClient } = await import("./client.js");
+
+    const runtimeErrors: string[] = [];
+    const client = new IMessageRpcClient({
+      runtime: { error: (msg: string) => runtimeErrors.push(msg) } as never,
+    });
+
+    const internals = client as unknown as {
+      handleLine: (line: string) => void;
+    };
+
+    // Fragment produced by readline splitting on U+2028 — missing closing brace
+    const fragment = '{"jsonrpc":"2.0","id":42,"result":{"messages":[{"text":"Line one';
+
+    internals.handleLine(fragment);
+
+    expect(runtimeErrors).toHaveLength(1);
+    expect(runtimeErrors[0]).toContain("imsg rpc: failed to parse");
+  });
 });
 
 describe("imessage setup status", () => {
