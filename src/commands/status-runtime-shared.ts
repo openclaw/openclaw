@@ -1,4 +1,4 @@
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -66,7 +66,10 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
   return await loadProviderUsageSummary({
     timeoutMs: params.timeoutMs,
     config: params.config,
-    agentDir: params.agentDir ?? resolveDefaultAgentDir(params.config),
+    agentDir:
+      params.agentDir ?? resolveAgentDir(params.config, resolveDefaultAgentId(params.config)),
+    skipPluginAuthWithoutCredentialSource: true,
+    allowOAuthRefresh: false,
   });
 }
 
