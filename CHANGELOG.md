@@ -2,12 +2,6 @@
 
 Docs: https://docs.openclaw.ai
 
-## Unreleased
-
-### Fixes
-
-- Secrets: resolve persona-level TTS provider SecretRefs at runtime so file-source apiKeys reach the plugin as resolved strings. Thanks @SebTardif.
-
 ## 2026.6.2
 
 ### Highlights

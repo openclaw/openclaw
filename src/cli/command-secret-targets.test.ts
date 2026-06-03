@@ -12,7 +12,9 @@ const REGISTRY_IDS = [
   "gateway.remote.token",
   "gateway.remote.password",
   "models.providers.*.apiKey",
+  "agents.list[].tts.personas.*.providers.*.apiKey",
   "messages.tts.providers.openai.apiKey",
+  "messages.tts.personas.*.providers.*.apiKey",
   "plugins.entries.voice-call.config.twilio.authToken",
   "plugins.entries.firecrawl.config.webFetch.apiKey",
   "plugins.entries.firecrawl.config.webSearch.apiKey",
@@ -247,6 +249,7 @@ import {
   getCapabilityWebSearchCommandSecretTargetIds,
   getModelsCommandSecretTargetIds,
   getQrRemoteCommandSecretTargetIds,
+  getTtsCommandSecretTargetIds,
   getScopedChannelsCommandSecretTargets,
   getSecurityAuditCommandSecretTargetIds,
   getStatusCommandSecretTargetIds,
@@ -1123,6 +1126,20 @@ describe("command secret target ids", () => {
     expect(scoped.allowedPaths).toEqual(
       new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
     );
+  });
+
+  it("includes persona TTS targets in the TTS command target set", () => {
+    const ids = getTtsCommandSecretTargetIds();
+    expect(ids.has("messages.tts.providers.*.apiKey")).toBe(true);
+    expect(ids.has("messages.tts.personas.*.providers.*.apiKey")).toBe(true);
+    expect(ids.has("agents.list[].tts.providers.*.apiKey")).toBe(true);
+    expect(ids.has("agents.list[].tts.personas.*.providers.*.apiKey")).toBe(true);
+  });
+
+  it("includes persona TTS targets in the agent runtime command target set", () => {
+    const ids = getAgentRuntimeCommandSecretTargetIds();
+    expect(ids.has("agents.list[].tts.providers.*.apiKey")).toBe(true);
+    expect(ids.has("agents.list[].tts.personas.*.providers.*.apiKey")).toBe(true);
   });
 
   it("keeps account-scoped allowedPaths as an empty set when scoped target paths are absent", () => {

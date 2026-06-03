@@ -39,6 +39,7 @@ const STATIC_AGENT_RUNTIME_BASE_TARGET_IDS = [
   "agents.defaults.memorySearch.remote.apiKey",
   "agents.list[].memorySearch.remote.apiKey",
   "agents.list[].tts.providers.*.apiKey",
+  "agents.list[].tts.personas.*.providers.*.apiKey",
   "messages.tts.providers.*.apiKey",
   "skills.entries.*.apiKey",
   "tools.web.search.apiKey",
@@ -52,7 +53,9 @@ const STATIC_MEMORY_EMBEDDING_TARGET_IDS = [
 const STATIC_TTS_TARGET_IDS = [
   ...STATIC_MODEL_TARGET_IDS,
   "agents.list[].tts.providers.*.apiKey",
+  "agents.list[].tts.personas.*.providers.*.apiKey",
   "messages.tts.providers.*.apiKey",
+  "messages.tts.personas.*.providers.*.apiKey",
 ] as const;
 const STATIC_GATEWAY_AUTH_TARGET_IDS = [
   "gateway.auth.token",
