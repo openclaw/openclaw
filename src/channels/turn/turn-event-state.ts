@@ -96,6 +96,14 @@ export function sanitizeTurnEventMetadata(
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
+export function sanitizeTurnEvent(event: TurnEvent): TurnEvent {
+  const metadata = sanitizeTurnEventMetadata(event.metadata);
+  return {
+    ...event,
+    ...(metadata ? { metadata } : { metadata: undefined }),
+  };
+}
+
 /** Spike store for modelling turn event timelines without adding persistence yet. */
 export class InMemoryTurnEventStore implements TurnEventRecorder {
   private readonly events: TurnEvent[] = [];
@@ -108,13 +116,11 @@ export class InMemoryTurnEventStore implements TurnEventRecorder {
   }
 
   append(event: AppendTurnEventInput): TurnEvent {
-    const metadata = sanitizeTurnEventMetadata(event.metadata);
-    const recorded: TurnEvent = {
+    const recorded = sanitizeTurnEvent({
       id: event.id ?? this.createId(),
       timestamp: event.timestamp ?? this.now(),
       ...event,
-      ...(metadata ? { metadata } : { metadata: undefined }),
-    };
+    });
     this.events.push(recorded);
     return recorded;
   }

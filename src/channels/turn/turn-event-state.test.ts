@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   InMemoryTurnEventStore,
   materializeTurnState,
+  sanitizeTurnEvent,
   sanitizeTurnEventMetadata,
   validateTurnCompletion,
   type TurnEvent,
@@ -72,6 +73,24 @@ describe("turn event state", () => {
 
   it("returns undefined sanitized metadata when every value is undefined", () => {
     expect(sanitizeTurnEventMetadata({ empty: undefined })).toBeUndefined();
+  });
+
+  it("sanitizes a returned turn event before diagnostics consume it", () => {
+    expect(
+      sanitizeTurnEvent(
+        baseEvent({
+          metadata: {
+            messageId: "msg-1",
+            bodyPreview: "private message body",
+            operationalHint: "safe",
+          },
+        }),
+      ).metadata,
+    ).toEqual({
+      messageId: "msg-1",
+      bodyPreview: "<redacted>",
+      operationalHint: "safe",
+    });
   });
 
   it("blocks completion when visible delivery is required but missing", () => {

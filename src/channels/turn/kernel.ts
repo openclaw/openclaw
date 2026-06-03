@@ -26,6 +26,7 @@ import {
 } from "./durable-delivery.js";
 import {
   materializeTurnState,
+  sanitizeTurnEvent,
   sanitizeTurnEventMetadata,
   validateTurnCompletion,
 } from "./turn-event-state.js";
@@ -237,13 +238,15 @@ async function appendTurnEvent(params: {
     ...params.event,
     metadata: sanitizeTurnEventMetadata(params.event.metadata),
   };
-  const recorded = params.recorder
-    ? await params.recorder.append(safeEvent)
-    : ({
-        id: safeEvent.id ?? `turn-event:${safeEvent.turnId}:${safeEvent.type}`,
-        timestamp: safeEvent.timestamp ?? Date.now(),
-        ...safeEvent,
-      } satisfies TurnEvent);
+  const recorded = sanitizeTurnEvent(
+    params.recorder
+      ? await params.recorder.append(safeEvent)
+      : ({
+          id: safeEvent.id ?? `turn-event:${safeEvent.turnId}:${safeEvent.type}`,
+          timestamp: safeEvent.timestamp ?? Date.now(),
+          ...safeEvent,
+        } satisfies TurnEvent),
+  );
   emitTrustedDiagnosticEvent({
     type: "channel.turn.event",
     channel: recorded.channel,
