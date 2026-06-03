@@ -2,7 +2,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { ChannelHealthMonitor } from "./channel-health-monitor.js";
 import { startChannelHealthMonitor } from "./channel-health-monitor.js";
-import { startGatewayModelPricingRefresh } from "./model-pricing-cache.js";
+import {
+  collectConfiguredModelPricingRefs,
+  startGatewayModelPricingRefresh,
+} from "./model-pricing-cache.js";
 
 type GatewayRuntimeServiceLogger = {
   child: (name: string) => {
@@ -82,6 +85,25 @@ export function startGatewayRuntimeServices(params: {
     cfg: params.cfgAtStart,
     channelManager: params.channelManager,
   });
+
+  // Warm cold-start model discovery off the request path. On a fresh gateway the
+  // FIRST message otherwise pays ~40s for provider discovery (the `models.json`
+  // build) plus per-model dynamic resolution — a one-time lazy cost. Both results
+  // are cached, so this background warmup lets the first real message hit warm
+  // caches. The models.json readyCache dedupes if a message races the warmup.
+  if (!params.minimalTestGateway && process.env.VITEST !== "1") {
+    void (async () => {
+      const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
+      await ensureOpenClawModelsJson(params.cfgAtStart);
+      const { resolveModelAsync } = await import("../agents/pi-embedded-runner/model.js");
+      const refs = collectConfiguredModelPricingRefs(params.cfgAtStart);
+      await Promise.allSettled(
+        refs.map((ref) => resolveModelAsync(ref.provider, ref.model, undefined, params.cfgAtStart)),
+      );
+    })().catch((err) => {
+      params.log.error(`model warmup failed: ${String(err)}`);
+    });
+  }
 
   return {
     heartbeatRunner: createNoopHeartbeatRunner(),

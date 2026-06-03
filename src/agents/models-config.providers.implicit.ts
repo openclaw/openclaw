@@ -52,18 +52,33 @@ type ImplicitProviderContext = ImplicitProviderParams & {
   resolveProviderAuth: ProviderAuthResolver;
 };
 
-function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
+// Default per-provider catalog-discovery timeout. Each provider's discovery may
+// fetch a remote catalog; without a bound, one slow/unreachable provider (e.g.
+// blocked outbound network) stalls first-message latency for tens of seconds.
+// Timed-out providers are skipped gracefully (see runProviderCatalogWithTimeout).
+const DEFAULT_PROVIDER_CATALOG_TIMEOUT_MS = 8_000;
+const LIVE_PROVIDER_CATALOG_TIMEOUT_MS = 15_000;
+
+function resolveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | null {
+  // Explicit override applies in any mode; `0` opts out (unbounded).
+  const override = env.OPENCLAW_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
+  if (override) {
+    const parsed = Number.parseInt(override, 10);
+    if (Number.isFinite(parsed)) {
+      return parsed > 0 ? parsed : null;
+    }
+  }
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return null;
+  if (live) {
+    const raw = env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
+    if (raw) {
+      const parsed = Number.parseInt(raw, 10);
+      return Number.isFinite(parsed) && parsed > 0 ? parsed : LIVE_PROVIDER_CATALOG_TIMEOUT_MS;
+    }
+    return LIVE_PROVIDER_CATALOG_TIMEOUT_MS;
   }
-  const raw = env.OPENCLAW_LIVE_PROVIDER_DISCOVERY_TIMEOUT_MS?.trim();
-  if (!raw) {
-    return 15_000;
-  }
-  const parsed = Number.parseInt(raw, 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
+  return DEFAULT_PROVIDER_CATALOG_TIMEOUT_MS;
 }
 
 function resolveProviderDiscoveryFilter(params: {
@@ -82,12 +97,14 @@ function resolveProviderDiscoveryFilter(params: {
   }
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return undefined;
-  }
+  // Opt-in production allowlist: restrict implicit provider discovery to a few
+  // providers so a cold start does not load and probe dozens of unused provider
+  // plugins (each adds module-load + network-probe latency to the first message).
+  // Unset = discover all (default, unchanged). Works in any mode.
   const rawValues = [
-    env.OPENCLAW_LIVE_PROVIDERS?.trim(),
-    env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim(),
+    env.OPENCLAW_PROVIDERS?.trim(),
+    live ? env.OPENCLAW_LIVE_PROVIDERS?.trim() : undefined,
+    live ? env.OPENCLAW_LIVE_GATEWAY_PROVIDERS?.trim() : undefined,
   ].filter((value): value is string => Boolean(value && value !== "all"));
   if (rawValues.length === 0) {
     return undefined;
@@ -204,56 +221,69 @@ async function resolvePluginImplicitProviders(
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig = buildPluginCatalogConfig(ctx);
-  for (const provider of byOrder[order]) {
-    const resolveCatalogProviderApiKey = (providerId?: string) => {
-      const resolvedProviderId = providerId?.trim() || provider.id;
-      const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
-      if (resolved.apiKey) {
-        return resolved;
-      }
+  const timeoutMs = resolveProviderCatalogTimeoutMs(ctx.env);
 
-      if (
-        !findNormalizedProviderValue(
-          {
-            [provider.id]: true,
-            ...Object.fromEntries((provider.aliases ?? []).map((alias) => [alias, true])),
-            ...Object.fromEntries((provider.hookAliases ?? []).map((alias) => [alias, true])),
-          },
-          resolvedProviderId,
-        )
-      ) {
-        return resolved;
-      }
+  // Run the (network-bound) catalog probes concurrently so one slow/unreachable
+  // provider does not serialize behind the others — with 30+ provider plugins,
+  // sequential probing summed each timeout. Merge results afterward in stable
+  // provider order so precedence (`discovered[providerId] ?? …`) is unchanged
+  // from the original sequential behavior.
+  const runs = await Promise.all(
+    byOrder[order].map(async (provider) => {
+      const resolveCatalogProviderApiKey = (providerId?: string) => {
+        const resolvedProviderId = providerId?.trim() || provider.id;
+        const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
+        if (resolved.apiKey) {
+          return resolved;
+        }
 
-      const synthetic = provider.resolveSyntheticAuth?.({
-        config: catalogConfig,
-        provider: resolvedProviderId,
-        providerConfig: catalogConfig.models?.providers?.[resolvedProviderId],
-      });
-      const syntheticApiKey = synthetic?.apiKey?.trim();
-      if (!syntheticApiKey) {
-        return resolved;
-      }
+        if (
+          !findNormalizedProviderValue(
+            {
+              [provider.id]: true,
+              ...Object.fromEntries((provider.aliases ?? []).map((alias) => [alias, true])),
+              ...Object.fromEntries((provider.hookAliases ?? []).map((alias) => [alias, true])),
+            },
+            resolvedProviderId,
+          )
+        ) {
+          return resolved;
+        }
 
-      return {
-        apiKey: isNonSecretApiKeyMarker(syntheticApiKey)
-          ? syntheticApiKey
-          : resolveNonEnvSecretRefApiKeyMarker("file"),
-        discoveryApiKey: undefined,
+        const synthetic = provider.resolveSyntheticAuth?.({
+          config: catalogConfig,
+          provider: resolvedProviderId,
+          providerConfig: catalogConfig.models?.providers?.[resolvedProviderId],
+        });
+        const syntheticApiKey = synthetic?.apiKey?.trim();
+        if (!syntheticApiKey) {
+          return resolved;
+        }
+
+        return {
+          apiKey: isNonSecretApiKeyMarker(syntheticApiKey)
+            ? syntheticApiKey
+            : resolveNonEnvSecretRefApiKeyMarker("file"),
+          discoveryApiKey: undefined,
+        };
       };
-    };
 
-    const result = await runProviderCatalogWithTimeout({
-      provider,
-      config: catalogConfig,
-      agentDir: ctx.agentDir,
-      workspaceDir: ctx.workspaceDir,
-      env: ctx.env,
-      resolveProviderApiKey: resolveCatalogProviderApiKey,
-      resolveProviderAuth: (providerId, options) =>
-        ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
-      timeoutMs: resolveLiveProviderCatalogTimeoutMs(ctx.env),
-    });
+      const result = await runProviderCatalogWithTimeout({
+        provider,
+        config: catalogConfig,
+        agentDir: ctx.agentDir,
+        workspaceDir: ctx.workspaceDir,
+        env: ctx.env,
+        resolveProviderApiKey: resolveCatalogProviderApiKey,
+        resolveProviderAuth: (providerId, options) =>
+          ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
+        timeoutMs,
+      });
+      return { provider, result };
+    }),
+  );
+
+  for (const { provider, result } of runs) {
     if (!result) {
       continue;
     }
