@@ -5091,6 +5091,66 @@ describe("openai transport stream", () => {
     expect(params.messages?.[0]?.role).toBe("system");
   });
 
+  it("honors compat.requiresReasoningContentOnAssistantMessages on a custom (non-detected) provider", () => {
+    // Regression for #89660: the agent transport getCompat() previously resolved
+    // this flag from detection only, so a custom DeepSeek-compatible proxy whose
+    // URL/provider is not auto-detected would accept the config key but never
+    // replay the required empty `reasoning_content` on assistant messages.
+    const model = {
+      id: "custom-ds-chat",
+      name: "Custom DeepSeek-compatible chat",
+      api: "openai-completions",
+      provider: "generic",
+      baseUrl: "https://my-proxy.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+      compat: {
+        requiresReasoningContentOnAssistantMessages: true,
+      },
+    } satisfies Model<"openai-completions">;
+    const assistantTurn = {
+      role: "assistant" as const,
+      content: [{ type: "text" as const, text: "prior answer" }],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop" as const,
+      timestamp: 2,
+    };
+    const context = {
+      systemPrompt: "system",
+      messages: [{ role: "user", content: "hi", timestamp: 1 }, assistantTurn],
+      tools: [],
+    };
+
+    const enabled = buildOpenAICompletionsParams(model, context as never, undefined) as {
+      messages?: Array<{ role?: string; reasoning_content?: unknown }>;
+    };
+    const enabledAssistant = enabled.messages?.find((message) => message.role === "assistant");
+    expect(enabledAssistant?.reasoning_content).toBe("");
+
+    // With the flag absent, detection for this custom provider leaves it off, so
+    // no empty reasoning_content is injected — proving the explicit flag is what
+    // drives the behavior through the agent transport.
+    const withoutFlag = { ...model, compat: {} } as unknown as Model<"openai-completions">;
+    const disabled = buildOpenAICompletionsParams(withoutFlag, context as never, undefined) as {
+      messages?: Array<{ role?: string; reasoning_content?: unknown }>;
+    };
+    const disabledAssistant = disabled.messages?.find((message) => message.role === "assistant");
+    expect(disabledAssistant?.reasoning_content).toBeUndefined();
+  });
+
   it("strips the internal cache boundary from OpenAI completions system prompts", () => {
     const params = buildOpenAICompletionsParams(
       {
