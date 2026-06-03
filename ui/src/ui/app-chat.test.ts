@@ -1814,6 +1814,8 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "wait for selected model",
       chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      eventLogBuffer: [],
+      tab: "debug",
     });
 
     const send = handleSendChat(host);
@@ -1822,6 +1824,14 @@ describe("handleSendChat", () => {
       sendState: "waiting-model",
       text: "wait for selected model",
     });
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "waiting-model",
+          sendState: "waiting-model",
+        }),
+      ]),
+    );
 
     await retryReconnectableQueuedChatSends(host);
     expect(request).not.toHaveBeenCalled();
@@ -2213,6 +2223,8 @@ describe("handleSendChat", () => {
       client: null,
       connected: false,
       chatMessage: "send after reconnect",
+      eventLogBuffer: [],
+      tab: "debug",
     });
 
     await handleSendChat(host);
@@ -2226,6 +2238,14 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main",
     });
     expect(host.chatQueue[0]?.sendRunId).toEqual(expect.any(String));
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "waiting-reconnect",
+          sendState: "waiting-reconnect",
+        }),
+      ]),
+    );
   });
 
   it("replays queued global sends under the originally selected agent", async () => {

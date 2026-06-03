@@ -442,6 +442,9 @@ function enqueuePendingSendMessage(
   };
   host.chatQueue = [...host.chatQueue, pending];
   recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
+  if (sendState === "waiting-model" || sendState === "waiting-reconnect") {
+    recordChatSendTiming(host, pending, sendState, submittedAtMs);
+  }
   schedulePendingSendPaintTiming(host, pending, submittedAtMs);
   scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true, false, {
     source: "manual",
