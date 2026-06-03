@@ -261,6 +261,7 @@ describe("models-config", () => {
           providers: {
             botzhipin: {
               baseUrl: "https://botzhipin.work/openclaw/platform/v1",
+              auth: "api-key",
               api: "openai-completions",
               models: [
                 {
