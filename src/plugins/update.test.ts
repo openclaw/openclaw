@@ -711,6 +711,53 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("skips integrity checks when official sync may choose a compatible fallback", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.5.2",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.2",
+      integrity: "sha512-old",
+      openclaw: {
+        compat: { pluginApi: ">=9999.0.0" },
+      },
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "acpx",
+        targetDir: installPath,
+        version: "2026.5.1",
+        npmResolution: {
+          name: "@openclaw/acpx",
+          version: "2026.5.1",
+          resolvedSpec: "@openclaw/acpx@2026.5.1",
+        },
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx@2026.5.2",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.5.2",
+        resolvedVersion: "2026.5.2",
+        integrity: "sha512-old",
+      }),
+      pluginIds: ["acpx"],
+      syncOfficialPluginInstalls: true,
+    });
+
+    expectNpmUpdateCall({
+      spec: "@openclaw/acpx",
+      expectedPluginId: "acpx",
+      expectedIntegrity: undefined,
+    });
+  });
+
   it("keeps integrity drift checks when official latest falls back to pinned stable", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",

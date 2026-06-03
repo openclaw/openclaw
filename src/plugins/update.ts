@@ -1409,6 +1409,9 @@ export async function updateNpmInstalledPlugins(params: {
           record,
           trustedSourceLinkedOfficialInstall,
         });
+        if (!isNpmMetadataCompatibleWithCurrentHost(expectedIntegrityMetadata)) {
+          expectedIntegrity = undefined;
+        }
         if (bypassTrustedOfficialUnchangedNpmCheck && !trustedPrereleaseFallback) {
           expectedIntegrity = undefined;
         }
