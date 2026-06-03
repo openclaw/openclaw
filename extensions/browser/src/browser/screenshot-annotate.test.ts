@@ -95,6 +95,39 @@ describe("planAnnotations - viewport mode", () => {
   });
 });
 
+describe("planAnnotations - viewport off-screen accounting", () => {
+  it("counts off-viewport refs as skipped but keeps them in annotations when viewport size is given", () => {
+    const plan = planAnnotations({
+      inputs: [
+        { ref: "e1", role: "button", doc: { x: 10, y: 50, width: 40, height: 20 } }, // in viewport
+        { ref: "e2", role: "link", doc: { x: 10, y: 5000, width: 40, height: 20 } }, // below viewport
+      ],
+      space: "viewport",
+      scroll: { x: 0, y: 0 },
+      viewport: { width: 1280, height: 720 },
+    });
+
+    // Only the in-viewport ref is drawn.
+    expect(plan.overlayItems.map((o) => o.ref)).toEqual(["e1"]);
+    // Both refs are surfaced for callers (off-viewport box can be out of image).
+    expect(plan.annotations.map((a) => a.ref)).toEqual(["e1", "e2"]);
+    // The off-viewport ref raises skipped, preserving the shipped contract.
+    expect(plan.skipped).toBe(1);
+  });
+
+  it("does not count off-viewport refs when viewport size is omitted", () => {
+    const plan = planAnnotations({
+      inputs: [{ ref: "e2", role: "link", doc: { x: 10, y: 5000, width: 40, height: 20 } }],
+      space: "viewport",
+      scroll: { x: 0, y: 0 },
+    });
+
+    expect(plan.skipped).toBe(0);
+    expect(plan.overlayItems).toHaveLength(1);
+    expect(plan.annotations).toHaveLength(1);
+  });
+});
+
 describe("planAnnotations - fullpage mode", () => {
   it("returns box equal to doc (document coordinates)", () => {
     const plan = planAnnotations({ inputs: sampleInputs, space: "fullpage" });

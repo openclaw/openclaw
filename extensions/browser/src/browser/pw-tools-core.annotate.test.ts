@@ -10,10 +10,14 @@ const mod = await import("./pw-tools-core.js");
 
 type EvaluateArg = unknown;
 
-function evaluateMockReturning(scrollResult: { x: number; y: number }) {
+function evaluateMockReturning(view: { x: number; y: number; width?: number; height?: number }) {
+  // Caller reads { x, y, width, height } in one evaluate; default to a normal
+  // desktop viewport so refs near the top stay in-viewport unless a test puts
+  // them out of range explicitly.
+  const result = { width: 1280, height: 720, ...view };
   return vi.fn(async (arg: EvaluateArg) => {
     if (typeof arg === "function") {
-      return scrollResult;
+      return result;
     }
     return true;
   });
@@ -80,11 +84,12 @@ describe("screenshotWithLabelsViaPlaywright (viewport)", () => {
     expect(clearCalls.length).toBeGreaterThanOrEqual(2);
   });
 
-  it("does not filter off-viewport refs (single code path)", async () => {
-    const evaluate = evaluateMockReturning({ x: 0, y: 0 });
+  it("counts off-viewport refs as skipped but still surfaces them in annotations", async () => {
+    const evaluate = evaluateMockReturning({ x: 0, y: 0, width: 1280, height: 720 });
     const screenshot = vi.fn(async () => Buffer.from("PNG"));
     setPwToolsCoreCurrentPage({ evaluate, screenshot });
-    // bbox is way below the viewport (y: 5000); previously this would be skipped.
+    // bbox is far below the viewport (y: 5000): not drawn, but still reported
+    // so callers keep the position and a non-zero skipped count.
     setPwToolsCoreCurrentRefLocator({
       boundingBox: async () => ({ x: 0, y: 5000, width: 50, height: 20 }),
     });
@@ -95,8 +100,10 @@ describe("screenshotWithLabelsViaPlaywright (viewport)", () => {
       refs: { e1: { role: "button" } },
     });
 
-    expect(result.skipped).toBe(0);
+    expect(result.skipped).toBe(1);
+    expect(result.labels).toBe(0);
     expect(result.annotations).toHaveLength(1);
+    expect(result.annotations[0]?.ref).toBe("e1");
   });
 });
 

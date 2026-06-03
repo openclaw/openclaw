@@ -62,6 +62,13 @@ export interface PlanAnnotationsParams {
   space: CoordinateSpace;
   /** Required when space === "viewport". */
   scroll?: { x: number; y: number };
+  /**
+   * Viewport size (CSS px). Only meaningful when space === "viewport". When
+   * provided, refs whose document box falls outside the current viewport rect
+   * (`scroll` + this size) are counted as skipped instead of drawn, preserving
+   * the shipped `labelsSkipped` contract. Omit it to disable that accounting.
+   */
+  viewport?: { width: number; height: number };
   /** Required when space === "element". */
   elementRect?: { x: number; y: number; width: number; height: number };
   maxLabels?: number;
@@ -93,11 +100,35 @@ export function planAnnotations(params: PlanAnnotationsParams): AnnotationPlan {
     kept = params.inputs.filter((input) => rectsOverlap(input.doc, er));
   }
 
+  // Viewport capture only shows refs inside the current viewport rect. An
+  // off-viewport ref is still surfaced in `annotations` (with its real,
+  // possibly out-of-image box) so callers can locate it, but it is not drawn
+  // and is counted as skipped. This keeps the shipped `labelsSkipped` meaning
+  // ("refs not present in the captured viewport image") instead of silently
+  // narrowing it. Only applied when the caller supplies the viewport size;
+  // without it we cannot decide off-screen state and skip nothing.
+  const viewportRect =
+    params.space === "viewport" && params.scroll && params.viewport
+      ? {
+          x: params.scroll.x,
+          y: params.scroll.y,
+          width: params.viewport.width,
+          height: params.viewport.height,
+        }
+      : undefined;
+
   const overlayItems: OverlayItem[] = [];
   const annotations: AnnotationItem[] = [];
   let skipped = 0;
 
   for (const input of kept) {
+    if (viewportRect && !rectsOverlap(input.doc, viewportRect)) {
+      // Outside the captured viewport: count as skipped (compat) but still
+      // report the annotation; do not draw it or consume the label budget.
+      skipped += 1;
+      annotations.push(toAnnotation(input, params));
+      continue;
+    }
     if (overlayItems.length >= maxLabels) {
       skipped += 1;
       continue;
@@ -109,16 +140,20 @@ export function planAnnotations(params: PlanAnnotationsParams): AnnotationPlan {
       w: input.doc.width,
       h: input.doc.height,
     });
-    annotations.push({
-      ref: input.ref,
-      number: refToNumber(input.ref),
-      role: input.role,
-      ...(input.name ? { name: input.name } : {}),
-      box: projectBox(input.doc, params),
-    });
+    annotations.push(toAnnotation(input, params));
   }
 
   return { overlayItems, annotations, skipped };
+}
+
+function toAnnotation(input: RawAnnotationInput, params: PlanAnnotationsParams): AnnotationItem {
+  return {
+    ref: input.ref,
+    number: refToNumber(input.ref),
+    role: input.role,
+    ...(input.name ? { name: input.name } : {}),
+    box: projectBox(input.doc, params),
+  };
 }
 
 function projectBox(

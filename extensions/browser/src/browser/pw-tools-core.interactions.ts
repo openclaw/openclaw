@@ -1322,12 +1322,17 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
       ? "element"
       : "viewport";
 
-  // Read scroll first; we always need it to convert Playwright's viewport-space
-  // boundingBoxes into the document-space inputs the helper expects.
-  const scroll = await page.evaluate(() => ({
+  // Read scroll + viewport size. Scroll converts Playwright's viewport-space
+  // boundingBoxes into document-space inputs; the viewport size lets the helper
+  // restore the shipped `labelsSkipped` semantics by counting off-viewport refs
+  // as skipped (in viewport capture mode).
+  const view = await page.evaluate(() => ({
     x: window.scrollX || 0,
     y: window.scrollY || 0,
+    width: window.innerWidth || 0,
+    height: window.innerHeight || 0,
   }));
+  const scroll = { x: view.x, y: view.y };
 
   let elementRect: { x: number; y: number; width: number; height: number } | undefined;
   if (space === "element") {
@@ -1352,12 +1357,9 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
   const inputs: RawAnnotationInput[] = [];
   let bboxFailures = 0;
   for (const ref of refKeys) {
-    let box: { x: number; y: number; width: number; height: number } | null = null;
-    try {
-      box = await refLocator(page, ref).boundingBox();
-    } catch {
-      box = null;
-    }
+    const box = await refLocator(page, ref)
+      .boundingBox()
+      .catch(() => null);
     if (!box) {
       bboxFailures += 1;
       continue;
@@ -1379,6 +1381,7 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
     inputs,
     space,
     scroll,
+    viewport: { width: view.width, height: view.height },
     elementRect,
     maxLabels,
   });
@@ -1402,8 +1405,11 @@ export async function screenshotWithLabelsViaPlaywright(opts: {
             timeout: opts.timeoutMs,
           });
     return {
+      // `labels` reports overlay boxes actually drawn on the captured image
+      // (in-viewport, within budget); off-viewport refs are surfaced via
+      // `annotations` but not drawn, and are reflected in `skipped`.
       buffer,
-      labels: plan.annotations.length,
+      labels: plan.overlayItems.length,
       skipped: plan.skipped + bboxFailures,
       annotations: plan.annotations,
     };
