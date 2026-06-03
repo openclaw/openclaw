@@ -33,6 +33,7 @@ export {
   markLiveMessagePreviewUpdated,
 } from "./live.js";
 export {
+  createMessageReceiptDeliveryEvidence,
   createMessageReceiptFromOutboundResults,
   listMessageReceiptPlatformIds,
   resolveMessageReceiptPrimaryId,
@@ -110,6 +111,7 @@ export type {
   LivePreviewFinalizerResultKind,
 } from "./live.js";
 export type { DurableMessageSendState, DurableMessageStateRecord } from "./state.js";
+export type { MessageReceiptDeliveryEvidence } from "./receipt.js";
 export type {
   ChannelMessageAdapter,
   ChannelMessageAdapterShape,

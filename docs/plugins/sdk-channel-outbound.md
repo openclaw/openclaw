@@ -23,6 +23,7 @@ Most plugins define one `message` adapter:
 ```ts
 import {
   defineChannelMessageAdapter,
+  createMessageReceiptDeliveryEvidence,
   createMessageReceiptFromOutboundResults,
 } from "openclaw/plugin-sdk/channel-outbound";
 
@@ -65,6 +66,28 @@ Only declare capabilities the native transport actually preserves. Cover each
 declared send, receipt, live-preview, and receive-ack capability with the
 contract helpers exported from this subpath.
 
+## Delivery Evidence
+
+A `MessageReceipt` proves that the channel adapter/provider accepted a send and
+returned platform message identifiers. It does **not** prove that the recipient's
+device displayed or read the message. Channels that expose read receipts, device
+delivery receipts, or group-specific delivery state should track those facts in a
+separate channel-specific path instead of overloading the send receipt.
+
+Receipts without platform message identifiers are treated as local receipt
+metadata only: `platformSendAccepted` is `false`,
+`platformSendAcceptedAt` is `null`, and `platformSendEvidence` is `"none"`.
+
+Use `createMessageReceiptDeliveryEvidence(...)` when an operator-facing status
+needs to make that boundary explicit:
+
+```ts
+const evidence = createMessageReceiptDeliveryEvidence(receipt);
+
+// evidence.platformSendAccepted is true only when platform ids are present.
+// evidence.deviceDeliveryConfirmed is always false for MessageReceipt-only data.
+```
+
 ## Existing Outbound Adapters
 
 If the channel already has a compatible `outbound` adapter, derive the message
@@ -96,9 +119,9 @@ Runtime send helpers also live on `channel-outbound`:
 
 `sendDurableMessageBatch(...)` returns one explicit outcome:
 
-- `sent`: at least one visible platform message was delivered.
+- `sent`: at least one visible platform message was accepted by the platform send path.
 - `suppressed`: no platform message should be treated as missing.
-- `partial_failed`: at least one platform message was delivered before a later
+- `partial_failed`: at least one platform message was accepted before a later
   payload or side effect failed.
 - `failed`: no platform receipt was produced.
 
