@@ -2205,11 +2205,15 @@ export const dispatchTelegramMessage = async ({
   }
   let sentFallback = false;
   const deliverySummary = deliveryState.snapshot();
+  const hasFinalBeforeFallback =
+    deliverySummary.delivered || suppressSilentReplyFallback || queuedFinal;
+  const hasDispatchError = dispatchError != null;
   const shouldSendFailureFallback =
     !isRoomEvent &&
-    (dispatchError ||
-      (!deliverySummary.delivered &&
-        (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0)));
+    !hasFinalBeforeFallback &&
+    (hasDispatchError ||
+      deliverySummary.skippedNonSilent > 0 ||
+      deliverySummary.failedNonSilent > 0);
   if (shouldSendFailureFallback) {
     const fallbackText = dispatchError
       ? "Something went wrong while processing your request. Please try again."
@@ -2259,8 +2263,7 @@ export const dispatchTelegramMessage = async ({
     });
   }
 
-  const hasFinalResponse =
-    deliverySummary.delivered || sentFallback || suppressSilentReplyFallback || queuedFinal;
+  const hasFinalResponse = hasFinalBeforeFallback || sentFallback;
 
   if (statusReactionController && !hasFinalResponse) {
     void finalizeTelegramStatusReaction({ outcome: "error", hasFinalResponse: false }).catch(
@@ -2322,7 +2325,8 @@ export const dispatchTelegramMessage = async ({
   }
 
   if (statusReactionController) {
-    const statusReactionOutcome = dispatchError || sentFallback ? "error" : "done";
+    const statusReactionOutcome =
+      sentFallback || (!hasFinalBeforeFallback && hasDispatchError) ? "error" : "done";
     void finalizeTelegramStatusReaction({
       outcome: statusReactionOutcome,
       hasFinalResponse: true,

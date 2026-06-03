@@ -3820,6 +3820,28 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(groupHistories.get(historyKey)).toHaveLength(1);
   });
 
+  it("does not send a generic error fallback after visible final delivery", async () => {
+    const statusReactionController = createStatusReactionController();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Visible answer" }, { kind: "final" });
+      throw new Error("post-delivery cleanup failed");
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        statusReactionController: statusReactionController as never,
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "Visible answer" });
+    await vi.waitFor(() => {
+      expect(statusReactionController.setDone).toHaveBeenCalledTimes(1);
+    });
+    expect(statusReactionController.setError).not.toHaveBeenCalled();
+  });
+
   it("shows compacting reaction during auto-compaction and resumes thinking", async () => {
     const statusReactionController = {
       setThinking: vi.fn(async () => {}),
@@ -4144,6 +4166,25 @@ describe("dispatchTelegramMessage draft streaming", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: true,
       counts: { block: 0, final: 1, tool: 0 },
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      streamMode: "off",
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("does not emit an error fallback when a final reply is already queued", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onError?.(new Error("queued final delivery warning"), { kind: "final" });
+      return {
+        queuedFinal: true,
+        counts: { block: 0, final: 1, tool: 0 },
+      };
     });
 
     await dispatchWithContext({
