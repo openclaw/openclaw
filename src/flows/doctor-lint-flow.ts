@@ -1,5 +1,5 @@
-import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { listHealthChecks } from "./health-check-registry.js";
+import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import {
   HEALTH_FINDING_SEVERITY_RANK,
   healthFindingMeetsSeverity,
