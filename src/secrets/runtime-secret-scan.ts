@@ -1,6 +1,7 @@
 import { coerceSecretRef } from "../config/types.secrets.js";
 import type { SecretDefaults } from "./runtime-shared.js";
 
+/** Field names treated as credential-bearing even before a value is converted to SecretRef. */
 const CREDENTIAL_FIELD_NAMES = new Set(["apikey", "key", "token", "secret", "password"]);
 
 function hasRecursiveSecretValue(params: {
@@ -33,6 +34,7 @@ function hasRecursiveSecretValue(params: {
 
 /**
  * Returns whether a value tree contains anything coercible to a SecretRef.
+ * `seen` may be shared across sibling probes to preserve cycle safety.
  */
 export function hasSecretRefCandidate(
   value: unknown,
@@ -44,6 +46,7 @@ export function hasSecretRefCandidate(
 
 /**
  * Returns whether a value tree contains SecretRefs or non-empty credential-looking fields.
+ * Used before runtime fast-paths so enabled web tools do not skip secret-aware preparation.
  */
 export function hasCredentialBearingObjectValue(
   value: unknown,
