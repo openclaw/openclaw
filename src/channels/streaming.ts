@@ -27,12 +27,19 @@ export type {
 export type { SlackChannelStreamingConfig } from "../config/types.slack.js";
 
 export type StreamingCompatEntry = {
+  /** Canonical nested streaming config or legacy preview mode string. */
   streaming?: unknown;
+  /** Legacy preview stream mode. */
   streamMode?: unknown;
+  /** Legacy text chunking mode. */
   chunkMode?: unknown;
+  /** Legacy block delivery toggle. */
   blockStreaming?: unknown;
+  /** Legacy preview chunk config. */
   draftChunk?: unknown;
+  /** Legacy block coalescing config. */
   blockStreamingCoalesce?: unknown;
+  /** Legacy native streaming transport toggle. */
   nativeStreaming?: unknown;
 };
 
@@ -195,8 +202,11 @@ export async function resolveTranscriptBackedChannelFinalText(params: {
 }
 
 export type ChannelProgressLineOptions = {
+  /** Whether generated tool details should use Markdown formatting. */
   markdown?: boolean;
+  /** Detail shape for tool arguments shown in progress drafts. */
   detailMode?: "explain" | "raw";
+  /** Whether command progress should show raw command text or status-only copy. */
   commandText?: ChannelStreamingCommandTextMode;
 };
 
@@ -266,14 +276,23 @@ export type ChannelProgressDraftLineInput =
 export type ChannelProgressDraftLineKind = ChannelProgressDraftLineInput["event"];
 
 export type ChannelProgressDraftLine = {
+  /** Stable line id used to update an existing progress line in place. */
   id?: string;
+  /** Progress event family that produced this line. */
   kind: ChannelProgressDraftLineKind;
+  /** Rendered line text before final draft truncation/prefix formatting. */
   text: string;
+  /** Human-readable label for UI renderers. */
   label: string;
+  /** Optional leading icon for rich or plain progress renderers. */
   icon?: string;
+  /** Compact detail text separated from label/icon. */
   detail?: string;
+  /** Optional lifecycle status, such as completed or exit code. */
   status?: string;
+  /** Normalized tool name when the line represents tool work. */
   toolName?: string;
+  /** Whether final formatting should add a bullet/line prefix. */
   prefix?: boolean;
 };
 
@@ -374,14 +393,18 @@ function shouldPrefixProgressLine(line: string): boolean {
 }
 
 export function formatChannelProgressDraftLine(
+  /** Structured progress event to render as one draft line. */
   input: ChannelProgressDraftLineInput,
+  /** Formatting options for tool details and command text. */
   options?: ChannelProgressLineOptions,
 ): string | undefined {
   return buildChannelProgressDraftLine(input, options)?.text;
 }
 
 export function resolveChannelProgressDraftLineOptions(
+  /** Channel streaming config source for command-text defaults. */
   entry: StreamingCompatEntry | null | undefined,
+  /** Caller-supplied line formatting overrides. */
   options?: ChannelProgressLineOptions,
 ): ChannelProgressLineOptions {
   return {
@@ -391,8 +414,11 @@ export function resolveChannelProgressDraftLineOptions(
 }
 
 export function buildChannelProgressDraftLineForEntry(
+  /** Channel streaming config source for command-text defaults. */
   entry: StreamingCompatEntry | null | undefined,
+  /** Structured progress event to render as one draft line. */
   input: ChannelProgressDraftLineInput,
+  /** Formatting options for tool details and command text. */
   options?: ChannelProgressLineOptions,
 ): ChannelProgressDraftLine | undefined {
   return buildChannelProgressDraftLine(
@@ -402,15 +428,20 @@ export function buildChannelProgressDraftLineForEntry(
 }
 
 export function formatChannelProgressDraftLineForEntry(
+  /** Channel streaming config source for command-text defaults. */
   entry: StreamingCompatEntry | null | undefined,
+  /** Structured progress event to render as one draft line. */
   input: ChannelProgressDraftLineInput,
+  /** Formatting options for tool details and command text. */
   options?: ChannelProgressLineOptions,
 ): string | undefined {
   return buildChannelProgressDraftLineForEntry(entry, input, options)?.text;
 }
 
 export function buildChannelProgressDraftLine(
+  /** Structured progress event to normalize into draft-line metadata. */
   input: ChannelProgressDraftLineInput,
+  /** Formatting options for tool details and command text. */
   options?: ChannelProgressLineOptions,
 ): ChannelProgressDraftLine | undefined {
   switch (input.event) {
@@ -514,9 +545,13 @@ export function buildChannelProgressDraftLine(
 }
 
 export function createChannelProgressDraftGate(params: {
+  /** Callback that starts the channel progress draft. */
   onStart: () => void | Promise<void>;
+  /** Delay before first work event starts a draft; second work event starts immediately. */
   initialDelayMs?: number;
+  /** Timer implementation, injectable for tests. */
   setTimeoutFn?: typeof setTimeout;
+  /** Timer clearer, injectable for tests. */
   clearTimeoutFn?: typeof clearTimeout;
 }) {
   const initialDelayMs = params.initialDelayMs ?? DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS;
@@ -561,6 +596,8 @@ export function createChannelProgressDraftGate(params: {
         started = false;
         throw error;
       });
+    // Hold one startup promise so timer, explicit start, and second-work triggers
+    // cannot race into duplicate draft creation.
     startPromise = nextStart;
     return startPromise;
   };
