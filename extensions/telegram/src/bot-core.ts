@@ -22,6 +22,7 @@ import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/ru
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount, type ResolvedTelegramAccount } from "./accounts.js";
+import { getTelegramSequentialKeyForAccount } from "./active-run-ingress.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { registerTelegramHandlers } from "./bot-handlers.runtime.js";
@@ -219,7 +220,9 @@ export function createTelegramBotCore(
     }
   });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
+  bot.use(
+    botRuntime.sequentialize((ctx) => getTelegramSequentialKeyForAccount(ctx, account.accountId)),
+  );
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
   const MAX_RAW_UPDATE_CHARS = 8000;
