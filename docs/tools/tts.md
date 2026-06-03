@@ -821,6 +821,9 @@ OpenAI and ElevenLabs output formats are fixed per channel as listed above.
     <ParamField path="timeoutMs" type="number">
       Request timeout in milliseconds.
     </ParamField>
+    <ParamField path="skipEmojiSymbols" type="boolean" default="false">
+      Remove emoji and decorative symbol sequences before synthesis so providers do not read symbol names aloud.
+    </ParamField>
     <ParamField path="prefsPath" type="string">
       Override the local prefs JSON path (provider/limit/summary). Default `~/.openclaw/settings/tts.json`.
     </ParamField>

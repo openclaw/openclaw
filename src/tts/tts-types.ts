@@ -23,6 +23,7 @@ export type ResolvedTtsConfig = {
   modelOverrides: ResolvedTtsModelOverrides;
   providerConfigs: Record<string, SpeechProviderConfig>;
   prefsPath?: string;
+  skipEmojiSymbols?: boolean;
   maxTextLength: number;
   timeoutMs: number;
   timeoutMsSource?: "config" | "default";

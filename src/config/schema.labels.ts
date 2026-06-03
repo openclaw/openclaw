@@ -993,6 +993,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "messages.tts.providers": "TTS Provider Settings",
   "messages.tts.providers.*": "TTS Provider Config",
   "messages.tts.providers.*.apiKey": "TTS Provider API Key", // pragma: allowlist secret
+  "messages.tts.skipEmojiSymbols": "Skip TTS Emoji and Symbols",
   "talk.provider": "Talk Active Provider",
   "talk.providers": "Talk Provider Settings",
   "talk.providers.*": "Talk Provider Config",

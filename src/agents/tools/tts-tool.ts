@@ -57,6 +57,7 @@ export function createTtsTool(opts?: {
       const channel = readStringParam(params, "channel");
       const timeoutMs = readTtsTimeoutMs(params);
       const cfg = opts?.config ?? getRuntimeConfig();
+
       const result = await textToSpeech({
         text,
         cfg,
@@ -72,8 +73,11 @@ export function createTtsTool(opts?: {
         // still delivered via details.media. Sanitize first so a crafted
         // utterance cannot inject reply directives when the tool output is
         // rendered in verbose mode.
+        const resultText = text;
         return {
-          content: [{ type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(text)}` }],
+          content: [
+            { type: "text", text: `(spoken) ${sanitizeTranscriptForToolContent(resultText)}` },
+          ],
           details: {
             audioPath: result.audioPath,
             provider: result.provider,

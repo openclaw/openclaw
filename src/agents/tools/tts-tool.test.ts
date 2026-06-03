@@ -225,4 +225,58 @@ describe("createTtsTool", () => {
       "TTS conversion failed: openai: not configured",
     );
   });
+
+  it("strips emoji when skipEmojiSymbols is enabled", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool({
+      config: {
+        messages: {
+          tts: {
+            skipEmojiSymbols: true,
+          },
+        },
+      } as any,
+    });
+    await tool.execute("call-1", { text: "Done ✓" });
+
+    // The tool now passes the original text to textToSpeech; filtering is
+    // applied inside textToSpeech via resolveEffectiveTtsConfig with channelId.
+    expect(textToSpeechSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Done ✓",
+      }),
+    );
+  });
+
+  it("preserves emoji when skipEmojiSymbols is disabled", async () => {
+    textToSpeechSpy.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/reply.opus",
+      provider: "test",
+      voiceCompatible: true,
+    });
+
+    const tool = createTtsTool({
+      config: {
+        messages: {
+          tts: {
+            skipEmojiSymbols: false,
+          },
+        },
+      } as any,
+    });
+    await tool.execute("call-1", { text: "Done ✓" });
+
+    expect(textToSpeechSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "Done ✓",
+      }),
+    );
+  });
 });

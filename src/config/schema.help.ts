@@ -1911,6 +1911,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Provider-specific TTS configuration for one speech provider id. Keep fields scoped to the plugin that owns that provider.",
   "messages.tts.providers.*.apiKey":
     "Provider API key used by that speech provider when its plugin requires authenticated TTS access.", // pragma: allowlist secret
+  "messages.tts.skipEmojiSymbols":
+    "Remove emoji and decorative symbol sequences from synthesized speech input so providers do not read names such as checkmark, copyright, or flag aloud.",
   channels:
     "Channel provider configurations plus shared defaults that control access policies, heartbeat visibility, and per-surface behavior. Keep defaults centralized and override per provider only where required.",
   "channels.mattermost":

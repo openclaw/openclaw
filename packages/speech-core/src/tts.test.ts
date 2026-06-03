@@ -11,6 +11,7 @@ import type {
   SpeechProviderPlugin,
   SpeechProviderPrepareSynthesisContext,
   SpeechSynthesisRequest,
+  SpeechSynthesisStreamRequest,
   SpeechTelephonySynthesisRequest,
 } from "openclaw/plugin-sdk/speech-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -115,6 +116,8 @@ const {
   maybeApplyTtsToPayload,
   resolveTtsConfig,
   synthesizeSpeech,
+  textToSpeech,
+  textToSpeechStream,
   textToSpeechTelephony,
 } = await import("./tts.js");
 
@@ -171,6 +174,10 @@ function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: 
 
 function requireFirstSynthesisRequest(label: string): Record<string, unknown> {
   return requireRecord(requireFirstCallParam(synthesizeMock.mock.calls, label), label);
+}
+
+function requireLatestSynthesisRequest(label: string): Record<string, unknown> {
+  return requireRecord(synthesizeMock.mock.calls.at(-1)?.[0], label);
 }
 
 function requireAttempt(attempts: unknown[] | undefined, index: number) {
@@ -1166,6 +1173,178 @@ describe("speech-core native voice-note routing", () => {
     expect(attempt.reasonCode).toBe("unsupported_for_telephony");
     expect(attempt.persona).toBe("alfred");
     expect(attempt).not.toHaveProperty("personaBinding");
+  });
+
+  it("strips complete emoji and symbol sequences before synthesis when enabled", async () => {
+    let mediaDir: string | undefined;
+    try {
+      const result = await textToSpeech({
+        text: "Ship it 👨‍👩‍👧‍👦 🇺🇸 1️⃣ 👍🏽 🫠 ✓ © text.",
+        cfg: {
+          messages: {
+            tts: {
+              enabled: true,
+              provider: "mock",
+              skipEmojiSymbols: true,
+            },
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(synthesizeMock).toHaveBeenCalledOnce();
+      const request = requireLatestSynthesisRequest("synthesis request");
+      expect(request.text).toMatch(/^Ship it +text\.$/);
+      expect(String(request.text)).not.toMatch(/(?:\u200D|\uFE0F|[\u{1F1E6}-\u{1F1FF}])/u);
+      mediaDir = result.audioPath ? path.dirname(result.audioPath) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("preserves word boundaries when stripping adjacent emoji and symbols", async () => {
+    let mediaDir: string | undefined;
+    try {
+      const result = await textToSpeech({
+        text: "hello✅world one©two",
+        cfg: {
+          messages: {
+            tts: {
+              enabled: true,
+              provider: "mock",
+              skipEmojiSymbols: true,
+            },
+          },
+        },
+      });
+
+      expect(result.success).toBe(true);
+      expect(synthesizeMock).toHaveBeenCalledOnce();
+      const request = requireLatestSynthesisRequest("synthesis request");
+      expect(request.text).toBe("hello world one two");
+      mediaDir = result.audioPath ? path.dirname(result.audioPath) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("does not synthesize file output when emoji stripping leaves empty text", async () => {
+    const result = await textToSpeech({
+      text: "✓ © 🫠",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            skipEmojiSymbols: true,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("empty after removing emoji");
+    expect(synthesizeMock).not.toHaveBeenCalled();
+  });
+
+  it("does not synthesize stream output when emoji stripping leaves empty text", async () => {
+    const streamSynthesize = vi.fn(async (_request: SpeechSynthesisStreamRequest) => ({
+      audioStream: new ReadableStream<Uint8Array>(),
+      fileExtension: ".ogg",
+      outputFormat: "ogg",
+      voiceCompatible: true,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        streamSynthesize,
+      }),
+    ]);
+
+    const result = await textToSpeechStream({
+      text: "✓ © 🫠",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            skipEmojiSymbols: true,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("empty after removing emoji");
+    expect(streamSynthesize).not.toHaveBeenCalled();
+  });
+
+  it("passes stripped text to telephony synthesis providers", async () => {
+    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+      audioBuffer: Buffer.from("voice"),
+      outputFormat: "pcm",
+      sampleRate: 24000,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        synthesizeTelephony,
+      }),
+    ]);
+
+    const result = await textToSpeechTelephony({
+      text: "Read this ✓ © 🫠 aloud.",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            skipEmojiSymbols: true,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    expect(synthesizeTelephony).toHaveBeenCalledOnce();
+    const request = requireRecord(
+      requireFirstCallParam(synthesizeTelephony.mock.calls, "telephony synthesis"),
+      "telephony synthesis request",
+    );
+    expect(request.text).toMatch(/^Read this +aloud\.$/);
+    expect(String(request.text)).not.toMatch(/[\u{1F000}-\u{1FAFF}\u00A9]/u);
+  });
+
+  it("does not synthesize telephony output when emoji stripping leaves empty text", async () => {
+    const synthesizeTelephony = vi.fn(async (_request: SpeechTelephonySynthesisRequest) => ({
+      audioBuffer: Buffer.from("voice"),
+      outputFormat: "pcm",
+      sampleRate: 24000,
+    }));
+    installSpeechProviders([
+      createMockSpeechProvider("mock", {
+        synthesizeTelephony,
+      }),
+    ]);
+
+    const result = await textToSpeechTelephony({
+      text: "✓ © 🫠",
+      cfg: {
+        messages: {
+          tts: {
+            enabled: true,
+            provider: "mock",
+            skipEmojiSymbols: true,
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toContain("empty after removing emoji");
+    expect(synthesizeTelephony).not.toHaveBeenCalled();
   });
 
   it("passes directive overrides to telephony synthesis providers", async () => {
