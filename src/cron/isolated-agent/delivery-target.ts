@@ -132,14 +132,15 @@ function shouldStripResolvedTargetProviderPrefix(target: ResolvedMessagingTarget
   return target.resolutionSource === "normalized";
 }
 
-function isSlackDeliveryTargetAlias(params: { canonicalTo: string; value: string }): boolean {
+function isSlackDeliveryTargetAlias(params: {
+  canonicalTo: string;
+  value: string;
+  directoryResolved: boolean;
+}): boolean {
   const canonical = params.canonicalTo.trim();
   const value = params.value.trim();
   if (value === canonical) {
     return false;
-  }
-  if (value.startsWith("#")) {
-    return true;
   }
   const canonicalChannelId = canonical.match(/^channel:([A-Z0-9]+)$/i)?.[1];
   if (!canonicalChannelId) {
@@ -148,12 +149,16 @@ function isSlackDeliveryTargetAlias(params: { canonicalTo: string; value: string
   if (value.toLowerCase() === `channel:${canonicalChannelId.toLowerCase()}`) {
     return false;
   }
-  return value.toLowerCase() === canonicalChannelId.toLowerCase();
+  if (value.toLowerCase() === canonicalChannelId.toLowerCase()) {
+    return true;
+  }
+  return params.directoryResolved;
 }
 
 function compactDeliveryTargetAliases(params: {
   channel: Exclude<OutboundChannel, "none">;
   canonicalTo: string;
+  directoryResolved: boolean;
   values: Array<string | undefined>;
 }): string[] | undefined {
   const canonical = params.canonicalTo.trim();
@@ -166,7 +171,11 @@ function compactDeliveryTargetAliases(params: {
         }
         return (
           params.channel === "slack" &&
-          isSlackDeliveryTargetAlias({ canonicalTo: canonical, value })
+          isSlackDeliveryTargetAlias({
+            canonicalTo: canonical,
+            value,
+            directoryResolved: params.directoryResolved,
+          })
         );
       }),
   );
@@ -484,6 +493,7 @@ export async function resolveDeliveryTarget(
   const aliases = compactDeliveryTargetAliases({
     channel,
     canonicalTo: toCandidate,
+    directoryResolved: resolvedTarget.source === "directory",
     values: [explicitTo, preResolvedRouteTargetCandidate, resolvedTarget.to, route?.to],
   });
   if (options?.dryRun) {
