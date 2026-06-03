@@ -652,17 +652,12 @@ function resolveExternalRunFailureTextForConversation(params: {
   text: string;
   sessionCtx: TemplateContext;
   isGenericRunnerFailure: boolean;
-  suppressInNonDirect?: boolean;
   cfg?: OpenClawConfig;
 }): string {
   if (!isNonDirectConversationContext(params.sessionCtx)) {
     return params.text;
   }
-  if (
-    !params.suppressInNonDirect &&
-    !params.isGenericRunnerFailure &&
-    !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)
-  ) {
+  if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
     return params.text;
   }
   // Match normal reply routing: default group/channel failures stay silent,
@@ -2995,7 +2990,6 @@ export async function runAgentTurnWithFallback(params: {
               text: formattedErrorCandidate,
               sessionCtx: params.sessionCtx,
               isGenericRunnerFailure: false,
-              suppressInNonDirect: true,
               cfg: params.followupRun.run.config,
             }),
             isError: true,

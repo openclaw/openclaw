@@ -2950,51 +2950,37 @@ describe("runAgentTurnWithFallback", () => {
     ).toBeUndefined();
   });
 
-  it("surfaces model capacity errors from no-text mid-turn failures", async () => {
-    state.runEmbeddedAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "thinking", isReasoning: true }],
-      meta: {
-        error: {
-          kind: "server_overloaded",
-          message: "Selected model is at capacity. Please try a different model.",
+  it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
+    "surfaces model capacity errors from no-text mid-turn failures in $label chats",
+    async (testCase) => {
+      state.runEmbeddedAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "thinking", isReasoning: true }],
+        meta: {
+          error: {
+            kind: "server_overloaded",
+            message: "Selected model is at capacity. Please try a different model.",
+          },
         },
-      },
-    });
+      });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback(
+        createMinimalRunAgentTurnParams({
+          sessionCtx: createNonDirectFailureSessionCtx(testCase),
+        }),
+      );
 
-    expect(result.kind).toBe("success");
-    if (result.kind === "success") {
-      expect(result.runResult.payloads).toEqual([
-        {
-          text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
-          isError: true,
-        },
-      ]);
-    }
-  });
+      expect(result.kind).toBe("success");
+      if (result.kind === "success") {
+        expect(result.runResult.payloads).toEqual([
+          {
+            text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+            isError: true,
+          },
+        ]);
+      }
+    },
+  );
 
   it("surfaces model capacity errors from pre-reply CLI failures", async () => {
     state.runWithModelFallbackMock.mockRejectedValueOnce(
@@ -5244,9 +5230,6 @@ describe("runAgentTurnWithFallback", () => {
   it.each(NON_DIRECT_FAILURE_SURFACE_CASES)(
     "keeps default silent behavior in $label chats when silentReply policy is unset",
     async (testCase) => {
-      // Sanity check: explicit `{}` config (no silentReply) must still resolve
-      // to the documented default `group: "allow"` and produce a silent payload
-      // — the new policy hookup must not regress the default behavior.
       state.runEmbeddedAgentMock.mockRejectedValueOnce(
         new Error("openai/gpt-5.5 ended with an incomplete terminal response"),
       );
