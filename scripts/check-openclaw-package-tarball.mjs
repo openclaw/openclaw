@@ -3,6 +3,7 @@
 // This is intentionally tarball-only: the check proves Docker lanes consume the
 // prebuilt package artifact with dist inventory, not a source checkout.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -75,8 +76,10 @@ const entries = list.stdout
   .split(/\r?\n/u)
   .map((entry) => entry.trim())
   .filter(Boolean);
-const normalized = entries.map((entry) => entry.replace(/^package\//u, ""));
+const listedNormalized = entries.map((entry) => entry.replace(/^package\//u, ""));
+const normalized = listedNormalized.map((entry) => (entry ? path.posix.normalize(entry) : entry));
 const entrySet = new Set(normalized);
+const normalizedEntryCounts = new Map();
 const errors = [];
 const warnings = [];
 const REQUIRED_TARBALL_ENTRIES = ["dist/control-ui/index.html"];
@@ -112,6 +115,13 @@ function isLegacyOmittedPrivateQaInventoryEntry(relativePath) {
   return (
     LEGACY_OMITTED_PRIVATE_QA_INVENTORY_FILES.has(relativePath) ||
     LEGACY_OMITTED_PRIVATE_QA_INVENTORY_PREFIXES.some((prefix) => relativePath.startsWith(prefix))
+  );
+}
+
+function isAllowedMissingContentInventoryEntry(relativePath) {
+  return (
+    isLegacyPackageAcceptanceCompatVersion(packageVersion) &&
+    isLegacyOmittedPrivateQaInventoryEntry(relativePath)
   );
 }
 
@@ -151,22 +161,90 @@ function isLegacyShrinkwrapCompatVersion(version) {
   return parsed ? compareCalver(parsed, LEGACY_SHRINKWRAP_COMPAT_MAX) <= 0 : false;
 }
 
+function isSafeTarEntryPath(entryPath) {
+  return (
+    entryPath.startsWith("dist/") &&
+    !entryPath.startsWith("/") &&
+    !entryPath.includes("\0") &&
+    !entryPath.split("/").includes("..")
+  );
+}
+
+function resolveExtractedTarEntry(entryPath, packageScoped) {
+  if (
+    !isSafeTarEntryPath(entryPath) &&
+    entryPath !== "package.json" &&
+    entryPath !== "npm-shrinkwrap.json"
+  ) {
+    return null;
+  }
+  const root = packageScoped ? path.join(extractDir, "package") : extractDir;
+  const candidate = path.resolve(root, entryPath);
+  const rootPrefix = `${path.resolve(root)}${path.sep}`;
+  return candidate.startsWith(rootPrefix) ? candidate : null;
+}
+
 function readTarEntry(entryPath) {
   const candidates = [
-    path.join(extractDir, entryPath),
-    path.join(extractDir, "package", entryPath),
+    resolveExtractedTarEntry(entryPath, true),
+    resolveExtractedTarEntry(entryPath, false),
   ];
   for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
+    if (candidate && fs.existsSync(candidate)) {
       return fs.readFileSync(candidate, "utf8");
     }
   }
   return "";
 }
 
-for (const entry of normalized) {
-  if (entry.startsWith("/") || entry.split("/").includes("..")) {
+function readTarEntryBuffer(entryPath) {
+  const candidates = [
+    resolveExtractedTarEntry(entryPath, true),
+    resolveExtractedTarEntry(entryPath, false),
+  ];
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) {
+      return fs.readFileSync(candidate);
+    }
+  }
+  return null;
+}
+
+function sha256Hex(content) {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function isContentInventoryEntry(entry) {
+  return (
+    entry &&
+    typeof entry === "object" &&
+    typeof entry.path === "string" &&
+    typeof entry.sha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(entry.sha256) &&
+    Number.isInteger(entry.mode) &&
+    entry.mode >= 0 &&
+    Number.isInteger(entry.size) &&
+    entry.size >= 0
+  );
+}
+
+for (const [index, entry] of listedNormalized.entries()) {
+  const canonicalEntry = normalized[index] ?? "";
+  if (canonicalEntry) {
+    normalizedEntryCounts.set(canonicalEntry, (normalizedEntryCounts.get(canonicalEntry) ?? 0) + 1);
+  }
+  if (
+    entry.startsWith("/") ||
+    entry.split("/").includes("..") ||
+    entry.split("/").includes(".") ||
+    canonicalEntry !== entry
+  ) {
     errors.push(`unsafe tar entry: ${entry}`);
+  }
+}
+for (const [entry, count] of normalizedEntryCounts) {
+  if (count > 1) {
+    errors.push(`duplicate normalized tar entry: ${entry}`);
   }
 }
 
@@ -253,7 +331,11 @@ for (const forbiddenEntry of FORBIDDEN_LOCAL_BUILD_METADATA_FILES) {
 if (!entrySet.has("dist/postinstall-inventory.json")) {
   errors.push("missing dist/postinstall-inventory.json");
 }
+if (!entrySet.has("dist/postinstall-content-inventory.json")) {
+  errors.push("missing dist/postinstall-content-inventory.json");
+}
 let packageDistImports = null;
+let normalizedInventory = null;
 if (entrySet.has("dist/postinstall-inventory.json")) {
   try {
     const allowLegacyPrivateQaInventoryOmissions =
@@ -262,7 +344,7 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
     if (!Array.isArray(inventory) || inventory.some((entry) => typeof entry !== "string")) {
       errors.push("invalid dist/postinstall-inventory.json");
     } else {
-      const normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
+      normalizedInventory = inventory.map((entry) => entry.replace(/\\/gu, "/"));
       const normalizedInventorySet = new Set(normalizedInventory);
       packageDistImports = runPhase("dist import graph", () =>
         collectPackageDistImports({
@@ -300,6 +382,72 @@ if (entrySet.has("dist/postinstall-inventory.json")) {
   } catch (error) {
     errors.push(
       `unreadable dist/postinstall-inventory.json: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+if (entrySet.has("dist/postinstall-content-inventory.json")) {
+  try {
+    const contentInventory = JSON.parse(readTarEntry("dist/postinstall-content-inventory.json"));
+    if (
+      !Array.isArray(contentInventory) ||
+      contentInventory.some((entry) => !isContentInventoryEntry(entry))
+    ) {
+      errors.push("invalid dist/postinstall-content-inventory.json");
+    } else {
+      const normalizedContentEntries = contentInventory.map((entry) =>
+        Object.assign({}, entry, { path: entry.path.replace(/\\/gu, "/") }),
+      );
+      const contentEntryMap = new Map(normalizedContentEntries.map((entry) => [entry.path, entry]));
+      const normalizedInventorySet = normalizedInventory ? new Set(normalizedInventory) : null;
+      if (normalizedInventory) {
+        for (const inventoryEntry of normalizedInventory) {
+          if (
+            !contentEntryMap.has(inventoryEntry) &&
+            !isAllowedMissingContentInventoryEntry(inventoryEntry)
+          ) {
+            errors.push(`content inventory omits packaged dist file ${inventoryEntry}`);
+          }
+        }
+        for (const contentEntry of normalizedContentEntries) {
+          if (!normalizedInventorySet?.has(contentEntry.path)) {
+            errors.push(
+              `content inventory references non-inventoried dist file ${contentEntry.path}`,
+            );
+          }
+        }
+      }
+      for (const contentEntry of normalizedContentEntries) {
+        if (!isSafeTarEntryPath(contentEntry.path)) {
+          errors.push(`unsafe content inventory entry ${contentEntry.path}`);
+          continue;
+        }
+        if (normalizedInventorySet && !normalizedInventorySet.has(contentEntry.path)) {
+          continue;
+        }
+        if (!entrySet.has(contentEntry.path)) {
+          errors.push(`content inventory references missing tar entry ${contentEntry.path}`);
+          continue;
+        }
+        const content = readTarEntryBuffer(contentEntry.path);
+        if (!content) {
+          errors.push(`content inventory references missing tar entry ${contentEntry.path}`);
+          continue;
+        }
+        const actualHash = sha256Hex(content);
+        if (actualHash !== contentEntry.sha256) {
+          errors.push(`content inventory hash mismatch for ${contentEntry.path}`);
+        }
+        if (content.length !== contentEntry.size) {
+          errors.push(`content inventory size mismatch for ${contentEntry.path}`);
+        }
+      }
+    }
+  } catch (error) {
+    errors.push(
+      `unreadable dist/postinstall-content-inventory.json: ${
         error instanceof Error ? error.message : String(error)
       }`,
     );

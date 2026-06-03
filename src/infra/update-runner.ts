@@ -133,6 +133,7 @@ type UpdateRunnerOptions = {
   channel?: UpdateChannel;
   devTargetRef?: string;
   deferConfiguredPluginInstallRepair?: boolean;
+  reapplyLocalOverrides?: boolean;
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -1505,6 +1506,7 @@ export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<
       packageRoot: pkgRoot,
       runCommand,
       timeoutMs,
+      reapplyLocalOverrides: opts.reapplyLocalOverrides === true,
       ...(globalInstallEnv === undefined ? {} : { env: globalInstallEnv }),
       installCwd: pkgRoot,
       runStep: (stepParams) =>

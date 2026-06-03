@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
   existsSync,
@@ -22,7 +23,13 @@ function withTarball(
   files: Record<string, string>,
   testBody: (tarball: string) => void,
   version = "0.0.0",
-  options: { includeControlUi?: boolean; includeShrinkwrap?: boolean } = {},
+  options: {
+    includeContentInventory?: boolean;
+    includeControlUi?: boolean;
+    includeShrinkwrap?: boolean;
+    extraRootFiles?: Record<string, string>;
+    extraPackEntries?: string[];
+  } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
   try {
@@ -62,11 +69,45 @@ function withTarball(
       mkdirSync(dirname(filePath), { recursive: true });
       writeFileSync(filePath, body);
     }
+    for (const [relativePath, body] of Object.entries(options.extraRootFiles ?? {})) {
+      const filePath = join(root, relativePath);
+      mkdirSync(dirname(filePath), { recursive: true });
+      writeFileSync(filePath, body);
+    }
+    if (options.includeContentInventory !== false) {
+      const contentInventory = inventory
+        .filter((relativePath) => Object.prototype.hasOwnProperty.call(tarFiles, relativePath))
+        .map((relativePath) => {
+          const body = tarFiles[relativePath] ?? "";
+          return {
+            path: relativePath,
+            sha256: createHash("sha256").update(body).digest("hex"),
+            mode: 0o644,
+            size: Buffer.byteLength(body),
+          };
+        });
+      writeFileSync(
+        join(packageRoot, "dist", "postinstall-content-inventory.json"),
+        JSON.stringify(contentInventory),
+      );
+    }
 
     const tarball = join(root, "openclaw.tgz");
-    const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package"], {
-      encoding: "utf8",
-    });
+    const pack = spawnSync(
+      "tar",
+      [
+        "-czf",
+        tarball,
+        "-C",
+        root,
+        "package",
+        ...Object.keys(options.extraRootFiles ?? {}),
+        ...(options.extraPackEntries ?? []),
+      ],
+      {
+        encoding: "utf8",
+      },
+    );
     expect(pack.status, pack.stderr).toBe(0);
     testBody(tarball);
   } finally {
@@ -161,6 +202,154 @@ describe("check-openclaw-package-tarball", () => {
         expect(result.status).not.toBe(0);
         expect(result.stderr).toContain("inventory references missing tar entry dist/cli.js");
       },
+    );
+  });
+
+  it("rejects missing content inventory", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("missing dist/postinstall-content-inventory.json");
+      },
+      "2026.5.21",
+      { includeContentInventory: false },
+    );
+  });
+
+  it("rejects stale content inventory hashes", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "dist/postinstall-content-inventory.json": JSON.stringify([
+          { path: "dist/index.js", sha256: "0".repeat(64), mode: 0o644, size: 11 },
+        ]),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("content inventory hash mismatch for dist/index.js");
+      },
+      "2026.5.21",
+      { includeContentInventory: false },
+    );
+  });
+
+  it("rejects content inventory entries omitted from the path inventory", () => {
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": "export {};\n",
+        "dist/extra.js": "export {};\n",
+        "dist/postinstall-content-inventory.json": JSON.stringify([
+          {
+            path: "dist/index.js",
+            sha256: createHash("sha256").update("export {};\n").digest("hex"),
+            mode: 0o644,
+            size: "export {};\n".length,
+          },
+          {
+            path: "dist/extra.js",
+            sha256: createHash("sha256").update("export {};\n").digest("hex"),
+            mode: 0o644,
+            size: "export {};\n".length,
+          },
+        ]),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain(
+          "content inventory references non-inventoried dist file dist/extra.js",
+        );
+      },
+      "2026.5.21",
+      { includeContentInventory: false },
+    );
+  });
+
+  it("rejects unsafe content inventory paths before reading them", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-package-content-inventory-unsafe-"));
+    try {
+      const outsidePath = join(root, "outside.js");
+      const outsideBody = "export const outside = true;\n";
+      writeFileSync(outsidePath, outsideBody);
+      withTarball(
+        ["dist/index.js"],
+        {
+          "dist/index.js": "export {};\n",
+          "dist/postinstall-content-inventory.json": JSON.stringify([
+            {
+              path: outsidePath,
+              sha256: createHash("sha256").update(outsideBody).digest("hex"),
+              mode: 0o644,
+              size: Buffer.byteLength(outsideBody),
+            },
+          ]),
+        },
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain(`unsafe content inventory entry ${outsidePath}`);
+        },
+        "2026.5.21",
+        { includeContentInventory: false },
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects duplicate normalized tar entries before content hashes can shadow package files", () => {
+    const installedBody = "export const installed = true;\n";
+    const shadowBody = "export const shadow = true;\n";
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/index.js": installedBody,
+        "dist/postinstall-content-inventory.json": JSON.stringify([
+          {
+            path: "dist/index.js",
+            sha256: createHash("sha256").update(shadowBody).digest("hex"),
+            mode: 0o644,
+            size: Buffer.byteLength(shadowBody),
+          },
+        ]),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("duplicate normalized tar entry: dist/index.js");
+      },
+      "2026.5.21",
+      {
+        extraRootFiles: { "dist/index.js": shadowBody },
+        includeContentInventory: false,
+      },
+    );
+  });
+
+  it("rejects dot-segment tar entries that normalize over packaged files", () => {
+    withTarball(
+      ["dist/index.js"],
+      { "dist/index.js": "export {};\n" },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("unsafe tar entry: ./dist/index.js");
+        expect(result.stderr).toContain("duplicate normalized tar entry: dist/index.js");
+      },
+      "2026.5.21",
+      { extraPackEntries: ["package/./dist/index.js"] },
     );
   });
 

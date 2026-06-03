@@ -20,7 +20,7 @@ type LocalPackageOverrideChange = {
 };
 
 export type LocalPackageOverridesResult = {
-  status: "unsupported" | "none" | "applied" | "conflict" | "error";
+  status: "unsupported" | "none" | "preserved" | "applied" | "conflict" | "error";
   added: number;
   modified: number;
   deleted: number;
@@ -378,9 +378,21 @@ async function preflightLocalOverrides(params: {
 export async function applyLocalPackageOverrides(params: {
   packageRoot: string;
   plan: LocalPackageOverridesPlan | null;
+  reapply: boolean;
 }): Promise<LocalPackageOverridesResult> {
   if (!params.plan) {
     return emptyResult("none");
+  }
+
+  if (!params.reapply) {
+    return {
+      ...params.plan.result,
+      status: "preserved",
+      applied: 0,
+      warnings: [
+        "Local OpenClaw changes were preserved in the recovery bundle and were not reapplied. Re-run with --reapply-local-overrides only if you trust those package mutations.",
+      ],
+    };
   }
 
   const conflicts = await preflightLocalOverrides({
@@ -426,7 +438,7 @@ export async function applyLocalPackageOverrides(params: {
       applied += 1;
     }
   } catch {
-    for (const entry of rollbackEntries.reverse()) {
+    for (const entry of rollbackEntries.toReversed()) {
       const targetPath = resolveSafePackagePath(params.packageRoot, entry.path);
       await fs.rm(targetPath, { force: true }).catch(() => undefined);
       if (entry.backupPath) {

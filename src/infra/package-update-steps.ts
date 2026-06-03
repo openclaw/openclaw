@@ -510,6 +510,7 @@ export async function runGlobalPackageUpdateSteps(params: {
   timeoutMs: number;
   env?: NodeJS.ProcessEnv;
   installCwd?: string;
+  reapplyLocalOverrides?: boolean;
   postVerifyStep?: (packageRoot: string) => Promise<PackageUpdateStepResult | null>;
 }): Promise<{
   steps: PackageUpdateStepResult[];
@@ -683,6 +684,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             localOverrides = await applyLocalPackageOverrides({
               packageRoot: activePackageRoot,
               plan: localOverridesPlan,
+              reapply: params.reapplyLocalOverrides === true,
             });
             if (localOverrides.status !== "none") {
               steps.push({

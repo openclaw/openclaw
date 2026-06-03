@@ -128,6 +128,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         packageRoot,
         runCommand: createRootRunner(globalRoot),
         runStep,
+        reapplyLocalOverrides: true,
         timeoutMs: 1000,
       });
 
@@ -200,6 +201,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         packageRoot,
         runCommand: createRootRunner(globalRoot),
         runStep,
+        reapplyLocalOverrides: true,
         timeoutMs: 1000,
       });
 
@@ -215,6 +217,70 @@ describe("runGlobalPackageUpdateSteps", () => {
       await expect(
         fs.readFile(path.join(packageRoot, "dist", "local-helper.js"), "utf8"),
       ).resolves.toBe("export const helper = true;\n");
+    });
+  });
+
+  it("preserves local dist overrides without reapplying by default", async () => {
+    await withTempDir({ prefix: "openclaw-package-update-local-preserved-" }, async (base) => {
+      const prefix = path.join(base, "prefix");
+      const globalRoot = path.join(prefix, "lib", "node_modules");
+      const packageRoot = path.join(globalRoot, "openclaw");
+      await writePackageRoot(packageRoot, "1.0.0");
+      await fs.writeFile(
+        path.join(packageRoot, "dist", "index.js"),
+        "export const local = true;\n",
+        "utf8",
+      );
+
+      const runStep = vi.fn(
+        async ({ name, argv, cwd, timeoutMs }): Promise<PackageUpdateStepResult> => {
+          expect(timeoutMs).toBe(1000);
+          if (name !== "global update") {
+            throw new Error(`unexpected step ${name}`);
+          }
+          const prefixIndex = argv.indexOf("--prefix");
+          expect(prefixIndex).toBeGreaterThan(0);
+          const stagePrefix = argv[prefixIndex + 1];
+          if (!stagePrefix) {
+            throw new Error("missing staged prefix");
+          }
+          await writePackageRoot(
+            path.join(stagePrefix, "lib", "node_modules", "openclaw"),
+            "2.0.0",
+          );
+          return {
+            name,
+            command: argv.join(" "),
+            cwd: cwd ?? process.cwd(),
+            durationMs: 1,
+            exitCode: 0,
+          };
+        },
+      );
+
+      const result = await runGlobalPackageUpdateSteps({
+        installTarget: createNpmTarget(globalRoot),
+        installSpec: "openclaw@2.0.0",
+        packageName: "openclaw",
+        packageRoot,
+        runCommand: createRootRunner(globalRoot),
+        runStep,
+        timeoutMs: 1000,
+      });
+
+      expect(result.failedStep).toBeNull();
+      expect(result.localOverrides?.status).toBe("preserved");
+      expect(result.localOverrides?.modified).toBe(1);
+      expect(result.localOverrides?.applied).toBe(0);
+      await expect(fs.readFile(path.join(packageRoot, "dist", "index.js"), "utf8")).resolves.toBe(
+        "export {};\n",
+      );
+      await expect(
+        fs.readFile(
+          path.join(result.localOverrides?.recoveryDir ?? "", "files", "dist", "index.js"),
+          "utf8",
+        ),
+      ).resolves.toBe("export const local = true;\n");
     });
   });
 
@@ -267,6 +333,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         packageRoot,
         runCommand: createRootRunner(globalRoot),
         runStep,
+        reapplyLocalOverrides: true,
         timeoutMs: 1000,
       });
 
@@ -355,6 +422,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageRoot,
           runCommand: createRootRunner(globalRoot),
           runStep,
+          reapplyLocalOverrides: true,
           timeoutMs: 1000,
         });
 
@@ -428,6 +496,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         packageRoot,
         runCommand: createRootRunner(globalRoot),
         runStep,
+        reapplyLocalOverrides: true,
         timeoutMs: 1000,
       });
 
@@ -498,6 +567,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         packageRoot,
         runCommand: createRootRunner(globalRoot),
         runStep,
+        reapplyLocalOverrides: true,
         timeoutMs: 1000,
       });
 
@@ -564,6 +634,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           packageRoot,
           runCommand: createRootRunner(globalRoot),
           runStep,
+          reapplyLocalOverrides: true,
           timeoutMs: 1000,
         });
 
