@@ -5,10 +5,12 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { satisfiesPluginApiRange } from "../infra/clawhub.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
+import { createNpmMetadataEnv, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   compareOpenClawReleaseVersions,
+  isExactSemverVersion,
   isOpenClawOrgNpmSpec,
+  isPrereleaseSemverVersion,
   isPrereleaseResolutionAllowed,
   parseRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
@@ -20,6 +22,7 @@ import {
 } from "../infra/package-update-utils.js";
 import { compareComparableSemver, parseComparableSemver } from "../infra/semver-compare.js";
 import type { UpdateChannel } from "../infra/update-channels.js";
+import { runCommandWithTimeout } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { resolveBundledPluginSources } from "./bundled-sources.js";
@@ -253,6 +256,75 @@ function expectedIntegrityForNpmUpdate(params: {
     params.record.resolvedSpec ?? params.record.spec,
     params.record.integrity,
   );
+}
+
+function compareNpmSemverForUpdate(left: string, right: string): number {
+  const releaseCmp = compareOpenClawReleaseVersions(left, right);
+  if (releaseCmp !== null) {
+    return releaseCmp;
+  }
+  return compareComparableSemver(parseComparableSemver(left), parseComparableSemver(right)) ?? 0;
+}
+
+async function loadNpmPackageVersionsForUpdate(params: {
+  packageName: string;
+  timeoutMs?: number;
+}): Promise<string[] | null> {
+  const versions = await runCommandWithTimeout(
+    ["npm", "view", params.packageName, "versions", "--json"],
+    {
+      timeoutMs: Math.max(params.timeoutMs ?? 0, 60_000),
+      env: createNpmMetadataEnv(),
+    },
+  );
+  if (!versions || versions.code !== 0) {
+    return null;
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(versions.stdout.trim());
+  } catch {
+    return null;
+  }
+  return (Array.isArray(parsed) ? parsed : [parsed]).filter(
+    (value): value is string => typeof value === "string" && isExactSemverVersion(value),
+  );
+}
+
+async function resolveTrustedOfficialStableFallbackMetadataForUpdate(params: {
+  metadata: NpmSpecResolution;
+  spec: string;
+  timeoutMs?: number;
+}): Promise<NpmSpecResolution | undefined> {
+  const parsedSpec = parseRegistryNpmSpec(params.spec);
+  if (
+    !parsedSpec ||
+    !parsedSpec.name.startsWith("@openclaw/") ||
+    !params.metadata.version ||
+    isPrereleaseResolutionAllowed({
+      spec: parsedSpec,
+      resolvedVersion: params.metadata.version,
+    })
+  ) {
+    return undefined;
+  }
+  const versions = await loadNpmPackageVersionsForUpdate({
+    packageName: parsedSpec.name,
+    timeoutMs: params.timeoutMs,
+  });
+  const stableVersion = versions
+    ?.filter((value) => !isPrereleaseSemverVersion(value))
+    .toSorted(compareNpmSemverForUpdate)
+    .at(-1);
+  if (!stableVersion) {
+    return undefined;
+  }
+  const stableMetadata = await resolveNpmSpecMetadata({
+    spec: `${parsedSpec.name}@${stableVersion}`,
+    timeoutMs: params.timeoutMs,
+  });
+  return stableMetadata.ok ? stableMetadata.metadata : undefined;
 }
 
 async function expectedIntegrityForNpmFallback(params: {
@@ -1299,13 +1371,23 @@ export async function updateNpmInstalledPlugins(params: {
             trustedSourceLinkedOfficialInstall,
           },
         );
+        const expectedIntegrityMetadata =
+          (trustedSourceLinkedOfficialInstall &&
+            (await resolveTrustedOfficialStableFallbackMetadataForUpdate({
+              metadata: metadataResult.metadata,
+              spec: effectiveSpec!,
+              timeoutMs: params.timeoutMs,
+            }))) ||
+          metadataResult.metadata;
+        const resolvedStableFallbackMetadata =
+          expectedIntegrityMetadata !== metadataResult.metadata;
         expectedIntegrity = expectedIntegrityForNpmUpdate({
           effectiveSpec,
-          metadata: metadataResult.metadata,
+          metadata: expectedIntegrityMetadata,
           record,
           trustedSourceLinkedOfficialInstall,
         });
-        if (bypassTrustedOfficialUnchangedNpmCheck) {
+        if (bypassTrustedOfficialUnchangedNpmCheck && !resolvedStableFallbackMetadata) {
           expectedIntegrity = undefined;
         }
         if (

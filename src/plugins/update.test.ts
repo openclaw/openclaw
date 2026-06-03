@@ -334,6 +334,14 @@ function mockNpmViewMetadata(params: {
   });
 }
 
+function mockNpmViewVersions(versions: string[]) {
+  runCommandWithTimeoutMock.mockResolvedValueOnce({
+    code: 0,
+    stdout: JSON.stringify(versions),
+    stderr: "",
+  });
+}
+
 function npmInstallCall(index = 0): Record<string, unknown> | undefined {
   const calls = installPluginFromNpmSpecMock.mock.calls as unknown as Array<
     [Record<string, unknown>]
@@ -637,6 +645,56 @@ describe("updateNpmInstalledPlugins", () => {
       name: "@openclaw/acpx",
       version: "2026.5.2",
       integrity: "sha512-new",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "acpx",
+        targetDir: installPath,
+        version: "2026.5.2",
+        npmResolution: {
+          name: "@openclaw/acpx",
+          version: "2026.5.2",
+          resolvedSpec: "@openclaw/acpx@2026.5.2",
+        },
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx@2026.5.2",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.5.2",
+        resolvedVersion: "2026.5.2",
+        integrity: "sha512-old",
+      }),
+      pluginIds: ["acpx"],
+      syncOfficialPluginInstalls: true,
+    });
+
+    expectNpmUpdateCall({
+      spec: "@openclaw/acpx",
+      expectedPluginId: "acpx",
+      expectedIntegrity: "sha512-old",
+    });
+  });
+
+  it("keeps integrity drift checks when official latest falls back to pinned stable", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.5.2",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.3-beta.1",
+      integrity: "sha512-beta",
+    });
+    mockNpmViewVersions(["2026.5.2", "2026.5.3-beta.1"]);
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.2",
+      integrity: "sha512-old",
     });
     installPluginFromNpmSpecMock.mockResolvedValue(
       createSuccessfulNpmUpdateResult({
