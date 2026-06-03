@@ -502,6 +502,7 @@ const mergeUsageTotals = (target: UsageTotals, source: Partial<UsageTotals>) => 
 const buildAggregatesFromSessions = (
   sessions: UsageSessionEntry[],
   fallback?: UsageAggregates | null,
+  selectedDays?: string[],
 ): UsageAggregates => {
   if (sessions.length === 0) {
     return (
@@ -516,6 +517,11 @@ const buildAggregatesFromSessions = (
       }
     );
   }
+
+  const selectedDaySet = selectedDays && selectedDays.length > 0 ? new Set(selectedDays) : null;
+  // When filtering by selected days, prefer daily breakdowns over session-wide
+  // totals so only the selected days contribute to aggregates.
+  const hasDayFilter = selectedDaySet !== null;
 
   const messages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
   const toolMap = new Map<string, number>();
@@ -555,7 +561,26 @@ const buildAggregatesFromSessions = (
     if (!usage) {
       continue;
     }
-    if (usage.messageCounts) {
+
+    const dayMatches = (date: string): boolean => {
+      return selectedDaySet === null || selectedDaySet.has(date);
+    };
+
+    // Messages: derive from dailyMessageCounts when day-filtering so only
+    // selected days count; fall back to session-wide totals for legacy data.
+    if (hasDayFilter && usage.dailyMessageCounts && usage.dailyMessageCounts.length > 0) {
+      for (const day of usage.dailyMessageCounts) {
+        if (!dayMatches(day.date)) {
+          continue;
+        }
+        messages.total += day.total;
+        messages.user += day.user;
+        messages.assistant += day.assistant;
+        messages.toolCalls += day.toolCalls;
+        messages.toolResults += day.toolResults;
+        messages.errors += day.errors;
+      }
+    } else if (usage.messageCounts) {
       messages.total += usage.messageCounts.total;
       messages.user += usage.messageCounts.user;
       messages.assistant += usage.messageCounts.assistant;
@@ -570,7 +595,38 @@ const buildAggregatesFromSessions = (
       }
     }
 
-    if (usage.modelUsage) {
+    // Model/provider usage: derive from dailyModelUsage when day-filtering;
+    // fall back to session-wide modelUsage for legacy data.
+    if (hasDayFilter && usage.dailyModelUsage && usage.dailyModelUsage.length > 0) {
+      for (const entry of usage.dailyModelUsage) {
+        if (!dayMatches(entry.date)) {
+          continue;
+        }
+        const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+        const modelExisting = modelMap.get(modelKey) ?? {
+          provider: entry.provider,
+          model: entry.model,
+          count: 0,
+          totals: emptyUsageTotals(),
+        };
+        modelExisting.count += entry.count;
+        modelExisting.totals.totalTokens += entry.tokens;
+        modelExisting.totals.totalCost += entry.cost;
+        modelMap.set(modelKey, modelExisting);
+
+        const providerKey = entry.provider ?? "unknown";
+        const providerExisting = providerMap.get(providerKey) ?? {
+          provider: entry.provider,
+          model: undefined,
+          count: 0,
+          totals: emptyUsageTotals(),
+        };
+        providerExisting.count += entry.count;
+        providerExisting.totals.totalTokens += entry.tokens;
+        providerExisting.totals.totalCost += entry.cost;
+        providerMap.set(providerKey, providerExisting);
+      }
+    } else if (usage.modelUsage) {
       for (const entry of usage.modelUsage) {
         const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
         const modelExisting = modelMap.get(modelKey) ?? {
@@ -596,20 +652,55 @@ const buildAggregatesFromSessions = (
       }
     }
 
-    mergeUsageLatency(latencyTotals, usage.latency);
-
-    if (session.agentId) {
-      const totals = agentMap.get(session.agentId) ?? emptyUsageTotals();
-      mergeUsageTotals(totals, usage);
-      agentMap.set(session.agentId, totals);
+    // Latency: derive from dailyLatency when day-filtering.
+    if (hasDayFilter && usage.dailyLatency && usage.dailyLatency.length > 0) {
+      for (const day of usage.dailyLatency) {
+        if (!dayMatches(day.date)) {
+          continue;
+        }
+        mergeUsageLatency(latencyTotals, day);
+      }
+    } else {
+      mergeUsageLatency(latencyTotals, usage.latency);
     }
-    if (session.channel) {
-      const totals = channelMap.get(session.channel) ?? emptyUsageTotals();
-      mergeUsageTotals(totals, usage);
-      channelMap.set(session.channel, totals);
+
+    // Agent/channel usage: derive from dailyBreakdown when day-filtering so
+    // only selected days contribute; fall back to session-wide usage totals.
+    if (hasDayFilter && usage.dailyBreakdown && usage.dailyBreakdown.length > 0) {
+      for (const day of usage.dailyBreakdown) {
+        if (!dayMatches(day.date)) {
+          continue;
+        }
+        if (session.agentId) {
+          const totals = agentMap.get(session.agentId) ?? emptyUsageTotals();
+          totals.totalTokens += day.tokens;
+          totals.totalCost += day.cost;
+          agentMap.set(session.agentId, totals);
+        }
+        if (session.channel) {
+          const totals = channelMap.get(session.channel) ?? emptyUsageTotals();
+          totals.totalTokens += day.tokens;
+          totals.totalCost += day.cost;
+          channelMap.set(session.channel, totals);
+        }
+      }
+    } else {
+      if (session.agentId) {
+        const totals = agentMap.get(session.agentId) ?? emptyUsageTotals();
+        mergeUsageTotals(totals, usage);
+        agentMap.set(session.agentId, totals);
+      }
+      if (session.channel) {
+        const totals = channelMap.get(session.channel) ?? emptyUsageTotals();
+        mergeUsageTotals(totals, usage);
+        channelMap.set(session.channel, totals);
+      }
     }
 
     for (const day of usage.dailyBreakdown ?? []) {
+      if (!dayMatches(day.date)) {
+        continue;
+      }
       const daily = dailyMap.get(day.date) ?? {
         date: day.date,
         tokens: 0,
@@ -623,6 +714,9 @@ const buildAggregatesFromSessions = (
       dailyMap.set(day.date, daily);
     }
     for (const day of usage.dailyMessageCounts ?? []) {
+      if (!dayMatches(day.date)) {
+        continue;
+      }
       const daily = dailyMap.get(day.date) ?? {
         date: day.date,
         tokens: 0,
@@ -636,8 +730,18 @@ const buildAggregatesFromSessions = (
       daily.errors += day.errors;
       dailyMap.set(day.date, daily);
     }
-    mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
+    if (hasDayFilter && usage.dailyLatency) {
+      mergeUsageDailyLatency(
+        dailyLatencyMap,
+        usage.dailyLatency.filter((d) => dayMatches(d.date)),
+      );
+    } else {
+      mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
+    }
     for (const day of usage.dailyModelUsage ?? []) {
+      if (!dayMatches(day.date)) {
+        continue;
+      }
       const key = `${day.date}::${day.provider ?? "unknown"}::${day.model ?? "unknown"}`;
       const existing = modelDailyMap.get(key) ?? {
         date: day.date,

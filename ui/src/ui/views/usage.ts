@@ -289,7 +289,11 @@ export function renderUsage(props: UsageProps) {
         : filters.selectedDays.length > 0
           ? dayFilteredSessions
           : sortedSessions;
-  const activeAggregates = buildAggregatesFromSessions(aggregateSessions, data.aggregates);
+  const activeAggregates = buildAggregatesFromSessions(
+    aggregateSessions,
+    data.aggregates,
+    filters.selectedDays,
+  );
 
   // Filter daily chart data if sessions are selected
   const filteredDaily =
