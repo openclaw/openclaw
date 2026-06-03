@@ -16,6 +16,7 @@ import { normalizeMessageChannel } from "./message-channel-core.js";
 import { isDeliverableMessageChannel } from "./message-channel-normalize.js";
 export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
+/** Normalizes a delivery context into canonical channel route fields, dropping invalid routes. */
 export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryContext | undefined {
   if (!context) {
     return undefined;
@@ -44,6 +45,7 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
   return normalized;
 }
 
+/** Normalizes an unknown channel route payload from persisted session/plugin metadata. */
 export function normalizeDeliveryChannelRoute(route?: unknown): ChannelRouteRef | undefined {
   if (!route || typeof route !== "object" || Array.isArray(route)) {
     return undefined;
@@ -61,6 +63,7 @@ export function normalizeDeliveryChannelRoute(route?: unknown): ChannelRouteRef 
   });
 }
 
+/** Converts a normalized channel route reference into a delivery context. */
 export function deliveryContextFromChannelRoute(
   route?: ChannelRouteRef,
 ): DeliveryContext | undefined {
@@ -73,6 +76,7 @@ export function deliveryContextFromChannelRoute(
   });
 }
 
+/** Converts delivery context fields into the SDK channel route reference shape. */
 export function channelRouteFromDeliveryContext(
   context?: DeliveryContext,
 ): ChannelRouteRef | undefined {
@@ -122,6 +126,7 @@ function mergeExternalDeliveryContextOverInternalRoute(
   });
 }
 
+/** Reconciles legacy session delivery fields, route metadata, and explicit delivery context. */
 export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSource): {
   route?: ChannelRouteRef;
   deliveryContext?: DeliveryContext;
@@ -185,6 +190,7 @@ export function normalizeSessionDeliveryFields(source?: DeliveryContextSessionSo
   };
 }
 
+/** Derives the best delivery context from current and legacy session fields. */
 export function deliveryContextFromSession(
   entry?: DeliveryContextSessionSource,
 ): DeliveryContext | undefined {
@@ -204,6 +210,7 @@ export function deliveryContextFromSession(
   return normalizeSessionDeliveryFields(source).deliveryContext;
 }
 
+/** Merges delivery contexts without mixing target/account/thread fields across channels. */
 export function mergeDeliveryContext(
   primary?: DeliveryContext,
   fallback?: DeliveryContext,
@@ -233,6 +240,7 @@ export function mergeDeliveryContext(
   });
 }
 
+/** Builds a compact stable key for a routable delivery context. */
 export function deliveryContextKey(context?: DeliveryContext): string | undefined {
   return channelRouteCompactKey(normalizeDeliveryContext(context));
 }
