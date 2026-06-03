@@ -749,6 +749,10 @@ export async function resolveGlobalInstallTarget(params: {
   };
 }
 
+/**
+ * Identifies which global package manager owns an existing package root.
+ * Command probes are checked first, then pnpm/bun layout fingerprints.
+ */
 export async function detectGlobalInstallManagerForRoot(
   runCommand: CommandRunner,
   pkgRoot: string,
@@ -804,6 +808,10 @@ export async function detectGlobalInstallManagerForRoot(
   return null;
 }
 
+/**
+ * Detects an installed global OpenClaw package by probing package-manager roots
+ * when no trusted package root is already available.
+ */
 export async function detectGlobalInstallManagerByPresence(
   runCommand: CommandRunner,
   timeoutMs: number,
@@ -829,6 +837,10 @@ export async function detectGlobalInstallManagerByPresence(
   return null;
 }
 
+/**
+ * Builds the primary package-manager argv for a global OpenClaw install.
+ * npm receives quiet/freshness-bypass flags; pnpm source installs allow builds.
+ */
 export function globalInstallArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
@@ -862,6 +874,10 @@ export function globalInstallArgs(
   ];
 }
 
+/**
+ * Builds npm's retry argv without optional dependencies.
+ * Non-npm managers have no equivalent fallback and return null.
+ */
 export function globalInstallFallbackArgs(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   spec: string,
@@ -886,6 +902,7 @@ export function globalInstallFallbackArgs(
   ];
 }
 
+/** Removes leftover hidden global package directories from interrupted renames. */
 export async function cleanupGlobalRenameDirs(params: {
   globalRoot: string;
   packageName: string;
