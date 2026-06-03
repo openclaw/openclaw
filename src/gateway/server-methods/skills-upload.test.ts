@@ -1,3 +1,6 @@
+/**
+ * Tests for skill upload gateway methods and archive validation.
+ */
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
