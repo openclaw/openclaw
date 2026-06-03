@@ -1,3 +1,4 @@
+/** Resolves when the signal aborts, or immediately when no wait is needed. */
 export async function waitForAbortSignal(signal?: AbortSignal): Promise<void> {
   if (!signal || signal.aborted) {
     return;
