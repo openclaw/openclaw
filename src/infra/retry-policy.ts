@@ -27,6 +27,8 @@ function resolveChannelApiShouldRetry(params: {
   if (params.strictShouldRetry) {
     return params.shouldRetry;
   }
+  // Channel APIs often wrap network failures differently by provider. Keep the
+  // fallback regex unless callers opt into strict idempotency control.
   return (err: unknown) =>
     params.shouldRetry?.(err) || CHANNEL_API_RETRY_RE.test(formatErrorMessage(err));
 }
@@ -36,6 +38,8 @@ function getChannelApiRetryAfterMs(err: unknown): number | undefined {
     return undefined;
   }
   const candidate =
+    // Telegram-style clients may expose retry_after on the root error, response,
+    // or nested error object; keep all shapes aligned so rate-limit sleeps match.
     "parameters" in err && err.parameters && typeof err.parameters === "object"
       ? (err.parameters as { retry_after?: unknown }).retry_after
       : "response" in err &&
