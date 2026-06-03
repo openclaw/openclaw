@@ -494,6 +494,22 @@ export async function executePreparedCliRun(
             },
           });
         };
+        let commentaryCounter = 0;
+        const emitCliCommentaryText = (text: string) => {
+          commentaryCounter += 1;
+          emitAgentEvent({
+            runId: params.runId,
+            stream: "item",
+            data: {
+              kind: "preamble",
+              itemId: `commentary-${params.runId}-${commentaryCounter}`,
+              phase: "update",
+              title: "commentary",
+              status: "running",
+              progressText: text,
+            },
+          });
+        };
         if (shouldUseClaudeLiveSession(context)) {
           if (!hasJsonlOutput) {
             throw new Error("Claude live session requires JSONL streaming parser");
@@ -536,6 +552,7 @@ export async function executePreparedCliRun(
             },
             onToolUseStart: emitCliToolUseStart,
             onToolResult: emitCliToolResult,
+            onCommentaryText: emitCliCommentaryText,
             cleanup: async () => {
               try {
                 await fallbackClaudeSkillsPlugin?.cleanup();
@@ -580,6 +597,7 @@ export async function executePreparedCliRun(
               },
               onToolUseStart: emitCliToolUseStart,
               onToolResult: emitCliToolResult,
+              onCommentaryText: emitCliCommentaryText,
             })
           : null;
         const supervisor = executeDeps.getProcessSupervisor();

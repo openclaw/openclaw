@@ -632,12 +632,14 @@ export function createCliJsonlStreamingParser(params: {
   onAssistantDelta: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
+  onCommentaryText?: (text: string) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
   let output: CliOutput | null = null;
+  let lastFlushedCommentaryLength = 0;
   const texts: string[] = [];
   const toolTracker = createToolUseTracker();
 
@@ -674,6 +676,32 @@ export function createCliJsonlStreamingParser(params: {
       const type = normalizeLowercaseStringOrEmpty(item.type);
       if (!type || type.includes("message")) {
         texts.push(item.text);
+      }
+    }
+
+    // Flush accumulated assistant text as commentary when a tool_use block starts.
+    // Text preceding a tool call is inter-tool commentary, not final answer text.
+    // Only flush if new text has arrived since the last flush to avoid duplicates
+    // when multiple tool_use blocks appear consecutively without intervening text.
+    if (
+      params.onCommentaryText &&
+      usesClaudeStreamJsonDialect(params) &&
+      parsed.type === "stream_event" &&
+      isRecord(parsed.event)
+    ) {
+      const evt = parsed.event;
+      if (
+        evt.type === "content_block_start" &&
+        isRecord(evt.content_block) &&
+        isClaudeToolUseBlockType(evt.content_block.type)
+      ) {
+        if (assistantText.length > lastFlushedCommentaryLength) {
+          const trimmedCommentary = assistantText.trim();
+          if (trimmedCommentary) {
+            params.onCommentaryText(trimmedCommentary);
+          }
+          lastFlushedCommentaryLength = assistantText.length;
+        }
       }
     }
 
