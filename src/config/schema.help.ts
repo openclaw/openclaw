@@ -1693,6 +1693,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Path to the cron job store file used to persist scheduled jobs across restarts. Set an explicit path only when you need custom storage layout, backups, or mounted volumes.",
   "cron.maxConcurrentRuns":
     "Defaults to 8. Limits how many cron jobs can execute at the same time when multiple schedules fire together, including isolated agent-turn LLM execution on the dedicated cron-nested lane. Use lower values to protect CPU/memory under heavy automation load, or raise carefully for higher throughput.",
+  "cron.minInterval":
+    "Minimum interval allowed between fires for recurring `every` and `cron` jobs (for example `30s`, `5m`, `1h`; bare numbers are milliseconds). Enforced when jobs are created or edited, so creation is rejected with a clear error if the schedule would fire more often than this floor. Omit or set `0` (default) to disable the limit. One-shot `at` jobs are exempt. Use this as a guardrail against accidental high-frequency schedules.",
   "cron.retry":
     "Overrides the default retry policy for one-shot jobs when they fail with transient errors (rate limit, overloaded, network, server_error). Omit to use defaults: maxAttempts 3, backoffMs [30000, 60000, 300000], retry all transient types.",
   "cron.retry.maxAttempts":

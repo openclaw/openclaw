@@ -446,6 +446,7 @@ Model override note:
     enabled: true,
     store: "~/.openclaw/cron/jobs.json",
     maxConcurrentRuns: 8,
+    minInterval: "5m",
     retry: {
       maxAttempts: 3,
       backoffMs: [60000, 120000, 300000],
@@ -459,6 +460,8 @@ Model override note:
 ```
 
 `maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution, and defaults to 8. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
+
+`minInterval` is an optional guardrail against accidental high-frequency schedules. It sets the minimum allowed gap between fires for recurring `every` and `cron` jobs, accepting a duration string (`30s`, `5m`, `1h`) or a number of milliseconds (bare numbers are milliseconds). When set, creating or editing a recurring job whose tightest interval is below the floor is rejected with a clear error, so the agent or CLI caller learns to back off instead of scheduling a runaway job. `cron` expressions are checked by their smallest gap across consecutive fires, so an expression like `0,1 * * * *` (which fires one minute apart) is still caught. One-shot `at` jobs are exempt, and the default (`0` / unset) imposes no minimum.
 
 `cron.store` is a logical store key and legacy doctor import path. Run `openclaw doctor --fix` to import existing JSON stores into SQLite and archive them; future cron changes should go through the CLI or Gateway API.
 

@@ -3,6 +3,8 @@ import {
   normalizeOptionalString,
   normalizeOptionalThreadValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { resolveCronMinIntervalMs } from "../../config/cron-limits.js";
+import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAbsoluteTimeMs } from "../parse.js";
 import {
@@ -25,6 +27,7 @@ import type {
   CronJobPatch,
   CronPayload,
   CronPayloadPatch,
+  CronSchedule,
 } from "../types.js";
 import { normalizeHttpWebhookUrl } from "../webhook-url.js";
 import { resolveInitialCronDelivery } from "./initial-delivery.js";
@@ -37,6 +40,13 @@ import type { CronServiceState } from "./state.js";
 
 const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
+
+/**
+ * Consecutive cron fires sampled to find a schedule's tightest gap. Irregular
+ * expressions (e.g. fire at :00 and :01) are judged by their smallest interval,
+ * so a handful of samples is enough to catch a too-frequent burst.
+ */
+const CRON_MIN_INTERVAL_SAMPLE_RUNS = 6;
 const staggerOffsetCache = new Map<string, number>();
 
 /** Default retry delays applied after consecutive cron execution errors. */
@@ -266,6 +276,70 @@ function resolveEveryAnchorMs(params: {
     return Math.max(0, Math.floor(params.fallbackAnchorMs));
   }
   return 0;
+}
+
+function formatIntervalForError(ms: number): string {
+  return formatDurationCompact(ms) ?? `${Math.max(0, Math.floor(ms))}ms`;
+}
+
+function minIntervalError(intervalMs: number, minIntervalMs: number): Error {
+  return new Error(
+    `cron schedule fires every ${formatIntervalForError(intervalMs)}, below the minimum interval of ${formatIntervalForError(minIntervalMs)}`,
+  );
+}
+
+/** Finds the tightest gap between consecutive cron-expression fires, sampling a few runs. */
+function smallestCronGapMs(schedule: CronSchedule, nowMs: number): number | undefined {
+  let cursor = nowMs;
+  let previous: number | undefined;
+  let smallest: number | undefined;
+  for (let i = 0; i < CRON_MIN_INTERVAL_SAMPLE_RUNS; i++) {
+    const next = computeNextRunAtMs(schedule, cursor);
+    if (next === undefined || !Number.isFinite(next) || next <= cursor) {
+      break;
+    }
+    if (previous !== undefined) {
+      const gap = next - previous;
+      if (gap > 0 && (smallest === undefined || gap < smallest)) {
+        smallest = gap;
+      }
+    }
+    previous = next;
+    cursor = next;
+  }
+  return smallest;
+}
+
+/**
+ * Rejects recurring schedules whose tightest fire interval is below the
+ * operator-configured floor (`cron.minInterval`). One-shot `at` jobs are exempt
+ * and a floor of `0` disables the guardrail. `cron` expressions are sampled
+ * across consecutive fires so irregular schedules are judged by their smallest
+ * gap rather than an average.
+ */
+export function assertScheduleMeetsMinInterval(
+  schedule: CronSchedule,
+  minIntervalMs: number,
+  nowMs: number,
+): void {
+  if (!(minIntervalMs > 0) || schedule.kind === "at") {
+    return;
+  }
+  if (schedule.kind === "every") {
+    const everyMsRaw = coerceFiniteScheduleNumber(schedule.everyMs);
+    if (everyMsRaw === undefined) {
+      return;
+    }
+    const everyMs = Math.max(1, Math.floor(everyMsRaw));
+    if (everyMs < minIntervalMs) {
+      throw minIntervalError(everyMs, minIntervalMs);
+    }
+    return;
+  }
+  const smallestGapMs = smallestCronGapMs(schedule, nowMs);
+  if (smallestGapMs !== undefined && smallestGapMs < minIntervalMs) {
+    throw minIntervalError(smallestGapMs, minIntervalMs);
+  }
 }
 
 /** Validates that session target and payload kind form a supported cron job shape. */
@@ -777,6 +851,11 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  assertScheduleMeetsMinInterval(
+    job.schedule,
+    resolveCronMinIntervalMs(state.deps.cronConfig),
+    now,
+  );
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }

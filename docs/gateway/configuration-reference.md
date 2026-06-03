@@ -1285,6 +1285,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
   cron: {
     enabled: true,
     maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
+    minInterval: "5m", // optional floor for recurring every/cron jobs; omit/0 = no limit
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
@@ -1296,6 +1297,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 }
 ```
 
+- `minInterval`: minimum allowed interval between fires for recurring `every` and `cron` jobs, as a duration string (`30s`, `5m`, `1h`) or a number of milliseconds. Creating or editing a recurring job whose tightest gap is below this floor is rejected. One-shot `at` jobs are exempt. Default: unset (`0`, no limit).
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
 - `runLog.maxBytes`: accepted for compatibility with older file-backed cron run logs. Default: `2_000_000` bytes.
 - `runLog.keepLines`: newest SQLite run-history rows retained per job. Default: `2000`.

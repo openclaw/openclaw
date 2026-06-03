@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { resolveCronMinIntervalMs } from "../../config/cron-limits.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
@@ -16,6 +17,7 @@ import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { failureNotificationDeliveryFromJobState } from "./failure-alerts.js";
 import {
   applyJobPatch,
+  assertScheduleMeetsMinInterval,
   assertSupportedJobSpec,
   computeJobNextRunAtMs,
   createJob,
@@ -471,6 +473,16 @@ export async function update(state: CronServiceState, id: string, patch: CronJob
     }
     const scheduleChanged = patch.schedule !== undefined;
     const enabledChanged = patch.enabled !== undefined;
+
+    // Re-validate against the configured floor only when the schedule itself
+    // changes, so unrelated edits to a pre-existing fast job are not blocked.
+    if (scheduleChanged) {
+      assertScheduleMeetsMinInterval(
+        nextJob.schedule,
+        resolveCronMinIntervalMs(state.deps.cronConfig),
+        now,
+      );
+    }
 
     if (scheduleChanged && nextJob.schedule.kind === "cron" && !isJobEnabled(nextJob)) {
       computeJobNextRunAtMs({ ...nextJob, enabled: true }, now);
