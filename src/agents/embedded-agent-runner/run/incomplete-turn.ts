@@ -676,8 +676,11 @@ export const IDLE_MODEL_TIMEOUT_NOTICE =
  *   nag the user and override the `paused` liveness state the terminal path
  *   otherwise preserves,
  * - some visible payload is already being returned (`payloadCount > 0`),
- * - an empty reply is intentionally silent here (cron/heartbeat contexts that
- *   set `allowEmptyAssistantReplyAsSilent`),
+ * - an empty reply is acceptable here (cron/heartbeat contexts that set
+ *   `allowEmptyAssistantReplyAsSilent`). NOTE: gate on the raw flag, not the
+ *   derived `shouldTreatEmptyAssistantReplyAsSilent` result — that helper short-
+ *   circuits to `false` for any timed-out attempt (via `shouldSkipPlanningOnlyRetry`),
+ *   so it can never protect the very case handled here,
  * - a messaging tool already delivered a reply out-of-band, or
  * - a deterministic approval prompt was already delivered out-of-band (payload
  *   building intentionally suppresses assistant artifacts in that case) — both
@@ -688,7 +691,7 @@ export function resolveTurnBudgetTimeoutNotice(params: {
   idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   payloadCount: number;
-  emptyAssistantReplyIsSilent: boolean;
+  allowSilentReply: boolean;
   hasMessagingDelivery: boolean;
   hasDeterministicApprovalPrompt: boolean;
 }): string | null {
@@ -696,7 +699,7 @@ export function resolveTurnBudgetTimeoutNotice(params: {
     !params.timedOut ||
     params.timedOutDuringCompaction ||
     params.payloadCount > 0 ||
-    params.emptyAssistantReplyIsSilent ||
+    params.allowSilentReply ||
     params.hasMessagingDelivery ||
     params.hasDeterministicApprovalPrompt
   ) {

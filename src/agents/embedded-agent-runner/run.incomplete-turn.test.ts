@@ -3403,6 +3403,73 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.livenessState).toBe("working");
     expectNoWarnMessageWith("planning");
   });
+
+  it("delivers a turn-budget timeout notice when a tool-execution timeout leaves no visible reply", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        timedOutDuringToolExecution: true,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-exec-timeout-notice",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("time budget");
+    expect(result.meta.livenessState).toBe("abandoned");
+  });
+
+  it("stays silent on a timed-out turn in a silent-reply context (allowEmptyAssistantReplyAsSilent)", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        timedOutDuringToolExecution: true,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-tool-exec-timeout-silent-context",
+      allowEmptyAssistantReplyAsSilent: true,
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect((result.payloads ?? []).some((p) => (p.text ?? "").includes("time budget"))).toBe(false);
+  });
+
+  it("keeps a compaction timeout paused instead of emitting a turn-budget notice", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        timedOut: true,
+        timedOutDuringCompaction: true,
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai",
+      model: "gpt-5.5",
+      runId: "run-compaction-timeout-paused",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+    expect((result.payloads ?? []).some((p) => (p.text ?? "").includes("time budget"))).toBe(false);
+    expect(result.meta.livenessState).toBe("paused");
+  });
 });
 
 describe("resolveTurnBudgetTimeoutNotice", () => {
@@ -3411,7 +3478,7 @@ describe("resolveTurnBudgetTimeoutNotice", () => {
     idleTimedOut: false,
     timedOutDuringCompaction: false,
     payloadCount: 0,
-    emptyAssistantReplyIsSilent: false,
+    allowSilentReply: false,
     hasMessagingDelivery: false,
     hasDeterministicApprovalPrompt: false,
   };
@@ -3440,10 +3507,11 @@ describe("resolveTurnBudgetTimeoutNotice", () => {
     expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, payloadCount: 1 })).toBeNull();
   });
 
-  it("returns null when an empty reply is intentionally silent (cron/heartbeat)", () => {
-    expect(
-      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, emptyAssistantReplyIsSilent: true }),
-    ).toBeNull();
+  it("returns null in a silent-reply context (cron/heartbeat: allowSilentReply) even on timeout", () => {
+    // Gate on the RAW allowEmptyAssistantReplyAsSilent flag: the derived
+    // `emptyAssistantReplyIsSilent` is always false for timed-out attempts, so
+    // only the raw flag protects autonomous/silent contexts here.
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, allowSilentReply: true })).toBeNull();
   });
 
   it("returns null when a messaging tool already delivered a reply (no double-notify)", () => {

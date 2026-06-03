@@ -4041,7 +4041,7 @@ async function runEmbeddedAgentInternal(
             idleTimedOut,
             timedOutDuringCompaction,
             payloadCount,
-            emptyAssistantReplyIsSilent,
+            allowSilentReply: params.allowEmptyAssistantReplyAsSilent === true,
             hasMessagingDelivery: hasMessagingToolDeliveryEvidence(attempt),
             hasDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt === true,
           });
