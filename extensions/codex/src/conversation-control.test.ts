@@ -133,9 +133,11 @@ describe("codex conversation controls", () => {
     ).resolves.toBe("Codex model set to openai/gpt-5.5.");
 
     const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    const binding = await readCodexAppServerBinding(sessionFile);
     expect(resumeParams?.model).toBe("openai/gpt-5.5");
     expect(resumeParams).not.toHaveProperty("modelProvider");
     expect(resumeParams?.approvalsReviewer).toBe("auto_review");
+    expect(binding?.modelProvider).toBeUndefined();
   });
 
   it("keeps the bound local provider when switching to another unqualified model", async () => {

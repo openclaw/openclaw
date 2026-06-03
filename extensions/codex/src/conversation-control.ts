@@ -177,7 +177,7 @@ export async function setCodexConversationModel(params: {
       ...binding,
       cwd: response.thread.cwd ?? binding.cwd,
       model: response.model ?? model,
-      modelProvider: response.modelProvider ?? binding.modelProvider,
+      modelProvider: response.modelProvider ?? modelProvider,
       approvalPolicy: binding.approvalPolicy,
       sandbox: binding.sandbox,
       serviceTier: binding.serviceTier ?? runtime.serviceTier,
