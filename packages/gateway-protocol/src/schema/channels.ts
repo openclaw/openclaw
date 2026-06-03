@@ -676,6 +676,7 @@ export const TalkConfigResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Text-to-speech result with encoded audio and provider output metadata. */
 export const TalkSpeakResultSchema = Type.Object(
   {
     audioBase64: NonEmptyString,
@@ -688,6 +689,7 @@ export const TalkSpeakResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Channel status request, optionally probing one channel before returning. */
 export const ChannelsStatusParamsSchema = Type.Object(
   {
     probe: Type.Optional(Type.Boolean()),
@@ -697,8 +699,12 @@ export const ChannelsStatusParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
-// Channel docking: channels.status is intentionally schema-light so new
-// channels can ship without protocol updates.
+/**
+ * Per-account status snapshot for channel docking.
+ *
+ * This is intentionally schema-light so new channel-specific metadata can ship
+ * without a gateway protocol update; known fields stay documented for UI use.
+ */
 export const ChannelAccountSnapshotSchema = Type.Object(
   {
     accountId: NonEmptyString,
@@ -739,6 +745,7 @@ export const ChannelAccountSnapshotSchema = Type.Object(
   { additionalProperties: true },
 );
 
+/** UI label and icon metadata for one channel. */
 export const ChannelUiMetaSchema = Type.Object(
   {
     id: NonEmptyString,
@@ -749,6 +756,7 @@ export const ChannelUiMetaSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Event-loop health snapshot included with channel status responses. */
 export const ChannelEventLoopHealthSchema = Type.Object(
   {
     degraded: Type.Boolean(),
@@ -768,6 +776,7 @@ export const ChannelEventLoopHealthSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Full channel status result for dashboard and operator diagnostics. */
 export const ChannelsStatusResultSchema = Type.Object(
   {
     ts: Type.Integer({ minimum: 0 }),
@@ -786,6 +795,7 @@ export const ChannelsStatusResultSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Logs out one channel account. */
 export const ChannelsLogoutParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
@@ -794,6 +804,7 @@ export const ChannelsLogoutParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Stops one channel account runtime. */
 export const ChannelsStopParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
@@ -802,6 +813,7 @@ export const ChannelsStopParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Starts one channel account runtime. */
 export const ChannelsStartParamsSchema = Type.Object(
   {
     channel: NonEmptyString,
@@ -810,6 +822,7 @@ export const ChannelsStartParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+/** Starts browser/web login for a channel account. */
 export const WebLoginStartParamsSchema = Type.Object(
   {
     force: Type.Optional(Type.Boolean()),
@@ -825,6 +838,7 @@ const QrDataUrlSchema = Type.String({
   pattern: "^data:image/png;base64,",
 });
 
+/** Waits for web login completion or the next QR code. */
 export const WebLoginWaitParamsSchema = Type.Object(
   {
     timeoutMs: Type.Optional(Type.Integer({ minimum: 0 })),
