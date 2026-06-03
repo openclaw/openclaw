@@ -15,6 +15,7 @@ import {
   resolveInstalledPluginIndexPolicyHash,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
+import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
@@ -163,6 +164,36 @@ function createPersistableIndex(pluginId: string): InstalledPluginIndex {
     ...index,
     plugins,
   };
+}
+
+function createManifestRecord(
+  fields: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
+): PluginManifestRecord {
+  return {
+    channels: [],
+    cliBackends: [],
+    hooks: [],
+    manifestPath: `/tmp/${fields.id}/openclaw.plugin.json`,
+    origin: "global",
+    providers: [],
+    rootDir: `/tmp/${fields.id}`,
+    skills: [],
+    source: `/tmp/${fields.id}/index.js`,
+    ...fields,
+  };
+}
+
+function createPoisonedNormalizerAliasRecord(
+  id: string,
+  field: "id" | "providers" | "providerAuthAliases",
+): PluginManifestRecord {
+  const record = createManifestRecord({ id });
+  Object.defineProperty(record, field, {
+    get() {
+      throw new Error(`plugin registry ${field} alias metadata exploded`);
+    },
+  });
+  return record;
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -450,6 +481,36 @@ describe("plugin registry facade", () => {
       { manifestRegistry: lookUpTable.manifestRegistry },
     );
     expect(normalizedConfig.allow).toEqual(["demo"]);
+  });
+
+  it("skips unreadable manifest alias metadata while normalizing plugin config ids", () => {
+    const index = createIndex("healthy", {
+      plugins: [
+        {
+          ...createIndex("healthy").plugins[0],
+          pluginId: "healthy",
+          rootDir: "/tmp/healthy",
+        },
+      ],
+    });
+    const manifestRegistry = {
+      plugins: [
+        createPoisonedNormalizerAliasRecord("bad-id", "id"),
+        createPoisonedNormalizerAliasRecord("bad-aliases", "providerAuthAliases"),
+        createPoisonedNormalizerAliasRecord("bad-providers", "providers"),
+        createManifestRecord({
+          id: "healthy",
+          channels: ["healthy-chat"],
+          providers: ["healthy-provider"],
+        }),
+      ],
+      diagnostics: [],
+    };
+
+    const normalizePluginId = createPluginRegistryIdNormalizer(index, { manifestRegistry });
+
+    expect(normalizePluginId("healthy-chat")).toBe("healthy");
+    expect(normalizePluginId("healthy-provider")).toBe("healthy");
   });
 
   it("reads the persisted registry before deriving from discovered candidates", async () => {

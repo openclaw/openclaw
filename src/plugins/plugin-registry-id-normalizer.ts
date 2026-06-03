@@ -34,6 +34,30 @@ function listPluginRegistryNormalizerAliases(plugin: PluginManifestRecord): read
   ];
 }
 
+type PluginRegistryNormalizerAliasEntry = {
+  pluginId: string;
+  registryId: string;
+  aliases: readonly string[];
+};
+
+function readPluginRegistryNormalizerAliasEntry(
+  plugin: PluginManifestRecord,
+): PluginRegistryNormalizerAliasEntry | undefined {
+  try {
+    const pluginId = normalizePluginRegistryAlias(plugin.id);
+    if (!pluginId) {
+      return undefined;
+    }
+    return {
+      pluginId,
+      registryId: plugin.id,
+      aliases: listPluginRegistryNormalizerAliases(plugin),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
 export function createPluginRegistryIdNormalizer(
   index: InstalledPluginIndex,
   options: PluginRegistryIdNormalizerOptions = {},
@@ -55,19 +79,17 @@ export function createPluginRegistryIdNormalizer(
       index,
       includeDisabled: true,
     });
-  for (const plugin of [...registry.plugins].toSorted((left, right) =>
-    left.id.localeCompare(right.id),
-  )) {
-    const pluginId = normalizePluginRegistryAlias(plugin.id);
-    if (!pluginId) {
-      continue;
-    }
-    aliases.set(normalizePluginRegistryAliasKey(pluginId), plugin.id);
-    for (const alias of listPluginRegistryNormalizerAliases(plugin)) {
+  const manifestAliasEntries = registry.plugins
+    .map((plugin) => readPluginRegistryNormalizerAliasEntry(plugin))
+    .filter((entry): entry is PluginRegistryNormalizerAliasEntry => Boolean(entry))
+    .toSorted((left, right) => left.pluginId.localeCompare(right.pluginId));
+  for (const entry of manifestAliasEntries) {
+    aliases.set(normalizePluginRegistryAliasKey(entry.pluginId), entry.registryId);
+    for (const alias of entry.aliases) {
       const normalizedAlias = normalizePluginRegistryAlias(alias);
       const normalizedAliasKey = normalizePluginRegistryAliasKey(alias);
       if (normalizedAlias && !aliases.has(normalizedAliasKey)) {
-        aliases.set(normalizedAliasKey, pluginId);
+        aliases.set(normalizedAliasKey, entry.pluginId);
       }
     }
   }
