@@ -5,8 +5,15 @@ import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import type { SessionStatus } from "./status.types.js";
 export { shortenText } from "./text-format.js";
 
-export const formatKTokens = (value: number) =>
-  `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+export const formatKTokens = (value: number) => {
+  // Sub-1000 counts must render as plain integers; otherwise 999 rounds across
+  // the boundary to "1.0k" and small caches/sessions look like they crossed
+  // into thousands. Matches the canonical formatTokenCount sub-1000 branch.
+  if (value < 1000) {
+    return String(Math.round(value));
+  }
+  return `${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+};
 
 export const formatDuration = (ms: number | null | undefined) => {
   if (ms == null || !Number.isFinite(ms)) {
