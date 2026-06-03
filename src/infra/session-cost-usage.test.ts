@@ -17,6 +17,10 @@ import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
 import * as formatDatetime from "./format-time/format-datetime.js";
 import {
+  readSessionCostUsageCacheJson,
+  writeSessionCostUsageCacheJson,
+} from "./session-cost-usage-cache.sqlite.js";
+import {
   discoverAllSessions,
   loadCostUsageSummary,
   loadCostUsageSummaryFromCache,
@@ -504,6 +508,287 @@ describe("session cost usage", () => {
       const logs = await loadSessionLogs({ sessionId: "sess-top-level-provider", config });
       expect(logs?.[0]?.tokens).toBe(15_000);
       expect(logs?.[0]?.cost).toBeCloseTo(expectedCost, 8);
+    });
+  });
+
+  it("excludes untimestamped entries from direct bounded session ranges", async () => {
+    const root = await makeSessionCostRoot("cost-session-direct-range-untimestamped");
+    const sessionFile = path.join(root, "session.jsonl");
+    const assistantEntry = (
+      timestamp: string | undefined,
+      totalTokens: number,
+      model = "gpt-5.5",
+    ) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model,
+        content: [{ type: "tool_use", name: "weather" }],
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+    const userEntry = (timestamp: string) => ({
+      type: "message",
+      timestamp,
+      message: { role: "user", content: "hello" },
+    });
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify(assistantEntry(undefined, 1_000, "glm-5")),
+        JSON.stringify(assistantEntry("2026-02-04T12:00:00.000Z", 10)),
+        JSON.stringify(userEntry("2026-02-05T11:59:00.000Z")),
+        JSON.stringify(assistantEntry("2026-02-05T12:00:00.000Z", 20)),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
+    const ranged = await loadSessionCostSummary({
+      sessionFile,
+      startMs: Date.UTC(2026, 1, 5),
+      endMs: rangeEndMs,
+    });
+
+    expect(ranged?.totalTokens).toBe(20);
+    expect(ranged?.dailyBreakdown).toEqual([{ date: "2026-02-05", tokens: 20, cost: 0.02 }]);
+    expect(ranged?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
+
+    const allRange = await loadSessionCostSummary({
+      sessionFile,
+      startMs: 0,
+      endMs: rangeEndMs,
+      includeUntimestamped: true,
+    });
+    expect(allRange?.totalTokens).toBe(1_030);
+    expect(allRange?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(true);
+    expect(allRange?.dailyModelUsage?.some((entry) => entry.model === "glm-5")).toBe(false);
+  });
+
+  it("excludes untimestamped entries from cached bounded session ranges", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch-range-untimestamped");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-batch-range.jsonl");
+    const assistantEntry = (
+      timestamp: string | undefined,
+      totalTokens: number,
+      model = "gpt-5.5",
+    ) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model,
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify(assistantEntry(undefined, 1_000, "glm-5")),
+        JSON.stringify(assistantEntry("2026-02-04T12:00:00.000Z", 10)),
+        JSON.stringify(assistantEntry("2026-02-05T12:00:00.000Z", 20)),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const session = { sessionId: "sess-batch-range", sessionFile };
+      await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
+      const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
+      await vi.waitFor(
+        async () => {
+          const ranged = await loadSessionCostSummariesFromCache({
+            sessions: [session],
+            agentId: "main",
+            startMs: Date.UTC(2026, 1, 5),
+            endMs: rangeEndMs,
+            requestRefresh: false,
+          });
+          expect(ranged.cacheStatus.status).toBe("fresh");
+          expect(ranged.summaries[0]?.totalTokens).toBe(20);
+          expect(ranged.summaries[0]?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
+        },
+        { interval: 10, timeout: 2_000 },
+      );
+
+      const cacheJson = readSessionCostUsageCacheJson("main");
+      const cachedEntry = cacheJson
+        ? (
+            JSON.parse(cacheJson) as {
+              files?: Record<string, { hasUntimestampedTranscriptEntry?: boolean }>;
+            }
+          ).files?.[sessionFile]
+        : undefined;
+      expect(cachedEntry?.hasUntimestampedTranscriptEntry).toBe(true);
+
+      const allRange = await loadSessionCostSummariesFromCache({
+        sessions: [session],
+        agentId: "main",
+        startMs: 0,
+        endMs: rangeEndMs,
+        includeUntimestamped: true,
+        requestRefresh: false,
+      });
+      expect(allRange.cacheStatus.status).toBe("fresh");
+      expect(allRange.summaries[0]?.totalTokens).toBe(1_030);
+      expect(allRange.summaries[0]?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(
+        true,
+      );
+
+      const explicitEpochRange = await loadSessionCostSummariesFromCache({
+        sessions: [session],
+        agentId: "main",
+        startMs: 0,
+        endMs: rangeEndMs,
+        requestRefresh: false,
+      });
+      expect(explicitEpochRange.summaries[0]?.totalTokens).toBe(30);
+      expect(
+        explicitEpochRange.summaries[0]?.modelUsage?.some((entry) => entry.model === "glm-5"),
+      ).toBe(false);
+    });
+  });
+
+  it("rebuilds version 7 caches and preserves the untimestamped marker on append", async () => {
+    const root = await makeSessionCostRoot("cost-cache-v7-untimestamped-upgrade");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-v7-upgrade.jsonl");
+    const assistantEntry = (timestamp: string | undefined, totalTokens: number) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: timestamp ? "gpt-5.5" : "glm-5",
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify(assistantEntry(undefined, 1_000)),
+        JSON.stringify(assistantEntry("2026-02-05T12:00:00.000Z", 20)),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const session = { sessionId: "sess-v7-upgrade", sessionFile };
+      await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
+      await vi.waitFor(async () => {
+        const current = await loadSessionCostSummariesFromCache({
+          sessions: [session],
+          agentId: "main",
+          requestRefresh: false,
+        });
+        expect(current.cacheStatus.status).toBe("fresh");
+      });
+
+      const currentCache = JSON.parse(
+        requireValue(readSessionCostUsageCacheJson("main"), "expected current usage cache"),
+      ) as {
+        version: number;
+        updatedAt: number;
+        files: Record<
+          string,
+          {
+            hasUntimestampedTranscriptEntry?: boolean;
+            totals: { totalTokens: number };
+            sessionSummary?: { totalTokens: number };
+          }
+        >;
+      };
+      currentCache.version = 7;
+      const legacyEntry = requireValue(currentCache.files[sessionFile], "expected cached session");
+      delete legacyEntry.hasUntimestampedTranscriptEntry;
+      legacyEntry.totals.totalTokens = 9_999;
+      if (legacyEntry.sessionSummary) {
+        legacyEntry.sessionSummary.totalTokens = 9_999;
+      }
+      writeSessionCostUsageCacheJson({
+        agentId: "main",
+        valueJson: JSON.stringify(currentCache),
+        updatedAt: currentCache.updatedAt,
+      });
+
+      const rangeEndMs = Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1;
+      await loadSessionCostSummariesFromCache({
+        sessions: [session],
+        agentId: "main",
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: rangeEndMs,
+      });
+      await vi.waitFor(async () => {
+        const rebuilt = await loadSessionCostSummariesFromCache({
+          sessions: [session],
+          agentId: "main",
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: rangeEndMs,
+          requestRefresh: false,
+        });
+        expect(rebuilt.cacheStatus.status).toBe("fresh");
+        expect(rebuilt.summaries[0]?.totalTokens).toBe(20);
+      });
+
+      await fs.appendFile(
+        sessionFile,
+        `\n${JSON.stringify(assistantEntry("2026-02-05T13:00:00.000Z", 5))}`,
+        "utf-8",
+      );
+      await loadSessionCostSummariesFromCache({ sessions: [session], agentId: "main" });
+      await vi.waitFor(async () => {
+        const appended = await loadSessionCostSummariesFromCache({
+          sessions: [session],
+          agentId: "main",
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: rangeEndMs,
+          requestRefresh: false,
+        });
+        expect(appended.cacheStatus.status).toBe("fresh");
+        expect(appended.summaries[0]?.totalTokens).toBe(25);
+      });
+
+      const appendedCache = JSON.parse(
+        requireValue(readSessionCostUsageCacheJson("main"), "expected appended usage cache"),
+      ) as {
+        version: number;
+        files: Record<string, { hasUntimestampedTranscriptEntry?: boolean }>;
+      };
+      expect(appendedCache.version).toBe(8);
+      expect(appendedCache.files[sessionFile]?.hasUntimestampedTranscriptEntry).toBe(true);
+
+      const allTime = await loadSessionCostSummariesFromCache({
+        sessions: [session],
+        agentId: "main",
+        startMs: 0,
+        endMs: rangeEndMs,
+        includeUntimestamped: true,
+        requestRefresh: false,
+      });
+      expect(allTime.summaries[0]?.totalTokens).toBe(1_025);
     });
   });
 
