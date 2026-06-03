@@ -25,6 +25,9 @@ import { buildSingleProviderApiKeyCatalog } from "./provider-catalog-shared.js";
 
 type ApiKeyAuthMethodOptions = Parameters<typeof createProviderApiKeyAuthMethod>[0];
 
+/**
+ * API-key auth options for single-provider plugins, with provider id filled in by the entry helper.
+ */
 export type SingleProviderPluginApiKeyAuthOptions = Omit<
   ApiKeyAuthMethodOptions,
   "providerId" | "expectedProviders" | "wizard"
@@ -33,6 +36,9 @@ export type SingleProviderPluginApiKeyAuthOptions = Omit<
   wizard?: false | ProviderPluginWizardSetup;
 };
 
+/**
+ * Catalog configuration accepted by the single-provider entry helper.
+ */
 export type SingleProviderPluginCatalogOptions =
   | {
       buildProvider: Parameters<typeof buildSingleProviderApiKeyCatalog>[0]["buildProvider"];
@@ -51,6 +57,9 @@ export type SingleProviderPluginCatalogOptions =
       allowExplicitBaseUrl?: never;
     };
 
+/**
+ * Defines one provider plugin plus optional extra registration hooks.
+ */
 export type SingleProviderPluginOptions = {
   id: string;
   name: string;
@@ -136,6 +145,9 @@ async function runUnifiedTextCatalog(params: {
   });
 }
 
+/**
+ * Builds a plugin entry for providers whose runtime exports exactly one primary model provider.
+ */
 export function defineSingleProviderPluginEntry(options: SingleProviderPluginOptions) {
   return definePluginEntry({
     id: options.id,
@@ -166,6 +178,8 @@ export function defineSingleProviderPluginEntry(options: SingleProviderPluginOpt
             acceptedProviderAuth.push(entry);
             return [method];
           } catch {
+            // Fuzzed or partially unreadable auth rows should not prevent the
+            // provider from registering its remaining healthy auth methods.
             return [];
           }
         });
