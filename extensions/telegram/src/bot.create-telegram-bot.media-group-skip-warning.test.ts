@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveRemoteMedia = vi.fn();
@@ -104,10 +105,15 @@ function resolveFlushTimer(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
   return flushTimer;
 }
 
+async function waitForBufferedProcessing() {
+  await delay(75);
+}
+
 async function flushChannelPostMediaGroup(setTimeoutSpy: ReturnType<typeof vi.spyOn>) {
   const flushTimer = resolveFlushTimer(setTimeoutSpy);
   expect(flushTimer).toBeTypeOf("function");
   await flushTimer?.();
+  await waitForBufferedProcessing();
 }
 
 function createChannelPostContext(params: {

@@ -1,3 +1,4 @@
+import type { CommandsListResult } from "../../../packages/gateway-protocol/src/index.js";
 import { setLastActiveSessionKey } from "./app-last-active-session.ts";
 import { scheduleChatScroll, resetChatScroll } from "./app-scroll.ts";
 import { resetToolStream } from "./app-tool-stream.ts";
@@ -25,15 +26,19 @@ import {
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import { executeSlashCommand } from "./chat/slash-command-executor.ts";
-import { parseSlashCommand, refreshSlashCommands } from "./chat/slash-commands.ts";
+import {
+  applyRemoteSlashCommandsResult,
+  parseSlashCommand,
+  refreshSlashCommands,
+} from "./chat/slash-commands.ts";
 import { formatConnectError } from "./connect-error.ts";
+import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   controlUiNowMs,
   recordControlUiPerformanceEvent,
   roundedControlUiDurationMs,
   scheduleControlUiAfterPaint,
 } from "./control-ui-performance.ts";
-import { resolveControlUiAuthHeader } from "./control-ui-auth.ts";
 import {
   abortChatRun,
   appendUserChatMessage,
@@ -41,10 +46,13 @@ import {
   requestChatSend,
   sendDetachedChatMessage,
   sendSteerChatMessage,
+  type ChatEventPayload,
   type ChatHistoryResult,
+  type ChatSendAck,
   type ChatState,
+  isGatewayMethodAdvertised,
 } from "./controllers/chat.ts";
-import { loadModels } from "./controllers/models.ts";
+import { applyModelCatalogResult, loadModels } from "./controllers/models.ts";
 import {
   applyChatHistorySessionInfo,
   loadSessions,
@@ -66,7 +74,12 @@ import {
 } from "./session-key.ts";
 import { isSessionRunActive } from "./session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
-import type { ChatModelOverride, GatewaySessionRow, ModelCatalogEntry } from "./types.ts";
+import type {
+  AgentsListResult,
+  ChatModelOverride,
+  GatewaySessionRow,
+  ModelCatalogEntry,
+} from "./types.ts";
 import type { SessionsListResult } from "./types.ts";
 import type { ChatAttachment, ChatQueueItem, ChatSessionRefreshTarget } from "./ui-types.ts";
 import { generateUUID } from "./uuid.ts";
@@ -105,13 +118,23 @@ export type ChatHost = ChatInputHistoryState & {
   refreshSessionsAfterChat: Map<string, ChatSessionRefreshTarget>;
   pendingAbort?: { runId?: string | null; sessionKey: string; agentId?: string } | null;
   chatSubmitGuards?: Map<string, Promise<void>>;
+  chatSendTimingsByRun?: Map<string, ChatSendTimingEntry>;
   assistantAgentId?: string | null;
-  agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
+  agentsList?: ChatAgentsListSnapshot | null;
+  agentsSelectedId?: string | null;
   eventLogBuffer?: unknown[];
   eventLog?: unknown[];
   tab?: string;
   /** Callback for slash-command side effects that need app-level access. */
   onSlashAction?: (action: string) => void | Promise<void>;
+};
+
+type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
+  agents?: Array<{ id: string }>;
+};
+
+type ChatMetadataResult = CommandsListResult & {
+  models?: ModelCatalogEntry[];
 };
 
 function setChatError(host: ChatHost, error: string | null) {
@@ -395,8 +418,9 @@ function enqueuePendingSendMessage(
   attachments?: ChatAttachment[],
   refreshSessions?: boolean,
   submittedAtMs = controlUiNowMs(),
-  sendState: ChatQueueItem["sendState"] =
-    host.connected && host.client ? "sending" : "waiting-reconnect",
+  sendState: ChatQueueItem["sendState"] = host.connected && host.client
+    ? "sending"
+    : "waiting-reconnect",
 ): ChatQueueItem | null {
   const trimmed = text.trim();
   const hasAttachments = Boolean(attachments && attachments.length > 0);
@@ -418,8 +442,13 @@ function enqueuePendingSendMessage(
   };
   host.chatQueue = [...host.chatQueue, pending];
   recordChatSendTiming(host, pending, "pending-visible", submittedAtMs);
+  if (sendState === "waiting-model" || sendState === "waiting-reconnect") {
+    recordChatSendTiming(host, pending, sendState, submittedAtMs);
+  }
   schedulePendingSendPaintTiming(host, pending, submittedAtMs);
-  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true);
+  scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0], true, false, {
+    source: "manual",
+  });
   return pending;
 }
 
@@ -541,9 +570,9 @@ function cancelPendingSendBeforeRequest(
     restoreComposer && opts.previousDraft != null && !host.chatMessage.trim();
   const willRestoreAttachments = Boolean(
     restoreComposer &&
-      opts.previousAttachments?.length &&
-      host.chatAttachments.length === 0 &&
-      (willRestoreDraft || !host.chatMessage.trim()),
+    opts.previousAttachments?.length &&
+    host.chatAttachments.length === 0 &&
+    (willRestoreDraft || !host.chatMessage.trim()),
   );
   if (restoreComposer) {
     if (willRestoreDraft) {
@@ -568,10 +597,45 @@ type ChatSendTimingPhase =
   | "pending-painted"
   | "request-start"
   | "ack"
+  | "server-dispatch-started"
+  | "server-model-selected"
+  | "server-agent-run-started"
+  | "server-dispatch-completed"
+  | "server-post-dispatch-completed"
+  | "first-assistant-visible"
+  | "terminal-before-delta"
   | "queued-busy"
   | "waiting-model"
   | "waiting-reconnect"
   | "failed";
+
+type ChatSendTimingEntry = {
+  runId: string;
+  sessionKey?: string;
+  agentId?: string;
+  sendAttempts: number;
+  sendState?: ChatQueueItem["sendState"];
+  submittedAtMs: number;
+  requestStartedAtMs?: number;
+  ackAtMs?: number;
+  ackStatus?: ChatSendAck["status"];
+  firstAssistantVisibleRecorded?: boolean;
+};
+
+type ChatSendServerTimingPhase =
+  | "dispatch-started"
+  | "model-selected"
+  | "agent-run-started"
+  | "dispatch-completed"
+  | "post-dispatch-completed";
+
+const CHAT_SEND_SERVER_TIMING_PHASES = new Set<ChatSendServerTimingPhase>([
+  "dispatch-started",
+  "model-selected",
+  "agent-run-started",
+  "dispatch-completed",
+  "post-dispatch-completed",
+]);
 
 function recordChatSendTiming(
   host: ChatHost,
@@ -603,6 +667,244 @@ function recordChatSendTiming(
   );
 }
 
+function readChatSendServerTimingPhase(value: unknown): ChatSendServerTimingPhase | null {
+  return typeof value === "string" &&
+    (CHAT_SEND_SERVER_TIMING_PHASES as ReadonlySet<string>).has(value)
+    ? (value as ChatSendServerTimingPhase)
+    : null;
+}
+
+function readChatSendTimingNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+export function recordChatSendServerTiming(host: ChatHost, payload: unknown) {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  const record = payload as Record<string, unknown>;
+  const phase = readChatSendServerTimingPhase(record.phase);
+  const runId = typeof record.runId === "string" && record.runId.trim() ? record.runId.trim() : "";
+  if (!phase || !runId) {
+    return;
+  }
+  const entry = host.chatSendTimingsByRun?.get(runId);
+  const nowMs = controlUiNowMs();
+  const serverAckToPhaseMs = readChatSendTimingNumber(record.ackToPhaseMs);
+  const serverReceivedToPhaseMs = readChatSendTimingNumber(record.receivedToPhaseMs);
+  const serverDispatchStartedToPhaseMs = readChatSendTimingNumber(record.dispatchStartedToPhaseMs);
+  const serverPostDispatchMs = readChatSendTimingNumber(record.postDispatchMs);
+  const durationMs =
+    entry?.submittedAtMs !== undefined
+      ? roundedControlUiDurationMs(nowMs - entry.submittedAtMs)
+      : serverAckToPhaseMs;
+  if (durationMs === undefined) {
+    return;
+  }
+  recordControlUiPerformanceEvent(
+    host as Parameters<typeof recordControlUiPerformanceEvent>[0],
+    "control-ui.chat.send",
+    {
+      phase: `server-${phase}`,
+      durationMs,
+      runId,
+      sessionKey:
+        entry?.sessionKey ??
+        (typeof record.sessionKey === "string" && record.sessionKey.trim()
+          ? record.sessionKey.trim()
+          : undefined),
+      agentId:
+        entry?.agentId ??
+        (typeof record.agentId === "string" && record.agentId.trim()
+          ? record.agentId.trim()
+          : undefined),
+      sendAttempts: entry?.sendAttempts ?? 0,
+      sendState: entry?.sendState,
+      ackStatus: entry?.ackStatus,
+      serverPhase: phase,
+      ...(serverAckToPhaseMs !== undefined ? { serverAckToPhaseMs } : {}),
+      ...(serverReceivedToPhaseMs !== undefined ? { serverReceivedToPhaseMs } : {}),
+      ...(serverDispatchStartedToPhaseMs !== undefined ? { serverDispatchStartedToPhaseMs } : {}),
+      ...(serverPostDispatchMs !== undefined ? { serverPostDispatchMs } : {}),
+      ...(typeof record.provider === "string" && record.provider.trim()
+        ? { provider: record.provider.trim() }
+        : {}),
+      ...(typeof record.model === "string" && record.model.trim()
+        ? { model: record.model.trim() }
+        : {}),
+      ...(typeof record.agentRunId === "string" && record.agentRunId.trim()
+        ? { agentRunId: record.agentRunId.trim() }
+        : {}),
+    },
+    { console: false, maxBufferedEventsForType: 40 },
+  );
+}
+
+function ensureChatSendTimingEntries(host: ChatHost): Map<string, ChatSendTimingEntry> {
+  if (host.chatSendTimingsByRun) {
+    return host.chatSendTimingsByRun;
+  }
+  const entries = new Map<string, ChatSendTimingEntry>();
+  host.chatSendTimingsByRun = entries;
+  return entries;
+}
+
+function registerChatSendTiming(
+  host: ChatHost,
+  item: Pick<
+    ChatQueueItem,
+    "sendRunId" | "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
+  >,
+  runId: string,
+  requestStartedAtMs: number,
+) {
+  ensureChatSendTimingEntries(host).set(runId, {
+    runId,
+    sessionKey: item.sessionKey,
+    agentId: item.agentId,
+    sendAttempts: item.sendAttempts ?? 0,
+    sendState: item.sendState,
+    submittedAtMs: item.sendSubmittedAtMs ?? requestStartedAtMs,
+    requestStartedAtMs,
+  });
+}
+
+function updateChatSendAckTiming(
+  host: ChatHost,
+  requestedRunId: string,
+  ack: ChatSendAck,
+  item: Pick<
+    ChatQueueItem,
+    "sessionKey" | "agentId" | "sendAttempts" | "sendState" | "sendSubmittedAtMs"
+  >,
+  requestStartedAtMs: number,
+) {
+  const entries = ensureChatSendTimingEntries(host);
+  const existing = entries.get(requestedRunId);
+  const submittedAtMs = existing?.submittedAtMs ?? item.sendSubmittedAtMs ?? requestStartedAtMs;
+  const next: ChatSendTimingEntry = {
+    ...(existing ?? {
+      runId: ack.runId,
+      sessionKey: item.sessionKey,
+      agentId: item.agentId,
+      sendAttempts: item.sendAttempts ?? 0,
+      sendState: item.sendState,
+      submittedAtMs,
+      requestStartedAtMs,
+    }),
+    runId: ack.runId,
+    sessionKey: existing?.sessionKey ?? item.sessionKey,
+    agentId: existing?.agentId ?? item.agentId,
+    ackAtMs: controlUiNowMs(),
+    ackStatus: ack.status,
+  };
+  if (ack.runId !== requestedRunId) {
+    entries.delete(requestedRunId);
+  }
+  entries.set(ack.runId, next);
+}
+
+function chatSendAckServerTimingEventFields(ack: ChatSendAck): Record<string, number> {
+  const timing = ack.serverTiming;
+  return {
+    ...(typeof timing?.receivedToAckMs === "number"
+      ? { serverReceivedToAckMs: timing.receivedToAckMs }
+      : {}),
+    ...(typeof timing?.loadSessionMs === "number"
+      ? { serverLoadSessionMs: timing.loadSessionMs }
+      : {}),
+    ...(typeof timing?.prepareAttachmentsMs === "number"
+      ? { serverPrepareAttachmentsMs: timing.prepareAttachmentsMs }
+      : {}),
+  };
+}
+
+function chatEventHasVisibleTerminalPayload(payload: ChatEventPayload): boolean {
+  if (payload.state === "error" && payload.errorMessage?.trim()) {
+    return true;
+  }
+  return Boolean(payload.message && typeof payload.message === "object");
+}
+
+function resolveFirstAssistantTimingPhase(
+  host: ChatHost,
+  payload: ChatEventPayload,
+  entry: ChatSendTimingEntry,
+): Extract<ChatSendTimingPhase, "first-assistant-visible" | "terminal-before-delta"> | null {
+  if (entry.firstAssistantVisibleRecorded) {
+    return null;
+  }
+  if (payload.state === "delta") {
+    return typeof host.chatStream === "string" && host.chatStream.trim()
+      ? "first-assistant-visible"
+      : null;
+  }
+  if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
+    return chatEventHasVisibleTerminalPayload(payload) ? "terminal-before-delta" : null;
+  }
+  return null;
+}
+
+export function recordFirstAssistantChatTiming(
+  host: ChatHost,
+  payload: ChatEventPayload | undefined,
+  handledState: ChatEventPayload["state"] | null,
+) {
+  if (!payload || !handledState || typeof payload.runId !== "string") {
+    return;
+  }
+  const runId = payload.runId.trim();
+  const entry = runId ? host.chatSendTimingsByRun?.get(runId) : undefined;
+  if (!entry) {
+    return;
+  }
+  const phase = resolveFirstAssistantTimingPhase(host, payload, entry);
+  if (!phase) {
+    if (payload.state === "final" || payload.state === "aborted" || payload.state === "error") {
+      host.chatSendTimingsByRun?.delete(runId);
+    }
+    return;
+  }
+
+  const eventAtMs = controlUiNowMs();
+  entry.firstAssistantVisibleRecorded = true;
+  scheduleControlUiAfterPaint(host, () => {
+    const paintedAtMs = controlUiNowMs();
+    recordControlUiPerformanceEvent(
+      host as Parameters<typeof recordControlUiPerformanceEvent>[0],
+      "control-ui.chat.send",
+      {
+        phase,
+        durationMs: roundedControlUiDurationMs(paintedAtMs - entry.submittedAtMs),
+        runId,
+        sessionKey: entry.sessionKey ?? payload.sessionKey,
+        agentId: entry.agentId ?? payload.agentId,
+        sendAttempts: entry.sendAttempts,
+        sendState: entry.sendState,
+        ackStatus: entry.ackStatus,
+        eventState: payload.state,
+        firstAssistantPaintMs: roundedControlUiDurationMs(paintedAtMs - eventAtMs),
+        ...(entry.requestStartedAtMs != null
+          ? {
+              requestToFirstAssistantEventMs: roundedControlUiDurationMs(
+                eventAtMs - entry.requestStartedAtMs,
+              ),
+            }
+          : {}),
+        ...(entry.ackAtMs != null
+          ? {
+              ackToFirstAssistantEventMs: roundedControlUiDurationMs(eventAtMs - entry.ackAtMs),
+            }
+          : {}),
+      },
+      { console: false, maxBufferedEventsForType: 40 },
+    );
+    if (phase === "terminal-before-delta") {
+      host.chatSendTimingsByRun?.delete(runId);
+    }
+  });
+}
+
 function shouldRecordPendingSendPaint(item: ChatQueueItem): boolean {
   return (
     typeof item.sendSubmittedAtMs === "number" &&
@@ -622,21 +924,18 @@ function schedulePendingSendPaintTiming(
   if (!sendRunId || startedAtMs == null) {
     return;
   }
-  scheduleControlUiAfterPaint(
-    host as Parameters<typeof scheduleControlUiAfterPaint>[0],
-    () => {
-      if (!visibleSessionMatches(host, sessionKey, item.agentId)) {
-        return;
-      }
-      const queued = readChatQueueForSession(host, sessionKey).find(
-        (entry) => entry.id === item.id && entry.sendRunId === sendRunId,
-      );
-      if (!queued || !shouldRecordPendingSendPaint(queued)) {
-        return;
-      }
-      recordChatSendTiming(host, queued, "pending-painted", startedAtMs);
-    },
-  );
+  scheduleControlUiAfterPaint(host as Parameters<typeof scheduleControlUiAfterPaint>[0], () => {
+    if (!visibleSessionMatches(host, sessionKey, item.agentId)) {
+      return;
+    }
+    const queued = readChatQueueForSession(host, sessionKey).find(
+      (entry) => entry.id === item.id && entry.sendRunId === sendRunId,
+    );
+    if (!queued || !shouldRecordPendingSendPaint(queued)) {
+      return;
+    }
+    recordChatSendTiming(host, queued, "pending-painted", startedAtMs);
+  });
 }
 
 function ensureQueuedSendState(
@@ -695,17 +994,19 @@ async function sendQueuedChatMessage(
   const runId = prepared.sendRunId ?? generateUUID();
   const startedAt = Date.now();
   const requestStartedAtMs = controlUiNowMs();
-  updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
-    ...item,
-    sendAttempts: (item.sendAttempts ?? 0) + 1,
-    sendError: undefined,
-    sendRunId: runId,
-    sendState: "sending",
-    sendRequestStartedAtMs: requestStartedAtMs,
-    sessionKey,
-    agentId: prepared.agentId,
-  }));
-  recordChatSendTiming(host, prepared, "request-start", prepared.sendSubmittedAtMs);
+  const sendingItem =
+    updateQueuedMessageForSession(host, sessionKey, id, (item) => ({
+      ...item,
+      sendAttempts: (item.sendAttempts ?? 0) + 1,
+      sendError: undefined,
+      sendRunId: runId,
+      sendState: "sending",
+      sendRequestStartedAtMs: requestStartedAtMs,
+      sessionKey,
+      agentId: prepared.agentId,
+    })) ?? prepared;
+  registerChatSendTiming(host, sendingItem, runId, requestStartedAtMs);
+  recordChatSendTiming(host, sendingItem, "request-start", sendingItem.sendSubmittedAtMs);
   host.chatSending = true;
   const isVisibleSession = () => visibleSessionMatches(host, sessionKey, prepared.agentId);
   if (isVisibleSession()) {
@@ -723,9 +1024,11 @@ async function sendQueuedChatMessage(
       sessionKey,
       agentId: prepared.agentId,
     });
-    recordChatSendTiming(host, prepared, "ack", prepared.sendSubmittedAtMs, {
+    updateChatSendAckTiming(host, runId, ack, sendingItem, requestStartedAtMs);
+    recordChatSendTiming(host, sendingItem, "ack", sendingItem.sendSubmittedAtMs, {
       ackStatus: ack.status,
       requestDurationMs: roundedControlUiDurationMs(controlUiNowMs() - requestStartedAtMs),
+      ...chatSendAckServerTimingEventFields(ack),
     });
     removeQueuedMessageWithoutReleasing(host, id, sessionKey);
     if (isVisibleSession()) {
@@ -739,6 +1042,7 @@ async function sendQueuedChatMessage(
         reconcileChatRunLifecycle(
           host as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
           {
+            outcome: "done",
             sessionStatus: "done",
             runId: ack.runId,
             sessionKey,
@@ -746,7 +1050,8 @@ async function sendQueuedChatMessage(
             clearChatStream: true,
             clearToolStream: true,
             clearSideResultTerminalRuns: true,
-            clearRunStatus: true,
+            publishRunStatus: false,
+            armLocalTerminalReconcile: true,
           },
         );
         void loadChatHistory(host as unknown as ChatState);
@@ -1637,12 +1942,14 @@ function injectCommandResult(host: ChatHost, content: string) {
 
 export async function refreshChat(
   host: ChatHost,
-  opts?: { scheduleScroll?: boolean; awaitHistory?: boolean },
+  opts?: { scheduleScroll?: boolean; awaitHistory?: boolean; startup?: boolean },
 ) {
   const refreshedSessionKey = host.sessionKey;
   const requestUpdate = () => host.requestUpdate?.();
   const previousSessionsResult = host.sessionsResult;
-  const historyLoad = loadChatHistory(host as unknown as ChatState);
+  const historyLoad = loadChatHistory(host as unknown as ChatState, {
+    startup: opts?.startup === true,
+  });
   const historyRefresh = historyLoad.finally(() => {
     if (opts?.scheduleScroll !== false) {
       scheduleChatScroll(host as unknown as Parameters<typeof scheduleChatScroll>[0]);
@@ -1670,11 +1977,9 @@ export async function refreshChat(
     if (host.sessionKey !== refreshedSessionKey || !host.connected) {
       return;
     }
-    void Promise.allSettled([
-      refreshChatAvatar(host),
-      refreshChatModels(host),
-      refreshChatCommands(host),
-    ]).finally(requestUpdate);
+    void Promise.allSettled([refreshChatAvatar(host), refreshChatMetadata(host)]).finally(
+      requestUpdate,
+    );
   });
   void historyRefresh;
   void secondaryRefresh;
@@ -1714,6 +2019,62 @@ async function refreshChatCommands(host: ChatHost) {
     client: host.client,
     agentId: resolveAgentIdForSession(host),
   });
+}
+
+async function refreshChatMetadata(host: ChatHost) {
+  if (!host.client || !host.connected) {
+    host.chatModelsLoading = false;
+    host.chatModelCatalog = [];
+    return;
+  }
+  const client = host.client;
+  const sessionKey = host.sessionKey;
+  const agentId = resolveAgentIdForSession(host);
+  const metadataAdvertised = isGatewayMethodAdvertised(
+    host as unknown as ChatState,
+    "chat.metadata",
+  );
+  if (metadataAdvertised === false) {
+    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
+    return;
+  }
+
+  host.chatModelsLoading = true;
+  try {
+    const result = await client.request<ChatMetadataResult>(
+      "chat.metadata",
+      agentId ? { agentId } : {},
+    );
+    if (
+      host.client !== client ||
+      !host.connected ||
+      host.sessionKey !== sessionKey ||
+      resolveAgentIdForSession(host) !== agentId
+    ) {
+      return;
+    }
+    const models = applyModelCatalogResult(result.models);
+    if (models) {
+      host.chatModelCatalog = models;
+    }
+    const commandsApplied = applyRemoteSlashCommandsResult({
+      client,
+      agentId,
+      result,
+    });
+    if (!models || !commandsApplied) {
+      await Promise.allSettled([
+        ...(models ? [] : [refreshChatModels(host)]),
+        ...(commandsApplied ? [] : [refreshChatCommands(host)]),
+      ]);
+    }
+  } catch {
+    await Promise.allSettled([refreshChatModels(host), refreshChatCommands(host)]);
+  } finally {
+    if (host.client === client) {
+      host.chatModelsLoading = false;
+    }
+  }
 }
 
 export const flushChatQueueForEvent = flushChatQueue;

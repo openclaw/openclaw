@@ -90,6 +90,22 @@ const EXTENSION_ACTIVE_MEMORY_VITEST_CONFIG =
 const EXTENSION_ACPX_VITEST_CONFIG = "test/vitest/vitest.extension-acpx.config.ts";
 const EXTENSION_BROWSER_VITEST_CONFIG = "test/vitest/vitest.extension-browser.config.ts";
 const EXTENSION_CODEX_VITEST_CONFIG = "test/vitest/vitest.extension-codex.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_EXTRA_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt-extra.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_LIGHT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt-light.config.ts";
+const EXTENSION_CODEX_APP_SERVER_ATTEMPT_SUPPORT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-attempt-support.config.ts";
+const EXTENSION_CODEX_APP_SERVER_RUNTIME_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-runtime.config.ts";
+const EXTENSION_CODEX_APP_SERVER_SUPPORT_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-support.config.ts";
+const EXTENSION_CODEX_APP_SERVER_TOOLS_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-app-server-tools.config.ts";
+const EXTENSION_CODEX_SURFACE_VITEST_CONFIG =
+  "test/vitest/vitest.extension-codex-surface.config.ts";
 const EXTENSION_CHANNELS_VITEST_CONFIG = "test/vitest/vitest.extension-channels.config.ts";
 const EXTENSION_DIFFS_VITEST_CONFIG = "test/vitest/vitest.extension-diffs.config.ts";
 const EXTENSION_DISCORD_VITEST_CONFIG = "test/vitest/vitest.extension-discord.config.ts";
@@ -148,6 +164,14 @@ const FULL_SUITE_CONFIG_WEIGHT = new Map([
   [AGENTS_SUPPORT_VITEST_CONFIG, 168],
   [AGENTS_TOOLS_VITEST_CONFIG, 167],
   [EXTENSION_CODEX_VITEST_CONFIG, 168],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_VITEST_CONFIG, 168],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_EXTRA_VITEST_CONFIG, 118],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_LIGHT_VITEST_CONFIG, 82],
+  [EXTENSION_CODEX_APP_SERVER_ATTEMPT_SUPPORT_VITEST_CONFIG, 80],
+  [EXTENSION_CODEX_APP_SERVER_RUNTIME_VITEST_CONFIG, 88],
+  [EXTENSION_CODEX_APP_SERVER_TOOLS_VITEST_CONFIG, 78],
+  [EXTENSION_CODEX_APP_SERVER_SUPPORT_VITEST_CONFIG, 72],
+  [EXTENSION_CODEX_SURFACE_VITEST_CONFIG, 68],
   [EXTENSION_VOICE_CALL_VITEST_CONFIG, 169],
   [EXTENSIONS_VITEST_CONFIG, 168],
   [EXTENSION_PROVIDER_OPENAI_VITEST_CONFIG, 167],
@@ -371,6 +395,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
   [
+    ".github/workflows/ci-check-arm-testbox.yml",
+    ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
+  ],
+  [
     ".github/workflows/crabbox-hydrate.yml",
     ["test/scripts/ci-workflow-guards.test.ts", "test/scripts/package-acceptance-workflow.test.ts"],
   ],
@@ -455,7 +483,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   [
     "scripts/mcp-code-mode-gateway-e2e.ts",
-    ["test/scripts/mcp-code-mode-gateway-client.test.ts", "test/scripts/session-log-mentions.test.ts"],
+    [
+      "test/scripts/mcp-code-mode-gateway-client.test.ts",
+      "test/scripts/session-log-mentions.test.ts",
+    ],
   ],
   ["scripts/dependency-changes-report.mjs", ["test/scripts/dependency-changes-report.test.ts"]],
   [
@@ -577,6 +608,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
     ["test/scripts/docker-build-helper.test.ts", "test/scripts/openclaw-test-state.test.ts"],
   ],
   ["scripts/e2e/plugin-lifecycle-matrix-docker.sh", ["test/scripts/docker-build-helper.test.ts"]],
+  [
+    "scripts/e2e/lib/plugin-lifecycle-matrix/measure.mjs",
+    ["test/scripts/plugin-lifecycle-measure.test.ts"],
+  ],
   [
     "scripts/e2e/lib/plugin-lifecycle-matrix/probe.mjs",
     ["test/scripts/plugin-lifecycle-probe.test.ts"],
@@ -1612,8 +1647,10 @@ function resolveToolingChangedTestTargets(changedPaths, cwd = process.cwd()) {
   return [...new Set(targets)];
 }
 
+const TOOLING_SCRIPT_PATH_PATTERN = /^scripts\/(.+)\.(?:mjs|cjs|js|mts|cts|ts|sh|py|ps1)$/u;
+
 function resolveConventionalToolingTestTargets(changedPath, cwd = process.cwd()) {
-  const match = /^scripts\/(.+)\.(?:mjs|ts|js|sh|py)$/u.exec(changedPath);
+  const match = TOOLING_SCRIPT_PATH_PATTERN.exec(changedPath);
   if (!match) {
     return null;
   }
@@ -1632,14 +1669,45 @@ function resolveConventionalToolingTestTargets(changedPath, cwd = process.cwd())
   return targets.length > 0 ? targets : null;
 }
 
+function isToolingScriptPath(changedPath) {
+  return TOOLING_SCRIPT_PATH_PATTERN.test(changedPath);
+}
+
+function resolveParallelsToolingTestTargets(changedPath) {
+  if (!/^scripts\/e2e\/parallels\/[^/]+\.ts$/u.test(changedPath)) {
+    return null;
+  }
+  const targets = ["test/scripts/parallels-smoke-model.test.ts"];
+  if (
+    [
+      "scripts/e2e/parallels/guest-transports.ts",
+      "scripts/e2e/parallels/host-command.ts",
+      "scripts/e2e/parallels/npm-update-scripts.ts",
+      "scripts/e2e/parallels/npm-update-smoke.ts",
+    ].includes(changedPath)
+  ) {
+    targets.push("test/scripts/parallels-npm-update-smoke.test.ts");
+  }
+  if (changedPath === "scripts/e2e/parallels/update-job-timeout.ts") {
+    targets.push("test/scripts/parallels-update-job-timeout.test.ts");
+  }
+  return targets;
+}
+
 function resolveToolingTestTargets(changedPath, cwd = process.cwd()) {
   const explicitTargets =
-    TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ?? TOOLING_TEST_TARGETS.get(changedPath);
+    TOOLING_SOURCE_TEST_TARGETS.get(changedPath) ??
+    TOOLING_TEST_TARGETS.get(changedPath) ??
+    resolveParallelsToolingTestTargets(changedPath);
   const conventionalTargets = resolveConventionalToolingTestTargets(changedPath, cwd);
   if (explicitTargets && conventionalTargets) {
     return uniqueOrdered([...explicitTargets, ...conventionalTargets]);
   }
-  return explicitTargets ?? conventionalTargets;
+  return (
+    explicitTargets ??
+    conventionalTargets ??
+    (isToolingScriptPath(changedPath) ? [TOOLING_VITEST_CONFIG] : null)
+  );
 }
 
 function shouldUseBroadChangedTargets(env = process.env) {
@@ -2295,7 +2363,10 @@ export function buildFullSuiteVitestRunPlans(args, cwd = process.cwd()) {
       },
     ];
   }
-  const parallelShardCount = Number.parseInt(process.env.OPENCLAW_TEST_PROJECTS_PARALLEL ?? "", 10);
+  const parallelShardCount = parsePositiveInt(
+    process.env.OPENCLAW_TEST_PROJECTS_PARALLEL,
+    "OPENCLAW_TEST_PROJECTS_PARALLEL",
+  );
   const expandToProjectConfigs =
     process.env.OPENCLAW_TEST_PROJECTS_LEAF_SHARDS === "1" ||
     (Number.isFinite(parallelShardCount) && parallelShardCount > 1) ||
@@ -2345,14 +2416,27 @@ export function shouldUseLocalFullSuiteParallelByDefault(env = process.env) {
   );
 }
 
-function parsePositiveInt(value) {
-  const parsed = Number.parseInt(value ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+function parsePositiveInt(value, label) {
+  const text = value?.trim();
+  if (!text) {
+    return null;
+  }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer; got: ${value}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer; got: ${value}`);
+  }
+  return parsed;
 }
 
 function hasConservativeVitestWorkerBudget(env) {
   const workerBudget = parsePositiveInt(
     env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS,
+    env.OPENCLAW_VITEST_MAX_WORKERS === undefined
+      ? "OPENCLAW_TEST_WORKERS"
+      : "OPENCLAW_VITEST_MAX_WORKERS",
   );
   return workerBudget !== null && workerBudget <= 1;
 }
@@ -2360,7 +2444,10 @@ function hasConservativeVitestWorkerBudget(env) {
 export function resolveParallelFullSuiteConcurrency(specCount, envInput, hostInfo) {
   let env = envInput;
   env ??= process.env;
-  const override = parsePositiveInt(env.OPENCLAW_TEST_PROJECTS_PARALLEL);
+  const override = parsePositiveInt(
+    env.OPENCLAW_TEST_PROJECTS_PARALLEL,
+    "OPENCLAW_TEST_PROJECTS_PARALLEL",
+  );
   if (override !== null) {
     return Math.min(override, specCount);
   }

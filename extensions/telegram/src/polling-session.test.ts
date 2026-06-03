@@ -717,17 +717,11 @@ describe("TelegramPollingSession", () => {
       spoolDir: tempDir,
       update: { update_id: 42, message: { text: "hello" } },
     });
-    let stopWorker: (() => void) | undefined;
-    const workerDone = new Promise<void>((resolve) => {
-      stopWorker = resolve;
-    });
     const createWorker = vi.fn(() => ({
       onMessage: vi.fn(() => () => undefined),
-      stop: vi.fn(async () => {
-        stopWorker?.();
-      }),
+      stop: vi.fn(async () => undefined),
       task: vi.fn(async () => {
-        await workerDone;
+        await waitForAbortSignal(abort.signal);
       }),
     }));
 

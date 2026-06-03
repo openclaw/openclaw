@@ -317,6 +317,7 @@ export async function connectTestGatewayClient(params: {
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
   onEvent?: (evt: EventFrame) => void;
   onRetry?: (attempt: number, error: Error) => void;
 }): Promise<GatewayClient> {
@@ -358,6 +359,7 @@ async function connectClientOnce(params: {
   clientDisplayName?: string | null;
   requestTimeoutMs?: number;
   tickWatchTimeoutMs?: number;
+  waitForEventLoopReady?: boolean;
   onEvent?: (evt: EventFrame) => void;
 }): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
@@ -413,10 +415,17 @@ async function connectClientOnce(params: {
       params.timeoutMs,
     );
     connectTimeout.unref();
-    void startGatewayClientWhenEventLoopReady(client, {
-      timeoutMs: params.timeoutMs,
-      signal: abortStart.signal,
-    }).then(
+    const startPromise =
+      params.waitForEventLoopReady === false
+        ? Promise.resolve().then(() => {
+            client.start();
+            return { ready: true, aborted: false };
+          })
+        : startGatewayClientWhenEventLoopReady(client, {
+            timeoutMs: params.timeoutMs,
+            signal: abortStart.signal,
+          });
+    void startPromise.then(
       (readiness) => {
         if (!readiness.ready && !readiness.aborted) {
           finish({ error: new Error("gateway event loop readiness timeout") });

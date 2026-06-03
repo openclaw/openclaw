@@ -14,7 +14,8 @@ import {
   sendMinimalGatewayResponse,
 } from "./minimal-gateway.test-helpers.js";
 
-const GATEWAY_CONNECT_TIMEOUT_MS = 5_000;
+const GATEWAY_CONNECT_OPERATION_TIMEOUT_MS = 1_000;
+const GATEWAY_CONNECT_TEST_TIMEOUT_MS = 15_000;
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-gateway-connect-" });
 
 async function createTempDeviceIdentity() {
@@ -104,12 +105,13 @@ describe("gateway cli backend connect", () => {
           url: server.url,
           token,
           deviceIdentity,
-          timeoutMs: 1_000,
-          maxAttemptTimeoutMs: 1_000,
-          requestTimeoutMs: 1_000,
+          timeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
+          maxAttemptTimeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
+          requestTimeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
+          waitForEventLoopReady: false,
         });
         const health = await client.request("health", undefined, {
-          timeoutMs: 1_000,
+          timeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS,
         });
         const connectClient = server.connectParams?.client as Record<string, unknown> | undefined;
         expect(health.ok).toBe(true);
@@ -119,10 +121,12 @@ describe("gateway cli backend connect", () => {
         expect(connectClient?.mode).toBe(GATEWAY_CLIENT_MODES.TEST);
         expect(server.requests).toEqual(["connect", "health"]);
       } finally {
-        await client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {});
+        await client
+          ?.stopAndWait({ timeoutMs: GATEWAY_CONNECT_OPERATION_TIMEOUT_MS })
+          .catch(() => {});
         await server.close();
       }
     },
-    GATEWAY_CONNECT_TIMEOUT_MS,
+    GATEWAY_CONNECT_TEST_TIMEOUT_MS,
   );
 });

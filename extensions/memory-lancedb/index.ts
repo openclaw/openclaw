@@ -209,6 +209,7 @@ const DEFAULT_TOOL_RECALL_COOLDOWN_MS = 60_000;
 // bounded.
 const DEFAULT_AUTO_RECALL_OVERFETCH_LIMIT = 10;
 const DEFAULT_AUTO_RECALL_RESULT_CAP = 3;
+const DUPLICATE_SEARCH_LIMIT = 5;
 
 function parsePositiveIntegerOption(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) {
@@ -662,6 +663,16 @@ function sanitizeRecallMemoryText(text: string): string | null {
   return looksLikeEnvelopeSludge(stripped) ? null : stripped;
 }
 
+async function findCleanDuplicateMemory(
+  db: {
+    search(vector: number[], limit?: number, minScore?: number): Promise<MemorySearchResult[]>;
+  },
+  vector: number[],
+): Promise<MemorySearchResult | undefined> {
+  const existing = await db.search(vector, DUPLICATE_SEARCH_LIMIT, 0.95);
+  return existing.find((result) => sanitizeRecallMemoryText(result.entry.text) !== null);
+}
+
 // ============================================================================
 // Envelope / transport metadata contamination detection
 // ============================================================================
@@ -692,6 +703,12 @@ const INBOUND_META_SENTINELS = [
   "Nearby reply target window (untrusted, chronological, around replied-to message):",
   "Chat history since last reply (untrusted, for context):",
 ] as const;
+const INBOUND_META_SENTINEL_LINE_RE = new RegExp(
+  `^(?:${INBOUND_META_SENTINELS.map((sentinel) =>
+    sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
+  ).join("|")})[^\\n]*$`,
+  "m",
+);
 
 const MESSAGE_TOOL_DELIVERY_HINTS = [
   "Delivery: to send a message, use the `message` tool.",
@@ -705,6 +722,16 @@ const MESSAGE_TOOL_DELIVERY_HINT_RE = new RegExp(
 );
 const HISTORY_CONTEXT_MARKER = "[Chat messages since your last reply - for context]";
 const CURRENT_MESSAGE_MARKER = "[Current message - respond to this]";
+const HISTORY_CONTEXT_MARKERS = [
+  HISTORY_CONTEXT_MARKER,
+  "[Chat messages since your last reply \u2014 CONTEXT ONLY]",
+  "[Merged earlier messages \u2014 CONTEXT ONLY]",
+] as const;
+const CURRENT_MESSAGE_MARKERS = [
+  CURRENT_MESSAGE_MARKER,
+  "[CURRENT MESSAGE \u2014 reply to this]",
+  "[CURRENT MESSAGE \u2014 reply using the context above]",
+] as const;
 
 const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
 
@@ -720,18 +747,20 @@ const ACTIVE_TURN_RECOVERY_RE = /active-turn-recovery/i;
  * so requiring `):` to terminate the line catches every real injection while
  * sidestepping the false-positive risk.
  *
- * Label segment is capped at 100 chars to avoid catastrophic backtracking on
- * pathological inputs.
+ * The producer does not truncate custom structured-context labels, so the
+ * label segment is newline-bound rather than length-bound. The expression uses
+ * only linear character classes; avoid nested wildcards here.
  */
 const INBOUND_META_LABEL_RE =
-  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*$/m;
+  /^[^\n]+\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*$/m;
 const INBOUND_META_LABEL_JSON_BLOCK_RE =
-  /^[^\n]{1,100}\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*\n?/gm;
+  /^[^\n]+\((?:untrusted metadata|untrusted, for context|untrusted, nearest first|untrusted, chronological,[^\n)]{1,80})\):[ \t]*\n[ \t]*```json[ \t]*\n[\s\S]*?\n[ \t]*```[ \t]*\n?/gm;
 const LEADING_CHRONOLOGICAL_CONTEXT_LABEL_RE =
   /^\s*[^\n]{1,100}\(untrusted, chronological,[^\n)]{1,80}\):[ \t]*(?:\n|$)/;
-const BRACKETED_LINE_PREFIX_RE = /^\[[^\]\n]{1,500}\]\s/gm;
 const BRACKETED_PREFIX_RE = /\[[^\]\n]{1,500}\]\s/g;
 const LEADING_CURRENT_MESSAGE_CONTEXT_RE = /^\s*Current message:[ \t]*(?:\n|$)/;
+const LEADING_CURRENT_MESSAGE_REPLY_LINE_RE = /^\s*\[Replying to:[^\n]{0,1000}\]\s*\n/;
+const LEADING_CURRENT_MESSAGE_ID_SENDER_RE = /^#\d+\s+[^\n:]{1,100}:\s*/;
 
 const UNTRUSTED_CONTEXT_HEADER_RE = /^Untrusted context \(metadata/m;
 
@@ -777,12 +806,11 @@ const INBOUND_ENVELOPE_PREFIX_RE =
   /^\[([^\]\n]{0,300}?(?:\s\+(?:\d+[smhdwy]|just now)\b|\s[A-Za-z]{3}\s\d{4}-\d{2}-\d{2})[^\]\n]{0,200})\]\s/;
 
 /**
- * Marker-free leading envelope header, e.g. `[telegram alice] hello`. The
- * elapsed/date marker regex above misses this shape because `formatAgentEnvelope`
- * drops `+<elapsed>`, host, ip, and the absolute timestamp when their inputs are
- * absent. The minimum real shape is then `[<channel> <from>]` with no markers,
- * which is indistinguishable from arbitrary user `[label ...]` prose without a
- * channel-id anchor.
+ * Marker-free leading envelope header. The elapsed/date marker regex above
+ * misses envelopes where `formatAgentEnvelope` drops every optional marker.
+ * Because channel labels can also be ordinary words, callers only accept this
+ * match after `matchKnownChannelMarkerFreeEnvelopePrefix` finds a stronger
+ * group/thread or body-sender signal.
  *
  * Anchoring on a known bundled/official channel prefix from
  * `BUNDLED_CHAT_CHANNEL_ENVELOPE_PREFIXES` keeps the detector and formatter in
@@ -824,12 +852,32 @@ const INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE: RegExp | null = ENVELOPE_KNOWN_C
  * regex bounded and matches realistic display names).
  */
 const ENVELOPE_BODY_SENDER_PREFIX_RE = /^([^\n:]{1,120}):\s/;
+const ENVELOPE_BODY_DIRECT_PREFIX = "(sender)";
 const ENVELOPE_BODY_SELF_PREFIX = "(self)";
 const SENDER_PREFIXED_ENVELOPE_CHANNEL_RE =
   /^(?:discord|imessage|line|mattermost|qqbot|signal|slack|telegram|whatsapp)(?:\s|$)/i;
 const NON_DIRECT_ENVELOPE_HEADER_RE =
   /(?:^|\s)(?:#[^\s]+|group:[^\s]+|group\s+id:[^\s]+|room:[^\s]+|channel\s+id:[^\s]+|id:-[^\s]+|unknown-group|[^\s]+@g\.us)(?:\s|$)/i;
 const USER_AUTHORED_BODY_LABEL_RE = /^(?:action|decision|fixme|note|question|reminder|todo)$/i;
+
+function matchKnownChannelMarkerFreeEnvelopePrefix(
+  text: string,
+  options?: { allowAmbiguousDirect?: boolean },
+): RegExpMatchArray | null {
+  const match = INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE?.exec(text);
+  if (!match) {
+    return null;
+  }
+  const headerInside = match[1] ?? "";
+  if (NON_DIRECT_ENVELOPE_HEADER_RE.test(headerInside)) {
+    return match;
+  }
+  const body = text.slice(match[0].length);
+  if (stripEnvelopeBodySenderPrefix(body, headerInside) !== body) {
+    return match;
+  }
+  return options?.allowAmbiguousDirect ? match : null;
+}
 
 /**
  * Returns true if `text` looks like it contains OpenClaw-injected envelope or
@@ -843,7 +891,7 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
   // Generic line-anchored sentinel match; precompiled at module scope so the
   // hot-path callers (capture gating, recall filtering) do not pay a regex
   // compile per invocation.
-  if (INBOUND_META_LABEL_RE.test(text)) {
+  if (INBOUND_META_SENTINEL_LINE_RE.test(text) || INBOUND_META_LABEL_RE.test(text)) {
     return true;
   }
 
@@ -857,7 +905,10 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
     return true;
   }
 
-  if (text.includes(HISTORY_CONTEXT_MARKER) || text.includes(CURRENT_MESSAGE_MARKER)) {
+  if (
+    HISTORY_CONTEXT_MARKERS.some((marker) => text.includes(marker)) ||
+    CURRENT_MESSAGE_MARKERS.some((marker) => text.includes(marker))
+  ) {
     return true;
   }
 
@@ -877,18 +928,13 @@ export function looksLikeEnvelopeSludge(text: string): boolean {
   }
 
   // Check for the leading `[Channel sender +elapsed ...]` bracket emitted by
-  // formatInboundEnvelope. The agent_end hook receives messages with this
-  // header still attached, so unguarded auto-capture would persist envelope
-  // metadata bytes as part of the user's "memory". Two regexes: the
-  // marker-aware one catches envelopes that include elapsed/date markers
-  // regardless of channel id (covers third-party channels not in the bundled
-  // list); the known-channel one catches marker-free shapes like
-  // `[telegram alice] hi` that drop every optional part except the channel id
-  // and from label.
+  // formatInboundEnvelope. Marker-free channel brackets need a stronger
+  // group/thread or body-sender signal so user prose like `[Signal Hill] ...`
+  // is not treated as transport metadata.
   if (INBOUND_ENVELOPE_PREFIX_RE.test(text)) {
     return true;
   }
-  if (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE?.test(text)) {
+  if (matchKnownChannelMarkerFreeEnvelopePrefix(text)) {
     return true;
   }
 
@@ -921,7 +967,7 @@ function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): stri
     return body;
   }
   const label = match[1];
-  if (label === ENVELOPE_BODY_SELF_PREFIX) {
+  if (label === ENVELOPE_BODY_SELF_PREFIX || label === ENVELOPE_BODY_DIRECT_PREFIX) {
     return body.slice(match[0].length);
   }
   if (
@@ -932,7 +978,7 @@ function stripEnvelopeBodySenderPrefix(body: string, headerInside: string): stri
     return body.slice(match[0].length);
   }
   const headerTokens = headerInside.split(/\s+/);
-  if (headerTokens.includes(label)) {
+  if (headerTokens.includes(label) || headerInside.includes(label)) {
     return body.slice(match[0].length);
   }
   return body;
@@ -957,7 +1003,10 @@ function stripLeadingMessageToolDeliveryHints(text: string): string {
   return stripped ? lines.slice(index).join("\n") : text;
 }
 
-function findFirstInboundEnvelopeIndex(text: string, options?: { skipReplyQuoteLine?: boolean }) {
+function findFirstInboundEnvelopeIndex(
+  text: string,
+  options?: { allowAmbiguousMarkerFree?: boolean; skipReplyQuoteLine?: boolean },
+) {
   for (const match of text.matchAll(BRACKETED_PREFIX_RE)) {
     const index = match.index;
     if (options?.skipReplyQuoteLine) {
@@ -969,7 +1018,9 @@ function findFirstInboundEnvelopeIndex(text: string, options?: { skipReplyQuoteL
     const candidate = text.slice(index);
     if (
       INBOUND_ENVELOPE_PREFIX_RE.test(candidate) ||
-      INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE?.test(candidate)
+      matchKnownChannelMarkerFreeEnvelopePrefix(candidate, {
+        allowAmbiguousDirect: options?.allowAmbiguousMarkerFree,
+      })
     ) {
       return index;
     }
@@ -979,22 +1030,36 @@ function findFirstInboundEnvelopeIndex(text: string, options?: { skipReplyQuoteL
 
 function stripPendingHistoryContextBeforeCurrentMessage(text: string): string {
   const candidateText = text.trimStart();
-  if (!candidateText.startsWith(HISTORY_CONTEXT_MARKER)) {
+  if (!HISTORY_CONTEXT_MARKERS.some((marker) => candidateText.startsWith(marker))) {
     return text;
   }
-  const currentMessageIndex = candidateText.lastIndexOf(CURRENT_MESSAGE_MARKER);
-  if (currentMessageIndex === -1) {
+  const currentMarker = findLastContextMarker(candidateText, CURRENT_MESSAGE_MARKERS);
+  if (!currentMarker) {
     return text;
   }
-  return candidateText.slice(currentMessageIndex + CURRENT_MESSAGE_MARKER.length);
+  return candidateText.slice(currentMarker.index + currentMarker.marker.length);
 }
 
 function stripToCurrentMessageMarker(text: string): string | null {
-  const currentMessageIndex = text.lastIndexOf(CURRENT_MESSAGE_MARKER);
-  if (currentMessageIndex === -1) {
+  const currentMarker = findLastContextMarker(text, CURRENT_MESSAGE_MARKERS);
+  if (!currentMarker) {
     return null;
   }
-  return text.slice(currentMessageIndex + CURRENT_MESSAGE_MARKER.length);
+  return text.slice(currentMarker.index + currentMarker.marker.length);
+}
+
+function findLastContextMarker(
+  text: string,
+  markers: readonly string[],
+): { index: number; marker: string } | null {
+  let result: { index: number; marker: string } | null = null;
+  for (const marker of markers) {
+    const index = text.lastIndexOf(marker);
+    if (index !== -1 && (!result || index > result.index)) {
+      result = { index, marker };
+    }
+  }
+  return result;
 }
 
 function stripLeadingCurrentMessageContextBeforeEnvelope(text: string): string {
@@ -1002,12 +1067,24 @@ function stripLeadingCurrentMessageContextBeforeEnvelope(text: string): string {
   if (!LEADING_CURRENT_MESSAGE_CONTEXT_RE.test(candidateText)) {
     return text;
   }
-  const envelopeIndex = findFirstInboundEnvelopeIndex(candidateText, { skipReplyQuoteLine: true });
+  const envelopeIndex = findFirstInboundEnvelopeIndex(candidateText, {
+    allowAmbiguousMarkerFree: true,
+    skipReplyQuoteLine: true,
+  });
   if (envelopeIndex === -1) {
-    return text;
+    let plainBody = candidateText.replace(LEADING_CURRENT_MESSAGE_CONTEXT_RE, "").trimStart();
+    for (let pass = 0; pass < 4; pass += 1) {
+      const replyLineMatch = plainBody.match(LEADING_CURRENT_MESSAGE_REPLY_LINE_RE);
+      if (!replyLineMatch) {
+        break;
+      }
+      plainBody = plainBody.slice(replyLineMatch[0].length).trimStart();
+    }
+    const currentMessagePrefixMatch = plainBody.match(LEADING_CURRENT_MESSAGE_ID_SENDER_RE);
+    return currentMessagePrefixMatch ? plainBody.slice(currentMessagePrefixMatch[0].length) : text;
   }
   // `Current message:` is current-turn transport context. Strip it only when a
-  // real inbound envelope follows; otherwise preserve the text for normal capture.
+  // real current-message body follows; otherwise preserve the text for normal capture.
   return candidateText.slice(envelopeIndex);
 }
 
@@ -1021,35 +1098,26 @@ function stripLeadingPlainTextMetadataBody(text: string): string {
   return currentMessageBody === candidateText ? "" : currentMessageBody;
 }
 
-function stripLeadingInboundEnvelope(text: string): string {
-  const candidateText = stripLeadingCurrentMessageContextBeforeEnvelope(
+function stripLeadingInboundEnvelope(
+  text: string,
+  options?: { allowAmbiguousMarkerFree?: boolean },
+): string {
+  const strippedCandidate = stripLeadingCurrentMessageContextBeforeEnvelope(
     stripPendingHistoryContextBeforeCurrentMessage(stripLeadingMessageToolDeliveryHints(text)),
-  ).trimStart();
+  );
+  const candidateText = strippedCandidate.trimStart();
+  const allowAmbiguousMarkerFree = options?.allowAmbiguousMarkerFree || strippedCandidate !== text;
   const envelopePrefixMatch =
     candidateText.match(INBOUND_ENVELOPE_PREFIX_RE) ??
-    (INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE
-      ? candidateText.match(INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE)
-      : null);
+    matchKnownChannelMarkerFreeEnvelopePrefix(candidateText, {
+      allowAmbiguousDirect: allowAmbiguousMarkerFree,
+    });
   if (!envelopePrefixMatch) {
-    return text;
+    return strippedCandidate === text ? text : candidateText;
   }
   const headerInside = envelopePrefixMatch[1] ?? "";
   const afterBracket = candidateText.slice(envelopePrefixMatch[0].length);
   return stripEnvelopeBodySenderPrefix(afterBracket, headerInside);
-}
-
-function findFirstInboundEnvelopeLineIndex(text: string): number {
-  for (const match of text.matchAll(BRACKETED_LINE_PREFIX_RE)) {
-    const index = match.index;
-    const candidate = text.slice(index);
-    if (
-      INBOUND_ENVELOPE_PREFIX_RE.test(candidate) ||
-      INBOUND_ENVELOPE_KNOWN_CHANNEL_PREFIX_RE?.test(candidate)
-    ) {
-      return index;
-    }
-  }
-  return -1;
 }
 
 function stripLeadingChronologicalContextBlocks(text: string): string {
@@ -1062,8 +1130,36 @@ function stripLeadingChronologicalContextBlocks(text: string): string {
       return cleaned;
     }
     const afterLabel = cleaned.slice(match[0].length);
-    const envelopeIndex = findFirstInboundEnvelopeLineIndex(afterLabel);
-    cleaned = envelopeIndex === -1 ? "" : afterLabel.slice(envelopeIndex);
+    const bodyStart = afterLabel.search(/\S/);
+    if (bodyStart === -1) {
+      return "";
+    }
+    const bodyLineEnd = afterLabel.indexOf("\n", bodyStart);
+    const firstBodyLine =
+      bodyLineEnd === -1 ? afterLabel.slice(bodyStart) : afterLabel.slice(bodyStart, bodyLineEnd);
+    let lineEnvelopeIndex = firstBodyLine.trimStart().startsWith("[")
+      ? findFirstInboundEnvelopeIndex(firstBodyLine, {
+          allowAmbiguousMarkerFree: true,
+          skipReplyQuoteLine: true,
+        })
+      : -1;
+    if (lineEnvelopeIndex === -1 && match[0].includes("selected for current message")) {
+      const inlineEnvelopeIndex = findFirstInboundEnvelopeIndex(firstBodyLine, {
+        allowAmbiguousMarkerFree: true,
+        skipReplyQuoteLine: true,
+      });
+      const prefix = inlineEnvelopeIndex === -1 ? "" : firstBodyLine.slice(0, inlineEnvelopeIndex);
+      lineEnvelopeIndex = /^#\d+\s/.test(prefix.trimStart()) ? inlineEnvelopeIndex : -1;
+    }
+    const envelopeIndex = lineEnvelopeIndex === -1 ? -1 : bodyStart + lineEnvelopeIndex;
+    if (envelopeIndex === -1) {
+      const separatorMatch = /\n[ \t]*\n/.exec(afterLabel);
+      cleaned = separatorMatch
+        ? afterLabel.slice(separatorMatch.index + separatorMatch[0].length)
+        : "";
+    } else {
+      cleaned = afterLabel.slice(envelopeIndex);
+    }
     if (!cleaned) {
       return "";
     }
@@ -1084,16 +1180,22 @@ export function sanitizeForMemoryCapture(text: string): string {
   // Pre-truncate to cap regex work on very large inputs (ReDoS mitigation)
   const MAX_SANITIZE_CHARS = 10_000;
   let cleaned = text.length > MAX_SANITIZE_CHARS ? text.slice(0, MAX_SANITIZE_CHARS) : text;
+  let strippedInjectedContext = false;
 
   // Strip leading timestamp prefix
   cleaned = cleaned.replace(LEADING_TIMESTAMP_PREFIX_RE, "");
+  const afterDeliveryHints = stripLeadingMessageToolDeliveryHints(cleaned);
+  strippedInjectedContext ||= afterDeliveryHints !== cleaned;
+  cleaned = afterDeliveryHints;
 
   // Strip inbound metadata blocks: generic label line + optional ```json +
   // content + ```. This deliberately mirrors `looksLikeEnvelopeSludge`'s
   // generic label coverage so current reply-chain, location, and plugin-owned
   // structured-context labels do not make `shouldCapture` reject the useful
   // user body that follows.
-  cleaned = cleaned.replace(INBOUND_META_LABEL_JSON_BLOCK_RE, "");
+  const afterJsonMetaBlocks = cleaned.replace(INBOUND_META_LABEL_JSON_BLOCK_RE, "");
+  strippedInjectedContext ||= afterJsonMetaBlocks !== cleaned;
+  cleaned = afterJsonMetaBlocks;
 
   // First strip legacy/inline sentinel+code-fence blocks; each replace removes
   // the entire block including its sentinel header so iteration order does not
@@ -1104,12 +1206,16 @@ export function sanitizeForMemoryCapture(text: string): string {
       `${escapedSentinel}\\s*\\n\\s*\`\`\`json\\s*\\n[\\s\\S]*?\\n\\s*\`\`\`\\s*\\n?`,
       "g",
     );
-    cleaned = cleaned.replace(blockRe, "");
+    const afterSentinelBlock = cleaned.replace(blockRe, "");
+    strippedInjectedContext ||= afterSentinelBlock !== cleaned;
+    cleaned = afterSentinelBlock;
   }
   // Plain chat-window context blocks are untrusted history lines rather than
   // JSON metadata. When they lead the prompt, keep only the following real
   // inbound envelope; if no envelope follows, drop the context block entirely.
-  cleaned = stripLeadingChronologicalContextBlocks(cleaned);
+  const afterChronologicalContext = stripLeadingChronologicalContextBlocks(cleaned);
+  strippedInjectedContext ||= afterChronologicalContext !== cleaned;
+  cleaned = afterChronologicalContext;
   // For labels/sentinels that survived the code-fence strip (plain-text body,
   // no JSON fence), act on the earliest line-anchored metadata header each
   // pass. A bounded retry cap rules out pathological input from spinning
@@ -1153,18 +1259,32 @@ export function sanitizeForMemoryCapture(text: string): string {
       const lineEnd = cleaned.indexOf("\n");
       const afterHeader = lineEnd === -1 ? "" : cleaned.slice(lineEnd + 1);
       if (!afterHeader.trimStart().startsWith("```json")) {
-        cleaned = stripLeadingPlainTextMetadataBody(afterHeader);
+        const afterPlainTextMetadata = stripLeadingPlainTextMetadataBody(afterHeader);
+        strippedInjectedContext ||= afterPlainTextMetadata !== cleaned;
+        cleaned = afterPlainTextMetadata;
         continue;
       }
     }
-    cleaned = cleaned.replace(earliestMetaRe, "");
+    const afterMetaHeader = cleaned.replace(earliestMetaRe, "");
+    strippedInjectedContext ||= afterMetaHeader !== cleaned;
+    cleaned = afterMetaHeader;
   }
+
+  // Active-memory context can be prepended before the real user prompt; strip
+  // that known block before the generic untrusted-context truncation below.
+  const afterActiveMemoryContext = cleaned.replace(
+    /^Untrusted context \(metadata[^\n]*\n<active_memory_plugin>[\s\S]*?<\/active_memory_plugin>\s*/gm,
+    "",
+  );
+  strippedInjectedContext ||= afterActiveMemoryContext !== cleaned;
+  cleaned = afterActiveMemoryContext;
 
   // Strip the "Untrusted context (metadata..." header and everything after it,
   // but only when it appears at the start of a line to avoid false positives
   // on user content that happens to quote the phrase mid-line.
   const untrustedLineMatch = /^Untrusted context \(metadata/m.exec(cleaned);
   if (untrustedLineMatch) {
+    strippedInjectedContext = true;
     cleaned = cleaned.slice(0, untrustedLineMatch.index);
   }
 
@@ -1174,7 +1294,9 @@ export function sanitizeForMemoryCapture(text: string): string {
   // The bracket precedes the user's body text; for non-direct envelopes the
   // body is prefixed with `<Sender>: ` and for direct fromMe with `(self): `,
   // so strip that too when the surviving label matches the formatter contract.
-  cleaned = stripLeadingInboundEnvelope(cleaned);
+  cleaned = stripLeadingInboundEnvelope(cleaned, {
+    allowAmbiguousMarkerFree: strippedInjectedContext,
+  });
 
   // Strip [media attached: ...] and [media attached N/M: ...] annotations
   cleaned = cleaned.replace(MEDIA_ATTACHED_PATTERN, "");
@@ -1517,20 +1639,19 @@ export default definePluginEntry({
 
           const vector = await embeddings.embed(text);
 
-          // Check for duplicates
-          const existing = await db.search(vector, 1, 0.95);
-          if (existing.length > 0) {
+          const existing = await findCleanDuplicateMemory(db, vector);
+          if (existing) {
             return {
               content: [
                 {
                   type: "text",
-                  text: `Similar memory already exists: "${existing[0].entry.text}"`,
+                  text: `Similar memory already exists: "${existing.entry.text}"`,
                 },
               ],
               details: {
                 action: "duplicate",
-                existingId: existing[0].entry.id,
-                existingText: existing[0].entry.text,
+                existingId: existing.entry.id,
+                existingText: existing.entry.text,
               },
             };
           }
@@ -1851,9 +1972,8 @@ export default definePluginEntry({
               const category = detectCategory(sanitized);
               const vector = await embeddings.embed(sanitized);
 
-              // Check for duplicates (high similarity threshold)
-              const existing = await db.search(vector, 1, 0.95);
-              if (existing.length > 0) {
+              const existing = await findCleanDuplicateMemory(db, vector);
+              if (existing) {
                 continue;
               }
 
