@@ -1,5 +1,3 @@
-// Public auth/onboarding helpers for provider plugins.
-
 import path from "node:path";
 import {
   asDateTimestampMs,
@@ -238,7 +236,9 @@ export function deriveCopilotApiBaseUrlFromToken(token: string): string | null {
   return resolveProviderEndpoint(baseUrl).endpointClass === "invalid" ? null : baseUrl;
 }
 
-/** @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins. */
+/**
+ * @deprecated GitHub Copilot provider-owned helper; do not use from third-party plugins.
+ */
 export async function resolveCopilotApiToken(params: {
   githubToken: string;
   env?: NodeJS.ProcessEnv;
@@ -258,6 +258,8 @@ export async function resolveCopilotApiToken(params: {
   const saveJsonFileFn = params.saveJsonFileImpl ?? saveJsonFile;
   const cached = loadJsonFileFn(cachePath) as CachedCopilotToken | undefined;
   if (cached && typeof cached.token === "string" && typeof cached.expiresAt === "number") {
+    // Token cache entries are scoped to the current Copilot integration id so
+    // stale tokens from older editor identities are exchanged again.
     if (isCopilotTokenUsable(cached)) {
       return {
         token: cached.token,
@@ -300,6 +302,9 @@ export async function resolveCopilotApiToken(params: {
   };
 }
 
+/**
+ * Checks whether a provider has either env auth or matching local auth profiles configured.
+ */
 export function isProviderApiKeyConfigured(params: {
   provider: string;
   agentDir?: string;
@@ -326,6 +331,9 @@ export function isProviderApiKeyConfigured(params: {
   });
 }
 
+/**
+ * Lists auth profile ids usable for a provider without throwing on missing stores or keychain access.
+ */
 export function listUsableProviderAuthProfileIds(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -341,6 +349,9 @@ export function listUsableProviderAuthProfileIds(params: {
   }
 }
 
+/**
+ * Checks whether any usable auth profile exists for a provider.
+ */
 export function isProviderAuthProfileConfigured(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -351,6 +362,9 @@ export function isProviderAuthProfileConfigured(params: {
   return listUsableProviderAuthProfileIds(params).profileIds.length > 0;
 }
 
+/**
+ * Resolves the first usable auth-profile API key for a provider in configured profile order.
+ */
 export async function resolveProviderAuthProfileApiKey(params: {
   provider: string;
   cfg?: OpenClawConfig;
