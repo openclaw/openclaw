@@ -14,6 +14,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { SecurityAuditFinding, SecurityAuditSeverity } from "./audit.types.js";
 
+/** Classify free-form channel warnings into audit severities. */
 function classifyChannelWarningSeverity(message: string): SecurityAuditSeverity {
   const s = message.toLowerCase();
   if (
@@ -78,6 +79,7 @@ function formatChannelAccountNote(params: {
     : "";
 }
 
+/** Collect channel-specific security findings across active channel plugins/accounts. */
 export async function collectChannelSecurityFindings(params: {
   cfg: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
@@ -143,6 +145,9 @@ export async function collectChannelSecurityFindings(params: {
       };
     }
     const useSourceUnavailableAccount = Boolean(
+      // Secret resolution can replace a configured account with an unresolved
+      // placeholder. Use source config when needed so audits still explain the
+      // originally configured credential surface.
       sourceInspectedAccount &&
       hasConfiguredUnavailableCredentialStatus(sourceInspectedAccount) &&
       (!hasResolvedCredentialValue(resolvedAccount) ||
@@ -207,6 +212,8 @@ export async function collectChannelSecurityFindings(params: {
     normalizeEntry?: (raw: string) => string;
   }) => {
     const policyPath = input.policyPath ?? `${input.allowFromPath}policy`;
+    // DM allowlist audit may need channel-specific normalization and async
+    // account ownership checks before classifying open/multi-user exposure.
     const { hasWildcard, isMultiUserDm } = await resolveDmAllowAuditState({
       provider: input.provider,
       accountId: input.accountId,

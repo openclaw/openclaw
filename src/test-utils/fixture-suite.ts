@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+/** Creates a temp fixture root with deterministic per-case subdirectories. */
 export function createFixtureSuite(rootPrefix: string) {
   let fixtureRoot = "";
   let fixtureCount = 0;

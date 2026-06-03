@@ -66,6 +66,7 @@ const INTERPRETER_LIKE_PATTERNS = [
   /^node\d+(?:\.\d+)?$/,
 ];
 
+/** Returns true for safeBins that can interpret scripts or execute broad embedded programs. */
 export function isInterpreterLikeSafeBin(raw: string): boolean {
   const normalized = normalizeSafeBinName(raw);
   if (!normalized) {
@@ -77,6 +78,7 @@ export function isInterpreterLikeSafeBin(raw: string): boolean {
   return INTERPRETER_LIKE_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
+/** Lists normalized interpreter-like safeBins from a configured entry set. */
 export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[] {
   return Array.from(entries)
     .map((entry) => normalizeSafeBinName(entry))
@@ -84,6 +86,7 @@ export function listInterpreterLikeSafeBins(entries: Iterable<string>): string[]
     .toSorted();
 }
 
+/** Merges global and local safe-bin profile fixtures, with local definitions winning. */
 export function resolveMergedSafeBinProfileFixtures(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;
@@ -99,6 +102,7 @@ export function resolveMergedSafeBinProfileFixtures(params: {
   };
 }
 
+/** Resolves safe-bin names, profiles, trusted dirs, and warning metadata for exec evaluation. */
 export function resolveExecSafeBinRuntimePolicy(params: {
   global?: ExecSafeBinConfigScope | null;
   local?: ExecSafeBinConfigScope | null;

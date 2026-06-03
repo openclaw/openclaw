@@ -3,6 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 
+/** Alias lookup tables used by `/model` directive resolution. */
 export type ModelAliasIndex = {
   byAlias: Map<
     string,
@@ -14,6 +15,7 @@ export type ModelAliasIndex = {
   byKey: Map<string, string[]>;
 };
 
+/** Resolved model choice from a `/model` directive. */
 export type ModelDirectiveSelection = {
   provider: string;
   model: string;
@@ -56,6 +58,7 @@ const FUZZY_VARIANT_TOKENS = [
   "nano",
 ];
 
+/** Builds the canonical provider/model key used by allowlists and aliases. */
 export function modelKey(provider: string, model: string): string {
   const providerId = provider.trim();
   const modelId = model.trim();
@@ -72,6 +75,7 @@ export function modelKey(provider: string, model: string): string {
     : `${providerId}/${modelId}`;
 }
 
+/** Resolves an explicit model directive string into a provider/model ref. */
 export function resolveModelRefFromDirectiveString(params: {
   raw: string;
   defaultProvider: string;
@@ -260,6 +264,7 @@ function scoreFuzzyMatch(params: {
   };
 }
 
+/** Resolves a `/model` directive into an allowlisted model selection or error. */
 export function resolveModelDirectiveSelection(params: {
   raw: string;
   defaultProvider: string;
@@ -356,6 +361,7 @@ export function resolveModelDirectiveSelection(params: {
         return Object.assign({ candidate }, details);
       })
       .toSorted((a, b) => {
+        // Tie-break deterministically so repeated prompts pick the same model.
         if (b.score !== a.score) {
           return b.score - a.score;
         }

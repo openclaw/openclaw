@@ -12,6 +12,8 @@ import type { ParsedRegistryNpmSpec } from "./npm-registry-spec.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
+// Managed npm roots are private package roots used for installed plugins. This
+// module owns package.json dependency/override edits and peer repair helpers.
 type ManagedNpmRootManifest = {
   private?: boolean;
   dependencies?: Record<string, string>;
@@ -33,11 +35,13 @@ type ManagedNpmRootOpenClawMetadata = {
   [key: string]: unknown;
 };
 
+/** Snapshot of root dependencies that were inserted only for peer satisfaction. */
 export type ManagedNpmRootPeerDependencySnapshot = {
   dependencies: Record<string, string>;
   managedPeerDependencies: string[];
 };
 
+/** Installed dependency metadata read from a managed root lockfile. */
 export type ManagedNpmRootInstalledDependency = {
   version?: string;
   integrity?: string;
@@ -190,6 +194,7 @@ function filterUnsupportedManagedNpmRootOverrides(value: unknown): Record<string
   return filtered;
 }
 
+/** Read host OpenClaw package overrides for reuse inside a managed npm root. */
 export async function readOpenClawManagedNpmRootOverrides(params?: {
   argv1?: string;
   cwd?: string;
@@ -226,6 +231,7 @@ export async function readOpenClawManagedNpmRootOverrides(params?: {
   }
 }
 
+/** Resolve the dependency spec to write for a parsed registry package. */
 export function resolveManagedNpmRootDependencySpec(params: {
   parsedSpec: ParsedRegistryNpmSpec;
   resolution: NpmSpecResolution;
@@ -233,6 +239,7 @@ export function resolveManagedNpmRootDependencySpec(params: {
   return params.resolution.version ?? params.parsedSpec.selector ?? "latest";
 }
 
+/** Insert or update a dependency and managed override metadata in package.json. */
 export async function upsertManagedNpmRootDependency(params: {
   npmRoot: string;
   packageName: string;
@@ -637,6 +644,7 @@ async function collectNpmResolvedManagedNpmRootPeerDependencyPins(params: {
   }
 }
 
+/** Snapshot managed peer dependencies before a risky install/update operation. */
 export async function readManagedNpmRootPeerDependencySnapshot(params: {
   npmRoot: string;
 }): Promise<ManagedNpmRootPeerDependencySnapshot> {
@@ -656,6 +664,7 @@ export async function readManagedNpmRootPeerDependencySnapshot(params: {
   };
 }
 
+/** Restore a previously captured managed peer dependency snapshot. */
 export async function restoreManagedNpmRootPeerDependencySnapshot(params: {
   npmRoot: string;
   snapshot: ManagedNpmRootPeerDependencySnapshot;
@@ -686,6 +695,7 @@ export async function restoreManagedNpmRootPeerDependencySnapshot(params: {
   await writeJson(manifestPath, next, { trailingNewline: true });
 }
 
+/** Sync package.json with peer dependency pins resolved from npm's lock plan. */
 export async function syncManagedNpmRootPeerDependencies(params: {
   npmRoot: string;
   managedOverrides?: Record<string, unknown>;
@@ -756,6 +766,7 @@ export async function syncManagedNpmRootPeerDependencies(params: {
   return changed;
 }
 
+/** Remove stale managed-root openclaw peer installs while preserving active host links. */
 export async function repairManagedNpmRootOpenClawPeer(params: {
   npmRoot: string;
   packageRoot?: string | null;
@@ -992,6 +1003,7 @@ async function scrubManagedNpmRootOpenClawPeer(params: {
   });
 }
 
+/** Read lockfile metadata for an installed dependency in the managed root. */
 export async function readManagedNpmRootInstalledDependency(params: {
   npmRoot: string;
   packageName: string;
@@ -1012,6 +1024,7 @@ export async function readManagedNpmRootInstalledDependency(params: {
   };
 }
 
+/** Remove a dependency from the managed root manifest. */
 export async function removeManagedNpmRootDependency(params: {
   npmRoot: string;
   packageName: string;

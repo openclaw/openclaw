@@ -1,6 +1,7 @@
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 
+/** Build a minimal channel plugin stub for security audit unit tests. */
 export function stubAuditChannelPlugin(params: {
   id: string;
   label: string;
@@ -33,6 +34,8 @@ export function stubAuditChannelPlugin(params: {
         ((cfg, accountId) => {
           const resolvedAccountId =
             typeof accountId === "string" && accountId ? accountId : "default";
+          // Default inspection mirrors the resolved test account so channel
+          // audit tests can override only the behavior they care about.
           const account = params.resolveAccount(cfg, resolvedAccountId) as
             | { config?: Record<string, unknown> }
             | undefined;

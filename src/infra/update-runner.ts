@@ -86,6 +86,14 @@ export type UpdateRunResult = {
           message: string;
           currentVersion?: string;
           nextVersion?: string;
+          channelFallback?: {
+            requestedSpec: string;
+            usedSpec: string;
+            requestedLabel: string;
+            usedLabel: string;
+            reason: "unavailable" | "failed";
+            message: string;
+          };
         }>;
       };
       integrityDrifts: Array<{

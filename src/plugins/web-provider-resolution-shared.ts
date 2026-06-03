@@ -7,6 +7,7 @@ import { createPluginIdScopeSet, normalizePluginIdScope } from "./plugin-scope.j
 export type WebProviderContract = "webSearchProviders" | "webFetchProviders";
 export type WebProviderConfigKey = "webSearch" | "webFetch";
 
+/** Manifest-backed plugin id candidates for a web provider family. */
 export type WebProviderCandidateResolution = {
   pluginIds: string[] | undefined;
   manifestRecords?: readonly PluginManifestRecord[];
@@ -31,6 +32,7 @@ export function sortPluginProviders<T extends Pick<WebProviderSortEntry, "id" | 
   return providers.toSorted(comparePluginProvidersAlphabetically);
 }
 
+/** Sorts provider candidates for auto-detect while keeping equal priorities deterministic. */
 export function sortPluginProvidersForAutoDetect<T extends WebProviderSortEntry>(
   providers: T[],
 ): T[] {
@@ -75,6 +77,7 @@ function loadInstalledWebProviderManifestRecords(params: {
   return pluginIdSet ? records.filter((plugin) => pluginIdSet.has(plugin.id)) : records;
 }
 
+/** Returns only plugin ids for manifest-declared web provider candidates. */
 export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   contract: WebProviderContract;
   configKey: WebProviderConfigKey;
@@ -87,6 +90,7 @@ export function resolveManifestDeclaredWebProviderCandidatePluginIds(params: {
   return resolveManifestDeclaredWebProviderCandidates(params).pluginIds;
 }
 
+/** Resolves manifest-declared web provider candidates without importing plugin runtime code. */
 export function resolveManifestDeclaredWebProviderCandidates(params: {
   contract: WebProviderContract;
   configKey: WebProviderConfigKey;
@@ -122,6 +126,8 @@ export function resolveManifestDeclaredWebProviderCandidates(params: {
   if (ids.length > 0) {
     return { pluginIds: ids, manifestRecords };
   }
+  // Unscoped resolution falls back to runtime registry loading; scoped/origin-filtered
+  // calls must return an explicit empty candidate set instead.
   if (params.origin || scopedPluginIds !== undefined) {
     return { pluginIds: [], manifestRecords };
   }
@@ -143,6 +149,7 @@ function resolveBundledWebProviderCompatPluginIds(params: {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Builds bundled-plugin activation config for provider families with legacy enablement defaults. */
 export function resolveBundledWebProviderResolutionConfig(params: {
   contract: WebProviderContract;
   config?: PluginLoadOptions["config"];
@@ -176,6 +183,7 @@ export function resolveBundledWebProviderResolutionConfig(params: {
   };
 }
 
+/** Adds plugin ids to registry provider records, applies an optional plugin scope, then sorts. */
 export function mapRegistryProviders<TProvider extends { id: string }>(params: {
   entries: readonly { pluginId: string; provider: TProvider }[];
   onlyPluginIds?: readonly string[];

@@ -861,23 +861,26 @@ describe("gateway server chat", () => {
         });
 
       const first = Promise.resolve(callSend("first", "idem-active-a"));
-      await vi.waitFor(() => {
-        expect(responses).toEqual([
-          {
-            id: "first",
-            ok: true,
-            payload: expect.objectContaining({
-              runId: "idem-active-a",
-              status: "started",
-              serverTiming: {
-                receivedToAckMs: expect.any(Number),
-                loadSessionMs: expect.any(Number),
-              },
-            }),
-            error: undefined,
-          },
-        ]);
-      }, FAST_WAIT_OPTS);
+      await vi.waitFor(
+        () => {
+          expect(responses).toEqual([
+            {
+              id: "first",
+              ok: true,
+              payload: expect.objectContaining({
+                runId: "idem-active-a",
+                status: "started",
+                serverTiming: {
+                  receivedToAckMs: expect.any(Number),
+                  loadSessionMs: expect.any(Number),
+                },
+              }),
+              error: undefined,
+            },
+          ]);
+        },
+        { timeout: 2_000, interval: 5 },
+      );
 
       await callSend("duplicate", "idem-active-b");
 
@@ -1045,6 +1048,157 @@ describe("gateway server chat", () => {
       expect(dispatchOptions[0]?.promptCacheKey).not.toContain("main");
       expect(dispatchOptions[0]?.promptCacheKey).not.toContain("sess-main");
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send emits operator-only post-ACK server timing milestones", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const broadcastToConnIds = vi.fn();
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        broadcastToConnIds,
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        const replyOptions = (args as { replyOptions?: GetReplyOptions }).replyOptions;
+        replyOptions?.onModelSelected?.({
+          provider: "openai",
+          model: "gpt-5.5",
+          thinkLevel: undefined,
+        });
+        replyOptions?.onAgentRunStart?.("agent-run-1");
+        return {};
+      });
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "operator-timing",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "measure",
+            idempotencyKey: "idem-server-timing",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "measure",
+          idempotencyKey: "idem-server-timing",
+        },
+        client: {
+          connId: "conn-control-ui",
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error) => {
+          responses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toEqual([
+        {
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "idem-server-timing",
+            status: "started",
+            serverTiming: {
+              receivedToAckMs: expect.any(Number),
+              loadSessionMs: expect.any(Number),
+            },
+          }),
+          error: undefined,
+        },
+      ]);
+      await vi.waitFor(
+        () => {
+          const phases = broadcastToConnIds.mock.calls
+            .filter(([event]) => event === "chat.send_timing")
+            .map(([, payload]) => (payload as { phase?: unknown }).phase);
+          expect(phases).toEqual(
+            expect.arrayContaining([
+              "dispatch-started",
+              "model-selected",
+              "agent-run-started",
+              "dispatch-completed",
+              "post-dispatch-completed",
+            ]),
+          );
+        },
+        { timeout: 2_000, interval: 5 },
+      );
+      for (const [event, payload, connIds, opts] of broadcastToConnIds.mock.calls) {
+        expect(event).toBe("chat.send_timing");
+        expect(connIds).toEqual(new Set(["conn-control-ui"]));
+        expect(opts).toEqual({ dropIfSlow: true });
+        expect(payload).toMatchObject({
+          runId: "idem-server-timing",
+          sessionKey: "agent:main:main",
+          ackToPhaseMs: expect.any(Number),
+          receivedToPhaseMs: expect.any(Number),
+        });
+      }
+      const timingPayloads = broadcastToConnIds.mock.calls.map(([, payload]) => payload);
+      expect(timingPayloads).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            phase: "model-selected",
+            provider: "openai",
+            model: "gpt-5.5",
+          }),
+          expect.objectContaining({
+            phase: "agent-run-started",
+            agentRunId: "agent-run-1",
+            dispatchStartedToPhaseMs: expect.any(Number),
+          }),
+        ]),
+      );
     } finally {
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;

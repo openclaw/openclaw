@@ -22,6 +22,7 @@ import {
   validateRuntimeOptionPatch,
 } from "./runtime-options.js";
 
+/** Initializes an ACP runtime session and persists its metadata before caching the handle. */
 export async function runManagerInitializeSession(params: {
   input: AcpInitializeSessionInput;
   sessionKey: string;

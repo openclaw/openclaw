@@ -399,6 +399,30 @@ setInterval(() => {}, 1000);
     }
   });
 
+  posixIt("rejects timed commands that exit cleanly after SIGTERM", async () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-timeout-zero-"));
+    const scriptPath = path.join(root, "term-zero.mjs");
+    writeFileSync(
+      scriptPath,
+      `
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+      "utf8",
+    );
+
+    try {
+      await expect(
+        runCommand(process.execPath, [scriptPath], {
+          timeoutKillGraceMs: 1000,
+          timeoutMs: 100,
+        }),
+      ).rejects.toThrow("timed out after 100ms");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("records resource samples for command process trees", async () => {
     const samples: Array<{
       aggregateRssMiB?: number;
@@ -1006,8 +1030,8 @@ describe("kitchen-sink RPC process sampling", () => {
     expect(() => assertResourceCeiling(null)).toThrow("gateway RSS sample was not captured");
   });
 
-  it("allows missing command samples but fails command RSS spikes", () => {
-    expect(() => assertCommandResourceCeiling(null)).not.toThrow();
+  it("fails missing command samples and command RSS spikes", () => {
+    expect(() => assertCommandResourceCeiling(null)).toThrow("command RSS sample was not captured");
     expect(() => assertCommandResourceCeiling({ aggregateRssMiB: 8193, rssMiB: 1024 })).toThrow(
       "command aggregate RSS exceeded 8192 MiB: 8193 MiB",
     );

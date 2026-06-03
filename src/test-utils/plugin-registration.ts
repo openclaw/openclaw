@@ -11,6 +11,7 @@ import type {
   VideoGenerationProviderPlugin,
 } from "../plugins/types.js";
 
+/** Captured registration helpers for provider plugin tests. */
 export { createCapturedPluginRegistration };
 
 type RegistrablePlugin = {
@@ -28,6 +29,7 @@ export type RegisteredProviderCollections = {
   modelCatalogProviders: UnifiedModelCatalogProviderPlugin[];
 };
 
+/** Registers one provider plugin callback and returns its first provider. */
 export async function registerSingleProviderPlugin(params: {
   register(api: OpenClawPluginApi): void;
 }): Promise<ProviderPlugin> {

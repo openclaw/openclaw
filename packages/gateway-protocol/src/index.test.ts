@@ -36,6 +36,15 @@ import {
   type ValidationError,
 } from "./index.js";
 
+/**
+ * Broad protocol validator smoke tests.
+ *
+ * This file exercises exported lazy validators, readable validation errors, and
+ * representative cross-surface payloads so schema registry changes fail before
+ * they reach CLI, Gateway, channel, or dashboard consumers.
+ */
+
+/** Builds a validation error fixture while keeping only the field under test noisy. */
 const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
   keyword: "type",
   instancePath: "",
@@ -45,6 +54,7 @@ const makeError = (overrides: Partial<ValidationError>): ValidationError => ({
   ...overrides,
 });
 
+/** Runtime shape shared by all exported lazy protocol validator functions. */
 type ProtocolValidator = (value: unknown) => boolean;
 
 describe("lazy protocol validators", () => {

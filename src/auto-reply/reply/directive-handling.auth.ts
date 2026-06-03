@@ -20,6 +20,7 @@ import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import { shortenHomePath } from "../../utils.js";
 import { maskApiKey } from "../../utils/mask-api-key.js";
 
+/** Controls how much auth provenance is shown in directive status output. */
 export type ModelAuthDetailMode = "compact" | "verbose";
 
 function resolveStoredCredentialLabel(params: {
@@ -58,6 +59,7 @@ function isStoredAuthProfileType(value: unknown): value is AuthProfileCredential
   return value === "api_key" || value === "oauth" || value === "token";
 }
 
+/** Resolves the displayed auth source for a provider without exposing secrets. */
 export const resolveAuthLabel = async (
   provider: string,
   cfg: OpenClawConfig,
@@ -228,6 +230,7 @@ export const resolveAuthLabel = async (
     };
   }
 
+  // Auth profiles win over environment/config keys because they encode provider order.
   const envKey = resolveEnvApiKey(provider, process.env, { config: cfg, workspaceDir });
   if (envKey) {
     const isOAuthEnv =
@@ -246,6 +249,7 @@ export const resolveAuthLabel = async (
   return { label: "missing", source: "missing" };
 };
 
+/** Formats an auth label plus source for one-line status output. */
 export const formatAuthLabel = (auth: { label: string; source: string }) => {
   if (!auth.source || auth.source === auth.label || auth.source === "missing") {
     return auth.label;

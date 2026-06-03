@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import { vi } from "vitest";
 import { withFetchPreconnect } from "./fetch-mock.js";
 
+/** Stubs fetch with the preconnect marker expected by camera URL tests. */
 export function stubFetchResponse(response: Response) {
   vi.stubGlobal("fetch", withFetchPreconnect(vi.fn(async () => response)));
 }

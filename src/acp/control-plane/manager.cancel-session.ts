@@ -14,6 +14,7 @@ import type {
 } from "./manager.types.js";
 import { normalizeActorKey, requireReadySessionMeta } from "./manager.utils.js";
 
+/** Cancels either the active ACP turn or the idle runtime handle for a session. */
 export async function runManagerCancelSession(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

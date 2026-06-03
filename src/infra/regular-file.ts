@@ -1,4 +1,7 @@
 import "./fs-safe-defaults.js";
+
+// Regular-file IO helpers reject symlinks and non-file targets before reads or
+// appends touch user-controlled paths.
 export {
   appendRegularFile,
   appendRegularFileSync,
