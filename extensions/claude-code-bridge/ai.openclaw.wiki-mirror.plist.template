@@ -9,7 +9,7 @@
   INSTALL:
     1. Copy this file to ~/Library/LaunchAgents/ai.openclaw.wiki-mirror.plist
     2. Replace placeholders:
-         __HOME__           -> /Users/coryshelton (or your $HOME)
+         __HOME__           -> absolute path to your home directory (for example /Users/you)
          __NODE_BIN__       -> absolute path to node (likely /opt/homebrew/bin/node)
          __INGEST_KEY__     -> super-admin API key pulled from 1Password
        1Password CLI one-liner for the key:

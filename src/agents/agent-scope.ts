@@ -23,8 +23,6 @@ import {
 } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
 import {
-  canonicalizeAgentId,
-  listAgentEntries,
   listAgentIds,
   resolveAgentConfig,
   resolveAgentWorkspaceDir,

@@ -619,12 +619,12 @@ function buildServer() {
     "openclaw_skill_list",
     {
       description:
-        "List skills available to an OpenClaw agent. Defaults to the default agent (kestrel-aurelius).",
+        "List skills available to an OpenClaw agent. Defaults to the configured default agent.",
       inputSchema: {
         agentId: z
           .string()
           .optional()
-          .describe("Agent id (e.g., 'kestrel-aurelius'). Omit to use the default agent."),
+          .describe("Agent id (for example 'main'). Omit to use the default agent."),
       },
     },
     async ({ agentId }) => {
@@ -759,15 +759,13 @@ function buildServer() {
     "openclaw_agent_handoff",
     {
       description:
-        "Hand a brief to an OpenClaw agent. Creates a fresh session with the initial message and returns a sessionKey you can use with openclaw_agent_messages to read replies. Defaults to the default agent (kestrel-aurelius). Async by default — agent reply may take 30+ seconds for Opus 4.6 thinking.",
+        "Hand a brief to an OpenClaw agent. Creates a fresh session with the initial message and returns a sessionKey you can use with openclaw_agent_messages to read replies. Defaults to the configured default agent. Async by default - agent replies may take 30+ seconds for high-reasoning models.",
       inputSchema: {
         message: z.string().min(1).describe("The brief / initial message to send."),
         agentId: z
           .string()
           .optional()
-          .describe(
-            "Target agent id (e.g., 'kestrel-aurelius', 'cole', 'sage'). Omit for default.",
-          ),
+          .describe("Target agent id (for example 'main' or a configured alias). Omit for default."),
         label: z.string().optional().describe("Optional session label for later identification."),
         force: z
           .boolean()

@@ -126,6 +126,10 @@ function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | u
  * canonical ids.
  */
 export function canonicalizeAgentId(cfg: OpenClawConfig, agentId: string): string | undefined {
+  const requested = normalizeAgentId(agentId);
+  if (listAgentEntries(cfg).length === 0 && requested === DEFAULT_AGENT_ID) {
+    return DEFAULT_AGENT_ID;
+  }
   const entry = resolveAgentEntry(cfg, agentId);
   return entry ? normalizeAgentId(entry.id) : undefined;
 }
