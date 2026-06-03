@@ -115,3 +115,93 @@ describe("Bedrock thinking effort mapping", () => {
     ).toBe("max");
   });
 });
+
+describe("Bedrock tool config projection", () => {
+  it("skips unreadable tool descriptors while preserving healthy siblings", () => {
+    const brokenTool = {
+      get name() {
+        throw new Error("bedrock tool name getter exploded");
+      },
+      description: "broken",
+      parameters: { type: "object", properties: {} },
+    };
+    const healthyTool = {
+      name: "read_context",
+      description: "Read context",
+      parameters: { type: "object", properties: { path: { type: "string" } } },
+    };
+
+    expect(
+      testing.convertToolConfig([brokenTool, healthyTool] as never, {
+        type: "tool",
+        name: "read_context",
+      }),
+    ).toEqual({
+      tools: [
+        {
+          toolSpec: {
+            name: "read_context",
+            description: "Read context",
+            inputSchema: {
+              json: { type: "object", properties: { path: { type: "string" } } },
+            },
+          },
+        },
+      ],
+      toolChoice: { tool: { name: "read_context" } },
+    });
+  });
+
+  it("fails closed when a pinned tool choice is not projectable", () => {
+    const brokenTool = {
+      name: "broken_tool",
+      description: "broken",
+      get parameters() {
+        throw new Error("bedrock tool parameters getter exploded");
+      },
+    };
+    const healthyTool = {
+      name: "read_context",
+      description: "Read context",
+      parameters: { type: "object", properties: {} },
+    };
+
+    expect(() =>
+      testing.convertToolConfig([brokenTool, healthyTool] as never, {
+        type: "tool",
+        name: "broken_tool",
+      }),
+    ).toThrow('Bedrock tool choice "broken_tool" was not projected');
+  });
+
+  it("fails closed when every tool is skipped and a pinned tool choice was requested", () => {
+    const brokenTool = {
+      name: "broken_tool",
+      description: "broken",
+      get parameters() {
+        throw new Error("bedrock tool parameters getter exploded");
+      },
+    };
+
+    expect(() =>
+      testing.convertToolConfig([brokenTool] as never, {
+        type: "tool",
+        name: "broken_tool",
+      }),
+    ).toThrow('Bedrock tool choice "broken_tool" was not projected');
+  });
+
+  it("fails closed when every tool is skipped and any tool was required", () => {
+    const brokenTool = {
+      name: "broken_tool",
+      description: "broken",
+      get parameters() {
+        throw new Error("bedrock tool parameters getter exploded");
+      },
+    };
+
+    expect(() => testing.convertToolConfig([brokenTool] as never, "any")).toThrow(
+      "Bedrock required tool choice had no projected tools",
+    );
+  });
+});

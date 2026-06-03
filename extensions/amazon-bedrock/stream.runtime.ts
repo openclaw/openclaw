@@ -40,16 +40,35 @@ import {
   type SimpleStreamOptions,
   type StopReason,
   type StreamFunction,
-  type TextContent,
-  type ThinkingContent,
   type ThinkingLevel,
   type Tool,
-  type ToolCall,
   type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 
-type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
+type TextBlock = {
+  type: "text";
+  text: string;
+  index?: number;
+};
+
+type ThinkingBlock = {
+  type: "thinking";
+  thinking: string;
+  thinkingSignature?: string;
+  index?: number;
+};
+
+type ToolCallBlock = {
+  type: "toolCall";
+  id: string;
+  name: string;
+  arguments: Record<string, unknown>;
+  index?: number;
+  partialJson?: string;
+};
+
+type Block = TextBlock | ThinkingBlock | ToolCallBlock;
 
 export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
   model: Model<"bedrock-converse-stream">,
@@ -222,10 +241,12 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
-      for (const block of output.content) {
-        delete (block as Block).index;
+      for (const block of blocks) {
+        delete block.index;
         // partialJson is only a streaming scratch buffer; never persist it.
-        delete (block as Block).partialJson;
+        if (block.type === "toolCall") {
+          delete block.partialJson;
+        }
       }
       output.stopReason = options.signal?.aborted ? "aborted" : "error";
       output.errorMessage = formatBedrockError(error);
@@ -451,7 +472,7 @@ function handleContentBlockStop(
       block.arguments = parseStreamingJson(block.partialJson);
       // Finalize in-place and strip the scratch buffer so replay only
       // carries parsed arguments.
-      delete (block as Block).partialJson;
+      delete block.partialJson;
       stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
       break;
   }
@@ -766,13 +787,27 @@ function convertToolConfig(
     return undefined;
   }
 
-  const bedrockTools: BedrockTool[] = tools.map((tool) => ({
-    toolSpec: {
-      name: tool.name,
-      description: tool.description,
-      inputSchema: { json: tool.parameters as unknown as DocumentType },
-    },
-  }));
+  const bedrockTools: BedrockTool[] = [];
+  const bedrockToolNames = new Set<string>();
+  for (const tool of tools) {
+    const projected = readBedrockTool(tool);
+    if (!projected) {
+      continue;
+    }
+    bedrockTools.push(projected.bedrockTool);
+    bedrockToolNames.add(projected.name);
+  }
+  const pinnedToolChoice =
+    typeof toolChoice === "object" && toolChoice?.type === "tool" ? toolChoice.name : undefined;
+  if (pinnedToolChoice && !bedrockToolNames.has(pinnedToolChoice)) {
+    throw new Error(`Bedrock tool choice "${pinnedToolChoice}" was not projected`);
+  }
+  if (toolChoice === "any" && bedrockTools.length === 0) {
+    throw new Error("Bedrock required tool choice had no projected tools");
+  }
+  if (bedrockTools.length === 0) {
+    return undefined;
+  }
 
   let bedrockToolChoice: ToolChoice | undefined;
   switch (toolChoice) {
@@ -783,12 +818,35 @@ function convertToolConfig(
       bedrockToolChoice = { any: {} };
       break;
     default:
-      if (typeof toolChoice === "object" && toolChoice?.type === "tool") {
-        bedrockToolChoice = { tool: { name: toolChoice.name } };
+      if (pinnedToolChoice) {
+        bedrockToolChoice = { tool: { name: pinnedToolChoice } };
       }
   }
 
   return { tools: bedrockTools, toolChoice: bedrockToolChoice };
+}
+
+function readBedrockTool(tool: Tool): { name: string; bedrockTool: BedrockTool } | undefined {
+  try {
+    const name = tool.name;
+    if (typeof name !== "string" || name.trim().length === 0) {
+      return undefined;
+    }
+    const description = tool.description;
+    const parameters = tool.parameters;
+    return {
+      name,
+      bedrockTool: {
+        toolSpec: {
+          name,
+          description,
+          inputSchema: { json: parameters as unknown as DocumentType },
+        },
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function mapStopReason(reason: string | undefined): StopReason {
@@ -949,6 +1007,7 @@ function createImageBlock(mimeType: string, data: string) {
 }
 
 export const testing = {
+  convertToolConfig,
   convertMessages,
   getConfiguredBedrockRegion,
   hasConfiguredBedrockProfile,
