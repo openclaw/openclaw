@@ -1,3 +1,10 @@
+/**
+ * Shared fixed-window rate-limit primitive for gateway, ACP, and webhook ingress.
+ *
+ * It is intentionally in-memory and process-local; callers that need distributed
+ * limits must layer their own persistence before invoking request work.
+ */
+
 /** Minimal fixed-window limiter interface used by memory and request guard helpers. */
 export type FixedWindowRateLimiter = {
   consume: () => {
@@ -24,8 +31,11 @@ export function resolveFixedWindowRateLimitInteger(
 
 /** Creates a fixed-window counter that reports allowance, remaining quota, and retry delay. */
 export function createFixedWindowRateLimiter(params: {
+  /** Maximum successful consume calls allowed per window. */
   maxRequests: number;
+  /** Fixed window duration in milliseconds. */
   windowMs: number;
+  /** Optional clock for tests or deterministic host runtimes. */
   now?: () => number;
 }): FixedWindowRateLimiter {
   const maxRequests = resolveFixedWindowRateLimitInteger(params.maxRequests, 1, { min: 1 });
