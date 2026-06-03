@@ -5,11 +5,15 @@ import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
-const READY_TIMEOUT_MS = 120_000;
+export const READY_TIMEOUT_MS = 120_000;
+export const READY_PROBE_TIMEOUT_MS = 1_000;
+const IS_DIRECT_RUN =
+  typeof process.argv[1] === "string" &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 function usage() {
   return [
@@ -84,13 +88,21 @@ async function sleep(ms) {
   });
 }
 
-async function waitForGatewayReady({ child, port, stderrPath }) {
+export async function waitForGatewayReady({
+  child,
+  fetchImpl = fetch,
+  port,
+  probeTimeoutMs = READY_PROBE_TIMEOUT_MS,
+  readyTimeoutMs = READY_TIMEOUT_MS,
+  sleepMs = 250,
+  stderrPath,
+}) {
   const startedAt = Date.now();
   let childExit = null;
   child.once("exit", (code, signal) => {
     childExit = { code, signal };
   });
-  while (Date.now() - startedAt < READY_TIMEOUT_MS) {
+  while (Date.now() - startedAt < readyTimeoutMs) {
     if (childExit) {
       const stderr = await fs.readFile(stderrPath, "utf8").catch(() => "");
       throw new Error(
@@ -99,7 +111,9 @@ async function waitForGatewayReady({ child, port, stderrPath }) {
     }
     for (const endpoint of ["/readyz", "/healthz"]) {
       try {
-        const response = await fetch(`http://127.0.0.1:${port}${endpoint}`);
+        const response = await fetchImpl(`http://127.0.0.1:${port}${endpoint}`, {
+          signal: AbortSignal.timeout(probeTimeoutMs),
+        });
         if (response.ok) {
           return;
         }
@@ -107,12 +121,10 @@ async function waitForGatewayReady({ child, port, stderrPath }) {
         // The gateway may not have bound the port yet.
       }
     }
-    await sleep(250);
+    await sleep(sleepMs);
   }
   const stderr = await fs.readFile(stderrPath, "utf8").catch(() => "");
-  throw new Error(
-    `gateway did not become ready after ${READY_TIMEOUT_MS}ms\n${stderr.slice(-4000)}`,
-  );
+  throw new Error(`gateway did not become ready after ${readyTimeoutMs}ms\n${stderr.slice(-4000)}`);
 }
 
 async function stopGateway(child) {
@@ -448,9 +460,11 @@ async function main() {
   }
 }
 
-main().catch(
-  /** @param {unknown} error */ (error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  },
-);
+if (IS_DIRECT_RUN) {
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    },
+  );
+}

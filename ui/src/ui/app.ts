@@ -760,7 +760,9 @@ export class OpenClawApp extends LitElement {
     });
     if (this.realtimeTalkOptionsOpen) {
       const insideTalkOptions = Array.from(
-        this.querySelectorAll(".agent-chat__talk-options, [aria-label='Talk settings']"),
+        this.querySelectorAll(
+          ".agent-chat__talk-options, [aria-label='Talk settings'], [aria-label='Talk options']",
+        ),
       ).some((node) => path.includes(node));
       if (!insideTalkOptions) {
         this.realtimeTalkOptionsOpen = false;

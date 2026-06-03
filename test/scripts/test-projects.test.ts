@@ -426,6 +426,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps Crabbox and Testbox workflow edits on workflow regression tests", () => {
     for (const workflowPath of [
       ".github/workflows/ci-check-testbox.yml",
+      ".github/workflows/ci-check-arm-testbox.yml",
       ".github/workflows/crabbox-hydrate.yml",
     ]) {
       expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
