@@ -3,6 +3,7 @@ import { normalizeSecretInputString } from "../../config/types.secrets.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { redactSensitiveText } from "../../logging/redact.js";
+import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
   OAUTH_REFRESH_CALL_TIMEOUT_MS,
@@ -10,6 +11,7 @@ import {
   log,
 } from "./constants.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
+import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
 import {
   buildRefreshContentionError,
   isGlobalRefreshLockTimeoutError,
@@ -60,9 +62,8 @@ export type ResolvedOAuthAccess = {
   credential: OAuthCredential;
 };
 
-export class OAuthManagerRefreshError extends Error {
+export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
   readonly profileId: string;
-  readonly provider: string;
   readonly code?: string;
   readonly lockPath?: string;
   readonly #refreshedStore: AuthProfileStore;
@@ -90,13 +91,14 @@ export class OAuthManagerRefreshError extends Error {
       storedCredential?.type === "oauth" ? storedCredential : undefined,
     );
     const causeMessage = formatRedactedOAuthRefreshError(params.cause, secrets);
-    super(`OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`, {
+    super({
+      provider: params.credential.provider,
+      message: `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
       cause: createRedactedOAuthRefreshCause(delegatedCause, secrets),
     });
     this.name = "OAuthManagerRefreshError";
     this.#credential = params.credential;
     this.profileId = params.profileId;
-    this.provider = params.credential.provider;
     this.#refreshedStore = params.refreshedStore;
     if (structuredCause) {
       this.code = typeof structuredCause.code === "string" ? structuredCause.code : undefined;
@@ -237,7 +239,6 @@ function createRedactedOAuthRefreshCause(cause: unknown, secrets: string[]): Err
 function loadStoredOAuthRefreshStore(agentDir?: string): AuthProfileStore {
   return loadAuthProfileStoreWithoutExternalProfiles(agentDir, {
     allowKeychainPrompt: true,
-    resolveLegacyOAuthSidecars: true,
   });
 }
 
@@ -326,13 +327,16 @@ export function createOAuthManager(adapter: OAuthManagerAdapter) {
         allowKeychainPrompt: false,
       });
       const mainCred = mainStore.profiles[params.profileId];
+      if (mainCred?.type !== "oauth") {
+        return null;
+      }
+      const mainExpires = asDateTimestampMs(mainCred.expires);
+      const localExpires = asDateTimestampMs(params.credential.expires);
       if (
-        mainCred?.type === "oauth" &&
         mainCred.provider === params.credential.provider &&
         hasUsableOAuthCredential(mainCred) &&
-        Number.isFinite(mainCred.expires) &&
-        (!Number.isFinite(params.credential.expires) ||
-          mainCred.expires > params.credential.expires) &&
+        mainExpires !== undefined &&
+        (localExpires === undefined || mainExpires > localExpires) &&
         isSafeToAdoptMainStoreOAuthIdentity(params.credential, mainCred)
       ) {
         params.store.profiles[params.profileId] = { ...mainCred };

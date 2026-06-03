@@ -480,7 +480,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       string,
       import("openclaw/plugin-sdk/reply-history").HistoryEntry[]
     >();
-    let { botUserId, botUserName } = await fetchDiscordBotIdentity({
+    const { botUserId, botUserName } = await fetchDiscordBotIdentity({
       client,
       token,
       runtime,
@@ -510,6 +510,11 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
         accountId: account.accountId,
         runtime,
         botUserId,
+      });
+      const { setDiscordTranscriptsVoiceManager } = await import("../voice/transcripts-source.js");
+      setDiscordTranscriptsVoiceManager({
+        accountId: account.accountId,
+        manager: voiceManager,
       });
       voiceManagerRef.current = voiceManager;
       registerDiscordListener(client.listeners, new DiscordVoiceReadyListener(voiceManager));

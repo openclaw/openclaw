@@ -1,10 +1,10 @@
 export {
-  abortEmbeddedPiRun,
+  abortEmbeddedAgentRun,
   getActiveEmbeddedRunCount,
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
   waitForActiveEmbeddedRuns,
-} from "../../agents/pi-embedded-runner/runs.js";
+} from "../../agents/embedded-agent-runner/runs.js";
 export { markRestartAbortedMainSessions } from "../../agents/main-session-restart-recovery.js";
 export { flushAllInboundDebouncers } from "../../auto-reply/inbound-debounce.js";
 export { waitForFollowupQueueDrain } from "../../auto-reply/reply/queue/drain-all.js";
@@ -16,6 +16,7 @@ export {
 export {
   resolveGatewayRestartDeferralTimeoutMs,
   consumeGatewayRestartIntentPayloadSync,
+  consumeGatewaySigusr1RestartIntent,
   consumeGatewayRestartIntentSync,
   consumeGatewaySigusr1RestartAuthorization,
   isGatewaySigusr1RestartExternallyAllowed,

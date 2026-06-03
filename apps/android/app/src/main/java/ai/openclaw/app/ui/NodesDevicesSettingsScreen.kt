@@ -29,6 +29,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
+/** Settings screen for gateway nodes, paired devices, and pending pairing requests. */
 @Composable
 internal fun NodesDevicesSettingsScreen(
   viewModel: MainViewModel,
@@ -41,6 +42,8 @@ internal fun NodesDevicesSettingsScreen(
 
   LaunchedEffect(isConnected) {
     if (isConnected) {
+      // Refresh once on connection; user-triggered refresh handles later changes
+      // so device admin state is not polled from Compose.
       viewModel.refreshNodesDevices()
     }
   }
@@ -56,7 +59,7 @@ internal fun NodesDevicesSettingsScreen(
         listOf(
           SettingsMetric("Nodes", summary.nodes.size.toString()),
           SettingsMetric("Online", summary.nodes.count { it.connected }.toString()),
-          SettingsMetric("Devices", if (summary.devicePairingAvailable) summary.pairedDevices.size.toString() else "Locked"),
+          SettingsMetric("Devices", if (summary.devicePairingAvailable) summary.pairedDevices.size.toString() else "Admin"),
           SettingsMetric("Pending", summary.pendingDevices.size.toString()),
         ),
     )
@@ -95,7 +98,7 @@ private fun NodesDevicesPanel(summary: GatewayNodesDevicesSummary) {
   Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
     if (!summary.devicePairingAvailable) {
       ClawPanel {
-        Text(text = "Pairing controls are not available from this connection.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        Text(text = "Device pairing admin needs elevated access. Connected nodes still work.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
     }
     if (summary.pendingDevices.isNotEmpty()) {
@@ -195,6 +198,7 @@ private fun DeviceListRow(
   )
 }
 
+/** True when the gateway returned no node or device rows to render. */
 private fun GatewayNodesDevicesSummary.isEmpty(): Boolean = nodes.isEmpty() && pendingDevices.isEmpty() && pairedDevices.isEmpty()
 
 private fun nodeSubtitle(node: GatewayNodeSummary): String {

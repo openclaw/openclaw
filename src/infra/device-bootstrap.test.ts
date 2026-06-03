@@ -72,8 +72,19 @@ describe("device bootstrap tokens", () => {
     expect(parsed[issued.token]?.issuedAtMs).toBe(Date.now());
     expect(parsed[issued.token]?.profile).toEqual({
       roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.write"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
+  });
+
+  it("rejects bootstrap token issuance when expiry would exceed the Date range", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    const baseDir = await createTempDir();
+
+    await expect(issueDeviceBootstrapToken({ baseDir })).rejects.toThrow(
+      "Device bootstrap token expiry could not be resolved.",
+    );
   });
 
   it("verifies valid bootstrap tokens and binds them to the first device identity", async () => {
@@ -158,7 +169,7 @@ describe("device bootstrap tokens", () => {
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
       {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.write"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       },
     );
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: "invalid" })).resolves.toBeNull();
@@ -399,7 +410,7 @@ describe("device bootstrap tokens", () => {
     await expect(getDeviceBootstrapTokenProfile({ baseDir, token: issued.token })).resolves.toEqual(
       {
         roles: ["node", "operator"],
-        scopes: ["operator.approvals", "operator.read", "operator.write"],
+        scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
       },
     );
     await expect(
@@ -463,7 +474,7 @@ describe("device bootstrap tokens", () => {
     >;
     expect(parsed[issued.token]?.redeemedProfile).toEqual({
       roles: ["operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.write"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
   });
 
@@ -545,7 +556,7 @@ describe("device bootstrap tokens", () => {
       }),
     ).resolves.toEqual({
       roles: ["node", "operator"],
-      scopes: ["operator.approvals", "operator.read", "operator.write"],
+      scopes: ["operator.approvals", "operator.read", "operator.talk.secrets", "operator.write"],
     });
   });
 
@@ -594,6 +605,36 @@ describe("device bootstrap tokens", () => {
     });
 
     await expect(verifyBootstrapToken(baseDir, "expiredToken")).resolves.toEqual({
+      ok: false,
+      reason: "bootstrap_token_invalid",
+    });
+  });
+
+  it("prunes persisted bootstrap tokens with invalid issued timestamps", async () => {
+    vi.useFakeTimers();
+    const baseDir = await createTempDir();
+    const bootstrapPath = resolveBootstrapPath(baseDir);
+    await fs.mkdir(path.dirname(bootstrapPath), { recursive: true });
+
+    vi.setSystemTime(new Date("2026-03-14T12:00:00Z"));
+    await fs.writeFile(
+      bootstrapPath,
+      `${JSON.stringify(
+        {
+          invalidToken: {
+            token: "invalidToken",
+            ts: Number.POSITIVE_INFINITY,
+            issuedAtMs: Number.POSITIVE_INFINITY,
+            profile: { roles: ["node"], scopes: [] },
+          },
+        },
+        null,
+        2,
+      )}\n`,
+      "utf8",
+    );
+
+    await expect(verifyBootstrapToken(baseDir, "invalidToken")).resolves.toEqual({
       ok: false,
       reason: "bootstrap_token_invalid",
     });

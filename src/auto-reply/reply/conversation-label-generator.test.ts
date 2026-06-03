@@ -8,9 +8,9 @@ const resolveDefaultModelForAgent = vi.hoisted(() => vi.fn());
 const resolveModelAsync = vi.hoisted(() => vi.fn());
 const prepareModelForSimpleCompletion = vi.hoisted(() => vi.fn());
 
-vi.mock("@earendil-works/pi-ai", async () => {
+vi.mock("../../llm/stream.js", async () => {
   const original =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+    await vi.importActual<typeof import("../../llm/stream.js")>("../../llm/stream.js");
   return {
     ...original,
     completeSimple,
@@ -25,7 +25,7 @@ vi.mock("../../agents/model-selection.js", () => ({
   resolveDefaultModelForAgent,
 }));
 
-vi.mock("../../agents/pi-embedded-runner/model.js", () => ({
+vi.mock("../../agents/embedded-agent-runner/model.js", () => ({
   resolveModelAsync,
 }));
 
@@ -135,9 +135,9 @@ describe("generateConversationLabel", () => {
   });
 
   it("omits temperature for Codex Responses simple completions", async () => {
-    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai-codex", model: "gpt-5.5" });
+    resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.5" });
     resolveModelAsync.mockResolvedValue({
-      model: { provider: "openai-codex", api: "openai-codex-responses" },
+      model: { provider: "openai", api: "openai-chatgpt-responses" },
       authStorage: {},
       modelRegistry: {},
     });

@@ -10,11 +10,11 @@ const formatDocsLinkMock = vi.hoisted(() =>
 );
 const resolveCommitHashMock = vi.hoisted(() => vi.fn<() => string | null>(() => "abc1234"));
 
-vi.mock("../../terminal/links.js", () => ({
+vi.mock("../../../packages/terminal-core/src/links.js", () => ({
   formatDocsLink: formatDocsLinkMock,
 }));
 
-vi.mock("../../terminal/theme.js", () => ({
+vi.mock("../../../packages/terminal-core/src/theme.js", () => ({
   isRich: () => false,
   theme: {
     heading: (s: string) => s,
@@ -164,5 +164,23 @@ describe("configureProgramHelp", () => {
     process.argv = ["node", "openclaw", "--version"];
     resolveCommitHashMock.mockReturnValue(null);
     expectVersionExit({ expectedVersion: "OpenClaw 9.9.9-test" });
+  });
+
+  it("does not treat subcommand --version options as root version requests", () => {
+    process.argv = ["node", "openclaw", "skills", "verify", "discrawl", "--version", "1.0.0"];
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code ?? ""}`);
+    }) as typeof process.exit);
+
+    try {
+      const program = makeProgramWithCommands();
+      expect(() => configureProgramHelp(program, testProgramContext)).not.toThrow();
+      expect(logSpy).not.toHaveBeenCalled();
+      expect(exitSpy).not.toHaveBeenCalled();
+    } finally {
+      logSpy.mockRestore();
+      exitSpy.mockRestore();
+    }
   });
 });

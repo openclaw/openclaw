@@ -27,7 +27,7 @@ Both transports are production-ready and reach feature parity for messaging, sla
 | ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
 | Public Gateway URL           | Not required                                                                                                                                         | Required (DNS, TLS, reverse proxy or tunnel)                                                                   |
 | Outbound network             | Outbound WSS to `wss-primary.slack.com` must be reachable                                                                                            | No outbound WS; inbound HTTPS only                                                                             |
-| Tokens needed                | Bot token (`xoxb-...`) + App-Level Token (`xapp-...`) with `connections:write`                                                                       | Bot token (`xoxb-...`) + Signing Secret                                                                        |
+| Tokens needed                | Bot token + App-Level Token with `connections:write`                                                                                                 | Bot token + Signing Secret                                                                                     |
 | Dev laptop / behind firewall | Works as-is                                                                                                                                          | Needs a public tunnel (ngrok, Cloudflare Tunnel, Tailscale Funnel) or staging Gateway                          |
 | Horizontal scaling           | One Socket Mode session per app per host; multiple Gateways need separate Slack apps                                                                 | Stateless POST handler; multiple Gateway replicas can share one app behind a load balancer                     |
 | Multi-account on one Gateway | Supported; each account opens its own WS                                                                                                             | Supported; each account needs a unique `webhookPath` (default `/slack/events`) so registrations do not collide |
@@ -222,8 +222,8 @@ openclaw plugins install @openclaw/slack
 
         After Slack creates the app:
 
-        - **Basic Information → App-Level Tokens → Generate Token and Scopes**: add `connections:write`, save, copy the `xapp-...` value.
-        - **Install App → Install to Workspace**: copy the `xoxb-...` Bot User OAuth Token.
+        - **Basic Information -> App-Level Tokens -> Generate Token and Scopes**: add `connections:write`, save, copy the App-Level Token.
+        - **Install App -> Install to Workspace**: copy the Bot User OAuth Token.
 
       </Step>
 
@@ -232,8 +232,8 @@ openclaw plugins install @openclaw/slack
         Recommended SecretRef setup:
 
 ```bash
-export SLACK_APP_TOKEN=xapp-...
-export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_APP_TOKEN=slack-app-token-example
+export SLACK_BOT_TOKEN=slack-bot-token-example
 cat > slack.socket.patch.json5 <<'JSON5'
 {
   channels: {
@@ -253,8 +253,8 @@ openclaw config patch --file ./slack.socket.patch.json5
         Env fallback (default account only):
 
 ```bash
-SLACK_APP_TOKEN=xapp-...
-SLACK_BOT_TOKEN=xoxb-...
+SLACK_APP_TOKEN=slack-app-token-example
+SLACK_BOT_TOKEN=slack-bot-token-example
 ```
 
       </Step>
@@ -455,7 +455,7 @@ openclaw gateway
         After Slack creates the app:
 
         - **Basic Information → App Credentials**: copy the **Signing Secret** for request verification.
-        - **Install App → Install to Workspace**: copy the `xoxb-...` Bot User OAuth Token.
+        - **Install App -> Install to Workspace**: copy the Bot User OAuth Token.
 
       </Step>
 
@@ -464,7 +464,7 @@ openclaw gateway
         Recommended SecretRef setup:
 
 ```bash
-export SLACK_BOT_TOKEN=xoxb-...
+export SLACK_BOT_TOKEN=slack-bot-token-example
 export SLACK_SIGNING_SECRET=...
 cat > slack.http.patch.json5 <<'JSON5'
 {
@@ -867,7 +867,7 @@ The default manifest enables the Slack App Home **Home** tab and subscribes to `
   strings or SecretRef objects.
 - Config tokens override env fallback.
 - `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` env fallback applies only to the default account.
-- `userToken` (`xoxp-...`) is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
+- `userToken` is config-only (no env fallback) and defaults to read-only behavior (`userTokenReadOnly: true`).
 
 Status snapshot behavior:
 
@@ -1048,19 +1048,46 @@ When a `message` tool call runs inside a Slack thread and targets the same chann
 
 ## Ack reactions
 
-`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message.
+`ackReaction` sends an acknowledgement emoji while OpenClaw is processing an inbound message. `ackReactionScope` decides _when_ that emoji is actually sent.
+
+### Emoji (`ackReaction`)
 
 Resolution order:
 
 - `channels.slack.accounts.<accountId>.ackReaction`
 - `channels.slack.ackReaction`
 - `messages.ackReaction`
-- agent identity emoji fallback (`agents.list[].identity.emoji`, else "👀")
+- agent identity emoji fallback (`agents.list[].identity.emoji`, else `"eyes"` / 👀)
 
 Notes:
 
 - Slack expects shortcodes (for example `"eyes"`).
 - Use `""` to disable the reaction for the Slack account or globally.
+
+### Scope (`messages.ackReactionScope`)
+
+The Slack provider reads scope from `messages.ackReactionScope` (default `"group-mentions"`). There is no Slack-account or Slack-channel-level override today; the value is global to the gateway.
+
+Values:
+
+- `"all"`: react in DMs and groups.
+- `"direct"`: react in DMs only.
+- `"group-all"`: react on every group message (no DMs).
+- `"group-mentions"` (default): react in groups, but only when the bot is mentioned (or in group mentionables that opted in). **DMs are excluded.**
+- `"off"` / `"none"`: never react.
+
+<Note>
+The default scope (`"group-mentions"`) does not fire ack reactions in direct messages. To see the configured `ackReaction` (for example `"eyes"`) on inbound Slack DMs, set `messages.ackReactionScope` to `"direct"` or `"all"`. `messages.ackReactionScope` is read at Slack provider startup, so a gateway restart is needed for the change to take effect.
+</Note>
+
+```json5
+{
+  messages: {
+    ackReaction: "eyes",
+    ackReactionScope: "all", // react in DMs and groups
+  },
+}
+```
 
 ## Text streaming
 
@@ -1093,6 +1120,8 @@ Hide raw command/exec text while keeping compact progress lines:
 
 `channels.slack.streaming.nativeTransport` controls Slack native text streaming when `channels.slack.streaming.mode` is `partial` (default: `true`).
 
+Slack native progress task cards are opt-in for progress mode. Set `channels.slack.streaming.progress.nativeTaskCards` to `true` with `channels.slack.streaming.mode="progress"` to send a Slack-native plan/task card while work is running, then update the same task card at completion. Without this flag, progress mode keeps the portable draft-preview behavior.
+
 - A reply thread must be available for native text streaming and Slack assistant thread status to appear. Thread selection still follows `replyToMode`.
 - Channel, group-chat, and top-level DM roots can still use the normal draft preview when native streaming is unavailable or no reply thread exists.
 - Top-level Slack DMs stay off-thread by default, so they do not show Slack's thread-style native stream/status preview; OpenClaw posts and edits a draft preview in the DM instead.
@@ -1109,6 +1138,24 @@ Use draft preview instead of Slack native text streaming:
       streaming: {
         mode: "partial",
         nativeTransport: false,
+      },
+    },
+  },
+}
+```
+
+Opt in to Slack native progress task cards:
+
+```json5
+{
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        progress: {
+          nativeTaskCards: true,
+          render: "rich",
+        },
       },
     },
   },
@@ -1435,7 +1482,7 @@ openclaw pairing list slack
 
   <Accordion title="Socket mode not connecting">
     Validate bot + app tokens and Socket Mode enablement in Slack app settings.
-    The `xapp-...` App-Level Token needs `connections:write`, and the `xoxb-...`
+    The App-Level Token needs `connections:write`, and the Bot User OAuth Token
     bot token must belong to the same Slack app/workspace as the app token.
 
     If `openclaw channels status --probe --json` shows `botTokenStatus` or
@@ -1505,7 +1552,7 @@ Slack can attach downloaded media to the agent turn when Slack file downloads su
 
 When a Slack message with file attachments arrives:
 
-1. OpenClaw downloads the file from Slack's private URL using the bot token (`xoxb-...`).
+1. OpenClaw downloads the file from Slack's private URL using the bot token.
 2. The file is written to the media store on success.
 3. Downloaded media paths and content types are added to the inbound context.
 4. Image-capable model/tool paths can use image attachments from that context.

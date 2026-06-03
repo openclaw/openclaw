@@ -3,7 +3,8 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 
 export type WindowsSpawnResolution =
   | "direct"
@@ -128,10 +129,7 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
   }
 
   const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
-  const pathEntries = pathValue
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const pathEntries = normalizeStringEntries(pathValue.split(";"));
   const hasExtension = path.extname(command).length > 0;
   const pathExtRaw =
     env.PATHEXT ??
@@ -141,11 +139,9 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
     ".EXE;.CMD;.BAT;.COM";
   const pathExt = hasExtension
     ? [""]
-    : pathExtRaw
-        .split(";")
-        .map((ext) => ext.trim())
-        .filter(Boolean)
-        .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
+    : normalizeStringEntries(pathExtRaw.split(";")).map((ext) =>
+        ext.startsWith(".") ? ext : `.${ext}`,
+      );
 
   for (const dir of pathEntries) {
     for (const ext of pathExt) {

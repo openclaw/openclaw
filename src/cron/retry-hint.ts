@@ -1,5 +1,6 @@
 import type { CronRetryOn } from "../config/types.cron.js";
 
+/** Cron retry classifier output consumed by scheduler retry policy. */
 export type CronRetryHint = {
   retryable: boolean;
   category?: CronRetryOn;
@@ -11,11 +12,12 @@ const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
   overloaded:
     /\b529\b|\boverloaded(?:_error)?\b|high demand|temporar(?:ily|y) overloaded|capacity exceeded/i,
   network:
-    /(network|fetch failed|socket|econnreset|econnrefused|eai_again|ehostunreach|ehostdown|enetreset|enetunreach|epipe)/i,
+    /(network|fetch failed|socket|econnreset|econnrefused|eai_again|enetdown|ehostunreach|ehostdown|enetreset|enetunreach|epipe)/i,
   timeout: /(timeout|etimedout)/i,
   server_error: /\b5\d{2}\b/,
 };
 
+/** Classifies cron execution errors against the configured retryable transient categories. */
 export function resolveCronExecutionRetryHint(
   error: string | undefined,
   retryOn?: CronRetryOn[],
@@ -27,6 +29,7 @@ export function resolveCronExecutionRetryHint(
   const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
   const classified = classifiedReason ?? undefined;
   if (classified && keys.includes(classified as CronRetryOn)) {
+    // Structured provider classifications win over brittle message regexes when allowed.
     return { retryable: true, category: classified as CronRetryOn };
   }
   for (const key of keys) {

@@ -40,21 +40,23 @@ prepare_gates() {
   fi
 
   local has_changelog_update=false
-  if printf '%s\n' "$changed_files" | rg -q '^CHANGELOG\.md$'; then
-    has_changelog_update=true
-  fi
-
-  local unsupported_changelog_fragments
-  unsupported_changelog_fragments=$(printf '%s\n' "$changed_files" | rg '^changelog/fragments/' || true)
+  local unsupported_changelog_fragments=""
+  local changed_path
+  while IFS= read -r changed_path; do
+    [ -n "$changed_path" ] || continue
+    case "$changed_path" in
+      CHANGELOG.md)
+        has_changelog_update=true
+        ;;
+      changelog/fragments/*)
+        unsupported_changelog_fragments="${unsupported_changelog_fragments}${changed_path}"$'\n'
+        ;;
+    esac
+  done <<<"$changed_files"
   if [ -n "$unsupported_changelog_fragments" ]; then
     echo "Unsupported changelog fragment files detected:"
     printf '%s\n' "$unsupported_changelog_fragments"
     echo "Move changelog fragment content into CHANGELOG.md and remove changelog/fragments files."
-    exit 1
-  fi
-
-  if [ "$changelog_required" = "true" ] && [ "$has_changelog_update" = "false" ]; then
-    echo "Missing changelog update. Add CHANGELOG.md changes."
     exit 1
   fi
 
