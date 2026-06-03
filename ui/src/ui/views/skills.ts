@@ -1,3 +1,4 @@
+import { repeat } from "lit/directives/repeat.js";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -307,7 +308,11 @@ export function renderSkills(props: SkillsProps) {
                       <span class="muted">${group.skills.length}</span>
                     </summary>
                     <div class="list skills-grid">
-                      ${group.skills.map((skill) => renderSkill(skill, props))}
+                      ${repeat(
+                        group.skills,
+                        (skill) => skill.skillKey,
+                        (skill) => renderSkill(skill, props),
+                      )}
                     </div>
                   </details>
                 `;
