@@ -1,3 +1,7 @@
+/**
+ * Transcript inspection helpers shared by session filesystem views and usage metrics.
+ * Keep provider-specific block aliases centralized so both surfaces classify tools consistently.
+ */
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
