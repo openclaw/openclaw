@@ -8649,7 +8649,8 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(dispatcher.sendBlockReply).toHaveBeenCalledTimes(1);
-    const delivered = dispatcher.sendBlockReply.mock.calls[0][0];
+    const delivered = (dispatcher.sendBlockReply as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as ReplyPayload;
     expect(delivered.mediaUrls).toEqual(["https://example.com/image.png"]);
     expect(delivered.text).toBeUndefined();
   });
@@ -8713,13 +8714,17 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    const delivered = dispatcher.sendToolResult.mock.calls[0][0];
+    const delivered = (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as ReplyPayload;
     expect(delivered.mediaUrls).toEqual(["https://example.com/tool-image.png"]);
     expect(delivered.text).toBeUndefined();
   });
 
   it("preserves text-only tool results when captioned final TTS is active", async () => {
     setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      verboseLevel: "on",
+    };
     ttsMocks.state.statusSnapshot = {
       autoMode: "always",
       provider: "auto",
@@ -8728,7 +8733,11 @@ describe("dispatchReplyFromConfig", () => {
     };
     channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "telegram", Surface: "telegram" });
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      Surface: "telegram",
+      SessionKey: "agent:main:telegram:dm:123",
+    });
     const replyResolver = async (
       _ctx: MsgContext,
       opts?: GetReplyOptions,
@@ -8745,7 +8754,8 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
-    const delivered = dispatcher.sendToolResult.mock.calls[0][0];
+    const delivered = (dispatcher.sendToolResult as ReturnType<typeof vi.fn>).mock
+      .calls[0][0] as ReplyPayload;
     expect(delivered.text).toBe("Searching...");
   });
 
