@@ -1938,15 +1938,18 @@ function fullCheckoutSyncRoot() {
   return root;
 }
 
-function parsePositiveIntegerEnv(name, fallback) {
+function parseNonNegativeIntegerEnv(name, fallback, unit) {
   const raw = process.env[name]?.trim();
   if (!raw) {
     return fallback;
   }
   if (!/^\d+$/u.test(raw)) {
-    throw new Error(`${name} must be a non-negative integer byte count, got ${JSON.stringify(raw)}`);
+    throw new Error(`${name} must be a non-negative integer ${unit}, got ${JSON.stringify(raw)}`);
   }
-  const parsed = Number.parseInt(raw, 10);
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be a safe non-negative integer ${unit}, got ${JSON.stringify(raw)}`);
+  }
   return parsed;
 }
 
@@ -1965,9 +1968,10 @@ function formatByteCount(bytes) {
 }
 
 function assertFullCheckoutSyncDisk(root) {
-  const requiredBytes = parsePositiveIntegerEnv(
+  const requiredBytes = parseNonNegativeIntegerEnv(
     "OPENCLAW_CRABBOX_SYNC_MIN_FREE_BYTES",
     1024 * 1024 * 1024,
+    "byte count",
   );
   if (requiredBytes === 0) {
     return;
@@ -2066,11 +2070,12 @@ function startFullCheckoutKeepalive(checkout) {
   };
 
   refresh();
-  const intervalMs = Number.parseInt(
-    process.env.OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS ?? "5000",
-    10,
+  const intervalMs = parseNonNegativeIntegerEnv(
+    "OPENCLAW_CRABBOX_SYNC_KEEPALIVE_MS",
+    5000,
+    "millisecond interval",
   );
-  if (!Number.isFinite(intervalMs) || intervalMs <= 0) {
+  if (intervalMs <= 0) {
     return () => {};
   }
 
@@ -2361,7 +2366,12 @@ const childArgs =
         remoteChangedGateBase,
       );
 if (fullCheckout) {
-  stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout);
+  try {
+    stopFullCheckoutKeepalive = startFullCheckoutKeepalive(fullCheckout);
+  } catch (error) {
+    cleanupOnce();
+    throw error;
+  }
 }
 const childInvocation = spawnInvocation(binary, childArgs, childEnv, process.platform);
 const child = spawn(childInvocation.command, childInvocation.args, {

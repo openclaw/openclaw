@@ -204,10 +204,13 @@ export function parseArgs(argv) {
   return parsed;
 }
 
-function parsePositiveIntegerEnv(name, fallback) {
-  const raw = process.env[name]?.trim();
+export function parsePositiveIntegerEnv(name, fallback, env = process.env) {
+  const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0) {

@@ -46,35 +46,6 @@ const REPAIR_GUIDANCE = "Run `openclaw doctor --fix` to retry plugin repair.";
 const inspectGuidance = (pluginId: string) =>
   `Run \`openclaw plugins inspect ${pluginId} --runtime --json\` for details.`;
 
-function isBlockingRepairFailure(params: {
-  cfg: OpenClawConfig;
-  pluginId: string;
-  records: Record<string, PluginInstallRecord>;
-  smokeRecords: Record<string, PluginInstallRecord>;
-}): boolean {
-  if (Object.hasOwn(params.smokeRecords, params.pluginId)) {
-    return true;
-  }
-  const normalizedPluginConfig = normalizePluginsConfig(params.cfg.plugins);
-  const enableState = resolveEffectiveEnableState({
-    id: params.pluginId,
-    origin: "global",
-    config: normalizedPluginConfig,
-    rootConfig: params.cfg,
-  });
-  if (enableState.enabled) {
-    return true;
-  }
-  const record = params.records[params.pluginId];
-  if (!record) {
-    return false;
-  }
-  return Boolean(
-    resolveTrustedSourceLinkedOfficialNpmSpec({ pluginId: params.pluginId, record }) ||
-    resolveTrustedSourceLinkedOfficialClawHubSpec({ pluginId: params.pluginId, record }),
-  );
-}
-
 async function repairManagedNpmOpenClawPeerLinks(params: {
   env: NodeJS.ProcessEnv;
 }): Promise<{ changes: string[]; warnings: PostCoreConvergenceWarning[] }> {
@@ -114,8 +85,10 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
 /**
  * Mandatory post-core convergence pass. Runs AFTER the core package files
  * are swapped and the in-update doctor pass has already returned, but BEFORE
- * the gateway is restarted. Failures here must block the restart so we
- * never restart with a configured plugin whose payload is unloadable.
+ * the gateway is restarted. Missing-plugin repair failures stay nonblocking:
+ * an external package fetch may be transient, and failing the core update
+ * would strand the user. Payload smoke failures still block the restart so we
+ * never restart with an installed active plugin whose payload is unloadable.
  */
 export async function runPostCorePluginConvergence(params: {
   cfg: OpenClawConfig;
@@ -165,14 +138,6 @@ export async function runPostCorePluginConvergence(params: {
   // configured plugin whose payload was deleted on disk would block the
   // entire update — even though the gateway will never load that plugin.
   const smokeRecords = filterRecordsToActive({ cfg: params.cfg, records });
-  const blockingFailedPluginIds = (repair.failedPluginIds ?? []).filter((pluginId) =>
-    isBlockingRepairFailure({
-      cfg: params.cfg,
-      pluginId,
-      records,
-      smokeRecords,
-    }),
-  );
   const smoke = await runPluginPayloadSmokeCheck({ records: smokeRecords, env });
   for (const failure of smoke.failures) {
     warnings.push({
@@ -192,7 +157,7 @@ export async function runPostCorePluginConvergence(params: {
       ...peerLinkRepair.changes,
     ],
     warnings,
-    errored: blockingFailedPluginIds.length > 0 || smoke.failures.length > 0,
+    errored: smoke.failures.length > 0,
     smokeFailures: smoke.failures,
     installRecords: records,
   };

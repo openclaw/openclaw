@@ -301,31 +301,35 @@ describe("runPostCorePluginConvergence", () => {
     ]);
   });
 
-  it("marks convergence errored when repair reports failed plugin ids", async () => {
+  it("keeps failed configured-plugin repair fetches nonblocking", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
       warnings: [
-        'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+        'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
       ],
-      failedPluginIds: ["discord"],
+      failedPluginIds: ["matrix"],
       records: {},
     });
     const result = await runPostCorePluginConvergence({
       cfg: {
-        plugins: { entries: { discord: { enabled: true } } },
+        plugins: { entries: { matrix: { enabled: true } } },
       } as unknown as OpenClawConfig,
       env: {},
     });
-    expect(result.errored).toBe(true);
+    expect(result.errored).toBe(false);
     expect(result.warnings).toStrictEqual([
       {
         reason:
-          'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+          'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
         message:
-          'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
+          'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
         guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
       },
     ]);
+    expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
+      records: {},
+      env: expect.any(Object),
+    });
   });
 
   it("keeps inactive repair failures nonblocking", async () => {

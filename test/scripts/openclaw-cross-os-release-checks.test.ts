@@ -51,6 +51,7 @@ import {
   normalizeWindowsCommandShimPath,
   normalizeWindowsInstalledCliPath,
   maybeBuildOptionalAgentTurnSkipResult,
+  parsePositiveIntegerEnv,
   parseCrossOsSuiteFilter,
   parseArgs,
   packageHasScript,
@@ -200,6 +201,25 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   it("prints command heartbeats before long release commands hit job timeouts", () => {
     expect(CROSS_OS_COMMAND_HEARTBEAT_SECONDS).toBeGreaterThan(0);
     expect(CROSS_OS_COMMAND_HEARTBEAT_SECONDS).toBeLessThanOrEqual(60);
+  });
+
+  it("rejects malformed cross-OS positive integer environment values", () => {
+    expect(parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {})).toBe(
+      60,
+    );
+    expect(
+      parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {
+        OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS: "25",
+      }),
+    ).toBe(25);
+
+    for (const raw of ["1e3", "25ms", "1.5", "0", "-1", String(Number.MAX_SAFE_INTEGER + 1)]) {
+      expect(() =>
+        parsePositiveIntegerEnv("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS", 60, {
+          OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS: raw,
+        }),
+      ).toThrow("OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS must be a positive integer");
+    }
   });
 
   it("records packaged-fresh phase timings for release-check summaries", () => {
