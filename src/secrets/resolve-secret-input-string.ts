@@ -8,6 +8,12 @@ import { resolveSecretRefString } from "./resolve.js";
 
 type SecretDefaults = NonNullable<OpenClawConfig["secrets"]>["defaults"];
 
+/**
+ * Resolves a config value that may be either an inline string or a SecretRef object.
+ *
+ * Plugin and gateway callers can override normalization and convert SecretRef resolution errors
+ * into surface-specific failures without duplicating provider lookup behavior.
+ */
 export async function resolveSecretInputString(params: {
   config: OpenClawConfig;
   value: unknown;
