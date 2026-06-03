@@ -29,6 +29,7 @@ type ChannelPresenceOptions = {
   };
 };
 
+/** Source that made a channel look potentially configured. */
 export type ChannelPresenceSignalSource = "config" | "env" | "persisted-auth";
 
 type ChannelPresenceSignal = {
@@ -36,6 +37,7 @@ type ChannelPresenceSignal = {
   source: ChannelPresenceSignalSource;
 };
 
+/** Returns true when a channel config entry contains settings beyond enabled/disabled state. */
 export function hasMeaningfulChannelConfig(value: unknown): boolean {
   if (!isRecord(value)) {
     return false;
@@ -43,6 +45,7 @@ export function hasMeaningfulChannelConfig(value: unknown): boolean {
   return Object.keys(value).some((key) => key !== "enabled");
 }
 
+/** Lists channels explicitly disabled in config so activation logic can suppress auto-detection. */
 export function listExplicitlyDisabledChannelIdsForConfig(cfg: OpenClawConfig): string[] {
   const channels = isRecord(cfg.channels) ? cfg.channels : null;
   if (!channels) {
@@ -80,6 +83,7 @@ function listPersistedAuthStateChannelIds(options: ChannelPresenceOptions): read
   if (persistedAuthStateChannelIds) {
     return persistedAuthStateChannelIds;
   }
+  // Bundled plugin metadata is process-stable; cache the static persisted-auth id list.
   persistedAuthStateChannelIds = listBundledChannelIdsWithPersistedAuthState();
   return persistedAuthStateChannelIds;
 }
@@ -102,6 +106,7 @@ function hasPersistedAuthState(params: {
   });
 }
 
+/** Lists channel ids detected from config, env vars, or persisted auth state. */
 export function listPotentialConfiguredChannelIds(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -114,6 +119,7 @@ export function listPotentialConfiguredChannelIds(
   );
 }
 
+/** Lists deduplicated channel presence signals with their detection source. */
 export function listPotentialConfiguredChannelPresenceSignals(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
@@ -192,6 +198,7 @@ function hasEnvConfiguredChannel(
   );
 }
 
+/** Returns true when any channel appears configured from config, env, or persisted auth state. */
 export function hasPotentialConfiguredChannels(
   cfg: OpenClawConfig | null | undefined,
   env: NodeJS.ProcessEnv = process.env,
