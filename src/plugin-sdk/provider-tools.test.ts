@@ -11,6 +11,28 @@ import {
 } from "./provider-tools.js";
 
 describe("buildProviderToolCompatFamilyHooks", () => {
+  function createUnreadablePropertiesParameters(): Record<string, unknown> {
+    const parameters: Record<string, unknown> = { type: "object" };
+    Object.defineProperty(parameters, "properties", {
+      enumerable: true,
+      get() {
+        throw new Error("provider properties getter exploded");
+      },
+    });
+    return parameters;
+  }
+
+  function createUnreadableSchemaArray(): unknown[] {
+    return new Proxy([{ type: "string" }], {
+      get(target, property, receiver) {
+        if (property === "0") {
+          throw new Error("provider schema array getter exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+  }
+
   function normalizeOpenAIParameters(parameters: unknown): unknown {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const tools = [{ name: "demo", description: "", parameters }] as never;
@@ -228,6 +250,158 @@ describe("buildProviderToolCompatFamilyHooks", () => {
     ).toStrictEqual([]);
   });
 
+  it("keeps deepseek provider hooks from throwing on unreadable tool schemas", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+    const broken = {
+      name: "fuzzplugin_provider",
+      description: "",
+      parameters: createUnreadablePropertiesParameters(),
+    };
+    const healthy = {
+      name: "healthy",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          mode: {
+            anyOf: [
+              { const: "fast", type: "string" },
+              { const: "safe", type: "string" },
+            ],
+          },
+        },
+      },
+    };
+    const ctx = {
+      provider: "deepseek",
+      modelId: "deepseek-v4-pro",
+      modelApi: "openai-completions",
+      model: {
+        provider: "deepseek",
+        api: "openai-completions",
+        id: "deepseek-v4-pro",
+      } as never,
+      tools: [broken, healthy],
+    } as never;
+
+    const normalized = hooks.normalizeToolSchemas(ctx);
+
+    expect(normalized[0]).toBe(broken);
+    expect(normalized[1]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        mode: {
+          type: "string",
+          enum: ["fast", "safe"],
+        },
+      },
+    });
+    expect(
+      hooks.inspectToolSchemas({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        model: {
+          provider: "deepseek",
+          api: "openai-completions",
+          id: "deepseek-v4-pro",
+        } as never,
+        tools: normalized,
+      } as never),
+    ).toEqual([
+      {
+        toolName: "fuzzplugin_provider",
+        toolIndex: 0,
+        violations: ["fuzzplugin_provider.parameters is unreadable"],
+      },
+    ]);
+  });
+
+  it("reports unreadable provider schema arrays without throwing", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("deepseek");
+
+    expect(
+      hooks.inspectToolSchemas({
+        provider: "deepseek",
+        modelId: "deepseek-v4-pro",
+        modelApi: "openai-completions",
+        tools: [
+          {
+            name: "fuzzplugin_array",
+            description: "",
+            parameters: {
+              type: "object",
+              anyOf: createUnreadableSchemaArray(),
+            },
+          },
+        ],
+      } as never),
+    ).toEqual([
+      {
+        toolName: "fuzzplugin_array",
+        toolIndex: 0,
+        violations: [
+          "fuzzplugin_array.parameters.anyOf",
+          "fuzzplugin_array.parameters.anyOf[0] is unreadable",
+        ],
+      },
+    ]);
+  });
+
+  it("keeps gemini provider hooks from throwing on unreadable tool schemas", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("gemini");
+    const broken = {
+      name: "fuzzplugin_provider",
+      description: "",
+      parameters: createUnreadablePropertiesParameters(),
+    };
+    const healthy = {
+      name: "healthy",
+      description: "",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string", minLength: 3 },
+        },
+        required: ["query"],
+      },
+    };
+    const ctx = {
+      provider: "gemini",
+      modelId: "gemini-3-pro",
+      modelApi: "google-gemini",
+      model: {
+        provider: "gemini",
+        api: "google-gemini",
+        id: "gemini-3-pro",
+      } as never,
+      tools: [broken, healthy],
+    } as never;
+
+    const normalized = hooks.normalizeToolSchemas(ctx);
+
+    expect(normalized[0]).toBe(broken);
+    expect(normalized[1]?.parameters).toEqual({
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+      required: ["query"],
+    });
+    expect(hooks.inspectToolSchemas(ctx)).toEqual([
+      {
+        toolName: "fuzzplugin_provider",
+        toolIndex: 0,
+        violations: ["fuzzplugin_provider.parameters is unreadable"],
+      },
+      {
+        toolName: "healthy",
+        toolIndex: 1,
+        violations: ["healthy.parameters.properties.query.minLength"],
+      },
+    ]);
+  });
+
   it("normalizes parameter-free and typed-object schemas for the openai family", () => {
     const hooks = buildProviderToolCompatFamilyHooks("openai");
     const tools = [
@@ -395,6 +569,62 @@ describe("buildProviderToolCompatFamilyHooks", () => {
         tools: [permissiveTool],
       }),
     ).toStrictEqual([]);
+  });
+
+  it("keeps openai provider normalization from throwing on unreadable tool schemas", () => {
+    const hooks = buildProviderToolCompatFamilyHooks("openai");
+    const broken = {
+      name: "fuzzplugin_provider",
+      description: "",
+      parameters: createUnreadablePropertiesParameters(),
+    };
+    const healthy = { name: "healthy", description: "", parameters: {} };
+    const ctx = {
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      model: {
+        provider: "openai",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        id: "gpt-5.4",
+      } as never,
+      tools: [broken, healthy],
+    } as never;
+
+    const normalized = hooks.normalizeToolSchemas(ctx);
+
+    expect(normalized[0]).toBe(broken);
+    expect(normalized[1]?.parameters).toEqual({
+      type: "object",
+      properties: {},
+      required: [],
+      additionalProperties: false,
+    });
+    expect(hooks.inspectToolSchemas(ctx)).toStrictEqual([]);
+  });
+
+  it("reports unreadable schemas from strict openai schema inspection", () => {
+    expect(
+      findOpenAIStrictSchemaViolations(createUnreadablePropertiesParameters(), "tool.params"),
+    ).toEqual(["tool.params is unreadable"]);
+  });
+
+  it("reports unreadable arrays from strict openai schema inspection", () => {
+    expect(
+      findOpenAIStrictSchemaViolations(
+        {
+          type: "object",
+          anyOf: createUnreadableSchemaArray(),
+        },
+        "tool.params",
+      ),
+    ).toEqual([
+      "tool.params.anyOf",
+      "tool.params.additionalProperties",
+      "tool.params.required",
+      "tool.params.anyOf[0] is unreadable",
+    ]);
   });
 
   it("skips openai strict-tool normalization on non-native routes", () => {
