@@ -74,21 +74,30 @@ type ApprovalOriginOrSessionTargetChecker =
   ChannelApprovalForwardingEvaluatorParams["hasOriginOrSessionTarget"];
 
 export type ChannelApprovalForwardingEligibilityParams = {
+  /** Full config containing exec/plugin approval forwarding settings. */
   cfg: OpenClawConfig;
+  /** Optional channel account id for account-scoped transport checks. */
   accountId?: string | null;
+  /** Approval family whose forwarding config should be evaluated. */
   approvalKind: ApprovalKind;
+  /** Approval request being considered for native delivery. */
   request: ApprovalRequest;
 };
 
 export type ChannelApprovalPotentialRouteParams = {
+  /** Full config containing exec/plugin approval forwarding settings. */
   cfg: OpenClawConfig;
+  /** Optional channel account id for account-scoped transport checks. */
   accountId?: string | null;
+  /** Approval family whose forwarding config should be evaluated. */
   approvalKind: ApprovalKind;
+  /** When true, ignore explicit target routes and only consider session/native origin routes. */
   nativeSessionOnly?: boolean;
 };
 
 export type ChannelApprovalExplicitTargetEligibilityParams =
   ChannelApprovalForwardingEligibilityParams & {
+    /** Forwarding target that may be handled by the channel-native approval route. */
     target: ChannelApprovalForwardTarget;
   };
 
@@ -215,14 +224,20 @@ type CustomOriginResolverParams<TTarget> = BaseOriginResolverParams<TTarget> & {
 };
 
 export type NativeApprovalTarget = {
+  /** Channel-local destination id. */
   to: string;
+  /** Optional channel account id associated with the destination. */
   accountId?: string | null;
+  /** Optional thread/topic id inside the destination. */
   threadId?: string | number | null;
 };
 
 export function nativeApprovalTargetsMatch(params: {
+  /** Channel id used for route target normalization. */
   channel?: string | null;
+  /** Left native target to compare. */
   left: NativeApprovalTarget;
+  /** Right native target to compare. */
   right: NativeApprovalTarget;
 }): boolean {
   return channelRouteTargetsMatchExact({
@@ -242,25 +257,37 @@ export function nativeApprovalTargetsMatch(params: {
 }
 
 export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
+  /** Full config containing top-level or channel-specific approval settings. */
   cfg: OpenClawConfig;
+  /** Optional channel account id for account-scoped native delivery checks. */
   accountId?: string | null;
+  /** Reply payload that may already contain exec approval metadata. */
   payload: ReplyPayload;
+  /** Outbound payload hint proving an active native exec approval route. */
   hint?: ChannelOutboundPayloadHint;
+  /** Legacy transport gate for native delivery. */
   isTransportEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  /** Preferred transport gate for native delivery. */
   isNativeDeliveryEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
+  /** Optional channel-specific approval config resolver. */
   resolveApprovalConfig?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     metadata: ExecApprovalReplyMetadata;
   }) => LocalNativeExecApprovalConfig | undefined;
+  /** Whether the resolved approval config must be enabled before suppressing local prompt. */
   requireApprovalConfigEnabled?: boolean;
+  /** Whether forwarding mode must be session/both unless exact target proof is present. */
   enforceForwardingMode?: boolean;
+  /** Optional session-route gate for the approval metadata. */
   isSessionRouteEligible?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
     metadata: ExecApprovalReplyMetadata;
   }) => boolean;
+  /** Proof that target-mode forwarding already matched this exact native target. */
   hasExactTargetProof?: boolean;
+  /** Whether agent filters may fall back to the agent segment in sessionKey. */
   fallbackAgentIdFromSessionKey?: boolean;
 }): boolean {
   if (params.hint?.kind !== "approval-pending" || params.hint.approvalKind !== "exec") {
@@ -292,6 +319,8 @@ export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
     params.enforceForwardingMode ?? params.resolveApprovalConfig === undefined;
   if (enforceForwardingMode) {
     const mode = config?.mode ?? "session";
+    // In targets-only mode, local prompt suppression requires exact target
+    // proof so a session/native route cannot hide the only visible prompt.
     if (mode !== "session" && mode !== "both" && !params.hasExactTargetProof) {
       return false;
     }
