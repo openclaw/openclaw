@@ -21,7 +21,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveFeishuAccount } from "./accounts.js";
+import { resolveFeishuAccount, resolveFeishuOutboundCredentialsConfig } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
@@ -487,7 +487,14 @@ export const feishuOutbound: ChannelOutboundAdapter = {
     },
   },
   renderPresentation: renderFeishuPresentationPayload,
-  sendPayload: async (ctx) => {
+  sendPayload: async (ctxInput) => {
+    const ctx = {
+      ...ctxInput,
+      cfg: await resolveFeishuOutboundCredentialsConfig({
+        cfg: ctxInput.cfg,
+        accountId: ctxInput.accountId ?? undefined,
+      }),
+    };
     const card = buildFeishuPayloadCard({
       payload: ctx.payload,
       text: ctx.text,
@@ -563,16 +570,12 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "feishu",
-    sendText: async ({
-      cfg,
-      to,
-      text,
-      accountId,
-      replyToId,
-      threadId,
-      mediaLocalRoots,
-      identity,
-    }) => {
+    sendText: async (input) => {
+      const cfg = await resolveFeishuOutboundCredentialsConfig({
+        cfg: input.cfg,
+        accountId: input.accountId ?? undefined,
+      });
+      const { to, text, accountId, replyToId, threadId, mediaLocalRoots, identity } = input;
       const { replyToMessageId, replyInThread } = resolveFeishuMediaReplyMode({
         replyToId,
         threadId,
@@ -640,17 +643,13 @@ export const feishuOutbound: ChannelOutboundAdapter = {
         replyInThread,
       });
     },
-    sendMedia: async ({
-      cfg,
-      to,
-      text,
-      mediaUrl,
-      audioAsVoice,
-      accountId,
-      mediaLocalRoots,
-      replyToId,
-      threadId,
-    }) => {
+    sendMedia: async (input) => {
+      const cfg = await resolveFeishuOutboundCredentialsConfig({
+        cfg: input.cfg,
+        accountId: input.accountId ?? undefined,
+      });
+      const { to, text, mediaUrl, audioAsVoice, accountId, mediaLocalRoots, replyToId, threadId } =
+        input;
       const { replyToMessageId, replyInThread } = resolveFeishuMediaReplyMode({
         replyToId,
         threadId,

@@ -8,6 +8,7 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-resolution";
 import { coerceSecretRef } from "openclaw/plugin-sdk/provider-auth";
+import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { normalizeString } from "./comment-shared.js";
 import type {
   FeishuConfig,
@@ -181,19 +182,26 @@ export function resolveDefaultFeishuAccountId(cfg: ClawdbotConfig): string {
   return resolveDefaultAccountId(cfg);
 }
 
-function resolveRawFeishuAccountConfig(
+function findFeishuAccountMapKey(
   accounts: Record<string, Partial<FeishuConfig>> | undefined,
   accountId: string,
-): Partial<FeishuConfig> | undefined {
+): string | undefined {
   if (!accounts || typeof accounts !== "object") {
     return undefined;
   }
   if (Object.hasOwn(accounts, accountId)) {
-    return accounts[accountId];
+    return accountId;
   }
   const normalized = accountId.toLowerCase();
-  const matchKey = Object.keys(accounts).find((key) => key.toLowerCase() === normalized);
-  return matchKey ? accounts[matchKey] : undefined;
+  return Object.keys(accounts).find((key) => key.toLowerCase() === normalized);
+}
+
+function resolveRawFeishuAccountConfig(
+  accounts: Record<string, Partial<FeishuConfig>> | undefined,
+  accountId: string,
+): Partial<FeishuConfig> | undefined {
+  const key = findFeishuAccountMapKey(accounts, accountId);
+  return key ? accounts?.[key] : undefined;
 }
 
 /**
@@ -367,6 +375,97 @@ export function resolveFeishuRuntimeAccount(
     baseMode: "strict",
     eventSecretMode: options?.requireEventSecrets ? "strict" : "inspect",
   });
+}
+
+async function resolveFeishuCredentialRefValue(params: {
+  cfg: ClawdbotConfig;
+  env: NodeJS.ProcessEnv;
+  value: unknown;
+  path: string;
+}): Promise<string | undefined> {
+  // Plaintext / already-resolved values and non-refs need nothing inlined.
+  if (typeof params.value === "string" || !coerceSecretRef(params.value)) {
+    return undefined;
+  }
+  // Exec/file/keychain-capable SDK resolver; the sync runtime resolver handles
+  // only env/plaintext, which is the #89338 gap this repairs.
+  const { value: resolved } = await resolveConfiguredSecretInputString({
+    config: params.cfg,
+    env: params.env,
+    value: params.value,
+    path: params.path,
+  });
+  return resolved;
+}
+
+/**
+ * Resolve still-unresolved app credential SecretRefs for an outbound account and
+ * return a cfg with them inlined as strings. The sync runtime resolver only
+ * handles env/plaintext; an exec/keychain `appId`/`appSecret` SecretRef the
+ * gateway did not pre-resolve for this dispatch would otherwise throw before the
+ * SDK client is built, dropping the send (issue #89338). Resolved/plaintext
+ * configs are returned unchanged (no clone, no resolver call).
+ */
+export async function resolveFeishuOutboundCredentialsConfig(params: {
+  cfg: ClawdbotConfig;
+  accountId?: string | null;
+  env?: NodeJS.ProcessEnv;
+}): Promise<ClawdbotConfig> {
+  const feishuRoot = params.cfg.channels?.feishu as FeishuConfig | undefined;
+  if (!feishuRoot) {
+    return params.cfg;
+  }
+  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
+  const merged = account.config;
+  // Fast path: nothing to inline unless an app credential is still an unresolved
+  // SecretRef — plaintext / already-resolved configs need no resolver call and no clone.
+  if (!coerceSecretRef(merged.appId) && !coerceSecretRef(merged.appSecret)) {
+    return params.cfg;
+  }
+  const env = params.env ?? process.env;
+  const accounts = feishuRoot.accounts as Record<string, Partial<FeishuConfig>> | undefined;
+  // Resolver path mirrors the write-back location: the matched account-map key (which may
+  // be noncanonical/mixed-case), or top-level for an implicit/inherited account. It labels
+  // the unresolved-SecretRef diagnostic, so keep it at the real source location.
+  const matchedAccountKey = findFeishuAccountMapKey(accounts, account.accountId);
+  const fieldPath = (field: string) =>
+    matchedAccountKey
+      ? `channels.feishu.accounts.${matchedAccountKey}.${field}`
+      : `channels.feishu.${field}`;
+  const [appId, appSecret] = await Promise.all([
+    resolveFeishuCredentialRefValue({
+      cfg: params.cfg,
+      env,
+      value: merged.appId,
+      path: fieldPath("appId"),
+    }),
+    resolveFeishuCredentialRefValue({
+      cfg: params.cfg,
+      env,
+      value: merged.appSecret,
+      path: fieldPath("appSecret"),
+    }),
+  ]);
+  if (appId === undefined && appSecret === undefined) {
+    return params.cfg;
+  }
+  const overrides = {
+    ...(appId !== undefined ? { appId } : {}),
+    ...(appSecret !== undefined ? { appSecret } : {}),
+  };
+  // Inline at the matched account-map key (preserving its other per-account settings),
+  // or top-level for an implicit/inherited account, so the downstream account merge wins.
+  const nextFeishu: FeishuConfig =
+    accounts && matchedAccountKey
+      ? {
+          ...feishuRoot,
+          accounts: {
+            ...accounts,
+            [matchedAccountKey]: { ...accounts[matchedAccountKey], ...overrides },
+          },
+        }
+      : { ...feishuRoot, ...overrides };
+  return { ...params.cfg, channels: { ...params.cfg.channels, feishu: nextFeishu } };
 }
 
 /**
