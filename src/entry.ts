@@ -27,7 +27,13 @@ const ENTRY_WRAPPER_PAIRS = [
 ] as const;
 
 type PrecomputedCommandHelpName = "browser" | "secrets" | "nodes";
-type PrecomputedSubcommandHelpName = "doctor" | "gateway" | "models" | "plugins";
+type PrecomputedSubcommandHelpName =
+  | "doctor"
+  | "gateway"
+  | "models"
+  | "plugins"
+  | "sessions"
+  | "tasks";
 type OutputPrecomputedHelpText = () => boolean;
 
 const HELP_FLAGS = new Set(["-h", "--help"]);
@@ -279,7 +285,9 @@ function resolvePrecomputedSubcommandName(
     commandName === "doctor" ||
     commandName === "gateway" ||
     commandName === "models" ||
-    commandName === "plugins"
+    commandName === "plugins" ||
+    commandName === "sessions" ||
+    commandName === "tasks"
   ) {
     return commandName;
   }

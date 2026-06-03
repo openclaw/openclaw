@@ -388,7 +388,9 @@ const resolvePrecomputedCommandHelp = (argv) => {
     argv[2] === "doctor" ||
     argv[2] === "gateway" ||
     argv[2] === "models" ||
-    argv[2] === "plugins"
+    argv[2] === "plugins" ||
+    argv[2] === "sessions" ||
+    argv[2] === "tasks"
   ) {
     return {
       command: argv[2],

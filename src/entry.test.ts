@@ -155,23 +155,26 @@ describe("entry precomputed command help fast path", () => {
     expect(outputPrecomputedNodesHelpTextCalls).toBe(1);
   });
 
-  it("renders precomputed subcommand help from startup metadata without importing the full program", async () => {
-    const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
+  it.each(["doctor", "sessions", "tasks"])(
+    "renders precomputed %s help from startup metadata without importing the full program",
+    async (commandName) => {
+      const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
 
-    const handled = await tryHandlePrecomputedCommandHelpFastPath(
-      ["node", "openclaw", "doctor", "--help"],
-      {
-        env: {},
-        outputPrecomputedSubcommandHelpText: (commandName) => {
-          outputPrecomputedSubcommandHelpTextCalls.push(commandName);
-          return true;
+      const handled = await tryHandlePrecomputedCommandHelpFastPath(
+        ["node", "openclaw", commandName, "--help"],
+        {
+          env: {},
+          outputPrecomputedSubcommandHelpText: (requestedCommandName) => {
+            outputPrecomputedSubcommandHelpTextCalls.push(requestedCommandName);
+            return true;
+          },
         },
-      },
-    );
+      );
 
-    expect(handled).toBe(true);
-    expect(outputPrecomputedSubcommandHelpTextCalls).toEqual(["doctor"]);
-  });
+      expect(handled).toBe(true);
+      expect(outputPrecomputedSubcommandHelpTextCalls).toEqual([commandName]);
+    },
+  );
 
   it("renders precomputed subcommand help with leading root options", async () => {
     const outputPrecomputedSubcommandHelpTextCalls: string[] = [];
