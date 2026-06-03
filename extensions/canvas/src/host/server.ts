@@ -69,6 +69,14 @@ export type CanvasHostHandler = {
   close: () => Promise<void>;
 };
 
+export function escapeCanvasHostHtmlText(value: string): string {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
 function defaultIndexHTML() {
   return `<!doctype html>
 <meta charset="utf-8" />
@@ -380,7 +388,7 @@ export async function createCanvasHostHandler(
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/html; charset=utf-8");
           res.end(
-            `<!doctype html><meta charset="utf-8" /><title>OpenClaw Canvas</title><pre>Missing file.\nCreate ${rootDir}/index.html</pre>`,
+            `<!doctype html><meta charset="utf-8" /><title>OpenClaw Canvas</title><pre>Missing file.\nCreate ${escapeCanvasHostHtmlText(rootDir)}/index.html</pre>`,
           );
           return true;
         }

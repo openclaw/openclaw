@@ -12,6 +12,7 @@ import type { SsrfPolicyConfig } from "../adapter/types.js";
 import { MediaFileType } from "../types.js";
 import { formatErrorMessage } from "./format.js";
 import { normalizeOptionalString } from "./string-normalize.js";
+import { redactTextForLog, redactUrlForLog } from "./url-redaction.js";
 
 /** Maximum file size accepted by the QQ Bot one-shot upload API (base64 direct). */
 export const MAX_UPLOAD_SIZE = 20 * 1024 * 1024;
@@ -202,13 +203,17 @@ export async function downloadFile(
     return destPath;
   } catch (err) {
     console.error(
-      `[qqbot:downloadFile] FAILED url=${url.slice(0, 120)} error=${err instanceof Error ? err.message : String(err)}`,
+      `[qqbot:downloadFile] FAILED url=${redactUrlForLog(url, 120)} error=${redactTextForLog(formatErrorMessage(err))}`,
     );
     if (err instanceof Error && err.stack) {
-      console.error(`[qqbot:downloadFile] stack=${err.stack.split("\n").slice(0, 3).join(" | ")}`);
+      console.error(
+        `[qqbot:downloadFile] stack=${redactTextForLog(err.stack.split("\n").slice(0, 3).join(" | "))}`,
+      );
     }
     if (err instanceof Error && err.cause) {
-      console.error(`[qqbot:downloadFile] cause=${formatErrorMessage(err.cause)}`);
+      console.error(
+        `[qqbot:downloadFile] cause=${redactTextForLog(formatErrorMessage(err.cause))}`,
+      );
     }
     return null;
   }

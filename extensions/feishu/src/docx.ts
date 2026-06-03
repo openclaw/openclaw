@@ -27,6 +27,7 @@ import {
   resolveAnyEnabledFeishuToolsConfig,
   resolveFeishuToolAccount,
 } from "./tool-account.js";
+import { redactTextForLog, redactUrlForLog } from "./url-redaction.js";
 
 // ============ Helpers ============
 
@@ -695,7 +696,9 @@ async function processImages(
 
       processed++;
     } catch (err) {
-      console.error(`Failed to process image ${url}:`, err);
+      console.error(
+        `Failed to process image ${redactUrlForLog(url)}: ${redactTextForLog(formatErrorMessage(err))}`,
+      );
     }
   }
 

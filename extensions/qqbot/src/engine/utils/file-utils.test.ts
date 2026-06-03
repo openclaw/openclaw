@@ -96,6 +96,56 @@ describe("qqbot file-utils downloadFile", () => {
     expect(adapterMocks.fetchMedia).not.toHaveBeenCalled();
   });
 
+  it("redacts URL credentials and query params before logging download failures", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      adapterMocks.fetchMedia.mockRejectedValueOnce(
+        new Error(
+          "fetch failed for https://user:pass@media.qq.com/assets/photo.png?token=download-token#frag",
+        ),
+      );
+
+      const savedPath = await downloadFile(
+        "https://user:pass@media.qq.com/assets/photo.png?token=download-token&safe=value#frag",
+        tempDir,
+        "photo.png",
+      );
+
+      expect(savedPath).toBeNull();
+      const logged = consoleErrorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toContain("https://media.qq.com/assets/photo.png");
+      expect(logged).not.toContain("user:pass");
+      expect(logged).not.toContain("download-token");
+      expect(logged).not.toContain("safe=value");
+      expect(logged).not.toContain("#frag");
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it("redacts malformed URL-like secrets before logging download failures", async () => {
+    const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      adapterMocks.fetchMedia.mockRejectedValueOnce(
+        new Error(
+          "fetch failed for https://user:pass@%zz/assets/photo.png?token=download-token&safe=value#frag",
+        ),
+      );
+
+      const savedPath = await downloadFile("https://media.qq.com/assets/photo.png", tempDir);
+
+      expect(savedPath).toBeNull();
+      const logged = consoleErrorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toContain("https://%zz/assets/photo.png");
+      expect(logged).not.toContain("user:pass");
+      expect(logged).not.toContain("download-token");
+      expect(logged).not.toContain("safe=value");
+      expect(logged).not.toContain("#frag");
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   it.skipIf(process.platform === "win32")("rejects symlinked local media helpers", async () => {
     const targetPath = path.join(tempDir, "target.png");
     const linkPath = path.join(tempDir, "link.png");

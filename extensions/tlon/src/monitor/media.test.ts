@@ -77,4 +77,60 @@ describe("tlon monitor media", () => {
     expect(result).toBeNull();
     expect(readRemoteMediaBufferMock).not.toHaveBeenCalled();
   });
+
+  it("redacts media URL secrets in rejection and download error logs", async () => {
+    await expect(
+      downloadMedia("ftp://user:pass@example.com/photo.png?token=download-token&safe=value#frag"),
+    ).resolves.toBeNull();
+
+    let logged = vi
+      .mocked(console.warn)
+      .mock.calls.map((call) => call.join(" "))
+      .join("\n");
+    expect(logged).toContain("ftp://example.com/photo.png");
+    expect(logged).not.toContain("user:pass");
+    expect(logged).not.toContain("download-token");
+    expect(logged).not.toContain("safe=value");
+    expect(logged).not.toContain("#frag");
+
+    vi.mocked(console.warn).mockClear();
+    saveRemoteMediaMock.mockRejectedValueOnce(
+      new Error(
+        "fetch failed for https://user:pass@example.com/photo.png?token=download-token&safe=value#frag",
+      ),
+    );
+
+    await expect(
+      downloadMedia("https://user:pass@example.com/photo.png?token=download-token&safe=value#frag"),
+    ).resolves.toBeNull();
+
+    logged = vi
+      .mocked(console.error)
+      .mock.calls.map((call) => call.join(" "))
+      .join("\n");
+    expect(logged).toContain("https://example.com/photo.png");
+    expect(logged).not.toContain("user:pass");
+    expect(logged).not.toContain("download-token");
+    expect(logged).not.toContain("safe=value");
+    expect(logged).not.toContain("#frag");
+
+    vi.mocked(console.error).mockClear();
+    saveRemoteMediaMock.mockRejectedValueOnce(
+      new Error(
+        "fetch failed for https://user:pass@%zz/photo.png?token=download-token&safe=value#frag",
+      ),
+    );
+
+    await expect(downloadMedia("https://example.com/photo.png")).resolves.toBeNull();
+
+    logged = vi
+      .mocked(console.error)
+      .mock.calls.map((call) => call.join(" "))
+      .join("\n");
+    expect(logged).toContain("https://%zz/photo.png");
+    expect(logged).not.toContain("user:pass");
+    expect(logged).not.toContain("download-token");
+    expect(logged).not.toContain("safe=value");
+    expect(logged).not.toContain("#frag");
+  });
 });

@@ -99,6 +99,61 @@ describe("uploadImageFromUrl", () => {
     expect(result).toBe("https://example.com/image.png");
   });
 
+  it("redacts source URL secrets before logging rejected or failed fetches", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const rejected = await uploadImageFromUrl(
+        "ftp://user:pass@example.com/image.png?token=download-token&safe=value#frag",
+      );
+      expect(rejected).toBe(
+        "ftp://user:pass@example.com/image.png?token=download-token&safe=value#frag",
+      );
+
+      mockFetch.mockResolvedValueOnce({
+        response: {
+          ok: false,
+          status: 404,
+        } as unknown as Response,
+        finalUrl: "https://example.com/image.png",
+        release: vi.fn().mockResolvedValue(undefined),
+      });
+
+      const failed = await uploadImageFromUrl(
+        "https://user:pass@example.com/image.png?token=download-token&safe=value#frag",
+      );
+      expect(failed).toBe(
+        "https://user:pass@example.com/image.png?token=download-token&safe=value#frag",
+      );
+
+      let logged = warnSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toContain("ftp://example.com/image.png");
+      expect(logged).toContain("https://example.com/image.png");
+      expect(logged).not.toContain("user:pass");
+      expect(logged).not.toContain("download-token");
+      expect(logged).not.toContain("safe=value");
+      expect(logged).not.toContain("#frag");
+
+      warnSpy.mockClear();
+      mockFetch.mockRejectedValueOnce(
+        new Error(
+          "fetch failed for https://user:pass@%zz/image.png?token=download-token&safe=value#frag",
+        ),
+      );
+
+      const malformedFailed = await uploadImageFromUrl("https://example.com/image.png");
+      expect(malformedFailed).toBe("https://example.com/image.png");
+
+      logged = warnSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toContain("https://%zz/image.png");
+      expect(logged).not.toContain("user:pass");
+      expect(logged).not.toContain("download-token");
+      expect(logged).not.toContain("safe=value");
+      expect(logged).not.toContain("#frag");
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("returns original URL if upload fails", async () => {
     await setupSuccessfulUpload();
     mockUploadFile.mockRejectedValue(new Error("Upload failed"));
