@@ -19,7 +19,7 @@ import {
   serializeJsonlEntry,
   serializeJsonlLine,
   writeJsonlEntry,
-  writeJsonlLines,
+  writeJsonlLinesAtomic,
 } from "./transcript-jsonl.js";
 import {
   streamSessionTranscriptLines,
@@ -302,7 +302,10 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
     leafId = id;
     output.push(serializeJsonlLine(record));
   }
-  await writeJsonlLines(transcriptPath, output, { mode: 0o600 });
+  // Rewrite atomically: a torn write here (crash/ENOSPC) would otherwise destroy
+  // the user's conversation history mid-migration, since the rewrite replaces the
+  // whole transcript in place.
+  await writeJsonlLinesAtomic(transcriptPath, output, { mode: 0o600 });
   const result: { leafId?: string } = {};
   if (leafId) {
     result.leafId = leafId;

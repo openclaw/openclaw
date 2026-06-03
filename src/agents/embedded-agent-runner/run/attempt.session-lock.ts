@@ -738,7 +738,13 @@ async function classifySessionFenceRewrite(params: {
     !params.previous?.fingerprint.exists ||
     !params.current.exists ||
     !params.previous.text ||
-    !sameSessionFileIdentity(params.previous.fingerprint, params.current) ||
+    // Identity (dev+ino) is intentionally NOT required for a benign rewrite: the
+    // linear -> parent-linked migration rewrites the transcript atomically (temp
+    // + rename), producing a new inode. The per-line migration check below is the
+    // real guard, and every caller re-stats before trusting the result (the
+    // transcript-only branch in assertSessionFileFence and mergePromptReleased-
+    // SessionChange), so a rename-capable writer cannot swap content past the
+    // trust boundary (TOCTOU). The allowAnyMessage-gated size cap is preserved.
     (!params.allowAnyMessage &&
       params.current.size > BigInt(MAX_BENIGN_SESSION_FENCE_REWRITE_RESULT_BYTES)) ||
     params.current.size > MAX_SAFE_FILE_OFFSET
@@ -1457,10 +1463,21 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       current,
     });
     if (changeKind?.kind === "transcript-only" && !params.mergePromptReleasedSessionEntries) {
-      fenceSnapshot = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
-      fenceFingerprint = fenceSnapshot.fingerprint;
-      setFenceGeneration(trustSessionFileState(sessionFileFenceKey, current) ?? fenceGeneration);
-      return;
+      // Re-stat after classification and only adopt the snapshot if it still
+      // matches the fingerprint we just classified as benign. classifySessionFence-
+      // Rewrite no longer requires inode identity (the atomic temp+rename migration
+      // changes the inode), so without this re-check a rename-capable writer could
+      // show benign content to the classifier and then swap other content into the
+      // baseline we trust (TOCTOU). The merge branch below gets the same guarantee
+      // from mergePromptReleasedSessionChange's post-merge re-stat. A mismatch means
+      // the file changed again after acceptance — fall through to the takeover below.
+      const accepted = await readSessionFileFenceSnapshot(params.lockOptions.sessionFile);
+      if (sameSessionFileFingerprint(accepted.fingerprint, current)) {
+        fenceSnapshot = accepted;
+        fenceFingerprint = accepted.fingerprint;
+        setFenceGeneration(trustSessionFileState(sessionFileFenceKey, current) ?? fenceGeneration);
+        return;
+      }
     }
     if (changeKind && params.mergePromptReleasedSessionEntries) {
       const mergedChange = await mergePromptReleasedSessionChange(fenceSnapshot, current);
