@@ -274,6 +274,44 @@ describe("memory search config", () => {
     });
   });
 
+  it("defaults intervalMinutes to 30 when not configured in overrides or defaults", () => {
+    clearMemoryEmbeddingProviders();
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "openai",
+            sync: {
+              onSessionStart: false,
+              onSearch: true,
+              watch: false,
+              watchDebounceMs: 25,
+              sessions: {
+                deltaBytes: 321,
+                deltaMessages: 7,
+                postCompactionForce: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(resolveMemorySearchSyncConfig(cfg, "main")).toEqual({
+      onSessionStart: false,
+      onSearch: true,
+      watch: false,
+      watchDebounceMs: 25,
+      intervalMinutes: 30,
+      embeddingBatchTimeoutSeconds: undefined,
+      sessions: {
+        deltaBytes: 321,
+        deltaMessages: 7,
+        postCompactionForce: false,
+      },
+    });
+  });
+
   it("uses configured embeddingBatchTimeoutSeconds when set", () => {
     const cfg = asConfig({
       agents: {
