@@ -1,0 +1,508 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Cinematic Scroll — a free Agent Skill for scroll-driven websites</title>
+<meta name="description" content="A free, MIT Agent Skill (Claude / Cursor / Hermes) for cinematic, scroll-driven websites — pinned chapters, multi-depth parallax, 3D tilt, and full release pages with AI-generated visuals. Two editorial themes: Petroleum dark & Swiss Museum light." />
+<meta name="theme-color" content="#101417" />
+<meta property="og:title" content="Cinematic Scroll" />
+<meta property="og:description" content="Cinematic scroll-driven storytelling. Free & MIT. GSAP ScrollTrigger + SplitText in the Next.js build; a dependency-free engine in the single-file demos." />
+<meta property="og:image" content="./assets/04_v2.png" />
+<meta property="og:type" content="website" />
+<link rel="preload" as="image" href="./assets/04_v2.png" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,500;1,600&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* ───── THEME TOKENS ─────────────────────────────────────────────
+     [data-theme="dark"]  → Petroleum Editorial
+     [data-theme="light"] → Swiss Museum                            */
+  :root, [data-theme="dark"]{
+    --bg:#101417; --surface:#1B2026; --card:#202A31;
+    --text:#E9E1D4; --muted:#8B857B;
+    --accent:#C08A3E;          /* brass, lifted for dark contrast */
+    --accent2:#7E3036;         /* oxblood */
+    --petrol:#1E3A3E; --steel:#31475A;
+    --line:rgba(233,225,212,.10); --line2:rgba(233,225,212,.20);
+    --on-accent:#0E1114;
+    --shadow:0 40px 90px -45px rgba(0,0,0,.85);
+    --hero-tint:linear-gradient(180deg, rgba(16,20,23,.30), rgba(16,20,23,.82));
+    color-scheme:dark;
+  }
+  [data-theme="light"]{
+    --bg:#F4EFE6; --surface:#FBF8F1; --card:#FFFFFF;
+    --text:#1E2326; --muted:#6F6A63;
+    --accent:#8F6A38;          /* brass */
+    --accent2:#6A3037;         /* burgundy */
+    --petrol:#D6E0E6; --steel:#D6E0E5;
+    --line:rgba(30,35,38,.12); --line2:rgba(30,35,38,.20);
+    --on-accent:#F4EFE6;
+    --shadow:0 30px 64px -38px rgba(30,35,38,.32);
+    --hero-tint:linear-gradient(180deg, rgba(244,239,230,.10), rgba(244,239,230,.55));
+    color-scheme:light;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html{scroll-behavior:smooth}
+  body{background:var(--bg);color:var(--text);font-family:"Space Grotesk",-apple-system,Segoe UI,sans-serif;line-height:1.6;-webkit-font-smoothing:antialiased;overflow-x:hidden;transition:background .5s ease,color .5s ease}
+  a{color:inherit;text-decoration:none}
+  img{display:block;max-width:100%}
+  ::selection{background:var(--accent);color:var(--on-accent)}
+
+  .display{font-family:"Cormorant Garamond",Georgia,serif}
+  .mono{font-family:"Space Mono",ui-monospace,Menlo,monospace}
+  .eyebrow{font-family:"Space Mono",monospace;font-size:11px;letter-spacing:.3em;text-transform:uppercase;color:var(--accent)}
+
+  .wrap{max-width:1200px;margin:0 auto;padding:0 clamp(20px,4vw,56px)}
+  section{position:relative}
+
+  /* atmosphere */
+  .atmos{position:fixed;inset:0;z-index:-2;background:
+    radial-gradient(70% 50% at 82% -5%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 60%),
+    radial-gradient(60% 60% at -5% 105%, color-mix(in srgb, var(--accent2) 16%, transparent), transparent 60%),
+    var(--bg);transition:background .6s ease}
+  .grain{position:fixed;inset:0;z-index:-1;pointer-events:none;opacity:.05;mix-blend-mode:overlay;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E")}
+
+  /* ───── NAV ───── */
+  .nav{position:fixed;top:0;left:0;right:0;z-index:60;background:linear-gradient(to bottom,var(--bg) 12%,color-mix(in srgb,var(--bg) 55%,transparent) 70%,transparent);backdrop-filter:blur(6px)}
+  .nav .row{display:flex;align-items:center;justify-content:space-between;padding:clamp(14px,1.8vw,20px) 0;padding-top:max(clamp(14px,1.8vw,20px),env(safe-area-inset-top))}
+  .brand{display:flex;align-items:baseline;gap:12px}
+  .brand .w230{font-family:"Cormorant Garamond",serif;font-weight:600;font-size:24px;letter-spacing:.02em}
+  .brand .w230 sup{font-size:.5em;color:var(--accent);letter-spacing:.1em}
+  .brand .tag{font-family:"Space Mono",monospace;font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:var(--muted)}
+  .nav .right{display:flex;align-items:center;gap:18px}
+  .nav .right a.link{font-family:"Space Mono",monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);transition:color .3s}
+  .nav .right a.link:hover{color:var(--text)}
+  @media(max-width:760px){.nav .right a.link{display:none}}
+
+  /* theme toggle */
+  .toggle{display:inline-flex;border:1px solid var(--line2);border-radius:999px;overflow:hidden;background:var(--surface)}
+  .toggle button{appearance:none;border:0;background:transparent;cursor:pointer;color:var(--muted);
+    font-family:"Space Mono",monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+    padding:8px 14px;display:flex;align-items:center;gap:7px;transition:color .3s,background .3s}
+  .toggle button.active{background:var(--accent);color:var(--on-accent)}
+  .toggle svg{width:13px;height:13px}
+
+  /* ───── HERO ───── */
+  .hero{min-height:100svh;display:flex;align-items:center;padding-top:90px;padding-bottom:60px}
+  .hero .grid{display:grid;grid-template-columns:1.05fr .95fr;gap:clamp(30px,5vw,72px);align-items:center;width:100%}
+  @media(max-width:900px){.hero .grid{grid-template-columns:1fr;gap:34px}}
+  .hero h1{font-family:"Cormorant Garamond",serif;font-weight:600;font-size:clamp(3rem,8.5vw,7rem);line-height:.92;letter-spacing:.005em;text-transform:uppercase;margin:18px 0 0}
+  .hero h1 .w{display:inline-block;margin-right:.06em;will-change:transform,opacity}
+  .hero .sub{margin-top:22px;font-size:clamp(1.05rem,1.7vw,1.32rem);color:var(--muted);max-width:46ch}
+  .hero .sub b{color:var(--text);font-weight:500}
+  .hero .cta{margin-top:clamp(26px,3.4vw,40px);display:flex;flex-wrap:wrap;gap:14px;align-items:center}
+  .hero .meta{margin-top:24px;font-family:"Space Mono",monospace;font-size:10px;letter-spacing:.14em;color:var(--muted)}
+  .hero .meta b{color:var(--accent)}
+
+  .btn{display:inline-flex;align-items:center;gap:10px;padding:14px 26px;border-radius:999px;font-family:"Space Mono",monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;transition:transform .3s,background .3s,border-color .3s,color .3s}
+  .btn.primary{background:var(--accent);color:var(--on-accent)}
+  .btn.primary:hover{transform:translateY(-2px)}
+  .btn.ghost{border:1px solid var(--line2);color:var(--text)}
+  .btn.ghost:hover{border-color:var(--accent);color:var(--accent)}
+
+  /* hero figure */
+  .hero .fig{position:relative;aspect-ratio:4/3.1;border-radius:8px;overflow:hidden;border:1px solid var(--line2);box-shadow:var(--shadow);perspective:1000px}
+  .hero .fig .pic{position:absolute;inset:0;transition:transform .25s ease-out;will-change:transform}
+  .hero .fig .pic img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;display:none}
+  [data-theme="dark"] .hero .fig img.dk{display:block}
+  [data-theme="light"] .hero .fig img.lt{display:block}
+  .hero .fig .veil{position:absolute;inset:0;background:var(--hero-tint);pointer-events:none}
+  .hero .fig .cue{position:absolute;left:0;right:0;bottom:18px;text-align:center;font-family:"Space Mono",monospace;font-size:9px;letter-spacing:.28em;text-transform:uppercase;color:var(--text);opacity:.85}
+  .hero .fig .cue .v{display:block;width:1px;height:26px;background:var(--accent);margin:8px auto 0;transform-origin:top;animation:cue 2.4s infinite ease-in-out}
+  @keyframes cue{0%,100%{transform:scaleY(1)}50%{transform:scaleY(.3)}}
+
+  /* ───── FEATURE ICONS ───── */
+  .features{border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:clamp(34px,5vw,56px) 0;margin-top:10px}
+  .features .row{display:grid;grid-template-columns:repeat(5,1fr);gap:20px}
+  @media(max-width:760px){.features .row{grid-template-columns:repeat(2,1fr);gap:28px}}
+  .feat{display:flex;flex-direction:column;gap:12px}
+  .feat svg{width:26px;height:26px;stroke:var(--accent);fill:none;stroke-width:1.4}
+  .feat .t{font-family:"Space Mono",monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--text);line-height:1.5}
+
+  /* ───── SECTION HEADS ───── */
+  .block{padding:clamp(64px,9vw,120px) 0}
+  .head{font-family:"Cormorant Garamond",serif;font-weight:600;font-size:clamp(2rem,5vw,3.4rem);line-height:1.04;letter-spacing:.01em;text-transform:uppercase;margin-top:14px;max-width:20ch}
+  .lead{margin-top:16px;color:var(--muted);max-width:62ch;font-size:clamp(1rem,1.3vw,1.12rem)}
+
+  /* ───── VISUAL GALLERY ───── */
+  .gallery{margin-top:clamp(38px,5vw,64px);display:grid;grid-template-columns:repeat(2,1fr);gap:clamp(16px,2vw,24px)}
+  @media(max-width:720px){.gallery{grid-template-columns:1fr}}
+  .gcard{position:relative;border-radius:8px;overflow:hidden;border:1px solid var(--line2);background:var(--card);min-height:300px;display:flex;flex-direction:column;perspective:1000px}
+  .gcard.wide{grid-column:1 / -1;min-height:240px}
+  .gcard .body{position:relative;z-index:2;padding:clamp(22px,2.6vw,32px);display:flex;flex-direction:column;gap:10px;flex:1}
+  .gcard .num{font-family:"Space Mono",monospace;font-size:12px;letter-spacing:.2em;color:var(--accent)}
+  .gcard h3{font-family:"Cormorant Garamond",serif;font-weight:600;font-size:clamp(1.5rem,2.4vw,2rem);line-height:1.04;text-transform:uppercase;letter-spacing:.01em}
+  .gcard p{color:var(--muted);font-size:.95rem;max-width:34ch}
+  .gcard .barline{margin-top:auto;width:1px;height:38px;background:var(--accent);opacity:.7}
+  .gcard .img{position:absolute;inset:0;z-index:1}
+  .gcard .img .pic{position:absolute;inset:0;transition:transform .3s ease-out;will-change:transform}
+  .gcard .img img{width:100%;height:100%;object-fit:cover}
+  /* split cards: text left over a tint, image right */
+  .gcard.split .body{max-width:54%}
+  .gcard.split .img{left:auto;width:52%;clip-path:polygon(12% 0,100% 0,100% 100%,0 100%)}
+  /* universal angled band behind text — 75% opacity so the image shows through
+     subtly on EVERY card. Solid zone runs to ~58% (wider than the text column)
+     so copy never spills past the band edge; fades out after. */
+  .gcard .scrim{position:absolute;inset:0;z-index:1;opacity:.75;
+    background:linear-gradient(105deg,
+      var(--card) 0%,
+      var(--card) 58%,
+      color-mix(in srgb,var(--card) 60%,transparent) 70%,
+      transparent 86%)}
+  /* keep the text column comfortably inside the solid part of the band */
+  .gcard .body{max-width:52%}
+  /* full + accent cards share the SAME angled band + a diagonal image clip, so
+     the composition matches the readable split cards instead of bleeding through */
+  .gcard.full .img,.gcard.accent .img{left:auto;width:62%;clip-path:polygon(22% 0,100% 0,100% 100%,0 100%)}
+  .gcard.full.wide .img{width:64%;clip-path:polygon(28% 0,100% 0,100% 100%,0 100%)}
+  .gcard.accent{--card:var(--accent2)}
+  .gcard.accent .num,.gcard.accent .barline{color:#E9D9C9;background-color:#E9D9C9}
+  .gcard.accent h3,.gcard.accent p{color:#F1E4D8}
+  .gcard.accent .num{background:none;color:#E9C9B2}
+
+  /* ───── THEME BAND ───── */
+  .themeband{border:1px solid var(--line2);border-radius:10px;background:var(--surface);padding:clamp(26px,4vw,44px);margin-top:clamp(38px,5vw,60px);display:grid;grid-template-columns:1fr 1fr;gap:clamp(26px,4vw,52px)}
+  @media(max-width:820px){.themeband{grid-template-columns:1fr;gap:34px}}
+  .tcol .label{font-family:"Space Mono",monospace;font-size:11px;letter-spacing:.18em;text-transform:uppercase;color:var(--text)}
+  .tcol .sub{font-family:"Space Mono",monospace;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin-top:4px}
+  .swatches{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+  .sw{width:46px}
+  .sw i{display:block;height:42px;border-radius:5px;border:1px solid var(--line2)}
+  .sw span{display:block;font-family:"Space Mono",monospace;font-size:7.5px;letter-spacing:.04em;color:var(--muted);margin-top:6px;text-transform:uppercase;text-align:center;line-height:1.3}
+  .uiex{margin-top:22px;display:flex;flex-direction:column;gap:10px}
+  .uiex .ub{display:inline-flex;align-items:center;gap:8px;align-self:flex-start;font-family:"Space Mono",monospace;font-size:10px;letter-spacing:.12em;text-transform:uppercase;padding:9px 16px;border-radius:6px}
+  .uiex .ub.p{background:var(--accent);color:var(--on-accent)}
+  .uiex .ub.s{border:1px solid var(--line2);color:var(--text)}
+
+  /* ───── DEMO CTA ───── */
+  .demo{display:grid;grid-template-columns:1.1fr .9fr;gap:clamp(24px,4vw,56px);align-items:center;margin-top:clamp(36px,5vw,60px)}
+  @media(max-width:820px){.demo{grid-template-columns:1fr}}
+  /* two finished examples, side by side */
+  .twoup{display:grid;grid-template-columns:1fr 1fr;gap:clamp(20px,3vw,40px);margin-top:clamp(36px,5vw,60px)}
+  @media(max-width:820px){.twoup{grid-template-columns:1fr}}
+  .twoup .ex{display:flex;flex-direction:column;gap:14px}
+  .twoup .ex .meta .num{font-family:"Space Mono",monospace;font-size:12px;letter-spacing:.2em;color:var(--accent)}
+  .twoup .ex .meta h3{font-family:"Cormorant Garamond",serif;font-weight:600;font-size:clamp(1.4rem,2.4vw,1.9rem);line-height:1.05;text-transform:uppercase;letter-spacing:.01em;margin-top:6px}
+  .twoup .ex .meta p{color:var(--muted);font-size:.94rem;margin-top:8px;max-width:42ch}
+  .demo .shot{position:relative;border-radius:8px;overflow:hidden;border:1px solid var(--line2);box-shadow:var(--shadow)}
+  .twoup .shot{position:relative;border-radius:8px;overflow:hidden;border:1px solid var(--line2);box-shadow:var(--shadow);display:block}
+  .twoup .shot img{width:100%;aspect-ratio:16/10;object-fit:cover;object-position:top;display:block}
+  .twoup .shot .play{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 18%,transparent);transition:background .3s}
+  .twoup .shot:hover .play{background:transparent}
+  .twoup .shot .play span{width:54px;height:54px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:16px;padding-left:3px}
+  .demo .shot img{width:100%;aspect-ratio:16/10;object-fit:cover;object-position:top}
+  .demo .shot .play{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 18%,transparent);transition:background .3s}
+  .demo .shot:hover .play{background:transparent}
+  .demo .shot .play span{width:64px;height:64px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:18px;padding-left:4px}
+
+  /* unified live examples grid — 5 cards all with GIFs */
+  .exgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:clamp(18px,2.4vw,28px);margin-top:clamp(26px,3.6vw,40px)}
+  @media(max-width:820px){.exgrid{grid-template-columns:1fr}}
+  .exgrid .ex{display:flex;flex-direction:column;gap:14px;border:1px solid var(--line2);border-radius:8px;overflow:hidden;background:var(--surface);transition:transform .3s ease,border-color .3s ease}
+  .exgrid .ex:hover{transform:translateY(-3px);border-color:var(--accent)}
+  .exgrid .shot{position:relative;border-radius:0;border:none;box-shadow:none;display:block;border-bottom:1px solid var(--line2)}
+  .exgrid .shot img{width:100%;aspect-ratio:16/10;object-fit:cover;object-position:top;display:block}
+  .exgrid .shot .play{position:absolute;inset:0;display:grid;place-items:center;background:color-mix(in srgb,var(--bg) 18%,transparent);transition:background .3s}
+  .exgrid .shot:hover .play{background:transparent}
+  .exgrid .shot .play span{width:48px;height:48px;border-radius:50%;background:var(--accent);color:var(--on-accent);display:grid;place-items:center;font-size:14px;padding-left:3px}
+  .exgrid .meta{padding:clamp(16px,2vw,20px);display:flex;flex-direction:column;gap:8px}
+  .exgrid .num{font-family:"Space Mono",monospace;font-size:11px;letter-spacing:.2em;color:var(--accent)}
+  .exgrid h3{font-family:"Cormorant Garamond",serif;font-weight:600;font-size:clamp(1.25rem,2vw,1.6rem);line-height:1.05;text-transform:uppercase;letter-spacing:.01em}
+  .exgrid p{color:var(--muted);font-size:.88rem}
+  /* legacy exlink text-only cards for backwards compatibility */
+  .exlink{display:flex;flex-direction:column;gap:12px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);
+    padding:clamp(20px,2.4vw,28px);transition:transform .3s ease,border-color .3s ease}
+  .exlink:hover{transform:translateY(-3px);border-color:var(--accent)}
+  .exlink .num{font-family:"Space Mono",monospace;font-size:12px;letter-spacing:.2em;color:var(--accent)}
+  .exlink h3{font-family:"Cormorant Garamond",serif;font-weight:600;font-size:clamp(1.35rem,2.2vw,1.8rem);line-height:1.05;text-transform:uppercase;letter-spacing:.01em}
+  .exlink p{color:var(--muted);font-size:.92rem;margin-top:2px}
+  .exlink .go{margin-top:auto;font-family:"Space Mono",monospace;font-size:10px;letter-spacing:.16em;text-transform:uppercase;color:var(--text);display:inline-flex;align-items:center;gap:8px}
+  .exlink:hover .go{color:var(--accent)}
+
+  /* code */
+  pre.code{background:var(--surface);border:1px solid var(--line2);border-radius:8px;padding:20px 22px;overflow:auto;font-family:"Space Mono",monospace;font-size:.84rem;color:var(--text);line-height:1.9;margin-top:22px}
+  pre.code .c{color:var(--muted)} pre.code .k{color:var(--accent)}
+
+  /* footer */
+  footer{border-top:1px solid var(--line);padding:clamp(36px,5vw,60px) 0;margin-top:20px}
+  footer .row{display:flex;flex-wrap:wrap;gap:26px;justify-content:space-between}
+  .fitem{display:flex;align-items:center;gap:10px;font-family:"Space Mono",monospace;font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+  .fitem svg{width:18px;height:18px;stroke:var(--accent);fill:none;stroke-width:1.3}
+  .fitem b{color:var(--text);font-weight:400}
+  .fitem a{color:var(--text);border-bottom:1px solid var(--line2)}
+
+  /* bottom theme selector */
+  .selector{position:sticky;bottom:0;z-index:55;border-top:1px solid var(--line2);background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:blur(8px)}
+  .selector .row{display:flex;gap:10px;padding:12px 0;align-items:center;justify-content:center}
+  .selector .row .lbl{font-family:"Space Mono",monospace;font-size:9px;letter-spacing:.24em;text-transform:uppercase;color:var(--muted);margin-right:6px}
+  .selector .seg{flex:1;max-width:420px;display:flex;gap:8px}
+  .selector .seg button{flex:1;appearance:none;border:1px solid var(--line2);background:var(--surface);color:var(--muted);cursor:pointer;
+    font-family:"Space Mono",monospace;font-size:11px;letter-spacing:.16em;text-transform:uppercase;padding:12px;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:8px;transition:.3s}
+  .selector .seg button.active{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+  .selector svg{width:14px;height:14px}
+
+  .reveal{opacity:0;transform:translateY(24px);transition:opacity .9s ease,transform .9s cubic-bezier(.16,1,.3,1)}
+  .reveal.in{opacity:1;transform:none}
+
+  @media (prefers-reduced-motion: reduce){
+    html{scroll-behavior:auto}
+    .hero h1 .w{opacity:1!important;transform:none!important}
+    .reveal{opacity:1;transform:none;transition:none}
+    .hero .fig .cue .v{animation:none}
+    .pic{transition:none!important}
+  }
+</style>
+</head>
+<body>
+  <div class="atmos" aria-hidden="true"></div>
+  <div class="grain" aria-hidden="true"></div>
+
+  <!-- NAV -->
+  <header class="nav"><div class="wrap"><div class="row">
+    <div class="brand"><span class="w230 display">W<sup>230</sup></span><span class="tag">Skill Suite</span></div>
+    <div class="right">
+      <a class="link" href="#gallery">Gallery</a>
+      <a class="link" href="#themes">Themes</a>
+      <a class="link" href="https://github.com/MustBeSimo/cinematic-scroll-skill">GitHub ↗</a>
+      <div class="toggle" id="navToggle" role="group" aria-label="Theme">
+        <button data-set="dark" class="active" aria-label="Dark theme">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/></svg>Dark</button>
+        <button data-set="light" aria-label="Light theme">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>Light</button>
+      </div>
+    </div>
+  </div></div></header>
+
+  <!-- HERO -->
+  <section class="hero"><div class="wrap"><div class="grid">
+    <div>
+      <div class="eyebrow">A free Agent Skill · Claude · Cursor · Hermes · OpenClaw</div>
+      <h1 id="title">Cinematic Scroll</h1>
+      <p class="sub"><b>Cinematic, scroll-driven storytelling</b> — a dependency-free rAF engine in the single-file demos, and <b>GSAP ScrollTrigger + SplitText + smooth scroll</b> in the full Next.js build. From a single pinned section to a Shopify-Editions-style release page with AI-generated art.</p>
+      <div class="cta">
+        <a class="btn primary" href="#demo">▶ See the live demos</a>
+        <a class="btn ghost" href="https://github.com/MustBeSimo/cinematic-scroll-skill">Get the skill — free</a>
+      </div>
+      <div class="meta"><b>MIT licensed.</b> Five finished single-file examples in clashing styles — Renaissance, brutalist, sci-fi noir, quiet luxury, Gen-Z pop. The motion is the constant; the look is yours.</div>
+    </div>
+    <div class="fig" id="heroFig">
+      <div class="pic">
+        <img class="dk" src="./assets/04_v2.png" alt="Petroleum-toned cinematic hero" loading="eager" />
+        <img class="lt" src="./assets/02_v2.png" alt="Swiss-museum light hero" loading="eager" />
+      </div>
+      <div class="veil"></div>
+      <div class="cue">Scroll to explore<span class="v"></span></div>
+    </div>
+  </div></div></section>
+
+  <!-- FEATURES -->
+  <section class="features"><div class="wrap"><div class="row" id="features"></div></div></section>
+
+  <!-- GALLERY -->
+  <section class="block" id="gallery"><div class="wrap">
+    <div class="eyebrow reveal">Aesthetic directions</div>
+    <h2 class="head reveal">One skill, many worlds.</h2>
+    <p class="lead reveal">Concept stills that show the <b>range of looks</b> the skill can art-direct — each generated by its own fal.ai pipeline, the same art-direction engine you get in Mode B. They illustrate possible directions, not finished pages; for sites you can actually scroll end-to-end, jump to the <a href="#demo" style="color:var(--accent)">live examples</a>. In a real build, each becomes the depth-0.75 subject layer of a pinned chapter, parallaxing under HTML titles while the background morphs.</p>
+    <div class="gallery" id="galleryGrid"></div>
+  </div></section>
+
+  <!-- THEMES -->
+  <section class="block" id="themes"><div class="wrap">
+    <div class="eyebrow reveal">Two finishes, one system</div>
+    <h2 class="head reveal">Petroleum Editorial. Swiss Museum.</h2>
+    <p class="lead reveal">The whole site is token-driven, so it flips between a moody dark editorial finish and a bright Swiss-museum light finish with one toggle. Use either as the starting palette for your own build.</p>
+    <div class="themeband reveal">
+      <div class="tcol">
+        <div class="label">Theme: Dark</div><div class="sub">Petroleum Editorial</div>
+        <div class="swatches" data-pal="dark"></div>
+        <div class="uiex">
+          <span class="ub p">Primary action →</span>
+          <span class="ub s">Secondary</span>
+        </div>
+      </div>
+      <div class="tcol">
+        <div class="label">Theme: Light</div><div class="sub">Swiss Museum</div>
+        <div class="swatches" data-pal="light"></div>
+        <div class="uiex">
+          <span class="ub p">Primary action →</span>
+          <span class="ub s">Secondary</span>
+        </div>
+      </div>
+    </div>
+  </div></section>
+
+  <!-- DEMO -->
+  <section class="block" id="demo"><div class="wrap">
+    <div class="eyebrow reveal">Live examples</div>
+    <h2 class="head reveal">Five aesthetics. One grammar.</h2>
+    <p class="lead reveal">Same engine, deliberately clashing aesthetics — proof the look is a variable, not a default. Each is a single build-free <span class="mono" style="color:var(--accent)">index.html</span>, dependency-free vanilla JS on requestAnimationFrame, transform/opacity-only. All five render fully with zero image files. Click any to scroll the real thing.</p>
+    <nav class="exgrid" style="grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); margin-top:clamp(28px,4vw,44px);" aria-label="Live examples">
+      <div class="ex reveal">
+        <a class="shot" href="./examples/renaissance/" aria-label="Open the Renaissance live demo">
+          <img src="./assets/scroll-demo.gif" alt="Renaissance editorial example — warm classical scroll loop" loading="lazy" />
+          <span class="play"><span>▶</span></span>
+        </a>
+        <div class="meta">
+          <div class="num">① Renaissance editorial</div>
+          <h3>Classic Touch.</h3>
+          <p>Warm, classical, ornate. Oil-painting heroes, gold↔oxblood morph, serif display. Mirrors <a href="https://www.w230.net/reinassence" style="color:var(--accent)">w230.net/reinassence</a>.</p>
+        </div>
+      </div>
+      <div class="ex reveal">
+        <a class="shot" href="./examples/studio/" aria-label="Open the brutalist studio live demo">
+          <img src="./assets/studio-scroll-demo_v2.gif" alt="Brutalist creative-director example — monochrome scroll loop with 3D motion" loading="lazy" />
+          <span class="play"><span>▶</span></span>
+        </a>
+        <div class="meta">
+          <div class="num">② Brutalist portfolio</div>
+          <h3>Maya Torres.</h3>
+          <p>Cold, modern, severe. Giant grotesk type, monochrome + electric-blue accent, grey↔ink morph, scroll-driven 3D camera.</p>
+        </div>
+      </div>
+      <div class="ex reveal">
+        <a class="shot" href="./examples/noir/" aria-label="Open the sci-fi noir live example">
+          <img src="./assets/noir-scroll-demo.gif" alt="Sci-fi noir example — teal fog and crimson edge-light loop" loading="lazy" />
+          <span class="play"><span>▶</span></span>
+        </a>
+        <div class="meta">
+          <div class="num">③ Sci-fi noir</div>
+          <h3>Vantascope.</h3>
+          <p>Near-black void, deep-teal fog, crimson edge-light, film grain. Studio VANTASCOPE, title HOLLOW STAR — 4 chapters, scroll-linked 3D camera, vertical mask-wipe reveals.</p>
+        </div>
+      </div>
+      <div class="ex reveal">
+        <a class="shot" href="./examples/luxe/" aria-label="Open the quiet-luxury live example">
+          <img src="./assets/luxe-scroll-demo.gif" alt="Quiet luxury example — ivory and sand still-life loop" loading="lazy" />
+          <span class="play"><span>▶</span></span>
+        </a>
+        <div class="meta">
+          <div class="num">④ Quiet luxury</div>
+          <h3>Maison Solenne.</h3>
+          <p>Warm ivory + sand, muted cognac accent, thin-serif display, vast negative space. 220vh pins, ~3% background drift, letter-spacing-scrub title reveals.</p>
+        </div>
+      </div>
+      <div class="ex reveal">
+        <a class="shot" href="./examples/pop/" aria-label="Open the Gen-Z pop live example">
+          <img src="./assets/pop-scroll-demo.gif" alt="Gen-Z pop example — neon gradient and glassy UI loop" loading="lazy" />
+          <span class="play"><span>▶</span></span>
+        </a>
+        <div class="meta">
+          <div class="num">⑤ Gen-Z pop</div>
+          <h3>Bloom.</h3>
+          <p>Candy-pink + electric-lime gradients, bold rounded type, fast parallax with wide depth gaps, floating CSS phone-UI layer.</p>
+        </div>
+      </div>
+    </nav>
+
+    <p class="lead reveal" style="margin-top:clamp(28px,4vw,44px)">No framework, no build step, no API keys. Drop your own art into <span class="mono" style="color:var(--accent)">assets/</span> and edit the <span class="mono" style="color:var(--accent)">chapters</span> data — the whole page regenerates. <b>The motion is the constant; the aesthetic is yours.</b></p>
+  </div></section>
+
+  <!-- FOOTER -->
+  <footer><div class="wrap"><div class="row">
+    <div class="fitem"><svg viewBox="0 0 24 24"><path d="M12 3v18M5 7h14M7 7l-3 7h6zM17 7l-3 7h6z"/></svg><span><b>Open source</b><br>MIT License</span></div>
+    <div class="fitem"><svg viewBox="0 0 24 24"><path d="M13 2L3 14h7l-1 8 10-12h-7z"/></svg><span><b>Next.js build uses</b><br>GSAP (free) · ScrollTrigger · SplitText · choreo-3d</span></div>
+    <div class="fitem"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M8 12l3 3 5-6"/></svg><span><b>Maintained with</b><br>Claude Code</span></div>
+    <div class="fitem"><svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/></svg><span><b>Made by</b><br><a href="https://w230.net">@MustBeSimo</a></span></div>
+  </div></div></footer>
+
+  <!-- THEME SELECTOR -->
+  <div class="selector"><div class="wrap"><div class="row">
+    <span class="lbl">Theme selector</span>
+    <div class="seg" id="segToggle">
+      <button data-set="dark" class="active"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/></svg>Dark · Petroleum</button>
+      <button data-set="light"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>Light · Swiss</button>
+    </div>
+  </div></div></div>
+
+<script>
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isTouch = matchMedia('(hover: none) and (pointer: coarse)').matches;
+const clamp=(n,a,b)=>Math.max(a,Math.min(b,n));
+
+/* ── THEME ── */
+const root=document.documentElement;
+function setTheme(t){
+  root.setAttribute('data-theme',t);
+  try{localStorage.setItem('cs-theme',t)}catch(e){}
+  document.querySelector('meta[name=theme-color]').setAttribute('content', t==='dark'?'#101417':'#F4EFE6');
+  document.querySelectorAll('[data-set]').forEach(b=>b.classList.toggle('active', b.dataset.set===t));
+}
+(()=>{let t='dark';try{t=localStorage.getItem('cs-theme')||'dark'}catch(e){}setTheme(t);})();
+document.querySelectorAll('[data-set]').forEach(b=>b.addEventListener('click',()=>setTheme(b.dataset.set)));
+
+/* ── FEATURES ── */
+const FEATS=[
+  ['Cinematic animations','<rect x="3" y="5" width="18" height="14" rx="1"/><path d="M3 9h18M8 5v14"/>'],
+  ['Smooth scrolling','<path d="M3 8c3-3 6 3 9 0s6-3 9 0M3 14c3-3 6 3 9 0s6-3 9 0"/>'],
+  ['Performance focused','<path d="M13 2L4 14h6l-1 8 9-12h-6z"/>'],
+  ['Fully customizable','<path d="M4 7h10M18 7h2M4 17h6M14 17h6"/><circle cx="16" cy="7" r="2"/><circle cx="12" cy="17" r="2"/>'],
+  ['Professional quality','<path d="M12 2l2.4 6.5L21 9l-5 4.6L17.6 21 12 17.3 6.4 21 8 13.6 3 9l6.6-.5z"/>'],
+];
+document.getElementById('features').innerHTML=FEATS.map(([t,svg])=>
+  `<div class="feat reveal"><svg viewBox="0 0 24 24">${svg}</svg><div class="t">${t}</div></div>`).join('');
+
+/* ── GALLERY (editorial numbered cards) ── */
+const CARDS=[
+  {n:'01',t:'The journey begins',d:'Pinned hero chapters that compose as you enter — never a blank frame.',img:'04_v2',cls:'full'},
+  {n:'02',t:'Built for performance',d:'Transform/opacity-only hot paths, designed for smooth 60fps scrolling — benchmark on your target devices. Reduced-motion safe.',img:'06_v2',cls:'accent'},
+  {n:'03',t:'Smooth by design',d:'Lenis smooth scroll for a natural, elevated, film-like cadence.',img:'05_v2',cls:'split'},
+  {n:'04',t:'Pixel-perfect details',d:'Multi-depth parallax, 3D tilt, mask + stagger title reveals.',img:'01_v2',cls:'split'},
+  {n:'05',t:'Ready for production',d:'Tested Next.js templates, a fal.ai asset pipeline, and a build-free vanilla fallback.',img:'03_v2',cls:'full wide'},
+];
+document.getElementById('galleryGrid').innerHTML=CARDS.map(c=>`
+  <article class="gcard ${c.cls} reveal">
+    <div class="img"><div class="pic"><img src="./assets/${c.img}.png" alt="${c.t}" loading="lazy" decoding="async"></div></div>
+    <div class="scrim"></div>
+    <div class="body"><div class="num">${c.n}</div><h3>${c.t}</h3><p>${c.d}</p><div class="barline"></div></div>
+  </article>`).join('');
+
+/* ── PALETTE SWATCHES ── */
+const PAL={
+  dark:[['BG','#101417'],['Surface','#1B2026'],['Elevated','#202A31'],['Ink','#E9E1D4'],['Muted','#8B857B'],['Brass','#8F6A38'],['Oxblood','#5A2328'],['Petrol','#1E3A3E'],['Steel','#31475A']],
+  light:[['Paper','#F4EFE6'],['Bone','#DED5C8'],['Carbon','#1E2326'],['Smoke','#6F6A63'],['Brass','#8F6A38'],['Burgundy','#6A3037'],['Mist','#D6E0E6'],['Mineral','#D6E0E5']],
+};
+document.querySelectorAll('[data-pal]').forEach(el=>{
+  el.innerHTML=PAL[el.dataset.pal].map(([n,h])=>`<div class="sw"><i style="background:${h}"></i><span>${n}<br>${h}</span></div>`).join('');
+});
+
+/* ── REVEALS ── */
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');io.unobserve(e.target)}}),{threshold:.14});
+document.querySelectorAll('.reveal').forEach(el=>io.observe(el));
+
+/* ── HERO TITLE word-stagger ── */
+const title=document.getElementById('title');
+const words=title.textContent.trim().split(/\s+/);
+title.innerHTML=words.map(w=>`<span class="w">${w}</span>`).join(' ');
+if(!reduce){[...title.querySelectorAll('.w')].forEach((w,k)=>{w.style.opacity='0';w.style.transform='translateY(36px)';
+  requestAnimationFrame(()=>setTimeout(()=>{w.style.transition='opacity .8s ease,transform .9s cubic-bezier(.16,1,.3,1)';w.style.opacity='1';w.style.transform='none';},120+k*90));});}
+
+/* ── PARALLAX (rAF) ── */
+let ticking=false;
+function frame(){
+  if(!reduce){const vh=innerHeight;
+    document.querySelectorAll('.gcard .pic, .hero .fig .pic').forEach(p=>{
+      const r=p.getBoundingClientRect();const c=(r.top+r.height/2-vh/2)/vh;
+      p.style.transform=`translateY(${(c*-16).toFixed(1)}px) scale(1.07)`;
+    });
+  }
+  ticking=false;
+}
+addEventListener('scroll',()=>{if(!ticking){ticking=true;requestAnimationFrame(frame)}},{passive:true});
+frame();
+
+/* ── tilt on hero + cards (non-touch) ── */
+if(!isTouch && !reduce){
+  document.querySelectorAll('.hero .fig, .gcard').forEach(el=>{
+    const pic=el.querySelector('.pic');if(!pic)return;
+    el.addEventListener('pointermove',e=>{const r=el.getBoundingClientRect();
+      const px=(e.clientX-r.left)/r.width-.5, py=(e.clientY-r.top)/r.height-.5;
+      pic.style.transform=`rotateY(${px*7}deg) rotateX(${-py*5}deg) scale(1.08)`;});
+    el.addEventListener('pointerleave',()=>{pic.style.transform='scale(1.07)'});
+  });
+}
+</script>
+</body>
+</html>
