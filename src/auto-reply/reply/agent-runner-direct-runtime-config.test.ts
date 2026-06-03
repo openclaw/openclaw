@@ -391,7 +391,7 @@ describe("runReplyAgent runtime config", () => {
     expect(resetReplyRunSessionMock.mock.calls[0]?.[0]).toMatchObject({
       options: {
         failureLabel: "memory flush exhaustion",
-        cleanupTranscripts: true,
+        cleanupTranscripts: false,
       },
       sessionKey,
       queueKey: "main",
@@ -458,6 +458,138 @@ describe("runReplyAgent runtime config", () => {
     expect(resetReplyRunSessionMock).toHaveBeenCalledOnce();
     expect(replyOp.updateSessionId).toHaveBeenCalledWith("session-after-exhaustion");
     expect(followupRun.run.sessionId).toBe("session-after-exhaustion");
+  });
+
+  it("sends a non-terminal degraded notice on memory flush exhaustion when notifyUser is enabled", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const sessionKey = "agent:main:telegram:default:direct:test";
+    const sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      compactionCount: 4,
+      memoryFlushFailureCount: 2,
+    };
+    replyParams.sessionKey = sessionKey;
+    replyParams.storePath = "/tmp/sessions.json";
+    replyParams.sessionEntry = sessionEntry;
+    replyParams.sessionStore = { [sessionKey]: sessionEntry };
+    replyParams.replyOperation = createReplyOperation();
+    resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
+      ...freshCfg,
+      agents: { defaults: { compaction: { notifyUser: true } } },
+    });
+    const onBlockReply = vi.fn();
+    replyParams.opts = { onBlockReply };
+    runPreflightCompactionIfNeededMock.mockImplementation(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    );
+    // Exhaustion: failure count grows AND the flush already ran at the current
+    // compaction count, so rotation (not another retry) is the next step.
+    runMemoryFlushIfNeededMock.mockImplementation(
+      async (params: {
+        sessionEntry?: typeof sessionEntry;
+        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
+      }) => {
+        params.onVisibleErrorPayloads?.([
+          {
+            text: "⚠️ Memory flush failed after 3 attempts; skipping for this cycle.",
+            isError: true,
+          },
+        ]);
+        return {
+          ...params.sessionEntry,
+          memoryFlushFailureCount: 3,
+          memoryFlushCompactionCount: 4,
+        };
+      },
+    );
+
+    const result = await runReplyAgent(replyParams);
+
+    // Notice is delivered out-of-band via onBlockReply, and the main reply still proceeds.
+    expect(result).toEqual({ text: "main reply" });
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+      text: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
+    });
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+  });
+
+  it("stays silent on a transient (non-exhaustion) memory flush failure even when notifyUser is enabled", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    resolveQueuedReplyExecutionConfigMock.mockResolvedValue({
+      ...freshCfg,
+      agents: { defaults: { compaction: { notifyUser: true } } },
+    });
+    const onBlockReply = vi.fn();
+    replyParams.opts = { onBlockReply };
+    replyParams.replyOperation = createReplyOperation();
+    runPreflightCompactionIfNeededMock.mockImplementation(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    );
+    // Transient failure: visible error payload but no exhaustion signal, so the
+    // opt-in notice must stay quiet under the exhaustion-only trigger.
+    runMemoryFlushIfNeededMock.mockImplementation(
+      async (params: {
+        sessionEntry?: unknown;
+        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
+      }) => {
+        params.onVisibleErrorPayloads?.([
+          {
+            text: "⚠️ write failed: Memory flush writes are restricted to memory/2023-11-14.md; use that path only.",
+            isError: true,
+          },
+        ]);
+        return params.sessionEntry;
+      },
+    );
+
+    const result = await runReplyAgent(replyParams);
+
+    // Transient flush failures no longer raise a notice; reply unaffected.
+    expect(result).toEqual({ text: "main reply" });
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
+  });
+
+  it("stays silent on memory flush failure when notifyUser is disabled", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const onBlockReply = vi.fn();
+    replyParams.opts = { onBlockReply };
+    replyParams.replyOperation = createReplyOperation();
+    runPreflightCompactionIfNeededMock.mockImplementation(
+      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
+    );
+    runMemoryFlushIfNeededMock.mockImplementation(
+      async (params: {
+        sessionEntry?: unknown;
+        onVisibleErrorPayloads?: (payloads: Array<{ text?: string; isError?: boolean }>) => void;
+      }) => {
+        params.onVisibleErrorPayloads?.([
+          {
+            text: "⚠️ Memory flush failed after 3 attempts; skipping for this cycle.",
+            isError: true,
+          },
+        ]);
+        return params.sessionEntry;
+      },
+    );
+
+    const result = await runReplyAgent(replyParams);
+
+    // Default behavior matches the current PR: no visible notice, reply unaffected.
+    expect(result).toEqual({ text: "main reply" });
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(runAgentTurnWithFallbackMock).toHaveBeenCalledOnce();
   });
 
   it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {

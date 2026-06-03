@@ -1562,6 +1562,27 @@ export async function runReplyAgent(params: {
         `Role ordering conflict (${reason}). Restarting session ${sessionKey} -> ${nextSessionId}.`,
       cleanupTranscripts: true,
     });
+  // Reuse the existing compaction notice gate; a memory flush failure is a
+  // background-maintenance degradation the same operators want to surface.
+  const shouldNotifyUserAboutMemoryFlushFailure =
+    cfg?.agents?.defaults?.compaction?.notifyUser === true;
+  const sendMemoryFlushDegradedNotice = async (): Promise<void> => {
+    if (!opts?.onBlockReply) {
+      return;
+    }
+    const noticePayload = applyReplyToMode({
+      text: "⚠️ Memory maintenance temporarily failed; continuing your reply.",
+      replyToId: sessionCtx.MessageSidFull ?? sessionCtx.MessageSid,
+      replyToCurrent: true,
+      isCompactionNotice: true,
+    });
+    try {
+      await opts.onBlockReply(noticePayload);
+    } catch (err) {
+      // Non-terminal notice: delivery failure must not abort the user reply.
+      logVerbose(`memory flush degraded notice delivery failed (non-fatal): ${String(err)}`);
+    }
+  };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied;
 
@@ -1642,11 +1663,25 @@ export async function runReplyAgent(params: {
         failureLabel: "memory flush exhaustion",
         buildLogMessage: (nextSessionId) =>
           `Memory flush exhausted. Rotating bloated session ${sessionKey} -> ${nextSessionId}.`,
-        cleanupTranscripts: true,
+        // Rotation alone breaks the flush death loop: the new session no longer
+        // hits the bloated transcript. Keep the old transcript file on disk
+        // (no unlink) so it stays available for forensics/recovery; the active
+        // session only replays the recent turns regardless of this flag.
+        cleanupTranscripts: false,
       });
       if (activeSessionEntry?.sessionId) {
         replyOperation.updateSessionId(activeSessionEntry.sessionId);
       }
+    }
+
+    // Opt-in, non-terminal degraded notice. Memory flush failures are
+    // log-and-continue (see #85645): the main reply still proceeds. When the
+    // operator enabled compaction notices we surface a short heads-up only on
+    // the meaningful exhaustion event (retries spent, session rotated) so
+    // transient single-turn flush failures don't add notice noise — without
+    // ever calling replyOperation.fail() or aborting the reply.
+    if (shouldNotifyUserAboutMemoryFlushFailure && memoryFlushExhaustedThisTurn) {
+      await sendMemoryFlushDegradedNotice();
     }
 
     runFollowupTurn = createFollowupRunner({

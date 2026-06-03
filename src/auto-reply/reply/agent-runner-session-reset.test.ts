@@ -184,4 +184,42 @@ describe("resetReplyRunSession", () => {
 
     await expectPathMissing(oldTranscriptPath);
   });
+
+  it("preserves the old transcript while still rotating when cleanup is disabled", async () => {
+    const storePath = path.join(rootDir, "sessions.json");
+    const oldTranscriptPath = path.join(rootDir, "old-session.jsonl");
+    await fs.writeFile(oldTranscriptPath, "old", "utf8");
+    const sessionEntry: SessionEntry = {
+      sessionId: "old-session",
+      updatedAt: 1,
+      sessionFile: oldTranscriptPath,
+    };
+    const sessionStore = { main: sessionEntry };
+    await writeTestSessionStore(storePath, "main", sessionEntry);
+
+    let rotatedSessionId: string | undefined;
+    await resetReplyRunSession({
+      options: {
+        failureLabel: "memory flush exhaustion",
+        cleanupTranscripts: false,
+        buildLogMessage: (next) => `reset ${next}`,
+      },
+      sessionKey: "main",
+      queueKey: "main",
+      activeSessionEntry: sessionEntry,
+      activeSessionStore: sessionStore,
+      storePath,
+      followupRun: createTestFollowupRun(),
+      onActiveSessionEntry: (entry) => {
+        rotatedSessionId = entry.sessionId;
+      },
+      onNewSession: () => {},
+    });
+
+    // Rotation still happens (new session id), but the old transcript archive
+    // stays on disk for forensics/recovery — this is the P1-A non-destructive path.
+    expect(rotatedSessionId).toBeDefined();
+    expect(rotatedSessionId).not.toBe("old-session");
+    await fs.access(oldTranscriptPath);
+  });
 });
