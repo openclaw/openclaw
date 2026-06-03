@@ -456,6 +456,10 @@ function inferNpmPrefixFromPackageRoot(pkgRoot?: string | null): string | null {
   return null;
 }
 
+/**
+ * Infers npm prefix, package root, and bin paths from an npm global root.
+ * Direct `node_modules` roots are accepted only when the caller opts into them.
+ */
 export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
   globalRoot?: string | null,
   options: { allowDirectNodeModulesRoot?: boolean } = {},
@@ -494,6 +498,10 @@ export function resolveNpmGlobalPrefixLayoutFromGlobalRoot(
   return null;
 }
 
+/**
+ * Derives npm's global package and bin directories from a prefix root.
+ * Used for staged installs where OpenClaw creates the prefix itself.
+ */
 export function resolveNpmGlobalPrefixLayoutFromPrefix(prefix: string): NpmGlobalPrefixLayout {
   const resolvedPrefix = path.resolve(prefix);
   if (process.platform === "win32") {
@@ -575,6 +583,10 @@ function inferPnpmGlobalRootFromPackageRoot(pkgRoot?: string | null): string | n
   return resolvePnpmGlobalDirFromGlobalRoot(globalRoot) ? globalRoot : null;
 }
 
+/**
+ * Resolves pnpm's global-dir from its active `node_modules` root.
+ * Versioned pnpm layouts put packages under `<globalDir>/<version>/node_modules`.
+ */
 export function resolvePnpmGlobalDirFromGlobalRoot(globalRoot?: string | null): string | null {
   const trimmed = globalRoot?.trim();
   if (!trimmed) {
