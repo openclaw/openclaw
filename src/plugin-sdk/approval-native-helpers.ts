@@ -202,24 +202,33 @@ type NativeApprovalChannelRouteGates = {
 };
 
 type BaseOriginResolverParams<TTarget> = {
+  /** Channel id whose origin target should be resolved. */
   channel: string;
+  /** Optional gate; returning false prevents native origin delivery. */
   shouldHandleRequest?: (params: ApprovalResolverParams) => boolean;
+  /** Maps request turn-source metadata to a native target. */
   resolveTurnSourceTarget: (request: ApprovalRequest) => TTarget | null;
+  /** Maps a persisted session target to a native target. */
   resolveSessionTarget: (
     sessionTarget: ExecApprovalSessionTarget,
     request: ApprovalRequest,
   ) => TTarget | null;
+  /** Normalizes the returned target before delivery. */
   normalizeTarget?: NativeApprovalTargetNormalizer<TTarget>;
+  /** Normalizes only matcher inputs when delivery target shape must stay native. */
   normalizeTargetForMatch?: NativeApprovalTargetNormalizer<TTarget>;
+  /** Optional fallback target when neither turn-source nor session target resolves. */
   resolveFallbackTarget?: (request: ApprovalRequest) => TTarget | null;
 };
 
 type NativeOriginResolverParams<TTarget extends NativeApprovalTarget> =
   BaseOriginResolverParams<TTarget> & {
+    /** Optional native target matcher; defaults to route-exact target matching. */
     targetsMatch?: (a: TTarget, b: TTarget) => boolean;
   };
 
 type CustomOriginResolverParams<TTarget> = BaseOriginResolverParams<TTarget> & {
+  /** Custom matcher required when target shape is not `NativeApprovalTarget`. */
   targetsMatch: (a: TTarget, b: TTarget) => boolean;
 };
 
@@ -878,6 +887,8 @@ function createOriginTargetResolver<TTarget>(
       resolveSessionTarget: (sessionTarget) =>
         normalizeTarget(params.resolveSessionTarget(sessionTarget, input.request)),
       targetsMatch: (left, right) => {
+        // Some transports need native delivery ids unchanged while matching on
+        // normalized aliases, so matcher normalization is separate from output normalization.
         const normalizedLeft = normalizeTargetForMatch(left);
         const normalizedRight = normalizeTargetForMatch(right);
         return Boolean(
@@ -919,11 +930,14 @@ export function createChannelApproverDmTargetResolver<
   TApprover,
   TTarget extends NativeApprovalTarget = NativeApprovalTarget,
 >(params: {
+  /** Optional gate; returning false skips approver DM delivery for the request. */
   shouldHandleRequest?: (params: ApprovalResolverParams) => boolean;
+  /** Resolves approver records from config and optional account scope. */
   resolveApprovers: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => readonly TApprover[];
+  /** Maps one approver record to a native DM target; nullish results are skipped. */
   mapApprover: (approver: TApprover, params: ApprovalResolverParams) => TTarget | null | undefined;
 }) {
   return (input: ApprovalResolverParams): TTarget[] => {
