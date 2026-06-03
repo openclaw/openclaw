@@ -1,5 +1,7 @@
+/** User-configurable reaction behavior level for channel delivery. */
 export type ReactionLevel = "off" | "ack" | "minimal" | "extensive";
 
+/** Expanded reaction flags consumed by runtime delivery and prompt guidance. */
 export type ResolvedReactionLevel = {
   level: ReactionLevel;
   /** Whether ACK reactions (e.g., 👀 when processing) are enabled. */
@@ -12,6 +14,7 @@ export type ResolvedReactionLevel = {
 
 const LEVELS = new Set<ReactionLevel>(["off", "ack", "minimal", "extensive"]);
 
+/** Parses a raw config value while preserving missing vs invalid for fallback policy. */
 function parseLevel(
   value: unknown,
 ): { kind: "missing" } | { kind: "invalid" } | { kind: "ok"; value: ReactionLevel } {
@@ -31,6 +34,7 @@ function parseLevel(
   return { kind: "invalid" };
 }
 
+/** Resolves raw reaction config into ACK and agent-reaction runtime flags. */
 export function resolveReactionLevel(params: {
   value: unknown;
   defaultLevel: ReactionLevel;
