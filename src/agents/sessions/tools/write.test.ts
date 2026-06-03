@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { WriteVerificationError } from "./write-verification.js";
 import { createWriteTool, type WriteOperations } from "./write.js";
 
 describe("write tool", () => {
@@ -108,6 +109,36 @@ describe("write tool", () => {
     );
 
     expect(result.content[0]?.type).toBe("text");
+  });
+
+  it("does not report success when a delegated write resolves without creating the file", async () => {
+    const filePath = await createTempPath();
+    const tool = createWriteTool(tmpDir, {
+      operations: {
+        mkdir: async () => {},
+        writeFile: async () => {},
+        readFile: async () => Buffer.from(""),
+        statFile: async () => null,
+      },
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "expected content" }, undefined),
+    ).rejects.toThrow(WriteVerificationError);
+    await expect(fs.access(filePath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("does not report success when same-size stale content remains after write", async () => {
+    const filePath = await createTempPath();
+    await fs.writeFile(filePath, "stale content\n", "utf-8");
+    const tool = createWriteTool(tmpDir, {
+      operations: createRecoverableOperations(async () => {}),
+    });
+
+    await expect(
+      tool.execute("call-1", { path: filePath, content: "fresh content\n" }, undefined),
+    ).rejects.toThrow(WriteVerificationError);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("stale content\n");
   });
 
   it("writes file URL paths through the shared session path resolver", async () => {

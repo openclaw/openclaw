@@ -32,6 +32,7 @@ import { resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
+import { isWriteVerificationError } from "./write-verification.js";
 
 type EditPreview = EditDiffResult | EditDiffError;
 
@@ -436,6 +437,9 @@ export function createEditToolDefinition(
             },
           };
         } catch (error: unknown) {
+          if (isWriteVerificationError(error)) {
+            throw error;
+          }
           const normalizedError = error instanceof Error ? error : new Error(String(error));
           const currentContent = await ops
             .readFile(absolutePath)
