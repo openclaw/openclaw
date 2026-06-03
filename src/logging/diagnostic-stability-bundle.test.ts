@@ -211,11 +211,13 @@ describe("diagnostic stability bundles", () => {
       latency: {
         messageAgeMs: {
           count: 1,
+          slowCount: 1,
           latestMs: 65_000,
           maxMs: 65_000,
         },
         receivedToTurnStartMs: {
           count: 1,
+          slowCount: 1,
           latestMs: 12_000,
           maxMs: 12_000,
         },

@@ -268,16 +268,16 @@ function formatChannelTurnSlaSummary(
   if (latency) {
     const latencyParts = [
       latency.messageAgeMs
-        ? `messageAge latest:${latency.messageAgeMs.latestMs}ms/max:${latency.messageAgeMs.maxMs}ms`
+        ? `messageAge latest:${latency.messageAgeMs.latestMs}ms/max:${latency.messageAgeMs.maxMs}ms/slow:${latency.messageAgeMs.slowCount}/${latency.messageAgeMs.count}`
         : "",
       latency.receivedToTurnStartMs
-        ? `receivedToStart latest:${latency.receivedToTurnStartMs.latestMs}ms/max:${latency.receivedToTurnStartMs.maxMs}ms`
+        ? `receivedToStart latest:${latency.receivedToTurnStartMs.latestMs}ms/max:${latency.receivedToTurnStartMs.maxMs}ms/slow:${latency.receivedToTurnStartMs.slowCount}/${latency.receivedToTurnStartMs.count}`
         : "",
       latency.startToDeliveryMs
-        ? `startToDelivery latest:${latency.startToDeliveryMs.latestMs}ms/max:${latency.startToDeliveryMs.maxMs}ms`
+        ? `startToDelivery latest:${latency.startToDeliveryMs.latestMs}ms/max:${latency.startToDeliveryMs.maxMs}ms/slow:${latency.startToDeliveryMs.slowCount}/${latency.startToDeliveryMs.count}`
         : "",
       latency.startToCompletionMs
-        ? `startToCompletion latest:${latency.startToCompletionMs.latestMs}ms/max:${latency.startToCompletionMs.maxMs}ms`
+        ? `startToCompletion latest:${latency.startToCompletionMs.latestMs}ms/max:${latency.startToCompletionMs.maxMs}ms/slow:${latency.startToCompletionMs.slowCount}/${latency.startToCompletionMs.count}`
         : "",
     ].filter(Boolean);
     if (latencyParts.length > 0) {

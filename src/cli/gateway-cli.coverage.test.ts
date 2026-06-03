@@ -244,11 +244,13 @@ describe("gateway-cli coverage", () => {
           latency: {
             receivedToTurnStartMs: {
               count: 1,
+              slowCount: 1,
               latestMs: 12_000,
               maxMs: 12_000,
             },
             startToDeliveryMs: {
               count: 1,
+              slowCount: 0,
               latestMs: 2_500,
               maxMs: 2_500,
             },
@@ -303,7 +305,7 @@ describe("gateway-cli coverage", () => {
     expect(output).toContain("degraded:missing_visible_delivery");
     expect(output).toContain("warning:slow_receive_to_turn_start");
     expect(output).toContain("Latency:");
-    expect(output).toContain("receivedToStart latest:12000ms/max:12000ms");
+    expect(output).toContain("receivedToStart latest:12000ms/max:12000ms/slow:1/1");
     expect(output).toContain("receivedToTurnStartMs=12000ms");
     expect(output).toContain("receivedToStart=12000ms");
     expect(output).toContain("reason=missing_visible_delivery");

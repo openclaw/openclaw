@@ -18,6 +18,18 @@ function formatMilliseconds(value: number | undefined): string {
   return `${Math.round(value)}ms`;
 }
 
+function formatLatencyMetric(
+  label: string,
+  metric: NonNullable<ChannelTurnSummary["latency"]>["messageAgeMs"] | undefined,
+): string {
+  if (!metric) {
+    return "";
+  }
+  return `${label} latest=${formatMilliseconds(metric.latestMs)} max=${formatMilliseconds(
+    metric.maxMs,
+  )} slow=${metric.slowCount}/${metric.count}`;
+}
+
 function formatChannelTurnIssueLine(issue: ChannelTurnSummary["health"]["issues"][number]): string {
   const parts = [`- ${issue.level}: ${issue.code}`];
   if (typeof issue.count === "number") {
@@ -34,26 +46,10 @@ function formatChannelTurnLatencyLine(latency: ChannelTurnSummary["latency"]): s
     return null;
   }
   const parts = [
-    latency.messageAgeMs
-      ? `messageAge latest=${formatMilliseconds(latency.messageAgeMs.latestMs)} max=${formatMilliseconds(
-          latency.messageAgeMs.maxMs,
-        )}`
-      : "",
-    latency.receivedToTurnStartMs
-      ? `receivedToStart latest=${formatMilliseconds(
-          latency.receivedToTurnStartMs.latestMs,
-        )} max=${formatMilliseconds(latency.receivedToTurnStartMs.maxMs)}`
-      : "",
-    latency.startToDeliveryMs
-      ? `startToDelivery latest=${formatMilliseconds(
-          latency.startToDeliveryMs.latestMs,
-        )} max=${formatMilliseconds(latency.startToDeliveryMs.maxMs)}`
-      : "",
-    latency.startToCompletionMs
-      ? `startToCompletion latest=${formatMilliseconds(
-          latency.startToCompletionMs.latestMs,
-        )} max=${formatMilliseconds(latency.startToCompletionMs.maxMs)}`
-      : "",
+    formatLatencyMetric("messageAge", latency.messageAgeMs),
+    formatLatencyMetric("receivedToStart", latency.receivedToTurnStartMs),
+    formatLatencyMetric("startToDelivery", latency.startToDeliveryMs),
+    formatLatencyMetric("startToCompletion", latency.startToCompletionMs),
   ].filter(Boolean);
   if (parts.length === 0) {
     return null;

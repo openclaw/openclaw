@@ -17,6 +17,7 @@ const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 
 type DiagnosticStabilityLatencyMetric = {
   count: number;
+  slowCount: number;
   latestMs?: number;
   maxMs?: number;
 };
@@ -753,12 +754,14 @@ function summarizeRecords(
     }
     const latency = channelTurns.latency;
     const current = latency[metric] as DiagnosticStabilityLatencyMetric | undefined;
+    const slow = valueMs >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS;
     latency[metric] = {
       count: (current?.count ?? 0) + 1,
+      slowCount: (current?.slowCount ?? 0) + (slow ? 1 : 0),
       latestMs: valueMs,
       maxMs: current?.maxMs === undefined ? valueMs : Math.max(current.maxMs, valueMs),
     };
-    if (valueMs >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+    if (slow) {
       latency.recentSlow.push({
         seq: record.seq,
         ts: record.ts,

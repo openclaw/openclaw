@@ -75,7 +75,7 @@ describe("doctor gateway stability", () => {
           },
         ],
         latency: {
-          startToDeliveryMs: { count: 1, latestMs: 2_500, maxMs: 2_500 },
+          startToDeliveryMs: { count: 1, slowCount: 0, latestMs: 2_500, maxMs: 2_500 },
           recentSlow: [],
         },
         health: {
@@ -124,7 +124,7 @@ describe("doctor gateway stability", () => {
         },
         recentFailures: [],
         latency: {
-          receivedToTurnStartMs: { count: 1, latestMs: 15_000, maxMs: 15_000 },
+          receivedToTurnStartMs: { count: 1, slowCount: 1, latestMs: 15_000, maxMs: 15_000 },
           recentSlow: [
             {
               seq: 9,
@@ -155,7 +155,7 @@ describe("doctor gateway stability", () => {
 
     expect(note?.body).toContain("slow_receive_to_turn_start");
     expect(note?.body).toContain("receivedToTurnStartMs=15000ms");
-    expect(note?.body).toContain("Latency: receivedToStart latest=15000ms max=15000ms.");
+    expect(note?.body).toContain("Latency: receivedToStart latest=15000ms max=15000ms slow=1/1.");
     expect(note?.body).toContain("Recent slow turns:");
     expect(note?.body).toContain(
       "- seq=9 channel=telegram receivedToTurnStartMs=15000ms turn=turn-2",

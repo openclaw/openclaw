@@ -496,21 +496,25 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.summary.channelTurns?.latency).toMatchObject({
       messageAgeMs: {
         count: 1,
+        slowCount: 1,
         latestMs: 30_000,
         maxMs: 30_000,
       },
       receivedToTurnStartMs: {
         count: 1,
+        slowCount: 1,
         latestMs: 12_000,
         maxMs: 12_000,
       },
       startToDeliveryMs: {
         count: 1,
+        slowCount: 0,
         latestMs: 2_500,
         maxMs: 2_500,
       },
       startToCompletionMs: {
         count: 1,
+        slowCount: 0,
         latestMs: 2_700,
         maxMs: 2_700,
       },

@@ -701,6 +701,8 @@ function readOptionalLatencyMetric(
   const metric = readObject(value, label);
   return {
     count: readNumber(metric.count, `${label}.count`),
+    slowCount:
+      metric.slowCount === undefined ? 0 : readNumber(metric.slowCount, `${label}.slowCount`),
     ...(metric.latestMs !== undefined
       ? { latestMs: readNumber(metric.latestMs, `${label}.latestMs`) }
       : {}),
