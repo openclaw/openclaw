@@ -443,6 +443,15 @@ export function formatTokens(total?: number | null, context?: number | null) {
   return `tokens ${totalLabel}/${formatTokenCount(context)}${pct !== null ? ` (${pct}%)` : ""}`;
 }
 
+export function formatConnectionHostFooter(connectionUrl: string): string | null {
+  try {
+    const hostname = new URL(connectionUrl.trim()).hostname.trim();
+    return hostname ? `host ${hostname}` : null;
+  } catch {
+    return null;
+  }
+}
+
 function formatGoalUsage(goal: SessionGoal): string | null {
   if (goal.tokenBudget === undefined) {
     return goal.tokensUsed > 0 ? formatTokenCount(goal.tokensUsed) : null;
