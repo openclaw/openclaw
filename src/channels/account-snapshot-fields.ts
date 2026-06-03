@@ -1,3 +1,7 @@
+/**
+ * Status-safe channel account projection helpers for CLI, status APIs, and plugin SDK callers.
+ * This file is the redaction boundary between runtime account objects and public snapshots.
+ */
 import { stripUrlUserInfo } from "@openclaw/net-policy/url-userinfo";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
