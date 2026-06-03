@@ -361,22 +361,21 @@ describe("renderSkills", () => {
     document.body.append(container);
     dialogRestores.push(() => container.remove());
     const onToggle = vi.fn();
-    const disabledSkills = [
-      createSkill({
-        skillKey: "alpha",
-        name: "Alpha",
-        source: "openclaw-managed",
-        filePath: "/tmp/skills/alpha/SKILL.md",
-        disabled: true,
-      }),
-      createSkill({
-        skillKey: "beta",
-        name: "Beta",
-        source: "openclaw-managed",
-        filePath: "/tmp/skills/beta/SKILL.md",
-        disabled: true,
-      }),
-    ];
+    const alphaSkill = createSkill({
+      skillKey: "alpha",
+      name: "Alpha",
+      source: "openclaw-managed",
+      filePath: "/tmp/skills/alpha/SKILL.md",
+      disabled: true,
+    });
+    const betaSkill = createSkill({
+      skillKey: "beta",
+      name: "Beta",
+      source: "openclaw-managed",
+      filePath: "/tmp/skills/beta/SKILL.md",
+      disabled: true,
+    });
+    const disabledSkills = [alphaSkill, betaSkill];
     const report: SkillStatusReport = {
       workspaceDir: "/tmp/workspace",
       managedSkillsDir: "/tmp/skills",
@@ -400,7 +399,11 @@ describe("renderSkills", () => {
     );
     expect(firstRenderToggles.map((toggle) => toggle.checked)).toEqual([false, false]);
 
-    firstRenderToggles[0]!.click();
+    const alphaToggle = firstRenderToggles[0];
+    if (!alphaToggle) {
+      throw new Error("Expected Alpha skill toggle to render.");
+    }
+    alphaToggle.click();
 
     expect(onToggle).toHaveBeenCalledTimes(1);
     expect(onToggle).toHaveBeenCalledWith("alpha", true);
@@ -410,7 +413,7 @@ describe("renderSkills", () => {
         createProps({
           report: {
             ...report,
-            skills: [{ ...disabledSkills[0]!, disabled: false }, disabledSkills[1]!],
+            skills: [{ ...alphaSkill, disabled: false }, betaSkill],
           },
           statusFilter: "disabled",
           onToggle,
