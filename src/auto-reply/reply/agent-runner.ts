@@ -42,6 +42,7 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import type { PluginHookReplyUsageState } from "../../plugins/hook-types.js";
 import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -89,6 +90,9 @@ import {
 import { resetReplyRunSession } from "./agent-runner-session-reset.js";
 import { appendUsageLine, formatResponseUsageLine } from "./agent-runner-usage-line.js";
 import { resolveQueuedReplyExecutionConfig } from "./agent-runner-utils.js";
+import { buildUsageContract } from "../usage-bar/contract.js";
+import { loadUsageBarTemplate } from "../usage-bar/template.js";
+import { renderUsageBar } from "../usage-bar/translator.js";
 import { createAudioAsVoiceBuffer, createBlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveEffectiveBlockStreamingConfig } from "./block-streaming.js";
 import {
@@ -1739,13 +1743,14 @@ export async function runReplyAgent(params: {
     const providerUsed =
       runResult.meta?.agentMeta?.provider ?? fallbackProvider ?? followupRun.run.provider;
 
+    let replyUsageState: PluginHookReplyUsageState | undefined;
     {
       const winnerProvider = runResult.meta?.executionTrace?.winnerProvider ?? providerUsed;
       const winnerModel = runResult.meta?.executionTrace?.winnerModel ?? modelUsed;
       const ctxTokens = runResult.meta?.agentMeta?.contextTokens;
       const compactions = runResult.meta?.agentMeta?.compactionCount;
       const lastCallUsage = runResult.meta?.agentMeta?.lastCallUsage;
-      recordReplyUsageState(runId, {
+      replyUsageState = {
         provider: providerUsed,
         model: modelUsed,
         resolvedRef: winnerProvider && winnerModel ? `${winnerProvider}/${winnerModel}` : undefined,
@@ -1805,7 +1810,8 @@ export async function runReplyAgent(params: {
               total: lastCallUsage.total,
             }
           : undefined,
-      });
+      };
+      recordReplyUsageState(runId, replyUsageState);
     }
     const verboseEnabled = resolvedVerboseLevel !== "off";
     const preserveUserFacingSessionState = shouldPreserveUserFacingSessionStateForInputProvenance(
@@ -2175,7 +2181,16 @@ export async function runReplyAgent(params: {
         showCost,
         costConfig,
       });
-      if (formatted && responseUsageMode === "full" && sessionKey) {
+      const usageTemplate =
+        responseUsageMode === "full" && replyUsageState
+          ? loadUsageBarTemplate(cfg.messages?.usageTemplate)
+          : undefined;
+      const renderedUsageLine = usageTemplate
+        ? renderUsageBar(usageTemplate, buildUsageContract(replyUsageState, replyToChannel))
+        : undefined;
+      if (renderedUsageLine) {
+        formatted = renderedUsageLine;
+      } else if (formatted && responseUsageMode === "full" && sessionKey) {
         formatted = `${formatted} · session \`${sessionKey}\``;
       }
       if (formatted) {
