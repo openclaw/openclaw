@@ -3,6 +3,13 @@ import { normalizeChatChannelId } from "../channels/ids.js";
 import { normalizeAnyChannelId } from "../channels/registry-normalize.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "./message-channel-constants.js";
 
+/**
+ * Shared message-channel normalization for delivery, routing, config, and gateway headers.
+ *
+ * Built-in aliases normalize through channel ids, while plugin-owned channel ids
+ * stay accepted even when core has no bundled alias for them.
+ */
+
 /** Normalizes raw channel names, aliases, and internal webchat into canonical ids. */
 export function normalizeMessageChannel(raw?: string | null): string | undefined {
   const normalized = normalizeOptionalLowercaseString(raw);
@@ -16,6 +23,8 @@ export function normalizeMessageChannel(raw?: string | null): string | undefined
   if (builtIn) {
     return builtIn;
   }
+  // Preserve unknown-but-normalized ids so external plugin channels can route
+  // before their full runtime is loaded.
   return normalizeAnyChannelId(normalized) ?? normalized;
 }
 
