@@ -118,7 +118,7 @@ describe("openclaw agent database", () => {
     expect(registered).toMatchObject({
       agentId: "worker-1",
       path: database.path,
-      schemaVersion: 1,
+      schemaVersion: 2,
     });
     expect(registered?.sizeBytes).toBeGreaterThan(0);
   });
@@ -359,7 +359,7 @@ describe("openclaw agent database", () => {
     expect(readSqliteNumberPragma(database.db, "busy_timeout")).toBe(30_000);
     expect(readSqliteNumberPragma(database.db, "foreign_keys")).toBe(1);
     expect(readSqliteNumberPragma(database.db, "synchronous")).toBe(1);
-    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(1);
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(2);
     expect(readSqliteNumberPragma(database.db, "wal_autocheckpoint")).toBe(1000);
     const journalMode = database.db.prepare("PRAGMA journal_mode").get() as
       | { journal_mode?: string }
@@ -382,9 +382,123 @@ describe("openclaw agent database", () => {
       ),
     ).toEqual({
       role: "agent",
-      schema_version: 1,
+      schema_version: 2,
       agent_id: "worker-1",
     });
+  });
+
+  it("migrates compact v1 session tables before applying normalized indexes", () => {
+    const stateDir = createTempStateDir();
+    const databasePath = path.join(
+      stateDir,
+      "agents",
+      "worker-1",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const { DatabaseSync } = requireNodeSqlite();
+    const db = new DatabaseSync(databasePath);
+    db.exec(`
+      CREATE TABLE schema_meta (
+        meta_key TEXT NOT NULL PRIMARY KEY,
+        role TEXT NOT NULL,
+        schema_version INTEGER NOT NULL,
+        agent_id TEXT,
+        app_version TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO schema_meta
+        (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+      VALUES ('primary', 'agent', 1, 'worker-1', NULL, 1, 1);
+      CREATE TABLE sessions (
+        session_id TEXT NOT NULL PRIMARY KEY,
+        session_key TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO sessions (session_id, session_key, created_at, updated_at)
+      VALUES ('session-1', 'agent:worker-1:main', 10, 20);
+      CREATE TABLE session_entries (
+        session_key TEXT NOT NULL PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        entry_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
+      );
+      INSERT INTO session_entries (session_key, session_id, entry_json, updated_at)
+      VALUES (
+        'agent:worker-1:group:example',
+        'session-1',
+        '{"sessionId":"session-1","updatedAt":20,"startedAt":11,"endedAt":19,"status":"done","chatType":"group","channel":"discord","deliveryContext":{"accountId":"acct-1"},"modelProvider":"openai","model":"gpt-5.5","agentHarnessId":"codex","parentSessionKey":"agent:worker-1:parent","spawnedBy":"agent:worker-1:spawner","displayName":"Example group"}',
+        20
+      );
+      PRAGMA user_version = 1;
+    `);
+    db.close();
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "worker-1",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+
+    expect(readSqliteNumberPragma(database.db, "user_version")).toBe(2);
+    const session = database.db
+      .prepare(
+        `
+          SELECT
+            account_id,
+            agent_harness_id,
+            channel,
+            chat_type,
+            display_name,
+            ended_at,
+            model,
+            model_provider,
+            parent_session_key,
+            session_scope,
+            spawned_by,
+            started_at,
+            status
+          FROM sessions
+          WHERE session_id = ?
+        `,
+      )
+      .get("session-1");
+    expect(session).toEqual({
+      account_id: "acct-1",
+      agent_harness_id: "codex",
+      channel: "discord",
+      chat_type: "group",
+      display_name: "Example group",
+      ended_at: 19,
+      model: "gpt-5.5",
+      model_provider: "openai",
+      parent_session_key: "agent:worker-1:parent",
+      session_scope: "group",
+      spawned_by: "agent:worker-1:spawner",
+      started_at: 11,
+      status: "done",
+    });
+    const route = database.db
+      .prepare("SELECT session_id, updated_at FROM session_routes WHERE session_key = ?")
+      .get("agent:worker-1:group:example");
+    expect(route).toEqual({
+      session_id: "session-1",
+      updated_at: 20,
+    });
+    const sessionForeignKeys = database.db.prepare("PRAGMA foreign_key_list(sessions)").all() as
+      | Array<{ from?: unknown; on_delete?: unknown; table?: unknown; to?: unknown }>
+      | undefined;
+    expect(sessionForeignKeys).toContainEqual(
+      expect.objectContaining({
+        from: "primary_conversation_id",
+        on_delete: "SET NULL",
+        table: "conversations",
+        to: "conversation_id",
+      }),
+    );
   });
 
   it("refuses to open newer per-agent schema versions", () => {
@@ -399,7 +513,7 @@ describe("openclaw agent database", () => {
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const { DatabaseSync } = requireNodeSqlite();
     const db = new DatabaseSync(databasePath);
-    db.exec("PRAGMA user_version = 2;");
+    db.exec("PRAGMA user_version = 3;");
     db.close();
 
     expect(() =>
@@ -407,6 +521,6 @@ describe("openclaw agent database", () => {
         agentId: "worker-1",
         env: { OPENCLAW_STATE_DIR: stateDir },
       }),
-    ).toThrow(/newer schema version 2/);
+    ).toThrow(/newer schema version 3/);
   });
 });
