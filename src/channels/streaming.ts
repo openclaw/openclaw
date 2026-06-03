@@ -860,6 +860,19 @@ function removeUnbalancedInlineBackticks(value: string): string {
   return value.trimStart().startsWith("`") ? value.replaceAll("`", "'") : value.replaceAll("`", "");
 }
 
+function removeUnbalancedItalicUnderscore(value: string): string {
+  const chars = Array.from(value);
+  const underscoreCount = chars.filter((char) => char === "_").length;
+  if (underscoreCount % 2 === 0) {
+    return value;
+  }
+  const trimmed = value.trimStart();
+  if (trimmed.startsWith("_")) {
+    return trimmed.slice(1);
+  }
+  return value.replace(/_([^_]*)$/, "$1");
+}
+
 function compactPlainProgressLine(line: string, maxChars: number): string {
   const head = sliceCodePoints(line, 0, maxChars - 1).trimEnd();
   const boundary = head.search(/\s+\S*$/u);
@@ -888,8 +901,10 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     if (detailLimit < 8) {
       return undefined;
     }
-    return removeUnbalancedInlineBackticks(
-      `${prefix}${compactProgressLineDetail(detail, detailLimit)}`,
+    return removeUnbalancedItalicUnderscore(
+      removeUnbalancedInlineBackticks(
+        `${prefix}${compactProgressLineDetail(detail, detailLimit)}`,
+      ),
     );
   };
 
@@ -911,7 +926,9 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
   }
 
-  return removeUnbalancedInlineBackticks(compactPlainProgressLine(normalized, maxChars));
+  return removeUnbalancedItalicUnderscore(
+    removeUnbalancedInlineBackticks(compactPlainProgressLine(normalized, maxChars)),
+  );
 }
 
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {
