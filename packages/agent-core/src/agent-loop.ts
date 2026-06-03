@@ -452,8 +452,8 @@ async function executeToolCalls(
   emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
-  const hasSequentialToolCall = toolCalls.some(
-    (tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
+  const hasSequentialToolCall = toolCalls.some((toolCall) =>
+    isSequentialToolCall(currentContext, toolCall),
   );
   if (config.toolExecution === "sequential" || hasSequentialToolCall) {
     return executeToolCallsSequential(
@@ -641,6 +641,32 @@ type FinalizedToolCallOutcome = {
 
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
 
+function readToolNameForLookup(tool: AgentTool): string | undefined {
+  try {
+    return typeof tool.name === "string" ? tool.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findToolByName(tools: AgentTool[] | undefined, name: string): AgentTool | undefined {
+  for (const tool of tools ?? []) {
+    if (readToolNameForLookup(tool) === name) {
+      return tool;
+    }
+  }
+  return undefined;
+}
+
+function isSequentialToolCall(currentContext: AgentContext, toolCall: AgentToolCall): boolean {
+  const tool = findToolByName(currentContext.tools, toolCall.name);
+  try {
+    return tool?.executionMode === "sequential";
+  } catch {
+    return tool !== undefined;
+  }
+}
+
 function shouldTerminateToolBatch(finalizedCalls: FinalizedToolCallOutcome[]): boolean {
   return (
     finalizedCalls.length > 0 &&
@@ -669,7 +695,7 @@ async function prepareToolCall(
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
-  const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+  const tool = findToolByName(currentContext.tools, toolCall.name);
   if (!tool) {
     return {
       kind: "immediate",
