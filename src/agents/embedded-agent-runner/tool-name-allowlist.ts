@@ -1,3 +1,4 @@
+import { collectClientToolDefinitionNames } from "../agent-tool-definition-adapter.js";
 import type { AgentTool } from "../runtime/index.js";
 import type { ClientToolDefinition } from "./run/params.js";
 
@@ -25,8 +26,8 @@ export function collectAllowedToolNames(params: {
   for (const tool of params.tools) {
     addName(names, tool.name);
   }
-  for (const tool of params.clientTools ?? []) {
-    addName(names, tool.function?.name);
+  for (const name of collectClientToolDefinitionNames(params.clientTools ?? [])) {
+    addName(names, name);
   }
   return names;
 }

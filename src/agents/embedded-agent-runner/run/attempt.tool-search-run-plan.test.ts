@@ -4,6 +4,50 @@ import {
   buildCallableToolNamesForEmptyAllowlistCheck,
   buildToolSearchRunPlan,
 } from "./attempt.tool-search-run-plan.js";
+import type { ClientToolDefinition } from "./params.js";
+
+function clientTool(name: string): ClientToolDefinition {
+  return {
+    type: "function",
+    function: {
+      name,
+      parameters: { type: "object", properties: {} },
+    },
+  };
+}
+
+function unreadableClientFunction(message: string): ClientToolDefinition {
+  const tool = {} as ClientToolDefinition;
+  Object.defineProperty(tool, "function", {
+    get() {
+      throw new Error(message);
+    },
+  });
+  return tool;
+}
+
+function unreadableClientName(message: string): ClientToolDefinition {
+  const tool = {
+    type: "function",
+    function: {},
+  } as unknown as ClientToolDefinition;
+  Object.defineProperty(tool.function, "name", {
+    get() {
+      throw new Error(message);
+    },
+  });
+  return tool;
+}
+
+function clientToolWithHostileTag(name: string): ClientToolDefinition {
+  const tool = clientTool(name);
+  Object.defineProperty(tool.function, Symbol.toStringTag, {
+    get() {
+      throw new Error("fuzzplugin run plan function tag getter exploded");
+    },
+  });
+  return tool;
+}
 
 describe("buildCallableToolNamesForEmptyAllowlistCheck", () => {
   it("ignores auto-added Tool Search controls so bad allowlists still fail", () => {
@@ -111,6 +155,33 @@ describe("buildToolSearchRunPlan", () => {
     });
 
     expect(plan.emptyAllowlistCallableNames).toEqual(["tool-search-client:client_pick_file"]);
+  });
+
+  it("skips unreadable client tool descriptors while preserving readable client names", () => {
+    const plan = buildToolSearchRunPlan({
+      visibleTools: [{ name: "tool_search_code" }] as never,
+      uncompactedTools: [{ name: "tool_search_code" }] as never,
+      clientTools: [
+        unreadableClientFunction("fuzzplugin run plan function getter exploded"),
+        unreadableClientName("fuzzplugin run plan name getter exploded"),
+        clientToolWithHostileTag("client_tagged"),
+        clientTool("client_pick_file"),
+      ],
+      catalogRegistered: true,
+      catalogToolCount: 0,
+      controlsEnabled: true,
+      explicitAllowlistSources: [{ entries: ["client_tagged", "client_pick_file"] }],
+    });
+
+    expect([...plan.replayAllowedToolNames]).toEqual([
+      "tool_search_code",
+      "client_tagged",
+      "client_pick_file",
+    ]);
+    expect(plan.emptyAllowlistCallableNames).toEqual([
+      "tool-search-client:client_tagged",
+      "tool-search-client:client_pick_file",
+    ]);
   });
 
   it("keeps code-mode control tools in replay-safe names", () => {

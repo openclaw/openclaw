@@ -49,6 +49,11 @@ type ToolExecuteArgs = ToolDefinition["execute"] extends (...args: infer P) => u
   ? P
   : ToolExecuteArgsCurrent;
 type ToolExecuteArgsAny = ToolExecuteArgs | ToolExecuteArgsLegacy | ToolExecuteArgsCurrent;
+type ClientToolDefinitionSnapshot = {
+  name: string;
+  description: string;
+  parameters: ToolDefinition["parameters"];
+};
 const TOOL_ERROR_PARAM_PREVIEW_MAX_CHARS = 600;
 const TOOL_ERROR_EXEC_COMMAND_HASH_CHARS = 16;
 const SENSITIVE_EXEC_ENV_VALUE = "[omitted exec env value]";
@@ -73,6 +78,58 @@ function isLegacyToolExecuteArgs(args: ToolExecuteArgsAny): args is ToolExecuteA
     return true;
   }
   return isAbortSignal(fifth);
+}
+
+function isClientToolFunctionRecord(value: unknown): value is Record<string, unknown> {
+  try {
+    return typeof value === "object" && value !== null && !Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function snapshotClientToolDefinition(
+  tool: ClientToolDefinition,
+): ClientToolDefinitionSnapshot | undefined {
+  let func: unknown;
+  try {
+    func = tool.function;
+  } catch {
+    return undefined;
+  }
+  if (!isClientToolFunctionRecord(func)) {
+    return undefined;
+  }
+
+  let name: unknown;
+  try {
+    name = func.name;
+  } catch {
+    return undefined;
+  }
+  if (typeof name !== "string" || !name.trim()) {
+    return undefined;
+  }
+
+  let description: unknown;
+  try {
+    description = func.description;
+  } catch {
+    description = undefined;
+  }
+
+  let parameters: unknown;
+  try {
+    parameters = func.parameters;
+  } catch {
+    parameters = undefined;
+  }
+
+  return {
+    name: name.trim(),
+    description: typeof description === "string" ? description : "",
+    parameters: parameters as ToolDefinition["parameters"],
+  };
 }
 
 function describeToolExecutionError(err: unknown): {
@@ -318,8 +375,7 @@ export function findClientToolNameConflicts(params: {
 
   const conflicts = new Set<string>();
   const seenClientNames = new Map<string, string>();
-  for (const tool of params.tools) {
-    const rawName = (tool.function?.name ?? "").trim();
+  for (const rawName of collectClientToolDefinitionNames(params.tools)) {
     if (!rawName) {
       continue;
     }
@@ -336,6 +392,13 @@ export function findClientToolNameConflicts(params: {
     seenClientNames.set(normalizedName, rawName);
   }
   return Array.from(conflicts);
+}
+
+export function collectClientToolDefinitionNames(tools: readonly ClientToolDefinition[]): string[] {
+  return tools.flatMap((tool) => {
+    const snapshot = snapshotClientToolDefinition(tool);
+    return snapshot ? [snapshot.name] : [];
+  });
 }
 
 export function createClientToolNameConflictError(conflicts: string[]): Error {
@@ -484,13 +547,16 @@ export function toClientToolDefinitions(
   onClientToolCall?: ClientToolCallRecorder,
   hookContext?: HookContext,
 ): ToolDefinition[] {
-  return tools.map((tool) => {
-    const func = tool.function;
+  return tools.flatMap((tool) => {
+    const func = snapshotClientToolDefinition(tool);
+    if (!func) {
+      return [];
+    }
     return {
       name: func.name,
       label: func.name,
-      description: func.description ?? "",
-      parameters: func.parameters as ToolDefinition["parameters"],
+      description: func.description,
+      parameters: func.parameters,
       execute: async (...args: ToolExecuteArgs): Promise<AgentToolResult<unknown>> => {
         const { toolCallId, params } = splitToolExecuteArgs(args);
         if (onClientToolCall && typeof onClientToolCall !== "function") {

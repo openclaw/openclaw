@@ -3,6 +3,7 @@ import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import {
   CLIENT_TOOL_NAME_CONFLICT_PREFIX,
+  collectClientToolDefinitionNames,
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   isClientToolNameConflictError,
@@ -124,6 +125,39 @@ function makeClientTool(name: string): ClientToolDefinition {
   };
 }
 
+function makeClientToolWithThrowingFunction(message: string): ClientToolDefinition {
+  const tool = {} as ClientToolDefinition;
+  Object.defineProperty(tool, "function", {
+    get() {
+      throw new Error(message);
+    },
+  });
+  return tool;
+}
+
+function makeClientToolWithThrowingName(message: string): ClientToolDefinition {
+  const tool = {
+    type: "function",
+    function: {},
+  } as unknown as ClientToolDefinition;
+  Object.defineProperty(tool.function, "name", {
+    get() {
+      throw new Error(message);
+    },
+  });
+  return tool;
+}
+
+function makeClientToolWithThrowingFunctionTag(name: string): ClientToolDefinition {
+  const tool = makeClientTool(name);
+  Object.defineProperty(tool.function, Symbol.toStringTag, {
+    get() {
+      throw new Error("fuzzplugin client function tag getter exploded");
+    },
+  });
+  return tool;
+}
+
 async function executeClientTool(params: unknown): Promise<{
   calledWith: Record<string, unknown> | undefined;
   result: Awaited<ReturnType<ToolExecute>>;
@@ -140,6 +174,64 @@ async function executeClientTool(params: unknown): Promise<{
 }
 
 describe("toClientToolDefinitions – param coercion", () => {
+  it("skips unreadable client tool descriptors while preserving healthy siblings", async () => {
+    const unreadableParameters = {
+      type: "function",
+      function: {
+        name: "client_probe",
+        description: "Client probe",
+      },
+    } as ClientToolDefinition;
+    Object.defineProperty(unreadableParameters.function, "parameters", {
+      get() {
+        throw new Error("fuzzplugin client parameters getter exploded");
+      },
+    });
+
+    const completed: Array<{ name: string; params: Record<string, unknown> }> = [];
+    const defs = toClientToolDefinitions(
+      [
+        makeClientToolWithThrowingFunction("fuzzplugin client function getter exploded"),
+        makeClientToolWithThrowingName("fuzzplugin client name getter exploded"),
+        unreadableParameters,
+        makeClientToolWithThrowingFunctionTag("client_tagged"),
+        makeClientTool("client_lookup"),
+      ],
+      (name, params) => completed.push({ name, params }),
+    );
+
+    expect(defs.map((def) => def.name)).toEqual(["client_probe", "client_tagged", "client_lookup"]);
+    expect(defs[0]?.parameters).toBeUndefined();
+
+    await defs[0]?.execute(
+      "call-client-probe",
+      { q: "probe" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    await defs[1]?.execute(
+      "call-client-tagged",
+      { q: "tagged" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    await defs[2]?.execute(
+      "call-client-lookup",
+      { q: "lookup" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    expect(completed).toEqual([
+      { name: "client_probe", params: { q: "probe" } },
+      { name: "client_tagged", params: { q: "tagged" } },
+      { name: "client_lookup", params: { q: "lookup" } },
+    ]);
+  });
+
   it("returns terminal pending results for each client tool in a batch", async () => {
     const completed: Array<{ id: string; name: string; params: Record<string, unknown> }> = [];
     const defs = toClientToolDefinitions([makeClientTool("search"), makeClientTool("lookup")], {
@@ -215,6 +307,31 @@ describe("toClientToolDefinitions – param coercion", () => {
 });
 
 describe("client tool name conflict checks", () => {
+  it("collects readable client tool names without traversing hostile function tags", () => {
+    expect(
+      collectClientToolDefinitionNames([
+        makeClientToolWithThrowingFunction("fuzzplugin collect function getter exploded"),
+        makeClientToolWithThrowingName("fuzzplugin collect name getter exploded"),
+        makeClientToolWithThrowingFunctionTag("client_tagged"),
+        makeClientTool("client_lookup"),
+      ]),
+    ).toEqual(["client_tagged", "client_lookup"]);
+  });
+
+  it("skips unreadable client tool names during conflict checks", () => {
+    expect(
+      findClientToolNameConflicts({
+        tools: [
+          makeClientToolWithThrowingFunction("fuzzplugin conflict function getter exploded"),
+          makeClientToolWithThrowingName("fuzzplugin conflict name getter exploded"),
+          makeClientToolWithThrowingFunctionTag("client_tagged"),
+          makeClientTool("exec"),
+        ],
+        existingToolNames: ["exec"],
+      }),
+    ).toEqual(["exec"]);
+  });
+
   it("detects collisions with existing built-in names after normalization", () => {
     expect(
       findClientToolNameConflicts({

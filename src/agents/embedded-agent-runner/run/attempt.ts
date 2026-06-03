@@ -91,6 +91,7 @@ import {
   resolveEffectiveCompactionMode,
 } from "../../agent-settings.js";
 import {
+  collectClientToolDefinitionNames,
   createClientToolNameConflictError,
   findClientToolNameConflicts,
   toClientToolDefinitions,
@@ -1431,6 +1432,7 @@ export async function runEmbeddedAttempt(
         }),
     });
     const clientTools = toolsEnabled && !isRawModelRun ? params.clientTools : undefined;
+    const clientToolNames = collectClientToolDefinitionNames(clientTools ?? []);
     const bundleMcpEnabled = shouldCreateBundleMcpRuntimeForAttempt({
       toolsEnabled,
       disableTools: params.disableTools || isRawModelRun,
@@ -1447,10 +1449,7 @@ export async function runEmbeddedAttempt(
     bundleMcpRuntime = bundleMcpSessionRuntime
       ? await materializeBundleMcpToolsForRun({
           runtime: bundleMcpSessionRuntime,
-          reservedToolNames: [
-            ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
-          ],
+          reservedToolNames: [...tools.map((tool) => tool.name), ...clientToolNames],
         })
       : undefined;
     const bundleLspEnabled = shouldCreateBundleLspRuntimeForAttempt({
@@ -1464,7 +1463,7 @@ export async function runEmbeddedAttempt(
           cfg: params.config,
           reservedToolNames: [
             ...tools.map((tool) => tool.name),
-            ...(clientTools?.map((tool) => tool.function.name) ?? []),
+            ...clientToolNames,
             ...(bundleMcpRuntime?.tools.map((tool) => tool.name) ?? []),
           ],
         })

@@ -1,3 +1,4 @@
+import { collectClientToolDefinitionNames } from "../../agent-tool-definition-adapter.js";
 import { normalizeToolName } from "../../tool-policy.js";
 import {
   TOOL_CALL_RAW_TOOL_NAME,
@@ -68,8 +69,7 @@ function collectExplicitlyAllowedClientToolNames(params: {
       source.entries.map((entry) => normalizeToolName(entry)),
     ),
   );
-  return (params.clientTools ?? [])
-    .map((tool) => tool.function?.name)
+  return collectClientToolDefinitionNames(params.clientTools ?? [])
     .filter((name): name is string => Boolean(name?.trim()))
     .filter((name) => explicitNames.has(normalizeToolName(name)));
 }
