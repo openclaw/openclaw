@@ -356,6 +356,19 @@ function chatItemTimestamp(item: ChatItem): number | null {
   return null;
 }
 
+function timestampAfterVisibleItems(items: ChatItem[], desiredTimestamp: number): number {
+  const latestTimestamp = items.reduce<number | null>((latest, item) => {
+    const timestamp = chatItemTimestamp(item);
+    if (timestamp == null) {
+      return latest;
+    }
+    return latest == null || timestamp > latest ? timestamp : latest;
+  }, null);
+  return latestTimestamp != null && desiredTimestamp <= latestTimestamp
+    ? latestTimestamp + 1
+    : desiredTimestamp;
+}
+
 function sortChatItemsByVisibleTime(items: ChatItem[]): ChatItem[] {
   return items
     .map((item, index) => ({ item, index, timestamp: chatItemTimestamp(item) }))
@@ -667,13 +680,14 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     const key = `stream:${props.sessionKey}:${props.streamStartedAt ?? "live"}`;
     const text = sanitizeStreamText(props.stream);
     const visibleText = trimAccumulatedStreamPrefix(text, previousAccumulatedStreamText);
+    const startedAt = timestampAfterVisibleItems(items, props.streamStartedAt ?? Date.now());
     if (visibleText.length > 0) {
       if (!stripHeartbeatTokenForDisplay(visibleText).shouldSkip) {
         items.push({
           kind: "stream",
           key,
           text: visibleText,
-          startedAt: props.streamStartedAt ?? Date.now(),
+          startedAt,
           isStreaming: true,
         });
       }

@@ -2747,6 +2747,40 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStreamStartedAt).toBeNull();
   });
 
+  it("timestamps materialized streamed text after the persisted user prompt", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      timestamp: 200,
+      __openclaw: { seq: 1 },
+    };
+    const request = vi.fn().mockResolvedValue({
+      messages: [persistedUser],
+      thinkingLevel: "low",
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser],
+      chatRunId: null,
+      chatStream: "Partial answer before history catch-up.",
+      chatStreamStartedAt: 100,
+    });
+
+    await loadChatHistory(state);
+
+    expect(state.chatMessages).toHaveLength(2);
+    expect(state.chatMessages[0]).toEqual(persistedUser);
+    expectTextChatMessage(
+      state.chatMessages[1],
+      "assistant",
+      "Partial answer before history catch-up.",
+    );
+    expect(requireRecord(state.chatMessages[1]).timestamp).toBe(201);
+    expect(state.chatStream).toBeNull();
+    expect(state.chatStreamStartedAt).toBeNull();
+  });
+
   it("materializes orphaned segment-only assistant text before clearing caught-up tools", async () => {
     const persistedUser = {
       role: "user",

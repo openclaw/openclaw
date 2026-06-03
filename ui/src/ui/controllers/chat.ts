@@ -513,6 +513,35 @@ function insertMessageAtIndex(messages: unknown[], message: unknown, index: numb
   return [...messages.slice(0, index), message, ...messages.slice(index)];
 }
 
+function timestampForInsertedVisibleStream(
+  messages: unknown[],
+  index: number,
+  desiredTimestamp: number,
+): number {
+  const previousTimestamp = messages
+    .slice(0, index)
+    .toReversed()
+    .map(messageTimestampMs)
+    .find((timestamp): timestamp is number => timestamp != null);
+  const nextTimestamp = messages
+    .slice(index)
+    .map(messageTimestampMs)
+    .find((timestamp): timestamp is number => timestamp != null);
+  if (previousTimestamp != null && desiredTimestamp <= previousTimestamp) {
+    const afterPrevious = previousTimestamp + 1;
+    return nextTimestamp != null && afterPrevious >= nextTimestamp
+      ? previousTimestamp + (nextTimestamp - previousTimestamp) / 2
+      : afterPrevious;
+  }
+  if (nextTimestamp != null && desiredTimestamp >= nextTimestamp) {
+    const beforeNext = nextTimestamp - 1;
+    return previousTimestamp != null && beforeNext <= previousTimestamp
+      ? previousTimestamp + (nextTimestamp - previousTimestamp) / 2
+      : beforeNext;
+  }
+  return desiredTimestamp;
+}
+
 function appendVisibleStreamStateMessages(
   messages: unknown[],
   state: ChatState,
@@ -524,15 +553,16 @@ function appendVisibleStreamStateMessages(
     if (hasAssistantStreamPartReplacement([...nextMessages, ...replacementMessages], part)) {
       continue;
     }
-    const streamMessage = buildAssistantStreamMessage(
-      part.text,
-      part.replacementText,
-      part.timestamp,
-    );
     const toolIndex =
       part.source === "segment"
         ? currentToolStreamMessageIndex(nextMessages, state, part.toolCallId)
         : -1;
+    const insertIndex = toolIndex >= 0 ? toolIndex : nextMessages.length;
+    const streamMessage = buildAssistantStreamMessage(
+      part.text,
+      part.replacementText,
+      timestampForInsertedVisibleStream(nextMessages, insertIndex, part.timestamp),
+    );
     nextMessages =
       toolIndex >= 0
         ? insertMessageAtIndex(nextMessages, streamMessage, toolIndex)
