@@ -2177,7 +2177,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Checkout timing summary helper
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || needs.preflight.outputs.checkout_revision || github.sha }}
           fetch-depth: 1

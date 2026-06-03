@@ -209,7 +209,7 @@ jobs:
       candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -312,7 +312,7 @@ jobs:
           done
 
       - name: Checkout harness ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           persist-credentials: false
           fetch-depth: 0

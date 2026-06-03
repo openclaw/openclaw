@@ -41,7 +41,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v6.0.2
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -83,7 +83,7 @@ jobs:
           scripts/run-opengrep.sh --changed --sarif --error
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@v4.36.0
         # Only upload if the scan actually produced a SARIF file.
         if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
         with:
