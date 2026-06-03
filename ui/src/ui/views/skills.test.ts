@@ -356,6 +356,80 @@ describe("renderSkills", () => {
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
 
+  it("keeps the remaining filtered row toggle tied to that skill after a row leaves", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onToggle = vi.fn();
+    const disabledSkills = [
+      createSkill({
+        skillKey: "alpha",
+        name: "Alpha",
+        source: "openclaw-managed",
+        filePath: "/tmp/skills/alpha/SKILL.md",
+        disabled: true,
+      }),
+      createSkill({
+        skillKey: "beta",
+        name: "Beta",
+        source: "openclaw-managed",
+        filePath: "/tmp/skills/beta/SKILL.md",
+        disabled: true,
+      }),
+    ];
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: disabledSkills,
+    };
+
+    render(
+      renderSkills(
+        createProps({
+          report,
+          statusFilter: "disabled",
+          onToggle,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const firstRenderToggles = Array.from(
+      container.querySelectorAll<HTMLInputElement>(".skills-grid .skill-toggle"),
+    );
+    expect(firstRenderToggles.map((toggle) => toggle.checked)).toEqual([false, false]);
+
+    firstRenderToggles[0]!.click();
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onToggle).toHaveBeenCalledWith("alpha", true);
+
+    render(
+      renderSkills(
+        createProps({
+          report: {
+            ...report,
+            skills: [{ ...disabledSkills[0]!, disabled: false }, disabledSkills[1]!],
+          },
+          statusFilter: "disabled",
+          onToggle,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const remainingRows = Array.from(
+      container.querySelectorAll<HTMLElement>(".skills-grid .list-item"),
+    );
+    const remainingToggle = container.querySelector<HTMLInputElement>(".skills-grid .skill-toggle");
+    expect(remainingRows.map((row) => normalizeText(row.querySelector(".list-title")!))).toEqual([
+      "Beta",
+    ]);
+    expect(remainingToggle?.checked).toBe(false);
+  });
+
   it("fails closed for inconsistent ClawHub verdict envelopes", async () => {
     const container = document.createElement("div");
     document.body.append(container);
