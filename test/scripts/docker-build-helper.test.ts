@@ -115,7 +115,7 @@ describe("docker build helper", () => {
     expect(helper).toContain("docker_build_transient_failure()");
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_RETRIES");
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_TIMEOUT");
-    expect(helper).toContain('docker_build_run_command "$timeout_value" "${command[@]}"');
+    expect(helper).toContain('docker_build_run_logged "$label" "$timeout_value" "$log_file"');
     expect(helper).toContain("OPENCLAW_DOCKER_BUILD_REQUIRE_TIMEOUT");
     expect(helper).toContain("frontend grpc server closed unexpectedly");
   });
@@ -236,6 +236,104 @@ grep -q '^build -t demo-image .$' "$TMPDIR/docker-seen"
 `;
 
       execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prints heartbeat progress for long successful centralized Docker builds", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-heartbeat-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/sh
+printf "captured docker build log\\n"
+/bin/sleep 2
+`,
+      );
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=1
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+output="$(docker_build_run e2e-build -t demo-image .)"
+[[ "$output" = *"Docker build e2e-build still running ("* ]]
+[[ "$output" = *"log bytes captured"* ]]
+[[ "$output" != *"captured docker build log"* ]]
+`;
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+    } finally {
+      rmSync(workDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not delay fast successful centralized Docker builds until the next heartbeat", () => {
+    const workDir = mkdtempSync(join(tmpdir(), "openclaw-docker-build-fast-heartbeat-"));
+
+    try {
+      const binDir = join(workDir, "bin");
+      mkdirSync(binDir);
+      writeFileSync(
+        join(binDir, "timeout"),
+        `#!/bin/bash
+set -euo pipefail
+if [[ "$1" = "--kill-after=1s" ]]; then
+  exit 0
+fi
+shift 2
+"$@"
+`,
+      );
+      chmodSync(join(binDir, "timeout"), 0o755);
+      writeFileSync(
+        join(binDir, "docker"),
+        `#!/bin/sh
+printf "quick docker build log\\n"
+`,
+      );
+      chmodSync(join(binDir, "docker"), 0o755);
+      const rootDir = process.cwd();
+      const script = `
+set -euo pipefail
+ROOT_DIR=${shellQuote(rootDir)}
+TMPDIR=${shellQuote(workDir)}
+export ROOT_DIR TMPDIR
+export PATH="$TMPDIR/bin:$PATH"
+export OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS=30
+
+source "$ROOT_DIR/scripts/lib/docker-build.sh"
+
+output="$(docker_build_run e2e-build -t demo-image .)"
+[[ -z "$output" ]]
+`;
+      const startedAt = Date.now();
+
+      execFileSync("bash", ["-lc", script], { encoding: "utf8" });
+
+      expect(Date.now() - startedAt).toBeLessThan(5_000);
     } finally {
       rmSync(workDir, { recursive: true, force: true });
     }
