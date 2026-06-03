@@ -390,6 +390,7 @@ describe("diagnostic stability recorder", () => {
       target: "sebastian",
       turnEventType: "delivery.required",
       status: "required",
+      messageAgeMs: 30_000,
     });
     emitDiagnosticEvent({
       type: "channel.turn.event",
@@ -402,6 +403,7 @@ describe("diagnostic stability recorder", () => {
       turnEventType: "delivery.failed",
       status: "failed",
       reason: "missing_visible_delivery",
+      startToDeliveryMs: 2_500,
     });
     emitDiagnosticEvent({
       type: "channel.turn.event",
@@ -417,6 +419,7 @@ describe("diagnostic stability recorder", () => {
       completionAllowed: false,
       visibleDeliveryRequired: true,
       visibleDeliverySent: false,
+      startToCompletionMs: 2_700,
     });
     emitDiagnosticEvent({
       type: "channel.turn.event",
@@ -425,6 +428,7 @@ describe("diagnostic stability recorder", () => {
       messageId: "msg-2",
       turnEventType: "delivery.sent",
       status: "sent",
+      receivedToTurnStartMs: 12_000,
     });
     await waitForDiagnosticEventsDrained();
 
@@ -466,6 +470,42 @@ describe("diagnostic stability recorder", () => {
         messageId: "msg-1",
         reason: "missing_visible_delivery",
       },
+    ]);
+    expect(snapshot.summary.channelTurns?.latency).toMatchObject({
+      messageAgeMs: {
+        count: 1,
+        latestMs: 30_000,
+        maxMs: 30_000,
+      },
+      receivedToTurnStartMs: {
+        count: 1,
+        latestMs: 12_000,
+        maxMs: 12_000,
+      },
+      startToDeliveryMs: {
+        count: 1,
+        latestMs: 2_500,
+        maxMs: 2_500,
+      },
+      startToCompletionMs: {
+        count: 1,
+        latestMs: 2_700,
+        maxMs: 2_700,
+      },
+    });
+    expect(snapshot.summary.channelTurns?.latency?.recentSlow).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        messageId: "msg-1",
+        metric: "messageAgeMs",
+        valueMs: 30_000,
+      }),
+      expect.objectContaining({
+        channel: "telegram",
+        messageId: "msg-2",
+        metric: "receivedToTurnStartMs",
+        valueMs: 12_000,
+      }),
     ]);
     expect(snapshot.events[0]).not.toHaveProperty("accountId");
     expect(JSON.stringify(snapshot)).not.toContain("hello");

@@ -215,6 +215,14 @@ function formatStabilityEvent(record: DiagnosticStabilityEventRecord): string {
     record.limitBytes !== undefined ? `limit=${formatBytes(record.limitBytes)}` : "",
     record.queueDepth !== undefined ? `queueDepth=${record.queueDepth}` : "",
     record.queueLength !== undefined ? `queueLength=${record.queueLength}` : "",
+    record.messageAgeMs !== undefined ? `messageAge=${record.messageAgeMs}ms` : "",
+    record.receivedToTurnStartMs !== undefined
+      ? `receivedToStart=${record.receivedToTurnStartMs}ms`
+      : "",
+    record.startToDeliveryMs !== undefined ? `startToDelivery=${record.startToDeliveryMs}ms` : "",
+    record.startToCompletionMs !== undefined
+      ? `startToCompletion=${record.startToCompletionMs}ms`
+      : "",
     record.droppedEvents !== undefined ? `dropped=${record.droppedEvents}` : "",
     record.maxQueueLength !== undefined ? `maxQueue=${record.maxQueueLength}` : "",
     record.queued !== undefined ? `queued=${record.queued}` : "",
@@ -254,6 +262,41 @@ function formatChannelTurnSlaSummary(
     .join(", ");
   if (channelBreakdown) {
     lines.push(`  ${channelBreakdown}`);
+  }
+
+  const latency = channelTurns.latency;
+  if (latency) {
+    const latencyParts = [
+      latency.messageAgeMs
+        ? `messageAge latest:${latency.messageAgeMs.latestMs}ms/max:${latency.messageAgeMs.maxMs}ms`
+        : "",
+      latency.receivedToTurnStartMs
+        ? `receivedToStart latest:${latency.receivedToTurnStartMs.latestMs}ms/max:${latency.receivedToTurnStartMs.maxMs}ms`
+        : "",
+      latency.startToDeliveryMs
+        ? `startToDelivery latest:${latency.startToDeliveryMs.latestMs}ms/max:${latency.startToDeliveryMs.maxMs}ms`
+        : "",
+      latency.startToCompletionMs
+        ? `startToCompletion latest:${latency.startToCompletionMs.latestMs}ms/max:${latency.startToCompletionMs.maxMs}ms`
+        : "",
+    ].filter(Boolean);
+    if (latencyParts.length > 0) {
+      lines.push(`  ${colorize(rich, theme.muted, "Latency:")} ${latencyParts.join(", ")}`);
+    }
+    if (latency.recentSlow.length > 0) {
+      lines.push(`  ${colorize(rich, theme.muted, "Recent slow channel turns:")}`);
+      for (const slow of latency.recentSlow.slice(-3)) {
+        const parts = [
+          new Date(slow.ts).toISOString(),
+          `#${slow.seq}`,
+          slow.channel ? `channel=${slow.channel}` : "",
+          slow.turnId ? `turn=${slow.turnId}` : "",
+          slow.messageId ? `message=${slow.messageId}` : "",
+          `${slow.metric}=${slow.valueMs}ms`,
+        ].filter(Boolean);
+        lines.push(`    ${parts.join(" ")}`);
+      }
+    }
   }
 
   if (channelTurns.recentFailures.length > 0) {

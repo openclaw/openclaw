@@ -58,6 +58,7 @@ import type {
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
   ChannelTurnResolved,
+  ChannelTurnTimingFacts,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
   NormalizedTurnInput,
@@ -175,6 +176,34 @@ function resolveTurnEventTurnId(params: {
   return `${scope}:session:${params.sessionKey ?? params.routeSessionKey ?? "unknown"}`;
 }
 
+function normalizeDiagnosticTimestamp(value: number | undefined): number | undefined {
+  if (value === undefined || !Number.isFinite(value) || value <= 0) {
+    return undefined;
+  }
+  const normalized = value < 10_000_000_000 ? value * 1000 : value;
+  const now = Date.now();
+  if (normalized > now + 60_000) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function computePositiveDurationMs(
+  endMs: number | undefined,
+  startMs: number | undefined,
+): number | undefined {
+  if (
+    endMs === undefined ||
+    startMs === undefined ||
+    !Number.isFinite(endMs) ||
+    !Number.isFinite(startMs)
+  ) {
+    return undefined;
+  }
+  const duration = Math.round(endMs - startMs);
+  return duration >= 0 ? duration : undefined;
+}
+
 async function appendTurnEvent(params: {
   accountId?: string;
   event: AppendTurnEventInput;
@@ -212,6 +241,30 @@ async function appendTurnEvent(params: {
     completionAllowed:
       typeof recorded.metadata?.completionAllowed === "boolean"
         ? recorded.metadata.completionAllowed
+        : undefined,
+    nativeMessageTimestamp:
+      typeof recorded.metadata?.nativeMessageTimestamp === "number"
+        ? recorded.metadata.nativeMessageTimestamp
+        : undefined,
+    messageReceivedAt:
+      typeof recorded.metadata?.messageReceivedAt === "number"
+        ? recorded.metadata.messageReceivedAt
+        : undefined,
+    messageAgeMs:
+      typeof recorded.metadata?.messageAgeMs === "number"
+        ? recorded.metadata.messageAgeMs
+        : undefined,
+    receivedToTurnStartMs:
+      typeof recorded.metadata?.receivedToTurnStartMs === "number"
+        ? recorded.metadata.receivedToTurnStartMs
+        : undefined,
+    startToDeliveryMs:
+      typeof recorded.metadata?.startToDeliveryMs === "number"
+        ? recorded.metadata.startToDeliveryMs
+        : undefined,
+    startToCompletionMs:
+      typeof recorded.metadata?.startToCompletionMs === "number"
+        ? recorded.metadata.startToCompletionMs
         : undefined,
   });
   if (recorded) {
@@ -569,6 +622,7 @@ async function runPreparedChannelTurnCoreInTrace<
     sessionKey: params.ctxPayload.SessionKey,
   });
   const recordedTurnEvents: TurnEvent[] = [];
+  const turnStartedAt = Date.now();
   const visibleDeliveryRequired = isTelegramDirectDispatchRequired({
     admission,
     channel: params.channel,
@@ -595,6 +649,16 @@ async function runPreparedChannelTurnCoreInTrace<
         messageId: params.messageId,
         routeSessionKey: params.routeSessionKey,
         sessionKey: params.ctxPayload.SessionKey,
+        nativeMessageTimestamp: params.turnTiming?.nativeMessageTimestamp,
+        messageReceivedAt: params.turnTiming?.messageReceivedAt,
+        receivedToTurnStartMs: computePositiveDurationMs(
+          turnStartedAt,
+          params.turnTiming?.messageReceivedAt,
+        ),
+        messageAgeMs: computePositiveDurationMs(
+          turnStartedAt,
+          params.turnTiming?.nativeMessageTimestamp,
+        ),
       },
     },
   });
@@ -719,6 +783,7 @@ async function runPreparedChannelTurnCoreInTrace<
     dispatchResult as ChannelTurnDispatchResultLike,
   );
   if (visibleDispatch) {
+    const deliveryRecordedAt = Date.now();
     await appendTurnEvent({
       accountId: params.accountId,
       recorder: params.turnEvents,
@@ -732,10 +797,12 @@ async function runPreparedChannelTurnCoreInTrace<
         status: "sent",
         metadata: {
           messageId: params.messageId,
+          startToDeliveryMs: computePositiveDurationMs(deliveryRecordedAt, turnStartedAt),
         },
       },
     });
   } else if (visibleDeliveryRequired) {
+    const deliveryFailedAt = Date.now();
     await appendTurnEvent({
       accountId: params.accountId,
       recorder: params.turnEvents,
@@ -750,12 +817,14 @@ async function runPreparedChannelTurnCoreInTrace<
         metadata: {
           reason: "missing_visible_delivery",
           messageId: params.messageId,
+          startToDeliveryMs: computePositiveDurationMs(deliveryFailedAt, turnStartedAt),
         },
       },
     });
   }
   const turnState = materializeTurnState(recordedTurnEvents);
   const completionErrors = validateTurnCompletion(turnState);
+  const turnCompletedAt = Date.now();
   await appendTurnEvent({
     accountId: params.accountId,
     recorder: params.turnEvents,
@@ -773,6 +842,7 @@ async function runPreparedChannelTurnCoreInTrace<
         completionAllowed: completionErrors.length === 0,
         visibleDeliveryRequired: turnState.visibleDeliveryRequired,
         visibleDeliverySent: turnState.visibleDeliverySent,
+        startToCompletionMs: computePositiveDurationMs(turnCompletedAt, turnStartedAt),
       },
     },
   });
@@ -841,6 +911,8 @@ export async function runChannelTurn<
     event: { stage: "ingest", event: "start" },
   });
   const input = await params.adapter.ingest(params.raw);
+  const messageReceivedAt = Date.now();
+  const nativeMessageTimestamp = normalizeDiagnosticTimestamp(input?.timestamp);
   if (!input) {
     const admission: ChannelTurnAdmission = { kind: "drop", reason: "ingest-null" };
     emit({
@@ -874,6 +946,9 @@ export async function runChannelTurn<
       status: "received",
       metadata: {
         messageId: input.id,
+        nativeMessageTimestamp,
+        messageReceivedAt,
+        messageAgeMs: computePositiveDurationMs(messageReceivedAt, nativeMessageTimestamp),
       },
     },
   });
@@ -947,6 +1022,10 @@ export async function runChannelTurn<
             log: params.log,
             turnEvents: params.turnEvents,
             messageId: input.id,
+            turnTiming: {
+              messageReceivedAt,
+              nativeMessageTimestamp,
+            },
           }
         : {
             ...resolved,
@@ -954,6 +1033,10 @@ export async function runChannelTurn<
             log: params.log,
             turnEvents: params.turnEvents,
             messageId: input.id,
+            turnTiming: {
+              messageReceivedAt,
+              nativeMessageTimestamp,
+            },
           },
     );
     result = dispatchResult.dispatched ? { ...dispatchResult, admission } : dispatchResult;

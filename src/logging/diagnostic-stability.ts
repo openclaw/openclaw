@@ -9,10 +9,34 @@ const DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY = 1000;
 const DEFAULT_DIAGNOSTIC_STABILITY_LIMIT = 50;
 export const MAX_DIAGNOSTIC_STABILITY_LIMIT = DEFAULT_DIAGNOSTIC_STABILITY_CAPACITY;
 const LIVENESS_EVENT_LOOP_DELAY_WARN_MS = 1_000;
+const CHANNEL_TURN_SLOW_LATENCY_WARN_MS = 10_000;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
 
 /** Sanitized diagnostic event record retained in the stability ring buffer. */
+
+type DiagnosticStabilityLatencyMetric = {
+  count: number;
+  latestMs?: number;
+  maxMs?: number;
+};
+
+type DiagnosticStabilityChannelTurnLatencySummary = {
+  messageAgeMs?: DiagnosticStabilityLatencyMetric;
+  receivedToTurnStartMs?: DiagnosticStabilityLatencyMetric;
+  startToDeliveryMs?: DiagnosticStabilityLatencyMetric;
+  startToCompletionMs?: DiagnosticStabilityLatencyMetric;
+  recentSlow: Array<{
+    seq: number;
+    ts: number;
+    channel?: string;
+    turnId?: string;
+    messageId?: string;
+    metric: string;
+    valueMs: number;
+  }>;
+};
+
 export type DiagnosticStabilityEventRecord = {
   seq: number;
   ts: number;
@@ -53,6 +77,12 @@ export type DiagnosticStabilityEventRecord = {
   completionAllowed?: boolean;
   visibleDeliveryRequired?: boolean;
   visibleDeliverySent?: boolean;
+  nativeMessageTimestamp?: number;
+  messageReceivedAt?: number;
+  messageAgeMs?: number;
+  receivedToTurnStartMs?: number;
+  startToDeliveryMs?: number;
+  startToCompletionMs?: number;
   costUsd?: number;
   count?: number;
   bytes?: number;
@@ -149,6 +179,7 @@ export type DiagnosticStabilitySnapshot = {
         messageId?: string;
         reason?: string;
       }>;
+      latency?: DiagnosticStabilityChannelTurnLatencySummary;
     };
   };
 };
@@ -311,6 +342,12 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.completionAllowed = event.completionAllowed;
       record.visibleDeliveryRequired = event.visibleDeliveryRequired;
       record.visibleDeliverySent = event.visibleDeliverySent;
+      record.nativeMessageTimestamp = event.nativeMessageTimestamp;
+      record.messageReceivedAt = event.messageReceivedAt;
+      record.messageAgeMs = event.messageAgeMs;
+      record.receivedToTurnStartMs = event.receivedToTurnStartMs;
+      record.startToDeliveryMs = event.startToDeliveryMs;
+      record.startToCompletionMs = event.startToCompletionMs;
       assignReasonCode(record, event.reason);
       break;
     case "talk.event":
@@ -630,7 +667,12 @@ function summarizeRecords(
     chunked: 0,
     bySurface: {} as Record<string, number>,
   };
-  const channelTurns = {
+  const channelTurns: Omit<
+    NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>,
+    "latency"
+  > & {
+    latency: DiagnosticStabilityChannelTurnLatencySummary;
+  } = {
     totalEvents: 0,
     deliveryRequired: 0,
     deliverySent: 0,
@@ -643,7 +685,41 @@ function summarizeRecords(
     recentFailures: [] as NonNullable<
       DiagnosticStabilitySnapshot["summary"]["channelTurns"]
     >["recentFailures"],
+    latency: {
+      recentSlow: [],
+    },
   };
+
+  function recordChannelTurnLatency(
+    record: DiagnosticStabilityEventRecord,
+    metric: Exclude<keyof DiagnosticStabilityChannelTurnLatencySummary, "recentSlow">,
+    valueMs: number | undefined,
+  ): void {
+    if (typeof valueMs !== "number" || !Number.isFinite(valueMs) || valueMs < 0) {
+      return;
+    }
+    const latency = channelTurns.latency;
+    const current = latency[metric] as DiagnosticStabilityLatencyMetric | undefined;
+    latency[metric] = {
+      count: (current?.count ?? 0) + 1,
+      latestMs: valueMs,
+      maxMs: current?.maxMs === undefined ? valueMs : Math.max(current.maxMs, valueMs),
+    };
+    if (valueMs >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+      latency.recentSlow.push({
+        seq: record.seq,
+        ts: record.ts,
+        channel: record.channel,
+        turnId: record.turnId,
+        messageId: record.messageId,
+        metric,
+        valueMs,
+      });
+      if (latency.recentSlow.length > 10) {
+        latency.recentSlow.shift();
+      }
+    }
+  }
 
   for (const record of records) {
     byType[record.type] = (byType[record.type] ?? 0) + 1;
@@ -714,6 +790,10 @@ function summarizeRecords(
           channelTurns.recentFailures.shift();
         }
       }
+      recordChannelTurnLatency(record, "messageAgeMs", record.messageAgeMs);
+      recordChannelTurnLatency(record, "receivedToTurnStartMs", record.receivedToTurnStartMs);
+      recordChannelTurnLatency(record, "startToDeliveryMs", record.startToDeliveryMs);
+      recordChannelTurnLatency(record, "startToCompletionMs", record.startToCompletionMs);
     }
   }
 

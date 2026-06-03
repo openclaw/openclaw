@@ -210,6 +210,7 @@ describe("gateway-cli coverage", () => {
           visibleDeliveryRequired: true,
           visibleDeliverySent: false,
           completionAllowed: false,
+          receivedToTurnStartMs: 12_000,
         },
       ],
       summary: {
@@ -240,6 +241,29 @@ describe("gateway-cli coverage", () => {
               reason: "missing_visible_delivery",
             },
           ],
+          latency: {
+            receivedToTurnStartMs: {
+              count: 1,
+              latestMs: 12_000,
+              maxMs: 12_000,
+            },
+            startToDeliveryMs: {
+              count: 1,
+              latestMs: 2_500,
+              maxMs: 2_500,
+            },
+            recentSlow: [
+              {
+                seq: 4,
+                ts: Date.parse("2026-06-03T12:00:03.000Z"),
+                channel: "telegram",
+                turnId: "turn-test",
+                messageId: "msg-test",
+                metric: "receivedToTurnStartMs",
+                valueMs: 12_000,
+              },
+            ],
+          },
         },
       },
     });
@@ -252,6 +276,10 @@ describe("gateway-cli coverage", () => {
     expect(output).toContain("failed=1");
     expect(output).toContain("missingVisible=1");
     expect(output).toContain("telegram=required:1/sent:0/failed:1/missing:1");
+    expect(output).toContain("Latency:");
+    expect(output).toContain("receivedToStart latest:12000ms/max:12000ms");
+    expect(output).toContain("receivedToTurnStartMs=12000ms");
+    expect(output).toContain("receivedToStart=12000ms");
     expect(output).toContain("reason=missing_visible_delivery");
     expect(output).not.toContain("chat text");
   });

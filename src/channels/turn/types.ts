@@ -346,6 +346,12 @@ export type ChannelTurnHistoryFinalizeOptions = {
   limit?: number;
 };
 
+/** Payload-free timing facts used to diagnose channel turn latency. */
+export type ChannelTurnTimingFacts = {
+  messageReceivedAt?: number;
+  nativeMessageTimestamp?: number;
+};
+
 /** Options for recording history when an inbound event is dropped before dispatch. */
 export type ChannelTurnDroppedHistoryOptions = {
   key: string;
@@ -391,6 +397,7 @@ export type AssembledChannelTurn = {
   log?: (event: ChannelTurnLogEvent) => void;
   turnEvents?: TurnEventRecorder;
   messageId?: string;
+  turnTiming?: ChannelTurnTimingFacts;
 };
 
 /** Channel turn with dispatch runner already prepared. */
@@ -411,6 +418,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   log?: (event: ChannelTurnLogEvent) => void;
   turnEvents?: TurnEventRecorder;
   messageId?: string;
+  turnTiming?: ChannelTurnTimingFacts;
 };
 
 /** Resolved turn shape returned by adapters before final run/dispatch handling. */

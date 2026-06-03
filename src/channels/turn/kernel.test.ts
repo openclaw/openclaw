@@ -1326,6 +1326,64 @@ describe("channel turn kernel", () => {
     expect(state.errors).toContain("missing_visible_delivery");
   });
 
+  it("records payload-free channel turn latency timing", async () => {
+    let now = 1_800_000_100_000;
+    const dateNow = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const turnEvents = new InMemoryTurnEventStore({ now: () => now });
+    try {
+      await runChannelTurn({
+        channel: "telegram",
+        raw: {},
+        turnEvents,
+        adapter: {
+          ingest: () => ({ id: "msg-1", rawText: "hello", timestamp: 1_800_000_070_000 }),
+          resolveTurn: () => {
+            now = 1_800_000_105_000;
+            return {
+              channel: "telegram",
+              routeSessionKey: "agent:main:telegram:peer",
+              storePath: "/tmp/sessions.json",
+              ctxPayload: createCtx({
+                ChatType: "direct",
+                SessionKey: "agent:main:telegram:peer",
+                To: "sebastian",
+              }),
+              recordInboundSession: createRecordInboundSession(),
+              runDispatch: async () => {
+                now = 1_800_000_106_000;
+                return {
+                  queuedFinal: true,
+                  counts: { tool: 0, block: 0, final: 1 },
+                };
+              },
+            };
+          },
+        },
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.find((event) => event.type === "message.received")?.metadata).toMatchObject({
+      nativeMessageTimestamp: 1_800_000_070_000,
+      messageReceivedAt: 1_800_000_100_000,
+      messageAgeMs: 30_000,
+    });
+    expect(events.find((event) => event.type === "turn.started")?.metadata).toMatchObject({
+      nativeMessageTimestamp: 1_800_000_070_000,
+      messageReceivedAt: 1_800_000_100_000,
+      receivedToTurnStartMs: 5_000,
+      messageAgeMs: 35_000,
+    });
+    expect(events.find((event) => event.type === "delivery.sent")?.metadata).toMatchObject({
+      startToDeliveryMs: 1_000,
+    });
+    expect(events.find((event) => event.type === "turn.completed")?.metadata).toMatchObject({
+      startToCompletionMs: 1_000,
+    });
+  });
+
   it("blocks materialized turn completion when required delivery was not sent", () => {
     const turnEvents = new InMemoryTurnEventStore({ now: () => 1, createId: () => "evt" });
     turnEvents.append({

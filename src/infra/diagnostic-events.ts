@@ -185,6 +185,12 @@ export type DiagnosticChannelTurnEvent = DiagnosticBaseEvent & {
   completionAllowed?: boolean;
   visibleDeliveryRequired?: boolean;
   visibleDeliverySent?: boolean;
+  nativeMessageTimestamp?: number;
+  messageReceivedAt?: number;
+  messageAgeMs?: number;
+  receivedToTurnStartMs?: number;
+  startToDeliveryMs?: number;
+  startToCompletionMs?: number;
 };
 
 export type DiagnosticTalkEvent = DiagnosticBaseEvent & {
