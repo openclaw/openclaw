@@ -174,6 +174,123 @@ describe("plugin tools MCP server", () => {
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 
+  it("lists plugin tools without probing proxy schemas through object operators", async () => {
+    const parameters = new Proxy(
+      { type: "object", properties: { query: { type: "string" } } },
+      {
+        has(target, property) {
+          if (property === "type") {
+            throw new Error("schema has trap");
+          }
+          return Reflect.has(target, property);
+        },
+      },
+    );
+    const tool = {
+      name: "neutral_probe",
+      description: "Neutral fixture tool",
+      parameters,
+      execute: vi.fn().mockResolvedValue({ content: "ok" }),
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const listed = await handlers.listTools();
+
+    expect(listed.tools).toHaveLength(1);
+    expect(listed.tools[0]?.name).toBe("neutral_probe");
+    expect(listed.tools[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: { query: { type: "string" } },
+    });
+  });
+
+  it("normalizes plugin MCP input schemas with implicit object roots", async () => {
+    const tool = {
+      name: "implicit_object_probe",
+      description: "Implicit object schema",
+      parameters: {
+        properties: {
+          query: { type: "string" },
+        },
+      },
+      execute: vi.fn().mockResolvedValue({ content: "ok" }),
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const listed = await handlers.listTools();
+
+    expect(listed.tools[0]?.inputSchema).toEqual({
+      properties: { query: { type: "string" } },
+      type: "object",
+    });
+  });
+
+  it("quarantines plugin MCP schemas that fail the MCP tool schema contract", async () => {
+    const invalid = {
+      name: "invalid_properties_probe",
+      description: "Invalid properties fixture tool",
+      parameters: {
+        type: "object",
+        properties: {
+          query: "string",
+        },
+      },
+      execute: vi.fn().mockResolvedValue({ content: "invalid" }),
+    } as unknown as AnyAgentTool;
+    const healthy = {
+      name: "healthy_probe",
+      description: "Healthy fixture tool",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn().mockResolvedValue({ content: "healthy" }),
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([invalid, healthy]);
+    const listed = await handlers.listTools();
+
+    expect(listed.tools.map((tool) => tool.name)).toEqual(["healthy_probe"]);
+    const quarantined = await handlers.callTool({
+      name: "invalid_properties_probe",
+      arguments: {},
+    });
+    expect(quarantined).toEqual({
+      content: [{ type: "text", text: "Unknown tool: invalid_properties_probe" }],
+      isError: true,
+    });
+  });
+
+  it("quarantines plugin tools with runtime-incompatible MCP schemas", async () => {
+    const healthy = {
+      name: "healthy_probe",
+      description: "Healthy fixture tool",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn().mockResolvedValue({ content: "healthy" }),
+    } as unknown as AnyAgentTool;
+    const incompatible = {
+      name: "neutral_probe",
+      description: "Neutral fixture tool",
+      parameters: {
+        type: "object",
+        properties: {
+          target: { $dynamicRef: "#target" },
+        },
+      },
+      execute: vi.fn().mockResolvedValue({ content: "unreachable" }),
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([incompatible, healthy]);
+    const listed = await handlers.listTools();
+
+    expect(listed.tools.map((tool) => tool.name)).toEqual(["healthy_probe"]);
+    const quarantined = await handlers.callTool({
+      name: "neutral_probe",
+      arguments: {},
+    });
+    expect(quarantined).toEqual({
+      content: [{ type: "text", text: "Unknown tool: neutral_probe" }],
+      isError: true,
+    });
+  });
+
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {
     const execute = vi.fn().mockResolvedValue({
       provider: "kitchen-sink-search",
