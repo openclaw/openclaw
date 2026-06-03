@@ -101,10 +101,14 @@ async function findSystemSystemdUnitPath(env: GatewayServiceEnv): Promise<string
   return null;
 }
 
-export type InstalledSystemdGatewayScope = {
+export type InstalledSystemdGatewayConflict = {
   scope: SystemdUnitScope;
   unitName: string;
   unitPath: string;
+};
+
+export type InstalledSystemdGatewayScope = InstalledSystemdGatewayConflict & {
+  conflictingUnit?: InstalledSystemdGatewayConflict;
 };
 
 async function findMarkerOwnedSystemSystemdUnit(): Promise<{
@@ -136,28 +140,79 @@ async function findMarkerOwnedSystemSystemdUnit(): Promise<{
   return null;
 }
 
-export async function findInstalledSystemdGatewayScope(
+async function isSystemdUnitActiveOrEnabled(
   env: GatewayServiceEnv,
-): Promise<InstalledSystemdGatewayScope | null> {
-  const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
+  unitName: string,
+  scope: SystemdUnitScope,
+): Promise<boolean> {
+  const run = (args: string[]) =>
+    scope === "system" ? execSystemctl(args, env) : execSystemctlUser(env, args);
+  const active = await run(["is-active", "--quiet", unitName]);
+  if (active.code === 0) {
+    return true;
+  }
+  const enabled = await run(["is-enabled", unitName]);
+  return enabled.code === 0;
+}
+
+async function readUserSystemdGatewayUnit(
+  env: GatewayServiceEnv,
+  canonicalUnitName: string,
+): Promise<InstalledSystemdGatewayConflict | null> {
   let userPath: string | null;
   try {
     userPath = resolveSystemdUnitPath(env);
   } catch {
-    userPath = null;
+    return null;
   }
-  if (userPath) {
-    try {
-      await fs.access(userPath);
-      return { scope: "user", unitName: canonicalUnitName, unitPath: userPath };
-    } catch {}
+  try {
+    await fs.access(userPath);
+  } catch {
+    return null;
   }
+  return { scope: "user", unitName: canonicalUnitName, unitPath: userPath };
+}
+
+async function chooseInstalledSystemdGatewayUnit(params: {
+  env: GatewayServiceEnv;
+  userUnit: InstalledSystemdGatewayConflict | null;
+  systemUnit: InstalledSystemdGatewayConflict | null;
+}): Promise<InstalledSystemdGatewayScope | null> {
+  const { env, userUnit, systemUnit } = params;
+  if (!userUnit || !systemUnit) {
+    return userUnit ?? systemUnit;
+  }
+  const systemOwnsGateway = await isSystemdUnitActiveOrEnabled(
+    env,
+    systemUnit.unitName,
+    "system",
+  ).catch(() => false);
+  return systemOwnsGateway
+    ? { ...systemUnit, conflictingUnit: userUnit }
+    : { ...userUnit, conflictingUnit: systemUnit };
+}
+
+export async function findInstalledSystemdGatewayScope(
+  env: GatewayServiceEnv,
+): Promise<InstalledSystemdGatewayScope | null> {
+  const canonicalUnitName = `${resolveSystemdServiceName(env)}.service`;
+  const userUnit = await readUserSystemdGatewayUnit(env, canonicalUnitName);
   const systemPath = await findSystemSystemdUnitPath(env);
-  if (systemPath) {
-    return { scope: "system", unitName: canonicalUnitName, unitPath: systemPath };
+  const systemUnit = systemPath
+    ? ({ scope: "system", unitName: canonicalUnitName, unitPath: systemPath } as const)
+    : null;
+  const selected = await chooseInstalledSystemdGatewayUnit({ env, userUnit, systemUnit });
+  if (selected) {
+    return selected;
   }
   const owned = await findMarkerOwnedSystemSystemdUnit();
-  return owned ? { scope: "system", unitName: owned.unitName, unitPath: owned.unitPath } : null;
+  return await chooseInstalledSystemdGatewayUnit({
+    env,
+    userUnit,
+    systemUnit: owned
+      ? { scope: "system", unitName: owned.unitName, unitPath: owned.unitPath }
+      : null,
+  });
 }
 
 export { enableSystemdUserLinger, readSystemdUserLingerStatus };
@@ -792,6 +847,27 @@ async function assertSystemdAvailable(env: GatewayServiceEnv = process.env as Ga
   throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
 }
 
+async function retireConflictingSystemScopeUnitBeforeUserUnitInstall(
+  env: GatewayServiceEnv,
+): Promise<InstalledSystemdGatewayConflict | null> {
+  if (isNodeSystemdEnvironment(env)) {
+    return null;
+  }
+  const unitName = `${resolveSystemdServiceName(env)}.service`;
+  const unitPath = await findSystemSystemdUnitPath(env);
+  if (!unitPath) {
+    return null;
+  }
+  const res = await execSystemctl(["disable", "--now", unitName], env);
+  if (res.code !== 0) {
+    const detail = readSystemctlDetail(res);
+    throw new Error(
+      `system-scope ${unitName} already exists at ${unitPath}; run \`sudo systemctl disable --now ${unitName}\` before installing the user service: ${detail || "unknown error"}`,
+    );
+  }
+  return { scope: "system", unitName, unitPath };
+}
+
 async function writeSystemdUnit({
   env,
   programArguments,
@@ -1086,11 +1162,20 @@ async function activateSystemdService(params: { env: GatewayServiceEnv }) {
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
+  const retiredSystemUnit = await retireConflictingSystemScopeUnitBeforeUserUnitInstall(args.env);
   const { unitPath, backedUp } = await writeSystemdUnit(args);
   await activateSystemdService({ env: args.env });
   writeFormattedLines(
     args.stdout,
     [
+      ...(retiredSystemUnit
+        ? [
+            {
+              label: "Retired conflicting systemd service",
+              value: `${retiredSystemUnit.unitName} (${retiredSystemUnit.unitPath})`,
+            },
+          ]
+        : []),
       {
         label: "Installed systemd service",
         value: unitPath,
@@ -1148,6 +1233,29 @@ function isRunningAsRoot(): boolean {
   return false;
 }
 
+async function retireConflictingUserScopeUnitForSystemUnit(
+  env: GatewayServiceEnv,
+  unit: InstalledSystemdGatewayConflict | undefined,
+): Promise<InstalledSystemdGatewayConflict | null> {
+  if (unit?.scope !== "user") {
+    return null;
+  }
+  const res = await execSystemctlUser(env, ["disable", "--now", unit.unitName]);
+  if (res.code !== 0) {
+    throw new Error(
+      `systemctl --user disable --now ${unit.unitName} failed: ${readSystemctlDetail(res) || "unknown error"}`,
+    );
+  }
+  try {
+    await fs.unlink(unit.unitPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw error;
+    }
+  }
+  return unit;
+}
+
 async function runSystemdServiceAction(params: {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
@@ -1158,6 +1266,15 @@ async function runSystemdServiceAction(params: {
   const installed = await findInstalledSystemdGatewayScope(env);
   const unitName = installed?.unitName ?? `${resolveSystemdServiceName(env)}.service`;
   if (installed?.scope === "system") {
+    const retiredUserUnit = await retireConflictingUserScopeUnitForSystemUnit(
+      env,
+      installed.conflictingUnit,
+    );
+    if (retiredUserUnit) {
+      params.stdout.write(
+        `${formatLine("Retired conflicting systemd service", `${retiredUserUnit.unitName} (${retiredUserUnit.unitPath})`)}\n`,
+      );
+    }
     if (!isRunningAsRoot()) {
       throw new Error(
         `${unitName} is a system-scope unit (${installed.unitPath}); run \`sudo systemctl ${params.action} ${unitName}\` to ${params.action} it`,
