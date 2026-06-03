@@ -5,6 +5,7 @@ import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 
+/** Lists auth-profile store paths that may contain SecretRefs for the configured agent set. */
 export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
   const paths = new Set<string>();
   // Scope default auth store discovery to the provided stateDir instead of

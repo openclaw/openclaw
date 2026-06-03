@@ -1,6 +1,7 @@
 import { isNonEmptyString, isRecord } from "./shared.js";
 import { listAuthProfileSecretTargetEntries } from "./target-registry.js";
 
+/** Auth-profile credential kinds that can carry SecretRef-backed values. */
 export type AuthProfileCredentialType = "api_key" | "token";
 
 type AuthProfileFieldSpec = {
@@ -58,6 +59,8 @@ const AUTH_PROFILE_FIELD_SPEC_BY_TYPE = (() => {
     if (!target.authProfileType) {
       continue;
     }
+    // Target registry owns shipped auth-profile field names; derive scan fields from it so
+    // policy checks and runtime collection cannot drift when a ref path changes.
     defaults[target.authProfileType] = {
       valueField: getAuthProfileFieldName(target.pathPattern),
       refField:
@@ -69,6 +72,7 @@ const AUTH_PROFILE_FIELD_SPEC_BY_TYPE = (() => {
   return defaults;
 })();
 
+/** Returns the value/ref field names for one auth-profile credential type. */
 export function getAuthProfileFieldSpec(type: AuthProfileCredentialType): AuthProfileFieldSpec {
   return AUTH_PROFILE_FIELD_SPEC_BY_TYPE[type];
 }
@@ -92,6 +96,7 @@ function toSecretCredentialVisit(params: {
   };
 }
 
+/** Iterates credential-bearing auth profiles with normalized field metadata. */
 export function* iterateAuthProfileCredentials(
   profiles: Record<string, unknown>,
 ): Iterable<AuthProfileCredentialVisit> {
