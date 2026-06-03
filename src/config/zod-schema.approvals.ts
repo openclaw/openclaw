@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+/** Native exec approval mode accepted by config. */
 export const NativeExecApprovalEnableModeSchema = z.union([z.boolean(), z.literal("auto")]);
 
 const ExecApprovalForwardTargetSchema = z

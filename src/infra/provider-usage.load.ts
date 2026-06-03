@@ -15,6 +15,7 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
+// Built-in fallback intentionally reports unsupported until a plugin supplies usage behavior.
 async function fetchProviderUsageSnapshotFallback(params: {
   auth: ProviderAuth;
   timeoutMs: number;
@@ -79,6 +80,7 @@ async function fetchProviderUsageSnapshot(params: {
   });
 }
 
+/** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
@@ -136,6 +138,9 @@ export async function loadProviderUsageSummary(
   const snapshots = await Promise.all(tasks);
   const providers = snapshots.filter((entry) => {
     if (entry.windows.length > 0) {
+      return true;
+    }
+    if (entry.summary?.trim()) {
       return true;
     }
     if (!entry.error) {

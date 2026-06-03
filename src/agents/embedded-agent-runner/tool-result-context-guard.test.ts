@@ -1,6 +1,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { describe, expect, it, vi } from "vitest";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { sanitizeToolUseResultPairing } from "../session-transcript-repair.js";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { MidTurnPrecheckSignal } from "./run/midturn-precheck.js";
 import {
@@ -409,10 +410,10 @@ describe("installToolResultContextGuard", () => {
 });
 
 type MockedEngine = ContextEngine & {
-  afterTurn: ReturnType<typeof vi.fn>;
-  assemble: ReturnType<typeof vi.fn>;
-  ingest: ReturnType<typeof vi.fn>;
-  ingestBatch?: ReturnType<typeof vi.fn>;
+  afterTurn: ReturnType<typeof vi.fn<NonNullable<ContextEngine["afterTurn"]>>>;
+  assemble: ReturnType<typeof vi.fn<ContextEngine["assemble"]>>;
+  ingest: ReturnType<typeof vi.fn<ContextEngine["ingest"]>>;
+  ingestBatch?: ReturnType<typeof vi.fn<NonNullable<ContextEngine["ingestBatch"]>>>;
 };
 
 function makeMockEngine(
@@ -429,13 +430,15 @@ function makeMockEngine(
     omitIngestBatch?: boolean;
   } = {},
 ): MockedEngine {
-  const defaultAfterTurn = vi.fn(async () => {});
-  const defaultAssemble = vi.fn(async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
-    messages: params.messages,
-    estimatedTokens: 0,
-  }));
-  const defaultIngest = vi.fn(async () => ({ ingested: true }));
-  const defaultIngestBatch = vi.fn(
+  const defaultAfterTurn = vi.fn<NonNullable<ContextEngine["afterTurn"]>>(async () => {});
+  const defaultAssemble = vi.fn<ContextEngine["assemble"]>(
+    async (params: Parameters<ContextEngine["assemble"]>[0]) => ({
+      messages: params.messages,
+      estimatedTokens: 0,
+    }),
+  );
+  const defaultIngest = vi.fn<ContextEngine["ingest"]>(async () => ({ ingested: true }));
+  const defaultIngestBatch = vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(
     async (params: Parameters<NonNullable<ContextEngine["ingestBatch"]>>[0]) => ({
       ingestedCount: params.messages.length,
     }),
@@ -443,14 +446,18 @@ function makeMockEngine(
   const afterTurn = overrides.omitAfterTurn
     ? undefined
     : overrides.afterTurn
-      ? vi.fn(overrides.afterTurn)
+      ? vi.fn<NonNullable<ContextEngine["afterTurn"]>>(overrides.afterTurn)
       : defaultAfterTurn;
-  const assemble = overrides.assemble ? vi.fn(overrides.assemble) : defaultAssemble;
-  const ingest = overrides.ingest ? vi.fn(overrides.ingest) : defaultIngest;
+  const assemble = overrides.assemble
+    ? vi.fn<ContextEngine["assemble"]>(overrides.assemble)
+    : defaultAssemble;
+  const ingest = overrides.ingest
+    ? vi.fn<ContextEngine["ingest"]>(overrides.ingest)
+    : defaultIngest;
   const ingestBatch = overrides.omitIngestBatch
     ? undefined
     : overrides.ingestBatch
-      ? vi.fn(overrides.ingestBatch)
+      ? vi.fn<NonNullable<ContextEngine["ingestBatch"]>>(overrides.ingestBatch)
       : defaultIngestBatch;
   const engine = {
     info: {
@@ -628,7 +635,7 @@ describe("installContextEngineLoopHook", () => {
     const engine = makeMockEngine();
     installHook(agent, engine, 1, () => ({
       provider: "anthropic",
-      modelId: modelId,
+      modelId,
       promptCache: {
         retention: "short",
         lastCacheTouchAt: 123,
@@ -779,6 +786,61 @@ describe("installContextEngineLoopHook", () => {
     });
 
     expect(transformed).toBe(compactedView);
+  });
+
+  it("repairs tool-result pairing in ownsCompaction assembled loop views", async () => {
+    const agent = makeGuardableAgent();
+    const assembledView = [makeUser("compacted"), makeToolResult("call_orphan", "stale")];
+    const engine = makeMockEngine({
+      assemble: async () => ({ messages: assembledView, estimatedTokens: 0 }),
+    });
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      repairAssembledMessages: sanitizeToolUseResultPairing,
+    });
+
+    const { transformed } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
+
+    expect(transformed).toEqual([expect.objectContaining({ role: "user", content: "compacted" })]);
+    expect((transformed as AgentMessage[]).some((message) => message.role === "toolResult")).toBe(
+      false,
+    );
+  });
+
+  it("repairs same-reference ownsCompaction assembled loop views", async () => {
+    const agent = makeGuardableAgent();
+    const engine = makeMockEngine();
+    installContextEngineLoopHook({
+      agent,
+      contextEngine: engine,
+      sessionId,
+      sessionKey,
+      sessionFile,
+      tokenBudget,
+      modelId,
+      repairAssembledMessages: sanitizeToolUseResultPairing,
+    });
+
+    const { transformed, withNew } = await callAfterInitialToolResult(agent, {
+      includeSecondUser: false,
+      firstResultText: "r",
+    });
+
+    expect(recordMockArg(engine.assemble).messages).toBe(withNew);
+    expect(transformed).not.toBe(withNew);
+    expect(transformed).toEqual([expect.objectContaining({ role: "user", content: "first" })]);
+    expect((transformed as AgentMessage[]).some((message) => message.role === "toolResult")).toBe(
+      false,
+    );
   });
 
   it("clears an assembled view when the engine fails on a later source", async () => {

@@ -1,12 +1,13 @@
-import type { MsgContext } from "../../auto-reply/templating.js";
-import { getLoadedChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
-import { normalizeSessionKeyPreservingOpaquePeerIds } from "../../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import { getLoadedChannelPlugin, listChannelPlugins } from "../../channels/plugins/index.js";
+import { normalizeSessionKeyPreservingOpaquePeerIds } from "../../sessions/session-key-utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 
+// Candidate channels come from context and key shape because explicit keys may be prefixed.
 function resolveExplicitSessionKeyNormalizerCandidates(
   sessionKey: string,
   ctx: Pick<MsgContext, "From" | "Provider" | "Surface">,
@@ -36,6 +37,7 @@ function resolveExplicitSessionKeyNormalizerCandidates(
   return [...candidates];
 }
 
+/** Normalizes caller-supplied session keys through the matching channel plugin when available. */
 export function normalizeExplicitSessionKey(sessionKey: string, ctx: MsgContext): string {
   const normalized = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
   for (const channelId of resolveExplicitSessionKeyNormalizerCandidates(normalized, ctx)) {

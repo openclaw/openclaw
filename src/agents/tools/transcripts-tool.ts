@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { uniqueStrings } from "../../shared/string-normalization.js";
 import {
   type ResolvedTranscriptsAutoStartConfig,
   resolveTranscriptsConfig,
@@ -19,7 +19,7 @@ import type {
 } from "../../transcripts/provider-types.js";
 import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
-import { type AnyAgentTool } from "./common.js";
+import type { AnyAgentTool } from "./common.js";
 
 type TranscriptsLogger = {
   warn: (message: string) => void;
@@ -480,7 +480,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           startedSessionIds.add(sessionId);
         }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         if (stopped) {
           return;
         }
@@ -542,7 +542,7 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
           ctx,
           store,
           rawParams: { action: "stop", sessionId },
-        }).catch((err) =>
+        }).catch((err: unknown) =>
           ctx.logger.warn(
             `transcripts autoStart stop failed session=${sessionId}: ${
               err instanceof Error ? err.message : String(err)

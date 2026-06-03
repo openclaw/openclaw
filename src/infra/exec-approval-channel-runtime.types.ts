@@ -5,8 +5,10 @@ import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-app
 type ApprovalRequestEvent = ExecApprovalRequest | PluginApprovalRequest;
 type ApprovalResolvedEvent = ExecApprovalResolved | PluginApprovalResolved;
 
+/** Approval event families a channel-native approval runtime can subscribe to. */
 export type ExecApprovalChannelRuntimeEventKind = "exec" | "plugin";
 
+/** Adapter implemented by a channel to deliver and finalize native approval prompts. */
 export type ExecApprovalChannelRuntimeAdapter<
   TPending,
   TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
@@ -16,6 +18,7 @@ export type ExecApprovalChannelRuntimeAdapter<
   clientDisplayName: string;
   cfg: OpenClawConfig;
   gatewayUrl?: string;
+  /** Defaults to exec-only; include plugin when the adapter can handle plugin approvals. */
   eventKinds?: readonly ExecApprovalChannelRuntimeEventKind[];
   isConfigured: () => boolean;
   shouldHandle: (request: TRequest) => boolean;
@@ -31,6 +34,7 @@ export type ExecApprovalChannelRuntimeAdapter<
   nowMs?: () => number;
 };
 
+/** Runtime handle used by approval bootstrap code to manage a channel-native approval client. */
 export type ExecApprovalChannelRuntime<
   TRequest extends ApprovalRequestEvent = ExecApprovalRequest,
   TResolved extends ApprovalResolvedEvent = ExecApprovalResolved,

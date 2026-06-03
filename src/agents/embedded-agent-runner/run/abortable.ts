@@ -14,6 +14,11 @@ function makeAbortError(signal: AbortSignal): Error {
   return err;
 }
 
+/**
+ * Races a promise against an AbortSignal while preserving normal promise
+ * settlement. Abort wins immediately and rejected non-Error payloads are
+ * normalized so callers can safely log/inspect them as Error objects.
+ */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(makeAbortError(signal));
@@ -29,10 +34,25 @@ export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<
         signal.removeEventListener("abort", onAbort);
         resolve(value);
       },
-      (err) => {
+      (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(err);
+        reject(toLintErrorObject(err, "Non-Error rejection"));
       },
     );
   });
+}
+
+/** Converts non-Error promise rejections into Error instances without dropping object fields. */
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

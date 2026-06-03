@@ -4,6 +4,7 @@ import { fetchWithTimeout } from "openclaw/plugin-sdk/provider-http";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { asPositiveSafeInteger } from "openclaw/plugin-sdk/string-coerce-runtime";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const log = createSubsystemLogger("deepinfra-models");
@@ -131,15 +132,12 @@ function entryToSurfaceModel(entry: DeepInfraAgentModelEntry): DeepInfraSurfaceM
     name: id,
     description: metadata.description ?? undefined,
     tags,
-    contextWindow:
-      typeof metadata.context_length === "number" ? metadata.context_length : undefined,
-    maxTokens: typeof metadata.max_tokens === "number" ? metadata.max_tokens : undefined,
+    contextWindow: asPositiveSafeInteger(metadata.context_length),
+    maxTokens: asPositiveSafeInteger(metadata.max_tokens),
     pricing,
-    defaultWidth: typeof metadata.default_width === "number" ? metadata.default_width : undefined,
-    defaultHeight:
-      typeof metadata.default_height === "number" ? metadata.default_height : undefined,
-    defaultIterations:
-      typeof metadata.default_iterations === "number" ? metadata.default_iterations : undefined,
+    defaultWidth: asPositiveSafeInteger(metadata.default_width),
+    defaultHeight: asPositiveSafeInteger(metadata.default_height),
+    defaultIterations: asPositiveSafeInteger(metadata.default_iterations),
   };
 }
 
@@ -295,13 +293,13 @@ const STATIC_NON_CHAT_FALLBACK: DeepInfraSurfaceModel[] = [
     id: "ResembleAI/chatterbox-turbo",
     name: "ResembleAI/chatterbox-turbo",
     tags: ["tts"],
-    pricing: { input_characters: 1.0 },
+    pricing: { input_characters: 1 },
   },
   {
     id: "sesame/csm-1b",
     name: "sesame/csm-1b",
     tags: ["tts"],
-    pricing: { input_characters: 7.0 },
+    pricing: { input_characters: 7 },
   },
   // stt
   {

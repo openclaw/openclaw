@@ -1,3 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
   getLoadedChannelPlugin,
@@ -17,8 +19,6 @@ import {
   buildPluginApprovalResolvedReplyPayload,
 } from "../plugin-sdk/approval-renderers.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -44,6 +44,8 @@ import {
   type PluginApprovalResolved,
 } from "./plugin-approvals.js";
 
+// Approval forwarding mirrors foreground exec/plugin approvals into configured
+// chat targets, then sends resolution/expiry notices to the same targets.
 const log = createSubsystemLogger("gateway/exec-approvals");
 type DeliverApprovalPayloads =
   typeof import("../channels/message/runtime.js").sendDurableMessageBatch;
@@ -209,6 +211,8 @@ function shouldSkipForwardingFallback(params: {
   if (!channel) {
     return false;
   }
+  // Channel adapters can suppress generic fallback delivery when they already
+  // own native approval UX for the same target.
   const adapter = resolveChannelApprovalAdapter(getLoadedChannelPlugin(channel));
   return (
     adapter?.delivery?.shouldSuppressForwardingFallback?.({
@@ -286,7 +290,7 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
       ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
       : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
   );
-  lines.push(`Reply with: /approve <id> ${decisionText}`);
+  lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
       "Allow Always is unavailable because the effective policy requires approval every time.",
@@ -580,7 +584,7 @@ function createApprovalHandlers<
           buildPayload: () => ({ text: params.strategy.buildExpiredText(request) }),
           deliver: params.deliver,
         });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         log.error(
           `${params.strategy.kind} approvals: failed to deliver expiry notification for ${requestId}: ${String(err)}`,
         );
@@ -627,7 +631,7 @@ function createApprovalHandlers<
       },
       deliver: params.deliver,
       shouldSend: () => pending.get(requestId) === pendingEntry,
-    }).catch((err) => {
+    }).catch((err: unknown) => {
       log.error(
         `${params.strategy.kind} approvals: failed to deliver request ${requestId}: ${String(err)}`,
       );

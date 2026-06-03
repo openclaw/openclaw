@@ -1,4 +1,5 @@
 export type UpdateAvailable = import("../../../src/infra/update-startup.js").UpdateAvailable;
+import type { SessionGoal } from "../../../src/config/sessions/types.js";
 import type { CronJobBase } from "../../../src/cron/types-shared.js";
 import type { ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
 import type {
@@ -8,6 +9,7 @@ import type {
   SessionsPatchResultBase,
 } from "../../../src/shared/session-types.js";
 export type { ConfigUiHint, ConfigUiHints } from "../../../src/shared/config-ui-hints-types.js";
+export type { SessionGoal } from "../../../src/config/sessions/types.js";
 
 export type ChannelsStatusSnapshot = {
   ts: number;
@@ -460,6 +462,7 @@ export type GatewaySessionRow = {
   contextTokens?: number;
   compactionCheckpointCount?: number;
   latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
+  goal?: SessionGoal;
 };
 
 export type SessionsListResult = SessionsListResultBase<GatewaySessionsDefaults, GatewaySessionRow>;
@@ -787,19 +790,19 @@ export type ModelCatalogEntry = {
 };
 
 export type ToolCatalogProfile =
-  import("../../../src/gateway/protocol/schema/types.js").ToolCatalogProfile;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogProfile;
 export type ToolCatalogEntry =
-  import("../../../src/gateway/protocol/schema/types.js").ToolCatalogEntry;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogEntry;
 export type ToolCatalogGroup =
-  import("../../../src/gateway/protocol/schema/types.js").ToolCatalogGroup;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolCatalogGroup;
 export type ToolsCatalogResult =
-  import("../../../src/gateway/protocol/schema/types.js").ToolsCatalogResult;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsCatalogResult;
 export type ToolsEffectiveEntry =
-  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveEntry;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveEntry;
 export type ToolsEffectiveGroup =
-  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveGroup;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveGroup;
 export type ToolsEffectiveResult =
-  import("../../../src/gateway/protocol/schema/types.js").ToolsEffectiveResult;
+  import("../../../packages/gateway-protocol/src/schema.js").ToolsEffectiveResult;
 
 export type ModelAuthExpiry =
   import("../../../src/gateway/server-methods/models-auth-status.js").ModelAuthExpiry;

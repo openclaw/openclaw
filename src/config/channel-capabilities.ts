@@ -1,7 +1,7 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import type { OpenClawConfig } from "./config.js";
 import type { SlackCapabilitiesConfig } from "./types.slack.js";
 import type { TelegramCapabilitiesConfig } from "./types.telegram.js";
@@ -37,6 +37,7 @@ function resolveAccountCapabilities(params: {
   if (accounts && typeof accounts === "object") {
     const match = resolveAccountEntry(accounts, normalizedAccountId);
     if (match) {
+      // Account capabilities override provider capabilities; empty/object account values fall back.
       return normalizeCapabilities(match.capabilities) ?? normalizeCapabilities(cfg.capabilities);
     }
   }
@@ -44,6 +45,7 @@ function resolveAccountCapabilities(params: {
   return normalizeCapabilities(cfg.capabilities);
 }
 
+/** Resolves normalized string capabilities for a channel/account config pair. */
 export function resolveChannelCapabilities(params: {
   cfg?: Partial<OpenClawConfig>;
   channel?: string | null;

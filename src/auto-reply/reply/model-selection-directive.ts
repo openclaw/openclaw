@@ -1,7 +1,7 @@
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
-import { normalizeProviderId } from "../../agents/provider-id.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 export type ModelAliasIndex = {
   byAlias: Map<
@@ -286,16 +286,18 @@ export function resolveModelDirectiveSelection(params: {
     };
   };
 
-  const resolveFuzzy = (params: {
+  const resolveFuzzy = (paramsLocal: {
     provider?: string;
     fragment: string;
   }): { selection?: ModelDirectiveSelection; error?: string } => {
-    const fragment = normalizeLowercaseStringOrEmpty(params.fragment);
+    const fragment = normalizeLowercaseStringOrEmpty(paramsLocal.fragment);
     if (!fragment) {
       return {};
     }
 
-    const providerFilter = params.provider ? normalizeProviderId(params.provider) : undefined;
+    const providerFilter = paramsLocal.provider
+      ? normalizeProviderId(paramsLocal.provider)
+      : undefined;
 
     const candidates: Array<{ provider: string; model: string }> = [];
     for (const key of allowedModelKeys) {
@@ -315,7 +317,7 @@ export function resolveModelDirectiveSelection(params: {
     }
 
     // Also allow partial alias matches when the user didn't specify a provider.
-    if (!params.provider) {
+    if (!paramsLocal.provider) {
       const aliasMatches: Array<{ provider: string; model: string }> = [];
       for (const [aliasKey, entry] of aliasIndex.byAlias.entries()) {
         if (!aliasKey.includes(fragment)) {

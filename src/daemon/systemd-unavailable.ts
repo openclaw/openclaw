@@ -1,10 +1,11 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type SystemdUnavailableKind =
   | "missing_systemctl"
   | "user_bus_unavailable"
   | "generic_unavailable";
 
+// Normalizes platform command output before matching known systemd failure families.
 function normalizeDetail(detail?: string): string {
   return normalizeLowercaseStringOrEmpty(detail);
 }

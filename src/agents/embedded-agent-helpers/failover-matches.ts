@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 type ErrorPattern = RegExp | string;
 
@@ -47,6 +47,8 @@ const CJK_AUTH_ERROR_PATTERNS = [
   "鉴权失败",
   "密钥无效",
   "apikey 无效",
+  /(?:当前\s*ak|ce-011).*?(?:违规请求|禁止访问)|(?:违规请求|禁止访问).*?(?:当前\s*ak|ce-011)/i,
+  /\bce-011\b/i,
 ] as const satisfies readonly ErrorPattern[];
 
 const ZAI_BILLING_CODE_1311_RE = /"code"\s*:\s*1311\b/;
@@ -171,7 +173,7 @@ const ERROR_PATTERNS = {
     /^terminated$/i,
     /^stream_read_error$/i,
     /\bund_err_(?:socket|connect|headers?|body|req_content_length_mismatch|aborted|closed)\b/i,
-    // shared model runtime's openai-codex provider surfaces `Request failed` when the HTTP
+    // shared model runtime's openai provider surfaces `Request failed` when the HTTP
     // response has no body and no status text (typical of Cloudflare 502s
     // from the upstream Codex service). Treat it as a transport failure so
     // the configured fallback chain runs instead of surfacing the error.

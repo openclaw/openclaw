@@ -20,6 +20,7 @@ import {
 } from "./auth-profiles.js";
 import {
   createRuntimeProviderAuthLookup,
+  hasAvailableAuthForProvider,
   hasRuntimeAvailableProviderAuth,
   type RuntimeProviderAuthLookup,
 } from "./model-auth.js";
@@ -143,8 +144,10 @@ function resolveProviderAuthConfigFingerprint(cfg: OpenClawConfig | undefined): 
 
 export async function hasAuthForModelProvider(params: {
   provider: string;
+  modelApi?: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
+  agentDir?: string;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   store?: AuthProfileStore;
@@ -176,21 +179,29 @@ export async function hasAuthForModelProvider(params: {
     preparedState !== null && params.cfg
       ? resolveAgentWorkspaceDir(params.cfg, preparedState.agentId)
       : null;
+  const expectedAgentDir =
+    preparedState !== null && params.cfg
+      ? resolveAgentDir(params.cfg, preparedState.agentId)
+      : null;
   const matchesWarmedScope =
     preparedState !== null &&
     configFingerprint === preparedState.configFingerprint &&
     workspaceDir === expectedWorkspaceDir &&
+    (params.agentDir === undefined || params.agentDir === expectedAgentDir) &&
     params.discoverExternalCliAuth !== false &&
     params.allowPluginSyntheticAuth !== false &&
     params.env === undefined &&
-    params.store === undefined;
+    params.store === undefined &&
+    params.modelApi === undefined;
   if (matchesWarmedScope) {
     const preparedAnswer = preparedState.providers.get(provider);
     if (preparedAnswer !== undefined) {
       return preparedAnswer;
     }
   }
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
   if (
     hasRuntimeAvailableProviderAuth({
       provider,
@@ -199,12 +210,16 @@ export async function hasAuthForModelProvider(params: {
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
       runtimeLookup: params.runtimeAuthLookup ?? params.resolveRuntimeAuthLookup?.(),
+      modelApi: params.modelApi,
     })
   ) {
     return true;
   }
   const slowPathAgentDir =
-    params.agentId && params.cfg ? resolveAgentDir(params.cfg, params.agentId) : undefined;
+    params.agentDir ??
+    (params.agentId && params.cfg
+      ? resolveAgentDir(params.cfg, params.agentId, params.env)
+      : undefined);
   const store =
     params.store ??
     (params.discoverExternalCliAuth === false
@@ -215,7 +230,16 @@ export async function hasAuthForModelProvider(params: {
           externalCli: externalCliDiscoveryForProviderAuth({ cfg: params.cfg, provider }),
         }));
   if (listProfilesForProvider(store, provider).length > 0) {
-    return true;
+    return params.modelApi === undefined
+      ? true
+      : await hasAvailableAuthForProvider({
+          provider,
+          modelApi: params.modelApi,
+          cfg: params.cfg,
+          workspaceDir: params.workspaceDir,
+          agentDir: slowPathAgentDir,
+          store,
+        });
   }
   return false;
 }
@@ -223,23 +247,27 @@ export async function hasAuthForModelProvider(params: {
 export function createProviderAuthChecker(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
+  agentDir?: string;
   agentId?: string;
   env?: NodeJS.ProcessEnv;
   allowPluginSyntheticAuth?: boolean;
   discoverExternalCliAuth?: boolean;
-}): (provider: string) => Promise<boolean> {
+}): (provider: string, modelApi?: string) => Promise<boolean> {
   const authCache = new Map<string, boolean>();
   let runtimeAuthLookup: RuntimeProviderAuthLookup | undefined;
-  return async (provider: string) => {
+  return async (provider: string, modelApi?: string) => {
     const key = normalizeProviderId(provider);
-    const cached = authCache.get(key);
+    const cacheKey = modelApi === undefined ? key : `${key}\0${modelApi}`;
+    const cached = authCache.get(cacheKey);
     if (cached !== undefined) {
       return cached;
     }
     const value = await hasAuthForModelProvider({
       provider: key,
+      modelApi,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
+      agentDir: params.agentDir,
       agentId: params.agentId,
       env: params.env,
       allowPluginSyntheticAuth: params.allowPluginSyntheticAuth,
@@ -252,7 +280,7 @@ export function createProviderAuthChecker(params: {
           includePluginSyntheticAuth: params.allowPluginSyntheticAuth !== false,
         })),
     });
-    authCache.set(key, value);
+    authCache.set(cacheKey, value);
     return value;
   };
 }
@@ -559,8 +587,6 @@ function runProviderAuthWarmWorker(params: {
   currentProviderAuthWarmWorker = handle;
   return new Promise<ProviderAuthWarmSnapshot>((resolve, reject) => {
     let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let cancelTimer: ReturnType<typeof setInterval> | undefined;
     const finish = (complete: () => void) => {
       if (settled) {
         return;
@@ -582,13 +608,13 @@ function runProviderAuthWarmWorker(params: {
       void worker.terminate();
       finish(() => resolve({ agents: [] }));
     };
-    timer = setTimeout(() => {
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
       handle.cancelled = true;
       void worker.terminate();
       finish(() => reject(new Error("provider auth warm worker timed out")));
     }, params.timeoutMs);
     timer.unref?.();
-    cancelTimer = setInterval(() => {
+    const cancelTimer: ReturnType<typeof setInterval> | undefined = setInterval(() => {
       if (params.isCancelled()) {
         cancelWorker();
       }
@@ -618,7 +644,7 @@ function runProviderAuthWarmWorker(params: {
           resolve({ agents: [] });
           return;
         }
-        reject(error);
+        reject(toLintErrorObject(error, "Non-Error rejection"));
       });
     });
     worker.once("exit", (code) => {
@@ -673,4 +699,18 @@ export async function warmCurrentProviderAuthStateOffMainThread(
     return;
   }
   publishProviderAuthWarmSnapshot(snapshot);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

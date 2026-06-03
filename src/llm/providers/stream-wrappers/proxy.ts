@@ -1,13 +1,17 @@
+import {
+  normalizeOptionalLowercaseString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveProviderRequestPolicy } from "../../../agents/provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../../../agents/provider-request-config.js";
 import type { StreamFn } from "../../../agents/runtime/index.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
-import {
-  normalizeOptionalLowercaseString,
-  readStringValue,
-} from "../../../shared/string-coerce.js";
+import { parseStrictFiniteNumber } from "../../../infra/parse-finite-number.js";
 import { streamSimple } from "../../stream.js";
-import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
+import {
+  applyAnthropicEphemeralCacheControlMarkers,
+  resolveAnthropicEphemeralCacheControl,
+} from "./anthropic-cache-control-payload.js";
 import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
 import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
@@ -60,9 +64,9 @@ function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | unde
     typeof value === "number"
       ? value
       : typeof value === "string"
-        ? Number.parseFloat(value.trim())
-        : Number.NaN;
-  if (!Number.isFinite(parsed)) {
+        ? parseStrictFiniteNumber(value)
+        : undefined;
+  if (parsed === undefined) {
     return undefined;
   }
   return String(Math.max(1, Math.min(86400, Math.trunc(parsed))));
@@ -154,7 +158,10 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
 }
 
 /** @deprecated OpenRouter provider-owned stream helper; do not use from third-party plugins. */
-export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+export function createOpenRouterSystemCacheWrapper(
+  baseStreamFn: StreamFn | undefined,
+  extraParams?: Record<string, unknown>,
+): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const provider = readStringValue(model.provider);
@@ -179,10 +186,35 @@ export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | unde
       return underlying(model, context, options);
     }
 
-    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      applyAnthropicEphemeralCacheControlMarkers(payloadObj);
-    });
+    const cacheRetention =
+      readCacheRetention(options?.cacheRetention) ??
+      readCacheRetention(extraParams?.cacheRetention);
+    return streamWithPayloadPatch(
+      underlying,
+      model,
+      context,
+      stripCacheRetentionOption(options),
+      (payloadObj) => {
+        applyAnthropicEphemeralCacheControlMarkers(
+          payloadObj,
+          resolveAnthropicEphemeralCacheControl(readStringValue(model.baseUrl), cacheRetention) ??
+            null,
+        );
+      },
+    );
   };
+}
+
+function readCacheRetention(value: unknown): "long" | "none" | "short" | undefined {
+  return value === "long" || value === "none" || value === "short" ? value : undefined;
+}
+
+function stripCacheRetentionOption(options: Parameters<StreamFn>[2]): Parameters<StreamFn>[2] {
+  if (!options || !Object.hasOwn(options, "cacheRetention")) {
+    return options;
+  }
+  const { cacheRetention: _cacheRetention, ...rest } = options;
+  return rest;
 }
 
 /** @deprecated OpenRouter provider-owned stream helper; do not use from third-party plugins. */

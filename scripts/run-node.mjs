@@ -96,7 +96,7 @@ const findLatestMtime = (dirPath, shouldSkip, deps) => {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = deps.fs.readdirSync(current, { withFileTypes: true });
     } catch {
@@ -344,7 +344,7 @@ const listBuiltBundledPluginEntries = (deps) => {
 
 const listBuiltBundledPluginRuntimeOverlayDirs = (deps) => {
   const distExtensionsRoot = path.join(resolveRuntimePostBuildDistRoot(deps), "extensions");
-  let entries = [];
+  let entries;
   try {
     entries = deps.fs.readdirSync(distExtensionsRoot, { withFileTypes: true });
   } catch {
@@ -377,7 +377,7 @@ const listRuntimeOverlaySourcePaths = (sourceDir, deps) => {
     if (!current) {
       continue;
     }
-    let entries = [];
+    let entries;
     try {
       entries = deps.fs.readdirSync(current, { withFileTypes: true });
     } catch {
@@ -452,7 +452,7 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
     return [];
   }
   const pluginSdkDir = path.join(distRoot, "plugin-sdk");
-  let dirents = [];
+  let dirents;
   try {
     dirents = deps.fs.readdirSync(pluginSdkDir, { withFileTypes: true });
   } catch {
@@ -473,10 +473,23 @@ const listRequiredOpenClawExtensionAliasOutputs = (deps) => {
 };
 
 const listRequiredStaticExtensionAssetOutputs = (deps) => {
+  if (deps.env.OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS === "0") {
+    return [];
+  }
   const distRoot = resolveRuntimePostBuildDistRoot(deps);
+  const runtimeRoot = resolveRuntimePostBuildRuntimeRoot(deps);
+  const runtimeExtensionsRoot = path.join(runtimeRoot, "extensions");
+  const hasRuntimeOverlay = deps.fs.existsSync(runtimeExtensionsRoot);
   return discoverStaticExtensionAssets({ rootDir: deps.cwd, fs: deps.fs })
     .filter((asset) => deps.fs.existsSync(path.join(deps.cwd, asset.src)))
-    .map((asset) => path.join(distRoot, normalizePath(asset.dest).replace(/^dist\//u, "")))
+    .flatMap((asset) => {
+      const relativeOutput = normalizePath(asset.dest).replace(/^dist\//u, "");
+      const outputs = [path.join(distRoot, relativeOutput)];
+      if (hasRuntimeOverlay) {
+        outputs.push(path.join(runtimeRoot, relativeOutput));
+      }
+      return outputs;
+    })
     .toSorted((left, right) => left.localeCompare(right));
 };
 
@@ -667,7 +680,10 @@ const parsePositiveIntegerEnv = (env, name, fallback) => {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const resolveRunNodeOutputLogPath = (deps) => {
   const outputLog = deps.env[RUN_NODE_OUTPUT_LOG_ENV]?.trim();
@@ -838,7 +854,7 @@ const parsePositiveInteger = (value) => {
 };
 
 const listRunNodeCpuProfiles = (deps, absoluteProfileDir, commandName) => {
-  let entries = [];
+  let entries;
   try {
     entries = deps.fs.readdirSync(absoluteProfileDir, { withFileTypes: true });
   } catch {
@@ -910,8 +926,6 @@ const resolveRunNodeDiagnosticArgs = (deps) => {
 
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
-  let onSigInt;
-  let onSigTerm;
 
   const cleanupSignals = () => {
     if (onSigInt) {
@@ -934,10 +948,10 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
     }
   };
 
-  onSigInt = () => {
+  const onSigInt = () => {
     forwardSignal("SIGINT");
   };
-  onSigTerm = () => {
+  const onSigTerm = () => {
     forwardSignal("SIGTERM");
   };
 
@@ -1147,7 +1161,8 @@ export const acquireRunNodeBuildLock = async (deps) => {
     DEFAULT_BUILD_LOCK_STALE_MS,
   );
   const startedAt = Date.now();
-  let loggedWait = false;
+  let waitLogBudget = 1;
+  const consumeWaitLog = () => waitLogBudget-- > 0;
 
   while (Date.now() - startedAt < timeoutMs) {
     try {
@@ -1201,9 +1216,8 @@ export const acquireRunNodeBuildLock = async (deps) => {
       if (removeStaleBuildLock(deps, lockDir, staleMs)) {
         continue;
       }
-      if (!loggedWait) {
+      if (consumeWaitLog()) {
         logRunner("Waiting for TypeScript/runtime artifact lock.", deps);
-        loggedWait = true;
       }
       await sleep(pollMs);
     }
@@ -1277,13 +1291,44 @@ const shouldSkipWatchRuntimeSync = (deps, requirement) =>
   !hasMissingRequiredRuntimePostBuildOutput(deps);
 
 const isGatewayClientCommand = (args) =>
-  args[0] === "gateway" && (args[1] === "call" || args[1] === "status");
+  (args[0] === "gateway" && (args[1] === "call" || args[1] === "status")) ||
+  (args[0] === "agent" && !args.includes("--local"));
 
-const shouldUseExistingDistForGatewayClient = (deps, buildRequirement) =>
-  buildRequirement.reason === "dirty_watched_tree" &&
+const shouldFastPathExistingDistForGatewayClient = (deps) =>
   isGatewayClientCommand(deps.args) &&
   deps.env.OPENCLAW_FORCE_BUILD !== "1" &&
-  statMtime(deps.distEntry, deps.fs) != null;
+  statMtime(deps.distEntry, deps.fs) != null &&
+  canUseStampedGatewayClientDist(deps);
+
+const canUseStampedGatewayClientDist = (deps) => {
+  const currentHead = resolveGitHead(deps);
+  if (!currentHead) {
+    return false;
+  }
+  const buildStamp = readBuildStamp(deps);
+  if (buildStamp.mtime == null || buildStamp.head !== currentHead) {
+    return false;
+  }
+  for (const filePath of deps.configFiles) {
+    const mtime = statMtime(filePath, deps.fs);
+    if (mtime != null && mtime > buildStamp.mtime) {
+      return false;
+    }
+  }
+  if (hasMissingBuiltBundledPluginRuntimeEntryOutput(deps)) {
+    return false;
+  }
+  const runtimeStamp = readRuntimePostBuildStamp(deps);
+  if (
+    runtimeStamp.mtime == null ||
+    runtimeStamp.mtime < buildStamp.mtime ||
+    runtimeStamp.head !== currentHead ||
+    deps.env.OPENCLAW_FORCE_RUNTIME_POSTBUILD === "1"
+  ) {
+    return false;
+  }
+  return !resolveRuntimePostBuildRequirement(deps).shouldSync;
+};
 
 const isQaParityReportCommand = (args) => args[0] === "qa" && args[1] === "parity-report";
 const isQaCoverageReportCommand = (args) => args[0] === "qa" && args[1] === "coverage";
@@ -1374,16 +1419,13 @@ export async function runNodeMain(params = {}) {
 
   try {
     let exitCode = 1;
-    let buildRequirement = resolveBuildRequirement(deps);
-    const useExistingGatewayClientDist = shouldUseExistingDistForGatewayClient(
-      deps,
-      buildRequirement,
-    );
+    if (shouldFastPathExistingDistForGatewayClient(deps)) {
+      exitCode = await runOpenClaw(deps);
+      return await closeRunNodeOutputTee(deps, exitCode);
+    }
+    const buildRequirement = resolveBuildRequirement(deps);
     const useQaParityReportSource = shouldRunQaParityReportFromSource(deps, buildRequirement);
     const useQaCoverageReportSource = shouldRunQaCoverageReportFromSource(deps, buildRequirement);
-    if (useExistingGatewayClientDist) {
-      buildRequirement = { shouldBuild: false, reason: "gateway_client_existing_dist" };
-    }
     if (useQaParityReportSource) {
       logRunner("Running QA parity report from source without rebuilding private QA dist.", deps);
       exitCode = await runQaParityReportFromSource(deps);
@@ -1395,26 +1437,24 @@ export async function runNodeMain(params = {}) {
       return await closeRunNodeOutputTee(deps, exitCode);
     }
     if (!buildRequirement.shouldBuild) {
-      if (!useExistingGatewayClientDist) {
-        const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
-        if (
-          runtimePostBuildRequirement.shouldSync &&
-          !shouldSkipWatchRuntimeSync(deps, runtimePostBuildRequirement)
-        ) {
-          const synced = await withRunNodeBuildLock(deps, async () => {
-            const lockedRuntimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
-            if (!lockedRuntimePostBuildRequirement.shouldSync) {
-              return true;
-            }
-            logRunner(
-              `Syncing runtime artifacts (${lockedRuntimePostBuildRequirement.reason} - ${formatRuntimePostBuildReason(lockedRuntimePostBuildRequirement.reason)}).`,
-              deps,
-            );
-            return await syncRuntimeArtifactsAndStamp(deps);
-          });
-          if (!synced) {
-            return await closeRunNodeOutputTee(deps, 1);
+      const runtimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
+      if (
+        runtimePostBuildRequirement.shouldSync &&
+        !shouldSkipWatchRuntimeSync(deps, runtimePostBuildRequirement)
+      ) {
+        const synced = await withRunNodeBuildLock(deps, async () => {
+          const lockedRuntimePostBuildRequirement = resolveRuntimePostBuildRequirement(deps);
+          if (!lockedRuntimePostBuildRequirement.shouldSync) {
+            return true;
           }
+          logRunner(
+            `Syncing runtime artifacts (${lockedRuntimePostBuildRequirement.reason} - ${formatRuntimePostBuildReason(lockedRuntimePostBuildRequirement.reason)}).`,
+            deps,
+          );
+          return await syncRuntimeArtifactsAndStamp(deps);
+        });
+        if (!synced) {
+          return await closeRunNodeOutputTee(deps, 1);
         }
       }
       exitCode = await runOpenClaw(deps);
@@ -1505,8 +1545,10 @@ export async function runNodeMain(params = {}) {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runNodeMain()
     .then((code) => process.exit(code))
-    .catch((err) => {
-      console.error(err);
-      process.exit(1);
-    });
+    .catch(
+      /** @param {unknown} err */ (err) => {
+        console.error(err);
+        process.exit(1);
+      },
+    );
 }

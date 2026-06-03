@@ -8,6 +8,27 @@ import {
 import type { RuntimeEnv } from "../runtime.js";
 import type { ControlUiRootState } from "./control-ui.js";
 
+// Control UI root resolution prefers explicit config, then bundled/proven
+// assets. Missing bundled assets trigger an async build attempt without blocking
+// gateway startup.
+function startControlUiAssetsBuild(params: {
+  gatewayRuntime: RuntimeEnv;
+  log: { warn: (message: string) => void };
+}): void {
+  void ensureControlUiAssetsBuilt(params.gatewayRuntime)
+    .then((result) => {
+      if (!result.ok && result.message) {
+        params.log.warn(`gateway: ${result.message}`);
+      }
+    })
+    .catch((error: unknown) => {
+      params.log.warn(
+        `gateway: Control UI assets build failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    });
+}
+
+/** Resolves the Control UI asset root state for gateway startup. */
 export async function resolveGatewayControlUiRootState(params: {
   controlUiRootOverride?: string;
   controlUiEnabled: boolean;
@@ -36,17 +57,15 @@ export async function resolveGatewayControlUiRootState(params: {
       cwd: process.cwd(),
     });
 
-  let resolvedRoot = resolveRoot();
+  const resolvedRoot = resolveRoot();
   if (!resolvedRoot) {
-    const ensureResult = await ensureControlUiAssetsBuilt(params.gatewayRuntime);
-    if (!ensureResult.ok && ensureResult.message) {
-      params.log.warn(`gateway: ${ensureResult.message}`);
-    }
-    resolvedRoot = resolveRoot();
-  }
-
-  if (!resolvedRoot) {
-    return { kind: "missing" };
+    // Source checkouts may need to build Control UI assets on demand; startup
+    // continues and the route can become available after the build completes.
+    startControlUiAssetsBuild({
+      gatewayRuntime: params.gatewayRuntime,
+      log: params.log,
+    });
+    return undefined;
   }
 
   return {

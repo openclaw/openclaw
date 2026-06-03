@@ -1,3 +1,7 @@
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tools.js";
@@ -9,15 +13,15 @@ import { logWarn } from "../logger.js";
 import { isTestDefaultMemorySlotDisabled } from "../plugins/config-state.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { canonicalizeSessionKeyForAgent } from "./session-store-key.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
+/**
+ * Shared gateway tool invocation engine used by HTTP and RPC adapters.
+ */
 const MEMORY_TOOL_NAMES = new Set(["memory_search", "memory_get"]);
 
+/** Protocol input shape accepted by gateway tool invocation surfaces. */
 export type ToolsInvokeInput = {
   tool?: unknown;
   name?: unknown;
@@ -143,6 +147,7 @@ function resolveToolSource(tool: AnyAgentTool): "core" | "plugin" | "channel" {
   return "core";
 }
 
+/** Resolves, authorizes, and invokes one gateway-visible core/plugin/channel tool. */
 export async function invokeGatewayTool(params: {
   cfg: OpenClawConfig;
   input: ToolsInvokeInput;

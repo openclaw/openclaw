@@ -1,3 +1,4 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import type { ProviderRuntimePluginHandle } from "../plugins/provider-hook-runtime.js";
@@ -5,7 +6,6 @@ import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.j
 import { shouldPreserveThinkingBlocks } from "../plugins/provider-replay-helpers.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { ProviderReplayPolicy } from "../plugins/types.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { isGoogleModelApi } from "./embedded-agent-helpers/google.js";
 import { normalizeProviderId } from "./model-selection.js";
 import type { ToolCallIdMode } from "./tool-call-id.js";
@@ -80,7 +80,7 @@ function isAnthropicApi(modelApi?: string | null): boolean {
 function isOpenAiResponsesCompatibleApi(modelApi?: string | null): boolean {
   return (
     modelApi === "openai-responses" ||
-    modelApi === "openai-codex-responses" ||
+    modelApi === "openai-chatgpt-responses" ||
     modelApi === "azure-openai-responses"
   );
 }
@@ -93,6 +93,13 @@ function isClaudeFamilyModelId(modelId?: string | null): boolean {
 function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
   const compat = model?.compat as { supportsReasoningEffort?: boolean } | undefined;
   return compat?.supportsReasoningEffort === false;
+}
+
+function shouldPreserveReasoningContentReplay(params: {
+  modelId?: string | null;
+  model?: ProviderRuntimeModel;
+}): boolean {
+  return params.model?.reasoning === true || requiresReasoningContentReplay(params.modelId);
 }
 
 /**
@@ -113,7 +120,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
   const requiresOpenAiCompatibleToolIdSanitization =
     params.modelApi === "openai-completions" ||
     params.modelApi === "openai-responses" ||
-    params.modelApi === "openai-codex-responses" ||
+    params.modelApi === "openai-chatgpt-responses" ||
     params.modelApi === "azure-openai-responses";
 
   if (
@@ -153,7 +160,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
       ? { dropThinkingBlocks: true }
       : {}),
     ...(isStrictOpenAiCompatible
-      ? { dropReasoningFromHistory: !requiresReasoningContentReplay(params.modelId) }
+      ? { dropReasoningFromHistory: !shouldPreserveReasoningContentReplay(params) }
       : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { applyAssistantFirstOrderingFix: true } : {}),
     ...(isGoogle || isStrictOpenAiCompatible ? { validateGeminiTurns: true } : {}),
@@ -268,6 +275,7 @@ function resolveTranscriptPolicyCacheKey(params: {
     modelApi: params.modelApi ?? "",
     modelId: params.modelId ?? "",
     dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
+    preservesReasoningContentReplay: params.model?.reasoning === true,
     workspaceDir: params.workspaceDir ?? "",
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.config,

@@ -1,4 +1,6 @@
 import "./fs-safe-defaults.js";
+
+// Local user-file URL helpers centralize encoded separator and UNC path checks.
 export {
   assertNoWindowsNetworkPath,
   basenameFromMediaSource,

@@ -15,7 +15,7 @@ Feishu/Lark is an all-in-one collaboration platform where teams chat, share docu
 ## Quick start
 
 <Note>
-Requires OpenClaw 2026.4.25 or above. Run `openclaw --version` to check. Upgrade with `openclaw update`.
+Requires OpenClaw 2026.5.29 or above. Run `openclaw --version` to check. Upgrade with `openclaw update`.
 </Note>
 
 <Steps>
@@ -584,6 +584,10 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                  | `false`                              |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                            | `true`                               |
 | `channels.feishu.resolveSenderNames`                     | Resolve sender display names                                                     | `true`                               |
+| `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                        | `true`                               |
+| `channels.feishu.tools.base`                             | Alias for `channels.feishu.tools.bitable`; explicit `bitable` wins when both set | `true`                               |
+| `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                               | inherited                            |
+| `channels.feishu.accounts.<id>.tools.base`               | Per-account alias for `tools.bitable`                                            | inherited                            |
 
 ---
 

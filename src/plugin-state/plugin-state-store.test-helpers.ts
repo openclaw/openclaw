@@ -1,5 +1,7 @@
-import { seedPluginStateSqliteEntriesForTests } from "./plugin-state-store.sqlite.js";
+import { seedPluginStateDatabaseEntriesForTests } from "./plugin-state-store.sqlite.js";
 
+// Test-only seed helpers for plugin state. Values are serialized through the
+// same JSON storage path used by the production sqlite store.
 export type PluginStateSeedEntry = {
   pluginId: string;
   namespace: string;
@@ -9,12 +11,13 @@ export type PluginStateSeedEntry = {
   expiresAt?: number | null;
 };
 
+/** Seeds plugin state entries for tests without opening public store handles. */
 export function seedPluginStateEntriesForTests(entries: PluginStateSeedEntry[]): void {
   if (entries.length === 0) {
     return;
   }
 
-  seedPluginStateSqliteEntriesForTests(
+  seedPluginStateDatabaseEntriesForTests(
     entries.map((entry) => {
       const valueJson = JSON.stringify(entry.value);
       if (valueJson == null) {

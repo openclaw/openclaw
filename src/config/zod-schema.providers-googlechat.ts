@@ -13,6 +13,7 @@ import {
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
+/** DM policy schema for Google Chat accounts. */
 export const GoogleChatDmSchema = z
   .object({
     enabled: z.boolean().optional(),

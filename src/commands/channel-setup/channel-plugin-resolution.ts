@@ -1,6 +1,7 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
-  listChannelPluginCatalogEntries,
+  listRawChannelPluginCatalogEntries,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
@@ -8,7 +9,6 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
 import {
@@ -63,7 +63,7 @@ function resolveCatalogChannelEntry(raw: string, cfg: OpenClawConfig | null) {
         cfg,
         workspaceDir: resolveWorkspaceDir(cfg),
       })
-    : listChannelPluginCatalogEntries({ excludeWorkspace: true });
+    : listRawChannelPluginCatalogEntries({ excludeWorkspace: true });
   return entries.find((entry) => {
     if (normalizeOptionalLowercaseString(entry.id) === trimmed) {
       return true;

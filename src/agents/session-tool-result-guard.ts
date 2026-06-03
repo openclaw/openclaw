@@ -1,3 +1,5 @@
+import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -14,7 +16,6 @@ import type {
   PluginHookBeforeMessageWriteResult,
 } from "../plugins/types.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -46,7 +47,9 @@ function capToolResultSize(msg: AgentMessage, maxChars: number): AgentMessage {
 }
 
 function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
-  return Math.max(1, opts?.maxToolResultChars ?? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
+  return resolveIntegerOption(opts?.maxToolResultChars, DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS, {
+    min: 1,
+  });
 }
 
 type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
@@ -518,6 +521,8 @@ export function installSessionToolResultGuard(
   opts?: {
     /** Optional session key for transcript update broadcasts. */
     sessionKey?: string;
+    /** Optional agent id for selected-global transcript update broadcasts. */
+    agentId?: string;
     /**
      * Optional transform applied to any message before persistence.
      */
@@ -740,8 +745,15 @@ export function installSessionToolResultGuard(
     ) {
       flushPendingToolResults();
     }
-    // If new tool calls arrive while older ones are pending, flush the old ones first.
-    if (pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)) {
+    // If synthetic results are disabled, a new assistant tool-call turn is a safe
+    // boundary to drop older pending ids. When synthetic results are enabled,
+    // do not synthesize here: parallel tool-result appends can still be racing
+    // this assistant append, and transcript repair can move late real results
+    // back into strict provider order before the next replay.
+    if (
+      !allowSyntheticToolResults &&
+      pendingState.shouldFlushBeforeNewToolCalls(toolCalls.length)
+    ) {
       flushPendingToolResults();
     }
 
@@ -777,6 +789,7 @@ export function installSessionToolResultGuard(
       emitSessionTranscriptUpdate({
         sessionFile,
         sessionKey: opts?.sessionKey,
+        ...(opts?.agentId ? { agentId: opts.agentId } : {}),
         message: finalMessage,
         messageId: typeof result === "string" ? result : undefined,
         ...(messageSeq !== undefined ? { messageSeq } : {}),

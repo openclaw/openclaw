@@ -11,6 +11,7 @@ import { getRuntimeAuthForModel } from "../../plugins/runtime/runtime-model-auth
 const DEFAULT_MAX_LABEL_LENGTH = 128;
 const TIMEOUT_MS = 15_000;
 
+/** Inputs for generating a short conversation label from the active model. */
 export type ConversationLabelParams = {
   userMessage: string;
   prompt: string;
@@ -25,7 +26,7 @@ function isTextContentBlock(block: { type: string }): block is TextContent {
 }
 
 function isCodexSimpleCompletionModel(model: { api?: string; provider?: string }): boolean {
-  return model.provider === "openai-codex" || model.api === "openai-codex-responses";
+  return model.api === "openai-chatgpt-responses";
 }
 
 function extractSimpleCompletionError(result: {
@@ -38,6 +39,7 @@ function extractSimpleCompletionError(result: {
   return result.errorMessage?.trim() || "unknown error";
 }
 
+/** Generates a bounded human-readable label for a session, or null on failure. */
 export async function generateConversationLabel(
   params: ConversationLabelParams,
 ): Promise<string | null> {
@@ -70,6 +72,7 @@ export async function generateConversationLabel(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
+    // Label generation should never block normal reply handling for long.
     const result = await completeSimple(
       completionModel,
       {

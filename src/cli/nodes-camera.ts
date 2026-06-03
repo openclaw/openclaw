@@ -1,7 +1,9 @@
+// Camera payload validation and artifact writers for node media commands.
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { normalizeHostname } from "../infra/net/hostname.js";
+import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { resolveCliName } from "./cli-name.js";
 import {
   asBoolean,
@@ -14,8 +16,10 @@ import {
 const MAX_CAMERA_URL_DOWNLOAD_BYTES = 250 * 1024 * 1024;
 const MAX_CAMERA_BASE64_BYTES = MAX_CAMERA_URL_DOWNLOAD_BYTES;
 
+/** Camera orientation accepted by node camera commands. */
 export type CameraFacing = "front" | "back";
 
+/** Validated still-image payload from `nodes camera snap`. */
 export type CameraSnapPayload = {
   format: string;
   base64?: string;
@@ -24,6 +28,7 @@ export type CameraSnapPayload = {
   height: number;
 };
 
+/** Validated video payload from `nodes camera clip`. */
 export type CameraClipPayload = {
   format: string;
   base64?: string;
@@ -32,6 +37,7 @@ export type CameraClipPayload = {
   hasAudio: boolean;
 };
 
+/** Validate and normalize an unknown camera still-image payload. */
 export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
   const obj = asRecord(value);
   const format = asString(obj.format);
@@ -45,6 +51,7 @@ export function parseCameraSnapPayload(value: unknown): CameraSnapPayload {
   return { format, ...(base64 ? { base64 } : {}), ...(url ? { url } : {}), width, height };
 }
 
+/** Validate and normalize an unknown camera clip payload. */
 export function parseCameraClipPayload(value: unknown): CameraClipPayload {
   const obj = asRecord(value);
   const format = asString(obj.format);
@@ -58,6 +65,7 @@ export function parseCameraClipPayload(value: unknown): CameraClipPayload {
   return { format, ...(base64 ? { base64 } : {}), ...(url ? { url } : {}), durationMs, hasAudio };
 }
 
+/** Build a deterministic temp path for a camera artifact. */
 export function cameraTempPath(opts: {
   kind: "snap" | "clip";
   facing?: CameraFacing;
@@ -75,6 +83,7 @@ export function cameraTempPath(opts: {
   return path.join(tmpDir, `${cliName}-camera-${opts.kind}${facingPart}-${id}${ext}`);
 }
 
+/** Download a node-hosted media URL to disk after HTTPS, host, redirect, and size checks. */
 export async function writeUrlToFile(
   filePath: string,
   url: string,
@@ -94,6 +103,7 @@ export async function writeUrlToFile(
     );
   }
 
+  // The node host is allowed even when private because the RPC response supplied its remote IP.
   const policy = {
     allowPrivateNetwork: true,
     allowedHostnames: [expectedHost],
@@ -124,7 +134,7 @@ export async function writeUrlToFile(
     }
 
     const contentLengthRaw = res.headers.get("content-length");
-    const contentLength = contentLengthRaw ? Number.parseInt(contentLengthRaw, 10) : undefined;
+    const contentLength = parseStrictNonNegativeInteger(contentLengthRaw);
     if (
       typeof contentLength === "number" &&
       Number.isFinite(contentLength) &&
@@ -168,7 +178,7 @@ export async function writeUrlToFile(
 
     if (thrown) {
       await fs.unlink(filePath).catch(() => {});
-      throw thrown;
+      throw toLintErrorObject(thrown, "Non-Error thrown");
     }
   } finally {
     await release();
@@ -183,6 +193,7 @@ function estimateDecodedBase64Bytes(base64: string): number {
   return Math.floor((normalized.length * 3) / 4) - padding;
 }
 
+/** Decode a base64 media payload to disk with preflight and post-decode size checks. */
 export async function writeBase64ToFile(
   filePath: string,
   base64: string,
@@ -200,6 +211,7 @@ export async function writeBase64ToFile(
   return { path: filePath, bytes: buf.length };
 }
 
+/** Require the node remote IP needed to validate URL-backed camera payloads. */
 export function requireNodeRemoteIp(remoteIp?: string): string {
   const normalized = remoteIp?.trim();
   if (!normalized) {
@@ -208,6 +220,7 @@ export function requireNodeRemoteIp(remoteIp?: string): string {
   return normalized;
 }
 
+/** Write either a URL-backed or base64-backed camera payload to disk. */
 export async function writeCameraPayloadToFile(params: {
   filePath: string;
   payload: { url?: string; base64?: string };
@@ -227,6 +240,7 @@ export async function writeCameraPayloadToFile(params: {
   throw new Error(params.invalidPayloadMessage ?? "invalid camera payload");
 }
 
+/** Write a camera clip payload to a generated temp file and return its path. */
 export async function writeCameraClipPayloadToFile(params: {
   payload: CameraClipPayload;
   facing: CameraFacing;
@@ -248,4 +262,18 @@ export async function writeCameraClipPayloadToFile(params: {
     invalidPayloadMessage: "invalid camera.clip payload",
   });
   return filePath;
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

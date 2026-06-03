@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { inspect } from "node:util";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number-runtime";
 import type {
   AcpRuntime,
   OpenClawPluginService,
@@ -23,7 +24,7 @@ import {
   reapStaleOpenClawOwnedAcpxOrphans,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
-import { lazyStartRuntimeTurn } from "./runtime-turn.js";
+import { createLazyAcpRuntimeProxy } from "./runtime-proxy.js";
 
 type AcpxRuntimeLike = AcpRuntime & {
   probeAvailability(): Promise<void>;
@@ -60,6 +61,13 @@ function loadRuntimeModule(): Promise<AcpxRuntimeModule> {
   return runtimeModulePromise;
 }
 
+export function resolveAcpxTimerTimeoutMs(timeoutSeconds: number | undefined): number | undefined {
+  if (timeoutSeconds === undefined) {
+    return undefined;
+  }
+  return finiteSecondsToTimerSafeMilliseconds(timeoutSeconds) ?? 1;
+}
+
 function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntimeLike {
   let runtime: AcpxRuntimeLike | null = null;
   let runtimePromise: Promise<AcpxRuntimeLike> | null = null;
@@ -84,10 +92,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
         permissionMode: params.pluginConfig.permissionMode,
         nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
-        timeoutMs:
-          params.pluginConfig.timeoutSeconds != null
-            ? params.pluginConfig.timeoutSeconds * 1_000
-            : undefined,
+        timeoutMs: resolveAcpxTimerTimeoutMs(params.pluginConfig.timeoutSeconds),
       }) as AcpxRuntimeLike;
       return runtime;
     });
@@ -95,39 +100,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
   }
 
   return {
-    async ensureSession(input) {
-      return await (await resolveRuntime()).ensureSession(input);
-    },
-    startTurn(input) {
-      return lazyStartRuntimeTurn(resolveRuntime, input);
-    },
-    async *runTurn(input) {
-      yield* (await resolveRuntime()).runTurn(input);
-    },
-    async getCapabilities(input) {
-      return (await (await resolveRuntime()).getCapabilities?.(input)) ?? { controls: [] };
-    },
-    async getStatus(input) {
-      return (await (await resolveRuntime()).getStatus?.(input)) ?? {};
-    },
-    async setMode(input) {
-      await (await resolveRuntime()).setMode?.(input);
-    },
-    async setConfigOption(input) {
-      await (await resolveRuntime()).setConfigOption?.(input);
-    },
-    async doctor() {
-      return (await (await resolveRuntime()).doctor?.()) ?? { ok: true, message: "ok" };
-    },
-    async prepareFreshSession(input) {
-      await (await resolveRuntime()).prepareFreshSession?.(input);
-    },
-    async cancel(input) {
-      await (await resolveRuntime()).cancel(input);
-    },
-    async close(input) {
-      await (await resolveRuntime()).close(input);
-    },
+    ...createLazyAcpRuntimeProxy(resolveRuntime),
     async probeAvailability() {
       await (await resolveRuntime()).probeAvailability();
     },
@@ -233,7 +206,7 @@ async function withStartupProbeTimeout<T>(params: {
   timeoutSeconds: number;
 }): Promise<T> {
   let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutMs = Math.max(1, params.timeoutSeconds * 1_000);
+  const timeoutMs = resolveAcpxTimerTimeoutMs(params.timeoutSeconds) ?? 1;
   try {
     return await Promise.race([
       params.promise,

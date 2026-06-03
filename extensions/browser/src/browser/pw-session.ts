@@ -1,5 +1,10 @@
 import crypto from "node:crypto";
 import path from "node:path";
+import {
+  isFutureDateTimestampMs,
+  parseFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   Browser,
@@ -181,9 +186,23 @@ const cachedByCdpUrl = new Map<string, ConnectedBrowser>();
 const connectingByCdpUrl = new Map<string, Promise<ConnectedBrowser>>();
 const blockedTargetsByCdpUrl = new Set<string>();
 const blockedPageRefsByCdpUrl = new Map<string, WeakSet<Page>>();
+let cdpConnectRetryDelayMsForTests: number | undefined;
+
+export function setCdpConnectRetryDelayMsForTests(delayMs?: number): void {
+  cdpConnectRetryDelayMsForTests = delayMs;
+}
+
+function resolveObservedDialogTimeoutMs(timeoutMs: number | undefined): number {
+  const parsed = parseFiniteNumber(timeoutMs);
+  return Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
+}
 
 function normalizeCdpUrl(raw: string) {
   return raw.replace(/\/$/, "");
+}
+
+function resolveCdpConnectRetryDelayMs(attempt: number): number {
+  return cdpConnectRetryDelayMsForTests ?? 250 + attempt * 250;
 }
 
 function buildManagedDownloadPath(fileName: string): string {
@@ -348,7 +367,7 @@ function observeDialog(pageState: PageState, dialog: Dialog): void {
   pageState.pendingDialogs.push(pending);
 
   const armed = pageState.armedDialogResponse;
-  if (armed && armed.expiresAt >= Date.now()) {
+  if (armed && isFutureDateTimestampMs(armed.expiresAt)) {
     clearArmedDialogResponse(pageState);
     void settleObservedDialog({
       state: pageState,
@@ -784,10 +803,14 @@ export function armObservedDialogResponseOnPage(opts: {
 }): void {
   const state = ensurePageState(opts.page);
   clearArmedDialogResponse(state);
-  const timeoutMs = Math.max(1, Math.floor(opts.timeoutMs ?? OBSERVED_DIALOG_TIMEOUT_MS));
+  const timeoutMs = resolveObservedDialogTimeoutMs(opts.timeoutMs);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(timeoutMs);
+  if (expiresAt === undefined) {
+    return;
+  }
   const response: ArmedDialogResponse = {
     accept: opts.accept,
-    expiresAt: Date.now() + timeoutMs,
+    expiresAt,
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {
@@ -923,8 +946,10 @@ async function connectBrowser(cdpUrl: string, ssrfPolicy?: SsrFPolicy): Promise<
         if (errMsg.includes("rate limit")) {
           break;
         }
-        const delay = 250 + attempt * 250;
-        await new Promise((r) => setTimeout(r, delay));
+        const delay = resolveCdpConnectRetryDelayMs(attempt);
+        await new Promise((r) => {
+          setTimeout(r, delay);
+        });
       }
     }
     if (lastErr instanceof Error) {
@@ -1043,7 +1068,7 @@ async function findPageByTargetId(
   const pages = await getAllPages(browser);
   let resolvedViaCdp = false;
   for (const page of pages) {
-    let tid: string | null = null;
+    let tid: string | null;
     try {
       tid = await pageTargetId(page);
       resolvedViaCdp = true;
@@ -1147,7 +1172,7 @@ export async function getPageForTargetId(opts: {
 }
 
 function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame = false;
+  let sameMainFrame;
   try {
     sameMainFrame = request.frame() === page.mainFrame();
   } catch {
@@ -1174,7 +1199,7 @@ function isTopLevelNavigationRequest(page: Page, request: Request): boolean {
 }
 
 function isSubframeDocumentNavigationRequest(page: Page, request: Request): boolean {
-  let sameMainFrame = false;
+  let sameMainFrame;
   try {
     sameMainFrame = request.frame() === page.mainFrame();
   } catch {
@@ -1334,12 +1359,12 @@ export async function gotoPageWithNavigationGuard(
   try {
     const response = await opts.page.goto(opts.url, { timeout: opts.timeoutMs });
     if (blockedError) {
-      throw blockedError;
+      throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     return response;
   } catch (err) {
     if (blockedError) {
-      throw blockedError;
+      throw toLintErrorObject(blockedError, "Non-Error thrown");
     }
     throw err;
   } finally {
@@ -1783,9 +1808,22 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
           await send("Page.bringToFront");
         },
       });
-      return;
     } catch {
       throw err;
     }
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

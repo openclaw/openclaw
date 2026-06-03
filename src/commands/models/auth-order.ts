@@ -1,3 +1,4 @@
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveAgentDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import {
   type AuthProfileStore,
@@ -9,7 +10,6 @@ import {
 import { normalizeProviderId } from "../../agents/model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { shortenHomePath } from "../../utils.js";
 import { loadModelsConfig } from "./load-config.js";
 import { resolveKnownAgentId } from "./shared.js";
@@ -71,7 +71,7 @@ export async function modelsAuthOrderGetCommand(
 
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
-  runtime.log(`Auth state file: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
+  runtime.log(`Auth state store: ${shortenHomePath(resolveAuthStatePathForDisplay(agentDir))}`);
   runtime.log(order.length > 0 ? `Order override: ${order.join(", ")}` : "Order override: (none)");
 }
 
@@ -87,7 +87,7 @@ export async function modelsAuthOrderClearCommand(
   });
   if (!updated) {
     throw new Error(
-      `Failed to update auth-state.json; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order clear --provider " + provider)}.`,
+      `Failed to update auth state; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order clear --provider " + provider)}.`,
     );
   }
 
@@ -132,7 +132,7 @@ export async function modelsAuthOrderSetCommand(
   });
   if (!updated) {
     throw new Error(
-      `Failed to update auth-state.json; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order set --provider " + provider + " <profileIds...>")}.`,
+      `Failed to update auth state; the auth state lock may be busy. Wait a moment and rerun ${formatCliCommand("openclaw models auth order set --provider " + provider + " <profileIds...>")}.`,
     );
   }
 

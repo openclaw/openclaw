@@ -38,6 +38,11 @@ const ENFORCED_MAINTENANCE_OVERRIDE = {
   highWaterBytes: null,
 };
 
+function jsonRoundTrip<T>(value: T): T {
+  const serialized = JSON.stringify(value);
+  return JSON.parse(serialized) as T;
+}
+
 const archiveTimestamp = (ms: number) => new Date(ms).toISOString().replaceAll(":", "-");
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-pruning-integ-" });
@@ -46,8 +51,8 @@ function makeEntry(updatedAt: number): SessionEntry {
   return { sessionId: crypto.randomUUID(), updatedAt };
 }
 
-function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyEnforcedMaintenanceConfig(mockLoadConfigValue: ReturnType<typeof vi.fn>) {
+  mockLoadConfigValue.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",
@@ -58,8 +63,8 @@ function applyEnforcedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>
   });
 }
 
-function applyCappedMaintenanceConfig(mockLoadConfig: ReturnType<typeof vi.fn>) {
-  mockLoadConfig.mockReturnValue({
+function applyCappedMaintenanceConfig(mockLoadConfigLocal: ReturnType<typeof vi.fn>) {
+  mockLoadConfigLocal.mockReturnValue({
     session: {
       maintenance: {
         mode: "enforce",
@@ -328,6 +333,14 @@ describe("Integration: saveSessionStore with pruning", () => {
     const now = Date.now();
     const validTranscript = path.join(testDir, "valid-present.jsonl");
     const legacyPresentTranscript = path.join(testDir, "legacy-present.jsonl");
+    const emptyPresentTranscript = path.join(testDir, "empty-present.jsonl");
+    const headerOnlyPresentTranscript = path.join(testDir, "header-only-present.jsonl");
+    const userOnlyPresentTranscript = path.join(testDir, "user-only-present.jsonl");
+    const legacyRolePresentTranscript = path.join(testDir, "legacy-role-present.jsonl");
+    const legacyNestedRolePresentTranscript = path.join(
+      testDir,
+      "legacy-nested-role-present.jsonl",
+    );
     await fs.writeFile(
       storePath,
       JSON.stringify(
@@ -354,6 +367,14 @@ describe("Integration: saveSessionStore with pruning", () => {
             updatedAt: now,
           },
           "valid-present": { sessionId: "valid-present", updatedAt: now },
+          "empty-present": { sessionId: "empty-present", updatedAt: now },
+          "header-only-present": { sessionId: "header-only-present", updatedAt: now },
+          "user-only-present": { sessionId: "user-only-present", updatedAt: now },
+          "legacy-role-present": { sessionId: "legacy-role-present", updatedAt: now },
+          "legacy-nested-role-present": {
+            sessionId: "legacy-nested-role-present",
+            updatedAt: now,
+          },
         } satisfies Record<string, SessionEntry>,
         null,
         2,
@@ -362,6 +383,27 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     await fs.writeFile(validTranscript, "valid", "utf-8");
     await fs.writeFile(legacyPresentTranscript, "legacy", "utf-8");
+    await fs.writeFile(emptyPresentTranscript, "", "utf-8");
+    await fs.writeFile(
+      headerOnlyPresentTranscript,
+      '{"type":"session","id":"header-only-present","cwd":"/tmp"}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      userOnlyPresentTranscript,
+      '{"type":"session","id":"user-only-present"}\n{"type":"message","message":{"role":"user","content":"hello"}}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      legacyRolePresentTranscript,
+      '{"role":"user","content":"legacy transcript row"}\n',
+      "utf-8",
+    );
+    await fs.writeFile(
+      legacyNestedRolePresentTranscript,
+      '{"message":{"role":"user","content":"legacy nested transcript row"}}\n',
+      "utf-8",
+    );
 
     const dryRun = await runSessionsCleanup({
       cfg: {},
@@ -369,14 +411,19 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
     const preview = dryRun.previewResults[0];
-    expect(preview?.summary.missing).toBe(3);
-    expect(preview?.summary.beforeCount).toBe(6);
-    expect(preview?.summary.afterCount).toBe(3);
+    expect(preview?.summary.missing).toBe(5);
+    expect(preview?.summary.beforeCount).toBe(11);
+    expect(preview?.summary.afterCount).toBe(6);
     expect(preview?.missingKeys.has("invalid-no-file")).toBe(true);
     expect(preview?.missingKeys.has("invalid-bad-file")).toBe(true);
     expect(preview?.missingKeys.has("invalid-missing-relative-file")).toBe(true);
+    expect(preview?.missingKeys.has("empty-present")).toBe(true);
+    expect(preview?.missingKeys.has("header-only-present")).toBe(true);
     expect(preview?.missingKeys.has("agent:main:metadata")).toBe(false);
     expect(preview?.missingKeys.has("legacy-present-invalid-id")).toBe(false);
+    expect(preview?.missingKeys.has("user-only-present")).toBe(false);
+    expect(preview?.missingKeys.has("legacy-role-present")).toBe(false);
+    expect(preview?.missingKeys.has("legacy-nested-role-present")).toBe(false);
     const rawAfterDryRun = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
       string,
       unknown
@@ -389,19 +436,25 @@ describe("Integration: saveSessionStore with pruning", () => {
       targets: [{ agentId: "main", storePath }],
     });
 
-    expect(applied.appliedSummaries[0]?.missing).toBe(3);
-    expect(applied.appliedSummaries[0]?.afterCount).toBe(3);
+    expect(applied.appliedSummaries[0]?.missing).toBe(5);
+    expect(applied.appliedSummaries[0]?.afterCount).toBe(6);
     const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(Object.keys(persisted)).toEqual([
       "agent:main:metadata",
       "legacy-present-invalid-id",
       "valid-present",
+      "user-only-present",
+      "legacy-role-present",
+      "legacy-nested-role-present",
     ]);
     expect(persisted["agent:main:metadata"]).toMatchObject({ groupActivation: "always" });
     expect(persisted["agent:main:metadata"]?.sessionId).toBeUndefined();
     expect(persisted["legacy-present-invalid-id"]?.sessionId).toBe("agent:main:main");
     await expectPathExists(validTranscript);
     await expectPathExists(legacyPresentTranscript);
+    await expectPathExists(legacyRolePresentTranscript);
+    await expectPathExists(legacyNestedRolePresentTranscript);
+    await expectPathExists(userOnlyPresentTranscript);
   });
 
   it("sessions cleanup previews stale direct DM rows after dmScope returns to main", async () => {
@@ -630,7 +683,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     const freshReset = path.join(
       testDir,
-      `fresh-reset.jsonl.reset.${archiveTimestamp(now - 1 * DAY_MS)}`,
+      `fresh-reset.jsonl.reset.${archiveTimestamp(now - DAY_MS)}`,
     );
     await fs.writeFile(oldReset, "old", "utf-8");
     await fs.writeFile(freshReset, "fresh", "utf-8");
@@ -1145,10 +1198,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     };
     await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
 
-    await saveSessionStore(
-      storePath,
-      JSON.parse(JSON.stringify(store)) as Record<string, SessionEntry>,
-    );
+    await saveSessionStore(storePath, jsonRoundTrip(store));
 
     const files = await fs.readdir(testDir);
     const backups = files.filter((file) => file.startsWith("sessions.json.bak."));
