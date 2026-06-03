@@ -1,10 +1,6 @@
 // Openai tests cover embedding batch plugin behavior.
 import { describe, expect, it } from "vitest";
-import {
-  OPENAI_BATCH_ENDPOINT,
-  parseOpenAiBatchOutput,
-  runOpenAiEmbeddingBatches,
-} from "./embedding-batch.js";
+import { parseOpenAiBatchOutput, runOpenAiEmbeddingBatches } from "./embedding-batch.js";
 
 const jsonlEncoder = new TextEncoder();
 
@@ -19,6 +15,23 @@ function jsonlBytes(value: string): number {
   return jsonlEncoder.encode(value).byteLength;
 }
 
+function fetchInputUrl(input: RequestInfo | URL): string {
+  if (typeof input === "string") {
+    return input;
+  }
+  if (input instanceof URL) {
+    return input.href;
+  }
+  return input.url;
+}
+
+function parseStringBody(init: RequestInit | undefined): unknown {
+  if (typeof init?.body !== "string") {
+    throw new Error("missing JSON request body");
+  }
+  return JSON.parse(init.body) as unknown;
+}
+
 describe("OpenAI embedding batch output", () => {
   it("wraps malformed JSONL output", () => {
     expect(() => parseOpenAiBatchOutput('{"custom_id":"ok"}\n{not json')).toThrow(
@@ -27,15 +40,18 @@ describe("OpenAI embedding batch output", () => {
   });
 
   it("splits provider uploads by serialized JSONL byte cap", async () => {
-    const requests = Array.from({ length: 3 }, (_, index) => ({
-      custom_id: String(index),
-      method: "POST" as const,
-      url: OPENAI_BATCH_ENDPOINT,
-      body: {
-        model: "text-embedding-3-small",
-        input: `payload-${index}-${"β".repeat(8)}`,
-      },
-    }));
+    const requests: Parameters<typeof runOpenAiEmbeddingBatches>[0]["requests"] = Array.from(
+      { length: 3 },
+      (_, index) => ({
+        custom_id: String(index),
+        method: "POST" as const,
+        url: "/v1/embeddings",
+        body: {
+          model: "text-embedding-3-small",
+          input: `payload-${index}-${"β".repeat(8)}`,
+        },
+      }),
+    );
     const uploadedJsonl: string[] = [];
     const requestsByFileId = new Map<string, Array<{ custom_id?: string }>>();
     const outputByFileId = new Map<string, string>();
@@ -43,7 +59,7 @@ describe("OpenAI embedding batch output", () => {
     let batchIndex = 0;
     const maxJsonlBytes = jsonlBytes(JSON.stringify(requests[0]));
     const fetchImpl: typeof fetch = async (input, init) => {
-      const url = String(input);
+      const url = fetchInputUrl(input);
       if (url.endsWith("/files") && init?.method === "POST") {
         const form = init.body as FormData;
         const file = form.get("file");
@@ -61,7 +77,7 @@ describe("OpenAI embedding batch output", () => {
         return jsonResponse({ id: fileId });
       }
       if (url.endsWith("/batches") && init?.method === "POST") {
-        const body = JSON.parse(String(init.body)) as { input_file_id?: string };
+        const body = parseStringBody(init) as { input_file_id?: string };
         const batchId = `batch-${batchIndex}`;
         const outputFileId = `output-${batchIndex}`;
         batchIndex += 1;
