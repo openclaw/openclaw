@@ -1,3 +1,7 @@
+/**
+ * Core sender identity validation for channel contexts before plugins/tools consume them.
+ * Keep this generic; channel-specific identity extraction belongs in each plugin.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { normalizeChatType } from "./chat-type.js";
