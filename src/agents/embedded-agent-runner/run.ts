@@ -2336,6 +2336,7 @@ export async function runEmbeddedAgent(
                 `livenessState=blocked suggestedAction=reset_or_new kind=${kind}`,
             );
             attempt.setTerminalLifecycleMeta?.({
+              aborted,
               replayInvalid: resolveReplayInvalidForAttempt(),
               livenessState: "blocked",
             });
@@ -2374,6 +2375,7 @@ export async function runEmbeddedAgent(
             const errorText = formatErrorMessage(promptError);
             const replayInvalid = resolveReplayInvalidForAttempt();
             attempt.setTerminalLifecycleMeta?.({
+              aborted,
               replayInvalid,
               livenessState: "blocked",
             });
@@ -2479,6 +2481,7 @@ export async function runEmbeddedAgent(
             // Handle role ordering errors with a user-friendly message
             if (/incorrect role information|roles must alternate/i.test(errorText)) {
               attempt.setTerminalLifecycleMeta?.({
+                aborted,
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
               });
@@ -2520,6 +2523,7 @@ export async function runEmbeddedAgent(
                 typeof maxMb === "number" && Number.isFinite(maxMb) ? `${maxMb}` : null;
               const maxBytesHint = maxMbLabel ? ` (max ${maxMbLabel}MB)` : "";
               attempt.setTerminalLifecycleMeta?.({
+                aborted,
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
               });
@@ -3031,6 +3035,7 @@ export async function runEmbeddedAgent(
             const timeoutPhase = attempt.promptTimeoutOutcome?.timeoutPhase ?? "provider";
             const providerStarted = attempt.promptTimeoutOutcome?.providerStarted ?? true;
             attempt.setTerminalLifecycleMeta?.({
+              aborted,
               replayInvalid,
               livenessState,
               timeoutPhase,
@@ -3281,6 +3286,7 @@ export async function runEmbeddedAgent(
             const replayInvalid = resolveReplayInvalidForAttempt(null);
             const livenessState: EmbeddedRunLivenessState = "blocked";
             attempt.setTerminalLifecycleMeta?.({
+              aborted,
               replayInvalid,
               livenessState,
             });
@@ -3328,6 +3334,7 @@ export async function runEmbeddedAgent(
               incompleteTurnText: "⚠️ Agent couldn't generate a response. Please try again.",
             });
             attempt.setTerminalLifecycleMeta?.({
+              aborted,
               replayInvalid,
               livenessState,
             });
@@ -3432,6 +3439,7 @@ export async function runEmbeddedAgent(
               incompleteTurnText,
             });
             attempt.setTerminalLifecycleMeta?.({
+              aborted,
               replayInvalid,
               livenessState,
             });
@@ -3552,6 +3560,7 @@ export async function runEmbeddedAgent(
             ? [{ text: SILENT_REPLY_TOKEN }]
             : payloadsForTerminalPath;
           attempt.setTerminalLifecycleMeta?.({
+            aborted,
             replayInvalid,
             livenessState,
             stopReason,

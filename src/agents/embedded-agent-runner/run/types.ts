@@ -196,5 +196,6 @@ export type EmbeddedRunAttemptResult = {
     yielded?: boolean;
     timeoutPhase?: AgentRunTimeoutPhase;
     providerStarted?: boolean;
+    aborted?: boolean;
   }) => void;
 };

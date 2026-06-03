@@ -120,6 +120,50 @@ describe("handleAgentEnd", () => {
     });
   });
 
+  it("forwards the runner's explicit aborted flag into the lifecycle end payload (#66534)", async () => {
+    emitAgentEventMock.mockClear();
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      { role: "assistant", stopReason: "end_turn", content: [{ type: "text", text: "partial" }] },
+      { onAgentEvent },
+    );
+    // The runner records this via setTerminalLifecycleMeta({ aborted }) on a user-cancelled
+    // run; it must reach the lifecycle:end payload so downstream consumers can distinguish a
+    // cancellation from a normal completion. #66534
+    ctx.state.terminalAborted = true;
+
+    await handleAgentEnd(ctx);
+
+    // Both the per-run callback and the global sink carry the explicit aborted flag.
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ phase: "end", aborted: true }),
+      }),
+    );
+    expect(emitAgentEventMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "lifecycle",
+        data: expect.objectContaining({ aborted: true }),
+      }),
+    );
+  });
+
+  it("omits aborted from the lifecycle payload when the runner never recorded it (#66534)", async () => {
+    const onAgentEvent = vi.fn();
+    const ctx = createContext(
+      { role: "assistant", stopReason: "end_turn", content: [{ type: "text", text: "done" }] },
+      { onAgentEvent },
+    );
+
+    // No terminalAborted recorded → no aborted key, so a normal completion is not mislabeled.
+    await handleAgentEnd(ctx);
+
+    for (const [event] of onAgentEvent.mock.calls) {
+      expect((event as { data?: Record<string, unknown> }).data).not.toHaveProperty("aborted");
+    }
+  });
+
   it("suppresses structured provider error messages in user-facing lifecycle events", async () => {
     const onAgentEvent = vi.fn();
     const rawError =

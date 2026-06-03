@@ -134,6 +134,9 @@ export function handleAgentEnd(
       ...(typeof ctx.state.providerStarted === "boolean"
         ? { providerStarted: ctx.state.providerStarted }
         : {}),
+      ...(typeof ctx.state.terminalAborted === "boolean"
+        ? { aborted: ctx.state.terminalAborted }
+        : {}),
     };
     if (isError) {
       emitAgentEvent({
