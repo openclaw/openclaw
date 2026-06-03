@@ -19,6 +19,7 @@ permissions:
 
 jobs:
   android:
+    if: github.repository == 'openclaw/openclaw'
     name: Critical Security (android)
     runs-on: blacksmith-8vcpu-ubuntu-2404
     timeout-minutes: 45

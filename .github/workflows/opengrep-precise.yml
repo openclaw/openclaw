@@ -35,6 +35,7 @@ permissions:
 
 jobs:
   scan:
+    if: github.repository == 'openclaw/openclaw'
     name: Scan changed paths (precise)
     if: ${{ !github.event.pull_request.draft }}
     runs-on: blacksmith-4vcpu-ubuntu-2404

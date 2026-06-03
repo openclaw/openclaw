@@ -15,6 +15,7 @@ permissions: {}
 
 jobs:
   real-behavior-proof:
+    if: github.repository == 'openclaw/openclaw'
     name: Real behavior proof
     permissions:
       contents: read
