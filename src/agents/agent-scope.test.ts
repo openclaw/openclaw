@@ -939,11 +939,11 @@ describe("resolveAgentConfig", () => {
     // agent's own model, so agents without a per-agent subagents.model inherit
     // the default-subagent fallbacks rather than the agent model fallbacks.
     expect(resolveSubagentModelFallbacksOverride(cfg, "agent-model")).toEqual([
-      "openai-codex/gpt-5.4",
+      "openai/gpt-5.4",
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "metadata-only-subagent")).toEqual([
-      "openai-codex/gpt-5.4",
+      "openai/gpt-5.4",
       "zai/glm-5",
     ]);
     expect(resolveSubagentModelFallbacksOverride(cfg, "fallback-only-agent-model")).toEqual([

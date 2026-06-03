@@ -134,7 +134,7 @@ describe("resolveCronFallbacksOverride", () => {
           message: "summarize",
         }),
       }),
-    ).toEqual(["openai-codex/gpt-5.2"]);
+    ).toEqual(["openai/gpt-5.2"]);
   });
 
   it("keeps a selected agent primary model strict when no default subagent primary is selectable", () => {
