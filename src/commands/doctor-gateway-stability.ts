@@ -11,7 +11,11 @@ import {
 type ChannelTurnSummary = NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>;
 
 export type GatewayChannelTurnHealthDoctorNote = {
-  title: "Gateway channel turns" | "Gateway sessions" | "Gateway queues";
+  title:
+    | "Gateway channel turns"
+    | "Gateway sessions"
+    | "Gateway queues"
+    | "Gateway runtime recommendations";
   body: string;
 };
 
@@ -289,6 +293,38 @@ export function buildGatewayQueueHealthDoctorNote(params: {
   };
 }
 
+export function buildGatewayRuntimeRecommendationsDoctorNote(params: {
+  snapshot: DiagnosticStabilitySnapshot;
+  sourceLabel?: string;
+}): GatewayChannelTurnHealthDoctorNote | null {
+  const recommendations = params.snapshot.summary.recommendations;
+  if (!recommendations || recommendations.length === 0) {
+    return null;
+  }
+
+  const source = params.sourceLabel?.trim() || "Gateway diagnostics";
+  const lines = [`Runtime recommendations from ${source}:`];
+  for (const recommendation of recommendations.slice(0, 5)) {
+    const details = [
+      `${recommendation.priority}: ${recommendation.code}`,
+      `source=${recommendation.source}`,
+      `reason=${recommendation.reason}`,
+      recommendation.metric ? `metric=${recommendation.metric}` : "",
+      recommendation.valueMs !== undefined
+        ? `value=${formatChannelTurnLatencyMs(recommendation.valueMs)}`
+        : "",
+      recommendation.count !== undefined ? `count=${recommendation.count}` : "",
+    ].filter(Boolean);
+    lines.push(`- ${details.join(" ")}`);
+    lines.push(`  Guidance: ${recommendation.guidance}`);
+  }
+
+  return {
+    title: "Gateway runtime recommendations",
+    body: lines.join("\n"),
+  };
+}
+
 async function loadGatewayStabilitySnapshot(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
@@ -344,5 +380,9 @@ export async function noteGatewayChannelTurnHealth(params: {
   const queueNote = buildGatewayQueueHealthDoctorNote(loaded);
   if (queueNote) {
     note(queueNote.body, queueNote.title);
+  }
+  const recommendationsNote = buildGatewayRuntimeRecommendationsDoctorNote(loaded);
+  if (recommendationsNote) {
+    note(recommendationsNote.body, recommendationsNote.title);
   }
 }

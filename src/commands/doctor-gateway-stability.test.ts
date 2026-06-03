@@ -3,6 +3,7 @@ import type { DiagnosticStabilitySnapshot } from "../logging/diagnostic-stabilit
 import {
   buildGatewayChannelTurnHealthDoctorNote,
   buildGatewayQueueHealthDoctorNote,
+  buildGatewayRuntimeRecommendationsDoctorNote,
   buildGatewaySessionAttentionDoctorNote,
 } from "./doctor-gateway-stability.js";
 
@@ -531,5 +532,58 @@ describe("doctor gateway stability", () => {
       "direct-control lanes should not wait behind long tool or cron work",
     );
     expect(note?.body).not.toContain("telegram:direct:owner");
+  });
+
+  it("stays quiet when no runtime recommendations are present", () => {
+    const note = buildGatewayRuntimeRecommendationsDoctorNote({
+      snapshot: makeSnapshotFromSummary({ byType: {} }),
+    });
+
+    expect(note).toBeNull();
+  });
+
+  it("reports runtime recommendations without raw private context", () => {
+    const note = buildGatewayRuntimeRecommendationsDoctorNote({
+      sourceLabel: "live Gateway diagnostics",
+      snapshot: makeSnapshotFromSummary({
+        byType: { "channel.turn.event": 1 },
+        recommendations: [
+          {
+            code: "inspect_missing_delivery",
+            priority: "high",
+            source: "channel_turns",
+            reason: "missing_visible_delivery",
+            count: 1,
+            guidance:
+              "Inspect the visible channel dispatch path; direct DMs must record delivery.sent before the turn is considered healthy.",
+          },
+          {
+            code: "clear_queue_pressure",
+            priority: "medium",
+            source: "queues",
+            reason: "slow_queue_dequeue",
+            metric: "waitMs",
+            valueMs: 12_500,
+            count: 1,
+            guidance:
+              "Inspect queue/session pressure, stale work, and overlapping background jobs; direct control messages should not wait behind long work.",
+          },
+        ],
+      }),
+    });
+
+    expect(note).toEqual({
+      title: "Gateway runtime recommendations",
+      body: expect.stringContaining("Runtime recommendations from live Gateway diagnostics:"),
+    });
+    expect(note?.body).toContain(
+      "- high: inspect_missing_delivery source=channel_turns reason=missing_visible_delivery count=1",
+    );
+    expect(note?.body).toContain(
+      "- medium: clear_queue_pressure source=queues reason=slow_queue_dequeue metric=waitMs value=12500ms count=1",
+    );
+    expect(note?.body).toContain("Guidance: Inspect queue/session pressure");
+    expect(note?.body).not.toContain("telegram:direct:owner");
+    expect(note?.body).not.toContain("private message");
   });
 });
