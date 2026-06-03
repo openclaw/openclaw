@@ -53,9 +53,14 @@ function mergeStreamingText(
   return `${previous}${next}`;
 }
 
+const resolveFeishuOutboundCredentialsConfigMock = vi.hoisted(() =>
+  vi.fn(async (params: { cfg: unknown }) => params.cfg),
+);
+
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
   resolveFeishuRuntimeAccount: resolveFeishuAccountMock,
+  resolveFeishuOutboundCredentialsConfig: resolveFeishuOutboundCredentialsConfigMock,
 }));
 vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
 vi.mock("./send.js", () => ({
@@ -2004,5 +2009,43 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       streamingInstances.push = origPush;
       nowSpy.mockRestore();
     }
+  });
+
+  it("resolves exec/keychain appSecret SecretRef before MEDIA send (#89338)", async () => {
+    // Simulates a cfg whose appSecret is still an unresolved exec SecretRef; the
+    // sync runtime resolver would throw on it.  The dispatcher must resolve it via
+    // resolveFeishuOutboundCredentialsConfig before calling sendMediaFeishu.
+    const execSecretCfg = {
+      channels: {
+        feishu: {
+          appId: "cli_main",
+          appSecret: { source: "exec", provider: "keychain_feishu_main", id: "value" },
+        },
+      },
+    } as never;
+    const resolvedCfg = {
+      channels: { feishu: { appId: "cli_main", appSecret: "resolved_secret" } },
+    } as never;
+    resolveFeishuOutboundCredentialsConfigMock.mockResolvedValueOnce(resolvedCfg);
+
+    useNonStreamingAutoAccount();
+    createFeishuReplyDispatcher({
+      cfg: execSecretCfg,
+      agentId: "agent",
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      chatId: "oc_chat",
+    });
+
+    const options = firstMockArg(createReplyDispatcherWithTypingMock, "reply dispatcher options");
+    await options.deliver({ mediaUrl: "https://example.com/img.png" }, { kind: "final" });
+
+    expect(resolveFeishuOutboundCredentialsConfigMock).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: execSecretCfg }),
+    );
+    expect(sendMediaFeishuMock).toHaveBeenCalledTimes(1);
+    expectMockArgFields(sendMediaFeishuMock, "media send params", {
+      cfg: resolvedCfg,
+      mediaUrl: "https://example.com/img.png",
+    });
   });
 });
