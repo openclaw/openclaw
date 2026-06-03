@@ -3851,8 +3851,7 @@ describe("codex command", () => {
     expect(setCodexConversationPlanMode).toHaveBeenCalledWith({
       sessionFile,
       mode: "plan",
-      agentDir: path.join(tempDir, "agents", "main", "agent"),
-      config: {},
+      pluginConfig: undefined,
     });
     expect(setCodexConversationReasoningEffort).toHaveBeenCalledWith({
       sessionFile,
