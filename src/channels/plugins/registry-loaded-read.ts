@@ -1,21 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ActiveChannelPluginRuntimeShape } from "../../plugins/channel-registry-state.types.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
+import { coerceLoadedChannelPlugin } from "./registry-loaded.js";
 import type { ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
-
-function coerceLoadedChannelPlugin(
-  plugin: ActiveChannelPluginRuntimeShape | null | undefined,
-): ChannelPlugin | undefined {
-  const id = normalizeOptionalString(plugin?.id) ?? "";
-  if (!plugin || !id) {
-    return undefined;
-  }
-  if (!plugin.meta || typeof plugin.meta !== "object") {
-    plugin.meta = {};
-  }
-  return plugin as ChannelPlugin;
-}
 
 export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";

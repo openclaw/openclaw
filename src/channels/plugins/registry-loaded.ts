@@ -21,17 +21,106 @@ type ChannelPluginView = {
   entriesById: Map<string, LoadedChannelPluginEntry>;
 };
 
-function coerceLoadedChannelPlugin(
+const stableLoadedChannelPlugins = new WeakMap<
+  ActiveChannelPluginRuntimeShape,
+  LoadedChannelPlugin
+>();
+
+function hasAccessorDescriptor(descriptor: PropertyDescriptor | undefined): boolean {
+  return Boolean(descriptor && ("get" in descriptor || "set" in descriptor));
+}
+
+function readLoadedChannelPluginId(plugin: ActiveChannelPluginRuntimeShape): string {
+  try {
+    return normalizeOptionalString(plugin.id) ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function readLoadedChannelPluginMeta(plugin: ActiveChannelPluginRuntimeShape): {
+  meta: LoadedChannelPlugin["meta"];
+  valid: boolean;
+} {
+  try {
+    const meta = plugin.meta;
+    if (meta && typeof meta === "object") {
+      return { meta: meta as LoadedChannelPlugin["meta"], valid: true };
+    }
+  } catch {
+    // Fall through to empty metadata.
+  }
+  return { meta: {}, valid: false };
+}
+
+function stableLoadedChannelPlugin(params: {
+  plugin: ActiveChannelPluginRuntimeShape;
+  id: string;
+  meta: LoadedChannelPlugin["meta"];
+}): LoadedChannelPlugin {
+  const plugin = Object.create(Object.getPrototypeOf(params.plugin)) as LoadedChannelPlugin;
+  const descriptors = Object.getOwnPropertyDescriptors(params.plugin);
+  delete descriptors.id;
+  delete descriptors.meta;
+  Object.defineProperties(plugin, descriptors);
+  Object.defineProperties(plugin, {
+    id: {
+      value: params.id,
+      enumerable: true,
+      configurable: true,
+    },
+    meta: {
+      value: params.meta,
+      enumerable: true,
+      configurable: true,
+    },
+  });
+  return plugin;
+}
+
+export function coerceLoadedChannelPlugin(
   plugin: ActiveChannelPluginRuntimeShape | null | undefined,
 ): LoadedChannelPlugin | null {
-  const id = normalizeOptionalString(plugin?.id) ?? "";
-  if (!plugin || !id) {
+  if (!plugin || typeof plugin !== "object") {
     return null;
   }
-  if (!plugin.meta || typeof plugin.meta !== "object") {
-    plugin.meta = {};
+  const idDescriptor = Object.getOwnPropertyDescriptor(plugin, "id");
+  const metaDescriptor = Object.getOwnPropertyDescriptor(plugin, "meta");
+  const needsStableWrapper =
+    hasAccessorDescriptor(idDescriptor) || hasAccessorDescriptor(metaDescriptor);
+  if (needsStableWrapper) {
+    const cached = stableLoadedChannelPlugins.get(plugin);
+    if (cached) {
+      return cached;
+    }
   }
-  return plugin as LoadedChannelPlugin;
+  const id = readLoadedChannelPluginId(plugin);
+  if (!id) {
+    return null;
+  }
+  const meta = readLoadedChannelPluginMeta(plugin);
+  if (!needsStableWrapper && meta.valid) {
+    return plugin as LoadedChannelPlugin;
+  }
+  if (!needsStableWrapper) {
+    try {
+      plugin.meta = meta.meta;
+      return plugin as LoadedChannelPlugin;
+    } catch {
+      // Fall through to a stable wrapper when malformed metadata is read-only.
+    }
+  }
+  const cached = stableLoadedChannelPlugins.get(plugin);
+  if (cached) {
+    return cached;
+  }
+  const stable = stableLoadedChannelPlugin({
+    plugin,
+    id,
+    meta: meta.meta,
+  });
+  stableLoadedChannelPlugins.set(plugin, stable);
+  return stable;
 }
 
 function dedupeChannels(channels: LoadedChannelPlugin[]): LoadedChannelPlugin[] {
