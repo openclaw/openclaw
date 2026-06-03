@@ -110,6 +110,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool allowlist when you want a narrow set of tools available at runtime. Use this for locked-down environments where tool scope must be tightly controlled.",
   "gateway.tools.deny":
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
+  "gateway.tools.directInvoke":
+    "Distinct surface-specific opt-ins for tools that expand the security boundary beyond the regular allow/deny policy. Each opt-in must be set explicitly in addition to including the tool name in gateway.tools.allow; old configs that only list the tool name in allow stay inert. Prevents upgrade-time compatibility breaks for security-sensitive coding tools on the gateway direct-invoke surface.",
+  "gateway.tools.directInvoke.hostFsRead":
+    "Allow the `read` coding tool to be materialized for direct-invoke surfaces (HTTP POST /tools/invoke + SDK RPC tools.invoke). Requires gateway.tools.allow to also include `read`. Default false. Exposes host filesystem reads outside the workspace unless tools.fs.workspaceOnly is enabled.",
   "gateway.handshakeTimeoutMs":
     "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
   "gateway.channelHealthCheckMinutes":
