@@ -86,6 +86,8 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
           readStore: params.readStoreAllowFrom,
         })
       : [];
+  // Pairing-mode store entries and configured allowlists both support access groups.
+  // Expand them separately so the access reason still reflects the source list.
   const [allowFrom, effectiveStoreAllowFrom] = await Promise.all([
     expandAllowFromWithAccessGroups({
       cfg: params.cfg,
@@ -119,6 +121,8 @@ export async function resolveInboundDirectDmAccessWithRuntime(params: {
     params.senderId,
     access.effectiveAllowFrom,
   );
+  // Older channel plugins inject their command authorizer here. When absent,
+  // preserve the legacy direct-DM behavior: command access follows sender allowlist access.
   const commandAuthorized = shouldComputeAuth
     ? (params.runtime.resolveCommandAuthorizedFromAuthorizers?.({
         useAccessGroups: params.cfg.commands?.useAccessGroups !== false,
@@ -174,6 +178,8 @@ export function createPreCryptoDirectDmAuthorizer(params: {
     }
     if (access.decision === "pairing") {
       if (params.issuePairingChallenge) {
+        // Pairing challenges happen before decrypting the DM payload; keep this branch
+        // side-effect free apart from the explicit reply hook.
         await params.issuePairingChallenge({
           senderId: input.senderId,
           reply: input.reply,
