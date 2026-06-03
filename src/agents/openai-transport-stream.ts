@@ -1768,11 +1768,17 @@ function readResponsesOutputMessageText(item: Record<string, unknown>): string {
     .join("");
 }
 
+function isFireworksProvider(model: Model): boolean {
+  const normalized = model.provider?.trim().toLowerCase();
+  return normalized === "fireworks" || normalized === "fireworks-ai";
+}
+
 function buildOpenAIClientHeaders(
   model: Model,
   context: Context,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ): Record<string, string> {
   const providerHeaders = { ...model.headers };
   if (model.provider === "github-copilot") {
@@ -1785,6 +1791,13 @@ function buildOpenAIClientHeaders(
     );
   }
   const callerHeaders = { ...optionHeaders, ...turnHeaders };
+  const shouldSendSessionAffinity =
+    sessionId && (model.compat?.sendSessionAffinityHeaders ?? isFireworksProvider(model));
+  if (shouldSendSessionAffinity) {
+    callerHeaders["x-session-affinity"] = sessionId!;
+    callerHeaders["x-client-request-id"] = sessionId!;
+    callerHeaders["session_id"] = sessionId!;
+  }
   const headers = resolveProviderRequestPolicyConfig({
     provider: model.provider,
     api: model.api,
@@ -1857,12 +1870,13 @@ function createOpenAIResponsesClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ) {
   return new OpenAI({
     apiKey,
     baseURL: model.baseUrl,
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
   });
@@ -1905,6 +1919,7 @@ export function createOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          options?.sessionId,
         );
         let params = buildOpenAIResponsesParams(
           model,
@@ -2339,6 +2354,7 @@ export function createAzureOpenAIResponsesTransportStreamFn(): StreamFn {
           apiKey,
           options?.headers,
           turnState?.headers,
+          options?.sessionId,
         );
         const deploymentName = resolveAzureDeploymentName(model);
         let params = buildAzureOpenAIResponsesParams(
@@ -2430,12 +2446,13 @@ function createAzureOpenAIClient(
   apiKey: string,
   optionHeaders?: Record<string, string>,
   turnHeaders?: Record<string, string>,
+  sessionId?: string,
 ) {
   return new AzureOpenAI({
     apiKey,
     apiVersion: resolveAzureOpenAIApiVersion(),
     dangerouslyAllowBrowser: true,
-    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders),
+    defaultHeaders: buildOpenAIClientHeaders(model, context, optionHeaders, turnHeaders, sessionId),
     baseURL: normalizeAzureBaseUrl(model.baseUrl),
     fetch: buildGuardedModelFetch(model),
     ...buildOpenAISdkClientOptions(model),
@@ -2481,8 +2498,9 @@ function createOpenAICompletionsClient(
   context: Context,
   apiKey: string,
   optionHeaders?: Record<string, string>,
+  sessionId?: string,
 ) {
-  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders);
+  const clientConfig = buildOpenAICompletionsClientConfig(model, context, optionHeaders, sessionId);
   return new OpenAI({
     apiKey,
     baseURL: clientConfig.baseURL,
@@ -2506,12 +2524,13 @@ function buildOpenAICompletionsClientConfig(
   model: Model,
   context: Context,
   optionHeaders?: Record<string, string>,
+  sessionId?: string,
 ): {
   baseURL: string;
   defaultHeaders: Record<string, string>;
   defaultQuery?: Record<string, string>;
 } {
-  const headers = buildOpenAIClientHeaders(model, context, optionHeaders);
+  const headers = buildOpenAIClientHeaders(model, context, optionHeaders, undefined, sessionId);
   const defaultQuery: Record<string, string> = {};
   let baseURL = model.baseUrl;
   let isAzureHost = false;
@@ -2574,7 +2593,13 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
       };
       try {
         const apiKey = options?.apiKey || getEnvApiKey(model.provider) || "";
-        const client = createOpenAICompletionsClient(model, context, apiKey, options?.headers);
+        const client = createOpenAICompletionsClient(
+          model,
+          context,
+          apiKey,
+          options?.headers,
+          options?.sessionId,
+        );
         let params = buildOpenAICompletionsParams(
           model as OpenAIModeModel,
           context,
