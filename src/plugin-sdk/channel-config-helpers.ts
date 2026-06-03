@@ -263,6 +263,8 @@ function resolveAccessorAccountWithFallback<
     | undefined,
   fallbackResolveAccessorAccount: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount,
 ): (params: ChannelConfigAccessorParams<Config>) => AccessorAccount {
+  // Read-only accessors can use a lighter account projection than runtime setup;
+  // fall back to the runtime resolver only when the channel has no projection hook.
   return resolveAccessorAccount ?? fallbackResolveAccessorAccount;
 }
 
@@ -559,6 +561,8 @@ export function createHybridChannelConfigBase<
     deleteAccount({ cfg, accountId }) {
       if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
         if (params.preserveSectionOnDefaultDelete) {
+          // Some hybrid channels keep non-account config at the root, so deleting
+          // default account credentials must clear only account-owned fields.
           return clearTopLevelChannelConfigFields({
             cfg,
             sectionKey: params.sectionKey,
