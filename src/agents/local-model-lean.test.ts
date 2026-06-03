@@ -36,6 +36,33 @@ describe("local model lean tool filtering", () => {
     ).toEqual(["read", "exec"]);
   });
 
+  it("omits unreadable tool names while lean filtering stays active", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          experimental: {
+            localModelLean: true,
+          },
+        },
+      },
+    };
+    const readTool = { name: "read" } as AnyAgentTool;
+    const unreadableTool = {} as AnyAgentTool;
+    Object.defineProperty(unreadableTool, "name", {
+      get() {
+        throw new Error("local model lean tool name getter exploded");
+      },
+    });
+    const execTool = { name: "exec" } as AnyAgentTool;
+
+    expect(
+      filterLocalModelLeanTools({
+        tools: [readTool, unreadableTool, { name: "cron" } as AnyAgentTool, execTool],
+        config: cfg,
+      }),
+    ).toEqual([readTool, execTool]);
+  });
+
   it("keeps explicitly preserved tools when lean mode is enabled", () => {
     const cfg: OpenClawConfig = {
       agents: {

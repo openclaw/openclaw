@@ -17,6 +17,14 @@ function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<
   );
 }
 
+function readNormalizedLocalModelLeanToolName(tool: AnyAgentTool): string | undefined {
+  try {
+    return normalizeToolName(tool.name) || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function resolveLocalModelLeanPreserveToolNames(params?: {
   toolNames?: Iterable<string>;
   forceMessageTool?: boolean;
@@ -74,7 +82,10 @@ export function filterLocalModelLeanTools(params: {
   }
   const preservedToolNames = resolvePreservedLocalModelLeanToolNames(params.preserveToolNames);
   return params.tools.filter((tool) => {
-    const normalizedName = normalizeToolName(tool.name);
+    const normalizedName = readNormalizedLocalModelLeanToolName(tool);
+    if (!normalizedName) {
+      return false;
+    }
     return (
       preservedToolNames.has(normalizedName) ||
       !LOCAL_MODEL_LEAN_DENY_TOOL_NAMES.has(normalizedName)
