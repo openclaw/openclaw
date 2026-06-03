@@ -3074,9 +3074,6 @@ describe("deliverOutboundPayloads", () => {
   });
 
   it("does not fail the channel send when the post-delivery transcript mirror throws", async () => {
-    // Regression for #89626: a transient session-lock failure on the
-    // best-effort transcript mirror must not invalidate an already-delivered
-    // channel message, otherwise the caller retries and re-sends duplicates.
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
     mocks.appendAssistantMessageToSessionTranscript.mockClear();
     mocks.appendAssistantMessageToSessionTranscript.mockRejectedValueOnce(
@@ -3096,7 +3093,6 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    // Channel delivered exactly once; the mirror failure was swallowed.
     expect(sendMatrix).toHaveBeenCalledTimes(1);
     expect(results).toHaveLength(1);
     const warnCall = requireMockCall(logMocks.warn, "warn");

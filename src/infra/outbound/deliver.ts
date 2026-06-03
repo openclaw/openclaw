@@ -1967,15 +1967,9 @@ async function deliverOutboundPayloadsCore(
       mediaUrls: deliveredMirror.mediaUrls,
     });
     if (mirrorText) {
-      // The transcript mirror is best-effort bookkeeping that runs *after* the
-      // channel payloads were already delivered (guarded by results.length > 0
-      // above). A failure here — e.g. transient session-lock contention
-      // ("session file changed while embedded prompt lock was released") — must
-      // not propagate, or the caller would treat the whole send as failed and
-      // re-deliver the already-sent message (duplicate announcements). Match the
-      // cron delivery path (mirrorDirectDeliveryIntoTranscript) and downgrade
-      // mirror failures to a warning. The append carries an idempotency key, so
-      // any later reconciliation stays deduplicated.
+      // Transcript mirroring is best-effort bookkeeping after platform send.
+      // Keep mirror failures non-fatal so callers do not retry an already-sent
+      // channel payload and create duplicate delivery.
       try {
         const { appendAssistantMessageToSessionTranscript } = await loadTranscriptRuntime();
         const mirrorResult = await appendAssistantMessageToSessionTranscript({
