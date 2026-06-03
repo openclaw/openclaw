@@ -1,0 +1,132 @@
+# ============================================================================
+# .gitignore — cinematic-scroll-skill
+#
+# This repo IS the source: assets/, examples/, templates/ are committed on
+# purpose. We only ignore generated output, installed deps, secrets, and junk.
+# (Do NOT ignore those source dirs.)
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# macOS
+# ----------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.AppleDouble
+.LSOverride
+.Spotlight-V100
+.Trashes
+.fseventsd
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+Icon?
+
+# ----------------------------------------------------------------------------
+# Windows / other OS junk
+# ----------------------------------------------------------------------------
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# ----------------------------------------------------------------------------
+# Node / package managers (templates are source — consumers install their own)
+# ----------------------------------------------------------------------------
+node_modules/
+jspm_packages/
+.npm
+.yarn/
+.yarn-integrity
+.pnp
+.pnp.js
+.pnp.cjs
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+yarn-*.log
+pnpm-debug.log*
+lerna-debug.log*
+.node_repl_history
+*.tgz
+
+# ----------------------------------------------------------------------------
+# Next.js / build output (if anyone runs the template in place)
+# ----------------------------------------------------------------------------
+.next/
+out/
+dist/
+build/
+.turbo/
+*.tsbuildinfo
+next-env.d.ts
+.swc/
+
+# ----------------------------------------------------------------------------
+# Environment / secrets — NEVER commit fal.ai keys (FAL_KEY)
+# Used by examples/studio/generate.mjs via examples/studio/.env.local
+# or the repo-root .env.local. Keep *.example templates tracked.
+# ----------------------------------------------------------------------------
+.env
+.env.*
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.pem
+secrets.json
+!.env.example
+!.env*.example
+
+# ----------------------------------------------------------------------------
+# Vercel
+# ----------------------------------------------------------------------------
+.vercel
+.vercel/
+
+# ----------------------------------------------------------------------------
+# Generated AI assets (regenerable via generate.mjs, can be large)
+# Stills committed under examples/studio/assets/ are kept on purpose.
+# ----------------------------------------------------------------------------
+templates/nextjs/public/generated/
+
+# ----------------------------------------------------------------------------
+# Logs / coverage / cache
+# ----------------------------------------------------------------------------
+*.log
+logs/
+coverage/
+.nyc_output/
+*.lcov
+.cache/
+.eslintcache
+.stylelintcache
+.parcel-cache/
+
+# ----------------------------------------------------------------------------
+# Editors / IDE
+# ----------------------------------------------------------------------------
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+*.sublime-project
+*.sublime-workspace
+
+# ----------------------------------------------------------------------------
+# Misc temp
+# ----------------------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+.history/
