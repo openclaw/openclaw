@@ -1,5 +1,24 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+type MockLoadedChannelPlugin = {
+  id: string;
+  gatewayMethods?: readonly string[];
+  gatewayMethodDescriptors?: readonly { name: string }[];
+};
+
+const mocks = vi.hoisted(() => ({
+  listLoadedChannelPlugins: vi.fn((): MockLoadedChannelPlugin[] => []),
+}));
+
+vi.mock("../channels/plugins/registry-loaded.js", () => ({
+  listLoadedChannelPlugins: mocks.listLoadedChannelPlugins,
+}));
+
 import { GATEWAY_EVENTS, listGatewayMethods } from "./server-methods-list.js";
+
+beforeEach(() => {
+  mocks.listLoadedChannelPlugins.mockReturnValue([]);
+});
 
 describe("GATEWAY_EVENTS", () => {
   it("advertises Talk event streams in hello features", () => {
@@ -61,5 +80,49 @@ describe("listGatewayMethods", () => {
     expect(methods).toContain("talk.session.submitToolResult");
     expect(methods).toContain("talk.session.steer");
     expect(methods).toContain("talk.session.close");
+  });
+
+  it("skips unreadable plugin gateway method rows while preserving healthy methods", () => {
+    const poisonedMethods = Object.defineProperty([], "0", {
+      get() {
+        throw new Error("gateway method row exploded");
+      },
+    }) as string[];
+    poisonedMethods.length = 1;
+    const poisonedDescriptor = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("gateway method descriptor name exploded");
+      },
+    }) as { name: string };
+    const poisonedDescriptorRows = Object.defineProperty([], "0", {
+      get() {
+        throw new Error("gateway method descriptor row exploded");
+      },
+    }) as { name: string }[];
+    poisonedDescriptorRows.length = 1;
+    mocks.listLoadedChannelPlugins.mockReturnValue([
+      {
+        id: "broken-method",
+        gatewayMethods: poisonedMethods,
+      },
+      {
+        id: "broken-descriptor",
+        gatewayMethodDescriptors: [poisonedDescriptor],
+      },
+      {
+        id: "broken-descriptor-row",
+        gatewayMethodDescriptors: poisonedDescriptorRows,
+      },
+      {
+        id: "healthy",
+        gatewayMethods: ["healthy.legacy"],
+        gatewayMethodDescriptors: [{ name: "healthy.descriptor" }],
+      },
+    ]);
+
+    const methods = listGatewayMethods();
+
+    expect(methods).toContain("healthy.legacy");
+    expect(methods).toContain("healthy.descriptor");
   });
 });

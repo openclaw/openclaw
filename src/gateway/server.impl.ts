@@ -85,7 +85,7 @@ import { resolveGatewayControlUiRootState } from "./server-control-ui-root.js";
 import { createLazyGatewayCronState } from "./server-cron-lazy.js";
 import { applyGatewayLaneConcurrency } from "./server-lanes.js";
 import { createGatewayServerLiveState, type GatewayServerLiveState } from "./server-live-state.js";
-import { GATEWAY_EVENTS } from "./server-methods-list.js";
+import { GATEWAY_EVENTS, listPluginGatewayMethodNames } from "./server-methods-list.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./server-methods/types.js";
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import type { GatewayPluginReloadResult } from "./server-reload-handlers.js";
@@ -729,10 +729,7 @@ export async function startGatewayServer(
   const listStartupChannelGatewayMethods = () => {
     const methods: string[] = [];
     for (const plugin of listGatewayStartupChannelPlugins()) {
-      methods.push(...(plugin.gatewayMethods ?? []));
-      for (const descriptor of plugin.gatewayMethodDescriptors ?? []) {
-        methods.push(descriptor.name);
-      }
+      methods.push(...listPluginGatewayMethodNames(plugin));
     }
     return methods;
   };
