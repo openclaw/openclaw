@@ -27,6 +27,9 @@ export type AnalyzeAssignmentsFromSnapshotResult = {
   inactive: UnresolvedCommandSecretAssignment[];
 };
 
+/**
+ * Compares source SecretRefs with the active resolved snapshot for command-time assignments.
+ */
 export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
@@ -82,6 +85,7 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
     const hasCompetingSiblingRef =
       target.entry.secretShape === "sibling_ref" && explicitRef && inlineCandidateRef; // pragma: allowlist secret
     if (hasCompetingSiblingRef) {
+      // Sibling refs are the canonical target for these surfaces; inline refs are legacy overlap.
       diagnostics.push(
         `${target.path}: both inline and sibling ref were present; sibling ref took precedence.`,
       );
@@ -91,6 +95,9 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   return { assignments, diagnostics, unresolved, inactive };
 }
 
+/**
+ * Returns resolved command assignments and throws when an active required ref is unresolved.
+ */
 export function collectCommandSecretAssignmentsFromSnapshot(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
