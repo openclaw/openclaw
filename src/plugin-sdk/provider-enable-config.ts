@@ -38,9 +38,13 @@ export function enablePluginInConfig<TConfig extends ProviderEnableConfigCarrier
   pluginId: string,
 ): PluginEnableResult<TConfig> {
   if (cfg.plugins?.enabled === false) {
+    // Policy blocks must preserve object identity so setup flows cannot persist partial plugin
+    // registry edits after global plugin loading has been disabled.
     return { config: cfg, enabled: false, reason: "plugins disabled" };
   }
   if (cfg.plugins?.deny?.includes(pluginId)) {
+    // Denylisted plugins are intentionally left untouched even when a provider setup selected
+    // them, allowing callers to report the policy reason without mutating config.
     return { config: cfg, enabled: false, reason: "blocked by denylist" };
   }
 
