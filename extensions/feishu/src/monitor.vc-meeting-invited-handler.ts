@@ -317,12 +317,6 @@ async function dispatchVcMeetingInvitedTurn(params: {
         ctxPayload,
         recordInboundSession: core.channel.session.recordInboundSession,
         record: {
-          updateLastRoute: {
-            sessionKey: route.sessionKey,
-            channel: "feishu",
-            to: `vc-meeting:${params.turn.meetingNo}`,
-            accountId: route.accountId,
-          },
           onRecordError: (err: unknown) => {
             error(
               `feishu[${account.accountId}]: failed to record vc meeting inbound session ${route.sessionKey}: ${String(err)}`,

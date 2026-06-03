@@ -304,6 +304,9 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
       typeof vi.fn
     >;
+    const recordInboundSession = runtime.channel.session.recordInboundSession as ReturnType<
+      typeof vi.fn
+    >;
     const finalizedContext = mockCallArg(finalizeInboundContext, "finalizeInboundContext") as
       | Record<string, unknown>
       | undefined;
@@ -328,6 +331,10 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
       "Use the available tool to join the meeting with meeting number 123456789 immediately.",
     );
     expect(finalizedContext?.BodyForAgent).toContain('pass call_id="call_vc_123"');
+    const sessionRecord = mockCallArg(recordInboundSession, "recordInboundSession") as
+      | { updateLastRoute?: unknown }
+      | undefined;
+    expect(sessionRecord?.updateLastRoute).toBeUndefined();
     expect(withReplyDispatcher).toHaveBeenCalledTimes(1);
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     expect(sendMessageFeishuMock).not.toHaveBeenCalled();
