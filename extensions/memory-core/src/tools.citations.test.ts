@@ -442,9 +442,12 @@ describe("memory tools", () => {
     const result = await tool.execute("call_all_corpus", { query: "alpha", corpus: "all" });
     const details = result.details as { results: Array<{ corpus: string; path: string }> };
 
+    // corpus=all block-interleaves the two pre-ordered corpora (memory block, then
+    // supplement block) without a cross-scale re-sort, so memory leads even though
+    // the wiki supplement has a numerically higher but incomparable score.
     expect(details.results.map((entry) => [entry.corpus, entry.path])).toEqual([
-      ["wiki", "entities/alpha.md"],
       ["memory", "MEMORY.md"],
+      ["wiki", "entities/alpha.md"],
     ]);
     expect(getMemorySearchManagerMockCalls()).toBe(1);
   });

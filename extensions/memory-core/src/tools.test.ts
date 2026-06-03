@@ -386,54 +386,47 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.rerank).toBe("active");
   });
 
-  it("preserves rerank ordering in tool output (promoted low-fusion-score doc stays first)", async () => {
+  it("preserves the manager's rerank+MMR order (no re-sort by rerankScore or raw score)", async () => {
     setMemoryBackend("builtin");
-    // manager.search returns reranked order: a promoted doc with LOW fusion score
-    // but HIGH rerankScore ahead of a demoted doc with high fusion score.
+    // manager.search returns the rerank-then-MMR composed order. Here MMR kept a
+    // diverse hit ahead of a near-duplicate that has BOTH a higher rerankScore
+    // and a higher fusion score. The tool must preserve the manager's order:
+    // re-sorting by rerankScore (0.85 > 0.6) or by raw score (0.8 > 0.5) would
+    // each wrongly promote the near-duplicate and undo MMR's diversity reorder.
     setMemorySearchImpl(async () => [
       {
-        path: "memory/promoted.md",
+        path: "memory/diverse.md",
         startLine: 1,
         endLine: 2,
-        score: 0.3,
-        rerankScore: 0.95,
-        snippet: "cross-encoder promoted this",
+        score: 0.5,
+        rerankScore: 0.6,
+        snippet: "diverse hit kept ahead by MMR",
         source: "memory" as const,
       },
       {
-        path: "memory/demoted.md",
+        path: "memory/near-duplicate.md",
         startLine: 1,
         endLine: 2,
-        score: 0.9,
-        rerankScore: 0.1,
-        snippet: "high fusion score, demoted by reranker",
+        score: 0.8,
+        rerankScore: 0.85,
+        snippet: "near-duplicate demoted by MMR for diversity",
         source: "memory" as const,
       },
     ]);
 
     const tool = createMemorySearchToolOrThrow({ config: { memory: { backend: "builtin" } } });
-    const result = await tool.execute("rerank-order", { query: "anything" });
-    const results = (result.details as { results: Array<{ path: string; rerankScore?: number }> })
-      .results;
+    const result = await tool.execute("mmr-order", { query: "anything" });
+    const results = (result.details as { results: Array<{ path: string }> }).results;
 
-    // Before the fix the tool re-sorted by raw score, sinking the promoted doc;
-    // the rerankScore ordering must survive to the tool output.
-    expect(results[0]?.path).toBe("memory/promoted.md");
-    expect(results[0]?.rerankScore).toBe(0.95);
-    expect(results[1]?.path).toBe("memory/demoted.md");
+    expect(results[0]?.path).toBe("memory/diverse.md");
+    expect(results[1]?.path).toBe("memory/near-duplicate.md");
   });
 
-  it("orders tool output by raw score when no reranker ran (rerankScore absent)", async () => {
+  it("preserves the manager's order when no reranker ran (rerankScore absent)", async () => {
     setMemoryBackend("builtin");
+    // No reranker: manager.search returns fusion-score-descending order; the tool
+    // preserves it verbatim rather than re-deriving any ranking.
     setMemorySearchImpl(async () => [
-      {
-        path: "memory/low.md",
-        startLine: 1,
-        endLine: 2,
-        score: 0.4,
-        snippet: "lower fusion score",
-        source: "memory" as const,
-      },
       {
         path: "memory/high.md",
         startLine: 1,
@@ -442,13 +435,20 @@ describe("memory_search unavailable payloads", () => {
         snippet: "higher fusion score",
         source: "memory" as const,
       },
+      {
+        path: "memory/low.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.4,
+        snippet: "lower fusion score",
+        source: "memory" as const,
+      },
     ]);
 
     const tool = createMemorySearchToolOrThrow({ config: { memory: { backend: "builtin" } } });
     const result = await tool.execute("no-rerank", { query: "anything" });
     const results = (result.details as { results: Array<{ path: string }> }).results;
 
-    // No rerankScore present -> sort falls back to raw score, unchanged behavior.
     expect(results[0]?.path).toBe("memory/high.md");
     expect(results[1]?.path).toBe("memory/low.md");
   });

@@ -164,12 +164,15 @@ The rerank state is visible in two places:
 `"degraded"`, or `"disabled"`), and is absent when the search had no candidates to
 rerank. It carries state only — no timing information.
 
-When a reranker is active, the cross-encoder ordering is preserved through to the
-`memory_search` tool output: memory results are ordered by `rerankScore`. For
-`corpus=all`, the memory and supplement corpora are balanced by per-corpus
-selection first, then interleaved best-effort (memory by `rerankScore`, supplements
-by their own `score`) — the two scales are not directly comparable, so cross-corpus
-order is approximate while each corpus stays correctly ordered internally.
+The `memory_search` tool preserves the manager's final result order; it does not
+re-rank at the tool boundary. That final order is the manager's composed
+rerank-then-MMR output: the highest-relevance candidate leads, but MMR may reorder
+near-tied tail entries for diversity, so the output is not a pure
+`rerankScore`-descending list (and with no reranker it stays fusion-`score`
+descending). For `corpus=all`, the memory and supplement corpora are balanced by
+per-corpus selection first, then backfilled in corpus order — each corpus keeps its
+internal order, and the two scales (memory rerank/fusion vs supplement raw `score`)
+are never compared across corpora.
 
 ## Related
 

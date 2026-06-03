@@ -132,56 +132,39 @@ function buildPausedMemoryIndexUnavailableResult(reason: string) {
   });
 }
 
-// Order by the reranker's signal when present (rerankScore, cross-encoder [0,1]),
-// otherwise by raw fusion score. This keeps a promoted low-fusion-score passage
-// in its reranked position in the tool output, while leaving the no-reranker path
-// byte-for-byte unchanged (rerankScore is undefined -> falls back to score). The
-// score tiebreaker preserves fusion ordering when rerankScores are equal.
-function sortMemorySearchToolResults<
-  T extends { score: number; path: string; rerankScore?: number },
->(results: T[]): T[] {
-  return results.toSorted((left, right) => {
-    const leftKey = left.rerankScore ?? left.score;
-    const rightKey = right.rerankScore ?? right.score;
-    if (leftKey !== rightKey) {
-      return rightKey - leftKey;
-    }
-    if (left.score !== right.score) {
-      return right.score - left.score;
-    }
-    return left.path.localeCompare(right.path);
-  });
-}
-
+// The manager returns results already in final composed order (rerank then MMR,
+// or score-descending when no reranker is active). Re-sorting here would undo
+// MMR's diversity reordering, so the tool preserves the manager's order and only
+// trims and balances corpora; corpus=all block-interleaves the two corpora
+// because their score scales (memory rerank/fusion vs supplement raw) are not
+// comparable.
 function mergeMemorySearchCorpusResults(params: {
   memoryResults: MemorySearchToolResult[];
   supplementResults: MemorySearchToolResult[];
   maxResults: number;
   balanceCorpora: boolean;
 }): MemorySearchToolResult[] {
-  const memoryResults = sortMemorySearchToolResults(params.memoryResults);
-  const supplementResults = sortMemorySearchToolResults(params.supplementResults);
-  if (!params.balanceCorpora || memoryResults.length === 0 || supplementResults.length === 0) {
-    return sortMemorySearchToolResults([...memoryResults, ...supplementResults]).slice(
-      0,
-      params.maxResults,
-    );
+  if (
+    !params.balanceCorpora ||
+    params.memoryResults.length === 0 ||
+    params.supplementResults.length === 0
+  ) {
+    return [...params.memoryResults, ...params.supplementResults].slice(0, params.maxResults);
   }
 
   const perCorpusCap = Math.ceil(params.maxResults / 2);
-  const selectedMemory = memoryResults.slice(0, perCorpusCap);
-  const selectedSupplements = supplementResults.slice(0, perCorpusCap);
+  const selectedMemory = params.memoryResults.slice(0, perCorpusCap);
+  const selectedSupplements = params.supplementResults.slice(0, perCorpusCap);
   const selected = [...selectedMemory, ...selectedSupplements];
   if (selected.length < params.maxResults) {
-    selected.push(
-      ...sortMemorySearchToolResults([
-        ...memoryResults.slice(selectedMemory.length),
-        ...supplementResults.slice(selectedSupplements.length),
-      ]).slice(0, params.maxResults - selected.length),
-    );
+    const remaining = [
+      ...params.memoryResults.slice(selectedMemory.length),
+      ...params.supplementResults.slice(selectedSupplements.length),
+    ];
+    selected.push(...remaining.slice(0, params.maxResults - selected.length));
   }
 
-  return sortMemorySearchToolResults(selected).slice(0, params.maxResults);
+  return selected.slice(0, params.maxResults);
 }
 
 function isClosedMemoryStoreError(error: unknown): boolean {
