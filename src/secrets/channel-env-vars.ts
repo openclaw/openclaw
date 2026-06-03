@@ -4,8 +4,11 @@ import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.
 export { isSafeChannelEnvVarTriggerName } from "./channel-env-var-names.js";
 
 type ChannelEnvVarLookupParams = {
+  /** Config snapshot used to discover enabled/installed plugin manifests. */
   config?: OpenClawConfig;
+  /** Workspace root used for local plugin metadata discovery. */
   workspaceDir?: string;
+  /** Env snapshot used by metadata loading; defaults to process env. */
   env?: NodeJS.ProcessEnv;
 };
 
@@ -32,6 +35,7 @@ function appendUniqueEnvVarCandidates(
 
 /**
  * Resolves plugin-declared channel environment variable names keyed by channel id.
+ * The result is deterministic so env-shell docs and prompt snapshots stay stable.
  */
 export function resolveChannelEnvVars(
   params?: ChannelEnvVarLookupParams,

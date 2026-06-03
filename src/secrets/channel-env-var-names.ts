@@ -1,3 +1,4 @@
+/** Ambient process env names that are too common to imply channel configuration. */
 const UNSAFE_CHANNEL_ENV_VAR_TRIGGER_NAMES = new Set([
   "CI",
   "HOME",
