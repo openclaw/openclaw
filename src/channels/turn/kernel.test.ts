@@ -1588,6 +1588,92 @@ describe("channel turn kernel", () => {
     ]);
   });
 
+  it("records runtime tool lifecycle events inside dispatched channel turns", async () => {
+    const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
+    await runChannelTurn({
+      channel: "telegram",
+      raw: {},
+      turnEvents,
+      adapter: {
+        ingest: () => ({ id: "msg-1", rawText: "run a tool" }),
+        resolveTurn: () => ({
+          cfg,
+          channel: "telegram",
+          agentId: "main",
+          routeSessionKey: "agent:main:telegram:peer",
+          storePath: "/tmp/sessions.json",
+          ctxPayload: createCtx({
+            ChatType: "direct",
+            SessionKey: "agent:main:telegram:peer",
+            To: "sebastian",
+          }),
+          recordInboundSession: createRecordInboundSession(),
+          dispatchReplyWithBufferedBlockDispatcher: vi.fn(async (params) => {
+            await params.replyOptions?.onToolLifecycleEvent?.({
+              phase: "start",
+              toolName: "exec",
+              toolCallId: "call-1",
+              runId: "run-1",
+              sessionKey: "agent:main:telegram:peer",
+              status: "started",
+            });
+            await params.replyOptions?.onToolLifecycleEvent?.({
+              phase: "end",
+              toolName: "exec",
+              toolCallId: "call-1",
+              runId: "run-1",
+              sessionKey: "agent:main:telegram:peer",
+              durationMs: 42,
+              isError: false,
+              status: "completed",
+            });
+            return {
+              queuedFinal: true,
+              counts: { tool: 0, block: 0, final: 1 },
+            };
+          }) as DispatchReplyWithBufferedBlockDispatcher,
+          delivery: createNoopChannelEventDeliveryAdapter(),
+        }),
+      },
+    });
+
+    const events = turnEvents.list("telegram:message:msg-1");
+    expect(events.map((event) => event.type)).toEqual([
+      "message.received",
+      "turn.started",
+      "delivery.required",
+      "tool.called",
+      "tool.result",
+      "delivery.sent",
+      "turn.completed",
+    ]);
+    const called = events.find((event) => event.type === "tool.called");
+    const result = events.find((event) => event.type === "tool.result");
+    expect(called).toMatchObject({
+      id: "turn-event:telegram:message:msg-1:tool:call-1:called",
+      actor: "agent",
+      runId: "run-1",
+      metadata: {
+        toolName: "exec",
+        toolCallId: "call-1",
+        phase: "start",
+        sessionKey: "agent:main:telegram:peer",
+      },
+    });
+    expect(result).toMatchObject({
+      actor: "tool",
+      parentId: "turn-event:telegram:message:msg-1:tool:call-1:called",
+      runId: "run-1",
+      metadata: {
+        toolName: "exec",
+        toolCallId: "call-1",
+        phase: "end",
+        durationMs: 42,
+        isError: false,
+      },
+    });
+  });
+
   it("emits bounded diagnostic turn events without requiring a custom recorder", async () => {
     const diagnostics: DiagnosticChannelTurnEvent[] = [];
     const unsubscribe = onInternalDiagnosticEvent((event) => {

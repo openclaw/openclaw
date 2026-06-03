@@ -2369,6 +2369,7 @@ export async function runAgentTurnWithFallback(params: {
                           }
                         : undefined,
                     onReasoningEnd: params.opts?.onReasoningEnd,
+                    onToolLifecycleEvent: params.opts?.onToolLifecycleEvent,
                     onAgentEvent: async (evt) => {
                       lifecycleBackstop.note(evt);
                       // Signal run start only after the embedded agent emits real activity.

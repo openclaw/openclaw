@@ -374,6 +374,10 @@ export type ChannelTurnReplyPipelineOptions = Omit<
   "cfg" | "agentId" | "channel" | "accountId"
 >;
 
+export type ChannelTurnDispatchRuntimeContext = {
+  onToolLifecycleEvent?: GetReplyOptions["onToolLifecycleEvent"];
+};
+
 /** Fully assembled channel turn ready to build the dispatch runner. */
 export type AssembledChannelTurn = {
   cfg: OpenClawConfig;
@@ -411,7 +415,7 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = {
   record?: ChannelTurnRecordOptions;
   history?: ChannelTurnHistoryFinalizeOptions;
   onPreDispatchFailure?: (err: unknown) => void | Promise<void>;
-  runDispatch: () => Promise<TDispatchResult>;
+  runDispatch: (context?: ChannelTurnDispatchRuntimeContext) => Promise<TDispatchResult>;
   observeOnlyDispatchResult?: TDispatchResult;
   admission?: Extract<ChannelTurnAdmission, { kind: "dispatch" | "observeOnly" }>;
   botLoopProtection?: ChannelBotLoopProtectionFacts;

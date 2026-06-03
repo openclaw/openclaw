@@ -1,4 +1,5 @@
 // Channel turn kernel for normalized inbound event dispatch, history, and delivery.
+import type { ToolLifecycleEvent } from "../../auto-reply/get-reply-options.types.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   clearHistoryEntriesIfEnabled,
@@ -59,6 +60,7 @@ import type {
   AssembledChannelTurn,
   ChannelEventClass,
   ChannelTurnAdmission,
+  ChannelTurnDispatchRuntimeContext,
   ChannelEventDeliveryAdapter,
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
@@ -300,6 +302,72 @@ async function appendTurnEvent(params: {
   if (recorded) {
     params.events?.push(recorded);
   }
+}
+
+function buildToolCallParentEventId(params: { turnId: string; toolCallId: string }): string {
+  return `turn-event:${params.turnId}:tool:${params.toolCallId}:called`;
+}
+
+async function appendChannelTurnToolLifecycleEvent(params: {
+  accountId?: string;
+  channel: string;
+  event: ToolLifecycleEvent;
+  events: TurnEvent[];
+  recorder?: TurnEventRecorder;
+  target?: string;
+  turnId: string;
+}): Promise<void> {
+  const toolCallId = typeof params.event.toolCallId === "string" ? params.event.toolCallId : "";
+  const parentId = toolCallId
+    ? buildToolCallParentEventId({ turnId: params.turnId, toolCallId })
+    : undefined;
+  const type = params.event.phase === "start" ? "tool.called" : "tool.result";
+  await appendTurnEvent({
+    accountId: params.accountId,
+    recorder: params.recorder,
+    events: params.events,
+    event: {
+      ...(type === "tool.called" && parentId ? { id: parentId } : {}),
+      type,
+      turnId: params.turnId,
+      runId: params.event.runId,
+      ...(type === "tool.result" && parentId ? { parentId } : {}),
+      actor: type === "tool.called" ? "agent" : "tool",
+      channel: params.channel,
+      target: params.target,
+      status:
+        params.event.phase === "start"
+          ? "started"
+          : params.event.phase === "end"
+            ? "completed"
+            : "failed",
+      metadata: {
+        toolName: params.event.toolName,
+        toolCallId: params.event.toolCallId,
+        phase: params.event.phase,
+        sessionKey: params.event.sessionKey,
+        sessionId: params.event.sessionId,
+        durationMs: params.event.durationMs,
+        isError: params.event.isError,
+        status: params.event.status,
+        deniedReason: params.event.deniedReason,
+        errorCategory: params.event.errorCategory,
+      },
+    },
+  });
+}
+
+function mergeToolLifecycleCallbacks(params: {
+  first?: (event: ToolLifecycleEvent) => Promise<void> | void;
+  second?: (event: ToolLifecycleEvent) => Promise<void> | void;
+}): ((event: ToolLifecycleEvent) => Promise<void>) | undefined {
+  if (!params.first && !params.second) {
+    return undefined;
+  }
+  return async (event) => {
+    await params.first?.(event);
+    await params.second?.(event);
+  };
 }
 
 function isTelegramDirectDispatchRequired(params: {
@@ -546,7 +614,7 @@ export async function dispatchAssembledChannelTurn(
       log: params.log,
       turnEvents: params.turnEvents,
       messageId: params.messageId,
-      runDispatch: async () =>
+      runDispatch: async (runtimeContext?: ChannelTurnDispatchRuntimeContext) =>
         await params.dispatchReplyWithBufferedBlockDispatcher({
           ctx: params.ctxPayload,
           cfg: params.cfg,
@@ -593,7 +661,13 @@ export async function dispatchAssembledChannelTurn(
             },
             onError: params.delivery.onError,
           },
-          replyOptions: replyPipeline.replyOptions,
+          replyOptions: {
+            ...replyPipeline.replyOptions,
+            onToolLifecycleEvent: mergeToolLifecycleCallbacks({
+              first: runtimeContext?.onToolLifecycleEvent,
+              second: replyPipeline.replyOptions?.onToolLifecycleEvent,
+            }),
+          },
           replyResolver: params.replyResolver,
         }),
     },
@@ -653,6 +727,17 @@ async function runPreparedChannelTurnCoreInTrace<
   });
   const recordedTurnEvents: TurnEvent[] = [];
   const turnStartedAt = Date.now();
+  const onToolLifecycleEvent = async (event: ToolLifecycleEvent) => {
+    await appendChannelTurnToolLifecycleEvent({
+      accountId: params.accountId,
+      channel: params.channel,
+      event,
+      events: recordedTurnEvents,
+      recorder: params.turnEvents,
+      target: params.ctxPayload.To,
+      turnId: turnEventTurnId,
+    });
+  };
   const visibleDeliveryRequired = isTelegramDirectDispatchRequired({
     admission,
     channel: params.channel,
@@ -777,7 +862,7 @@ async function runPreparedChannelTurnCoreInTrace<
     dispatchResult =
       options.suppressObserveOnlyDispatch && admission.kind === "observeOnly"
         ? resolveObserveOnlyDispatchResult(params)
-        : await params.runDispatch();
+        : await params.runDispatch({ onToolLifecycleEvent });
   } catch (err) {
     await appendTurnEvent({
       accountId: params.accountId,
