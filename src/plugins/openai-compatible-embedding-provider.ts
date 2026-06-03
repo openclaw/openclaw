@@ -143,7 +143,12 @@ function normalizeTemplateMatchModel(model: string): string {
 }
 
 function matchesTemplateModelAlias(model: string, prefix: string): boolean {
-  return model === prefix || model.startsWith(`${prefix}-`) || model.includes(`-${prefix}`);
+  return (
+    model === prefix ||
+    model.startsWith(`${prefix}-`) ||
+    model.startsWith(`${prefix}:`) ||
+    model.includes(`-${prefix}`)
+  );
 }
 
 function applyQueryInstructionTemplate(model: string, queryText: string): string {

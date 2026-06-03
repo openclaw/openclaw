@@ -787,6 +787,11 @@ describe("openai-compatible generic embedding provider", () => {
         "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:find workshop notes",
     },
     {
+      model: "qwen3-embedding:0.6b",
+      expected:
+        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:find workshop notes",
+    },
+    {
       model: "Qwen/Qwen3-Embedding-4B",
       expected:
         "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:find workshop notes",
@@ -797,6 +802,10 @@ describe("openai-compatible generic embedding provider", () => {
     },
     {
       model: "mixedbread-ai/mxbai-embed-large-v1",
+      expected: "Represent this sentence for searching relevant passages: find workshop notes",
+    },
+    {
+      model: "mxbai-embed-large:latest",
       expected: "Represent this sentence for searching relevant passages: find workshop notes",
     },
   ])(
