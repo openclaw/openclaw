@@ -76,6 +76,8 @@ function shouldUsePluginProviderEnvVars(
   if (plugin.origin !== "workspace" || params?.includeUntrustedWorkspacePlugins !== false) {
     return true;
   }
+  // Env-var candidates are hints for lookup/scrubbing, but callers can opt into the same
+  // workspace trust filter used for stronger auth evidence when probing scoped workspaces.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
 }
 
@@ -86,6 +88,8 @@ function shouldUsePluginProviderAuthEvidence(
   if (plugin.origin !== "workspace") {
     return true;
   }
+  // Auth evidence can point at local credential files, so workspace plugins must be explicitly
+  // trusted through config before their evidence participates in auth discovery.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
 }
 
