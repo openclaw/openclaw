@@ -17,6 +17,7 @@ type ScopedPairingAccess = ReturnType<typeof createScopedPairingAccess>;
 
 /** Pairing helpers scoped to one channel account. */
 export type ChannelPairingController = ScopedPairingAccess & {
+  /** Issues a challenge through the same normalized channel/account store as read/write helpers. */
   issueChallenge: (
     params: Omit<Parameters<typeof issuePairingChallenge>[0], "channel" | "upsertPairingRequest">,
   ) => ReturnType<typeof issuePairingChallenge>;
@@ -49,6 +50,7 @@ export function createChannelPairingController(params: {
   const access = createScopedPairingAccess(params);
   return {
     ...access,
+    // Use the scoped upsert sink so challenge issuance preserves normalized account ids.
     issueChallenge: createChannelPairingChallengeIssuer({
       channel: params.channel,
       upsertPairingRequest: access.upsertPairingRequest,

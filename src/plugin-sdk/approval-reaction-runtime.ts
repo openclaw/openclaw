@@ -38,8 +38,11 @@ type InMemoryApprovalReactionTarget<TTarget> = {
 };
 
 export type ApprovalReactionTargetStore<TTarget> = {
+  /** Associate a channel message/reaction key with an approval target until TTL expiry. */
   register(key: string, target: TTarget, opts?: { ttlMs?: number }): void;
+  /** Resolve a previously registered target; expired/missing/persistence failures return null. */
   lookup(key: string): Promise<TTarget | null>;
+  /** Remove the target from memory and best-effort persistent storage. */
   delete(key: string): void;
   clearForTest(): void;
 };
@@ -148,7 +151,9 @@ export function resolveApprovalReactionDecision(params: {
 }
 
 export function resolveApprovalReactionTarget<TRoute = unknown>(params: {
+  /** Stored target record attached to the reacted channel message. */
   target: ApprovalReactionTargetRecord<TRoute> | null | undefined;
+  /** Raw transport reaction key before emoji normalization. */
   reactionKey: string;
 }): ApprovalReactionTargetResolution<TRoute> | null {
   const target = params.target;
@@ -168,6 +173,8 @@ export function resolveApprovalReactionTarget<TRoute = unknown>(params: {
   }
   return {
     approvalId,
+    // Plugin approvals carry a stable prefix in shipped ids. Preserve explicit kind when the
+    // target store already resolved it, then fall back to the id contract for compatibility.
     approvalKind: target.approvalKind ?? (approvalId.startsWith("plugin:") ? "plugin" : "exec"),
     decision: decision.decision,
     normalizedEmoji: decision.normalizedEmoji,
@@ -329,8 +336,11 @@ function buildMetadataPayload(params: {
 }
 
 export function buildApprovalPendingPromptPayload(params: {
+  /** Original approval request; metadata is kept for channelData and fallback commands. */
   request: ApprovalRequest;
+  /** Canonical pending view. Passing a view lets tests/plugins keep prompt text stable. */
   view: PendingApprovalView;
+  /** Clock used for the relative expiry text embedded in the prompt. */
   nowMs: number;
 }): ApprovalReactionPromptPayload {
   const allowedDecisions = listDecisionActions(params.view.actions);
@@ -419,8 +429,11 @@ export function buildApprovalReactionPendingContentForRequest(params: {
 }
 
 export function createApprovalReactionTargetStore<TTarget>(params: {
+  /** Persistent namespace for channel-message-to-approval reaction targets. */
   namespace: string;
+  /** Maximum in-memory entries; oldest entries are evicted after TTL pruning. */
   maxEntries: number;
+  /** Default target lifetime when a caller does not provide a per-entry TTL. */
   defaultTtlMs: number;
   openStore?: (params: {
     namespace: string;
@@ -494,6 +507,8 @@ export function createApprovalReactionTargetStore<TTarget>(params: {
       if (!store) {
         return;
       }
+      // Memory is authoritative for the current process; persistence extends reaction handling
+      // across restarts but is disabled permanently after the first store error.
       void store
         .register(normalizedKey, { version: 1, target }, { ttlMs })
         .catch(disablePersistentStore);

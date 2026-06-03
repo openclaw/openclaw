@@ -321,6 +321,7 @@ function formatBundledEntryModuleOpenFailure(params: {
 
 function createBundledEntryModulePathCacheKey(importMetaUrl: string, specifier: string): string {
   const sourceFallbackDisabled = isTruthyEnvFlag(process.env[disableBundledEntrySourceFallbackEnv]);
+  // The fallback flag changes the candidate list, so it must participate in path-cache identity.
   return `${sourceFallbackDisabled ? "1" : "0"}\0${importMetaUrl}\0${specifier}`;
 }
 
@@ -342,6 +343,7 @@ function resolveBundledEntryModulePath(importMetaUrl: string, specifier: string)
   } | null = null;
 
   for (const candidate of candidates) {
+    // Validate every resolved sidecar against its plugin root before any loader sees the path.
     const opened = openRootFileSync({
       absolutePath: candidate.path,
       rootPath: candidate.boundaryRoot,
@@ -400,6 +402,7 @@ function canTryNodeRequireBuiltModule(modulePath: string): boolean {
   const isBuiltBundledArtifact =
     modulePath.includes(`${path.sep}dist${path.sep}`) ||
     modulePath.includes(`${path.sep}dist-runtime${path.sep}`);
+  // Built sidecars should stay on the native require path when possible to avoid source transforms.
   return (
     isBuiltBundledArtifact &&
     [".js", ".mjs", ".cjs"].includes(normalizeLowercaseStringOrEmpty(path.extname(modulePath)))

@@ -1,3 +1,4 @@
+/** Resolve webhook numeric options by rejecting non-finite input, flooring fractions, and enforcing a minimum. */
 export function resolveWebhookIntegerOption(
   value: number | undefined,
   fallback: number,

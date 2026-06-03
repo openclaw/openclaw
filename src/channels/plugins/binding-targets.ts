@@ -19,6 +19,8 @@ export async function ensureConfiguredBindingTargetReady(params: {
   const driverId = params.bindingResolution.statefulTarget.driverId;
   let driver = getStatefulBindingTargetDriver(driverId);
   if (!driver && isStatefulTargetBuiltinDriverId(driverId)) {
+    // Built-in drivers are registered lazily so callers that do not use
+    // configured bindings avoid loading their target runtime.
     await ensureStatefulTargetBuiltinsRegistered();
     driver = getStatefulBindingTargetDriver(driverId);
   }
@@ -34,6 +36,7 @@ export async function ensureConfiguredBindingTargetReady(params: {
   });
 }
 
+/** Reset an existing stateful binding target in place when its driver supports it. */
 export async function resetConfiguredBindingTargetInPlace(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -45,6 +48,8 @@ export async function resetConfiguredBindingTargetInPlace(params: {
     sessionKey: params.sessionKey,
   });
   if (!resolved) {
+    // Session-key reset can arrive before built-in drivers are loaded; retry
+    // once after registration before treating the target as unknown.
     await ensureStatefulTargetBuiltinsRegistered();
     resolved = resolveStatefulBindingTargetBySessionKey({
       cfg: params.cfg,
@@ -52,6 +57,8 @@ export async function resetConfiguredBindingTargetInPlace(params: {
     });
   }
   if (!resolved?.driver.resetInPlace) {
+    // Missing reset support is a non-error skip so command handlers can fall
+    // back to creating a fresh session when appropriate.
     return {
       ok: false,
       skipped: true,
@@ -63,6 +70,7 @@ export async function resetConfiguredBindingTargetInPlace(params: {
   });
 }
 
+/** Ensure the stateful target session exists for a resolved configured binding. */
 export async function ensureConfiguredBindingTargetSession(params: {
   cfg: OpenClawConfig;
   bindingResolution: ConfiguredBindingResolution;
@@ -70,6 +78,7 @@ export async function ensureConfiguredBindingTargetSession(params: {
   const driverId = params.bindingResolution.statefulTarget.driverId;
   let driver = getStatefulBindingTargetDriver(driverId);
   if (!driver && isStatefulTargetBuiltinDriverId(driverId)) {
+    // Keep readiness and session creation on the same lazy built-in driver path.
     await ensureStatefulTargetBuiltinsRegistered();
     driver = getStatefulBindingTargetDriver(driverId);
   }

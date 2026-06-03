@@ -18,7 +18,9 @@ export {
 
 /** Metadata used to advertise an optional channel plugin during setup flows. */
 type OptionalChannelSetupParams = {
+  /** Stable channel id used by setup routes and status reporting. */
   channel: string;
+  /** Human label used in install/docs guidance. */
   label: string;
   npmSpec?: string;
   docsPath?: string;
@@ -26,7 +28,9 @@ type OptionalChannelSetupParams = {
 
 /** Paired setup adapter + setup wizard for channels that may not be installed yet. */
 export type OptionalChannelSetupSurface = {
+  /** Runtime setup adapter that reports the optional plugin as unavailable until installed. */
   setupAdapter: ChannelSetupAdapter;
+  /** CLI wizard facade that shows the same unavailable/install guidance. */
   setupWizard: ChannelSetupWizard;
 };
 

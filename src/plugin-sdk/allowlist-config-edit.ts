@@ -166,6 +166,8 @@ function resolveAccountScopedWriteTarget(
   const channel = (channels[channelId] ??= {}) as Record<string, unknown>;
   const normalizedAccountId = normalizeAccountId(accountId);
   if (isBlockedObjectKey(normalizedAccountId)) {
+    // Blocked object keys fall back to channel-level writes so untrusted account ids cannot shape
+    // prototype-bearing config objects.
     return {
       target: channel,
       pathPrefix: `channels.${channelId}`,
@@ -175,6 +177,8 @@ function resolveAccountScopedWriteTarget(
   const hasAccounts = Boolean(channel.accounts && typeof channel.accounts === "object");
   const useAccount = normalizedAccountId !== DEFAULT_ACCOUNT_ID || hasAccounts;
   if (!useAccount) {
+    // Default account stays on the channel object until an accounts map already exists, preserving
+    // the compact config shape for single-account channels.
     return {
       target: channel,
       pathPrefix: `channels.${channelId}`,
@@ -253,12 +257,19 @@ function deleteNestedValue(root: Record<string, unknown>, path: string[]) {
 }
 
 function applyAccountScopedAllowlistConfigEdit(params: {
+  /** Parsed mutable config object that receives the allowlist edit. */
   parsedConfig: Record<string, unknown>;
+  /** Channel config bucket to edit under `channels.<id>`. */
   channelId: ChannelId;
+  /** Optional account scope. Non-default accounts write under `channels.<id>.accounts`. */
   accountId?: string | null;
+  /** Add or remove the normalized entry from the chosen allowlist path. */
   action: "add" | "remove";
+  /** User-supplied allowlist entry before channel-specific normalization. */
   entry: string;
+  /** Channel-specific allowlist normalizer used for duplicate detection and removal matching. */
   normalize: (values: Array<string | number>) => string[];
+  /** Read/write/cleanup paths for DM, group, or legacy allowlist storage. */
   paths: AllowlistConfigPaths;
 }): NonNullable<Awaited<ReturnType<NonNullable<ChannelAllowlistAdapter["applyConfigEdit"]>>>> {
   const resolvedTarget = resolveAccountScopedWriteTarget(
@@ -317,6 +328,7 @@ function applyAccountScopedAllowlistConfigEdit(params: {
       setNestedValue(resolvedTarget.target, params.paths.writePath, next);
     }
     for (const path of params.paths.cleanupPaths ?? []) {
+      // Legacy read paths are cleaned only after a real write so no-op edits do not churn config.
       deleteNestedValue(resolvedTarget.target, path);
     }
   }
@@ -331,8 +343,11 @@ function applyAccountScopedAllowlistConfigEdit(params: {
 
 /** Build the default account-scoped allowlist editor used by channel plugins with config-backed lists. */
 export function buildAccountScopedAllowlistConfigEditor(params: {
+  /** Channel id for config writes and write-target reporting. */
   channelId: ChannelId;
+  /** Channel-specific normalization for ids/usernames before comparison. */
   normalize: AllowlistNormalizer;
+  /** Scope-to-path resolver; returning null marks a scope unsupported. */
   resolvePaths: (scope: "dm" | "group") => AllowlistConfigPaths | null;
 }): NonNullable<ChannelAllowlistAdapter["applyConfigEdit"]> {
   return ({ cfg, parsedConfig, accountId, scope, action, entry }) => {
@@ -377,8 +392,11 @@ function buildAccountAllowlistAdapter<ResolvedAccount>(params: {
 
 /** Build the common DM/group allowlist adapter used by channels that store both lists in config. */
 export function buildDmGroupAccountAllowlistAdapter<ResolvedAccount>(params: {
+  /** Channel id whose account-scoped config should be read and edited. */
   channelId: ChannelId;
+  /** Resolve the channel account snapshot used for reads. */
   resolveAccount: AllowlistAccountResolver<ResolvedAccount>;
+  /** Channel-specific normalization for write comparisons. */
   normalize: AllowlistNormalizer;
   resolveDmAllowFrom: (
     account: ResolvedAccount,
@@ -407,8 +425,11 @@ export function buildDmGroupAccountAllowlistAdapter<ResolvedAccount>(params: {
 
 /** Build the common DM-only allowlist adapter for channels with legacy dm.allowFrom fallback paths. */
 export function buildLegacyDmAccountAllowlistAdapter<ResolvedAccount>(params: {
+  /** Channel id whose account-scoped config should be read and edited. */
   channelId: ChannelId;
+  /** Resolve the channel account snapshot used for reads. */
   resolveAccount: AllowlistAccountResolver<ResolvedAccount>;
+  /** Channel-specific normalization for write comparisons. */
   normalize: AllowlistNormalizer;
   resolveDmAllowFrom: (
     account: ResolvedAccount,

@@ -20,7 +20,9 @@ export {
 
 export type OutboundReplyPayload = {
   text?: string;
+  /** Preferred multi-attachment field for channel sends. */
   mediaUrls?: string[];
+  /** Legacy single-attachment field normalized into mediaUrls by helper APIs. */
   mediaUrl?: string;
   presentation?: InternalReplyPayload["presentation"];
   /**
@@ -38,8 +40,11 @@ export type ReasoningReplyPayload = {
 };
 
 export type SendableOutboundReplyParts = {
+  /** Original text chosen for delivery, before whitespace trimming. */
   text: string;
+  /** Text used for send/no-send decisions. */
   trimmedText: string;
+  /** Normalized media list after legacy mediaUrl fallback and empty-string filtering. */
   mediaUrls: string[];
   mediaCount: number;
   hasText: boolean;
@@ -207,6 +212,7 @@ export async function sendPayloadWithChunkedTextAndMedia<
       text,
       mediaUrl: urls[0],
     });
+    // Only the first media item carries the caption; later attachments are part of the same reply.
     for (let i = 1; i < urls.length; i++) {
       lastResult = await params.sendMedia({
         ...params.ctx,
@@ -320,6 +326,7 @@ export async function sendTextMediaPayload(params: {
       : [text];
   let lastResult: Awaited<ReturnType<NonNullable<typeof params.adapter.sendText>>>;
   for (const chunk of chunks) {
+    // Explicit reply ids fan out to every chunk; implicit first-reply ids are consumed after one send.
     lastResult = await params.adapter.sendText!({
       ...params.ctx,
       text: chunk,

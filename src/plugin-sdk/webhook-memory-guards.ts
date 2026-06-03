@@ -12,12 +12,14 @@ type CounterState = {
 };
 
 export type FixedWindowRateLimiter = {
+  /** Increment a key and return true only after it exceeds the configured window budget. */
   isRateLimited: (key: string, nowMs?: number) => boolean;
   size: () => number;
   clear: () => void;
 };
 
 export type BoundedCounter = {
+  /** Increment a key and return its current count; empty keys intentionally count as zero. */
   increment: (key: string, nowMs?: number) => number;
   size: () => number;
   clear: () => void;
@@ -38,6 +40,7 @@ export const WEBHOOK_ANOMALY_COUNTER_DEFAULTS = Object.freeze({
 export const WEBHOOK_ANOMALY_STATUS_CODES = Object.freeze([400, 401, 408, 413, 415, 429]);
 
 export type WebhookAnomalyTracker = {
+  /** Record a tracked status code and optionally emit sampled log messages. */
   record: (params: {
     key: string;
     statusCode: number;
@@ -80,6 +83,7 @@ export function createFixedWindowRateLimiter(options: {
   let lastPruneMs = 0;
 
   const touch = (key: string, value: FixedWindowState) => {
+    // Refresh insertion order so max-size pruning drops the coldest tracked keys.
     state.delete(key);
     state.set(key, value);
   };
@@ -143,6 +147,7 @@ export function createBoundedCounter(options: {
   let lastPruneMs = 0;
 
   const touch = (key: string, value: CounterState) => {
+    // Refresh insertion order so the bounded counter keeps recently active keys.
     counters.delete(key);
     counters.set(key, value);
   };
@@ -217,6 +222,8 @@ export function createWebhookAnomalyTracker(options?: {
       }
       const next = counter.increment(key, nowMs);
       if (log && (next === 1 || next % logEvery === 0)) {
+        // Log the first hit and then sample by cadence so noisy webhook probes
+        // stay visible without producing one log line per rejected request.
         log(message(next));
       }
       return next;

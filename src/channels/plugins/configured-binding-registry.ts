@@ -20,6 +20,8 @@ function resolveMaterializedConfiguredBinding(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
 }) {
+  // Normalize once before registry lookup so every resolver path compares
+  // channel/account/conversation ids against the compiled binding shape.
   const conversation = toConfiguredBindingConversationRef(params.conversation);
   if (!conversation) {
     return null;
@@ -46,6 +48,7 @@ function resolveMaterializedConfiguredBinding(params: {
   };
 }
 
+/** Precompile configured bindings for loaded channel plugins and report registry size. */
 export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }): {
   bindingCount: number;
   channelCount: number;
@@ -53,6 +56,7 @@ export function primeConfiguredBindingRegistry(params: { cfg: OpenClawConfig }):
   return countCompiledBindingRegistry(primeCompiledBindingRegistry(params.cfg));
 }
 
+/** Resolve a configured binding record from raw channel/account/conversation id fields. */
 export function resolveConfiguredBindingRecord(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -75,6 +79,7 @@ export function resolveConfiguredBindingRecord(params: {
   });
 }
 
+/** Resolve a configured binding record from an already canonical conversation reference. */
 export function resolveConfiguredBindingRecordForConversation(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
@@ -86,6 +91,7 @@ export function resolveConfiguredBindingRecordForConversation(params: {
   return resolved.materializedTarget;
 }
 
+/** Resolve the configured binding plus compiled rule and match metadata for routing callers. */
 export function resolveConfiguredBinding(params: {
   cfg: OpenClawConfig;
   conversation: ConversationRef;
@@ -102,6 +108,7 @@ export function resolveConfiguredBinding(params: {
   };
 }
 
+/** Resolve a configured binding record by its materialized target session key. */
 export function resolveConfiguredBindingRecordBySessionKey(params: {
   cfg: OpenClawConfig;
   sessionKey: string;

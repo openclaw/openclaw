@@ -106,15 +106,24 @@ type MultiAccountChannelConfigAdapterParams<
   AccessorAccount = ResolvedAccount,
   Config extends OpenClawConfig = OpenClawConfig,
 > = {
+  /** Channel config section key under `cfg.channels`. */
   sectionKey: string;
+  /** List configured account ids for status/config UI surfaces. */
   listAccountIds: (cfg: Config) => string[];
+  /** Resolve the runtime account shape used by CRUD and optional accessors. */
   resolveAccount: (cfg: Config, accountId?: string | null) => ResolvedAccount;
+  /** Optional read-only account shape for allowlist/default target accessors. */
   resolveAccessorAccount?: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
+  /** Default account id for channels that expose named accounts. */
   defaultAccountId: (cfg: Config) => string;
   inspectAccount?: (cfg: Config, accountId?: string | null) => unknown;
+  /** Base/root fields removed when deleting an account or clearing top-level account data. */
   clearBaseFields: string[];
+  /** Raw allowlist entries from the accessor account. */
   resolveAllowFrom: (account: AccessorAccount) => Array<string | number> | null | undefined;
+  /** Channel-specific formatter for presenting/storing allowlist entries. */
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
+  /** Optional default outbound target selector. */
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 };
 
@@ -166,9 +175,13 @@ export function createScopedAccountConfigAccessors<
   // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Config preserves caller-specific config subtype for account resolvers.
   Config extends OpenClawConfig = OpenClawConfig,
 >(params: {
+  /** Resolve the account snapshot used only for read-only config accessors. */
   resolveAccount: (params: { cfg: Config; accountId?: string | null }) => ResolvedAccount;
+  /** Extract raw allowlist entries from the resolved account. */
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
+  /** Format allowlist entries for command/status display. */
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
+  /** Optional default outbound target selector; omitted means the adapter exposes no default target. */
   resolveDefaultTo?: (account: ResolvedAccount) => string | number | null | undefined;
 }): Pick<
   ChannelConfigAdapter<ResolvedAccount>,
@@ -269,6 +282,8 @@ function createChannelConfigAdapterWithAccessors<
 }): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
   return {
     ...params.base,
+    // Accessor accounts can intentionally differ from runtime account objects so read-only helpers
+    // do not instantiate heavyweight channel clients or require secrets.
     ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
       resolveAccount: resolveAccessorAccountWithFallback(
         params.resolveAccessorAccount,
@@ -427,12 +442,16 @@ export function createTopLevelChannelConfigBase<
   ResolvedAccount,
   Config extends OpenClawConfig = OpenClawConfig,
 >(params: {
+  /** Channel config section key under `cfg.channels`. */
   sectionKey: string;
+  /** Resolve the single top-level account snapshot. */
   resolveAccount: (cfg: Config) => ResolvedAccount;
   listAccountIds?: (cfg: Config) => string[];
   defaultAccountId?: (cfg: Config) => string;
   inspectAccount?: (cfg: Config) => unknown;
+  /** remove-section deletes the channel config; clear-fields preserves unrelated channel settings. */
   deleteMode?: "remove-section" | "clear-fields";
+  /** Fields removed when deleteMode is clear-fields. */
   clearBaseFields?: string[];
 }): Pick<
   ChannelConfigAdapter<ResolvedAccount>,
@@ -605,8 +624,11 @@ export function createHybridChannelConfigAdapter<
 export function createScopedDmSecurityResolver<
   ResolvedAccount extends { accountId?: string | null },
 >(params: {
+  /** Channel key used for DM policy paths and pairing approval hints. */
   channelKey: string;
+  /** Resolve account-specific DM policy before shared defaults are applied. */
   resolvePolicy: (account: ResolvedAccount) => string | null | undefined;
+  /** Resolve account-specific DM allowlist before shared defaults are applied. */
   resolveAllowFrom: (account: ResolvedAccount) => Array<string | number> | null | undefined;
   resolveAccess?: (params: {
     cfg: OpenClawConfig;

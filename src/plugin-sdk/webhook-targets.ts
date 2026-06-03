@@ -8,12 +8,16 @@ import {
 } from "./webhook-request-guards.js";
 
 export type RegisteredWebhookTarget<T> = {
+  /** Normalized target stored in the caller's path bucket. */
   target: T;
+  /** Idempotent cleanup handle for removing this target from its path bucket. */
   unregister: () => void;
 };
 
 export type RegisterWebhookTargetOptions<T extends { path: string }> = {
+  /** Called only when the first target for a normalized path is registered. */
   onFirstPathTarget?: (params: { path: string; target: T }) => void | (() => void);
+  /** Called after the final target for a normalized path has been removed. */
   onLastPathTargetRemoved?: (params: { path: string }) => void;
 };
 
@@ -68,6 +72,8 @@ export function registerWebhookTarget<T extends { path: string }>(
   const existing = targetsByPath.get(key) ?? [];
 
   if (existing.length === 0) {
+    // The path bucket owns route setup/teardown, not individual targets, so
+    // sibling targets can share one plugin HTTP route until the last unregister.
     const onFirstPathResult = opts?.onFirstPathTarget?.({
       path: key,
       target: normalizedTarget,
@@ -141,7 +147,9 @@ export async function withResolvedWebhookRequestPipeline<T>(params: {
   const inFlightKey =
     typeof params.inFlightKey === "function"
       ? params.inFlightKey({ req: params.req, path: resolved.path, targets: resolved.targets })
-      : (params.inFlightKey ?? `${resolved.path}:${params.req.socket?.remoteAddress ?? "unknown"}`);
+      : // Default to path plus remote address so one slow sender does not block
+        // unrelated webhook paths or callers behind different source addresses.
+        (params.inFlightKey ?? `${resolved.path}:${params.req.socket?.remoteAddress ?? "unknown"}`);
   const requestLifecycle = beginWebhookRequestPipelineOrReject({
     req: params.req,
     res: params.res,
@@ -168,8 +176,11 @@ export async function withResolvedWebhookRequestPipeline<T>(params: {
 }
 
 export type WebhookTargetMatchResult<T> =
+  /** No registered target matched the request authentication material. */
   | { kind: "none" }
+  /** Exactly one target matched and can handle the request. */
   | { kind: "single"; target: T }
+  /** More than one target matched; callers must reject instead of guessing. */
   | { kind: "ambiguous" };
 
 function updateMatchedWebhookTarget<T>(
@@ -271,6 +282,8 @@ function resolveWebhookTargetMatchOrReject<T>(
     return match.target;
   }
   if (match.kind === "ambiguous") {
+    // Ambiguous auth is rejected as unauthorized; selecting one matching target
+    // would let one tenant's valid secret route another tenant's webhook.
     params.res.statusCode = params.ambiguousStatusCode ?? 401;
     params.res.end(params.ambiguousMessage ?? "ambiguous webhook target");
     return null;

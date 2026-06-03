@@ -11,11 +11,17 @@ export { ACCESS_GROUP_ALLOW_FROM_PREFIX, parseAccessGroupAllowFromEntry };
 
 /** Resolves membership for an access group using the full OpenClaw config. */
 export type AccessGroupMembershipResolver = (params: {
+  /** Canonical config for dynamic group membership lookups. */
   cfg: OpenClawConfig;
+  /** Access group name without the `accessGroup:` prefix. */
   name: string;
+  /** Selected group config from `cfg.accessGroups[name]`. */
   group: AccessGroupConfig;
+  /** Channel whose allowlist is being evaluated. */
   channel: ChannelId;
+  /** Account scope for channel-specific membership lookups. */
   accountId: string;
+  /** Sender id being tested against the group. */
   senderId: string;
 }) => boolean | Promise<boolean>;
 
@@ -30,11 +36,17 @@ export type AccessGroupMembershipLookup = (params: {
 
 /** Reports how access-group allowlist entries resolved for a channel sender. */
 export type ResolvedAccessGroupAllowFromState = {
+  /** Unique access group names referenced by the original allowlist. */
   referenced: string[];
+  /** Referenced groups that authorized the sender. */
   matched: string[];
+  /** Referenced groups absent from current config. */
   missing: string[];
+  /** Referenced groups needing dynamic membership when no resolver was supplied. */
   unsupported: string[];
+  /** Referenced groups whose dynamic membership resolver threw. */
   failed: string[];
+  /** Matched entries re-rendered as `accessGroup:<name>` allowlist values. */
   matchedAllowFromEntries: string[];
   hasReferences: boolean;
   hasMatch: boolean;
@@ -52,12 +64,19 @@ function resolveMessageSenderGroupEntries(params: {
 
 /** Resolves `accessGroup:<name>` allowlist entries without changing the original allowlist. */
 export async function resolveAccessGroupAllowFromState(params: {
+  /** Configured access groups keyed by name. Undefined makes all references missing. */
   accessGroups?: Record<string, AccessGroupConfig>;
+  /** Original allowlist entries, including optional `accessGroup:<name>` references. */
   allowFrom: Array<string | number> | null | undefined;
+  /** Channel id for static message.senders channel-specific entries. */
   channel: ChannelId;
+  /** Account scope passed to dynamic membership resolver. */
   accountId: string;
+  /** Sender id tested against static and dynamic group membership. */
   senderId: string;
+  /** Channel matcher used for static message.senders entries. */
   isSenderAllowed?: (senderId: string, allowFrom: string[]) => boolean;
+  /** Optional dynamic resolver for non-static group types. */
   resolveMembership?: AccessGroupMembershipLookup;
 }): Promise<ResolvedAccessGroupAllowFromState> {
   const names = Array.from(
@@ -98,6 +117,8 @@ export async function resolveAccessGroupAllowFromState(params: {
     }
 
     if (!params.resolveMembership) {
+      // `message.senders` can resolve locally. Other group types require a channel/plugin-owned
+      // resolver, so mark them unsupported instead of guessing membership.
       if (group.type !== "message.senders") {
         state.unsupported.push(name);
       }

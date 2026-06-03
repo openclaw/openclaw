@@ -1,13 +1,18 @@
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 
 export type AutoSelectableProvider = {
+  /** Canonical provider id used for lookup and provider config keys. */
   id: string;
+  /** Lower numbers win during automatic provider selection. */
   autoSelectOrder?: number;
 };
 
 export type ProviderSelection<TProvider> = {
+  /** Trimmed explicit provider id, when one was configured. */
   configuredProviderId?: string;
+  /** True only when an explicit id was configured but no provider exists for it. */
   missingConfiguredProvider: boolean;
+  /** Explicit provider or first auto-selected provider; undefined when explicit lookup failed. */
   provider: TProvider | undefined;
 };
 
@@ -26,8 +31,11 @@ export type ResolvedConfiguredProvider<TProvider, TConfig> =
     };
 
 export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableProvider>(params: {
+  /** Optional configured provider id; blank strings are treated as absent. */
   configuredProviderId?: string;
+  /** Lookup for explicit provider ids. */
   getConfiguredProvider: (providerId: string | undefined) => TProvider | undefined;
+  /** Registered provider candidates for automatic selection. */
   listProviders: () => Iterable<TProvider>;
 }): ProviderSelection<TProvider> {
   const configuredProviderId = normalizeOptionalString(params.configuredProviderId);
@@ -51,8 +59,11 @@ export function selectConfiguredOrAutoProvider<TProvider extends AutoSelectableP
 }
 
 export function resolveProviderRawConfig(params: {
+  /** Canonical provider id whose defaults should apply first. */
   providerId: string;
+  /** Optional selected/alias provider id whose config overrides canonical defaults. */
   configuredProviderId?: string;
+  /** Provider config map keyed by canonical and selected ids. */
   providerConfigs?: Record<string, Record<string, unknown> | undefined>;
 }): Record<string, unknown> {
   const canonicalProviderConfig = readProviderConfig(params.providerConfigs, params.providerId);
@@ -62,6 +73,8 @@ export function resolveProviderRawConfig(params: {
   );
 
   return {
+    // Canonical provider config supplies shared defaults; selected/alias config intentionally wins
+    // so users can override model-specific fields without duplicating secrets.
     ...canonicalProviderConfig,
     ...selectedProviderConfig,
   };
@@ -72,9 +85,12 @@ export function resolveConfiguredCapabilityProvider<
   TFullConfig,
   TProvider extends AutoSelectableProvider,
 >(params: {
+  /** Optional explicit provider id; when present, missing provider is a hard error. */
   configuredProviderId?: string;
   providerConfigs?: Record<string, Record<string, unknown> | undefined>;
+  /** Current full config, possibly undefined while callers probe setup state. */
   cfg: TFullConfig | undefined;
+  /** Non-null config object used to resolve provider-specific defaults. */
   cfgForResolve: TFullConfig;
   getConfiguredProvider: (providerId: string | undefined) => TProvider | undefined;
   listProviders: () => Iterable<TProvider>;

@@ -1,5 +1,3 @@
-// Public fetch/proxy helpers for plugins that need wrapped fetch behavior.
-
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 
 export { resolveFetch, wrapFetchWithAbortSignal } from "../infra/fetch.js";
@@ -31,6 +29,7 @@ type GuardedFetchPresetOptions = Omit<
   "mode" | "proxy" | "dangerouslyAllowEnvProxyWithoutPinnedDns"
 >;
 
+/** Preset guarded fetch options for plugin calls that trust managed environment proxy routing. */
 export function withTrustedEnvProxyGuardedFetchMode(
   params: GuardedFetchPresetOptions,
 ): GuardedFetchOptions {

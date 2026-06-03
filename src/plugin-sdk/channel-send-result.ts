@@ -13,7 +13,12 @@ export type ChannelSendRawResult = {
 };
 
 /** Attaches the channel id to a single outbound send result. */
-export function attachChannelToResult<T extends object>(channel: string, result: T) {
+export function attachChannelToResult<T extends object>(
+  /** Stable channel id stamped on outbound delivery results. */
+  channel: string,
+  /** Channel-specific result payload; its fields are preserved after the channel stamp. */
+  result: T,
+) {
   return {
     channel,
     ...result,
@@ -27,7 +32,9 @@ export function attachChannelToResults<T extends object>(channel: string, result
 
 /** Creates an empty outbound delivery result for send paths that produced no platform id. */
 export function createEmptyChannelResult(
+  /** Stable channel id for the outbound path that could not produce a platform message id. */
   channel: string,
+  /** Optional delivery metadata such as chat/thread ids; messageId defaults to the legacy sentinel. */
   result: Partial<Omit<OutboundDeliveryResult, "channel" | "messageId">> & {
     messageId?: string;
   } = {},
@@ -46,9 +53,13 @@ type SendPollParams = Parameters<NonNullable<ChannelOutboundAdapter["sendPoll"]>
 
 /** Wraps outbound send methods that already return delivery-shaped results without channel ids. */
 export function createAttachedChannelResultAdapter(params: {
+  /** Channel id added to every wrapped send result. */
   channel: string;
+  /** Modern text sender returning outbound delivery fields except channel. */
   sendText?: (ctx: SendTextParams) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
+  /** Modern media sender returning outbound delivery fields except channel. */
   sendMedia?: (ctx: SendMediaParams) => MaybePromise<Omit<OutboundDeliveryResult, "channel">>;
+  /** Modern poll sender returning poll delivery fields except channel. */
   sendPoll?: (ctx: SendPollParams) => MaybePromise<Omit<ChannelPollResult, "channel">>;
 }): Pick<ChannelOutboundAdapter, "sendText" | "sendMedia" | "sendPoll"> {
   return {
@@ -66,8 +77,11 @@ export function createAttachedChannelResultAdapter(params: {
 
 /** Wraps legacy raw text/media send methods and normalizes their results. */
 export function createRawChannelSendResultAdapter(params: {
+  /** Channel id added while converting raw ok/messageId/error payloads. */
   channel: string;
+  /** Legacy text sender that reports primitive success/error fields. */
   sendText?: (ctx: SendTextParams) => MaybePromise<ChannelSendRawResult>;
+  /** Legacy media sender that reports primitive success/error fields. */
   sendMedia?: (ctx: SendMediaParams) => MaybePromise<ChannelSendRawResult>;
 }): Pick<ChannelOutboundAdapter, "sendText" | "sendMedia"> {
   return {
@@ -81,7 +95,12 @@ export function createRawChannelSendResultAdapter(params: {
 }
 
 /** Normalize raw channel send results into the shape shared outbound callers expect. */
-export function buildChannelSendResult(channel: string, result: ChannelSendRawResult) {
+export function buildChannelSendResult(
+  /** Channel id for the adapter that produced the raw send result. */
+  channel: string,
+  /** Legacy primitive result; null/undefined message ids map to the empty-id sentinel. */
+  result: ChannelSendRawResult,
+) {
   return {
     channel,
     ok: result.ok,

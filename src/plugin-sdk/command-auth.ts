@@ -111,18 +111,29 @@ export type { StoredModelOverride } from "../auto-reply/reply/stored-model-overr
 
 /** @deprecated Use `resolveChannelMessageIngress` from `openclaw/plugin-sdk/channel-ingress-runtime`. */
 export type ResolveSenderCommandAuthorizationParams = {
+  /** Canonical host config; command access-group policy is read from `commands.useAccessGroups`. */
   cfg: OpenClawConfig;
+  /** Raw channel text before command parsing. Non-command input must not emit a command decision. */
   rawBody: string;
+  /** Group messages use only configured group allowlists for command authorization. */
   isGroup: boolean;
+  /** Direct-message access mode; pairing-style modes may add stored DM owners for DM commands only. */
   dmPolicy: string;
+  /** Configured direct-message owners before channel access-group expansion. */
   configuredAllowFrom: string[];
+  /** Configured group command senders before channel access-group expansion. */
   configuredGroupAllowFrom?: string[];
+  /** Transport-local sender id passed through the channel matcher unchanged. */
   senderId: string;
+  /** Channel matcher owns id normalization and wildcard/provider-specific matching. */
   isSenderAllowed: (senderId: string, allowFrom: string[]) => boolean;
+  /** Channel/account scope for expanding access-group entries; omitted keeps raw allowlists. */
   channel?: ChannelId;
   accountId?: string;
   resolveAccessGroupMembership?: AccessGroupMembershipResolver;
+  /** Pairing-store direct-message owners; ignored for groups, open policy, and allowlist policy. */
   readAllowFromStore: () => Promise<string[]>;
+  /** Runtime command detector. False preserves access facts without producing command auth. */
   shouldComputeCommandAuthorized: (rawBody: string, cfg: OpenClawConfig) => boolean;
   /** @deprecated Command authorization is resolved by channel ingress. Kept for runtime injection compatibility. */
   resolveCommandAuthorizedFromAuthorizers?: (params: {
@@ -188,6 +199,8 @@ export async function resolveSenderCommandAuthorization(
   commandAuthorized: boolean | undefined;
 }> {
   const shouldComputeAuth = params.shouldComputeCommandAuthorized(params.rawBody, params.cfg);
+  // Pairing-store owners authorize direct-message command replies only. Groups and open/allowlist
+  // policies must rely on configured allowlists so a paired DM cannot become group command access.
   const storeAllowFrom =
     !params.isGroup && params.dmPolicy !== "allowlist" && params.dmPolicy !== "open"
       ? await params.readAllowFromStore().catch(() => [])
@@ -198,6 +211,8 @@ export async function resolveSenderCommandAuthorization(
   let configuredGroupAllowFrom = params.configuredGroupAllowFrom ?? [];
   let dmStoreAllowFrom = storeAllowFrom;
   if (channel) {
+    // Expand each allowlist independently; configured DM, configured group, and stored DM owners
+    // feed different authorizers and must not collapse into one shared sender list.
     [configuredAllowFrom, configuredGroupAllowFrom] = await Promise.all([
       expandAllowFromWithAccessGroups({
         cfg: params.cfg,
@@ -251,6 +266,8 @@ export async function resolveSenderCommandAuthorization(
   const commandAuthorized = shouldComputeAuth
     ? (params.resolveCommandAuthorizedFromAuthorizers?.({
         useAccessGroups,
+        // Empty configured lists are treated as absent authorizers. This preserves the legacy
+        // fallback where direct sender access decides only when no runtime authorizer is injected.
         authorizers: [
           { configured: effectiveAllowFrom.length > 0, allowed: ownerAllowedForCommands },
           { configured: effectiveGroupAllowFrom.length > 0, allowed: groupAllowedForCommands },

@@ -8,6 +8,7 @@ import { shouldRemoveDeadOwnerOrExpiredLock } from "../infra/stale-lock-file.js"
 import { getProcessStartTime } from "../shared/pid-alive.js";
 
 export type FileLockOptions = {
+  /** Retry policy applied while another process owns the sidecar lock. */
   retries: {
     retries: number;
     factor: number;
@@ -19,6 +20,7 @@ export type FileLockOptions = {
 };
 
 export type FileLockHandle = {
+  /** Absolute path to the `.lock` sidecar currently held. */
   lockPath: string;
   release: () => Promise<void>;
 };
@@ -44,6 +46,7 @@ async function shouldReclaimPluginLock(params: {
   staleMs: number;
   nowMs: number;
 }): Promise<boolean> {
+  // Reclaim only when the recorded owner is dead or the lock is past its stale window.
   return shouldRemoveDeadOwnerOrExpiredLock({
     payload: params.payload,
     staleMs: params.staleMs,
@@ -92,6 +95,7 @@ export async function acquireFileLock(
           pid: process.pid,
           createdAt: new Date().toISOString(),
         };
+        // starttime differentiates a live owner from pid reuse after process restart.
         const starttime = getProcessStartTime(process.pid);
         if (starttime !== null) {
           payload.starttime = starttime;

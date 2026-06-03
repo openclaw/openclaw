@@ -28,18 +28,27 @@ type DeliverySuppressionParams = {
 };
 
 type ApproverRestrictedNativeApprovalParams = {
+  /** Canonical channel id used for native delivery/fallback suppression matching. */
   channel: string;
+  /** Human channel name used in denial copy and setup descriptions. */
   channelLabel: string;
+  /** Account ids considered when checking whether any configured approver DM route exists. */
   listAccountIds: (cfg: OpenClawConfig) => string[];
+  /** True when an account has explicit approvers configured for approval actions. */
   hasApprovers: (params: ApprovalAdapterParams) => boolean;
+  /** Exec approval sender authorization for the current account. */
   isExecAuthorizedSender: (params: ApprovalAdapterParams) => boolean;
+  /** Optional plugin approval sender authorization; defaults to exec auth for older channels. */
   isPluginAuthorizedSender?: (params: ApprovalAdapterParams) => boolean;
+  /** Native delivery transport gate; separate from action availability. */
   isNativeDeliveryEnabled: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
   resolveNativeDeliveryMode: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => NativeApprovalDeliveryMode;
+  /** Require fallback suppression to prove the request originated on this same channel. */
   requireMatchingTurnSourceChannel?: boolean;
+  /** Override the account used for native-delivery suppression, often from turn-source metadata. */
   resolveSuppressionAccountId?: (params: DeliverySuppressionParams) => string | undefined;
   resolveOriginTarget?: (params: {
     cfg: OpenClawConfig;
@@ -153,6 +162,8 @@ function buildApproverRestrictedNativeApprovalCapability(
           }
         }
         const resolvedAccountId = params.resolveSuppressionAccountId?.(input);
+        // Undefined means "use the forwarding target account"; empty string means "unscoped".
+        // This lets channels deliberately switch suppression checks to turn-source account facts.
         const accountId =
           (resolvedAccountId === undefined
             ? input.target.accountId?.trim()
@@ -189,14 +200,18 @@ function buildApproverRestrictedNativeApprovalCapability(
 }
 
 export function createApproverRestrictedNativeApprovalAdapter(
+  /** Full native approval capability parameters; result is split for legacy adapter consumers. */
   params: ApproverRestrictedNativeApprovalParams,
 ) {
   return splitChannelApprovalCapability(buildApproverRestrictedNativeApprovalCapability(params));
 }
 
 export function createChannelApprovalCapability(params: {
+  /** Authorization surface for approve actions. */
   authorizeActorAction?: ChannelApprovalCapability["authorizeActorAction"];
+  /** Generic approval action availability, independent of native delivery. */
   getActionAvailabilityState?: ChannelApprovalCapability["getActionAvailabilityState"];
+  /** Native exec initiating surface availability, including native-delivery transport gate. */
   getExecInitiatingSurfaceState?: ChannelApprovalCapability["getExecInitiatingSurfaceState"];
   resolveApproveCommandBehavior?: ChannelApprovalCapability["resolveApproveCommandBehavior"];
   describeExecApprovalSetup?: ChannelApprovalCapability["describeExecApprovalSetup"];

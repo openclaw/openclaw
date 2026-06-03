@@ -43,11 +43,17 @@ type PairLoopGuardEntry = {
 /** In-memory guard for suppressing repeated bidirectional bot pair loops. */
 export type PairLoopGuard = {
   recordAndCheck: (params: {
+    /** Channel/account/plugin scope. Same participants in different scopes are independent. */
     scopeId: string;
+    /** Conversation or room id that bounds a detected bot-to-bot loop. */
     conversationId: string;
+    /** Sender id for this event; direction is normalized with `receiverId`. */
     senderId: string;
+    /** Receiver id for this event; self-pairs are ignored because they are not bidirectional loops. */
     receiverId: string;
+    /** Resolved runtime thresholds. Disabled or invalid thresholds short-circuit without tracking. */
     settings: PairLoopGuardSettings;
+    /** Test/runtime clock override. Older reordered events must not inherit future cooldowns. */
     nowMs?: number;
   }) => PairLoopGuardResult;
   clear: () => void;
@@ -114,8 +120,11 @@ function positiveInteger(value: unknown): number | undefined {
 
 /** Resolves runtime loop guard settings from config/defaults and the channel default-enabled gate. */
 export function resolvePairLoopGuardSettings(params: {
+  /** Narrow channel/account/group config. Valid fields override shared defaults field-by-field. */
   config?: PairLoopGuardConfig;
+  /** Broader shared channel default config used when narrow config leaves a field unset. */
   defaultsConfig?: PairLoopGuardConfig;
+  /** Channel capability gate; false disables the guard even when config says enabled. */
   defaultEnabled: boolean;
 }): PairLoopGuardSettings {
   const configuredEnabled =
@@ -159,10 +168,14 @@ function buildPairKey(params: {
 
 function pruneRecentTimestamps(entry: PairLoopGuardEntry, nowMs: number, windowMs: number): void {
   const cutoff = nowMs - windowMs;
+  // Strictly greater than the cutoff keeps the active window bounded and avoids retaining the
+  // event that has just aged out at exactly `windowMs`.
   entry.recentMs = entry.recentMs.filter((timestampMs) => timestampMs > cutoff);
 }
 
 function countCurrentWindowEvents(entry: PairLoopGuardEntry, nowMs: number): number {
+  // Reordered older events should not count future timestamps. The later event remains stored so
+  // normal time flow can still trip the guard when the runtime reaches that point.
   return entry.recentMs.filter((timestampMs) => timestampMs <= nowMs).length;
 }
 

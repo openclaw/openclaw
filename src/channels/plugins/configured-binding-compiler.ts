@@ -18,6 +18,7 @@ import type {
 // from runtime plugin-owned conversation bindings.
 
 export type CompiledConfiguredBindingRegistry = {
+  /** Compiled binding rules grouped by normalized channel id for cheap runtime lookup. */
   rulesByChannel: Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>;
 };
 
@@ -29,6 +30,7 @@ function resolveLoadedChannelPlugin(channel: string) {
   return getChannelPlugin(normalized as ConfiguredBindingChannel);
 }
 
+/** Resolve a loaded channel plugin that can compile and match configured bindings. */
 function resolveConfiguredBindingAdapter(channel: string): {
   channel: ConfiguredBindingChannel;
   provider: ChannelConfiguredBindingProvider;
@@ -53,12 +55,14 @@ function resolveConfiguredBindingAdapter(channel: string): {
   };
 }
 
+/** Extract the configured peer id used as the provider-facing binding conversation id. */
 function resolveBindingConversationId(binding: {
   match?: { peer?: { id?: string } };
 }): string | null {
   return normalizeOptionalString(binding.match?.peer?.id) ?? null;
 }
 
+/** Let the channel provider compile config into its canonical conversation reference. */
 function compileConfiguredBindingTarget(params: {
   provider: ChannelConfiguredBindingProvider;
   binding: CompiledConfiguredBinding["binding"];
@@ -70,6 +74,7 @@ function compileConfiguredBindingTarget(params: {
   });
 }
 
+/** Build the compiled rule only when a consumer can materialize a runtime target. */
 function compileConfiguredBindingRule(params: {
   cfg: OpenClawConfig;
   channel: ConfiguredBindingChannel;
@@ -106,6 +111,7 @@ function compileConfiguredBindingRule(params: {
   };
 }
 
+/** Preserve config order inside each channel bucket for deterministic tie handling. */
 function pushCompiledRule(
   target: Map<ConfiguredBindingChannel, CompiledConfiguredBinding[]>,
   rule: CompiledConfiguredBinding,
@@ -126,11 +132,14 @@ function compileConfiguredBindingRegistry(params: {
   for (const binding of listConfiguredBindings(params.cfg)) {
     const bindingConversationId = resolveBindingConversationId(binding);
     if (!bindingConversationId) {
+      // Bindings without a peer id cannot be matched from inbound conversation refs.
       continue;
     }
 
     const resolvedChannel = resolveConfiguredBindingAdapter(binding.match.channel);
     if (!resolvedChannel) {
+      // Avoid late plugin discovery here; only already loaded channel plugins
+      // participate in configured binding resolution.
       continue;
     }
 
@@ -162,18 +171,21 @@ function compileConfiguredBindingRegistry(params: {
   };
 }
 
+/** Compile the current configured binding registry from loaded channel plugins. */
 export function resolveCompiledBindingRegistry(
   cfg: OpenClawConfig,
 ): CompiledConfiguredBindingRegistry {
   return compileConfiguredBindingRegistry({ cfg });
 }
 
+/** Eagerly compile configured bindings so callers can measure registry size. */
 export function primeCompiledBindingRegistry(
   cfg: OpenClawConfig,
 ): CompiledConfiguredBindingRegistry {
   return compileConfiguredBindingRegistry({ cfg });
 }
 
+/** Count compiled binding rules and occupied channel buckets for diagnostics. */
 export function countCompiledBindingRegistry(registry: CompiledConfiguredBindingRegistry): {
   bindingCount: number;
   channelCount: number;

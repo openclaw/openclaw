@@ -1,4 +1,8 @@
-/** Splits text into bounded chunks using caller-owned soft-break selection. */
+/**
+ * Splits text into bounded chunks using caller-owned soft-break selection.
+ * Empty input returns no chunks; non-positive limits intentionally leave the
+ * original text intact for adapters that disable chunking with `0`.
+ */
 export function chunkTextByBreakResolver(
   text: string,
   limit: number,

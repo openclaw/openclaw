@@ -14,7 +14,10 @@ import type { ReplyPayload } from "./reply-payload.js";
 
 const DEFAULT_ALLOWED_DECISIONS = ["allow-once", "allow-always", "deny"] as const;
 
-/** Build a pending approval reply payload using the portable presentation API. */
+/**
+ * Build a pending approval reply payload using the portable presentation API.
+ * The execApproval channelData is the suppression/resolution marker consumed by shared delivery code.
+ */
 export function buildApprovalPendingReplyPayload(params: {
   approvalKind?: "exec" | "plugin";
   approvalId: string;
@@ -47,7 +50,7 @@ export function buildApprovalPendingReplyPayload(params: {
   };
 }
 
-/** Build a resolved approval reply payload with approval metadata but no controls. */
+/** Build a resolved approval reply payload with approval metadata but no interactive controls. */
 export function buildApprovalResolvedReplyPayload(params: {
   approvalId: string;
   approvalSlug: string;
@@ -80,6 +83,7 @@ export function buildPluginApprovalPendingReplyPayload(params: {
     approvalId: params.request.id,
     approvalSlug: params.approvalSlug ?? params.request.id.slice(0, 8),
     text: params.text ?? buildPluginApprovalRequestMessage(params.request, params.nowMs),
+    // Plugin requests can narrow decisions; generic approvals default to the full exec set.
     allowedDecisions:
       params.allowedDecisions ??
       resolvePluginApprovalRequestAllowedDecisions(params.request.request),

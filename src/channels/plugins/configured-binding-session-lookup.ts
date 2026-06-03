@@ -16,6 +16,8 @@ export function resolveConfiguredBindingRecordBySessionKeyFromRegistry(params: {
     return null;
   }
 
+  // Consumers own their session-key grammar; the registry only supplies the
+  // compiled binding rules that may materialize into that parsed target.
   for (const consumer of listConfiguredBindingConsumers()) {
     const parsed = consumer.parseSessionKey?.({ sessionKey });
     if (!parsed) {
@@ -56,6 +58,8 @@ export function resolveConfiguredBindingRecordBySessionKeyFromRegistry(params: {
         }) ?? materializedTarget.record.targetSessionKey === sessionKey;
       if (matchesSessionKey) {
         if (accountMatchPriority === 2) {
+          // Exact account matches can return immediately because wildcard rules
+          // are only fallback candidates for parsed non-default session keys.
           exactMatch = materializedTarget;
           break;
         }

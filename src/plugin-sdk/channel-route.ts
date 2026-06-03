@@ -91,6 +91,8 @@ export function normalizeChannelRouteRef(
   if (!channel && !to && !accountId && threadId == null) {
     return undefined;
   }
+  // `rawTo` is diagnostic/provider input only. Route identity uses normalized `to` so callers do
+  // not split sessions when a channel preserves both parsed and original target strings.
   return {
     ...(channel ? { channel } : {}),
     ...(accountId ? { accountId } : {}),
@@ -181,12 +183,16 @@ export function channelRouteIdentityKey(input?: ChannelRouteTargetInput | null):
 }
 
 function threadIdsEqual(left?: string | number, right?: string | number): boolean {
+  // Numeric and numeric-string thread ids are equivalent across transports that deserialize ids
+  // differently; provider string ids remain distinct after stringification.
   const normalizedLeft = stringifyRouteThreadId(left);
   const normalizedRight = stringifyRouteThreadId(right);
   return normalizedLeft === normalizedRight;
 }
 
 function accountsCompatible(left?: string, right?: string): boolean {
+  // Conversation sharing accepts a parent route without account scope. Exact equality below keeps
+  // missing account separate from explicit account for dedupe and native target binding.
   return !left || !right || left === right;
 }
 
@@ -195,7 +201,9 @@ function accountsEqual(left?: string, right?: string): boolean {
 }
 
 export function channelRoutesMatchExact(params: {
+  /** Fully normalized left route. Missing account must stay different from explicit account. */
   left?: ChannelRouteRef | null;
+  /** Fully normalized right route. Thread ids compare by normalized string value. */
   right?: ChannelRouteRef | null;
 }): boolean {
   const { left, right } = params;
@@ -213,7 +221,9 @@ export function channelRoutesMatchExact(params: {
 
 /** Checks whether two normalized routes point at the same conversation or parent route. */
 export function channelRoutesShareConversation(params: {
+  /** Candidate route; missing thread means parent conversation when channel/target/account match. */
   left?: ChannelRouteRef | null;
+  /** Candidate route; missing account is compatible with any explicit account in this check. */
   right?: ChannelRouteRef | null;
 }): boolean {
   const { left, right } = params;
@@ -282,6 +292,8 @@ export function channelRouteCompactKey(route?: ChannelRouteKeyInput | null): str
   if (!normalized?.channel || !normalized.target?.to) {
     return undefined;
   }
+  // Compact keys are for logs/maps that require a real destination. Dedupe paths use the JSON key
+  // above so separator characters inside route parts cannot collide.
   return [
     normalized.channel,
     normalized.target.to,

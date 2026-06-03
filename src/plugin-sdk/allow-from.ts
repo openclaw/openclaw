@@ -78,7 +78,11 @@ type ParsedChatAllowTarget =
   | { kind: "chat_identifier"; chatIdentifier: string }
   | { kind: "handle"; handle: string };
 
-/** Match allowlist entries against senders, with conversation targets requiring explicit opt-in. */
+/**
+ * Match allowlist entries against senders, with conversation targets requiring explicit opt-in.
+ * Handles are sender identities; chat ids/guids/identifiers are thread targets and stay disabled
+ * unless the channel deliberately allows group/thread scoped entries.
+ */
 export function isAllowedParsedChatSender(params: {
   allowFrom: Array<string | number>;
   sender: string;
@@ -93,7 +97,9 @@ export function isAllowedParsedChatSender(params: {
 }
 
 export type BasicAllowlistResolutionEntry = {
+  /** Original user-configured allowlist input. */
   input: string;
+  /** Whether resolver lookup produced a stable sender/account id. */
   resolved: boolean;
   id?: string;
   name?: string;
@@ -113,7 +119,10 @@ export function mapBasicAllowlistResolutionEntries(
   }));
 }
 
-/** Map allowlist inputs sequentially so resolver side effects stay ordered and predictable. */
+/**
+ * Map allowlist inputs sequentially so resolver side effects stay ordered and predictable.
+ * Provider/contact resolvers can rate-limit, cache, or emit diagnostics in input order.
+ */
 export async function mapAllowlistResolutionInputs<T>(params: {
   inputs: string[];
   mapInput: (input: string) => Promise<T> | T;

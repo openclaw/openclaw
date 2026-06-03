@@ -17,6 +17,8 @@ import type {
 export function resolveAccountMatchPriority(match: string | undefined, actual: string): 0 | 1 | 2 {
   const trimmed = (match ?? "").trim();
   if (!trimmed) {
+    // Missing account pattern means the default account only; non-default
+    // conversations must opt in with an exact account id or wildcard.
     return actual === DEFAULT_ACCOUNT_ID ? 2 : 0;
   }
   if (trimmed === "*") {
@@ -25,6 +27,7 @@ export function resolveAccountMatchPriority(match: string | undefined, actual: s
   return normalizeAccountId(trimmed) === actual ? 2 : 0;
 }
 
+/** Delegate channel-specific conversation matching to the compiled binding provider. */
 function matchCompiledBindingConversation(params: {
   rule: CompiledConfiguredBinding;
   conversationId: string;
@@ -38,11 +41,13 @@ function matchCompiledBindingConversation(params: {
   });
 }
 
+/** Normalize configured binding channel ids, rejecting empty channel strings. */
 export function resolveCompiledBindingChannel(raw: string): ConfiguredBindingChannel | null {
   const normalized = normalizeOptionalLowercaseString(raw);
   return normalized ? (normalized as ConfiguredBindingChannel) : null;
 }
 
+/** Convert an outbound conversation ref into the normalized configured-binding match shape. */
 export function toConfiguredBindingConversationRef(conversation: ConversationRef): {
   channel: ConfiguredBindingChannel;
   accountId: string;
@@ -62,6 +67,7 @@ export function toConfiguredBindingConversationRef(conversation: ConversationRef
   };
 }
 
+/** Materialize the binding record after account and conversation matching has selected a rule. */
 export function materializeConfiguredBindingRecord(params: {
   rule: CompiledConfiguredBinding;
   accountId: string;
@@ -73,6 +79,7 @@ export function materializeConfiguredBindingRecord(params: {
   });
 }
 
+/** Resolve the best configured binding, preferring exact account matches over wildcard matches. */
 export function resolveMatchingConfiguredBinding(params: {
   rules: CompiledConfiguredBinding[];
   conversation: ReturnType<typeof toConfiguredBindingConversationRef>;
@@ -106,6 +113,8 @@ export function resolveMatchingConfiguredBinding(params: {
     }
     const matchPriority = match.matchPriority ?? 0;
     if (accountMatchPriority === 2) {
+      // Exact account bindings beat wildcard bindings even when both providers
+      // match the same conversation shape.
       if (!exactMatch || matchPriority > (exactMatch.match.matchPriority ?? 0)) {
         exactMatch = { rule, match };
       }

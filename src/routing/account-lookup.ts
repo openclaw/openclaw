@@ -1,5 +1,6 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** Resolve an account config entry by exact key first, then lowercase-normalized key match. */
 export function resolveAccountEntry<T>(
   accounts: Record<string, T> | undefined,
   accountId: string,
@@ -8,6 +9,8 @@ export function resolveAccountEntry<T>(
     return undefined;
   }
   if (Object.hasOwn(accounts, accountId)) {
+    // Exact own-key lookup takes precedence so an intentionally cased account id
+    // is not shadowed by another key that normalizes to the same value.
     return accounts[accountId];
   }
   const normalized = normalizeLowercaseStringOrEmpty(accountId);
@@ -17,6 +20,7 @@ export function resolveAccountEntry<T>(
   return matchKey ? accounts[matchKey] : undefined;
 }
 
+/** Resolve account entries with a plugin-provided normalizer for channel-specific aliases. */
 export function resolveNormalizedAccountEntry<T>(
   accounts: Record<string, T> | undefined,
   accountId: string,
@@ -26,6 +30,7 @@ export function resolveNormalizedAccountEntry<T>(
     return undefined;
   }
   if (Object.hasOwn(accounts, accountId)) {
+    // Keep direct own-key lookup ahead of normalized scans for duplicate-normalized maps.
     return accounts[accountId];
   }
   const normalized = normalizeAccountId(accountId);

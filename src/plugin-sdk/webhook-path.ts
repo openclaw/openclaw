@@ -1,9 +1,4 @@
-/**
- * @deprecated Compatibility subpath. Import webhook path helpers from
- * `openclaw/plugin-sdk/webhook-ingress` instead.
- */
-
-/** @deprecated Import from `openclaw/plugin-sdk/webhook-ingress` instead. */
+/** @deprecated Normalize webhook route paths via `openclaw/plugin-sdk/webhook-ingress` instead. */
 export function normalizeWebhookPath(raw: string): string {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -16,7 +11,7 @@ export function normalizeWebhookPath(raw: string): string {
   return withSlash;
 }
 
-/** @deprecated Import from `openclaw/plugin-sdk/webhook-ingress` instead. */
+/** @deprecated Resolve configured webhook paths via `openclaw/plugin-sdk/webhook-ingress` instead. */
 export function resolveWebhookPath(params: {
   webhookPath?: string;
   webhookUrl?: string;

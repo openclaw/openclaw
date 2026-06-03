@@ -24,6 +24,7 @@ export function createAccountListHelpers(
     hasImplicitDefaultAccount?: (cfg: OpenClawConfig) => boolean;
   },
 ) {
+  /** Check top-level credentials/env that imply the default account exists without accounts.default. */
   function hasImplicitDefaultAccount(cfg: OpenClawConfig): boolean {
     if (options?.hasImplicitDefaultAccount?.(cfg)) {
       return true;
@@ -42,6 +43,7 @@ export function createAccountListHelpers(
     return false;
   }
 
+  /** Resolve a configured defaultAccount only when it is allowed by the visible account list. */
   function resolveConfiguredDefaultAccountId(cfg: OpenClawConfig): string | undefined {
     const channel = cfg.channels?.[channelKey] as Record<string, unknown> | undefined;
     const preferred = normalizeOptionalAccountId(
@@ -60,6 +62,7 @@ export function createAccountListHelpers(
     return undefined;
   }
 
+  /** List account ids declared in channels.<id>.accounts, after optional plugin normalization. */
   function listConfiguredAccountIds(cfg: OpenClawConfig): string[] {
     const channel = cfg.channels?.[channelKey];
     const accounts = (channel as Record<string, unknown> | undefined)?.accounts;
@@ -74,6 +77,7 @@ export function createAccountListHelpers(
     return normalizeUniqueStringEntries(ids.map((id) => normalizeConfiguredAccountId(id)));
   }
 
+  /** Combine configured ids with implicit/default accounts so channel setup has a stable list. */
   function listAccountIds(cfg: OpenClawConfig): string[] {
     return listCombinedAccountIds({
       configuredAccountIds: listConfiguredAccountIds(cfg),
@@ -82,6 +86,7 @@ export function createAccountListHelpers(
     });
   }
 
+  /** Resolve the effective default account id from configured preference and account availability. */
   function resolveDefaultAccountId(cfg: OpenClawConfig): string {
     return resolveListedDefaultAccountId({
       accountIds: listAccountIds(cfg),
@@ -93,6 +98,7 @@ export function createAccountListHelpers(
   return { listConfiguredAccountIds, listAccountIds, resolveDefaultAccountId };
 }
 
+/** Treat non-empty strings and present non-string values as configured account fields. */
 export function hasConfiguredAccountValue(value: unknown): boolean {
   if (typeof value === "string") {
     return value.trim().length > 0;
@@ -100,6 +106,7 @@ export function hasConfiguredAccountValue(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
+/** Merge configured, additional, implicit, and fallback account ids into a sorted unique list. */
 export function listCombinedAccountIds(params: {
   configuredAccountIds: Iterable<string>;
   additionalAccountIds?: Iterable<string>;
@@ -128,6 +135,7 @@ export function listCombinedAccountIds(params: {
   return [...ids].toSorted((a, b) => a.localeCompare(b));
 }
 
+/** Pick the default account from a listed account set and optional configured preference. */
 export function resolveListedDefaultAccountId(params: {
   accountIds: readonly string[];
   configuredDefaultAccountId?: string | undefined;
@@ -153,6 +161,7 @@ export function resolveListedDefaultAccountId(params: {
   return params.accountIds[0] ?? DEFAULT_ACCOUNT_ID;
 }
 
+/** Merge top-level channel defaults with account-specific overrides. */
 export function mergeAccountConfig<TConfig extends Record<string, unknown>>(params: {
   channelConfig: TConfig | undefined;
   accountConfig: Partial<TConfig> | undefined;
@@ -180,6 +189,8 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
       accountValue != null &&
       !Array.isArray(accountValue)
     ) {
+      // Selected nested objects are merged so account overrides can replace one
+      // field without discarding sibling channel-level defaults.
       (merged as Record<string, unknown>)[key] = {
         ...(baseValue as Record<string, unknown>),
         ...(accountValue as Record<string, unknown>),
@@ -189,6 +200,7 @@ export function mergeAccountConfig<TConfig extends Record<string, unknown>>(para
   return merged;
 }
 
+/** Resolve an account entry by id, then merge it with top-level channel defaults. */
 export function resolveMergedAccountConfig<TConfig extends Record<string, unknown>>(params: {
   channelConfig: TConfig | undefined;
   accounts: Record<string, Partial<TConfig>> | undefined;
@@ -228,6 +240,7 @@ export function describeAccountSnapshot(params: {
   };
 }
 
+/** Describe webhook-style account state with a default mode for channel status surfaces. */
 export function describeWebhookAccountSnapshot(params: {
   account: AccountSnapshotInput;
   configured?: boolean | undefined;

@@ -119,6 +119,8 @@ function shouldApplyOpenAIToolCompat(ctx: ProviderNormalizeToolSchemasContext): 
   const api = (ctx.model?.api ?? ctx.modelApi ?? "").trim().toLowerCase();
   const baseUrl = (ctx.model?.baseUrl ?? "").trim().toLowerCase();
 
+  // Strict-schema promotion is native OpenAI Responses only. Proxy/OpenAI-compatible routes can
+  // have different schema contracts, so leave their tool payloads unchanged.
   if (provider === "openai") {
     if (api === "openai-responses") {
       return !baseUrl || isOpenAIResponsesBaseUrl(baseUrl);
@@ -229,6 +231,8 @@ function normalizeOpenAIStrictCompatSchemaRecursive(
     if (!options.promoteEmptyObject) {
       return schema;
     }
+    // Root parameter-free tools need an explicit strict object shape. Nested empty schemas are
+    // annotations/placeholders and must stay untouched so provider intent is not over-tightened.
     return {
       type: "object",
       properties: {},
@@ -280,6 +284,8 @@ export function findOpenAIStrictSchemaViolations(
   path: string,
   options?: { requireObjectRoot?: boolean },
 ): string[] {
+  // Diagnostics mirror the strict=true subset, but native transports may still choose strict:false.
+  // Keep this as a pure inspector so callers can decide whether violations should block a route.
   if (Array.isArray(schema)) {
     if (options?.requireObjectRoot) {
       return [`${path}.type`];
@@ -444,6 +450,8 @@ function normalizeDeepSeekSchema(schema: unknown): unknown {
     return normalized;
   }
 
+  // DeepSeek rejects anyOf/oneOf in tool schemas. Keep the first non-null schema as the callable
+  // shape and carry nullability separately so optional unions remain representable.
   const merged = {
     ...(selected as Record<string, unknown>),
     ...normalized,
@@ -495,7 +503,13 @@ export function inspectDeepSeekToolSchemas(
   });
 }
 
-export type ProviderToolCompatFamily = "deepseek" | "gemini" | "openai";
+export type ProviderToolCompatFamily =
+  /** DeepSeek/OpenAI-compatible route that rejects anyOf/oneOf in tool parameters. */
+  | "deepseek"
+  /** Gemini route that rejects provider-specific unsupported schema keywords. */
+  | "gemini"
+  /** Native OpenAI Responses/Codex route with strict object-shape compatibility rules. */
+  | "openai";
 
 export function buildProviderToolCompatFamilyHooks(family: ProviderToolCompatFamily): {
   normalizeToolSchemas: (ctx: ProviderNormalizeToolSchemasContext) => AnyAgentTool[];

@@ -30,6 +30,7 @@ export type OAuthAuthorizationInput = {
   state?: string;
 };
 
+/** Browser redirect target plus optional CLI-facing instructions for manual OAuth flows. */
 export type OAuthAuthInfo = {
   url: string;
   instructions?: string;
@@ -46,7 +47,9 @@ export type OAuthSelectPrompt = {
 };
 
 export interface OAuthLoginCallbacks {
+  /** Announce the provider authorization URL before waiting for browser or manual input. */
   onAuth: (info: OAuthAuthInfo) => void;
+  /** Ask for manual input when the provider flow cannot finish from callback data alone. */
   onPrompt: (prompt: OAuthPrompt) => Promise<string>;
   onProgress?: (message: string) => void;
   onManualCodeInput?: () => Promise<string>;
@@ -222,6 +225,10 @@ export function generateOAuthState(): string {
   return base64urlEncode(stateBytes);
 }
 
+/**
+ * Normalizes callback input from browsers, copied query strings, or raw manual codes.
+ * `code#state` is a CLI shortcut for providers whose redirect URL is hard to paste intact.
+ */
 export function parseOAuthAuthorizationInput(input: string): OAuthAuthorizationInput {
   const value = input.trim();
   if (!value) {
@@ -258,6 +265,7 @@ export function resolveOAuthTokenLifetimeMs(value: unknown): number | undefined 
   return positiveSecondsToSafeMilliseconds(value);
 }
 
+/** Converts provider `expires_in` seconds to an absolute refresh time, applying optional skew. */
 export function resolveOAuthTokenExpiresAt(
   value: unknown,
   options: { nowMs?: number; refreshSkewMs?: number } = {},
@@ -313,12 +321,14 @@ export function withOAuthLoginAbort<T>(
       },
       (error: unknown) => {
         cleanup();
+        // Some provider SDKs reject with strings or plain objects; normalize for strict catch sites.
         reject(toLintErrorObject(error, "Non-Error rejection"));
       },
     );
   });
 }
 
+/** Combines caller cancellation with a clamped timeout signal for provider HTTP requests. */
 export function buildOAuthRequestSignal(options: {
   signal?: AbortSignal;
   timeoutMs: number;

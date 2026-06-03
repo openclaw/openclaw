@@ -1,16 +1,19 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+/** Raw custom command entry accepted from config or legacy SDK callers. */
 export type CustomCommandInput = {
   command?: string | null;
   description?: string | null;
 };
 
+/** Indexed validation issue that callers can map back onto their config path. */
 export type CustomCommandIssue = {
   index: number;
   field: "command" | "description";
   message: string;
 };
 
+/** Channel-specific command validation policy shared by config schemas and SDK shims. */
 export type CustomCommandConfig = {
   label: string;
   pattern: RegExp;
@@ -20,6 +23,7 @@ export type CustomCommandConfig = {
 
 const DEFAULT_PREFIX = "/";
 
+/** Normalize slash command names before validation and storage. */
 export function normalizeSlashCommandName(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -29,10 +33,12 @@ export function normalizeSlashCommandName(value: string): string {
   return normalizeLowercaseStringOrEmpty(withoutSlash).replace(/-/g, "_");
 }
 
+/** Normalize command descriptions without applying channel-specific length or content policy. */
 export function normalizeCommandDescription(value: string): string {
   return value.trim();
 }
 
+/** Resolve valid custom commands and collect validation issues without throwing. */
 export function resolveCustomCommands(params: {
   commands?: CustomCommandInput[] | null;
   reservedCommands?: Set<string>;
@@ -98,6 +104,8 @@ export function resolveCustomCommands(params: {
       continue;
     }
     if (checkDuplicates) {
+      // Only accepted commands enter duplicate tracking so invalid earlier
+      // entries do not block a later valid definition for the same name.
       seen.add(normalized);
     }
     resolved.push({ command: normalized, description });

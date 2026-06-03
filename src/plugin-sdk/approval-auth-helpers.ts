@@ -11,6 +11,7 @@ const IMPLICIT_SAME_CHAT_APPROVAL_AUTHORIZATION = Symbol(
 );
 
 export function markImplicitSameChatApprovalAuthorization(
+  /** Authorization result returned when no explicit approver list exists. */
   result: ApprovalAuthorizationResult,
 ): ApprovalAuthorizationResult {
   // Keep this non-enumerable to avoid changing auth payload shape.
@@ -25,6 +26,7 @@ export function markImplicitSameChatApprovalAuthorization(
 }
 
 export function isImplicitSameChatApprovalAuthorization(
+  /** Result object returned from approval authorization; cloned results intentionally lose marker state. */
   result: ApprovalAuthorizationResult | null | undefined,
 ): boolean {
   return Boolean(
@@ -38,8 +40,11 @@ export function isImplicitSameChatApprovalAuthorization(
 }
 
 export function createResolvedApproverActionAuthAdapter(params: {
+  /** Human channel name used in denial copy. */
   channelLabel: string;
+  /** Resolve configured approvers for the channel/account before sender normalization. */
   resolveApprovers: (params: { cfg: OpenClawConfig; accountId?: string | null }) => string[];
+  /** Channel-specific sender normalization; defaults to optional string trimming. */
   normalizeSenderId?: (value: string) => string | undefined;
 }) {
   const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
@@ -51,10 +56,14 @@ export function createResolvedApproverActionAuthAdapter(params: {
       senderId,
       approvalKind,
     }: {
+      /** Canonical OpenClaw config used by the approver resolver. */
       cfg: OpenClawConfig;
+      /** Optional account scope for multi-account channel approver lists. */
       accountId?: string | null;
+      /** Raw channel actor id for the user taking the approval action. */
       senderId?: string | null;
       action: "approve";
+      /** Approval family used only for denial copy. */
       approvalKind: ApprovalKind;
     }) {
       const approvers = params.resolveApprovers({ cfg, accountId });

@@ -12,20 +12,25 @@ export type StatefulBindingTargetResetResult =
   | { ok: true }
   | { ok: false; skipped?: boolean; error?: string };
 
+/** Driver contract for creating, locating, and resetting stateful configured binding targets. */
 export type StatefulBindingTargetDriver = {
   id: string;
+  /** Validate prerequisites before a routed turn tries to use the target session. */
   ensureReady: (params: {
     cfg: OpenClawConfig;
     bindingResolution: ConfiguredBindingResolution;
   }) => Promise<StatefulBindingTargetReadyResult>;
+  /** Create or locate the backing session for a resolved configured binding. */
   ensureSession: (params: {
     cfg: OpenClawConfig;
     bindingResolution: ConfiguredBindingResolution;
   }) => Promise<StatefulBindingTargetSessionResult>;
+  /** Parse a session key back into this driver's target descriptor when possible. */
   resolveTargetBySessionKey?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
   }) => StatefulBindingTargetDescriptor | null;
+  /** Reset an existing target without replacing its configured binding record. */
   resetInPlace?: (params: {
     cfg: OpenClawConfig;
     sessionKey: string;
@@ -49,6 +54,8 @@ export function registerStatefulBindingTargetDriver(driver: StatefulBindingTarge
   const normalized = { ...driver, id };
   const existing = registeredStatefulBindingTargetDrivers.get(id);
   if (existing) {
+    // Registration is idempotent so built-in lazy loading and test setup can
+    // call through the same path without replacing an active driver instance.
     return;
   }
   registeredStatefulBindingTargetDrivers.set(id, normalized);
@@ -74,6 +81,8 @@ export function resolveStatefulBindingTargetBySessionKey(params: {
   if (!sessionKey) {
     return null;
   }
+  // Drivers own session-key parsing. Probe registered drivers in registration
+  // order and return the first target that recognizes the key.
   for (const driver of listStatefulBindingTargetDrivers()) {
     const bindingTarget = driver.resolveTargetBySessionKey?.({
       cfg: params.cfg,

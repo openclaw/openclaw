@@ -74,16 +74,24 @@ type ApprovalOriginOrSessionTargetChecker =
   ChannelApprovalForwardingEvaluatorParams["hasOriginOrSessionTarget"];
 
 export type ChannelApprovalForwardingEligibilityParams = {
+  /** Canonical config containing exec/plugin approval forwarding policy. */
   cfg: OpenClawConfig;
+  /** Optional channel account scope for multi-account native delivery. */
   accountId?: string | null;
+  /** Approval family whose forwarding policy should be evaluated. */
   approvalKind: ApprovalKind;
+  /** Approval request carrying session, turn-source, and filter facts. */
   request: ApprovalRequest;
 };
 
 export type ChannelApprovalPotentialRouteParams = {
+  /** Canonical config containing exec/plugin approval forwarding policy. */
   cfg: OpenClawConfig;
+  /** Optional channel account scope for multi-account native delivery. */
   accountId?: string | null;
+  /** Approval family whose forwarding policy should be evaluated. */
   approvalKind: ApprovalKind;
+  /** True when callers need a session-origin route and must ignore explicit targets. */
   nativeSessionOnly?: boolean;
 };
 
@@ -221,8 +229,11 @@ export type NativeApprovalTarget = {
 };
 
 export function nativeApprovalTargetsMatch(params: {
+  /** Channel id used to apply shared route comparison semantics. */
   channel?: string | null;
+  /** First normalized native target. Missing account/thread values are exact-match significant. */
   left: NativeApprovalTarget;
+  /** Second normalized native target. Numeric thread ids compare by normalized string value. */
   right: NativeApprovalTarget;
 }): boolean {
   return channelRouteTargetsMatchExact({
@@ -242,9 +253,13 @@ export function nativeApprovalTargetsMatch(params: {
 }
 
 export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
+  /** Canonical config used for native approval enablement, mode, and filters. */
   cfg: OpenClawConfig;
+  /** Optional channel account scope for native delivery checks. */
   accountId?: string | null;
+  /** Pending approval reply payload containing exec approval metadata. */
   payload: ReplyPayload;
+  /** Outbound hint proving a native exec route is active for this payload. */
   hint?: ChannelOutboundPayloadHint;
   isTransportEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
   isNativeDeliveryEnabled?: (params: { cfg: OpenClawConfig; accountId?: string | null }) => boolean;
@@ -254,6 +269,7 @@ export function shouldSuppressLocalNativeExecApprovalPrompt(params: {
     metadata: ExecApprovalReplyMetadata;
   }) => LocalNativeExecApprovalConfig | undefined;
   requireApprovalConfigEnabled?: boolean;
+  /** When true, target-only forwarding suppresses local prompt only with exact target proof. */
   enforceForwardingMode?: boolean;
   isSessionRouteEligible?: (params: {
     cfg: OpenClawConfig;
@@ -585,6 +601,8 @@ export function createNativeApprovalChannelRouteGates<TTarget extends NativeAppr
     if (!accountId) {
       return true;
     }
+    // Unscoped configured targets belong to the default account unless exactly one account is
+    // transport-enabled, which preserves single-account setups without cross-account leakage.
     const normalizedAccountId = normalizeAccountId(accountId);
     const defaultAccountId = normalizeAccountId(params.resolveDefaultAccountId(input.cfg));
     if (normalizedAccountId === defaultAccountId) {

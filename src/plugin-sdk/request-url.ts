@@ -1,4 +1,4 @@
-/** Extract a string URL from the common request-like inputs accepted by fetch helpers. */
+/** Extract a string URL from fetch-like inputs; unsupported shapes return an empty URL sentinel. */
 export function resolveRequestUrl(input: RequestInfo | URL): string {
   if (typeof input === "string") {
     return input;

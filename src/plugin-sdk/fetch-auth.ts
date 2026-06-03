@@ -4,6 +4,7 @@ import {
 } from "../infra/fetch-headers.js";
 
 export type ScopeTokenProvider = {
+  /** Return an access token for the requested provider scope. */
   getAccessToken: (scope: string) => Promise<string>;
 };
 
@@ -40,6 +41,7 @@ export async function fetchWithBearerAuthScopeFallback(params: {
       ...(headers ? { headers } : {}),
     });
 
+  // Preserve public-resource behavior by trying the request once before attaching credentials.
   const firstAttempt = await fetchOnce();
   if (firstAttempt.ok) {
     return firstAttempt;
@@ -60,6 +62,7 @@ export async function fetchWithBearerAuthScopeFallback(params: {
   for (const scope of params.scopes) {
     try {
       const token = await params.tokenProvider.getAccessToken(scope);
+      // Rebuild Headers so retry attempts do not retain symbol-bearing or non-fetch metadata.
       const authHeaders = new Headers(normalizeHeadersInitForFetch(requestInit?.headers));
       authHeaders.set("Authorization", `Bearer ${token}`);
       const authAttempt = await fetchOnce(authHeaders);

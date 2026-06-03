@@ -1,5 +1,7 @@
 export type KeyedAsyncQueueHooks = {
+  /** Called immediately when a task joins a key queue. */
   onEnqueue?: () => void;
+  /** Called when that task settles, before tail cleanup may remove the key. */
   onSettle?: () => void;
 };
 
@@ -13,6 +15,7 @@ export function enqueueKeyedTask<T>(params: {
   params.hooks?.onEnqueue?.();
   const previous = params.tails.get(params.key) ?? Promise.resolve();
   const current = previous
+    // Prior task failures must not poison later work for the same key.
     .catch(() => undefined)
     .then(params.task)
     .finally(() => {
@@ -24,6 +27,7 @@ export function enqueueKeyedTask<T>(params: {
   );
   params.tails.set(params.key, tail);
   const cleanup = () => {
+    // Only the latest tail owns cleanup; newer enqueues replace the map entry.
     if (params.tails.get(params.key) === tail) {
       params.tails.delete(params.key);
     }

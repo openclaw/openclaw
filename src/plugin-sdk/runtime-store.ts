@@ -4,10 +4,12 @@ const pluginRuntimeStoreRegistryKey = Symbol.for("openclaw.plugin-sdk.runtime-st
 
 type PluginRuntimeStoreRegistry = Map<string, { runtime: unknown }>;
 type PluginRuntimeStoreKeyOptions = {
+  /** Explicit registry key shared by callers that intentionally coordinate one runtime slot. */
   key: string;
   errorMessage: string;
 };
 type PluginRuntimeStorePluginOptions = {
+  /** Stable plugin id normalized into a cross-module runtime slot key. */
   pluginId: string;
   errorMessage: string;
 };
@@ -17,6 +19,7 @@ function getPluginRuntimeStoreRegistry(): PluginRuntimeStoreRegistry {
   const globalRecord = globalThis as typeof globalThis & {
     [pluginRuntimeStoreRegistryKey]?: PluginRuntimeStoreRegistry;
   };
+  // Store on globalThis so duplicated SDK module instances still share plugin runtime slots.
   globalRecord[pluginRuntimeStoreRegistryKey] ??= new Map();
   return globalRecord[pluginRuntimeStoreRegistryKey];
 }
@@ -66,7 +69,8 @@ export function createPluginRuntimeStore<T>(options: string | PluginRuntimeStore
   const resolved = resolvePluginRuntimeStoreOptions(options);
   const slot =
     typeof options === "string"
-      ? { runtime: null }
+      ? // Legacy string callers intentionally get isolated slots for each store instance.
+        { runtime: null }
       : (() => {
           const registry = getPluginRuntimeStoreRegistry();
           let existingSlot = registry.get(resolved.key);

@@ -37,6 +37,7 @@ function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
 
 export { getExecApprovalReplyMetadata, matchesApprovalRequestFilters };
 
+/** Enable channel-side approval clients only when configured and at least one approver exists. */
 export function isChannelExecApprovalClientEnabledFromConfig(params: {
   enabled?: ChannelExecApprovalEnableMode;
   approverCount: number;
@@ -47,6 +48,10 @@ export function isChannelExecApprovalClientEnabledFromConfig(params: {
   return params.enabled === true || params.enabled === "auto";
 }
 
+/**
+ * Match an inbound sender against configured approval forward targets for one channel/account.
+ * Channel adapters own target syntax, so callers provide `matchTarget` after shared mode checks.
+ */
 export function isChannelExecApprovalTargetRecipient(params: {
   cfg: OpenClawConfig;
   senderId?: string | null;
@@ -97,6 +102,7 @@ export function createChannelExecApprovalProfile(params: {
   matchesRequestAccount?: (params: ApprovalProfileParams & { request: ApprovalRequest }) => boolean;
   // Some channels encode the effective agent only in sessionKey for forwarded approvals.
   fallbackAgentIdFromSessionKey?: boolean;
+  /** Local prompt suppression can be reused by fallback paths before channel clients are enabled. */
   requireClientEnabledForLocalPromptSuppression?: boolean;
 }) {
   const normalizeSenderId = params.normalizeSenderId ?? normalizeOptionalString;
@@ -143,6 +149,7 @@ export function createChannelExecApprovalProfile(params: {
     ) {
       return false;
     }
+    // Account gates run before shared request filters so cross-account approvals never leak through.
     return matchesApprovalRequestFilters({
       request: input.request.request,
       agentFilter: config?.agentFilter,

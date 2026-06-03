@@ -54,10 +54,15 @@ type ComputedAccountStatusBase = {
 };
 
 type ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit> = {
+  /** Resolved channel account metadata from config. */
   account: ResolvedAccount;
+  /** Canonical config used by status/probe/audit helpers. */
   cfg: OpenClawConfig;
+  /** Runtime lifecycle snapshot for this account, if the channel has started. */
   runtime?: ChannelAccountSnapshot;
+  /** Optional probe result already collected by the status adapter. */
   probe?: Probe;
+  /** Optional audit result already collected by the status adapter. */
   audit?: Audit;
 };
 
@@ -168,15 +173,19 @@ export function buildWebhookChannelStatusSummary<TExtra extends StatusSnapshotEx
 /** Build the standard per-account status payload from config metadata plus runtime state. */
 export function buildBaseAccountStatusSnapshot<TExtra extends StatusSnapshotExtra>(
   params: {
+    /** Account metadata fields copied before runtime defaults and extras. */
     account: {
       accountId: string;
       name?: string;
       enabled?: boolean;
       configured?: boolean;
     };
+    /** Runtime lifecycle state; missing values become stable false/null defaults. */
     runtime?: RuntimeLifecycleSnapshot | null;
+    /** Probe result attached to the shared account snapshot shape. */
     probe?: unknown;
   },
+  /** Channel-specific fields appended after shared status fields. */
   extra?: TExtra,
 ) {
   const { account, runtime, probe } = params;
@@ -228,6 +237,7 @@ export function createComputedAccountStatusAdapter<
   TExtra extends StatusSnapshotExtra = StatusSnapshotExtra,
 >(
   options: Omit<ChannelStatusAdapter<ResolvedAccount, Probe, Audit>, "buildAccountSnapshot"> & {
+    /** Compute account configured fields and extras before shared runtime/probe fields are merged. */
     resolveAccountSnapshot: (
       params: ComputedAccountStatusAdapterParams<ResolvedAccount, Probe, Audit>,
     ) => ComputedAccountStatusSnapshot<TExtra>;
@@ -291,9 +301,12 @@ export function createAsyncComputedAccountStatusAdapter<
 /** Normalize runtime-only account state into the shared status snapshot fields. */
 export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotExtra>(
   params: {
+    /** Runtime lifecycle state; missing fields normalize to false/null defaults. */
     runtime?: RuntimeLifecycleSnapshot | null;
+    /** Probe result carried through without interpretation. */
     probe?: unknown;
   },
+  /** Channel-specific runtime fields appended after standard lifecycle metadata. */
   extra?: TExtra,
 ) {
   const { runtime, probe } = params;
@@ -336,6 +349,7 @@ export function buildTokenChannelStatusSummary(
     probe?: unknown;
     lastProbeAt?: number | null;
   },
+  /** includeMode=false keeps channels without mode state from emitting a synthetic mode field. */
   opts?: { includeMode?: boolean },
 ) {
   const base = {

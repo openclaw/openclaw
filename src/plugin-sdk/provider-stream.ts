@@ -46,12 +46,19 @@ export {
 } from "./provider-stream-shared.js";
 
 export type ProviderStreamFamily =
+  /** Google payload wrapper that maps OpenClaw thinking levels to Gemini thinking config. */
   | "google-thinking"
+  /** Proxy wrapper for Kilocode models; unsupported auto/router models intentionally drop reasoning. */
   | "kilocode-thinking"
+  /** Moonshot thinking wrapper; explicit tool_choice forces thinking off for API compatibility. */
   | "moonshot-thinking"
+  /** MiniMax wrapper that rewrites eligible model ids into high-speed mode when requested. */
   | "minimax-fast-mode"
+  /** OpenAI Responses wrapper stack for headers, extra params, web search, and reasoning cleanup. */
   | "openai-responses-defaults"
+  /** OpenRouter proxy wrapper; model capability gaps suppress unsupported reasoning payloads. */
   | "openrouter-thinking"
+  /** Tool-stream wrapper that defaults on unless the caller explicitly sends tool_stream=false. */
   | "tool-stream-default-on";
 
 type ProviderStreamFamilyHooks = Pick<ProviderPlugin, "wrapStreamFn">;
@@ -81,6 +88,8 @@ export function buildProviderStreamFamilyHooks(
     case "kilocode-thinking":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
+          // Auto/proxy models that cannot advertise reasoning must see the untouched payload.
+          // Sending a best-effort reasoning object there causes provider-side schema failures.
           const thinkingLevel =
             ctx.modelId === "kilo/auto" || isProxyReasoningUnsupported(ctx.modelId)
               ? undefined
@@ -117,6 +126,8 @@ export function buildProviderStreamFamilyHooks(
             agentDir: ctx.agentDir,
           });
           nextStreamFn = createOpenAIStringContentWrapper(nextStreamFn);
+          // Keep context management outermost so the final payload shape already includes
+          // compatibility rewrites, thinking-level normalization, and string-content cleanup.
           return createOpenAIResponsesContextManagementWrapper(
             createOpenAIReasoningCompatibilityWrapper(
               createOpenAIThinkingLevelWrapper(nextStreamFn, ctx.thinkingLevel),
@@ -128,6 +139,8 @@ export function buildProviderStreamFamilyHooks(
     case "openrouter-thinking":
       return {
         wrapStreamFn: (ctx: ProviderWrapStreamFnContext) => {
+          // OpenRouter accepts provider-family reasoning only for models with a known payload
+          // contract. Unknown/unsupported models keep the caller payload untouched.
           const thinkingLevel =
             ctx.modelId === "auto" || isProxyReasoningUnsupported(ctx.modelId)
               ? undefined
