@@ -138,10 +138,14 @@ function shouldApplyOpenAIToolCompat(ctx: ProviderNormalizeToolSchemasContext): 
 
   if (provider === "openai") {
     if (api === "openai-responses") {
+      // Strict-schema normalization is only safe for the native OpenAI endpoint;
+      // OpenAI-compatible proxies may accept broader schemas or define their own rules.
       return !baseUrl || isOpenAIResponsesBaseUrl(baseUrl);
     }
     return (
       api === "openai-chatgpt-responses" &&
+      // Codex/ChatGPT Responses uses the same strict object-schema contract as native
+      // OpenAI Responses, but only on the known first-party backend URLs.
       (!baseUrl || isOpenAIResponsesBaseUrl(baseUrl) || isOpenAICodexBaseUrl(baseUrl))
     );
   }
