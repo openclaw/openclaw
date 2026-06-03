@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { DiagnosticStabilitySnapshot } from "../logging/diagnostic-stability.js";
 import {
   buildGatewayChannelTurnHealthDoctorNote,
+  buildGatewayQueueHealthDoctorNote,
   buildGatewaySessionAttentionDoctorNote,
 } from "./doctor-gateway-stability.js";
 
@@ -446,5 +447,89 @@ describe("doctor gateway stability", () => {
     expect(note?.body).toContain("official cancel, recovery, or TaskFlow handoff paths");
     expect(note?.body).not.toContain("payload");
     expect(note?.body).not.toContain("call-secret");
+  });
+
+  it("stays quiet for healthy queue lanes", () => {
+    const note = buildGatewayQueueHealthDoctorNote({
+      snapshot: makeSnapshotFromSummary({
+        byType: { "queue.lane.dequeue": 1 },
+        queues: {
+          enqueued: 1,
+          dequeued: 1,
+          slowDequeues: 0,
+          maxWaitMs: 250,
+          maxQueueSize: 1,
+          byLane: {
+            main: {
+              enqueued: 1,
+              dequeued: 1,
+              slowDequeues: 0,
+              maxWaitMs: 250,
+              maxQueueSize: 1,
+            },
+          },
+          recentSlow: [],
+        },
+      }),
+    });
+
+    expect(note).toBeNull();
+  });
+
+  it("reports slow queue waits without raw session lanes", () => {
+    const note = buildGatewayQueueHealthDoctorNote({
+      sourceLabel: "live Gateway diagnostics",
+      snapshot: makeSnapshotFromSummary({
+        byType: { "queue.lane.dequeue": 2 },
+        queues: {
+          enqueued: 2,
+          dequeued: 2,
+          slowDequeues: 1,
+          maxWaitMs: 12_500,
+          maxQueueSize: 3,
+          byLane: {
+            session: {
+              enqueued: 1,
+              dequeued: 1,
+              slowDequeues: 1,
+              maxWaitMs: 12_500,
+              maxQueueSize: 3,
+            },
+            main: {
+              enqueued: 1,
+              dequeued: 1,
+              slowDequeues: 0,
+              maxWaitMs: 250,
+              maxQueueSize: 1,
+            },
+          },
+          recentSlow: [
+            {
+              seq: 8,
+              ts: 1_717_421_000_000,
+              lane: "session",
+              waitMs: 12_500,
+              queueSize: 2,
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(note).toEqual({
+      title: "Gateway queues",
+      body: expect.stringContaining("Queue health needs attention from live Gateway diagnostics."),
+    });
+    expect(note?.body).toContain(
+      "Counts: enqueued=2, dequeued=2, slow=1, maxWait=12500ms, maxQueue=3.",
+    );
+    expect(note?.body).toContain("session(enq=1, deq=1, slow=1, maxWait=12500ms, maxQueue=3)");
+    expect(note?.body).toContain("main(enq=1, deq=1, slow=0, maxWait=250ms, maxQueue=1)");
+    expect(note?.body).toContain("Recent slow queue waits:");
+    expect(note?.body).toContain("- seq=8 lane=session wait=12500ms queueSize=2");
+    expect(note?.body).toContain(
+      "direct-control lanes should not wait behind long tool or cron work",
+    );
+    expect(note?.body).not.toContain("telegram:direct:owner");
   });
 });

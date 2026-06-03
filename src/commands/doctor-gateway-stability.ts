@@ -11,7 +11,7 @@ import {
 type ChannelTurnSummary = NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>;
 
 export type GatewayChannelTurnHealthDoctorNote = {
-  title: "Gateway channel turns" | "Gateway sessions";
+  title: "Gateway channel turns" | "Gateway sessions" | "Gateway queues";
   body: string;
 };
 
@@ -219,6 +219,76 @@ export function buildGatewaySessionAttentionDoctorNote(params: {
   };
 }
 
+export function buildGatewayQueueHealthDoctorNote(params: {
+  snapshot: DiagnosticStabilitySnapshot;
+  sourceLabel?: string;
+}): GatewayChannelTurnHealthDoctorNote | null {
+  const queues = params.snapshot.summary.queues;
+  if (!queues) {
+    return null;
+  }
+  const hasSlowWaits = queues.slowDequeues > 0;
+  const hasLargeQueue = (queues.maxQueueSize ?? 0) >= 5;
+  if (!hasSlowWaits && !hasLargeQueue) {
+    return null;
+  }
+
+  const source = params.sourceLabel?.trim() || "Gateway diagnostics";
+  const lines = [
+    `Queue health needs attention from ${source}.`,
+    `Counts: enqueued=${queues.enqueued}, dequeued=${queues.dequeued}, slow=${queues.slowDequeues}, maxWait=${formatChannelTurnLatencyMs(
+      queues.maxWaitMs,
+    )}, maxQueue=${queues.maxQueueSize ?? "unknown"}.`,
+  ];
+
+  const topLanes = Object.entries(queues.byLane)
+    .toSorted((a, b) => {
+      const slowDelta = b[1].slowDequeues - a[1].slowDequeues;
+      if (slowDelta !== 0) {
+        return slowDelta;
+      }
+      return (b[1].maxWaitMs ?? 0) - (a[1].maxWaitMs ?? 0);
+    })
+    .slice(0, 5);
+  if (topLanes.length > 0) {
+    lines.push(
+      `Lanes: ${topLanes
+        .map(
+          ([lane, summary]) =>
+            `${lane}(enq=${summary.enqueued}, deq=${summary.dequeued}, slow=${
+              summary.slowDequeues
+            }, maxWait=${formatChannelTurnLatencyMs(summary.maxWaitMs)}, maxQueue=${
+              summary.maxQueueSize ?? "unknown"
+            })`,
+        )
+        .join("; ")}.`,
+    );
+  }
+
+  const recentSlow = queues.recentSlow.slice(-5).reverse();
+  if (recentSlow.length > 0) {
+    lines.push("Recent slow queue waits:");
+    for (const slow of recentSlow) {
+      const details = [
+        `seq=${slow.seq}`,
+        `lane=${slow.lane}`,
+        `wait=${formatChannelTurnLatencyMs(slow.waitMs)}`,
+        slow.queueSize !== undefined ? `queueSize=${slow.queueSize}` : "",
+      ].filter(Boolean);
+      lines.push(`- ${details.join(" ")}`);
+    }
+  }
+
+  lines.push(
+    "Guidance: inspect lane pressure and background work; direct-control lanes should not wait behind long tool or cron work.",
+  );
+
+  return {
+    title: "Gateway queues",
+    body: lines.join("\n"),
+  };
+}
+
 async function loadGatewayStabilitySnapshot(params: {
   cfg: OpenClawConfig;
   timeoutMs?: number;
@@ -270,5 +340,9 @@ export async function noteGatewayChannelTurnHealth(params: {
   const sessionNote = buildGatewaySessionAttentionDoctorNote(loaded);
   if (sessionNote) {
     note(sessionNote.body, sessionNote.title);
+  }
+  const queueNote = buildGatewayQueueHealthDoctorNote(loaded);
+  if (queueNote) {
+    note(queueNote.body, queueNote.title);
   }
 }
