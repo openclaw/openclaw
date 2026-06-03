@@ -75,8 +75,9 @@ import {
 } from "./manager-targeted-sync.js";
 import {
   countChokidarWatchedEntries,
-  MemoryWatchPressureWarning,
   type MemoryWatchPressureUnit,
+  type MemoryWatchPressureWarningState,
+  warnIfMemoryWatchPressureHigh,
 } from "./watch-pressure.js";
 import {
   recordMemoryWatchEventPath,
@@ -249,9 +250,7 @@ export abstract class MemoryManagerSyncOps {
   protected dirty = false;
   protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
   protected sessionsDirty = false;
-  private readonly memoryWatchPressureWarning = new MemoryWatchPressureWarning((message) =>
-    log.warn(message),
-  );
+  private readonly memoryWatchPressureWarning: MemoryWatchPressureWarningState = { shown: false };
   protected sessionsDirtyFiles = new Set<string>();
   protected sessionPendingFiles = new Set<string>();
   protected sessionDeltas = new Map<
@@ -633,7 +632,7 @@ export abstract class MemoryManagerSyncOps {
   private scheduleMemoryWatchPressureStartupCheck(): void {
     if (
       this.memoryWatchPressureStartupTimer ||
-      this.memoryWatchPressureWarning.hasShown ||
+      this.memoryWatchPressureWarning.shown ||
       this.closed ||
       (this.nativeMemoryWatchPairs.length === 0 && !this.watcher)
     ) {
@@ -641,11 +640,11 @@ export abstract class MemoryManagerSyncOps {
     }
     this.memoryWatchPressureStartupTimer = setTimeout(() => {
       this.memoryWatchPressureStartupTimer = null;
-      if (this.closed || this.memoryWatchPressureWarning.hasShown) {
+      if (this.closed || this.memoryWatchPressureWarning.shown) {
         return;
       }
       this.warnIfChokidarMemoryWatchPressure(this.watcher);
-      if (!this.memoryWatchPressureWarning.hasShown) {
+      if (!this.memoryWatchPressureWarning.shown) {
         this.warnIfLinuxMemoryWatchPressure();
       }
     }, MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS);
@@ -667,12 +666,16 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private warnIfMemoryWatchPressure(count: number, unit: MemoryWatchPressureUnit): void {
-    this.memoryWatchPressureWarning.warnIfHigh(
+    warnIfMemoryWatchPressureHigh({
+      state: this.memoryWatchPressureWarning,
       count,
       unit,
-      "Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files.",
-      "Remove large extraPaths, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
-    );
+      pressureDetail:
+        "Large memory folders or extraPaths can make OpenClaw run out of file watchers or open files.",
+      remediation:
+        "Remove large extraPaths, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      warn: (message) => log.warn(message),
+    });
   }
 
   private currentMemoryChokidarWatcher(): FSWatcher | null {

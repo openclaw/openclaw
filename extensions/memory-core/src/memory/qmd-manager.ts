@@ -61,7 +61,11 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
-import { countChokidarWatchedEntries, MemoryWatchPressureWarning } from "./watch-pressure.js";
+import {
+  countChokidarWatchedEntries,
+  type MemoryWatchPressureWarningState,
+  warnIfMemoryWatchPressureHigh,
+} from "./watch-pressure.js";
 import {
   recordMemoryWatchEventPath,
   settleMemoryWatchEventPaths,
@@ -365,9 +369,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private watcher: FSWatcher | null = null;
   private watchTimer: NodeJS.Timeout | null = null;
   private readonly pendingWatchPaths: MemoryWatchSettleQueue = new Map();
-  private readonly watchPressureWarning = new MemoryWatchPressureWarning((message) =>
-    log.warn(message),
-  );
+  private readonly watchPressureWarning: MemoryWatchPressureWarningState = { shown: false };
   private pendingUpdate: Promise<void> | null = null;
   private queuedForcedUpdate: Promise<void> | null = null;
   private queuedForcedRuns = 0;
@@ -1630,12 +1632,16 @@ export class QmdMemoryManager implements MemorySearchManager {
   }
 
   private warnIfWatchPressure(count: number): void {
-    this.watchPressureWarning.warnIfHigh(
+    warnIfMemoryWatchPressureHigh({
+      state: this.watchPressureWarning,
       count,
-      "paths",
-      "Large QMD collections can make OpenClaw run out of file watchers or open files.",
-      "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
-    );
+      unit: "paths",
+      pressureDetail:
+        "Large QMD collections can make OpenClaw run out of file watchers or open files.",
+      remediation:
+        "Remove large collections, or set memorySearch.sync.watch to false and refresh memory manually or with sync.intervalMinutes.",
+      warn: (message) => log.warn(message),
+    });
   }
 
   private resolveCollectionWatchPath(collection: ManagedCollection): string {

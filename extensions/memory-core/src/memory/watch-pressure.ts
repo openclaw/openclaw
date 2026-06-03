@@ -4,6 +4,10 @@ export const MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD = 2_000;
 
 export type MemoryWatchPressureUnit = "directories" | "paths";
 
+export type MemoryWatchPressureWarningState = {
+  shown: boolean;
+};
+
 export function countChokidarWatchedEntries(watcher: FSWatcher): number {
   const watched = watcher.getWatched();
   let count = Object.keys(watched).length;
@@ -13,31 +17,19 @@ export function countChokidarWatchedEntries(watcher: FSWatcher): number {
   return count;
 }
 
-export class MemoryWatchPressureWarning {
-  private shown = false;
-
-  constructor(
-    private readonly warn: (message: string) => void,
-    private readonly threshold = MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD,
-  ) {}
-
-  get hasShown(): boolean {
-    return this.shown;
+export function warnIfMemoryWatchPressureHigh(params: {
+  state: MemoryWatchPressureWarningState;
+  count: number;
+  unit: MemoryWatchPressureUnit;
+  pressureDetail: string;
+  remediation: string;
+  warn: (message: string) => void;
+}): boolean {
+  const { state, count, unit, pressureDetail, remediation, warn } = params;
+  if (state.shown || count <= MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD) {
+    return false;
   }
-
-  warnIfHigh(
-    count: number,
-    unit: MemoryWatchPressureUnit,
-    pressureDetail: string,
-    remediation: string,
-  ): boolean {
-    if (this.shown || count <= this.threshold) {
-      return false;
-    }
-    this.shown = true;
-    this.warn(
-      `Memory file watching is tracking ${count} ${unit}. ${pressureDetail} ${remediation}`,
-    );
-    return true;
-  }
+  state.shown = true;
+  warn(`Memory file watching is tracking ${count} ${unit}. ${pressureDetail} ${remediation}`);
+  return true;
 }

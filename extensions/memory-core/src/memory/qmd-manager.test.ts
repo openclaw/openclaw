@@ -538,8 +538,8 @@ describe("QmdMemoryManager", () => {
 
     const { manager } = await createManager({ mode: "full" });
     expect(watchMock).toHaveBeenCalledTimes(1);
-    const watcher = watchMock.mock.results[0]?.value as {
-      emit: (event: string, ...args: unknown[]) => boolean;
+    const watcher = watchMock.mock.results[0]?.value as EventEmitter & {
+      watchedEntries: Record<string, string[]>;
     };
     const initialUpdateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(initialUpdateCalls).toHaveLength(0);
@@ -553,6 +553,11 @@ describe("QmdMemoryManager", () => {
     expect(watchOptions.ignored?.(path.join(workspaceDir, "dist", "note.md"))).toBe(true);
     expect(watchOptions.ignored?.(path.join(workspaceDir, "build", "note.md"))).toBe(true);
     expect(watchOptions.ignored?.(path.join(workspaceDir, "notes.md"))).toBe(false);
+    watcher.watchedEntries = {
+      [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
+    };
+    watcher.emit("ready");
+    expectMockMessageContains(logWarnMock, "Memory file watching is tracking 2002 paths.");
 
     const notesPath = path.join(workspaceDir, "notes.md");
     await fs.writeFile(notesPath, "hello");
@@ -569,44 +574,6 @@ describe("QmdMemoryManager", () => {
     const updateCalls = spawnMock.mock.calls.filter((call) => call[1]?.[0] === "update");
     expect(updateCalls).toHaveLength(1);
     expect(manager.status().dirty).toBe(false);
-
-    await manager.close();
-  });
-
-  it("warns when qmd memory watching tracks many paths", async () => {
-    cfg = {
-      agents: {
-        defaults: {
-          workspace: workspaceDir,
-          memorySearch: {
-            provider: "openai",
-            model: "mock-embed",
-            store: { path: path.join(workspaceDir, "index.sqlite"), vector: { enabled: false } },
-            sync: { watch: true, watchDebounceMs: 25, onSessionStart: false, onSearch: false },
-          },
-        },
-        list: [{ id: agentId, default: true, workspace: workspaceDir }],
-      },
-      memory: {
-        backend: "qmd",
-        qmd: {
-          includeDefaultMemory: false,
-          update: { interval: "0s", debounceMs: 0, onBoot: false },
-          paths: [{ path: workspaceDir, pattern: "**/*.md", name: "workspace" }],
-        },
-      },
-    } as OpenClawConfig;
-
-    const { manager } = await createManager({ mode: "full" });
-    const watcher = watchMock.mock.results[0]?.value as EventEmitter & {
-      watchedEntries: Record<string, string[]>;
-    };
-    watcher.watchedEntries = {
-      [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
-    };
-    watcher.emit("ready");
-
-    expectMockMessageContains(logWarnMock, "Memory file watching is tracking 2002 paths.");
 
     await manager.close();
   });
