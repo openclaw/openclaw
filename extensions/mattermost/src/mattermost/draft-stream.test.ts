@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import { buildMattermostToolStatusText, createMattermostDraftStream } from "./draft-stream.js";
+import {
+  buildMattermostProgressLine,
+  buildMattermostToolStatusText,
+  createMattermostDraftStream,
+} from "./draft-stream.js";
 
 type RequestRecord = {
   path: string;
@@ -277,5 +281,40 @@ describe("buildMattermostToolStatusText", () => {
         config: { streaming: { preview: { commandText: "status" } } },
       }),
     ).toBe("🛠️ Exec");
+  });
+});
+
+describe("buildMattermostProgressLine", () => {
+  it("returns a ChannelProgressDraftLine with id from name", () => {
+    const line = buildMattermostProgressLine({ name: "read" });
+    expect(line).toBeDefined();
+    expect(line?.kind).toBe("tool");
+    expect(line?.text).toContain("Read");
+    expect(line?.label).toBeDefined();
+  });
+
+  it("includes toolCallId as line id when provided", () => {
+    const line = buildMattermostProgressLine({
+      name: "read",
+      toolCallId: "call-123",
+    });
+    expect(line?.id).toBe("call-123");
+  });
+
+  it("falls back to generic tool label for empty name", () => {
+    const line = buildMattermostProgressLine({ name: "" });
+    expect(line).toBeDefined();
+    expect(line?.toolName).toBe("tool_call");
+    expect(line?.kind).toBe("tool");
+  });
+
+  it("honors raw detail mode", () => {
+    const line = buildMattermostProgressLine({
+      name: "exec",
+      args: { command: "pnpm test" },
+      detailMode: "raw",
+    });
+    expect(line).toBeDefined();
+    expect(line?.detail).toContain("pnpm test");
   });
 });
