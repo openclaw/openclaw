@@ -421,7 +421,7 @@ describe("refreshChat", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
-  it("records chat history timing when a reload resets active stream state", async () => {
+  it("records chat history timing when a reload keeps active stream state visible", async () => {
     const request = vi.fn((method: string) => {
       if (method === "chat.history") {
         return Promise.resolve({
@@ -440,20 +440,13 @@ describe("refreshChat", () => {
 
     await refreshChat(host, { awaitHistory: true, scheduleScroll: false });
 
-    expect(host.chatStream).toBeNull();
+    expect(host.chatStream).toBe("partial");
     expect(eventPayloads(host, "control-ui.chat.history")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           phase: "start",
           sessionKey: "main",
           previousRunId: "run-main",
-        }),
-        expect.objectContaining({
-          phase: "stream-reset",
-          sessionKey: "main",
-          previousRunId: "run-main",
-          activeRunId: "run-main",
-          visibleMessageCount: 1,
         }),
         expect.objectContaining({
           phase: "applied",
@@ -1821,6 +1814,8 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "wait for selected model",
       chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      eventLogBuffer: [],
+      tab: "debug",
     });
 
     const send = handleSendChat(host);
@@ -1829,6 +1824,14 @@ describe("handleSendChat", () => {
       sendState: "waiting-model",
       text: "wait for selected model",
     });
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "waiting-model",
+          sendState: "waiting-model",
+        }),
+      ]),
+    );
 
     await retryReconnectableQueuedChatSends(host);
     expect(request).not.toHaveBeenCalled();
@@ -2220,6 +2223,8 @@ describe("handleSendChat", () => {
       client: null,
       connected: false,
       chatMessage: "send after reconnect",
+      eventLogBuffer: [],
+      tab: "debug",
     });
 
     await handleSendChat(host);
@@ -2233,6 +2238,14 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main",
     });
     expect(host.chatQueue[0]?.sendRunId).toEqual(expect.any(String));
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "waiting-reconnect",
+          sendState: "waiting-reconnect",
+        }),
+      ]),
+    );
   });
 
   it("replays queued global sends under the originally selected agent", async () => {

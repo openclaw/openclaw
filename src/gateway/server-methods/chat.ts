@@ -2540,6 +2540,14 @@ async function handleChatHistoryRequest({
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
     return;
   }
+  const modelCatalogPromise = measureDiagnosticsTimelineSpan(
+    `gateway.${method}.model_catalog`,
+    () => loadOptionalServerMethodModelCatalog(context, method),
+    {
+      config: cfg,
+      phase: method,
+    },
+  );
   const sessionId = entry?.sessionId;
   const sessionAgentId = resolveSessionAgentId({
     sessionKey,
@@ -2620,14 +2628,7 @@ async function handleChatHistoryRequest({
       `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
     );
   }
-  const modelCatalog = await measureDiagnosticsTimelineSpan(
-    `gateway.${method}.model_catalog`,
-    () => loadOptionalServerMethodModelCatalog(context, method),
-    {
-      config: cfg,
-      phase: method,
-    },
-  );
+  const modelCatalog = await modelCatalogPromise;
   const sessionInfo = buildGatewaySessionInfo({
     cfg,
     storePath,

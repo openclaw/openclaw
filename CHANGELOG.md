@@ -57,7 +57,12 @@ Docs: https://docs.openclaw.ai
 - Scripts/UI: stop descendant processes from wrapped non-interactive commands when `run-with-env` receives shutdown signals.
 - Release/CI/E2E: write multi-node update Docker artifacts to unique per-run directories by default so parallel runs cannot overwrite evidence.
 - Release/CI/E2E: write package Telegram Docker artifacts to unique per-run directories by default so parallel live/RTT runs cannot overwrite evidence.
+- Release/CI/E2E: keep plugin lifecycle matrix resource artifacts under a unique per-run scratch root so parallel runs cannot overwrite tarballs or inspect output.
+- Release/CI/E2E: bound mock OpenAI readiness probes in web-search and Telegram RTT Docker smokes so stalled HTTP accepts cannot hang cleanup or fall through.
+- Tooling: cancel oversized pnpm audit advisory responses before failing so registry error paths do not leave response bodies open.
 - Release/CI/E2E: fail secret-provider proof runs when temporary state cleanup still fails after retries instead of hiding the cleanup error.
+- Release/CI/E2E: fail package-candidate ref proofs when temporary source worktree cleanup fails instead of leaving stale worktrees behind.
+- Release/CI/E2E: remove package tarball extract directories when tar extraction fails before validation can continue.
 - Release/CI/E2E: retry generated temp-state cleanup after removal failures and route plugin lifecycle measurement edits to their owner tests.
 - Release/CI/E2E: close parent gateway log handles after spawning RPC RTT probes so repeated measurements do not leak file descriptors.
 - Release/CI/E2E: fail RPC RTT probes when temporary state cleanup fails instead of hiding leftover scratch directories.

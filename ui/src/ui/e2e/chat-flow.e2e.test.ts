@@ -56,6 +56,38 @@ async function chatThreadDistanceFromBottom(page: Page): Promise<number> {
   });
 }
 
+async function waitForChatScrollIdle(page: Page): Promise<void> {
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const app = document.querySelector("openclaw-app") as
+            | (Element & {
+                chatIsProgrammaticScroll?: boolean;
+                chatScrollFrame?: number | null;
+                chatScrollTimeout?: number | null;
+              })
+            | null;
+          return Boolean(
+            app &&
+              app.chatScrollFrame == null &&
+              app.chatScrollTimeout == null &&
+              !app.chatIsProgrammaticScroll,
+          );
+        }),
+      { timeout: 10_000 },
+    )
+    .toBe(true);
+}
+
+async function scrollChatThreadToTop(page: Page): Promise<void> {
+  await page.locator(".chat-thread").evaluate((element) => {
+    const thread = element as HTMLElement;
+    thread.scrollTop = 0;
+    thread.dispatchEvent(new Event("scroll", { bubbles: true }));
+  });
+}
+
 async function controlUiEventPayloads(
   page: Page,
   event: string,
@@ -363,9 +395,57 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         models: [],
       });
       await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
+      await page.getByText("First token visible.").waitFor({ timeout: 10_000 });
       await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
       await page.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("agents.list")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps streamed text visible when a chat error terminates the turn", async () => {
+    const context = await browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page);
+
+    try {
+      await page.goto(`${server.baseUrl}chat`);
+
+      const prompt = "stream before terminal error";
+      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await page.getByRole("button", { name: "Send message" }).click();
+
+      const sendRequest = await gateway.waitForRequest("chat.send");
+      const params = requireRecord(sendRequest.params);
+      const runId = requireString(params.idempotencyKey, "chat send idempotency key");
+      const partialText = "Partial answer before gateway error.";
+      await gateway.emitGatewayEvent("chat", {
+        deltaText: partialText,
+        message: {
+          content: [{ text: partialText, type: "text" }],
+          role: "assistant",
+          timestamp: Date.now(),
+        },
+        runId,
+        sessionKey: "main",
+        state: "delta",
+      });
+      await page.getByText(partialText).waitFor({ timeout: 10_000 });
+
+      await gateway.emitGatewayEvent("chat", {
+        errorMessage: "gateway disconnected",
+        runId,
+        sessionKey: "main",
+        state: "error",
+      });
+
+      await page.getByText(partialText).waitFor({ timeout: 10_000 });
+      await page.getByText("Error: gateway disconnected").waitFor({ timeout: 10_000 });
     } finally {
       await context.close();
     }
@@ -437,9 +517,8 @@ describeControlUiE2e("Control UI mocked Gateway E2E", () => {
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeLessThanOrEqual(4);
 
-      await page.locator(".chat-thread").evaluate((element) => {
-        (element as HTMLElement).scrollTop = 0;
-      });
+      await waitForChatScrollIdle(page);
+      await scrollChatThreadToTop(page);
       await expect
         .poll(() => chatThreadDistanceFromBottom(page), { timeout: 10_000 })
         .toBeGreaterThan(200);

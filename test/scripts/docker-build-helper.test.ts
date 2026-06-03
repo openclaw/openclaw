@@ -1236,9 +1236,19 @@ grep -qx -- "OPENCLAW_E2E_COMMAND_TIMEOUT=23s" "$TMPDIR/package-args"
 
     expect(sweep).toContain("cleanup() {");
     expect(sweep).toContain("openclaw_plugins_cleanup_fixture_servers");
+    expect(sweep).toContain(
+      'resource_dir="$(mktemp -d "/tmp/openclaw-plugin-lifecycle-matrix.XXXXXX")"',
+    );
+    expect(sweep).toContain('tarball_v1="$resource_dir/lifecycle-claw-1.0.0.tgz"');
+    expect(sweep).toContain('tarball_v2="$resource_dir/lifecycle-claw-2.0.0.tgz"');
+    expect(sweep).toContain('inspect_v1="$resource_dir/plugin-lifecycle-inspect-v1.json"');
+    expect(sweep).toContain('pack_root="$(mktemp -d "$resource_dir/pack.XXXXXX")"');
+    expect(sweep).toContain('registry_root="$(mktemp -d "$resource_dir/registry.XXXXXX")"');
     expect(sweep).toContain('rm -rf "$resource_dir"');
-    expect(sweep).toContain('rm -rf "$pack_root"');
-    expect(sweep).toContain('rm -rf "$registry_root"');
+    expect(sweep).not.toContain('resource_dir="/tmp/openclaw-plugin-lifecycle-matrix"');
+    expect(sweep).not.toContain("/tmp/lifecycle-claw-1.0.0.tgz");
+    expect(sweep).not.toContain("/tmp/lifecycle-claw-2.0.0.tgz");
+    expect(sweep).not.toContain("/tmp/plugin-lifecycle-inspect-v1.json");
     expect(sweep.match(/trap cleanup EXIT/g)).toHaveLength(2);
   });
 
@@ -2143,7 +2153,9 @@ output="$(run_logged_print_heartbeat plugins-run 08 bash -c 'printf "captured co
     expect(scenario).toContain(
       'gateway_pid="$(openclaw_e2e_start_gateway "$entry" "$PORT" "$GATEWAY_LOG")"',
     );
+    expect(scenario).toContain('openclaw_e2e_wait_mock_openai "$MOCK_PORT"');
     expect(scenario).toContain('openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360');
+    expect(scenario).not.toContain("fetch('http://127.0.0.1:${MOCK_PORT}/health')");
     expect(scenario).not.toContain('kill "$gateway_pid"');
     expect(scenario).not.toContain('kill "$mock_pid"');
     expect(scenario).not.toContain('node "$entry" gateway --port "$PORT"');
