@@ -304,6 +304,44 @@ describe("exec shell snapshots", () => {
     await expect(runWithPnpmHome("/second")).resolves.toBe("/second");
   });
 
+  it("preserves per-call env outside the snapshot allowlist", async () => {
+    const bash = resolveBashForTest();
+    if (!bash) {
+      return;
+    }
+
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-plugin-env-home-"));
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-plugin-env-state-"));
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-plugin-env-cwd-"));
+    tempDirs.push(home, stateDir, cwd);
+    setSnapshotStateForTest(stateDir, { home });
+    fs.writeFileSync(path.join(home, ".bashrc"), "alias oc_snapshot_alias='printf alias-ok'\n");
+
+    const env = {
+      ...process.env,
+      HOME: home,
+      OPENCLAW_STATE_DIR: stateDir,
+      PLUGIN_SAFE: "plugin-ok",
+    };
+    const shellArgs = getPosixShellArgs(bash);
+    const wrapped = await maybeWrapCommandWithShellSnapshot({
+      command: 'oc_snapshot_alias; printf ":%s" "$PLUGIN_SAFE"',
+      shell: bash,
+      shellArgs,
+      cwd,
+      env,
+    });
+    const result = spawnSync(bash, [...shellArgs, wrapped], {
+      cwd,
+      env,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toBe("alias-ok:plugin-ok");
+  });
+
   it("does not let non-fingerprinted env change captured shell state", async () => {
     const bash = resolveBashForTest();
     if (!bash) {

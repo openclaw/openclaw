@@ -41,8 +41,8 @@ import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sani
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { isFailoverError } from "../../agents/failover-error.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { ensureSelectedAgentHarnessPlugin } from "../../agents/harness/runtime-plugin.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { isMissingProviderAuthError } from "../../agents/model-auth.js";
 import { runWithModelFallback, isFallbackSummaryError } from "../../agents/model-fallback.js";
@@ -106,6 +106,7 @@ import {
 } from "./agent-runner-utils.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
 import { resolveCurrentTurnImages } from "./current-turn-images.js";
+import { hasInboundAudio } from "./inbound-media.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import {
   classifyProviderRequestError,
@@ -2200,6 +2201,7 @@ export async function runAgentTurnWithFallback(params: {
                     currentThreadTs:
                       cliCurrentThreadId != null ? String(cliCurrentThreadId) : undefined,
                     currentMessageId: cliCurrentMessageId,
+                    currentInboundAudio: hasInboundAudio(params.sessionCtx),
                     agentAccountId: params.followupRun.run.agentAccountId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
                     disableTools: params.opts?.disableTools,

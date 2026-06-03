@@ -231,6 +231,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("openai");
     expect(resolved.embeddedContext.messageTo).toBe("channel-1");
     expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
+    expect(resolved.embeddedContext.currentInboundAudio).toBe(false);
     expect(resolved.senderContext).toEqual({
       senderId: "sender-1",
       senderName: undefined,
@@ -255,6 +256,24 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
+  });
+
+  it("carries inbound audio context into embedded message tools", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "telegram",
+        To: "268300329",
+        MediaType: "audio/ogg; codecs=opus",
+        BodyForCommands: "<media:audio>",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+    });
+
+    expect(resolved.embeddedContext.currentInboundAudio).toBe(true);
   });
 
   it("uses telegram plugin threading context for native commands", () => {

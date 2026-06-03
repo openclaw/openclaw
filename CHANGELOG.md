@@ -45,9 +45,17 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/providers: avoid loading owner plugin runtimes for explicitly configured custom provider models during OpenAI-compatible transport setup.
+- Release/CI/E2E: fail early when Crabbox sparse-sync full checkouts do not have enough local disk, with guidance for moving the sync root.
+- Build: render independent CLI startup metadata help snapshots concurrently to cut cold build-all metadata time.
+- Plugins: stop timed-out package-boundary prep steps by process group so descendant TypeScript/helper processes do not survive local check cleanup.
+- Control UI: serve static assets asynchronously after safe-open checks so large UI files do not block Gateway request handling.
+- Scripts/UI: forward direct wrapper SIGHUP shutdown to child processes so terminal hangups do not leave wrapped dev commands running.
 - Gateway: return the post-expiration pending-work revision from node drains so reconnecting nodes do not observe stale queue revisions after expired items are pruned.
 - Release/CI/E2E: keep temporary full-sync checkouts alive while slow Crabbox leases boot, so sparse worktree runs do not lose their sync source before file-list generation.
 - Release/CI/E2E: normalize inherited Linux `C.UTF-8` locale settings before raw AWS macOS Crabbox bootstrap commands, avoiding macOS locale warnings during package-manager hydration.
+- Release/CI/E2E: keep gateway watch regression checks from copying large static plugin assets inside the measured idle window.
+- Update: keep core updates nonblocking when a missing external plugin repair download stalls, while still blocking installed active plugin payload smoke failures.
 - Agents/providers: keep streaming tool-call argument parsing record-shaped when providers emit valid non-object JSON such as `null` or arrays.
 - Release/CI/E2E: reset incremental log readers when watched log files rotate without shrinking, so same-size replacements do not hide new readiness or RPC lines.
 - Talk: preserve explicit `null` payloads on controller-created turn and output-audio lifecycle events.
@@ -70,6 +78,7 @@ Docs: https://docs.openclaw.ai
 - Cron: keep SQLite cron migrations compatible with legacy run-log tables, archived job stores, diagnostic cron names, and legacy one-shot delete-after-run behavior. (#88285)
 - Cron: keep update delivery validation scoped, harden restart state, and retire MCP runtimes on isolated cron cleanup.
 - Memory: serialize QMD update/embed writes per store, preserve phase signals on read errors, harden envelope metadata sanitization, and rewrite generated transcript paths on rollover so memory/search state survives concurrent gateway and CLI activity. (#66339, #85931) Thanks @openperf and @amittell.
+- Memory: keep vector-disabled FTS indexes from resolving embedding providers during sync and search.
 - Providers: bound generated media downloads from OpenAI, Runway, xAI, MiniMax, BytePlus, DashScope-compatible, FAL, OpenRouter, Google, Vydra, and Comfy providers.
 - Providers: resolve Google defaults to `google-generative-ai`, register Vertex static catalog rows, align Foundry reasoning metadata, skip DeepSeek V4 thinking params on Foundry fallback, use MiniMax account OAuth endpoints, preserve Copilot Claude 1M capabilities, suppress disabled Ollama reasoning output, keep OpenAI stop-finished tool calls, and avoid replay ids when the Responses store is disabled. (#88480, #88512)
 - Providers: cap GitHub Copilot OAuth request timeouts before creating abort signals.

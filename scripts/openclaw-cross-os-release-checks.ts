@@ -204,10 +204,13 @@ export function parseArgs(argv) {
   return parsed;
 }
 
-function parsePositiveIntegerEnv(name, fallback) {
-  const raw = process.env[name]?.trim();
+export function parsePositiveIntegerEnv(name, fallback, env = process.env) {
+  const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0) {
@@ -1014,6 +1017,15 @@ async function runUpgradeLane(params) {
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
           ignoreScripts: true,
         });
+        const fallbackInstalledVersion = readInstalledVersion(lane.prefixDir);
+        verifyWindowsPackagedUpgradeFallbackInstall({
+          installedVersion: fallbackInstalledVersion,
+          candidateVersion: params.build.candidateVersion,
+        });
+        appendFileSync(
+          updateLogPath,
+          `\n[release-checks] Windows fallback install verified candidate version ${fallbackInstalledVersion}\n`,
+        );
       });
     } else {
       verifyPackagedUpgradeUpdateResult(updateResult, {
@@ -1630,6 +1642,17 @@ export function shouldRunPackagedUpgradeStatusProbe({
   usedWindowsPackagedUpgradeFallback,
 } = {}) {
   return !(platform === "win32" && usedWindowsPackagedUpgradeFallback);
+}
+
+export function verifyWindowsPackagedUpgradeFallbackInstall({
+  installedVersion,
+  candidateVersion,
+}) {
+  if (installedVersion !== candidateVersion) {
+    throw new Error(
+      `Windows packaged upgrade fallback installed ${installedVersion || "unknown"}, expected ${candidateVersion}`,
+    );
+  }
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
