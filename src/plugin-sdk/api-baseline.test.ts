@@ -1,3 +1,6 @@
+/**
+ * Tests the plugin SDK public API baseline.
+ */
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { normalizePluginSdkApiDeclarationText } from "./api-baseline.js";

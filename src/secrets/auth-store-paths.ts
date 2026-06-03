@@ -5,6 +5,10 @@ import { resolveAuthStorePath } from "../agents/auth-profiles/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
 
+/**
+ * Lists deduplicated auth-profile store paths that may contain SecretRefs.
+ * Covers implicit main, discovered state-dir agents, and config-declared agent dirs.
+ */
 export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: string): string[] {
   const paths = new Set<string>();
   // Scope default auth store discovery to the provided stateDir instead of
@@ -21,6 +25,7 @@ export function listAuthProfileStorePaths(config: OpenClawConfig, stateDir: stri
     }
   }
 
+  // Configured agent dirs may live outside stateDir; include them after state-dir discovery.
   for (const agentId of listAgentIds(config)) {
     if (agentId === "main") {
       paths.add(

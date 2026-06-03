@@ -1,6 +1,8 @@
 import { vi } from "vitest";
 import type { ChannelApprovalNativeRuntimeAdapter } from "./approval-handler-runtime.js";
 
+// Shared approval-runtime stubs keep channel approval tests focused on route
+// behavior instead of rebuilding the native adapter shape.
 export type ApprovalNativeRuntimeAdapterStubParams = {
   resolveApprovalKind?: ChannelApprovalNativeRuntimeAdapter["resolveApprovalKind"];
   buildResolvedResult?: ChannelApprovalNativeRuntimeAdapter["presentation"]["buildResolvedResult"];
@@ -13,6 +15,7 @@ export type ApprovalNativeRuntimeAdapterStubParams = {
   bindPending?: NonNullable<ChannelApprovalNativeRuntimeAdapter["interactions"]>["bindPending"];
 };
 
+/** Build a complete native approval adapter stub with per-test overrides. */
 export function createApprovalNativeRuntimeAdapterStubs(
   params: ApprovalNativeRuntimeAdapterStubParams = {},
 ): ChannelApprovalNativeRuntimeAdapter {

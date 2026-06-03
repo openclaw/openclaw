@@ -1,5 +1,6 @@
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
+/** Runtime family that owns a task run lifecycle. */
 export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
 
 export type TaskStatus =
@@ -21,6 +22,7 @@ export type TaskDeliveryStatus =
 
 export type TaskNotifyPolicy = "done_only" | "state_changes" | "silent";
 
+/** Semantic success detail for required-completion task outcomes. */
 export type TaskTerminalOutcome = "succeeded" | "blocked";
 export type TaskScopeKind = "session" | "system";
 

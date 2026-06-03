@@ -10,6 +10,7 @@ import {
   type ResolvedConfiguredAcpBinding,
 } from "./persistent-bindings.types.js";
 
+/** Resolves a configured ACP binding for a concrete channel conversation. */
 export function resolveConfiguredAcpBindingRecord(params: {
   cfg: OpenClawConfig;
   channel: string;

@@ -22,6 +22,8 @@ function resolveTermuxHome(env: NodeJS.ProcessEnv): string | undefined {
   if (!prefix || !normalize(env.ANDROID_DATA)) {
     return undefined;
   }
+  // Termux exposes PREFIX under the app sandbox; other Android/chroot prefixes
+  // should not be treated as user-home evidence.
   if (!/(?:^|\/)com\.termux\/files\/usr\/?$/u.test(prefix.replace(/\\/gu, "/"))) {
     return undefined;
   }
@@ -49,6 +51,7 @@ function resolveRawHomeDir(env: NodeJS.ProcessEnv, homedir: () => string): strin
   return explicitHome;
 }
 
+/** Resolves OpenClaw's effective home, honoring OPENCLAW_HOME before OS homes. */
 export function resolveEffectiveHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -57,6 +60,7 @@ export function resolveEffectiveHomeDir(
   return raw ? path.resolve(raw) : undefined;
 }
 
+/** Resolves the underlying OS user home, ignoring OPENCLAW_HOME overrides. */
 export function resolveOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -64,6 +68,8 @@ export function resolveOsHomeDir(
   const raw = resolveRawOsHomeDir(env, homedir);
   return raw ? path.resolve(raw) : undefined;
 }
+
+/** Resolves the effective home or falls back to cwd when no home source exists. */
 export function resolveRequiredHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -71,6 +77,7 @@ export function resolveRequiredHomeDir(
   return resolveEffectiveHomeDir(env, homedir) ?? path.resolve(process.cwd());
 }
 
+/** Resolves the OS home or falls back to cwd when no OS home source exists. */
 export function resolveRequiredOsHomeDir(
   env: NodeJS.ProcessEnv = process.env,
   homedir: () => string = os.homedir,
@@ -78,6 +85,7 @@ export function resolveRequiredOsHomeDir(
   return resolveOsHomeDir(env, homedir) ?? path.resolve(process.cwd());
 }
 
+/** Expands leading `~`, `~/`, or `~\` with the effective home when one is known. */
 export function expandHomePrefix(
   input: string,
   opts?: {
@@ -98,6 +106,7 @@ export function expandHomePrefix(
   return input.replace(/^~(?=$|[\\/])/, home);
 }
 
+/** Resolves a user-supplied path after trimming and expanding against the effective home. */
 export function resolveHomeRelativePath(
   input: string,
   opts?: {
@@ -120,6 +129,7 @@ export function resolveHomeRelativePath(
   return path.resolve(trimmed);
 }
 
+/** Backward-compatible alias for resolving user paths against the effective home. */
 export function resolveUserPath(
   input: string,
   env: NodeJS.ProcessEnv = process.env,
@@ -128,6 +138,7 @@ export function resolveUserPath(
   return resolveHomeRelativePath(input, { env, homedir });
 }
 
+/** Resolves a user-supplied path against the OS home, ignoring OPENCLAW_HOME. */
 export function resolveOsHomeRelativePath(
   input: string,
   opts?: {

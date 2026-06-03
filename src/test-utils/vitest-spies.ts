@@ -1,5 +1,6 @@
 import { vi } from "vitest";
 
+/** Minimal mock contract for helpers that restore spies after a scoped run. */
 export type RestorableMock = {
   mockRestore(): void;
 };
