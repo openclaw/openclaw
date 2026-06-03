@@ -15,18 +15,22 @@ export function validateSenderIdentity(ctx: MsgContext): string[] {
   const senderE164 = normalizeOptionalString(ctx.SenderE164) || "";
 
   if (!isDirect) {
+    // Group/channel messages need an actor identity distinct from the conversation target;
+    // direct chats can derive the actor from the peer route.
     if (!senderId && !senderName && !senderUsername && !senderE164) {
       issues.push("missing sender identity (SenderId/SenderName/SenderUsername/SenderE164)");
     }
   }
 
   if (senderE164) {
+    // Keep E.164 canonical here so access-group matching does not compare mixed phone formats.
     if (!/^\+\d{3,}$/.test(senderE164)) {
       issues.push(`invalid SenderE164: ${senderE164}`);
     }
   }
 
   if (senderUsername) {
+    // Usernames are handle tokens, not display names or @mentions.
     if (senderUsername.includes("@")) {
       issues.push(`SenderUsername should not include "@": ${senderUsername}`);
     }
