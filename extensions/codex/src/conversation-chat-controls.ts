@@ -327,6 +327,22 @@ export function answerCodexUserInputFreeform(params: {
     if (!pending.questions.some((question) => question.isOther)) {
       return false;
     }
+    // Sequential pending entries answer only the currently-shown
+    // question per click, so the legacy "can this freeform text
+    // answer all remaining questions" merge rule would reject
+    // perfectly valid single-question freeform replies (upstream
+    // Codex normalizes request_user_input questions to isOther=true
+    // and the prompt tells users they may reply with their own
+    // answer). Match on the currently-shown question's isOther
+    // instead and let the sequential branch do the per-question
+    // bookkeeping below.
+    if (pending.emitNextPrompt && pending.questions.length > 1) {
+      const current = pending.questions[pending.currentQuestionIndex];
+      if (!current?.isOther) {
+        return false;
+      }
+      return !readControlScopeMismatch(pending, params.ctx, params.sessionFile);
+    }
     if (!buildCodexMergedFreeformAnswerText(pending, answerText)) {
       return false;
     }

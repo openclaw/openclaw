@@ -819,59 +819,91 @@ describe("codex conversation chat controls", () => {
     );
   });
 
-  it("discards partial answers when a sequential control is cancelled before completion", async () => {
+  it("answers the first question of a sequential prompt via freeform text when Other is allowed", async () => {
     let resolveText: (text: string) => void = () => undefined;
-    let rejectText: (error: Error) => void = () => undefined;
-    const answered = new Promise<string>((resolve, reject) => {
+    const answered = new Promise<string>((resolve) => {
       resolveText = resolve;
-      rejectText = reject;
     });
-    const { payload } = createCodexUserInputSequentialControl({
+    const emittedPayloads: Array<{ labels: string[] }> = [];
+    const { token, payload } = createCodexUserInputSequentialControl({
       scope,
       resolveText,
       questions: [
         {
-          id: "shape",
-          header: "Plan",
-          question: "Which plan shape?",
-          isOther: false,
+          id: "feature",
+          header: "Feature",
+          question: "Which feature?",
+          isOther: true,
           isSecret: false,
-          options: [{ label: "Small Patch", description: "Narrow" }],
+          options: [
+            { label: "Demo panel (Recommended)", description: "Visible" },
+            { label: "CLI flag", description: "No-op" },
+          ],
         },
         {
           id: "approval",
           header: "Approval",
           question: "Approve?",
-          isOther: false,
+          isOther: true,
           isSecret: false,
-          options: [{ label: "Approve", description: "Proceed" }],
+          options: [{ label: "Approve (Recommended)", description: "Proceed" }],
         },
       ],
-      emitNextPrompt: async () => undefined,
+      emitNextPrompt: async (nextIndex) => {
+        const next = buildCodexUserInputSequentialPrompt({
+          token,
+          questions: [
+            {
+              id: "feature",
+              header: "Feature",
+              question: "Which feature?",
+              isOther: true,
+              isSecret: false,
+              options: [
+                { label: "Demo panel (Recommended)", description: "Visible" },
+                { label: "CLI flag", description: "No-op" },
+              ],
+            },
+            {
+              id: "approval",
+              header: "Approval",
+              question: "Approve?",
+              isOther: true,
+              isSecret: false,
+              options: [{ label: "Approve (Recommended)", description: "Proceed" }],
+            },
+          ],
+          questionIndex: nextIndex,
+        });
+        emittedPayloads.push({ labels: readButtons(next).map((b) => b.label) });
+      },
     });
-    const q1Callback = readButtons(payload)[0]?.value?.slice(6) ?? "";
-    expect(resolveCodexUserInputCallback({ payload: q1Callback, ctx })).toEqual({
-      matched: true,
-      consumed: true,
-      message: "",
-    });
+    emittedPayloads.push({ labels: readButtons(payload).map((b) => b.label) });
 
-    // Simulate the request being cancelled before Q2 was answered.
-    // The bridge calls cancelCodexUserInput on abort/notification paths.
-    // The Q1 answer is dropped, matching the "discard answers, send empty"
-    // contract chosen for this PR.
-    const emptyText = "no_pending_input";
-    rejectText(new Error(emptyText));
-    await expect(answered).rejects.toThrow(emptyText);
+    // Q1 has isOther=true. Typing a custom answer should match the
+    // currently-shown question (not the legacy all-question merge
+    // rule) and advance to Q2.
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "Custom feature scope for the demo",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: true, consumed: true, message: "" });
+    expect(emittedPayloads).toHaveLength(2);
+    expect(emittedPayloads[1]?.labels).toEqual(["Approve (Recommended)"]);
 
-    // Q2 click is now an orphan and must return the standard "not found"
-    // message, not a stale "awaiting" message.
-    const q2Callback = `input:invalid-token:2:1`;
-    expect(resolveCodexUserInputCallback({ payload: q2Callback, ctx })).toEqual({
-      matched: true,
-      consumed: false,
-      message: "No pending Codex input request was found. The request may have expired.",
-    });
+    // Q2 typed answer finalizes.
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "Approve with caveats noted in plan",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: true, consumed: true, message: "Sent answer to Codex." });
+    await expect(answered).resolves.toBe(
+      "feature: Custom feature scope for the demo\napproval: Approve with caveats noted in plan",
+    );
   });
 });
 
