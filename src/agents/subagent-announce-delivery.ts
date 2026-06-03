@@ -28,7 +28,11 @@ import {
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import { isNonTerminalAgentRunStatus } from "../shared/agent-run-status.js";
-import { mergeDeliveryContext, normalizeDeliveryContext } from "../utils/delivery-context.js";
+import {
+  deliveryContextFromSession,
+  mergeDeliveryContext,
+  normalizeDeliveryContext,
+} from "../utils/delivery-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -1224,15 +1228,19 @@ async function sendSubagentAnnounceDirectly(params: {
     const completionDirectOrigin = normalizeDeliveryContext(params.completionDirectOrigin);
     const directOrigin = normalizeDeliveryContext(params.directOrigin);
     const requesterSessionOrigin = normalizeDeliveryContext(params.requesterSessionOrigin);
-    // Merge completionDirectOrigin with directOrigin so that missing fields
-    // (channel, to, accountId) fall back to the originating session's
-    // lastChannel / lastTo. Without this, a completion origin that carries a
-    // channel but not a `to` would prevent external delivery.
+    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
+    // Backfill missing fields (channel, to, accountId) from the requester
+    // session entry's lastChannel/lastTo so a completion origin that carries
+    // a channel but not a `to` (e.g. heartbeat, cron, subagent spawn paths
+    // where `agentTo` is undefined) still resolves an external delivery
+    // target. Without this, every Boolean(channel && to) gate downstream
+    // short-circuits and generated media is silently dropped.
+    const requesterSessionDeliveryFallback = deliveryContextFromSession(requesterEntry);
     const externalCompletionDirectOrigin =
       stripNonDeliverableChannelForCompletionOrigin(completionDirectOrigin);
     const completionExternalFallbackOrigin = mergeDeliveryContext(
       directOrigin,
-      requesterSessionOrigin,
+      mergeDeliveryContext(requesterSessionOrigin, requesterSessionDeliveryFallback),
     );
     const effectiveDirectOrigin = params.expectsCompletionMessage
       ? mergeDeliveryContext(externalCompletionDirectOrigin, completionExternalFallbackOrigin)
@@ -1240,7 +1248,6 @@ async function sendSubagentAnnounceDirectly(params: {
     const sessionOnlyOrigin = effectiveDirectOrigin?.channel
       ? effectiveDirectOrigin
       : requesterSessionOrigin;
-    const requesterEntry = loadRequesterSessionEntry(params.targetRequesterSessionKey).entry;
     const deliveryTarget = !params.requesterIsSubagent
       ? resolveExternalBestEffortDeliveryTarget({
           channel: effectiveDirectOrigin?.channel,

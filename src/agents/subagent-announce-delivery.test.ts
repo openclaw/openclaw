@@ -1,5 +1,8 @@
 // Subagent announce delivery tests cover the last-mile routing used when child
 // runs report progress or completion back to the requester session.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import {
@@ -4847,5 +4850,84 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+  });
+});
+
+describe("deliverSubagentAnnouncement requester session backfill (issue #86034)", () => {
+  // Regression: image_generate launched from a non-direct-reply turn (heartbeat,
+  // cron, subagent spawn) supplies a completion origin missing `to`. The
+  // already-loaded requester session entry carries `lastTo`/`lastChannel`, so
+  // effectiveDirectOrigin must backfill from it before the deliverability gate,
+  // otherwise generated media is silently dropped.
+  it("backfills to/channel/accountId from the requester session entry when completion origin is missing them", async () => {
+    const agentId = `backfill-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const sessionKey = `agent:${agentId}:telegram:5866004662`;
+    const storeTemplate = path.join(
+      os.tmpdir(),
+      `openclaw-86034-session-${agentId}-{agentId}.json`,
+    );
+    const storePath = storeTemplate.replaceAll("{agentId}", agentId);
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          [sessionKey]: {
+            sessionId: "telegram-session-1",
+            updatedAt: Date.now(),
+            channel: "telegram",
+            lastChannel: "telegram",
+            lastTo: "5866004662",
+            lastAccountId: "bot-1",
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: { payloads: [{ text: "requester voice completion" }] },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "telegram-session-1",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({ session: { store: storeTemplate } }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: sessionKey,
+      targetRequesterSessionKey: sessionKey,
+      triggerMessage: "image done",
+      steerMessage: "image done",
+      // Origin carries channel/accountId but NOT `to` — simulates an
+      // image_generate task created off the direct-reply path.
+      requesterOrigin: { channel: "telegram", accountId: "bot-1" },
+      requesterSessionOrigin: { channel: "telegram", accountId: "bot-1" },
+      completionDirectOrigin: { channel: "telegram", accountId: "bot-1" },
+      directOrigin: { channel: "telegram", accountId: "bot-1" },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-86034-backfill",
+      sourceTool: "image_generate",
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    // The deliverability decision must see the backfilled `to`.
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: true,
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "5866004662",
+    });
+
+    await fs.rm(storePath, { force: true });
   });
 });
