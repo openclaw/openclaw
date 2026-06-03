@@ -801,13 +801,9 @@ export async function createEmbeddedAttemptSessionLockController(params: {
       }
       const lock = heldLock;
       heldLock = undefined;
-      // Once `heldLock` is cleared the controller no longer tracks this lock, so the
-      // underlying file lock MUST be released even if the fence bookkeeping below
-      // throws. The fence reads perform filesystem I/O that can fail with a transient
-      // non-ENOENT error (e.g. EIO/EMFILE under load); without this guard such a throw
-      // would orphan the lock on the live gateway process for the full maxHoldMs lease
-      // (~17 min), wedging every subsequent interactive turn with
-      // SessionWriteLockTimeoutError until the watchdog reclaims it. See FAD-845.
+      // Clearing `heldLock` transfers release ownership to this block. Fence reads can
+      // throw after that transfer; release the underlying file lock anyway so later
+      // turns do not wait for the maxHoldMs watchdog.
       try {
         const fingerprint = await readSessionFileFingerprint(params.lockOptions.sessionFile);
         const ownedWrite = ownedSessionFileWrites.get(sessionFileFenceKey);
