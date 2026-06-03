@@ -106,6 +106,7 @@ const SESSION_SYNC_YIELD_EVERY = 10;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 // Warn only after real watcher state is high; #86613 reproduced FD pressure in large trees.
 const MEMORY_WATCH_PRESSURE_WARNING_THRESHOLD = 2_000;
+const MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS = 10_000;
 const IGNORED_MEMORY_WATCH_DIR_NAMES = new Set([
   ".git",
   "node_modules",
@@ -249,6 +250,7 @@ export abstract class MemoryManagerSyncOps {
   protected sessionUnsubscribe: (() => void) | null = null;
   protected fallbackReason?: string;
   protected intervalTimer: NodeJS.Timeout | null = null;
+  protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
   protected pendingWatchPaths: MemoryWatchSettleQueue = new Map();
@@ -598,9 +600,6 @@ export abstract class MemoryManagerSyncOps {
         : process.platform === "linux"
           ? this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)
           : false;
-      if (attached && process.platform === "linux") {
-        this.warnIfLinuxMemoryWatchPressure(dir);
-      }
       if (!attached) {
         // Native creation failed (dir missing, unsupported FS, throw) —
         // fall back to chokidar so directory coverage isn't dropped.
@@ -633,11 +632,35 @@ export abstract class MemoryManagerSyncOps {
         });
       }
     }
+    this.scheduleMemoryWatchPressureStartupCheck();
   }
 
-  private warnIfLinuxMemoryWatchPressure(dir: string): void {
-    const pair = this.nativeMemoryWatchPairs.find((entry) => entry.dir === dir);
-    const watcherCount = pair?.treeWatchers?.size ?? 0;
+  private scheduleMemoryWatchPressureStartupCheck(): void {
+    if (
+      this.memoryWatchPressureStartupTimer ||
+      this.memoryWatchPressureWarningShown ||
+      this.closed ||
+      (this.nativeMemoryWatchPairs.length === 0 && !this.watcher)
+    ) {
+      return;
+    }
+    this.memoryWatchPressureStartupTimer = setTimeout(() => {
+      this.memoryWatchPressureStartupTimer = null;
+      if (this.closed || this.memoryWatchPressureWarningShown) {
+        return;
+      }
+      this.warnIfChokidarMemoryWatchPressure(this.watcher);
+      if (!this.memoryWatchPressureWarningShown) {
+        this.warnIfLinuxMemoryWatchPressure();
+      }
+    }, MEMORY_WATCH_PRESSURE_STARTUP_CHECK_DELAY_MS);
+  }
+
+  private warnIfLinuxMemoryWatchPressure(): void {
+    let watcherCount = 0;
+    for (const pair of this.nativeMemoryWatchPairs) {
+      watcherCount += pair.treeWatchers?.size ?? 0;
+    }
     this.warnIfMemoryWatchPressure(watcherCount, "directories");
   }
 

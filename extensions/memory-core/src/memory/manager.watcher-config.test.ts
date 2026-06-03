@@ -555,8 +555,13 @@ describe("memory watcher config", () => {
         await fs.mkdir(path.join(root, `topic-${i}`));
       }
       const cfg = createWatcherConfig({ extraPaths: [] });
+      vi.useFakeTimers();
 
       await expectWatcherManager(cfg);
+      expect(memoryLoggerWarn).not.toHaveBeenCalledWith(
+        expect.stringContaining("Memory file watching is tracking 2002 directories."),
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
 
       expect(memoryLoggerWarn).toHaveBeenCalledWith(
         expect.stringContaining("Memory file watching is tracking 2002 directories."),
@@ -1015,6 +1020,7 @@ describe("memory watcher config", () => {
   it("warns when chokidar memory watching tracks many paths", async () => {
     await setupWatcherWorkspace({ name: "notes.md", contents: "hello" });
     const cfg = createWatcherConfig();
+    vi.useFakeTimers();
 
     await expectWatcherManager(cfg);
 
@@ -1023,7 +1029,10 @@ describe("memory watcher config", () => {
     chokidarWatcher!.watchedEntries = {
       [workspaceDir]: Array.from({ length: 2_001 }, (_value, index) => `${index}.md`),
     };
-    chokidarWatcher!.emit("ready");
+    expect(memoryLoggerWarn).not.toHaveBeenCalledWith(
+      expect.stringContaining("Memory file watching is tracking 2002 paths."),
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
 
     expect(memoryLoggerWarn).toHaveBeenCalledWith(
       expect.stringContaining("Memory file watching is tracking 2002 paths."),
