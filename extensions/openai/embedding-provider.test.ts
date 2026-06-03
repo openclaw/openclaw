@@ -216,24 +216,26 @@ describe("OpenAI embedding provider", () => {
   });
 
   describe("query instruction template", () => {
-    it.each(["qwen3-embedding-4b", "Qwen/Qwen3-Embedding-4B", "openai/Qwen/Qwen3-Embedding-4B"])(
-      "applies Qwen3-Embedding prefix to query string for %s",
-      async (model) => {
-        const { provider } = await createOpenAiEmbeddingProvider(createOptions({ model }));
+    it.each([
+      "qwen3-embedding-4b",
+      "qwen3-embedding:0.6b",
+      "Qwen/Qwen3-Embedding-4B",
+      "openai/Qwen/Qwen3-Embedding-4B",
+    ])("applies Qwen3-Embedding prefix to query string for %s", async (model) => {
+      const { provider } = await createOpenAiEmbeddingProvider(createOptions({ model }));
 
-        await provider.embedQuery("memory search query?");
+      await provider.embedQuery("memory search query?");
 
-        expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
-          expect.objectContaining({
-            body: expect.objectContaining({
-              input: [
-                "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:memory search query?",
-              ],
-            }),
+      expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            input: [
+              "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:memory search query?",
+            ],
           }),
-        );
-      },
-    );
+        }),
+      );
+    });
 
     it.each([
       "nomic-embed-text",
@@ -253,22 +255,23 @@ describe("OpenAI embedding provider", () => {
       );
     });
 
-    it.each(["mxbai-embed-large", "mixedbread-ai/mxbai-embed-large-v1"])(
-      "applies mxbai-embed-large prefix to query string for %s",
-      async (model) => {
-        const { provider } = await createOpenAiEmbeddingProvider(createOptions({ model }));
+    it.each([
+      "mxbai-embed-large",
+      "mxbai-embed-large:latest",
+      "mixedbread-ai/mxbai-embed-large-v1",
+    ])("applies mxbai-embed-large prefix to query string for %s", async (model) => {
+      const { provider } = await createOpenAiEmbeddingProvider(createOptions({ model }));
 
-        await provider.embedQuery("HVAC automation");
+      await provider.embedQuery("HVAC automation");
 
-        expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
-          expect.objectContaining({
-            body: expect.objectContaining({
-              input: ["Represent this sentence for searching relevant passages: HVAC automation"],
-            }),
+      expect(mocks.fetchRemoteEmbeddingVectors).toHaveBeenCalledWith(
+        expect.objectContaining({
+          body: expect.objectContaining({
+            input: ["Represent this sentence for searching relevant passages: HVAC automation"],
           }),
-        );
-      },
-    );
+        }),
+      );
+    });
 
     it("does not apply prefix to batch (document) embeddings", async () => {
       mocks.resolveRemoteEmbeddingClient.mockResolvedValueOnce({
