@@ -474,8 +474,8 @@ describe("state migrations", () => {
 
     const entries = loadFollowupQueueEntries(stateDir);
     expect(entries).toHaveLength(1);
-    expect(entries[0]?.[0]).toBe(queueKey);
-    const queueData = entries[0]?.[1] as {
+    expect(entries[0][0]).toBe(queueKey);
+    const queueData = entries[0][1] as {
       items?: Array<{ prompt?: string; originatingChannel?: string }>;
     };
     expect(queueData.items?.[0]?.prompt).toBe("doctor migrated prompt");
