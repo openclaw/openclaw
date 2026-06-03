@@ -6,7 +6,7 @@ import {
   loadGatewayModelCatalog,
   markGatewayModelCatalogStaleForReload,
 } from "./server-model-catalog.js";
-import { createDeferred } from "./test/deferred.js";
+import { createDeferred } from "./test-helpers.deferred.js";
 
 type LoadModelCatalogForTest = NonNullable<
   NonNullable<Parameters<typeof loadGatewayModelCatalog>[0]>["loadModelCatalog"]

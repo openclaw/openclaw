@@ -27,6 +27,7 @@ import {
   startServer,
   startServerWithClient,
 } from "./test-helpers.js";
+import { acknowledgeNodeInvokeRequestForTest } from "./test-helpers.node-invoke.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -76,22 +77,12 @@ async function connectApprovedNode(params: {
     commands: ["system.run"],
     deviceIdentity: paired.identity,
     onHelloOk: () => readyResolve?.(),
-    onEvent: (event) => {
-      if (event.event !== "node.invoke.request") {
-        return;
-      }
-      params.onInvoke(event.payload);
-      const payload = event.payload as { id?: string; nodeId?: string };
-      if (!payload.id || !payload.nodeId) {
-        return;
-      }
-      void client.request("node.invoke.result", {
-        id: payload.id,
-        nodeId: payload.nodeId,
-        ok: true,
-        payloadJSON: JSON.stringify({ ok: true }),
-      });
-    },
+    onEvent: (event) =>
+      acknowledgeNodeInvokeRequestForTest({
+        client,
+        event,
+        onInvoke: params.onInvoke,
+      }),
   });
   client.start();
   let timer: NodeJS.Timeout | undefined;

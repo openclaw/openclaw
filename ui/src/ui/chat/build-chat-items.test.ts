@@ -260,6 +260,27 @@ describe("buildChatItems", () => {
     expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
   });
 
+  it("honors a smaller history render window and preserves the hidden-count notice", () => {
+    const items = buildChatItems(
+      createProps({
+        historyRenderLimit: 30,
+        messages: Array.from({ length: 105 }, (_, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message ${index}`,
+          timestamp: index,
+        })),
+      }),
+    );
+
+    const groups = items.filter((item) => item.kind === "group");
+
+    const noticeGroup = requireGroup(items[0]);
+    expect(messageRecord(noticeGroup).content).toBe("Showing last 30 messages (75 hidden).");
+    expect(groups).toHaveLength(31);
+    expect(messageRecord(groups[1]).content).toBe("message 75");
+    expect(messageRecord(groups[groups.length - 1]).content).toBe("message 104");
+  });
+
   it("budgets rendered history by tool-result content size", () => {
     const largeOutput = "x".repeat(100_000);
     const items = buildChatItems(

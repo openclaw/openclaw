@@ -26,6 +26,7 @@ type McpLoopbackScopeParams = {
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | number | undefined;
+  currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
@@ -57,6 +58,7 @@ export class McpLoopbackToolCache {
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId != null ? String(params.currentMessageId) : "",
+      params.currentInboundAudio === true ? "audio" : "no-audio",
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",

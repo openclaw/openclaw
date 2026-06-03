@@ -16,6 +16,7 @@ import {
 } from "./mcp-http.loopback-runtime.js";
 import { jsonRpcError, type JsonRpcRequest } from "./mcp-http.protocol.js";
 import {
+  isMcpHttpBodyTooLargeError,
   readMcpHttpBody,
   resolveMcpRequestContext,
   validateMcpLoopbackRequest,
@@ -109,6 +110,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           currentChannelId: requestContext.currentChannelId,
           currentThreadTs: requestContext.currentThreadTs,
           currentMessageId: requestContext.currentMessageId,
+          currentInboundAudio: requestContext.currentInboundAudio,
           accountId: requestContext.accountId,
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
@@ -171,8 +173,15 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           message: formatErrorMessage(error),
         });
         if (!res.headersSent) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
+          if (isMcpHttpBodyTooLargeError(error)) {
+            res.writeHead(413, { "Content-Type": "application/json" });
+            res.end(JSON.stringify({ error: "payload_too_large" }), () => {
+              req.destroy();
+            });
+          } else {
+            res.writeHead(400, { "Content-Type": "application/json" });
+            res.end(JSON.stringify(jsonRpcError(null, -32700, "Parse error")));
+          }
         }
       } finally {
         requestAbort.cleanup();

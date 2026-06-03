@@ -23,6 +23,7 @@ import {
   validateChatAbortParams,
   validateChatHistoryParams,
   validateChatInjectParams,
+  validateChatMetadataParams,
   validateChatMessageGetParams,
   validateChatSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -210,6 +211,62 @@ type PreRegisteredAgentRun = {
 };
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
+
+async function handleChatMetadataRequest({
+  params,
+  respond,
+  context,
+}: GatewayRequestHandlerOptions): Promise<void> {
+  if (!validateChatMetadataParams(params)) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `invalid chat.metadata params: ${formatValidationErrors(validateChatMetadataParams.errors)}`,
+      ),
+    );
+    return;
+  }
+  const metadataParams = params;
+  const cfg = context.getRuntimeConfig();
+  const requestedAgentId =
+    typeof metadataParams.agentId === "string" && metadataParams.agentId.trim()
+      ? normalizeAgentId(metadataParams.agentId)
+      : resolveDefaultAgentId(cfg);
+  if (!listAgentIds(cfg).includes(requestedAgentId)) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${metadataParams.agentId}"`),
+    );
+    return;
+  }
+  try {
+    const [{ buildModelsListResult }, { buildCommandsListResult }] = await Promise.all([
+      import("./models-list-result.js"),
+      import("./commands-list-result.js"),
+    ]);
+    const [models, commands] = await Promise.all([
+      buildModelsListResult({
+        context,
+        agentId: requestedAgentId,
+        params: { view: "configured" },
+      }),
+      Promise.resolve(
+        buildCommandsListResult({
+          cfg,
+          agentId: requestedAgentId,
+          includeArgs: true,
+          scope: "text",
+        }),
+      ),
+    ]);
+    respond(true, { ...models, ...commands });
+  } catch (err) {
+    respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, String(err)));
+  }
+}
 
 function normalizeUnknownText(value: unknown): string | undefined {
   return typeof value === "string" ? normalizeOptionalText(value) : undefined;
@@ -2610,6 +2667,7 @@ export const chatHandlers: GatewayRequestHandlers = {
   "chat.startup": async (opts) => {
     await handleChatHistoryRequest({ ...opts, method: "chat.startup", includeAgentsList: true });
   },
+  "chat.metadata": handleChatMetadataRequest,
   "chat.message.get": async ({ params, respond, context }) => {
     if (!validateChatMessageGetParams(params)) {
       respond(

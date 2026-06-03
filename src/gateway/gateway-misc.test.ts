@@ -824,6 +824,7 @@ describe("resolveNodeCommandAllowlist", () => {
       "notifications.actions",
       "device.permissions",
       "device.health",
+      "device.apps",
       "callLog.search",
       "system.notify",
     ]);
