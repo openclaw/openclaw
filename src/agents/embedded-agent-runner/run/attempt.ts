@@ -164,7 +164,6 @@ import {
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { shouldSuppressNativeApprovalFallbackMessageSend } from "../../native-approval-message-suppression.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { describeProviderRequestRoutingSummary } from "../../provider-attribution.js";
@@ -1102,7 +1101,6 @@ export async function runEmbeddedAttempt(
     });
     const diagnosticRunStartedAt = Date.now();
     let diagnosticRunCompleted = false;
-    const deterministicApprovalPromptSentRef = { value: false };
     emitDiagnosticRunCompleted = (outcome, err, extra) => {
       if (diagnosticRunCompleted) {
         return;
@@ -1249,16 +1247,6 @@ export async function runEmbeddedAttempt(
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
             sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-            shouldSuppressMessageToolSend: ({ action, params: messageParams }) => {
-              return shouldSuppressNativeApprovalFallbackMessageSend({
-                action,
-                currentChannelProvider: params.messageChannel ?? params.messageProvider,
-                deterministicApprovalPromptSent: deterministicApprovalPromptSentRef.value,
-                messageParams,
-              })
-                ? "deterministic_approval_prompt_already_delivered"
-                : false;
-            },
             inboundEventKind: params.currentInboundEventKind,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
@@ -3223,7 +3211,6 @@ export async function runEmbeddedAttempt(
           shouldEmitToolOutput: params.shouldEmitToolOutput,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           onToolResult: params.onToolResult,
-          deterministicApprovalPromptSentRef,
           onReasoningStream: params.onReasoningStream,
           onReasoningEnd: params.onReasoningEnd,
           onBlockReply,

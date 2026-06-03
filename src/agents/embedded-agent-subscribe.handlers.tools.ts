@@ -767,22 +767,14 @@ async function emitToolResultOutput(params: {
           command: approvalPending.command,
           cwd: approvalPending.cwd,
           host: approvalPending.host,
-          agentId: ctx.params.agentId,
-          sessionKey: ctx.params.sessionKey,
           nodeId: approvalPending.nodeId,
           expiresAtMs: approvalPending.expiresAtMs,
           warningText: approvalPending.warningText,
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
-      if (ctx.params.deterministicApprovalPromptSentRef) {
-        ctx.params.deterministicApprovalPromptSentRef.value = true;
-      }
     } catch {
       ctx.state.deterministicApprovalPromptSent = false;
-      if (ctx.params.deterministicApprovalPromptSentRef) {
-        ctx.params.deterministicApprovalPromptSentRef.value = false;
-      }
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }
@@ -808,14 +800,8 @@ async function emitToolResultOutput(params: {
         }),
       );
       ctx.state.deterministicApprovalPromptSent = true;
-      if (ctx.params.deterministicApprovalPromptSentRef) {
-        ctx.params.deterministicApprovalPromptSentRef.value = true;
-      }
     } catch {
       ctx.state.deterministicApprovalPromptSent = false;
-      if (ctx.params.deterministicApprovalPromptSentRef) {
-        ctx.params.deterministicApprovalPromptSentRef.value = false;
-      }
     } finally {
       ctx.state.deterministicApprovalPromptPending = false;
     }

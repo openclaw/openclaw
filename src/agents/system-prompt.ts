@@ -260,7 +260,7 @@ function buildExecApprovalPromptGuidance(params: {
     hasNativeApprovalPromptRuntimeCapability(params.runtimeCapabilities) ||
     isKnownNativeApprovalPromptChannel(runtimeChannel);
   if (usesNativeApprovalUi) {
-    return "If exec returns approval-pending, do not send a separate approval prompt, command preview, or /approve instruction; native approval card/buttons are the visible approval UI. Only mention a plain /approve fallback if the user asks how to approve without the native UI.";
+    return 'If exec returns approval-pending, use native approval card/buttons first. Include a plain /approve command only when the tool says chat/manual approval is required; copy the exact command from "Reply with:".';
   }
   return 'If exec returns approval-pending, send the exact /approve command from "Reply with:"; do not ask for another code.';
 }

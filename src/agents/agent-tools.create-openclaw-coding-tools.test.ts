@@ -866,27 +866,6 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("whatsapp")).toBe(false);
   });
 
-  it("forwards message send suppression to OpenClaw tools", () => {
-    const shouldSuppressMessageToolSend = vi.fn(
-      () => "deterministic_approval_prompt_already_delivered" as const,
-    );
-    vi.mocked(createOpenClawTools).mockClear();
-
-    createOpenClawCodingTools({
-      messageProvider: "googlechat",
-      sourceReplyDeliveryMode: "message_tool_only",
-      shouldSuppressMessageToolSend,
-    });
-
-    expect(createOpenClawTools).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentChannel: "googlechat",
-        sourceReplyDeliveryMode: "message_tool_only",
-        shouldSuppressMessageToolSend,
-      }),
-    );
-  });
-
   it("filters session tools for sub-agent sessions by default", () => {
     const tools = createOpenClawCodingTools({
       sessionKey: "agent:main:subagent:test",

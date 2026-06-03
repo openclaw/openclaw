@@ -270,7 +270,6 @@ type ToolHandlerParams = Pick<
   | "onExecutionPhase"
   | "onHeartbeatToolResponse"
   | "onToolResult"
-  | "deterministicApprovalPromptSentRef"
   | "sessionKey"
   | "sessionId"
   | "agentId"

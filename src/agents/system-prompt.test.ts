@@ -1024,7 +1024,7 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
-  it("suppresses separate approval prompts when inline approval UI is available", () => {
+  it("suppresses plain chat approval commands when inline approval UI is available", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
@@ -1033,20 +1033,20 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("native approval card/buttons are the visible approval UI");
-    expect(prompt).toContain("do not send a separate approval prompt");
+    expect(prompt).toContain("use native approval card/buttons first");
+    expect(prompt).toContain("Include a plain /approve command only when");
   });
 
-  it("suppresses separate approval prompts for Google Chat native approvals", () => {
+  it("suppresses plain chat approval commands for native approval channels", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
-        channel: "googlechat",
+        channel: "slack",
       },
     });
 
-    expect(prompt).toContain("native approval card/buttons are the visible approval UI");
-    expect(prompt).toContain("do not send a separate approval prompt");
+    expect(prompt).toContain("use native approval card/buttons first");
+    expect(prompt).toContain("Include a plain /approve command only when");
   });
 
   it("keeps approval slug guidance separate from command previews", () => {
@@ -1057,7 +1057,7 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("native approval card/buttons are the visible approval UI");
+    expect(prompt).toContain('copy the exact command from "Reply with:"');
     expect(prompt).toContain("keep command/script previews separate from the /approve command");
     expect(prompt).toContain(
       "never substitute the shell command/script for the approval id or slug",

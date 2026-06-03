@@ -520,30 +520,6 @@ describe("message tool secret scoping", () => {
     expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
   });
 
-  it("suppresses configured send attempts before outbound dispatch", async () => {
-    mockSendResult();
-    const shouldSuppressSend = vi.fn(() => "deterministic_approval_prompt_already_delivered");
-
-    const { call, result } = await executeSendWithResult({
-      action: { message: "Please reply with: /approve abc123 allow-once" },
-      toolOptions: { shouldSuppressSend },
-    });
-
-    expect(shouldSuppressSend).toHaveBeenCalledWith({
-      action: "send",
-      params: expect.objectContaining({
-        action: "send",
-        message: "Please reply with: /approve abc123 allow-once",
-      }),
-    });
-    expect(call).toBeUndefined();
-    expect(mocks.runMessageAction).not.toHaveBeenCalled();
-    expect(result.details).toMatchObject({
-      status: "suppressed",
-      reason: "deterministic_approval_prompt_already_delivered",
-    });
-  });
-
   it("passes current inbound audio to the outbound runner", async () => {
     mockSendResult();
 
