@@ -148,6 +148,11 @@ export function validateMcpLoopbackRequest(params: {
       params.res.end(JSON.stringify({ error: "unauthorized" }));
       return null;
     }
+    if (rejectsBrowserLoopbackRequest(params.req)) {
+      params.res.writeHead(403, { "Content-Type": "application/json" });
+      params.res.end(JSON.stringify({ error: "forbidden" }));
+      return null;
+    }
     logMcpLoopbackHttp("sse-open", { method: "GET", path: url.pathname });
     params.res.writeHead(200, {
       "Content-Type": "text/event-stream",
