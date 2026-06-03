@@ -4,6 +4,13 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
+/**
+ * Shared node-selection policy for CLI, gateway-facing SDK helpers, and plugins.
+ *
+ * Exact ids, remote IPs, normalized display names, and long id prefixes are the
+ * only accepted query shapes; fuzzy ordering lives here so callers agree.
+ */
+
 /** Node fields accepted by shared CLI/API node selection helpers. */
 export type NodeMatchCandidate = {
   /** Stable node id used for RPC/session routing. */
@@ -19,8 +26,11 @@ export type NodeMatchCandidate = {
 };
 
 type ScoredNodeMatch = {
+  /** Candidate that matched one of the accepted query shapes. */
   node: NodeMatchCandidate;
+  /** Match class strength; higher classes outrank all tie-break heuristics. */
   matchScore: number;
+  /** Tie-break score within one match class, such as connected/current-client preference. */
   selectionScore: number;
 };
 
@@ -161,6 +171,8 @@ export function resolveNodeIdFromCandidates(nodes: NodeMatchCandidate[], query: 
     return strongestMatches[0]?.node.nodeId ?? "";
   }
 
+  // Only after the strongest match class is isolated do operational tie-breakers
+  // like connected state and current-client preference choose a winner.
   const topSelectionScore = Math.max(...strongestMatches.map((match) => match.selectionScore));
   const matches = strongestMatches.filter((match) => match.selectionScore === topSelectionScore);
   if (matches.length === 1) {
