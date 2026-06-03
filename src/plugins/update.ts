@@ -1422,6 +1422,24 @@ export async function updateNpmInstalledPlugins(params: {
             metadata: metadataResult.metadata,
           })
         ) {
+          if (params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall) {
+            const nextRecordSpec = resolveNpmInstallRecordSpec({
+              requestedSpec: recordSpec,
+              resolution: metadataResult.metadata,
+              pinResolvedRegistrySpec: true,
+            });
+            if (nextRecordSpec !== record.spec) {
+              next = recordPluginInstall(next, {
+                pluginId,
+                source: "npm",
+                spec: nextRecordSpec,
+                installPath,
+                version: currentVersion,
+                ...buildNpmResolutionInstallFields(metadataResult.metadata),
+              });
+              changed = true;
+            }
+          }
           outcomes.push({
             pluginId,
             status: "unchanged",

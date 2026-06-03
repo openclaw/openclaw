@@ -636,6 +636,37 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@2026.5.2-beta.2");
   });
 
+  it("pins unchanged official npm records during official sync", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.5.2",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.2",
+      integrity: "sha512-old",
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.5.2",
+        resolvedVersion: "2026.5.2",
+        integrity: "sha512-old",
+      }),
+      pluginIds: ["acpx"],
+      syncOfficialPluginInstalls: true,
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.outcomes[0]?.status).toBe("unchanged");
+    expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@2026.5.2");
+    expect(npmInstallCall()).toBeUndefined();
+  });
+
   it("keeps integrity drift checks for exact official pins during official sync", async () => {
     const installPath = createInstalledPackageDir({
       name: "@openclaw/acpx",
