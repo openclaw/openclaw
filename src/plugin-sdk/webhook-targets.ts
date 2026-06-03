@@ -56,7 +56,8 @@ function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () 
     return existing;
   }
   const created = new Map<string, () => void>();
-  // Teardown is scoped to the caller-owned registry map so independent plugins do not share routes.
+  // Teardown is scoped to the caller-owned registry map so independent plugins using the same
+  // path do not unregister each other's HTTP routes.
   pathTeardownByTargetMap.set(mapKey, created);
   return created;
 }
@@ -167,6 +168,8 @@ export async function withResolvedWebhookRequestPipeline<T>(params: {
     await params.handle(resolved);
     return true;
   } finally {
+    // Release even when the handler throws; otherwise one failed webhook can pin the in-flight
+    // slot and permanently reject later deliveries for the same key.
     requestLifecycle.release();
   }
 }
@@ -204,6 +207,8 @@ export function resolveSingleWebhookTarget<T>(
     if (!isMatch(target)) {
       continue;
     }
+    // Stop at the second match so auth callers can reject ambiguous secrets without inspecting
+    // or accidentally selecting a later target.
     const updated = updateMatchedWebhookTarget(matched, target);
     if (!updated.ok) {
       return updated.result;
