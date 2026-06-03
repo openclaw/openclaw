@@ -337,9 +337,6 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
         params.markDelivered();
         return result("preview-retained");
       }
-      if (!isFinal && (stream.isActive?.() || stream.suppressNonFinalFallback?.())) {
-        return result("preview-updated");
-      }
       return undefined;
     }
 

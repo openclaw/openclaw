@@ -30,7 +30,6 @@ import {
   mergeChannelProgressDraftLine,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
-  resolveChannelStreamingNativeTransport,
   resolveChannelStreamingPreviewNativeToolProgress,
   resolveChannelStreamingPreviewNativeToolProgressAllowFrom,
   resolveChannelStreamingPreviewToolProgress,
@@ -120,7 +119,6 @@ import {
   type LaneDeliveryResult,
   type LaneName,
 } from "./lane-delivery.js";
-import { createNativeTelegramAnswerDraftStream } from "./native-answer-draft.js";
 import { createNativeTelegramToolProgressDraft } from "./native-tool-progress-draft.js";
 import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import {
@@ -804,12 +802,6 @@ export const dispatchTelegramMessage = async ({
   const forceBlockStreamingForReasoning = resolvedReasoningLevel === "on";
   const streamReasoningDraft = resolvedReasoningLevel === "stream";
   const streamDeliveryEnabled = !isRoomEvent && streamMode !== "off";
-  const nativeAnswerDraftEnabled =
-    resolveChannelStreamingNativeTransport(telegramCfg) === true &&
-    streamMode === "partial" &&
-    !isGroup &&
-    !isRoomEvent &&
-    threadSpec.scope === "dm";
   const rawReplyQuoteText =
     ctxPayload.ReplyToIsQuote && typeof ctxPayload.ReplyToQuoteText === "string"
       ? ctxPayload.ReplyToQuoteText
@@ -870,40 +862,30 @@ export const dispatchTelegramMessage = async ({
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
-  const draftStreamParams = {
-    api: bot.api,
-    chatId,
-    maxChars: draftMaxChars,
-    thread: threadSpec,
-    replyToMessageId: draftReplyToMessageId,
-    minInitialChars: draftMinInitialChars,
-    renderText: renderStreamText,
-    log: logVerbose,
-    warn: logVerbose,
-  };
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
-    let stream: ReturnType<typeof createTelegramDraftStream> | undefined;
-    if (enabled) {
-      if (laneName === "answer" && nativeAnswerDraftEnabled) {
-        stream = (
-          telegramDeps.createNativeTelegramAnswerDraftStream ??
-          createNativeTelegramAnswerDraftStream
-        )(draftStreamParams);
-      }
-      stream ??= (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
-        ...draftStreamParams,
-        onSupersededPreview: (superseded) => {
-          if (superseded.retain) {
-            return;
-          }
-          void bot.api.deleteMessage(chatId, superseded.messageId).catch((err: unknown) => {
-            logVerbose(
-              `telegram: superseded ${laneName} stream cleanup failed (${superseded.messageId}): ${String(err)}`,
-            );
-          });
-        },
-      });
-    }
+    const stream = enabled
+      ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
+          api: bot.api,
+          chatId,
+          maxChars: draftMaxChars,
+          thread: threadSpec,
+          replyToMessageId: draftReplyToMessageId,
+          minInitialChars: draftMinInitialChars,
+          renderText: renderStreamText,
+          onSupersededPreview: (superseded) => {
+            if (superseded.retain) {
+              return;
+            }
+            void bot.api.deleteMessage(chatId, superseded.messageId).catch((err: unknown) => {
+              logVerbose(
+                `telegram: superseded ${laneName} stream cleanup failed (${superseded.messageId}): ${String(err)}`,
+              );
+            });
+          },
+          log: logVerbose,
+          warn: logVerbose,
+        })
+      : undefined;
     return {
       stream,
       lastPartialText: "",
@@ -1547,7 +1529,7 @@ export const dispatchTelegramMessage = async ({
       sendPayload,
       flushDraftLane,
       stopDraftLane: async (lane) => {
-        await (lane.stream?.materialize?.() ?? lane.stream?.stop());
+        await lane.stream?.stop();
       },
       clearDraftLane: async (lane) => {
         await lane.stream?.clear();
@@ -1849,7 +1831,7 @@ export const dispatchTelegramMessage = async ({
 
                     if (info.kind === "final") {
                       await rotateAnswerLaneAfterToolProgress();
-                      await (answerLane.stream?.materialize?.() ?? answerLane.stream?.stop());
+                      await answerLane.stream?.stop();
                       await reasoningLane.stream?.stop();
                       reasoningStepState.resetForNextStep();
                     }

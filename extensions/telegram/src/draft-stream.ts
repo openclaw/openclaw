@@ -28,8 +28,6 @@ export type TelegramDraftStream = {
   forceNewMessage: () => void;
   /** True when a preview sendMessage was attempted but the response was lost. */
   sendMayHaveLanded?: () => boolean;
-  isActive?: () => boolean;
-  suppressNonFinalFallback?: () => boolean;
 };
 
 type TelegramDraftPreview = {

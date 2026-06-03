@@ -20,7 +20,6 @@ type DispatchReplyWithBufferedBlockDispatcherArgs = Parameters<
 >[0];
 
 const createTelegramDraftStream = vi.hoisted(() => vi.fn());
-const createNativeTelegramAnswerDraftStream = vi.hoisted(() => vi.fn());
 const createNativeTelegramToolProgressDraft = vi.hoisted(() => vi.fn());
 const dispatchReplyWithBufferedBlockDispatcher = vi.hoisted(() =>
   vi.fn<(params: DispatchReplyWithBufferedBlockDispatcherArgs) => Promise<unknown>>(),
@@ -98,10 +97,6 @@ const resolveSessionStoreEntry = vi.hoisted(() =>
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
-}));
-
-vi.mock("./native-answer-draft.js", () => ({
-  createNativeTelegramAnswerDraftStream,
 }));
 
 vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
@@ -194,8 +189,6 @@ const telegramDepsForTest: TelegramBotDeps = {
   wasSentByBot: wasSentByBot as TelegramBotDeps["wasSentByBot"],
   createTelegramDraftStream:
     createTelegramDraftStream as TelegramBotDeps["createTelegramDraftStream"],
-  createNativeTelegramAnswerDraftStream:
-    createNativeTelegramAnswerDraftStream as TelegramBotDeps["createNativeTelegramAnswerDraftStream"],
   createNativeTelegramToolProgressDraft:
     createNativeTelegramToolProgressDraft as TelegramBotDeps["createNativeTelegramToolProgressDraft"],
   deliverReplies: deliverReplies as TelegramBotDeps["deliverReplies"],
@@ -219,7 +212,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
   beforeEach(() => {
     resetTelegramReplyFenceForTests();
     createTelegramDraftStream.mockReset();
-    createNativeTelegramAnswerDraftStream.mockReset();
     createNativeTelegramToolProgressDraft.mockReset();
     dispatchReplyWithBufferedBlockDispatcher.mockReset();
     deliverReplies.mockReset();
@@ -329,33 +321,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     createTelegramDraftStream
       .mockImplementationOnce(() => answerDraftStream)
       .mockImplementationOnce(() => reasoningDraftStream);
-    return { answerDraftStream, reasoningDraftStream };
-  }
-
-  function setupNativeAnswerDraftStreams() {
-    const answerDraftStream = createDraftStream();
-    let active = false;
-    const originalUpdate = answerDraftStream.update.getMockImplementation();
-    answerDraftStream.update.mockImplementation((text: string) => {
-      originalUpdate?.(text);
-      active = true;
-    });
-    answerDraftStream.materialize.mockImplementation(async () => {
-      active = false;
-      return undefined;
-    });
-    answerDraftStream.stop.mockImplementation(async () => {
-      active = false;
-    });
-    const origForceNewMessage = answerDraftStream.forceNewMessage.getMockImplementation();
-    answerDraftStream.forceNewMessage.mockImplementation(() => {
-      origForceNewMessage?.();
-      active = false;
-    });
-    (answerDraftStream as Record<string, unknown>).isActive = vi.fn(() => active);
-    const reasoningDraftStream = createDraftStream();
-    createNativeTelegramAnswerDraftStream.mockReturnValue(answerDraftStream);
-    createTelegramDraftStream.mockImplementationOnce(() => reasoningDraftStream);
     return { answerDraftStream, reasoningDraftStream };
   }
 
@@ -1620,6 +1585,35 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("keeps answer text off Telegram native drafts", async () => {
+    const sendMessageDraft = vi.fn(async () => ({}));
+    const bot = createBot();
+    Object.assign(bot.api, { sendMessageDraft });
+    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        await replyOptions?.onPartialReply?.({ text: "Streaming ", delta: "Streaming " });
+        await replyOptions?.onPartialReply?.({ text: "Streaming answer", delta: "answer" });
+        await dispatcherOptions.deliver({ text: "Streaming answer." }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+
+    await dispatchWithContext({
+      context: createContext(),
+      bot,
+      streamMode: "partial",
+      telegramCfg: { streaming: { mode: "partial" } },
+    });
+
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(1, "Streaming ");
+    expect(answerDraftStream.update).toHaveBeenNthCalledWith(2, "Streaming answer");
+    expect(answerDraftStream.update).toHaveBeenLastCalledWith("Streaming answer.");
+    expect(sendMessageDraft).not.toHaveBeenCalled();
+    expect(createNativeTelegramToolProgressDraft).not.toHaveBeenCalled();
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("does not coalesce answer partial fragments with tool progress drafts", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -1868,129 +1862,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(createNativeTelegramToolProgressDraft).not.toHaveBeenCalled();
-  });
-
-  it("nativeTransport true: partial answer interrupted by tool progress uses final delivery path", async () => {
-    const { answerDraftStream } = setupNativeAnswerDraftStreams();
-    const nativeDraft = createNativeToolProgressDraft();
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Partial ", delta: "Partial " });
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await replyOptions?.onPartialReply?.({ text: "Partial continued", delta: "continued" });
-        await dispatcherOptions.deliver({ text: "Done." }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: {
-          mode: "partial",
-          nativeTransport: true,
-          preview: { nativeToolProgress: true, nativeToolProgressAllowFrom: ["123"] },
-        },
-      },
-    });
-
-    expect(answerDraftStream.stop).toHaveBeenCalled();
-    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockCallArg(deliverReplies), {
-      replies: [expect.objectContaining({ text: "Done." })],
-    });
-  });
-
-  it("nativeTransport true: completed block delivery with active draft uses final delivery path", async () => {
-    const { answerDraftStream } = setupNativeAnswerDraftStreams();
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Streaming ", delta: "Streaming " });
-        await dispatcherOptions.deliver({ text: "Tool output" }, { kind: "tool" });
-        await dispatcherOptions.deliver({ text: "Final." }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: { mode: "partial", nativeTransport: true },
-      },
-    });
-
-    expect(answerDraftStream.update).toHaveBeenCalled();
-    expect(answerDraftStream.materialize).toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalled();
-    expect(
-      deliverReplies.mock.calls.some((call) =>
-        (call[0] as { replies?: Array<{ text?: string }> }).replies?.some(
-          (reply) => reply.text === "Final.",
-        ),
-      ),
-    ).toBe(true);
-  });
-
-  it("nativeTransport true: draft materialization sends the final text once", async () => {
-    setupNativeAnswerDraftStreams();
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Stale partial", delta: "Stale partial" });
-        await dispatcherOptions.deliver({ text: "Correct final." }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: { mode: "partial", nativeTransport: true },
-      },
-    });
-
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockCallArg(deliverReplies), {
-      replies: [expect.objectContaining({ text: "Correct final." })],
-    });
-  });
-
-  it("nativeTransport true: non-final stop does not call sendMessage", async () => {
-    const { answerDraftStream } = setupNativeAnswerDraftStreams();
-    const nativeDraft = createNativeToolProgressDraft();
-    createNativeTelegramToolProgressDraft.mockReturnValue(nativeDraft);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onPartialReply?.({ text: "Streaming ", delta: "Streaming " });
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        await dispatcherOptions.deliver({ text: "Final." }, { kind: "final" });
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "partial",
-      telegramCfg: {
-        streaming: {
-          mode: "partial",
-          nativeTransport: true,
-          preview: { nativeToolProgress: true, nativeToolProgressAllowFrom: ["123"] },
-        },
-      },
-    });
-
-    expect(answerDraftStream.stop).toHaveBeenCalled();
-    expect(answerDraftStream.materialize).toHaveBeenCalledTimes(1);
-    expect(nativeDraft.stop).toHaveBeenCalled();
-    expect(deliverReplies).toHaveBeenCalledTimes(1);
-    expectRecordFields(mockCallArg(deliverReplies), {
-      replies: [expect.objectContaining({ text: "Final." })],
-    });
   });
 
   it("does not hide text-only tool output after answer streaming starts", async () => {
