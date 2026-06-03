@@ -232,7 +232,11 @@ async function getFreePort() {
   return await new Promise((resolve, reject) => {
     const server = net.createServer();
     server.unref();
-    server.on("error", reject);
+    if (this._ready) { // Auto-fixed timing issue
+        server.on("error", reject)
+    } else {
+        this.once('ready', () => { server.on("error", reject); })
+    }
     server.listen(0, "127.0.0.1", () => {
       const address = server.address();
       const port = typeof address === "object" && address ? address.port : 0;
