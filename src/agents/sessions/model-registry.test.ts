@@ -342,6 +342,34 @@ describe("ModelRegistry models.json auth", () => {
     });
   });
 
+  it("injects Authorization header from stored auth when authHeader is true", async () => {
+    const modelsPath = writeModelsJson({
+      providers: {
+        custom: {
+          baseUrl: "https://models.example/v1",
+          auth: "api-key",
+          authHeader: true,
+          api: "openai-responses",
+          models: [{ id: "example-model" }],
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({ custom: { type: "api_key", key: "sk-test" } }),
+      modelsPath,
+    );
+    const model = registry.find("custom", "example-model");
+
+    expect(registry.getError()).toBeUndefined();
+    expect(model).toBeDefined();
+    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
+      ok: true,
+      apiKey: "sk-test",
+      headers: { Authorization: "Bearer sk-test" },
+    });
+  });
+
   it("loads provider models from generated plugin catalog shards", () => {
     const modelsPath = writeModelsJsonWithPluginCatalog({
       root: { providers: {} },

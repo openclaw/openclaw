@@ -330,7 +330,6 @@ async function writeModelsFileAtomicIfMissing(
 
 const INHERITED_MODELS_JSON_PROVIDER_CREDENTIAL_FIELDS = new Set([
   "apiKey",
-  "authHeader",
   "headers",
   "keyRef",
   "proxy",
