@@ -59,10 +59,41 @@ export type TurnState = {
 };
 
 let inMemoryTurnEventSequence = 0;
+const MAX_TURN_EVENT_METADATA_STRING_LENGTH = 256;
+const SENSITIVE_TURN_EVENT_METADATA_KEY =
+  /(?:authorization|body|content|cookie|credential|password|payload|raw|secret|text|token)/i;
 
 function createTurnEventId(): string {
   inMemoryTurnEventSequence += 1;
   return `turn-event-${inMemoryTurnEventSequence}`;
+}
+
+function sanitizeTurnEventMetadataValue(value: TurnEventMetadataValue): TurnEventMetadataValue {
+  if (typeof value !== "string") {
+    return value;
+  }
+  if (value.length <= MAX_TURN_EVENT_METADATA_STRING_LENGTH) {
+    return value;
+  }
+  return `${value.slice(0, MAX_TURN_EVENT_METADATA_STRING_LENGTH)}...`;
+}
+
+export function sanitizeTurnEventMetadata(
+  metadata: TurnEventMetadata | undefined,
+): TurnEventMetadata | undefined {
+  if (!metadata) {
+    return undefined;
+  }
+  const sanitized: TurnEventMetadata = {};
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value === undefined) {
+      continue;
+    }
+    sanitized[key] = SENSITIVE_TURN_EVENT_METADATA_KEY.test(key)
+      ? "<redacted>"
+      : sanitizeTurnEventMetadataValue(value);
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
 /** Spike store for modelling turn event timelines without adding persistence yet. */
@@ -77,10 +108,12 @@ export class InMemoryTurnEventStore implements TurnEventRecorder {
   }
 
   append(event: AppendTurnEventInput): TurnEvent {
+    const metadata = sanitizeTurnEventMetadata(event.metadata);
     const recorded: TurnEvent = {
       id: event.id ?? this.createId(),
       timestamp: event.timestamp ?? this.now(),
       ...event,
+      ...(metadata ? { metadata } : { metadata: undefined }),
     };
     this.events.push(recorded);
     return recorded;

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   InMemoryTurnEventStore,
   materializeTurnState,
+  sanitizeTurnEventMetadata,
   validateTurnCompletion,
   type TurnEvent,
 } from "./turn-event-state.js";
@@ -38,6 +39,39 @@ describe("turn event state", () => {
     });
     expect(store.list("telegram:message:msg-1")).toEqual([recorded]);
     expect(store.all()).toEqual([recorded]);
+  });
+
+  it("sanitizes event metadata before storing it", () => {
+    const store = new InMemoryTurnEventStore({
+      createId: () => "evt-1",
+      now: () => 123,
+    });
+
+    const recorded = store.append({
+      type: "message.received",
+      turnId: "telegram:message:msg-1",
+      actor: "user",
+      channel: "telegram",
+      status: "received",
+      metadata: {
+        messageId: "msg-1",
+        rawText: "private chat text",
+        apiToken: "secret-token",
+        longOperationalId: "x".repeat(300),
+        empty: undefined,
+      },
+    });
+
+    expect(recorded.metadata).toEqual({
+      messageId: "msg-1",
+      rawText: "<redacted>",
+      apiToken: "<redacted>",
+      longOperationalId: `${"x".repeat(256)}...`,
+    });
+  });
+
+  it("returns undefined sanitized metadata when every value is undefined", () => {
+    expect(sanitizeTurnEventMetadata({ empty: undefined })).toBeUndefined();
   });
 
   it("blocks completion when visible delivery is required but missing", () => {

@@ -24,7 +24,11 @@ import {
   isDurableInboundReplyDeliveryHandled,
   throwIfDurableInboundReplyDeliveryFailed,
 } from "./durable-delivery.js";
-import { materializeTurnState, validateTurnCompletion } from "./turn-event-state.js";
+import {
+  materializeTurnState,
+  sanitizeTurnEventMetadata,
+  validateTurnCompletion,
+} from "./turn-event-state.js";
 import type { AppendTurnEventInput, TurnEvent, TurnEventRecorder } from "./turn-event-state.js";
 export {
   buildChannelInboundEventContext,
@@ -229,12 +233,16 @@ async function appendTurnEvent(params: {
   events?: TurnEvent[];
   recorder?: TurnEventRecorder;
 }): Promise<void> {
+  const safeEvent: AppendTurnEventInput = {
+    ...params.event,
+    metadata: sanitizeTurnEventMetadata(params.event.metadata),
+  };
   const recorded = params.recorder
-    ? await params.recorder.append(params.event)
+    ? await params.recorder.append(safeEvent)
     : ({
-        id: params.event.id ?? `turn-event:${params.event.turnId}:${params.event.type}`,
-        timestamp: params.event.timestamp ?? Date.now(),
-        ...params.event,
+        id: safeEvent.id ?? `turn-event:${safeEvent.turnId}:${safeEvent.type}`,
+        timestamp: safeEvent.timestamp ?? Date.now(),
+        ...safeEvent,
       } satisfies TurnEvent);
   emitTrustedDiagnosticEvent({
     type: "channel.turn.event",

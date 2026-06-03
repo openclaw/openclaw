@@ -26,6 +26,11 @@ events are append-like and intentionally small: message receipt, turn start,
 delivery requirements, delivery outcome, tool causality support, and turn
 completion or failure.
 
+Turn event metadata is sanitized before it enters the local event timeline.
+Sensitive-looking keys such as body, text, payload, secret, token, cookie,
+password, credential, authorization, content, and raw are redacted, and long
+operational strings are bounded.
+
 The current enforced guarantee is deliberately narrow:
 
 - Telegram direct messages require visible delivery.
