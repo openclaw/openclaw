@@ -1,7 +1,17 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
+
+const mocks = vi.hoisted(() => ({
+  loadPluginManifestRegistryForPluginRegistry: vi.fn(),
+}));
+
+vi.mock("./plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: mocks.loadPluginManifestRegistryForPluginRegistry,
+}));
+
 import {
   listBundledChannelPluginMetadata,
   resolveBundledChannelGeneratedPath,
@@ -16,6 +26,44 @@ function createTempRoot(): string {
   return tempRoot;
 }
 
+function createRegistry(plugins: PluginManifestRegistry["plugins"]): PluginManifestRegistry {
+  return { plugins, diagnostics: [] };
+}
+
+function createPluginRecord(
+  overrides: Pick<PluginManifestRecord, "id" | "origin"> & Partial<PluginManifestRecord>,
+): PluginManifestRecord {
+  return {
+    rootDir: `/tmp/${overrides.id}`,
+    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
+    name: undefined,
+    description: undefined,
+    version: undefined,
+    enabledByDefault: undefined,
+    autoEnableWhenConfiguredProviders: undefined,
+    legacyPluginIds: undefined,
+    format: undefined,
+    bundleFormat: undefined,
+    bundleCapabilities: undefined,
+    kind: undefined,
+    channels: [],
+    providers: [],
+    modelSupport: undefined,
+    cliBackends: [],
+    channelEnvVars: undefined,
+    providerAuthAliases: undefined,
+    providerAuthChoices: undefined,
+    skills: [],
+    settingsFiles: undefined,
+    hooks: [],
+    source: `/tmp/${overrides.id}/channel.js`,
+    setupSource: undefined,
+    startupDeferConfiguredChannelFullLoadUntilAfterListen: undefined,
+    channelCatalogMeta: undefined,
+    ...overrides,
+  };
+}
+
 afterEach(() => {
   for (const tempRoot of tempRoots.splice(0)) {
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -23,6 +71,11 @@ afterEach(() => {
 });
 
 describe("bundled channel runtime metadata", () => {
+  beforeEach(() => {
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReset();
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue(createRegistry([]));
+  });
+
   it("preserves explicit empty bundled roots", () => {
     const tempRoot = createTempRoot();
 
@@ -81,5 +134,51 @@ describe("bundled channel runtime metadata", () => {
         builtScanRoot,
       ),
     ).toBe(path.join(pluginRoot, "dist", "index.js"));
+  });
+
+  it("skips unreadable bundled channel rows without dropping healthy rows", () => {
+    const unreadable = createPluginRecord({
+      id: "broken-channel",
+      origin: "bundled",
+      channels: ["broken-channel"],
+    });
+    Object.defineProperty(unreadable, "rootDir", {
+      get() {
+        throw new Error("bundled channel root metadata exploded");
+      },
+    });
+
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue(
+      createRegistry([
+        unreadable,
+        createPluginRecord({
+          id: "slack",
+          origin: "bundled",
+          channels: ["slack"],
+          rootDir: "/tmp/extensions/slack",
+          source: "/tmp/extensions/slack/channel.js",
+          setupSource: "/tmp/extensions/slack/setup.js",
+        }),
+      ]),
+    );
+
+    expect(listBundledChannelPluginMetadata()).toStrictEqual([
+      {
+        dirName: "slack",
+        source: {
+          source: "/tmp/extensions/slack/channel.js",
+          built: "/tmp/extensions/slack/channel.js",
+        },
+        setupSource: {
+          source: "/tmp/extensions/slack/setup.js",
+          built: "/tmp/extensions/slack/setup.js",
+        },
+        manifest: {
+          id: "slack",
+          channels: ["slack"],
+        },
+        rootDir: "/tmp/extensions/slack",
+      },
+    ]);
   });
 });

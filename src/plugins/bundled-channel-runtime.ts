@@ -92,6 +92,16 @@ function toBundledChannelPluginMetadata(
   };
 }
 
+function tryBundledChannelPluginMetadata(
+  record: PluginManifestRecord,
+): BundledChannelPluginMetadata | null {
+  try {
+    return toBundledChannelPluginMetadata(record);
+  } catch {
+    return null;
+  }
+}
+
 export function listBundledChannelPluginMetadata(params?: {
   rootDir?: string;
   scanDir?: string;
@@ -105,7 +115,7 @@ export function listBundledChannelPluginMetadata(params?: {
   return loadPluginManifestRegistryForPluginRegistry({
     env: scope.kind === "env" ? scope.env : undefined,
     includeDisabled: true,
-  }).plugins.flatMap((record) => toBundledChannelPluginMetadata(record) ?? []);
+  }).plugins.flatMap((record) => tryBundledChannelPluginMetadata(record) ?? []);
 }
 
 export function resolveBundledChannelGeneratedPath(
