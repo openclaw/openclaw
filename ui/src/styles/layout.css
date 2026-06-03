@@ -712,6 +712,56 @@
   gap: 4px;
 }
 
+/* UX-009 — Sidebar session search */
+.sidebar-session-search {
+  padding: 0 2px;
+}
+
+.sidebar-session-search__input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 5px 10px;
+  border: 1px solid color-mix(in srgb, var(--border) 80%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-elevated) 90%, transparent);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  transition:
+    border-color var(--duration-fast) ease,
+    background var(--duration-fast) ease;
+}
+
+.sidebar-session-search__input::placeholder {
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+.sidebar-session-search__input:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border) 40%);
+  background: var(--bg-elevated);
+}
+
+.sidebar-recent-sessions__empty {
+  display: block;
+  padding: 6px 10px;
+  font-size: 12px;
+  color: var(--muted);
+  opacity: 0.7;
+}
+
+/* Animate non-matching session items out */
+.sidebar-recent-session--hidden {
+  opacity: 0;
+  max-height: 0;
+  overflow: hidden;
+  pointer-events: none;
+  transition:
+    opacity 120ms ease-out,
+    max-height 120ms ease-out;
+}
+
 .sidebar-session-select {
   display: grid;
   gap: 4px;
@@ -1403,7 +1453,7 @@
   max-width: 290px;
 }
 
-.dreaming-header-controls__mode:focus:not(:disabled) {
+.dreaming-header-controls__mode:focus-visible:not(:disabled) {
   max-width: 290px;
 }
 
@@ -1440,7 +1490,7 @@
 }
 
 .dreaming-header-controls__mode:hover:not(:disabled) .dreaming-header-controls__mode-detail,
-.dreaming-header-controls__mode:focus:not(:disabled) .dreaming-header-controls__mode-detail {
+.dreaming-header-controls__mode:focus-visible:not(:disabled) .dreaming-header-controls__mode-detail {
   max-width: 220px;
   margin-left: 6px;
   opacity: 0.95;

@@ -233,7 +233,7 @@
 .usage-select:focus,
 .usage-query-input:focus,
 .usage-filters-inline select:focus,
-.usage-filters-inline input[type="text"]:focus {
+.usage-filters-inline input[type="text"]:focus-visible {
   outline: none;
   border-color: color-mix(in srgb, var(--accent) 50%, var(--border));
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 12%, transparent);

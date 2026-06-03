@@ -951,9 +951,9 @@
   }
 }
 
-.field input:focus,
-.field textarea:focus,
-.field select:focus {
+.field input:focus-visible,
+.field textarea:focus-visible,
+.field select:focus-visible {
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
 }
@@ -2718,7 +2718,7 @@
   transition: border-color var(--duration-fast) ease;
 }
 
-.data-table-search input:focus {
+.data-table-search input:focus-visible {
   border-color: var(--border-strong);
   box-shadow: var(--focus-ring);
 }
@@ -3400,7 +3400,7 @@ td.data-table-key-col {
   transition: border-color var(--duration-fast) ease;
 }
 
-.field-inline input:focus {
+.field-inline input:focus-visible {
   border-color: var(--border-strong);
   box-shadow: var(--focus-ring);
 }
@@ -3537,7 +3537,7 @@ td.data-table-key-col {
   width: 56px;
 }
 
-.session-filter-input:focus {
+.session-filter-input:focus-visible {
   border-color: var(--border-strong);
   box-shadow: var(--focus-ring);
 }
@@ -4370,7 +4370,7 @@ td.data-table-key-col {
     box-shadow var(--duration-fast) ease;
 }
 
-.chat-compose__field textarea:focus {
+.chat-compose__field textarea:focus-visible {
   border-color: var(--border-strong);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--border-strong) 24%, transparent);
 }
@@ -4578,7 +4578,7 @@ td.data-table-key-col {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23444' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
 }
 
-.agents-select:focus {
+.agents-select:focus-visible {
   border-color: var(--accent);
   box-shadow: var(--focus-ring);
 }
@@ -4845,7 +4845,7 @@ td.data-table-key-col {
 }
 
 .agent-chip-input input,
-.agent-chip-input input:focus {
+.agent-chip-input input:focus-visible {
   flex: 1;
   min-width: 120px;
   border: none;
