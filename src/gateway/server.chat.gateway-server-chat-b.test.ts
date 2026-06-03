@@ -1094,6 +1094,199 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("sessions.abort keeps terminal dedupe after suspended attachment preprocessing settles", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const catalogModels: Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>> = [
+      {
+        id: "vision-model",
+        name: "Vision Model",
+        provider: "test-provider",
+        input: ["text", "image"],
+      },
+    ];
+    const firstCatalog =
+      createDeferred<Awaited<ReturnType<GatewayRequestContext["loadGatewayModelCatalog"]>>>();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            modelProvider: "test-provider",
+            model: "vision-model",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const abortResponses: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const chatAbortControllers = new Map();
+      const context = {
+        loadGatewayModelCatalog: vi
+          .fn<GatewayRequestContext["loadGatewayModelCatalog"]>()
+          .mockImplementationOnce(() => firstCatalog.promise)
+          .mockResolvedValue(catalogModels),
+        getRuntimeConfig,
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers,
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        clearChatRunState: vi.fn(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        broadcastToConnIds: vi.fn(),
+        getSessionEventSubscriberConnIds: vi.fn(() => new Set<string>()),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockResolvedValue(undefined);
+
+      const pngB64 =
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+      const runId = "idem-sessions-abort-terminal-dedupe";
+      const params = {
+        sessionKey: "main",
+        message: "see image",
+        idempotencyKey: runId,
+        attachments: [
+          {
+            type: "image",
+            mimeType: "image/png",
+            fileName: "dot.png",
+            content: pngB64,
+          },
+        ],
+      };
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      const { sessionsHandlers } = await import("./server-methods/sessions.js");
+      const callSend = (id: string) =>
+        chatHandlers["chat.send"]({
+          req: { type: "req", id, method: "chat.send", params },
+          params,
+          client: null,
+          isWebchatConnect: () => false,
+          respond: ((ok, payload, error) => {
+            responses.push({ id, ok, payload, error });
+          }) as RespondFn,
+          context,
+        });
+
+      const send = Promise.resolve(callSend("send"));
+      await vi.waitFor(() => {
+        expect(context.loadGatewayModelCatalog).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+
+      await sessionsHandlers["sessions.abort"]({
+        req: {
+          type: "req",
+          id: "abort",
+          method: "sessions.abort",
+          params: { key: "main", runId },
+        },
+        params: { key: "main", runId },
+        client: null,
+        isWebchatConnect: () => false,
+        respond: ((ok, payload, error) => {
+          abortResponses.push({ ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(abortResponses).toEqual([
+        {
+          ok: true,
+          payload: {
+            ok: true,
+            abortedRunId: runId,
+            status: "aborted",
+          },
+          error: undefined,
+        },
+      ]);
+      expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+        expect.objectContaining({
+          runId,
+          status: "timeout",
+          stopReason: "rpc",
+          endedAt: expect.any(Number),
+        }),
+      );
+
+      await callSend("duplicate-before-settle");
+      expect(responses).toEqual([
+        {
+          id: "duplicate-before-settle",
+          ok: true,
+          payload: expect.objectContaining({
+            runId,
+            status: "timeout",
+            stopReason: "rpc",
+            endedAt: expect.any(Number),
+          }),
+          error: undefined,
+        },
+      ]);
+
+      firstCatalog.resolve(catalogModels);
+      await send;
+
+      expect(responses[1]).toEqual({
+        id: "send",
+        ok: true,
+        payload: { runId, status: "started" },
+        error: undefined,
+      });
+      expect(context.dedupe.get(`chat:${runId}`)?.payload).toEqual(
+        expect.objectContaining({
+          runId,
+          status: "timeout",
+          stopReason: "rpc",
+          endedAt: expect.any(Number),
+        }),
+      );
+
+      await callSend("duplicate-after-settle");
+      expect(responses[2]).toEqual({
+        id: "duplicate-after-settle",
+        ok: true,
+        payload: expect.objectContaining({
+          runId,
+          status: "timeout",
+          stopReason: "rpc",
+          endedAt: expect.any(Number),
+        }),
+        error: undefined,
+      });
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(context.addChatRun).not.toHaveBeenCalled();
+    } finally {
+      firstCatalog.resolve(catalogModels);
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, {
+        recursive: true,
+        force: true,
+        maxRetries: 3,
+        retryDelay: 10,
+      });
+    }
+  });
+
   test.each(configuredImageModelCases)(
     "chat.send preserves text-only image uploads as MediaPaths even with configured imageModel: $id",
     async ({ id, imageModel }) => {
