@@ -26,9 +26,6 @@ function listMiddlewareOwnerPluginIds(params: {
 }): string[] {
   const pluginIds: string[] = [];
   for (const record of params.manifestRegistry.plugins) {
-    if (record.origin !== "bundled") {
-      continue;
-    }
     const runtimes = normalizeAgentToolResultMiddlewareRuntimeIds(
       record.contracts?.agentToolResultMiddleware,
     );

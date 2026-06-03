@@ -132,6 +132,7 @@ import type {
   PluginRegistryParams,
   PluginSessionActionRegistryRegistration,
   PluginTextTransformsRegistration,
+  PluginTrustedToolPolicyRegistryRegistration,
 } from "./registry-types.js";
 export type {
   PluginReloadRegistration,
@@ -525,15 +526,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
   ) => {
-    if (record.origin !== "bundled") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "only bundled plugins can register agent tool result middleware",
-      });
-      return;
-    }
     if (typeof (handler as unknown) !== "function") {
       pushDiagnostic({
         level: "error",
@@ -2024,15 +2016,6 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     record: PluginRecord,
     policy: PluginTrustedToolPolicyRegistration,
   ) => {
-    if (record.origin !== "bundled") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "only bundled plugins can register trusted tool policies",
-      });
-      return;
-    }
     const id = normalizeHostHookString(policy.id);
     const description = normalizeHostHookString(policy.description);
     if (!id || !description || typeof policy.evaluate !== "function") {
@@ -2041,6 +2024,18 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         pluginId: record.id,
         source: record.source,
         message: "trusted tool policy registration requires id, description, and evaluate()",
+      });
+      return;
+    }
+    if (
+      record.origin !== "bundled" &&
+      !(record.contracts?.trustedToolPolicies ?? []).includes(id)
+    ) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: `plugin must declare contracts.trustedToolPolicies for: ${id}`,
       });
       return;
     }
@@ -2054,7 +2049,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
       });
       return;
     }
-    (registry.trustedToolPolicies ??= []).push({
+    const registration: PluginTrustedToolPolicyRegistryRegistration = {
       pluginId: record.id,
       pluginName: record.name,
       policy: {
@@ -2062,9 +2057,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
         id,
         description,
       },
+      origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,
-    });
+    };
+    const policies = (registry.trustedToolPolicies ??= []);
+    if (record.origin === "bundled") {
+      const firstInstalledPolicyIndex = policies.findIndex((entry) => entry.origin !== "bundled");
+      if (firstInstalledPolicyIndex === -1) {
+        policies.push(registration);
+      } else {
+        policies.splice(firstInstalledPolicyIndex, 0, registration);
+      }
+      return;
+    }
+    policies.push(registration);
   };
 
   const registerToolMetadata = (record: PluginRecord, metadata: PluginToolMetadataRegistration) => {

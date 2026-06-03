@@ -149,7 +149,7 @@ describe("agent tool result middleware", () => {
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
   });
 
-  it("rejects middleware from non-bundled plugins even when they declare the contract", () => {
+  it("allows middleware from installed plugins when they declare the runtime contract", () => {
     const tmp = createTempDir();
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
 
@@ -162,12 +162,14 @@ describe("agent tool result middleware", () => {
         },
       },
       body: `export default { id: "tool-result-middleware", register(api) {
-  api.registerAgentToolResultMiddleware(() => undefined, { runtimes: ["codex"] });
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.toolName + " installed compacted" }] }
+  }), { runtimes: ["codex"] });
 } };`,
     });
 
-    // Contract declaration is necessary but not sufficient; Codex middleware is
-    // limited to bundled plugins so external plugins cannot reshape tool output.
+    // Installed plugins can register Codex middleware only when explicitly
+    // enabled and when their manifest declares the targeted runtime contract.
     const registry = loadOpenClawPlugins({
       workspaceDir: tmp,
       onlyPluginIds: ["tool-result-middleware"],
@@ -179,13 +181,13 @@ describe("agent tool result middleware", () => {
       },
     });
 
-    const diagnostic = findDiagnostic(
-      registry.diagnostics,
-      "tool-result-middleware",
-      "only bundled plugins can register agent tool result middleware",
+    expect(registry.diagnostics).not.toContainEqual(
+      expect.objectContaining({
+        pluginId: "tool-result-middleware",
+        message: "only bundled plugins can register agent tool result middleware",
+      }),
     );
-    expect(diagnostic?.level).toBe("error");
-    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(1);
   });
 
   it("merges runtimes when a plugin registers the same middleware function twice", () => {
@@ -274,6 +276,52 @@ export default { id: "tool-result-middleware", register(api) {
     });
 
     expect(result.content).toEqual([{ type: "text", text: "exec lazily compacted" }]);
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+  });
+
+  it("lazily loads installed middleware owners from manifest contracts", async () => {
+    const tmp = createTempDir();
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = "/nonexistent/bundled/plugins";
+
+    const pluginFile = writeTempPlugin({
+      dir: tmp,
+      id: "tool-result-middleware",
+      manifest: {
+        activation: {
+          onStartup: false,
+        },
+        contracts: {
+          agentToolResultMiddleware: ["codex"],
+        },
+      },
+      body: `export default { id: "tool-result-middleware", register(api) {
+  api.registerAgentToolResultMiddleware(async (event) => ({
+    result: { ...event.result, content: [{ type: "text", text: event.toolName + " installed lazily compacted" }] }
+  }), { runtimes: ["codex"] });
+} };`,
+    });
+
+    setRuntimeConfigSnapshot({
+      plugins: {
+        load: { paths: [pluginFile] },
+        allow: ["tool-result-middleware"],
+      },
+    });
+    resetActivePluginRegistryForTest();
+
+    expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
+
+    const runner = createAgentToolResultMiddlewareRunner({ runtime: "codex" });
+    const result = await runner.applyToolResultMiddleware({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      toolCallId: "call-1",
+      toolName: "exec",
+      args: { command: "git status" },
+      result: { content: [{ type: "text", text: "raw" }], details: {} },
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "exec installed lazily compacted" }]);
     expect(listAgentToolResultMiddlewares("codex")).toHaveLength(0);
   });
 });

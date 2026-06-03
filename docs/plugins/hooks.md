@@ -227,12 +227,15 @@ See [Plugin permission requests](/plugins/plugin-permission-requests) for
 approval routing, decision behavior, and when to use `requireApproval` instead
 of optional tools or exec approvals.
 
-Bundled plugins that need host-level policy can register trusted tool policies
-with `api.registerTrustedToolPolicy(...)`. These run before ordinary
-`before_tool_call` hooks and before external plugin decisions. Use them only
-for host-trusted gates such as workspace policy, budget enforcement, or
-reserved workflow safety. External plugins should use normal `before_tool_call`
-hooks.
+Plugins that need host-level policy can register trusted tool policies with
+`api.registerTrustedToolPolicy(...)`. These run before ordinary
+`before_tool_call` hooks and before normal hook decisions. Bundled trusted
+policies run first; installed-plugin trusted policies run next in plugin-load
+order; ordinary `before_tool_call` hooks run after them. Bundled plugins keep
+the existing trusted-policy path. Installed plugins must declare every policy id
+in `contracts.trustedToolPolicies`; undeclared ids are rejected before
+registration. Use this tier only for host-trusted gates such as workspace
+policy, budget enforcement, or reserved workflow safety.
 
 ### Exec environment hook
 
