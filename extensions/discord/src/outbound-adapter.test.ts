@@ -409,6 +409,39 @@ describe("discordOutbound", () => {
     });
   });
 
+  it("does not duplicate already-delivered TTS supplement text when audioAsVoice delivery fails", async () => {
+    hoisted.sendVoiceMessageDiscordMock.mockRejectedValueOnce(new Error("ffmpeg unavailable"));
+
+    const result = await discordOutbound.sendPayload?.({
+      cfg: {},
+      to: "channel:123456",
+      text: "",
+      payload: {
+        mediaUrls: ["https://example.com/voice.ogg"],
+        audioAsVoice: true,
+        ttsSupplement: {
+          spokenText: "spoken answer",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+      accountId: "default",
+      replyToId: "reply-1",
+      replyToMode: "first",
+    });
+
+    expect(hoisted.sendVoiceMessageDiscordMock).toHaveBeenCalledOnce();
+    expect(hoisted.sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      channel: "discord",
+      messageId: "",
+      channelId: "channel:123456",
+      receipt: {
+        platformMessageIds: [],
+        parts: [],
+      },
+    });
+  });
+
   it("keeps replyToId on every internal audioAsVoice send when replyToMode is all", async () => {
     await discordOutbound.sendPayload?.({
       cfg: {},

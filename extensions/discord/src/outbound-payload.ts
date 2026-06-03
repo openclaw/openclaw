@@ -77,9 +77,19 @@ function resolveDiscordMediaDeliveryOptions(
 
 function resolveAudioAsVoiceFallbackText(
   payload: Pick<ReplyPayload, "text" | "ttsSupplement" | "mediaUrl" | "mediaUrls">,
-): string | undefined {
+): { text?: string; suppressVoiceFailure?: boolean } {
   const text = payload.text?.trim();
-  return text || getReplyPayloadTtsSupplement(payload)?.spokenText;
+  if (text) {
+    return { text };
+  }
+  const ttsSupplement = getReplyPayloadTtsSupplement(payload);
+  if (!ttsSupplement) {
+    return {};
+  }
+  if (ttsSupplement.visibleTextAlreadyDelivered) {
+    return { suppressVoiceFailure: true };
+  }
+  return { text: ttsSupplement.spokenText };
 }
 
 async function sendDiscordPayloadText(params: {
@@ -118,6 +128,7 @@ async function sendDiscordVoiceOrTextFallback(params: {
   sendContext: DiscordPayloadSendContext;
   mediaUrl: string;
   fallbackText?: string;
+  suppressVoiceFailure?: boolean;
 }): Promise<{ result: DiscordPayloadSendResult; deliveredVoice: boolean }> {
   const replyTo = params.sendContext.resolveReplyTo();
   try {
@@ -132,6 +143,12 @@ async function sendDiscordVoiceOrTextFallback(params: {
     return { result, deliveredVoice: true };
   } catch (err) {
     if (!params.fallbackText) {
+      if (params.suppressVoiceFailure) {
+        return {
+          result: createDiscordUnknownPayloadResult(params.sendContext.target),
+          deliveredVoice: false,
+        };
+      }
       throw err;
     }
     const result = await sendDiscordPayloadText({
@@ -157,11 +174,13 @@ export async function sendDiscordOutboundPayload(params: {
   const sendContext = await createDiscordPayloadSendContext(ctx);
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
+    const fallback = resolveAudioAsVoiceFallbackText(payload);
     const firstDelivery = await sendDiscordVoiceOrTextFallback({
       ctx,
       sendContext,
       mediaUrl: mediaUrls[0],
-      fallbackText: resolveAudioAsVoiceFallbackText(payload),
+      fallbackText: fallback.text,
+      suppressVoiceFailure: fallback.suppressVoiceFailure,
     });
     let lastResult = firstDelivery.result;
     if (firstDelivery.deliveredVoice && payload.text?.trim()) {
