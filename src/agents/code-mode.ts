@@ -1200,14 +1200,13 @@ export function applyCodeModeCatalog(params: {
       isVisibleControlTool: isCodeModeControlTool,
     });
   }
-  const tools = params.tools.filter(
-    (tool) =>
-      isCodeModeControlTool(tool) ||
-      (tool.name !== TOOL_SEARCH_CODE_MODE_TOOL_NAME &&
-        tool.name !== TOOL_SEARCH_RAW_TOOL_NAME &&
-        tool.name !== TOOL_DESCRIBE_RAW_TOOL_NAME &&
-        tool.name !== TOOL_CALL_RAW_TOOL_NAME),
-  );
+  const tools = params.tools.filter((tool) => {
+    if (isCodeModeControlTool(tool)) {
+      return true;
+    }
+    const toolName = readCodeModeCatalogToolName(tool);
+    return Boolean(toolName && !isLegacyToolSearchControlToolName(toolName));
+  });
   const compacted = applyToolCatalogCompaction({
     ...params,
     tools,
@@ -1217,7 +1216,7 @@ export function applyCodeModeCatalog(params: {
   });
   const visibleCatalog = params.catalogRef?.current?.entries ?? [];
   for (const tool of compacted.tools) {
-    if (tool.name === CODE_MODE_EXEC_TOOL_NAME) {
+    if (readCodeModeCatalogToolName(tool) === CODE_MODE_EXEC_TOOL_NAME) {
       tool.description = createCodeModeExecDescription(
         {
           config: params.config,
@@ -1233,6 +1232,24 @@ export function applyCodeModeCatalog(params: {
     }
   }
   return compacted;
+}
+
+function readCodeModeCatalogToolName(tool: AnyAgentTool): string | undefined {
+  try {
+    const name = tool.name;
+    return typeof name === "string" && name.trim() ? name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isLegacyToolSearchControlToolName(name: string): boolean {
+  return (
+    name === TOOL_SEARCH_CODE_MODE_TOOL_NAME ||
+    name === TOOL_SEARCH_RAW_TOOL_NAME ||
+    name === TOOL_DESCRIBE_RAW_TOOL_NAME ||
+    name === TOOL_CALL_RAW_TOOL_NAME
+  );
 }
 
 export function addClientToolsToCodeModeCatalog(params: {

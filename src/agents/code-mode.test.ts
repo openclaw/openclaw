@@ -702,6 +702,42 @@ describe("Code Mode", () => {
     expect(compacted.catalogToolCount).toBe(1);
   });
 
+  it("skips unreadable catalog tool names while keeping healthy code mode siblings", () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const badNameTool = {
+      get name(): string {
+        throw new Error("code mode tool name getter exploded");
+      },
+      label: "Bad Name",
+      description: "bad",
+      parameters: {
+        type: "object",
+        properties: {},
+      },
+      execute: vi.fn(async () => jsonResult({ ok: true })),
+    } satisfies AnyAgentTool;
+
+    const compacted = applyCodeModeCatalog({
+      tools: [
+        ...codeModeTools,
+        badNameTool,
+        pluginTool("fake_create_ticket", "Create a fake ticket"),
+      ],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    expect(compacted.tools.map((tool) => tool.name)).toEqual([
+      CODE_MODE_EXEC_TOOL_NAME,
+      CODE_MODE_WAIT_TOOL_NAME,
+    ]);
+    expect(compacted.catalogToolCount).toBe(1);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
+  });
+
   it("accepts command as an exec-compatible code alias", async () => {
     const { config, catalogRef, tools } = createCodeModeHarness();
     applyCodeModeCatalog({
