@@ -7,6 +7,8 @@ type FetchWithPreconnect = typeof fetch & {
 
 type RequestInitWithDuplex = RequestInit & { duplex?: "half" };
 
+// Mark wrapped fetch functions so repeated resolver calls preserve identity and
+// avoid stacking abort relays around the same implementation.
 const wrapFetchWithAbortSignalMarker = Symbol.for("openclaw.fetch.abort-signal-wrapped");
 
 type FetchWithAbortSignalMarker = typeof fetch & {
@@ -34,6 +36,10 @@ function withDuplex(
     : ({ duplex: "half" as const } as RequestInitWithDuplex);
 }
 
+/**
+ * Wraps fetch so Node-compatible duplex bodies, normalized headers, and foreign
+ * AbortSignal implementations work against runtimes expecting native signals.
+ */
 export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch {
   if ((fetchImpl as FetchWithAbortSignalMarker)[wrapFetchWithAbortSignalMarker]) {
     return fetchImpl;
@@ -101,6 +107,7 @@ export function wrapFetchWithAbortSignal(fetchImpl: typeof fetch): typeof fetch 
   return wrappedFetch;
 }
 
+/** Resolves an optional fetch implementation, wrapping it when fetch is available. */
 export function resolveFetch(fetchImpl?: typeof fetch): typeof fetch | undefined {
   const resolved = fetchImpl ?? globalThis.fetch;
   if (!resolved) {
