@@ -92,6 +92,7 @@ let timerKind: WakeTimerKind | null = null;
 
 const DEFAULT_COALESCE_MS = 250;
 const DEFAULT_RETRY_MS = 1_000;
+const REQUESTS_IN_FLIGHT_RETRY_MS = 60_000;
 const REASON_PRIORITY = {
   RETRY: 0,
   INTERVAL: 1,
@@ -237,6 +238,13 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
           const res = await active(wakeOpts);
           if (res.status === "skipped" && isRetryableHeartbeatBusySkipReason(res.reason)) {
             // The target runtime is busy; retry this wake target soon.
+            // Use a much longer delay for requests-in-flight so a heartbeat
+            // does not fire the instant the user's conversation turn ends,
+            // holding the session lock and blocking subsequent messages.
+            const retryDelayMs =
+              res.reason === HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT
+                ? REQUESTS_IN_FLIGHT_RETRY_MS
+                : DEFAULT_RETRY_MS;
             queuePendingWakeReason({
               source: pendingWake.source,
               intent: pendingWake.intent,
@@ -245,7 +253,7 @@ function schedule(coalesceMs: number, kind: WakeTimerKind = "normal") {
               sessionKey: pendingWake.sessionKey,
               heartbeat: pendingWake.heartbeat,
             });
-            schedule(DEFAULT_RETRY_MS, "retry");
+            schedule(retryDelayMs, "retry");
           }
         }
       } catch {
