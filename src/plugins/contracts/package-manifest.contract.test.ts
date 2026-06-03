@@ -5,12 +5,7 @@ type PackageManifestContractParams = Parameters<typeof describePackageManifestCo
 const packageManifestContractTests: PackageManifestContractParams[] = [
   {
     pluginId: "discord",
-    pluginLocalRuntimeDeps: [
-      "@discordjs/voice",
-      "discord-api-types",
-      "libopus-wasm",
-      "prism-media",
-    ],
+    pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "libopus-wasm"],
     minHostVersionBaseline: "2026.3.22",
   },
   {
@@ -53,13 +48,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   },
   {
     pluginId: "msteams",
-    pluginLocalRuntimeDeps: [
-      "@azure/identity",
-      "@microsoft/teams.api",
-      "@microsoft/teams.apps",
-      "jsonwebtoken",
-      "jwks-rsa",
-    ],
+    pluginLocalRuntimeDeps: ["@azure/identity", "@microsoft/teams.apps"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "nextcloud-talk", minHostVersionBaseline: "2026.3.22" },

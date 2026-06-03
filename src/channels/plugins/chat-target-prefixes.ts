@@ -1,8 +1,9 @@
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { parseStrictInteger } from "../../infra/parse-finite-number.js";
 
 export type ServicePrefix<TService extends string> = { prefix: string; service: TService };
 
@@ -145,8 +146,8 @@ export function parseChatTargetPrefixesOrThrow(
   for (const prefix of params.chatIdPrefixes) {
     if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
-      const chatId = Number.parseInt(value, 10);
-      if (!Number.isFinite(chatId)) {
+      const chatId = parseStrictInteger(value);
+      if (chatId === undefined) {
         throw new Error(`Invalid chat_id: ${value}`);
       }
       return { kind: "chat_id", chatId };
@@ -254,8 +255,8 @@ export function parseChatAllowTargetPrefixes(
   for (const prefix of params.chatIdPrefixes) {
     if (params.lower.startsWith(prefix)) {
       const value = stripPrefix(params.trimmed, prefix);
-      const chatId = Number.parseInt(value, 10);
-      if (Number.isFinite(chatId)) {
+      const chatId = parseStrictInteger(value);
+      if (chatId !== undefined) {
         return { kind: "chat_id", chatId };
       }
     }

@@ -1,3 +1,4 @@
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";
 import type { callGateway as defaultCallGateway } from "../gateway/call.js";
@@ -6,7 +7,6 @@ import { defaultRuntime } from "../runtime.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import { extractTextFromChatContent } from "../shared/chat-content.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
 import {
   completeTaskRunByRunId,
   failTaskRunByRunId,
@@ -17,12 +17,12 @@ import {
   resolveRequiredCompletionTerminalResult,
 } from "../tasks/task-completion-contract.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
+import { retireSessionMcpRuntimeForSessionKey } from "./agent-bundle-mcp-tools.js";
 import {
   buildAnnounceIdFromChildRun,
   buildAnnounceIdempotencyKey,
 } from "./announce-idempotency.js";
 import { removeInternalSessionEffectsTranscript } from "./internal-session-effects.js";
-import { retireSessionMcpRuntimeForSessionKey } from "./pi-bundle-mcp-tools.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { type SubagentRunOutcome, withSubagentOutcomeTiming } from "./subagent-announce-output.js";
 import {
@@ -53,6 +53,7 @@ import {
   safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import { resolveSubagentRunDeadlineMs } from "./subagent-run-timeout.js";
 import { deleteSubagentSessionForCleanup } from "./subagent-session-cleanup.js";
 
 type CaptureSubagentCompletionReply =
@@ -73,6 +74,42 @@ async function loadCleanupBrowserSessionsForLifecycleEnd(): Promise<
   BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"]
 > {
   return (await browserCleanupLoader.load()).cleanupBrowserSessionsForLifecycleEnd;
+}
+
+function shouldPreservePublishedExplicitRunTimeout(params: { entry: SubagentRunRecord }): boolean {
+  if (
+    typeof params.entry.runTimeoutSeconds !== "number" ||
+    !Number.isFinite(params.entry.runTimeoutSeconds) ||
+    params.entry.runTimeoutSeconds <= 0 ||
+    params.entry.outcome?.status !== "timeout" ||
+    typeof params.entry.endedAt !== "number"
+  ) {
+    return false;
+  }
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry);
+  if (deadlineMs === undefined || params.entry.endedAt < deadlineMs) {
+    return false;
+  }
+  if (
+    params.entry.cleanupHandled ||
+    typeof params.entry.cleanupCompletedAt === "number" ||
+    typeof params.entry.endedHookEmittedAt === "number" ||
+    params.entry.delivery?.status === "delivered" ||
+    typeof params.entry.delivery?.announcedAt === "number"
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function resolveExpiredExplicitRunDeadlineMs(params: {
+  entry: SubagentRunRecord;
+  nextOutcome: SubagentRunOutcome;
+  nextEndedAt: number;
+  observedStartedAt?: number;
+}): number | undefined {
+  const deadlineMs = resolveSubagentRunDeadlineMs(params.entry, params.observedStartedAt);
+  return deadlineMs !== undefined && params.nextEndedAt > deadlineMs ? deadlineMs : undefined;
 }
 
 export function createSubagentRegistryLifecycleController(params: {
@@ -515,6 +552,26 @@ export function createSubagentRegistryLifecycleController(params: {
     delivery.payload = payload;
   };
 
+  const refreshPendingFinalDeliveryPayload = (entry: SubagentRunRecord): boolean => {
+    const delivery = entry.delivery;
+    if (
+      !delivery?.payload ||
+      delivery.status === "delivered" ||
+      typeof delivery.announcedAt === "number"
+    ) {
+      return false;
+    }
+    delivery.payload = {
+      ...delivery.payload,
+      startedAt: entry.startedAt,
+      endedAt: entry.endedAt,
+      outcome: entry.outcome,
+      frozenResultText: entry.completion?.resultText,
+      fallbackFrozenResultText: entry.completion?.fallbackResultText,
+    };
+    return true;
+  };
+
   const suspendPendingFinalDelivery = (args: {
     runId: string;
     entry: SubagentRunRecord;
@@ -647,7 +704,7 @@ export function createSubagentRegistryLifecycleController(params: {
           runId,
           entry,
           reason: "expiry",
-        }).catch((error) => {
+        }).catch((error: unknown) => {
           defaultRuntime.log(
             `[warn] Subagent expiry finalize failed during deferred retry for run ${runId}: ${String(error)}`,
           );
@@ -745,29 +802,53 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!entry) {
       return;
     }
+    if (entry.expectsCompletionMessage === false) {
+      clearPendingFinalDelivery(entry);
+      entry.wakeOnDescendantSettle = undefined;
+      const shouldDeleteAttachments = cleanup === "delete" || !entry.retainAttachmentsOnKeep;
+      if (shouldDeleteAttachments) {
+        await safeRemoveAttachmentsDir(entry);
+      }
+      completeCleanupBookkeeping({
+        runId,
+        entry,
+        cleanup,
+        completedAt: Date.now(),
+      });
+      return;
+    }
     if (didAnnounce) {
-      if (!options?.skipAnnounce) {
-        const delivery = ensureDeliveryState(entry);
-        const deliveredAt = delivery.deliveredAt ?? Date.now();
+      const delivery = ensureDeliveryState(entry);
+      const shouldCreditDelivery =
+        !options?.skipAnnounce ||
+        delivery.status === "delivered" ||
+        typeof delivery.announcedAt === "number";
+      if (shouldCreditDelivery) {
+        const deliveredAt = delivery.deliveredAt ?? delivery.announcedAt ?? Date.now();
         delivery.status = "delivered";
         delivery.deliveredAt = deliveredAt;
-        delivery.announcedAt = deliveredAt;
-        params.persist();
+        delivery.announcedAt = delivery.announcedAt ?? deliveredAt;
+        if (!options?.skipAnnounce) {
+          delivery.announcedAt = deliveredAt;
+          params.persist();
+        }
       }
       clearPendingFinalDelivery(entry);
-      const delivery = ensureDeliveryState(entry);
-      delivery.status = "delivered";
-      delivery.suspendedAt = undefined;
-      delivery.suspendedReason = undefined;
-      if (!options?.skipDeliveryStatus) {
+      const finalDelivery = ensureDeliveryState(entry);
+      if (shouldCreditDelivery) {
+        finalDelivery.status = "delivered";
+        finalDelivery.suspendedAt = undefined;
+        finalDelivery.suspendedReason = undefined;
+      }
+      if (shouldCreditDelivery && !options?.skipDeliveryStatus) {
         safeSetSubagentTaskDeliveryStatus({
           runId,
           childSessionKey: entry.childSessionKey,
           deliveryStatus: "delivered",
         });
       }
-      delivery.lastError = undefined;
-      delivery.lastDropReason = undefined;
+      finalDelivery.lastError = undefined;
+      finalDelivery.lastDropReason = undefined;
       entry.wakeOnDescendantSettle = undefined;
       const completion = ensureCompletionState(entry);
       completion.fallbackResultText = undefined;
@@ -884,7 +965,7 @@ export function createSubagentRegistryLifecycleController(params: {
       }
       void finalizeSubagentCleanup(runId, entry.cleanup, true, {
         skipAnnounce: true,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -917,7 +998,7 @@ export function createSubagentRegistryLifecycleController(params: {
           skipAnnounce: true,
           skipDeliveryStatus: true,
         });
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -944,7 +1025,7 @@ export function createSubagentRegistryLifecycleController(params: {
         runId,
         entry.cleanup,
         didAnnounce || shouldCreditPriorDelivery,
-      ).catch((err) => {
+      ).catch((err: unknown) => {
         defaultRuntime.log(`[warn] subagent cleanup finalize failed (${runId}): ${String(err)}`);
         const current = params.runs.get(runId);
         if (!current || current.cleanupCompletedAt) {
@@ -999,7 +1080,7 @@ export function createSubagentRegistryLifecycleController(params: {
       .then((didAnnounce) => {
         void finalizeAnnounceCleanup(didAnnounce);
       })
-      .catch((error) => {
+      .catch((error: unknown) => {
         defaultRuntime.log(
           `[warn] Subagent announce flow failed during cleanup for run ${runId}: ${String(error)}`,
         );
@@ -1016,6 +1097,7 @@ export function createSubagentRegistryLifecycleController(params: {
     sendFarewell?: boolean;
     accountId?: string;
     triggerCleanup: boolean;
+    startedAt?: number;
   }) => {
     params.clearPendingLifecycleError(completeParams.runId);
     const entry = params.runs.get(completeParams.runId);
@@ -1036,8 +1118,40 @@ export function createSubagentRegistryLifecycleController(params: {
       mutated = true;
     }
 
-    const endedAt =
-      typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
+    let endedAt = typeof completeParams.endedAt === "number" ? completeParams.endedAt : Date.now();
+    let completionOutcome = completeParams.outcome;
+    let completionReason = completeParams.reason;
+    if (
+      shouldPreservePublishedExplicitRunTimeout({
+        entry,
+      })
+    ) {
+      return;
+    }
+
+    const observedStartedAt =
+      typeof completeParams.startedAt === "number" && Number.isFinite(completeParams.startedAt)
+        ? completeParams.startedAt
+        : undefined;
+    if (observedStartedAt !== undefined && entry.startedAt !== observedStartedAt) {
+      entry.startedAt = observedStartedAt;
+      if (typeof entry.sessionStartedAt !== "number") {
+        entry.sessionStartedAt = observedStartedAt;
+      }
+      mutated = true;
+    }
+
+    const expiredDeadlineMs = resolveExpiredExplicitRunDeadlineMs({
+      entry,
+      nextOutcome: completionOutcome,
+      nextEndedAt: endedAt,
+      observedStartedAt,
+    });
+    if (expiredDeadlineMs !== undefined) {
+      endedAt = expiredDeadlineMs;
+      completionOutcome = { status: "timeout" };
+      completionReason = SUBAGENT_ENDED_REASON_COMPLETE;
+    }
     if (entry.endedAt !== endedAt) {
       entry.endedAt = endedAt;
       entry.execution = {
@@ -1048,7 +1162,7 @@ export function createSubagentRegistryLifecycleController(params: {
       };
       mutated = true;
     }
-    const outcome = withSubagentOutcomeTiming(completeParams.outcome, {
+    const outcome = withSubagentOutcomeTiming(completionOutcome, {
       startedAt: entry.startedAt,
       endedAt,
     });
@@ -1070,8 +1184,8 @@ export function createSubagentRegistryLifecycleController(params: {
       };
       mutated = true;
     }
-    if (entry.endedReason !== completeParams.reason) {
-      entry.endedReason = completeParams.reason;
+    if (entry.endedReason !== completionReason) {
+      entry.endedReason = completionReason;
       mutated = true;
     }
     if (entry.pauseReason !== undefined) {
@@ -1080,6 +1194,9 @@ export function createSubagentRegistryLifecycleController(params: {
     }
 
     if (await freezeRunResultAtCompletion(entry, outcome)) {
+      mutated = true;
+    }
+    if (refreshPendingFinalDeliveryPayload(entry)) {
       mutated = true;
     }
 
@@ -1114,7 +1231,7 @@ export function createSubagentRegistryLifecycleController(params: {
       !suppressedForSteerRestart &&
       params.shouldEmitEndedHookForRun({
         entry,
-        reason: completeParams.reason,
+        reason: completionReason,
       });
     const shouldDeferEndedHook =
       shouldEmitEndedHook &&
@@ -1124,7 +1241,7 @@ export function createSubagentRegistryLifecycleController(params: {
     if (!shouldDeferEndedHook && shouldEmitEndedHook) {
       await params.emitSubagentEndedHookForRun({
         entry,
-        reason: completeParams.reason,
+        reason: completionReason,
         sendFarewell: completeParams.sendFarewell,
         accountId: completeParams.accountId,
       });
@@ -1134,20 +1251,29 @@ export function createSubagentRegistryLifecycleController(params: {
       return;
     }
 
-    try {
-      const cleanupBrowserSessions =
-        params.cleanupBrowserSessionsForLifecycleEnd ??
-        (await loadCleanupBrowserSessionsForLifecycleEnd());
-      await cleanupBrowserSessions({
-        sessionKeys: [entry.childSessionKey],
-        onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
-      });
-    } catch (error) {
-      params.warn("failed to cleanup browser sessions for completed subagent", {
-        error: buildSafeLifecycleErrorMeta(error),
-        runId: maskRunId(completeParams.runId),
-        childSessionKey: maskSessionKey(entry.childSessionKey),
-      });
+    // registerSubagentRun fires both an in-process listener and a gateway
+    // waitForSubagentCompletion RPC; both can reach this point for the same
+    // runId in embedded mode. Dedupe only the browser driver tab-close IPC
+    // with a sync check-then-set. The retire + announce tail below must still
+    // run for every caller, so a slow or held first browser cleanup cannot
+    // strand a duplicate caller's completion behind it.
+    if (entry.browserCleanupDispatchedAt === undefined) {
+      entry.browserCleanupDispatchedAt = Date.now();
+      try {
+        const cleanupBrowserSessions =
+          params.cleanupBrowserSessionsForLifecycleEnd ??
+          (await loadCleanupBrowserSessionsForLifecycleEnd());
+        await cleanupBrowserSessions({
+          sessionKeys: [entry.childSessionKey],
+          onWarn: (msg) => params.warn(msg, { runId: entry.runId }),
+        });
+      } catch (error) {
+        params.warn("failed to cleanup browser sessions for completed subagent", {
+          error: buildSafeLifecycleErrorMeta(error),
+          runId: maskRunId(completeParams.runId),
+          childSessionKey: maskSessionKey(entry.childSessionKey),
+        });
+      }
     }
 
     try {

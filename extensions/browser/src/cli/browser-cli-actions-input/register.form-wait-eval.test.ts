@@ -44,7 +44,7 @@ describe("browser action input wait command", () => {
   it("keeps the outer request open longer than a time-based wait", async () => {
     const program = createActionInputProgram();
 
-    await program.parseAsync(["browser", "wait", "--time", "25000"], { from: "user" });
+    await program.parseAsync(["browser", "wait", "--time", "+025000"], { from: "user" });
 
     const options = mocks.callBrowserRequest.mock.calls.at(-1)?.[2] as
       | { timeoutMs?: number }
@@ -64,6 +64,32 @@ describe("browser action input wait command", () => {
       | undefined;
     expect(options?.timeoutMs).toBeGreaterThan(21000);
   });
+
+  it("rejects non-decimal wait numeric options before sending the wait request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "wait", "--time", "1e3"], { from: "user" }),
+    ).rejects.toThrow("--time must be a non-negative integer.");
+    await expect(
+      program.parseAsync(["browser", "wait", "--text", "Ready", "--timeout-ms", "0x1000"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--timeout-ms must be a positive integer.");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported load states before sending the wait request", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "wait", "--load", "complete"], { from: "user" }),
+    ).rejects.toThrow("__exit__:1");
+
+    const capture = getBrowserCliRuntimeCapture();
+    expect(capture.runtimeErrors.join("\n")).toContain("Invalid --load value: complete");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("browser action input evaluate command", () => {
@@ -76,7 +102,7 @@ describe("browser action input evaluate command", () => {
     const program = createActionInputProgram();
 
     await program.parseAsync(
-      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "30000"],
+      ["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "+030000"],
       { from: "user" },
     );
 
@@ -88,5 +114,16 @@ describe("browser action input evaluate command", () => {
       | undefined;
     expect(request?.body?.timeoutMs).toBe(30000);
     expect(options?.timeoutMs).toBeGreaterThan(30000);
+  });
+
+  it("rejects non-decimal evaluate timeouts before dispatch", async () => {
+    const program = createActionInputProgram();
+
+    await expect(
+      program.parseAsync(["browser", "evaluate", "--fn", "() => true", "--timeout-ms", "1e3"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("--timeout-ms must be a positive integer.");
+    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 });

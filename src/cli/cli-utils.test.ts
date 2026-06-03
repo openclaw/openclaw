@@ -91,6 +91,25 @@ describe("dns cli", () => {
       log.mockRestore();
     }
   });
+
+  it.each(["foo/bar", "../../x", "evil\nrecords"])(
+    "rejects invalid --domain %j with explicit DNS-name diagnostic",
+    async (domain) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const program = new Command();
+        registerDnsCli(program);
+        await expect(
+          program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" }),
+        ).rejects.toThrow("wide-area discovery domain must be a valid DNS name");
+        const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
+        expect(output).not.toContain("No wide-area domain configured");
+        expect(output).not.toContain("DNS setup");
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
 });
 
 describe("parseByteSize", () => {
@@ -130,5 +149,10 @@ describe("parseDurationMs", () => {
   it("rejects invalid composite strings", () => {
     expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
     expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
+  });
+
+  it("rejects unsafe millisecond results", () => {
+    expect(() => parseDurationMs("9007199254740993ms")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("9007199254740990ms10ms")).toThrow(/Invalid duration/);
   });
 });

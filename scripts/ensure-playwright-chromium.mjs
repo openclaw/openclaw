@@ -8,12 +8,24 @@ import { resolvePnpmRunner } from "./pnpm-runner.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const playwrightInstallArgs = ["--dir", "ui", "exec", "playwright", "install", "chromium"];
+const executableOverrideEnvKey = "PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH";
+export const systemChromiumExecutableCandidates = [
+  "/snap/bin/chromium",
+  "/usr/bin/chromium-browser",
+  "/usr/bin/chromium",
+  "/usr/bin/google-chrome",
+  "/usr/bin/google-chrome-stable",
+];
+
+export function resolveSystemChromiumExecutablePath(existsSync = existsSyncImpl) {
+  return systemChromiumExecutableCandidates.find((candidate) => existsSync(candidate)) ?? "";
+}
 
 export function resolvePlaywrightInstallRunner(options = {}) {
   const env = options.env ?? process.env;
   return resolvePnpmRunner({
     comSpec: options.comSpec ?? env.ComSpec ?? env.COMSPEC,
-    npmExecPath: env.npm_execpath,
+    npmExecPath: env === process.env ? env.npm_execpath : (env.npm_execpath ?? ""),
     platform: options.platform,
     pnpmArgs: playwrightInstallArgs,
   });
@@ -36,12 +48,31 @@ export function isDirectScriptExecution(
 
 export function ensurePlaywrightChromium(options = {}) {
   const env = options.env ?? process.env;
+  const executableOverride =
+    typeof env[executableOverrideEnvKey] === "string" ? env[executableOverrideEnvKey].trim() : "";
   const executablePath = options.executablePath ?? chromium.executablePath();
   const existsSync = options.existsSync ?? existsSyncImpl;
   const log = options.log ?? console.error;
   const spawnSync = options.spawnSync ?? spawnSyncImpl;
 
+  if (executableOverride) {
+    if (existsSync(executableOverride)) {
+      return 0;
+    }
+    log(
+      `[ui-e2e] ${executableOverrideEnvKey} points to ${executableOverride}, but that browser does not exist.`,
+    );
+    return 1;
+  }
+
   if (existsSync(executablePath)) {
+    return 0;
+  }
+
+  const systemExecutablePath =
+    options.systemExecutablePath ?? resolveSystemChromiumExecutablePath(existsSync);
+  if (systemExecutablePath) {
+    log(`[ui-e2e] Using system Chromium at ${systemExecutablePath}.`);
     return 0;
   }
 
@@ -71,7 +102,9 @@ export function ensurePlaywrightChromium(options = {}) {
   }
 
   if (!existsSync(executablePath)) {
-    log(`[ui-e2e] Playwright install completed but Chromium is still missing at ${executablePath}.`);
+    log(
+      `[ui-e2e] Playwright install completed but Chromium is still missing at ${executablePath}.`,
+    );
     return 1;
   }
   return 0;

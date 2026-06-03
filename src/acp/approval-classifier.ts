@@ -1,13 +1,13 @@
 import { homedir } from "node:os";
 import path from "node:path";
-import { isKnownCoreToolId } from "../agents/tool-catalog.js";
-import { isMutatingToolCall } from "../agents/tool-mutation.js";
-import { isPathInside } from "../infra/path-guards.js";
+import { asRecord } from "@openclaw/acp-core/record-shared";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { asRecord } from "./record-shared.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { isKnownCoreToolId } from "../agents/tool-catalog.js";
+import { isMutatingToolCall } from "../agents/tool-mutation.js";
+import { isPathInside } from "../infra/path-guards.js";
 
 const SAFE_SEARCH_TOOL_IDS = new Set(["search", "web_search", "memory_search"]);
 const TRUSTED_SAFE_TOOL_ALIASES = new Set(["search"]);

@@ -8,7 +8,8 @@ import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
-import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAttachedChannelResultAdapter,
@@ -19,7 +20,6 @@ import {
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -648,10 +648,10 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               normalizeOptionalString(account.botToken),
             inputs,
             missingTokenNote: "missing Slack token",
-            resolveWithToken: async ({ token, inputs }) =>
+            resolveWithToken: async ({ token, inputs: inputsValue }) =>
               (await loadSlackResolveChannelsModule()).resolveSlackChannelAllowlist({
                 token,
-                entries: inputs,
+                entries: inputsValue,
               }),
             mapResolved: (entry) =>
               toResolvedTarget(entry, entry.archived ? "archived" : undefined),
@@ -663,10 +663,10 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
             normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
-          resolveWithToken: async ({ token, inputs }) =>
+          resolveWithToken: async ({ token, inputs: inputsLocal }) =>
             (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({
               token,
-              entries: inputs,
+              entries: inputsLocal,
             }),
           mapResolved: (entry) => toResolvedTarget(entry, entry.note),
         });

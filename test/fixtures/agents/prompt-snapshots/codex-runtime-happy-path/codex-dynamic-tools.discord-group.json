@@ -32,7 +32,8 @@
           "type": "string"
         },
         "delayMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "delivery": {
           "enum": ["system", "overlay", "auto"],
@@ -50,7 +51,8 @@
         },
         "durationMs": {
           "maximum": 300000,
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "facing": {
           "description": "camera_snap: front/back/both; camera_clip: front/back only.",
@@ -58,6 +60,7 @@
           "type": "string"
         },
         "fps": {
+          "exclusiveMinimum": 0,
           "type": "number"
         },
         "gatewayToken": {
@@ -76,19 +79,25 @@
           "type": "string"
         },
         "invokeTimeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "limit": {
-          "type": "number"
+          "maximum": 20,
+          "minimum": 1,
+          "type": "integer"
         },
         "locationTimeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "maxAgeMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "maxWidth": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "node": {
           "type": "string"
@@ -111,19 +120,23 @@
           "type": "string"
         },
         "quality": {
+          "maximum": 1,
+          "minimum": 0,
           "type": "number"
         },
         "requestId": {
           "type": "string"
         },
         "screenIndex": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "sound": {
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         },
         "title": {
           "type": "string"
@@ -152,7 +165,7 @@
         "contextMessages": {
           "maximum": 10,
           "minimum": 0,
-          "type": "number"
+          "type": "integer"
         },
         "gatewayToken": {
           "type": "string"
@@ -170,8 +183,15 @@
           "additionalProperties": true,
           "properties": {
             "agentId": {
-              "description": "Agent id, or null to keep it unset",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Agent id, or null to keep it unset"
             },
             "deleteAfterRun": {
               "description": "Delete after first run",
@@ -195,16 +215,27 @@
                   "additionalProperties": true,
                   "properties": {
                     "accountId": {
+                      "description": "Failure delivery account",
                       "type": "string"
                     },
                     "channel": {
+                      "description": "Failure delivery channel",
                       "type": "string"
                     },
                     "mode": {
-                      "enum": ["announce", "webhook"],
-                      "type": "string"
+                      "anyOf": [
+                        {
+                          "const": "announce",
+                          "type": "string"
+                        },
+                        {
+                          "const": "webhook",
+                          "type": "string"
+                        }
+                      ]
                     },
                     "to": {
+                      "description": "Failure delivery target",
                       "type": "string"
                     }
                   },
@@ -249,7 +280,8 @@
                 },
                 "after": {
                   "description": "Failures before alert",
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "channel": {
                   "description": "Alert channel",
@@ -257,7 +289,8 @@
                 },
                 "cooldownMs": {
                   "description": "Alert cooldown ms",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "includeSkipped": {
                   "description": "Skipped runs count toward alert",
@@ -316,6 +349,7 @@
                   "type": "string"
                 },
                 "timeoutSeconds": {
+                  "minimum": 0,
                   "type": "number"
                 },
                 "toolsAllow": {
@@ -333,7 +367,8 @@
               "properties": {
                 "anchorMs": {
                   "description": "Start anchor ms (kind=every)",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "at": {
                   "description": "ISO-8601 time (kind=at)",
@@ -341,7 +376,8 @@
                 },
                 "everyMs": {
                   "description": "Interval ms (kind=every)",
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "expr": {
                   "description": "Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
@@ -354,7 +390,8 @@
                 },
                 "staggerMs": {
                   "description": "Jitter ms (kind=cron)",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "tz": {
                   "description": "IANA timezone for cron wall-clock fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local timezone.",
@@ -364,8 +401,15 @@
               "type": "object"
             },
             "sessionKey": {
-              "description": "Explicit session key, or null to clear it",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit session key, or null to clear it"
             },
             "sessionTarget": {
               "description": "main | isolated | current | session:<id>",
@@ -390,8 +434,15 @@
           "additionalProperties": true,
           "properties": {
             "agentId": {
-              "description": "Agent id, or null to clear it",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Agent id, or null to clear it"
             },
             "deleteAfterRun": {
               "type": "boolean"
@@ -400,34 +451,91 @@
               "additionalProperties": true,
               "properties": {
                 "accountId": {
-                  "description": "Delivery account",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Delivery account, or null to clear"
                 },
                 "bestEffort": {
                   "type": "boolean"
                 },
                 "channel": {
-                  "description": "Delivery channel",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Delivery channel, or null to clear"
                 },
                 "failureDestination": {
-                  "additionalProperties": true,
-                  "properties": {
-                    "accountId": {
-                      "type": "string"
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "accountId": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Failure delivery account, or null to clear"
+                        },
+                        "channel": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Failure delivery channel, or null to clear"
+                        },
+                        "mode": {
+                          "anyOf": [
+                            {
+                              "const": "announce",
+                              "type": "string"
+                            },
+                            {
+                              "const": "webhook",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "to": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "Failure delivery target, or null to clear"
+                        }
+                      },
+                      "type": "object"
                     },
-                    "channel": {
-                      "type": "string"
-                    },
-                    "mode": {
-                      "enum": ["announce", "webhook"],
-                      "type": "string"
-                    },
-                    "to": {
-                      "type": "string"
+                    {
+                      "type": "null"
                     }
-                  },
-                  "type": "object"
+                  ],
+                  "description": "Failure destination, or null to clear"
                 },
                 "mode": {
                   "description": "Delivery mode",
@@ -441,13 +549,23 @@
                     },
                     {
                       "type": "number"
+                    },
+                    {
+                      "type": "null"
                     }
                   ],
                   "description": "Thread/topic id"
                 },
                 "to": {
-                  "description": "Delivery target",
-                  "type": "string"
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Delivery target, or null to clear"
                 }
               },
               "type": "object"
@@ -467,7 +585,8 @@
                 },
                 "after": {
                   "description": "Failures before alert",
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "channel": {
                   "description": "Alert channel",
@@ -475,7 +594,8 @@
                 },
                 "cooldownMs": {
                   "description": "Alert cooldown ms",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "includeSkipped": {
                   "description": "Skipped runs count toward alert",
@@ -534,14 +654,22 @@
                   "type": "string"
                 },
                 "timeoutSeconds": {
+                  "minimum": 0,
                   "type": "number"
                 },
                 "toolsAllow": {
-                  "description": "Allowed tool ids, or null to clear",
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
+                  "anyOf": [
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Allowed tool ids, or null to clear"
                 }
               },
               "type": "object"
@@ -551,7 +679,8 @@
               "properties": {
                 "anchorMs": {
                   "description": "Start anchor ms (kind=every)",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "at": {
                   "description": "ISO-8601 time (kind=at)",
@@ -559,7 +688,8 @@
                 },
                 "everyMs": {
                   "description": "Interval ms (kind=every)",
-                  "type": "number"
+                  "minimum": 1,
+                  "type": "integer"
                 },
                 "expr": {
                   "description": "Cron expr in tz wall-clock time; do not convert to UTC. Omitted tz => Gateway host local timezone. Example 6pm Shanghai daily: expr \"0 18 * * *\", tz \"Asia/Shanghai\".",
@@ -572,7 +702,8 @@
                 },
                 "staggerMs": {
                   "description": "Jitter ms (kind=cron)",
-                  "type": "number"
+                  "minimum": 0,
+                  "type": "integer"
                 },
                 "tz": {
                   "description": "IANA timezone for cron wall-clock fields, e.g. \"Asia/Shanghai\"; omitted => Gateway host local timezone.",
@@ -582,8 +713,15 @@
               "type": "object"
             },
             "sessionKey": {
-              "description": "Explicit session key, or null to clear it",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Explicit session key, or null to clear it"
             },
             "sessionTarget": {
               "description": "Session target",
@@ -604,7 +742,8 @@
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],
@@ -632,19 +771,10 @@
           "type": "boolean"
         },
         "attachments": {
-          "description": "Structured attachments; each needs media/mediaUrl/path/filePath/fileUrl/url.",
+          "description": "Structured attachments; each entry uses media.",
           "items": {
             "properties": {
-              "filePath": {
-                "type": "string"
-              },
-              "fileUrl": {
-                "type": "string"
-              },
               "media": {
-                "type": "string"
-              },
-              "mediaUrl": {
                 "type": "string"
               },
               "mimeType": {
@@ -653,14 +783,8 @@
               "name": {
                 "type": "string"
               },
-              "path": {
-                "type": "string"
-              },
               "type": {
                 "enum": ["image", "audio", "video", "file"],
-                "type": "string"
-              },
-              "url": {
                 "type": "string"
               }
             },
@@ -695,9 +819,6 @@
         "filename": {
           "type": "string"
         },
-        "filePath": {
-          "type": "string"
-        },
         "forceDocument": {
           "description": "Send image/GIF/video as document; avoids compression.",
           "type": "boolean"
@@ -719,9 +840,6 @@
           "type": "string"
         },
         "mimeType": {
-          "type": "string"
-        },
-        "path": {
           "type": "string"
         },
         "quoteText": {
@@ -749,7 +867,8 @@
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],
@@ -773,7 +892,7 @@
         "timeoutMs": {
           "description": "Provider timeout ms.",
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         }
       },
       "required": ["text"],
@@ -784,7 +903,7 @@
   },
   {
     "deferLoading": true,
-    "description": "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If still owe the user a reply, pass one-shot `continuationMessage`; do not write restart sentinel files directly.",
+    "description": "Gateway restart/config/update. Before config edits, use config.schema.lookup with targeted dot path. Prefer config.patch for partial merge; config.apply only full replace. Writes hot-reload or restart as needed. Always pass human `note` for post-restart delivery. If post-restart work must continue internally, pass one-shot `continuationMessage`; visible follow-up from that turn must use the message tool. Do not write restart sentinel files directly.",
     "inputSchema": {
       "properties": {
         "action": {
@@ -805,7 +924,8 @@
           "type": "string"
         },
         "delayMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "gatewayToken": {
           "type": "string"
@@ -826,13 +946,15 @@
           "type": "string"
         },
         "restartDelayMs": {
-          "type": "number"
+          "minimum": 0,
+          "type": "integer"
         },
         "sessionKey": {
           "type": "string"
         },
         "timeoutMs": {
-          "type": "number"
+          "minimum": 1,
+          "type": "integer"
         }
       },
       "required": ["action"],
@@ -858,7 +980,7 @@
       "properties": {
         "activeMinutes": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         },
         "agentId": {
           "maxLength": 64,
@@ -883,11 +1005,11 @@
         },
         "limit": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         },
         "messageLimit": {
           "minimum": 0,
-          "type": "number"
+          "type": "integer"
         },
         "search": {
           "minLength": 1,
@@ -909,7 +1031,7 @@
         },
         "limit": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         },
         "sessionKey": {
           "type": "string"
@@ -944,7 +1066,7 @@
         },
         "timeoutSeconds": {
           "minimum": 0,
-          "type": "number"
+          "type": "integer"
         }
       },
       "required": ["message"],
@@ -1022,10 +1144,6 @@
           "enum": ["subagent"],
           "type": "string"
         },
-        "runTimeoutSeconds": {
-          "minimum": 0,
-          "type": "number"
-        },
         "sandbox": {
           "enum": ["inherit", "require"],
           "type": "string"
@@ -1034,7 +1152,7 @@
           "type": "string"
         },
         "taskName": {
-          "description": "Stable alias for later targeting; lowercase letters/digits/underscores, starts letter.",
+          "description": "Stable alias for later targeting; lowercase letters/digits/underscores/hyphens, starts letter.",
           "type": "string"
         },
         "thinking": {
@@ -1043,10 +1161,6 @@
         "thread": {
           "description": "Bind spawn to new chat thread when supported. `thread=true` defaults mode=\"session\".",
           "type": "boolean"
-        },
-        "timeoutSeconds": {
-          "minimum": 0,
-          "type": "number"
         }
       },
       "required": ["task"],
@@ -1078,7 +1192,7 @@
         },
         "recentMinutes": {
           "minimum": 1,
-          "type": "number"
+          "type": "integer"
         }
       },
       "type": "object"
@@ -1185,7 +1299,7 @@
         "maxChars": {
           "description": "Max chars returned; truncates.",
           "minimum": 100,
-          "type": "number"
+          "type": "integer"
         },
         "url": {
           "description": "HTTP(S) URL.",

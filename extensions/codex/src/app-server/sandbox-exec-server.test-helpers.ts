@@ -40,8 +40,8 @@ export function createSandboxContext(overrides: {
       buildExecSpec:
         overrides.buildExecSpec ??
         (async () => ({
-          argv: ["/bin/sh", "-lc", "true"],
-          env: process.env,
+          argv: [process.execPath, "-e", ""],
+          env: { PATH: process.env.PATH },
           stdinMode: "pipe-closed",
         })),
       finalizeExec: overrides.finalizeExec,
@@ -206,7 +206,9 @@ export async function waitForHttpBodyDeltas(
     if (deltas.length >= count) {
       return deltas;
     }
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 25);
+    });
   }
   throw new Error(`expected ${count} http body deltas`);
 }

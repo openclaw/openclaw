@@ -99,6 +99,13 @@ export class ChatLog extends Container {
     }
   }
 
+  clearTools() {
+    for (const tool of this.toolById.values()) {
+      this.removeChild(tool);
+    }
+    this.toolById.clear();
+  }
+
   restorePendingUsers() {
     for (const entry of this.pendingUsers.values()) {
       if (this.children.includes(entry.component)) {
@@ -261,6 +268,15 @@ export class ChatLog extends Container {
     this.streamingRuns.set(effectiveRunId, component);
     this.appendNonSystem(component);
     return component;
+  }
+
+  reserveAssistantSlot(runId?: string) {
+    const effectiveRunId = this.resolveRunId(runId);
+    const existing = this.streamingRuns.get(effectiveRunId);
+    if (existing) {
+      return existing;
+    }
+    return this.startAssistant("", runId);
   }
 
   updateAssistant(text: string, runId?: string) {

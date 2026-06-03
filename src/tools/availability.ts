@@ -10,7 +10,7 @@ import type {
 } from "./types.js";
 
 function isRecord(value: JsonValue | undefined): value is JsonObject {
-  return !!value && typeof value === "object" && !Array.isArray(value);
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function resolveConfigPath(
@@ -118,8 +118,8 @@ function evaluateExpression(
   context: ToolAvailabilityContext,
 ): readonly ToolAvailabilityDiagnostic[] {
   if ("kind" in expression) {
-    const diagnostic = evaluateSignal(expression, context);
-    return diagnostic ? [diagnostic] : [];
+    const diagnosticLocal = evaluateSignal(expression, context);
+    return diagnosticLocal ? [diagnosticLocal] : [];
   }
   if ("allOf" in expression) {
     if (expression.allOf.length === 0) {

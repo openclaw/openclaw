@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { addTimerTimeoutGraceMs } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -15,6 +16,10 @@ import {
   type ChromeRealtimeAudioBridgeHandle,
 } from "../realtime.js";
 import {
+  GOOGLE_MEET_SYSTEM_PROFILER_COMMAND,
+  outputMentionsBlackHole2ch,
+} from "./chrome-audio-device.js";
+import {
   asBrowserTabs,
   callBrowserProxyOnNode,
   isSameMeetUrlForReuse,
@@ -24,8 +29,6 @@ import {
   type BrowserTab,
 } from "./chrome-browser-proxy.js";
 import type { GoogleMeetChromeHealth } from "./types.js";
-
-export const GOOGLE_MEET_SYSTEM_PROFILER_COMMAND = "/usr/sbin/system_profiler";
 
 type BrowserRequestParams = {
   method: "GET" | "POST" | "DELETE";
@@ -48,14 +51,11 @@ export const testing = {
   },
   meetStatusScriptForTest: meetStatusScript,
   parseMeetBrowserStatusForTest: parseMeetBrowserStatus,
+  resolveBrowserGatewayTimeoutMsForTest: resolveBrowserGatewayTimeoutMs,
 };
 
 function isGoogleMeetTalkBackMode(mode: GoogleMeetMode): boolean {
   return mode === "agent" || mode === "bidi";
-}
-
-export function outputMentionsBlackHole2ch(output: string): boolean {
-  return /\bBlackHole\s+2ch\b/i.test(output);
 }
 
 export async function assertBlackHole2chAvailable(params: {
@@ -293,7 +293,7 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
     "browser.request",
     {
       json: true,
-      timeout: String(params.timeoutMs + 5_000),
+      timeout: String(resolveBrowserGatewayTimeoutMs(params.timeoutMs)),
     },
     {
       method: params.method,
@@ -303,6 +303,10 @@ async function callLocalBrowserRequest(params: BrowserRequestParams) {
     },
     { progress: false },
   );
+}
+
+function resolveBrowserGatewayTimeoutMs(timeoutMs: number): number {
+  return addTimerTimeoutGraceMs(timeoutMs) ?? 1;
 }
 
 function mergeBrowserNotes(
@@ -762,7 +766,9 @@ async function openMeetWithBrowserRequest(params: {
     }
     const remainingWaitMs = deadline - Date.now();
     if (remainingWaitMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, Math.min(750, remainingWaitMs)));
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(750, remainingWaitMs));
+      });
     }
   } while (Date.now() < deadline);
   return { launched: true, browser };
@@ -1017,7 +1023,7 @@ export async function launchChromeMeetOnNode(params: {
       audioBridgeCommand: params.config.chrome.audioBridgeCommand,
       audioBridgeHealthCommand: params.config.chrome.audioBridgeHealthCommand,
     },
-    timeoutMs: params.config.chrome.joinTimeoutMs + 5_000,
+    timeoutMs: addTimerTimeoutGraceMs(params.config.chrome.joinTimeoutMs) ?? 1,
   });
   const result = parseNodeStartResult(raw);
   if (result.audioBridge?.type === "node-command-pair") {

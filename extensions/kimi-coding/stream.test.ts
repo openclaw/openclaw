@@ -1,5 +1,5 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   createKimiThinkingWrapper,
@@ -281,6 +281,82 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
+  it("strips Anthropic cache_control markers before Kimi requests are sent", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
+      system: [{ type: "text", text: "stable", cache_control: { type: "ephemeral", ttl: "1h" } }],
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "hello", cache_control: { type: "ephemeral" } },
+            {
+              type: "tool_result",
+              tool_use_id: "tool_1",
+              content: [
+                {
+                  type: "text",
+                  text: "done",
+                  cache_control: { type: "ephemeral" },
+                },
+              ],
+              cache_control: { type: "ephemeral" },
+            },
+            {
+              type: "tool_use",
+              id: "tool_2",
+              name: "persist",
+              input: {
+                cache_control: "tool argument",
+                nested: { cache_control: "nested argument" },
+              },
+              cache_control: { type: "ephemeral" },
+            },
+            { type: "text", text: "bye" },
+          ],
+        },
+      ],
+    });
+
+    const wrapped = createKimiThinkingWrapper(baseStreamFn, "enabled");
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      system: [{ type: "text", text: "stable" }],
+      messages: [
+        {
+          role: "user",
+          content: [
+            { type: "text", text: "hello" },
+            {
+              type: "tool_result",
+              tool_use_id: "tool_1",
+              content: [{ type: "text", text: "done" }],
+            },
+            {
+              type: "tool_use",
+              id: "tool_2",
+              name: "persist",
+              input: {
+                cache_control: "tool argument",
+                nested: { cache_control: "nested argument" },
+              },
+            },
+            { type: "text", text: "bye" },
+          ],
+        },
+      ],
+      thinking: { type: "enabled" },
+    });
+  });
+
   it("lets explicit model params keep Kimi thinking disabled even when session thinking is on", () => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
 
@@ -318,7 +394,7 @@ describe("kimi tool-call markup wrapper", () => {
             {
               id: "call_1",
               type: "function",
-              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
+              function: { name: "exec", arguments: '{"command":"pwd"}' },
             },
           ],
         },
@@ -359,7 +435,7 @@ describe("kimi tool-call markup wrapper", () => {
             {
               id: "call_1",
               type: "function",
-              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
+              function: { name: "exec", arguments: '{"command":"pwd"}' },
             },
           ],
         },
@@ -391,7 +467,7 @@ describe("kimi tool-call markup wrapper", () => {
             {
               id: "call_1",
               type: "function",
-              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
+              function: { name: "exec", arguments: '{"command":"pwd"}' },
             },
           ],
         },
@@ -418,7 +494,7 @@ describe("kimi tool-call markup wrapper", () => {
             {
               id: "call_1",
               type: "function",
-              function: { name: "exec", arguments: "{\"command\":\"pwd\"}" },
+              function: { name: "exec", arguments: '{"command":"pwd"}' },
             },
           ],
         },

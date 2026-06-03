@@ -1,6 +1,6 @@
-import { basenameFromAnyPath } from "../media/file-name.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { basenameFromAnyPath } from "@openclaw/media-core/file-name";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 
 export type AgentGeneratedAttachment = {
   type?: "image" | "audio" | "video" | "file";

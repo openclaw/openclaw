@@ -1,11 +1,11 @@
-import type { ErrorObject } from "ajv";
-import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import {
   ErrorCodes,
   errorShape,
+  type ValidationError,
   validateSecretsResolveParams,
   validateSecretsResolveResult,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { isKnownSecretTargetId } from "../../secrets/target-registry.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 function errorMessage(error: unknown): string {
@@ -13,7 +13,7 @@ function errorMessage(error: unknown): string {
 }
 
 function invalidSecretsResolveField(
-  errors: ErrorObject[] | null | undefined,
+  errors: ValidationError[] | null | undefined,
 ):
   | "allowedPaths"
   | "commandName"
@@ -21,24 +21,29 @@ function invalidSecretsResolveField(
   | "optionalActivePaths"
   | "providerOverrides"
   | "targetIds" {
+  // Return the offending top-level field only. Detailed validator output can
+  // include paths and schema internals that are not useful for callers here.
   for (const issue of errors ?? []) {
+    const instancePath = issue.instancePath ?? "";
     if (
-      issue.instancePath === "/commandName" ||
-      (issue.instancePath === "" &&
-        String((issue.params as { missingProperty?: unknown })?.missingProperty) === "commandName")
+      instancePath === "/commandName" ||
+      (instancePath === "" &&
+        (String(issue.params?.missingProperty) === "commandName" ||
+          (Array.isArray(issue.params?.requiredProperties) &&
+            issue.params.requiredProperties.includes("commandName"))))
     ) {
       return "commandName";
     }
-    if (issue.instancePath.startsWith("/allowedPaths")) {
+    if (instancePath.startsWith("/allowedPaths")) {
       return "allowedPaths";
     }
-    if (issue.instancePath.startsWith("/forcedActivePaths")) {
+    if (instancePath.startsWith("/forcedActivePaths")) {
       return "forcedActivePaths";
     }
-    if (issue.instancePath.startsWith("/optionalActivePaths")) {
+    if (instancePath.startsWith("/optionalActivePaths")) {
       return "optionalActivePaths";
     }
-    if (issue.instancePath.startsWith("/providerOverrides")) {
+    if (instancePath.startsWith("/providerOverrides")) {
       return "providerOverrides";
     }
   }
@@ -102,6 +107,8 @@ export function createSecretsHandlers(params: {
       const targetIds = requestParams.targetIds
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
+      // Normalize allow/force/optional path lists before resolving so secrets
+      // code receives policy paths, not UI whitespace artifacts.
       const allowedPaths = requestParams.allowedPaths
         ?.map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
@@ -120,6 +127,8 @@ export function createSecretsHandlers(params: {
           : {}),
       };
 
+      // Target ids are a closed registry. Reject unknown ids before resolving
+      // so callers cannot probe arbitrary config paths through this method.
       for (const targetId of targetIds) {
         if (!isKnownSecretTargetId(targetId)) {
           respond(
@@ -150,6 +159,8 @@ export function createSecretsHandlers(params: {
           inactiveRefPaths: result.inactiveRefPaths,
         };
         if (!validateSecretsResolveResult(payload)) {
+          // Validate the returned shape as a final boundary check before any
+          // secret assignment payload leaves the gateway.
           throw new Error("secrets.resolve returned invalid payload.");
         }
         respond(true, payload);

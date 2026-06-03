@@ -1,3 +1,4 @@
+import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -11,7 +12,7 @@ import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
+import { planManifestModelCatalogRows } from "../model-catalog/index.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
@@ -25,7 +26,7 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
-import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
+import { normalizeOptionalString, resolvePrimaryStringValue } from "../../packages/normalization-core/src/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
   clearGatewayModelPricingFailures,
@@ -145,6 +146,21 @@ function parseNumberString(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parsePricingContentLength(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`invalid content-length header: ${value}`);
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`invalid content-length header: ${value}`);
+  }
+  return parsed;
+}
+
 function formatTimeoutSeconds(timeoutMs: number): string {
   const seconds = timeoutMs / 1000;
   return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
@@ -256,7 +272,7 @@ async function readPricingJsonObject(
   response: Response,
   source: string,
 ): Promise<Record<string, unknown>> {
-  const contentLength = parseNumberString(response.headers.get("content-length"));
+  const contentLength = parsePricingContentLength(response.headers.get("content-length"));
   if (contentLength !== null && contentLength > MAX_PRICING_CATALOG_BYTES) {
     throw new Error(`${source} pricing response too large: ${contentLength} bytes`);
   }

@@ -309,7 +309,7 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     return await Promise.race([taskPromise, timeoutPromise]);
   } catch (err) {
     if (timedOut) {
-      void taskPromise.catch((lateErr) => {
+      void taskPromise.catch((lateErr: unknown) => {
         diag.warn(
           `lane task rejected after timeout: lane=${lane} timeoutMs=${taskTimeoutMs} error="${String(lateErr)}"`,
         );
@@ -402,6 +402,10 @@ function drainLane(lane: string) {
  */
 export function markGatewayDraining(): void {
   getQueueState().gatewayDraining = true;
+}
+
+export function isGatewayDraining(): boolean {
+  return getQueueState().gatewayDraining;
 }
 
 export function setCommandLaneConcurrency(lane: string, maxConcurrent: number) {

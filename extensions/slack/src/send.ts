@@ -1,11 +1,11 @@
 import type { MessageMetadata } from "@slack/types";
-import { type Block, type KnownBlock, type WebClient } from "@slack/web-api";
+import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
   type MessageReceipt,
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withTrustedEnvProxyGuardedFetchMode } from "openclaw/plugin-sdk/fetch-runtime";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
@@ -270,13 +270,13 @@ function hasSlackDnsRequestSignal(err: unknown): boolean {
 }
 
 function delaySlackDnsRetry(attempt: number): Promise<void> {
-  return new Promise((resolve) =>
-    setTimeout(resolve, SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt)),
-  );
+  return new Promise((resolve) => {
+    setTimeout(resolve, SLACK_DNS_RETRY_BASE_DELAY_MS * Math.max(1, attempt));
+  });
 }
 
 async function withSlackDnsRequestRetry<T>(operation: string, fn: () => Promise<T>): Promise<T> {
-  for (let attempt = 0; ; attempt += 1) {
+  for (const attempt of Array.from({ length: SLACK_DNS_RETRY_ATTEMPTS + 1 }, (_, index) => index)) {
     try {
       return await fn();
     } catch (err) {
@@ -289,6 +289,7 @@ async function withSlackDnsRequestRetry<T>(operation: string, fn: () => Promise<
       await delaySlackDnsRetry(attempt + 1);
     }
   }
+  throw new Error("unreachable Slack DNS retry loop exit");
 }
 
 function isSlackCustomizeScopeError(err: unknown): boolean {

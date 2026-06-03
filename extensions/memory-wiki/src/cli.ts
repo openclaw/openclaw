@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
+import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
   isRecord,
   normalizeStringEntries,
@@ -431,14 +432,38 @@ function addWikiSearchConfigOptions<T extends Command>(command: T): T {
     );
 }
 
+function invalidCliArgument(message: string): Error & { code: string; exitCode: number } {
+  const error = new Error(message) as Error & { code: string; exitCode: number };
+  error.name = "InvalidArgumentError";
+  // Commander recognizes parser failures by code; keep the import type-only for bundled plugin deps.
+  error.code = "commander.invalidArgument";
+  error.exitCode = 1;
+  return error;
+}
+
+function parseWikiConfidenceOption(value: string): number {
+  const trimmed = value.trim();
+  const confidence = /^[+-]?(?:\d+(?:\.\d+)?|\.\d+)$/.test(trimmed) ? Number(trimmed) : Number.NaN;
+  if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+    throw invalidCliArgument("--confidence must be a number between 0 and 1.");
+  }
+  return confidence;
+}
+
+function parseWikiPositiveIntegerOption(value: string, flag: string): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed === undefined) {
+    throw invalidCliArgument(`${flag} must be a positive integer.`);
+  }
+  return parsed;
+}
+
 function addWikiApplyMutationOptions<T extends Command>(command: T): T {
   return command
     .option("--source-id <id>", "Source id", collectCliValues)
     .option("--contradiction <text>", "Contradiction note", collectCliValues)
     .option("--question <text>", "Open question", collectCliValues)
-    .option("--confidence <n>", "Confidence score between 0 and 1", (value: string) =>
-      Number(value),
-    )
+    .option("--confidence <n>", "Confidence score between 0 and 1", parseWikiConfidenceOption)
     .option("--status <status>", "Page status");
 }
 
@@ -944,7 +969,9 @@ export function registerWikiCli(
       .command("search")
       .description("Search wiki pages and, when configured, the active memory corpus")
       .argument("<query>", "Search query")
-      .option("--max-results <n>", "Maximum results", (value: string) => Number(value))
+      .option("--max-results <n>", "Maximum results", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--max-results"),
+      )
       .option("--mode <mode>", `Search mode (${WIKI_SEARCH_MODES.join(", ")})`),
   )
     .option("--json", "Print JSON")
@@ -966,8 +993,12 @@ export function registerWikiCli(
       .command("get")
       .description("Read a wiki page by id or relative path, with optional active-memory fallback")
       .argument("<lookup>", "Relative path or page id")
-      .option("--from <n>", "Start line", (value: string) => Number(value))
-      .option("--lines <n>", "Number of lines", (value: string) => Number(value)),
+      .option("--from <n>", "Start line", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--from"),
+      )
+      .option("--lines <n>", "Number of lines", (value: string) =>
+        parseWikiPositiveIntegerOption(value, "--lines"),
+      ),
   )
     .option("--json", "Print JSON")
     .action(async (lookup: string, opts: WikiGetCommandOptions) => {

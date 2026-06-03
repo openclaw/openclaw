@@ -13,6 +13,11 @@ import {
 import { createRequire } from "node:module";
 import os from "node:os";
 import path, { dirname, join, resolve } from "node:path";
+import {
+  forwardSignalToVitestProcessGroup,
+  installVitestProcessGroupCleanup,
+  shouldUseDetachedVitestProcessGroup,
+} from "./vitest-process-group.mjs";
 
 const require = createRequire(import.meta.url);
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -27,6 +32,7 @@ const prepareBoundaryArtifactsBin = resolve(
 );
 const extensionPackageBoundaryBaseConfig = "../tsconfig.package-boundary.base.json";
 const FAILURE_OUTPUT_TAIL_LINES = 40;
+const STEP_OUTPUT_MAX_CHARS = 256 * 1024;
 const SLOW_COMPILE_SUMMARY_LIMIT = 10;
 const COMPILE_INPUT_EXTENSIONS = new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".json"]);
 const ROOTDIR_BOUNDARY_CANARY_IMPORT_PATH =
@@ -83,6 +89,26 @@ function formatFailureFooter(params = {}) {
     footerLines.push(params.note);
   }
   return footerLines.join("\n");
+}
+
+function createStepOutputCapture() {
+  return { text: "", truncatedChars: 0 };
+}
+
+export function appendBoundedStepOutput(buffer, chunk, maxChars = STEP_OUTPUT_MAX_CHARS) {
+  const nextText = buffer.text + String(chunk);
+  if (nextText.length <= maxChars) {
+    return { text: nextText, truncatedChars: buffer.truncatedChars };
+  }
+  const truncatedChars = buffer.truncatedChars + nextText.length - maxChars;
+  return { text: nextText.slice(-maxChars), truncatedChars };
+}
+
+function formatCapturedStepOutput(buffer) {
+  if (buffer.truncatedChars === 0) {
+    return buffer.text;
+  }
+  return `[output truncated ${buffer.truncatedChars} chars; showing tail]\n${buffer.text}`;
 }
 
 export function formatBoundaryCheckSuccessSummary(params = {}) {
@@ -336,30 +362,66 @@ function abortSiblingSteps(abortController) {
 
 export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
   const abortController = params.abortController;
+  const killProcess = params.killProcess ?? process.kill.bind(process);
   const onFailure = params.onFailure;
+  const platform = params.platform ?? process.platform;
+  const spawnImpl = params.spawnImpl ?? spawn;
   const startedAt = Date.now();
   return new Promise((resolvePromise, rejectPromise) => {
-    const child = spawn(process.execPath, args, {
+    const child = spawnImpl(process.execPath, args, {
       cwd: repoRoot,
+      detached: shouldUseDetachedVitestProcessGroup(platform),
       env: process.env,
       signal: abortController?.signal,
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    let stdout = "";
-    let stderr = "";
+    let stdout = createStepOutputCapture();
+    let stderr = createStepOutputCapture();
     let settled = false;
+    let forwardedSignal = null;
+    const signalChild = (signal) => {
+      if (
+        !forwardSignalToVitestProcessGroup({
+          child,
+          kill: killProcess,
+          platform,
+          signal,
+        })
+      ) {
+        child.kill(signal);
+      }
+    };
+    const abortSignal = abortController?.signal;
+    const abortListener = () => {
+      signalChild("SIGTERM");
+    };
+    abortSignal?.addEventListener("abort", abortListener, { once: true });
+    const teardownProcessCleanup = installVitestProcessGroupCleanup({
+      child,
+      onSignal: (signal) => {
+        forwardedSignal ??= signal;
+      },
+    });
+    const cleanup = () => {
+      clearTimeout(timer);
+      abortSignal?.removeEventListener("abort", abortListener);
+      teardownProcessCleanup();
+    };
     const timer = setTimeout(() => {
       if (settled) {
         return;
       }
-      child.kill("SIGTERM");
       settled = true;
+      cleanup();
+      signalChild("SIGKILL");
+      const stdoutText = formatCapturedStepOutput(stdout);
+      const stderrText = formatCapturedStepOutput(stderr);
       const error = attachStepFailureMetadata(
         new Error(
           formatStepFailure(label, {
-            stdout,
-            stderr,
+            stdout: stdoutText,
+            stderr: stderrText,
             kind: "timeout",
             elapsedMs: Date.now() - startedAt,
             note: `${label} timed out after ${timeoutMs}ms`,
@@ -367,8 +429,8 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
         ),
         label,
         {
-          stdout,
-          stderr,
+          stdout: stdoutText,
+          stderr: stderrText,
           kind: "timeout",
           elapsedMs: Date.now() - startedAt,
           note: `${label} timed out after ${timeoutMs}ms`,
@@ -376,38 +438,43 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       );
       onFailure?.(error);
       abortSiblingSteps(abortController);
-      rejectPromise(error);
+      rejectPromise(toLintErrorObject(error, "Step timed out"));
     }, timeoutMs);
 
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      stdout = appendBoundedStepOutput(stdout, chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr = appendBoundedStepOutput(stderr, chunk);
     });
     child.on("error", (error) => {
       if (settled) {
         return;
       }
-      clearTimeout(timer);
+      cleanup();
       settled = true;
       if (error.name === "AbortError" && abortController?.signal.aborted) {
         rejectPromise(
-          attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
-            kind: "canceled",
-            elapsedMs: Date.now() - startedAt,
-            note: "canceled after sibling failure",
-          }),
+          toLintErrorObject(
+            attachStepFailureMetadata(new Error(`${label} canceled after sibling failure`), label, {
+              kind: "canceled",
+              elapsedMs: Date.now() - startedAt,
+              note: "canceled after sibling failure",
+            }),
+            "Step canceled after sibling failure",
+          ),
         );
         return;
       }
+      const stdoutText = formatCapturedStepOutput(stdout);
+      const stderrText = formatCapturedStepOutput(stderr);
       const failure = attachStepFailureMetadata(
         new Error(
           formatStepFailure(label, {
-            stdout,
-            stderr,
+            stdout: stdoutText,
+            stderr: stderrText,
             kind: "spawn-error",
             elapsedMs: Date.now() - startedAt,
             note: error.message,
@@ -415,8 +482,8 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
         ),
         label,
         {
-          stdout,
-          stderr,
+          stdout: stdoutText,
+          stderr: stderrText,
           kind: "spawn-error",
           elapsedMs: Date.now() - startedAt,
           note: error.message,
@@ -424,38 +491,48 @@ export function runNodeStepAsync(label, args, timeoutMs, params = {}) {
       );
       onFailure?.(failure);
       abortSiblingSteps(abortController);
-      rejectPromise(failure);
+      rejectPromise(toLintErrorObject(failure, "Step spawn failed"));
     });
     child.on("close", (code) => {
       if (settled) {
         return;
       }
-      clearTimeout(timer);
+      cleanup();
       settled = true;
-      if (code === 0) {
-        resolvePromise({ stdout, stderr, elapsedMs: Date.now() - startedAt });
+      if (forwardedSignal) {
+        process.kill(process.pid, forwardedSignal);
         return;
       }
+      if (code === 0) {
+        resolvePromise({
+          stdout: formatCapturedStepOutput(stdout),
+          stderr: formatCapturedStepOutput(stderr),
+          elapsedMs: Date.now() - startedAt,
+        });
+        return;
+      }
+      const stdoutText = formatCapturedStepOutput(stdout);
+      const stderrText = formatCapturedStepOutput(stderr);
       const error = attachStepFailureMetadata(
         new Error(
           formatStepFailure(label, {
-            stdout,
-            stderr,
+            stdout: stdoutText,
+            stderr: stderrText,
             kind: "nonzero-exit",
             elapsedMs: Date.now() - startedAt,
           }),
         ),
         label,
         {
-          stdout,
-          stderr,
+          stdout: stdoutText,
+          stderr: stderrText,
           kind: "nonzero-exit",
           elapsedMs: Date.now() - startedAt,
         },
       );
       onFailure?.(error);
       abortSiblingSteps(abortController);
-      rejectPromise(error);
+      rejectPromise(toLintErrorObject(error, "Step failed"));
     });
   });
 }
@@ -487,7 +564,7 @@ export async function runNodeStepsWithConcurrency(steps, concurrency) {
   });
   await Promise.allSettled(workers);
   if (firstFailure) {
-    throw firstFailure;
+    throw toLintErrorObject(firstFailure, "Non-Error thrown");
   }
 }
 
@@ -819,4 +896,18 @@ export async function main(argv = process.argv.slice(2)) {
 
 if (import.meta.main) {
   await main();
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

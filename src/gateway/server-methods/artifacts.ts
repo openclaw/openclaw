@@ -1,15 +1,6 @@
 import { createHash } from "node:crypto";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import {
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-  toAgentStoreSessionKey,
-} from "../../routing/session-key.js";
-import { asOptionalRecord } from "../../shared/record-coerce.js";
-import { normalizeOptionalString as asNonEmptyString } from "../../shared/string-coerce.js";
-import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString as asNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -18,7 +9,16 @@ import {
   validateArtifactsDownloadParams,
   validateArtifactsGetParams,
   validateArtifactsListParams,
-} from "../protocol/index.js";
+} from "../../../packages/gateway-protocol/src/index.js";
+import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
+} from "../../routing/session-key.js";
+import { getTaskSessionLookupByIdForStatus } from "../../tasks/task-status-access.js";
 import { resolveSessionKeyForRun } from "../server-session-key.js";
 import {
   resolveSessionStoreAgentId,
@@ -41,6 +41,11 @@ type ArtifactQuery = {
   runId?: string;
   taskId?: string;
   agentId?: string;
+};
+
+type ArtifactCollectionOptions = {
+  includeDownloadData?: boolean;
+  downloadArtifactId?: string;
 };
 
 type ResolvedArtifactSession = {
@@ -79,6 +84,7 @@ function resolveRequesterSessionAgentId(
   return resolveAgentIdFromSessionKey(key);
 }
 
+/** Applies an optional agent scope to a transcript session key without crossing stores. */
 function resolveScopedArtifactSessionKey(
   sessionKey: string | undefined,
   agentId: string | undefined,
@@ -137,19 +143,49 @@ function mimeFromDataUrl(value: string): string | undefined {
 }
 
 function base64FromDataUrl(value: string): string | undefined {
-  const match = /^data:[^,]*;base64,(.*)$/is.exec(value.trim());
-  return match?.[1]?.replace(/\s+/g, "");
+  const trimmed = value.trim();
+  const commaIndex = trimmed.indexOf(",");
+  if (commaIndex < 0 || trimmed.slice(0, 5).toLowerCase() !== "data:") {
+    return undefined;
+  }
+  const metadata = trimmed.slice(0, commaIndex).toLowerCase();
+  if (!metadata.includes(";base64")) {
+    return undefined;
+  }
+  return trimmed.slice(commaIndex + 1).replace(/\s+/g, "");
+}
+
+function isBase64Whitespace(value: string): boolean {
+  return value === " " || value === "\n" || value === "\r" || value === "\t";
 }
 
 function estimateBase64Size(value: string | undefined): number | undefined {
   if (!value) {
     return undefined;
   }
-  try {
-    return Buffer.from(value, "base64").byteLength;
-  } catch {
+  let encodedLength = 0;
+  let padding = 0;
+  for (const char of value) {
+    if (!char || isBase64Whitespace(char)) {
+      continue;
+    }
+    encodedLength += 1;
+  }
+  for (let index = value.length - 1; index >= 0 && padding < 2; index -= 1) {
+    const char = value[index];
+    if (!char || isBase64Whitespace(char)) {
+      continue;
+    }
+    if (char === "=") {
+      padding += 1;
+      continue;
+    }
+    break;
+  }
+  if (encodedLength === 0) {
     return undefined;
   }
+  return Math.max(0, Math.floor((encodedLength * 3) / 4) - padding);
 }
 
 function mediaUrlValue(value: unknown): string | undefined {
@@ -176,6 +212,7 @@ function isSafeDownloadUrl(value: string): boolean {
   }
 }
 
+/** Generates a stable id from transcript position plus display metadata. */
 function artifactId(parts: {
   sessionKey: string;
   messageSeq: number;
@@ -213,7 +250,10 @@ function resolveMessageTaskId(message: Record<string, unknown>): string | undefi
   );
 }
 
-function resolveBlockDownload(block: Record<string, unknown>): {
+function resolveBlockDownload(
+  block: Record<string, unknown>,
+  opts: { includeData: boolean },
+): {
   mode: ArtifactDownloadMode;
   data?: string;
   url?: string;
@@ -251,7 +291,7 @@ function resolveBlockDownload(block: Record<string, unknown>): {
       ? Math.floor(explicitSize)
       : estimateBase64Size(base64);
   if (base64) {
-    return { mode: "bytes", data: base64, mimeType, sizeBytes };
+    return { mode: "bytes", ...(opts.includeData ? { data: base64 } : {}), mimeType, sizeBytes };
   }
   if (remoteUrl) {
     return { mode: "url", url: remoteUrl, mimeType, sizeBytes };
@@ -282,6 +322,8 @@ export function collectArtifactsFromMessages(params: {
   sessionKey: string;
   runId?: string;
   taskId?: string;
+  includeDownloadData?: boolean;
+  downloadArtifactId?: string;
 }): ArtifactRecord[] {
   const artifacts: ArtifactRecord[] = [];
   let messageFallbackSeq = 0;
@@ -299,6 +341,8 @@ function collectArtifactsFromMessage(params: {
   sessionKey: string;
   runId?: string;
   taskId?: string;
+  includeDownloadData?: boolean;
+  downloadArtifactId?: string;
 }): void {
   const msg = asOptionalRecord(params.message);
   if (!msg) {
@@ -326,15 +370,19 @@ function collectArtifactsFromMessage(params: {
       asNonEmptyString(block.filename) ??
       asNonEmptyString(block.alt) ??
       `${type} ${params.artifacts.length + 1}`;
-    const download = resolveBlockDownload(block);
+    const id = artifactId({
+      sessionKey: params.sessionKey,
+      messageSeq,
+      contentIndex,
+      title,
+      type,
+    });
+    const includeData = params.downloadArtifactId
+      ? params.downloadArtifactId === id
+      : params.includeDownloadData !== false;
+    const download = resolveBlockDownload(block, { includeData });
     const summary: ArtifactRecord = {
-      id: artifactId({
-        sessionKey: params.sessionKey,
-        messageSeq,
-        contentIndex,
-        title,
-        type,
-      }),
+      id,
       type,
       title,
       ...(download.mimeType ? { mimeType: download.mimeType } : {}),
@@ -394,9 +442,11 @@ function resolveQuerySession(
   return undefined;
 }
 
+/** Loads artifacts from the transcript selected by sessionKey, runId, or taskId. */
 async function loadArtifacts(
   query: ArtifactQuery,
   cfg?: OpenClawConfig,
+  opts: ArtifactCollectionOptions = {},
 ): Promise<{ artifacts: ArtifactRecord[]; sessionKey?: string }> {
   const resolved = resolveQuerySession(query, cfg);
   if (!resolved) {
@@ -425,11 +475,14 @@ async function loadArtifacts(
         sessionKey,
         runId: query.runId,
         taskId: query.taskId,
+        includeDownloadData: opts.includeDownloadData,
+        downloadArtifactId: opts.downloadArtifactId,
       });
     },
     {
       mode: "full",
       reason: "artifact query transcript scan",
+      cache: "skip",
     },
   );
   return {
@@ -456,11 +509,12 @@ function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {
 async function findArtifact(
   params: ArtifactsGetParams,
   cfg?: OpenClawConfig,
+  opts: ArtifactCollectionOptions = {},
 ): Promise<{
   artifact?: ArtifactRecord;
   sessionKey?: string;
 }> {
-  const loaded = await loadArtifacts(params, cfg);
+  const loaded = await loadArtifacts(params, cfg, opts);
   return {
     sessionKey: loaded.sessionKey,
     artifact: loaded.artifacts.find((artifact) => artifact.id === params.artifactId),
@@ -468,10 +522,11 @@ async function findArtifact(
 }
 
 function toSummary(artifact: ArtifactRecord): ArtifactSummary {
-  const { data: dataValue, url: _url, ...summary } = artifact;
+  const { data: _dataValue, url: _url, ...summary } = artifact;
   return summary;
 }
 
+/** Gateway handlers for listing, summarizing, and downloading transcript artifacts. */
 export const artifactsHandlers: GatewayRequestHandlers = {
   "artifacts.list": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateArtifactsListParams, "artifacts.list", respond)) {
@@ -480,7 +535,9 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifacts, sessionKey } = await loadArtifacts(params, context.getRuntimeConfig?.());
+    const { artifacts, sessionKey } = await loadArtifacts(params, context.getRuntimeConfig?.(), {
+      includeDownloadData: false,
+    });
     if (!sessionKey && (params.runId || params.taskId)) {
       respond(
         false,
@@ -498,7 +555,9 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.());
+    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.(), {
+      includeDownloadData: false,
+    });
     if (!artifact) {
       respond(
         false,
@@ -520,7 +579,9 @@ export const artifactsHandlers: GatewayRequestHandlers = {
     if (!requireQueryable(params, respond)) {
       return;
     }
-    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.());
+    const { artifact } = await findArtifact(params, context.getRuntimeConfig?.(), {
+      downloadArtifactId: params.artifactId,
+    });
     if (!artifact) {
       respond(
         false,

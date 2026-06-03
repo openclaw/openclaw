@@ -190,7 +190,7 @@ message bodies are also approved for export.
 - `gen_ai.client.operation.duration` (histogram, seconds, GenAI semantic-conventions metric, attrs: `gen_ai.provider.name`, `gen_ai.operation.name`, `gen_ai.request.model`, optional `error.type`)
 - `openclaw.model_call.duration_ms` (histogram, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, plus `openclaw.errorCategory` and `openclaw.failureKind` on classified errors)
 - `openclaw.model_call.request_bytes` (histogram, UTF-8 byte size of the final model request payload; no raw payload content)
-- `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed model response events; no raw response content)
+- `openclaw.model_call.response_bytes` (histogram, UTF-8 byte size of streamed model response events excluding accumulated `partial` snapshots on delta events; no raw response content)
 - `openclaw.model_call.time_to_first_byte_ms` (histogram, elapsed time before the first streamed response event)
 - `openclaw.model.failover` (counter, attrs: `openclaw.provider`, `openclaw.model`, `openclaw.failover.to_provider`, `openclaw.failover.to_model`, `openclaw.failover.reason`, `openclaw.failover.suspended`, `openclaw.lane`)
 - `openclaw.skill.used` (counter, attrs: `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent`, optional `openclaw.toolName`)
@@ -223,8 +223,8 @@ message bodies are also approved for export.
 - `openclaw.queue.depth` (histogram, attrs: `openclaw.lane` or `openclaw.channel=heartbeat`)
 - `openclaw.queue.wait_ms` (histogram, attrs: `openclaw.lane`)
 - `openclaw.session.state` (counter, attrs: `openclaw.state`, `openclaw.reason`)
-- `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
-- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted only for stale session bookkeeping with no active work)
+- `openclaw.session.stuck` (counter, attrs: `openclaw.state`; emitted for recoverable stale session bookkeeping)
+- `openclaw.session.stuck_age_ms` (histogram, attrs: `openclaw.state`; emitted for recoverable stale session bookkeeping)
 - `openclaw.session.turn.created` (counter, attrs: `openclaw.agent`, `openclaw.channel`, `openclaw.trigger`)
 - `openclaw.session.recovery.requested` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.active_work_kind`, `openclaw.reason`)
 - `openclaw.session.recovery.completed` (counter, attrs: `openclaw.state`, `openclaw.action`, `openclaw.status`, `openclaw.active_work_kind`, `openclaw.reason`)
@@ -249,8 +249,9 @@ OpenClaw classifies sessions by the work it can still observe:
   turns behind the lane can resume. When unset, the abort threshold defaults to
   the safer extended window of at least 5 minutes and 3x
   `diagnostics.stuckSessionWarnMs`.
-- `session.stuck`: stale session bookkeeping with no active work. This releases
-  the affected session lane immediately.
+- `session.stuck`: stale session bookkeeping with no active work, or an idle
+  queued session with stale ownerless model/tool activity. This releases the
+  affected session lane immediately after recovery gates pass.
 
 Recovery emits structured `session.recovery.requested` and
 `session.recovery.completed` events. Diagnostic session state is marked idle

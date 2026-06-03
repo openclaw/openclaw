@@ -1,4 +1,4 @@
-import { uniqueStrings } from "../shared/string-normalization.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { createHookRunner } from "./hooks.js";
 import type { PluginRegistry } from "./registry.js";
 import { createPluginRecord } from "./status.test-helpers.js";
@@ -39,7 +39,7 @@ export function createMockPluginRegistry(
     embeddingProviders: [],
     speechProviders: [],
     mediaUnderstandingProviders: [],
-    meetingNotesSourceProviders: [],
+    transcriptSourceProviders: [],
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],

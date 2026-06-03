@@ -1,13 +1,18 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  resolvePluginCapabilityProvider,
-  resolvePluginCapabilityProviders,
-} from "./capability-provider-runtime.js";
+  getRuntimeEmbeddingProviderAdapter,
+  listRuntimeEmbeddingProviderAdapters,
+  readConfiguredProviderApiId,
+  resolveRuntimeEmbeddingProviderLookupIds,
+} from "./embedding-provider-runtime-shared.js";
 import {
   getRegisteredEmbeddingProvider,
   listRegisteredEmbeddingProviders,
   type EmbeddingProviderAdapter,
 } from "./embedding-providers.js";
+
+const OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID = "openai-compatible";
+const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-responses"]);
 
 export { listRegisteredEmbeddingProviders };
 
@@ -16,31 +21,46 @@ export function listRegisteredEmbeddingProviderAdapters(): EmbeddingProviderAdap
 }
 
 export function listEmbeddingProviders(cfg?: OpenClawConfig): EmbeddingProviderAdapter[] {
-  const registered = listRegisteredEmbeddingProviderAdapters();
-  const merged = new Map(registered.map((adapter) => [adapter.id, adapter]));
-  for (const adapter of resolvePluginCapabilityProviders({
+  return listRuntimeEmbeddingProviderAdapters({
     key: "embeddingProviders",
     cfg,
-  })) {
-    if (!merged.has(adapter.id)) {
-      merged.set(adapter.id, adapter);
-    }
-  }
-  return [...merged.values()];
+    registered: listRegisteredEmbeddingProviderAdapters(),
+  });
+}
+
+function resolveConfiguredEmbeddingProviderId(
+  providerId: string,
+  cfg?: OpenClawConfig,
+): string | undefined {
+  return readConfiguredProviderApiId({
+    providerId,
+    cfg,
+    resolveApiProviderId: (normalizedApiId) =>
+      OPENAI_COMPATIBLE_MODEL_APIS.has(normalizedApiId)
+        ? OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID
+        : normalizedApiId,
+    resolveMissingApiProviderId: (providerConfig) =>
+      providerConfig.baseUrl?.trim() ? OPENAI_COMPATIBLE_EMBEDDING_PROVIDER_ID : undefined,
+  });
+}
+
+function resolveEmbeddingProviderLookupIds(id: string, cfg?: OpenClawConfig): string[] {
+  return resolveRuntimeEmbeddingProviderLookupIds({
+    id,
+    cfg,
+    resolveConfiguredProviderId: resolveConfiguredEmbeddingProviderId,
+  });
 }
 
 export function getEmbeddingProvider(
   id: string,
   cfg?: OpenClawConfig,
 ): EmbeddingProviderAdapter | undefined {
-  const registered = getRegisteredEmbeddingProvider(id);
-  if (registered) {
-    return registered.adapter;
-  }
-  return resolvePluginCapabilityProvider({
+  return getRuntimeEmbeddingProviderAdapter({
     key: "embeddingProviders",
-    providerId: id,
     cfg,
+    lookupIds: resolveEmbeddingProviderLookupIds(id, cfg),
+    getRegisteredProvider: getRegisteredEmbeddingProvider,
   });
 }
 

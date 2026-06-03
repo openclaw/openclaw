@@ -4,6 +4,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
+import {
+  installVitestProcessGroupCleanup,
+  shouldUseDetachedVitestProcessGroup,
+} from "./vitest-process-group.mjs";
 
 const LIVE_TEST_SUFFIX = ".live.test.ts";
 
@@ -273,8 +277,6 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter(isExtensionMediaMusicLiveTest);
     case "native-live-extensions-media-video":
       return files.filter(isExtensionMediaVideoLiveTest);
-    case "native-live-extensions-l-z":
-      return files.filter((file) => isExtensionInRange(file, "l", "z"));
     default:
       throw new Error(
         `Unknown live test shard '${shard}'. Expected one of: ${LIVE_TEST_SHARDS.join(", ")}`,
@@ -282,8 +284,10 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
   }
 }
 
-function usage() {
-  console.error(`Usage: node scripts/test-live-shard.mjs <${LIVE_TEST_SHARDS.join("|")}> [--list]`);
+function usage(stream = process.stderr) {
+  stream.write(
+    `Usage: node scripts/test-live-shard.mjs <${LIVE_TEST_SHARDS.join("|")}> [--list]\n`,
+  );
 }
 
 export function parseLiveShardArgs(args) {
@@ -308,10 +312,30 @@ export function parseLiveShardArgs(args) {
   return { shard, listOnly, passthroughArgs };
 }
 
+export function buildLiveShardPnpmArgs(files, passthroughArgs) {
+  return ["test:live", "--", ...files, ...passthroughArgs];
+}
+
+export function buildLiveShardSpawnParams(env = process.env, platform = process.platform) {
+  return {
+    detached: shouldUseDetachedVitestProcessGroup(platform),
+    env,
+    stdio: "inherit",
+  };
+}
+
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const rawArgs = process.argv.slice(2);
+  const separatorIndex = rawArgs.indexOf("--");
+  const optionArgs = separatorIndex >= 0 ? rawArgs.slice(0, separatorIndex) : rawArgs;
+  if (optionArgs.includes("--help") || optionArgs.includes("-h")) {
+    usage(process.stdout);
+    process.exit(0);
+  }
+
   let parsedArgs;
   try {
-    parsedArgs = parseLiveShardArgs(process.argv.slice(2));
+    parsedArgs = parseLiveShardArgs(rawArgs);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     usage();
@@ -345,18 +369,30 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
 
   console.log(`[test:live:shard] ${shard}: ${files.length} file(s)`);
   const child = spawnPnpmRunner({
-    stdio: "inherit",
-    pnpmArgs: ["test:live", "--", ...files, ...passthroughArgs],
-    env: process.env,
+    pnpmArgs: buildLiveShardPnpmArgs(files, passthroughArgs),
+    ...buildLiveShardSpawnParams(process.env),
+  });
+  let forwardedSignal = null;
+  const teardown = installVitestProcessGroupCleanup({
+    child,
+    onSignal: (signal) => {
+      forwardedSignal ??= signal;
+    },
   });
   child.on("exit", (code, signal) => {
+    teardown();
     if (signal) {
       process.kill(process.pid, signal);
+      return;
+    }
+    if (forwardedSignal) {
+      process.kill(process.pid, forwardedSignal);
       return;
     }
     process.exit(code ?? 1);
   });
   child.on("error", (error) => {
+    teardown();
     console.error(error);
     process.exit(1);
   });

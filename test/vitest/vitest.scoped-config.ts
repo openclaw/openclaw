@@ -77,13 +77,10 @@ export function shouldPassWithNoTestsForCliIncludes(
   if (cliIncludePatterns === null) {
     return false;
   }
-  return (
-    cliIncludePatterns.length === 0 ||
-    cliIncludePatterns.every((includePattern) =>
-      excludePatterns.some((excludePattern) =>
-        includePatternIsFullyExcluded(includePattern, excludePattern),
-      ),
-    )
+  return cliIncludePatterns.every((includePattern) =>
+    excludePatterns.some((excludePattern) =>
+      includePatternIsFullyExcluded(includePattern, excludePattern),
+    ),
   );
 }
 
@@ -98,7 +95,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "acp",
     "agents",
     "agents-core",
-    "agents-pi-embedded",
+    "agents-embedded-agent",
     "agents-support",
     "agents-tools",
     "auto-reply",
@@ -113,8 +110,10 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "commands-light",
     "cron",
     "daemon",
+    "extension-active-memory",
     "extension-acpx",
     "extension-channels",
+    "extension-codex",
     "extension-diffs",
     "extension-discord",
     "extension-feishu",
@@ -150,6 +149,7 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "secrets",
     "shared-core",
     "tasks",
+    "tooling-isolated",
     "tooling",
     "tui",
     "ui",

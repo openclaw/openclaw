@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { describe, expect, it } from "vitest";
-import { sortUniqueStrings } from "../shared/string-normalization.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -91,7 +91,7 @@ describe("host env reported baseline coverage", () => {
       baseline.reportedDangerousEverywhereKeys.length +
         baseline.reportedDangerousOverrideOnlyKeys.length,
     ).toBe(baseline.expectedTotalReportedEntries);
-    expect(baseline.expectedTotalReportedEntries).toBe(239);
+    expect(baseline.expectedTotalReportedEntries).toBe(243);
     expect(sortUniqueUpper(baseline.reportedDangerousEverywhereKeys)).toEqual(
       baseline.reportedDangerousEverywhereKeys,
     );

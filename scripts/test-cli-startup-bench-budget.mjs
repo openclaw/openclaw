@@ -1,13 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import {
-  booleanFlag,
-  floatFlag,
-  intFlag,
-  parseFlagArgs,
-  readEnvNumber,
-  stringFlag,
-} from "./lib/arg-utils.mjs";
+import { booleanFlag, intFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
+import { budgetFloatFlag, readBudgetEnvNumber } from "./lib/budget-number-args.mjs";
 import { readJsonFile } from "./test-report-utils.mjs";
 
 const CLI_STARTUP_BENCH_FIXTURE_PATH = "test/fixtures/cli-startup-bench.json";
@@ -50,41 +44,56 @@ if (process.argv.slice(2).includes("--help")) {
   process.exit(0);
 }
 
-const opts = parseFlagArgs(
-  process.argv.slice(2),
-  {
-    baseline: CLI_STARTUP_BENCH_FIXTURE_PATH,
-    report: "",
-    entry: "openclaw.mjs",
-    preset: "all",
-    runs: 1,
-    warmup: 0,
-    timeoutMs: 30_000,
-    maxDurationRegressionPct:
-      readEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_DURATION_REGRESSION_PCT") ?? 20,
-    maxFirstOutputRegressionPct:
-      readEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_FIRST_OUTPUT_REGRESSION_PCT") ?? 20,
-    maxRssRegressionPct: readEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT") ?? 20,
-    skipBaseline: false,
-  },
-  [
-    stringFlag("--baseline", "baseline"),
-    stringFlag("--report", "report"),
-    stringFlag("--entry", "entry"),
-    stringFlag("--preset", "preset"),
-    intFlag("--runs", "runs", { min: 1 }),
-    intFlag("--warmup", "warmup", { min: 0 }),
-    intFlag("--timeout-ms", "timeoutMs", { min: 1 }),
-    floatFlag("--max-duration-regression-pct", "maxDurationRegressionPct", { min: 0 }),
-    floatFlag("--max-first-output-regression-pct", "maxFirstOutputRegressionPct", { min: 0 }),
-    floatFlag("--max-rss-regression-pct", "maxRssRegressionPct", { min: 0 }),
-    booleanFlag("--skip-baseline", "skipBaseline"),
-  ],
-);
+let opts;
+try {
+  opts = parseFlagArgs(
+    process.argv.slice(2),
+    {
+      baseline: CLI_STARTUP_BENCH_FIXTURE_PATH,
+      report: "",
+      entry: "openclaw.mjs",
+      preset: "all",
+      runs: 1,
+      warmup: 0,
+      timeoutMs: 30_000,
+      maxDurationRegressionPct:
+        readBudgetEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_DURATION_REGRESSION_PCT") ?? 20,
+      maxFirstOutputRegressionPct:
+        readBudgetEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_FIRST_OUTPUT_REGRESSION_PCT") ?? 20,
+      maxRssRegressionPct:
+        readBudgetEnvNumber("OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT") ?? 20,
+      skipBaseline: false,
+    },
+    [
+      stringFlag("--baseline", "baseline"),
+      stringFlag("--report", "report"),
+      stringFlag("--entry", "entry"),
+      stringFlag("--preset", "preset"),
+      intFlag("--runs", "runs", { min: 1 }),
+      intFlag("--warmup", "warmup", { min: 0 }),
+      intFlag("--timeout-ms", "timeoutMs", { min: 1 }),
+      budgetFloatFlag("--max-duration-regression-pct", "maxDurationRegressionPct"),
+      budgetFloatFlag("--max-first-output-regression-pct", "maxFirstOutputRegressionPct"),
+      budgetFloatFlag("--max-rss-regression-pct", "maxRssRegressionPct"),
+      booleanFlag("--skip-baseline", "skipBaseline"),
+    ],
+  );
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exit(1);
+}
 
 function resolveCurrentReportPath() {
   if (opts.report) {
     return opts.report;
+  }
+  const build = spawnSync(process.execPath, ["scripts/ensure-cli-startup-build.mjs"], {
+    cwd: process.cwd(),
+    stdio: "inherit",
+    env: process.env,
+  });
+  if (build.status !== 0) {
+    process.exit(build.status ?? 1);
   }
   const reportPath = `.artifacts/cli-startup-bench.current.json`;
   fs.mkdirSync(".artifacts", { recursive: true });

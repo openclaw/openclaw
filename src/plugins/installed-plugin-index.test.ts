@@ -212,9 +212,9 @@ describe("installed plugin index", () => {
     const records = readPersistedInstalledPluginIndexInstallRecordsSync({ filePath });
 
     expect(records?.safe).toEqual({ source: "npm", spec: "safe" });
-    expect(Object.prototype.hasOwnProperty.call(records ?? {}, "constructor")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(records ?? {}, "prototype")).toBe(false);
-    expect(Object.prototype.hasOwnProperty.call(records ?? {}, "__proto__")).toBe(false);
+    expect(Object.hasOwn(records ?? {}, "constructor")).toBe(false);
+    expect(Object.hasOwn(records ?? {}, "prototype")).toBe(false);
+    expect(Object.hasOwn(records ?? {}, "__proto__")).toBe(false);
   });
 
   it("builds a runtime-free installed plugin snapshot from manifest and package metadata", () => {
@@ -676,7 +676,7 @@ describe("installed plugin index", () => {
     const config = {
       plugins: {
         entries: {
-          "openai-codex": {
+          openai: {
             enabled: false,
           },
         },
@@ -1071,6 +1071,38 @@ describe("installed plugin index", () => {
     expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual([
       "policy-changed",
     ]);
+  });
+
+  it("treats legacy config-path startup metadata as migration invalidation", () => {
+    const fixture = createRichPluginFixture();
+    writePluginManifest(fixture.rootDir, {
+      id: "demo",
+      name: "Demo",
+      configSchema: { type: "object" },
+      providers: ["demo"],
+      activation: {
+        onConfigPaths: ["browser"],
+      },
+    });
+    const current = loadInstalledPluginIndex({
+      candidates: [fixture.candidate],
+      env: hermeticEnv(),
+    });
+    const previous = {
+      ...current,
+      plugins: current.plugins.map((plugin) => ({
+        ...plugin,
+        startup: {
+          sidecar: plugin.startup.sidecar,
+          memory: plugin.startup.memory,
+          deferConfiguredChannelFullLoadUntilAfterListen:
+            plugin.startup.deferConfiguredChannelFullLoadUntilAfterListen,
+          agentHarnesses: plugin.startup.agentHarnesses,
+        },
+      })),
+    };
+
+    expect(diffInstalledPluginIndexInvalidationReasons(previous, current)).toEqual(["migration"]);
   });
 
   it("does not mark enabled-only migration snapshots stale for omitted disabled plugins", () => {

@@ -12,22 +12,20 @@ const repoRoot = path.resolve(scriptDir, "../..");
 
 export async function runVitestBatch(params) {
   return await new Promise((resolve, reject) => {
+    let forwardedSignal;
     const child = spawnPnpmRunner({
       cwd: repoRoot,
       detached: shouldUseDetachedVitestProcessGroup(),
       env: params.env,
-      pnpmArgs: [
-        "exec",
-        "vitest",
-        "run",
-        "--config",
-        params.config,
-        ...params.targets,
-        ...params.args,
-      ],
+      pnpmArgs: buildVitestBatchPnpmArgs(params),
       stdio: "inherit",
     });
-    const teardownChildCleanup = installVitestProcessGroupCleanup({ child });
+    const teardownChildCleanup = installVitestProcessGroupCleanup({
+      child,
+      onSignal(signal) {
+        forwardedSignal = signal;
+      },
+    });
 
     child.on("error", (error) => {
       teardownChildCleanup();
@@ -39,9 +37,17 @@ export async function runVitestBatch(params) {
         process.kill(process.pid, signal);
         return;
       }
+      if (forwardedSignal) {
+        process.kill(process.pid, forwardedSignal);
+        return;
+      }
       resolve(code ?? 1);
     });
   });
+}
+
+export function buildVitestBatchPnpmArgs(params) {
+  return ["exec", "vitest", "run", "--config", params.config, ...params.args, ...params.targets];
 }
 
 export function isDirectScriptRun(metaUrl) {

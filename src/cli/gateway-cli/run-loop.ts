@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import net from "node:net";
+import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   captureGatewayRestartTraceHandoff,
   createGatewayRestartTraceHandoffEnv,
@@ -12,7 +13,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
@@ -206,7 +206,7 @@ export async function runGatewayLoop(params: {
         } catch {
           // Best-effort; parent fallback keeps the gateway reachable for recovery.
         }
-        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err) => {
+        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
           gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
         });
         if (hadLock && !(await reacquireLockForInProcessRestart())) {
@@ -243,7 +243,7 @@ export async function runGatewayLoop(params: {
         gatewayLog.warn(
           `update respawn failed (${respawn.detail ?? "unknown error"}); falling back to in-process restart`,
         );
-        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err) => {
+        await markUpdateRestartSentinelFailure("restart-unhealthy").catch((err: unknown) => {
           gatewayLog.warn(`failed to mark update restart sentinel unhealthy: ${String(err)}`);
         });
       } else {
@@ -371,7 +371,7 @@ export async function runGatewayLoop(params: {
       restartDrainingMarkPromise = (async () => {
         const { markGatewayDraining } = await loadGatewayLifecycleRuntimeModule();
         markGatewayDraining();
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         restartDrainingMarkPromise = null;
         throw err;
       });
@@ -459,7 +459,7 @@ export async function runGatewayLoop(params: {
             "restart.drain",
             async () => {
               const {
-                abortEmbeddedPiRun,
+                abortEmbeddedAgentRun,
                 getRuntimeConfig,
                 getInspectableActiveTaskRestartBlockers,
                 getActiveEmbeddedRunCount,
@@ -545,7 +545,7 @@ export async function runGatewayLoop(params: {
               // Best-effort abort for compacting runs so long compaction operations
               // don't hold session write locks across restart boundaries.
               if (activeRuns > 0) {
-                abortEmbeddedPiRun(undefined, { mode: "compacting" });
+                abortEmbeddedAgentRun(undefined, { mode: "compacting" });
               }
 
               if (activeTasks > 0 || activeRuns > 0) {
@@ -563,7 +563,7 @@ export async function runGatewayLoop(params: {
                   await markActiveMainSessionsForRestart(
                     restartIntent.reason ?? "forced gateway restart",
                   );
-                  abortEmbeddedPiRun(undefined, { mode: "all" });
+                  abortEmbeddedAgentRun(undefined, { mode: "all" });
                 } else {
                   const stillPendingDrainLogger = createStillPendingDrainLogger();
                   let abortedAfterRunTimeout = false;
@@ -582,7 +582,7 @@ export async function runGatewayLoop(params: {
                       gatewayLog.warn(
                         "active embedded run drain timeout reached; aborting active run(s) before restart",
                       );
-                      abortEmbeddedPiRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all" });
                       abortedAfterRunTimeout = true;
                     }
                     tasksDrain = await tasksDrainPromise;
@@ -598,7 +598,7 @@ export async function runGatewayLoop(params: {
                     // Final best-effort abort to avoid carrying active runs into the
                     // next lifecycle when drain time budget is exhausted.
                     if (!abortedAfterRunTimeout) {
-                      abortEmbeddedPiRun(undefined, { mode: "all" });
+                      abortEmbeddedAgentRun(undefined, { mode: "all" });
                     }
                   }
                 }
@@ -687,7 +687,7 @@ export async function runGatewayLoop(params: {
     }
     if (!server || !restartResolver) {
       pendingStartupRequest = acceptedRequest;
-      void markRestartDraining().catch((err) => {
+      void markRestartDraining().catch((err: unknown) => {
         gatewayLog.warn(`failed to mark gateway draining for startup restart: ${String(err)}`);
       });
       armPendingStartupForceExitTimer();
@@ -743,6 +743,11 @@ export async function runGatewayLoop(params: {
           gatewayLog.warn(
             "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
           );
+          gatewayLog.warn(
+            "An unauthorized SIGUSR1 restart signal was received and ignored. " +
+              "If a pending gateway restart needs to be applied, run `openclaw gateway restart` " +
+              "or restart the gateway through your service manager.",
+          );
           return;
         }
         if (shuttingDown) {
@@ -763,7 +768,7 @@ export async function runGatewayLoop(params: {
         sigusr1RestartIntent?.reason ?? restartReason,
         sigusr1RestartIntent ?? undefined,
       );
-    })().catch((err) => {
+    })().catch((err: unknown) => {
       // Defense in depth: if anything in the listener body rejects, the
       // SIGUSR1 emit has already advanced emittedRestartToken but no one
       // called markGatewaySigusr1RestartHandled. Without unsticking the

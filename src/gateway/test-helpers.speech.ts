@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
   TALK_TEST_PROVIDER_ID,
   TALK_TEST_PROVIDER_LABEL,
@@ -26,9 +26,9 @@ async function fetchStubSpeechAudio(
   const withTimeout = async <T>(label: string, run: Promise<T>): Promise<T> =>
     await Promise.race([
       run,
-      new Promise<T>((_, reject) =>
-        setTimeout(() => reject(new Error(`${providerId} stub ${label} timed out`)), 5_000),
-      ),
+      new Promise<T>((_, reject) => {
+        setTimeout(() => reject(new Error(`${providerId} stub ${label} timed out`)), 5_000);
+      }),
     ]);
   const response = await withTimeout("fetch", globalThis.fetch(url, init));
   const arrayBuffer = await withTimeout("read", response.arrayBuffer());

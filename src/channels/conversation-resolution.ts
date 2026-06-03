@@ -1,3 +1,8 @@
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   resolveTargetPrefixedChannel,
@@ -9,11 +14,6 @@ import { resolveConversationIdFromTargets } from "../infra/outbound/conversation
 import { normalizeConversationTargetRef } from "../infra/outbound/session-binding-normalization.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { getActivePluginChannelRegistry } from "../plugins/runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "./plugins/index.js";
 import { resolveExplicitDeliveryTargetCompat } from "./plugins/target-parsing-loaded.js";
 import {
@@ -69,6 +69,7 @@ type ResolveInboundConversationResolutionInput = {
   accountId?: string | null;
   to?: string | null;
   threadId?: string | number | null;
+  threadParentId?: string | number | null;
   conversationId?: string | null;
   groupId?: string | null;
   from?: string | null;
@@ -422,6 +423,7 @@ export function resolveInboundConversationResolution(
       normalizeOptionalString(params.groupId) ??
       normalizeOptionalString(params.to),
     threadId,
+    threadParentId: stringifyRouteThreadId(params.threadParentId),
     isGroup: params.isGroup ?? true,
   };
 
@@ -455,6 +457,11 @@ export function resolveInboundConversationResolution(
   }
 
   const parentConversationId =
+    resolveChannelTargetId({
+      channel,
+      target: params.threadParentId == null ? undefined : String(params.threadParentId),
+      preserveExplicitTopicSuffix: threadId == null,
+    }) ??
     resolveChannelTargetId({
       channel,
       target: params.to,

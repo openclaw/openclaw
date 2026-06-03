@@ -1,10 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const OPENAI_CODEX_MODEL = {
-  provider: "openai-codex",
+  provider: "openai",
   id: "gpt-5.4",
   name: "GPT-5.4",
-  api: "openai-codex-responses",
+  api: "openai-chatgpt-responses",
   baseUrl: "https://chatgpt.com/backend-api",
   input: ["text"],
   contextWindow: 1_050_000,
@@ -19,8 +19,48 @@ const OPENAI_CODEX_53_MODEL = {
 };
 
 const mocks = vi.hoisted(() => {
+  const emptyPluginIndex = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "models-list-command-forward-compat-test",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
+  const emptyPluginMetadataSnapshot = {
+    policyHash: "models-list-command-forward-compat-test",
+    configFingerprint: "models-list-command-forward-compat-test",
+    index: emptyPluginIndex,
+    registryDiagnostics: [],
+    manifestRegistry: { plugins: [], diagnostics: [] },
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId: string) => pluginId,
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
+  };
   const sourceConfig = {
-    agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
+    agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
     models: {
       providers: {
         openai: {
@@ -30,7 +70,7 @@ const mocks = vi.hoisted(() => {
     },
   };
   const resolvedConfig = {
-    agents: { defaults: { model: { primary: "openai-codex/gpt-5.4" } } },
+    agents: { defaults: { model: { primary: "openai/gpt-5.4" } } },
     models: {
       providers: {
         openai: {
@@ -40,6 +80,7 @@ const mocks = vi.hoisted(() => {
     },
   };
   return {
+    emptyPluginMetadataSnapshot,
     sourceConfig,
     resolvedConfig,
     loadModelsConfigWithSource: vi.fn(),
@@ -57,6 +98,7 @@ const mocks = vi.hoisted(() => {
     printModelTable: vi.fn(),
     resolveModelWithRegistry: vi.fn(),
     readPersistedInstalledPluginIndexSync: vi.fn(),
+    loadManifestMetadataSnapshot: vi.fn(),
     loadPluginRegistrySnapshotWithMetadata: vi.fn(),
   };
 });
@@ -86,8 +128,8 @@ function resetMocks() {
   mocks.resolveConfiguredEntries.mockReturnValue({
     entries: [
       {
-        key: "openai-codex/gpt-5.4",
-        ref: { provider: "openai-codex", model: "gpt-5.4" },
+        key: "openai/gpt-5.4",
+        ref: { provider: "openai", model: "gpt-5.4" },
         tags: new Set(["configured"]),
         aliases: [],
       },
@@ -96,6 +138,7 @@ function resetMocks() {
   mocks.printModelTable.mockReset();
   mocks.resolveModelWithRegistry.mockReturnValue({ ...OPENAI_CODEX_MODEL });
   mocks.readPersistedInstalledPluginIndexSync.mockReturnValue(null);
+  mocks.loadManifestMetadataSnapshot.mockReturnValue(mocks.emptyPluginMetadataSnapshot);
   mocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
     source: "persisted",
     snapshot: { plugins: [] },
@@ -258,7 +301,7 @@ function installModelsListCommandForwardCompatMocks() {
     loadModelCatalog: mocks.loadModelCatalog,
   }));
 
-  vi.doMock("../../agents/pi-embedded-runner/model.js", () => ({
+  vi.doMock("../../agents/embedded-agent-runner/model.js", () => ({
     resolveModelWithRegistry: mocks.resolveModelWithRegistry,
   }));
 
@@ -269,6 +312,10 @@ function installModelsListCommandForwardCompatMocks() {
 
   vi.doMock("../../plugins/installed-plugin-index-store.js", () => ({
     readPersistedInstalledPluginIndexSync: mocks.readPersistedInstalledPluginIndexSync,
+  }));
+
+  vi.doMock("../../plugins/manifest-contract-eligibility.js", () => ({
+    loadManifestMetadataSnapshot: mocks.loadManifestMetadataSnapshot,
   }));
 
   vi.doMock("../../plugins/plugin-registry.js", async (importOriginal) => {
@@ -295,7 +342,7 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
     cfg: mocks.resolvedConfig,
     agentDir: "/tmp/openclaw-agent",
     authIndex: {
-      hasProviderAuth: (provider: string) => provider === "openai-codex",
+      hasProviderAuth: (provider: string) => provider === "openai",
       allowsProviderAuthAvailabilityFallback: () => false,
     },
     availableKeys: loaded.availableKeys,
@@ -305,7 +352,7 @@ async function buildAllOpenAiCodexRows(opts: { supplementCatalog?: boolean } = {
         (model: { provider: string; id: string }) => `${model.provider}/${model.id}`,
       ),
     ),
-    filter: { provider: "openai-codex" },
+    filter: { provider: "openai" },
   };
   const seenKeys = await listRowsModule.appendDiscoveredRows({
     rows: rows as never,
@@ -653,7 +700,7 @@ describe("modelsListCommand forward-compat", () => {
         missing: boolean;
       }>();
 
-      const codex = requireRow(rows, "openai-codex/gpt-5.4");
+      const codex = requireRow(rows, "openai/gpt-5.4");
       expect(codex.missing).toBe(false);
       expect(codex.tags).not.toContain("missing");
     });
@@ -662,8 +709,8 @@ describe("modelsListCommand forward-compat", () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({
         entries: [
           {
-            key: "openai-codex/gpt-5.4-mini",
-            ref: { provider: "openai-codex", model: "gpt-5.4-mini" },
+            key: "openai/gpt-5.4-mini",
+            ref: { provider: "openai", model: "gpt-5.4-mini" },
             tags: new Set(["configured"]),
             aliases: [],
           },
@@ -680,7 +727,7 @@ describe("modelsListCommand forward-compat", () => {
         missing: boolean;
       }>();
 
-      const codexMini = requireRow(rows, "openai-codex/gpt-5.4-mini");
+      const codexMini = requireRow(rows, "openai/gpt-5.4-mini");
       expect(codexMini.missing).toBe(false);
       expect(codexMini.tags).not.toContain("missing");
     });
@@ -689,8 +736,8 @@ describe("modelsListCommand forward-compat", () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({
         entries: [
           {
-            key: "openai-codex/gpt-5.4-pro",
-            ref: { provider: "openai-codex", model: "gpt-5.4-pro" },
+            key: "openai/gpt-5.4-pro",
+            ref: { provider: "openai", model: "gpt-5.4-pro" },
             tags: new Set(["configured"]),
             aliases: [],
           },
@@ -707,7 +754,7 @@ describe("modelsListCommand forward-compat", () => {
         missing: boolean;
       }>();
 
-      const codexPro = requireRow(rows, "openai-codex/gpt-5.4-pro");
+      const codexPro = requireRow(rows, "openai/gpt-5.4-pro");
       expect(codexPro.missing).toBe(false);
       expect(codexPro.tags).not.toContain("missing");
     });
@@ -756,9 +803,9 @@ describe("modelsListCommand forward-compat", () => {
       mocks.ensureAuthProfileStore.mockReturnValueOnce({
         version: 1,
         profiles: {
-          "openai-codex:default": {
+          "openai:default": {
             type: "token",
-            provider: "openai-codex",
+            provider: "openai",
             token: "codex-app-server",
           },
         },
@@ -769,13 +816,9 @@ describe("modelsListCommand forward-compat", () => {
       await modelsListCommand({ json: true }, runtime as never);
 
       expect(mocks.printModelTable).toHaveBeenCalled();
-      expectRowFields(
-        lastPrintedRows<{ key: string; available: boolean }>(),
-        "openai-codex/gpt-5.4",
-        {
-          available: true,
-        },
-      );
+      expectRowFields(lastPrintedRows<{ key: string; available: boolean }>(), "openai/gpt-5.4", {
+        available: true,
+      });
     });
 
     it("does not require the all-model registry result for configured-mode listing", async () => {
@@ -807,7 +850,7 @@ describe("modelsListCommand forward-compat", () => {
           provider: "codex",
           id: "gpt-5.4",
           name: "gpt-5.4",
-          api: "openai-codex-responses",
+          api: "openai-chatgpt-responses",
           baseUrl: "https://chatgpt.com/backend-api",
           input: ["text", "image"],
           contextWindow: 272_000,
@@ -961,7 +1004,7 @@ describe("modelsListCommand forward-compat", () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.loadModelRegistry.mockResolvedValueOnce({
         models: [{ ...OPENAI_CODEX_MODEL }],
-        availableKeys: new Set(["openai-codex/gpt-5.4"]),
+        availableKeys: new Set(["openai/gpt-5.4"]),
         registry: {
           getAll: () => [{ ...OPENAI_CODEX_MODEL }],
         },
@@ -992,10 +1035,7 @@ describe("modelsListCommand forward-compat", () => {
       expect(mocks.loadProviderCatalogModelsForList).not.toHaveBeenCalled();
       expect(mocks.resolveModelWithRegistry).not.toHaveBeenCalled();
       expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
-      expectRowKeys(lastPrintedRows<{ key: string }>(), [
-        "openai-codex/gpt-5.4",
-        "moonshot/kimi-k2.6",
-      ]);
+      expectRowKeys(lastPrintedRows<{ key: string }>(), ["openai/gpt-5.4", "moonshot/kimi-k2.6"]);
     });
 
     it("falls back to registry-backed rows when the fast-path catalog is empty", async () => {
@@ -1004,27 +1044,24 @@ describe("modelsListCommand forward-compat", () => {
       mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([]).mockResolvedValueOnce([]);
       mocks.loadModelRegistry.mockResolvedValueOnce({
         models: [{ ...OPENAI_CODEX_MODEL }],
-        availableKeys: new Set(["openai-codex/gpt-5.4"]),
+        availableKeys: new Set(["openai/gpt-5.4"]),
         registry: {
           getAll: () => [{ ...OPENAI_CODEX_MODEL }],
         },
       });
       const runtime = createRuntime();
 
-      await modelsListCommand(
-        { all: true, provider: "openai-codex", json: true },
-        runtime as never,
-      );
+      await modelsListCommand({ all: true, provider: "openai", json: true }, runtime as never);
 
       expectFirstRegistryConfig();
-      expect(modelRegistryOptions().providerFilter).toBe("openai-codex");
+      expect(modelRegistryOptions().providerFilter).toBe("openai");
       expect(modelRegistryOptions().normalizeModels).toBe(true);
       expect(mocks.loadProviderCatalogModelsForList).toHaveBeenNthCalledWith(
         1,
         expect.objectContaining({
           cfg: mocks.resolvedConfig,
           agentDir: "/tmp/openclaw-agent",
-          providerFilter: "openai-codex",
+          providerFilter: "openai",
           staticOnly: true,
         }),
       );
@@ -1033,13 +1070,13 @@ describe("modelsListCommand forward-compat", () => {
         expect.objectContaining({
           cfg: mocks.resolvedConfig,
           agentDir: "/tmp/openclaw-agent",
-          providerFilter: "openai-codex",
+          providerFilter: "openai",
           staticOnly: undefined,
         }),
       );
       const rows = lastPrintedRows<{ key: string; available: boolean }>();
-      expectRowKeys(rows, ["openai-codex/gpt-5.4"]);
-      expectRowFields(rows, "openai-codex/gpt-5.4", { available: true });
+      expectRowKeys(rows, ["openai/gpt-5.4"]);
+      expectRowFields(rows, "openai/gpt-5.4", { available: true });
     });
 
     it("falls back to registry rows for provider filters without catalog coverage", async () => {
@@ -1133,14 +1170,14 @@ describe("modelsListCommand forward-compat", () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.loadModelRegistry.mockResolvedValueOnce({
         models: [],
-        availableKeys: new Set(["openai-codex/gpt-5.4"]),
+        availableKeys: new Set(["openai/gpt-5.4"]),
         registry: {
           getAll: () => [],
         },
       });
       mocks.loadModelCatalog.mockResolvedValueOnce([
         {
-          provider: "openai-codex",
+          provider: "openai",
           id: "gpt-5.4",
           name: "GPT-5.3 Codex",
           input: ["text"],
@@ -1149,7 +1186,7 @@ describe("modelsListCommand forward-compat", () => {
       ]);
       mocks.resolveModelWithRegistry.mockImplementation(
         ({ provider, modelId }: { provider: string; modelId: string }) => {
-          if (provider !== "openai-codex") {
+          if (provider !== "openai") {
             return undefined;
           }
           if (modelId === "gpt-5.4") {
@@ -1160,13 +1197,11 @@ describe("modelsListCommand forward-compat", () => {
       );
       mocks.resolveModelWithRegistry.mockImplementationOnce(
         ({ provider, modelId }: { provider: string; modelId: string }) =>
-          provider === "openai-codex" && modelId === "gpt-5.4"
-            ? { ...OPENAI_CODEX_53_MODEL }
-            : undefined,
+          provider === "openai" && modelId === "gpt-5.4" ? { ...OPENAI_CODEX_53_MODEL } : undefined,
       );
       const rows = await buildAllOpenAiCodexRows();
-      expectRowKeys(rows as Array<{ key: string }>, ["openai-codex/gpt-5.4"]);
-      expectRowFields(rows as Array<{ key: string; available: boolean }>, "openai-codex/gpt-5.4", {
+      expectRowKeys(rows as Array<{ key: string }>, ["openai/gpt-5.4"]);
+      expectRowFields(rows as Array<{ key: string; available: boolean }>, "openai/gpt-5.4", {
         available: true,
       });
     });
@@ -1177,10 +1212,10 @@ describe("modelsListCommand forward-compat", () => {
       mocks.loadModelRegistry.mockResolvedValueOnce({
         models: [
           {
-            provider: "openai-codex",
+            provider: "openai",
             id: "gpt-5.5",
             name: "GPT-5.5",
-            api: "openai-codex-responses",
+            api: "openai-chatgpt-responses",
             baseUrl: "https://chatgpt.com/backend-api",
             input: ["text", "image"],
             contextWindow: 272000,
@@ -1188,14 +1223,14 @@ describe("modelsListCommand forward-compat", () => {
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
           },
         ],
-        availableKeys: new Set(["openai-codex/gpt-5.5"]),
+        availableKeys: new Set(["openai/gpt-5.5"]),
         registry: {
           getAll: () => [
             {
-              provider: "openai-codex",
+              provider: "openai",
               id: "gpt-5.5",
               name: "GPT-5.5",
-              api: "openai-codex-responses",
+              api: "openai-chatgpt-responses",
               baseUrl: "https://chatgpt.com/backend-api",
               input: ["text", "image"],
               contextWindow: 272000,
@@ -1207,12 +1242,12 @@ describe("modelsListCommand forward-compat", () => {
       });
       mocks.resolveModelWithRegistry.mockImplementation(
         ({ provider, modelId }: { provider: string; modelId: string }) =>
-          provider === "openai-codex" && modelId === "gpt-5.5"
+          provider === "openai" && modelId === "gpt-5.5"
             ? {
-                provider: "openai-codex",
+                provider: "openai",
                 id: "gpt-5.5",
                 name: "GPT-5.5",
-                api: "openai-codex-responses",
+                api: "openai-chatgpt-responses",
                 baseUrl: "https://chatgpt.com/backend-api",
                 input: ["text", "image"],
                 contextWindow: 400000,
@@ -1224,18 +1259,15 @@ describe("modelsListCommand forward-compat", () => {
       );
 
       const runtime = createRuntime();
-      await modelsListCommand(
-        { all: true, provider: "openai-codex", json: true },
-        runtime as never,
-      );
+      await modelsListCommand({ all: true, provider: "openai", json: true }, runtime as never);
 
       const rows = lastPrintedRows<{
         key: string;
         contextWindow: number;
         contextTokens?: number;
       }>();
-      expectRowKeys(rows, ["openai-codex/gpt-5.5"]);
-      expectRowFields(rows, "openai-codex/gpt-5.5", {
+      expectRowKeys(rows, ["openai/gpt-5.5"]);
+      expectRowFields(rows, "openai/gpt-5.5", {
         contextWindow: 400000,
         contextTokens: 272000,
       });
@@ -1277,19 +1309,19 @@ describe("modelsListCommand forward-compat", () => {
             hasProviderAuth: () => false,
             allowsProviderAuthAvailabilityFallback: () => false,
           },
-          availableKeys: new Set(["openai-codex/gpt-5.4"]),
+          availableKeys: new Set(["openai/gpt-5.4"]),
           configuredByKey: new Map(),
           discoveredKeys: new Set(),
           filter: {},
         } as never,
       });
 
-      expectRowKeys(rows as Array<{ key: string }>, ["openai-codex/gpt-5.4"]);
+      expectRowKeys(rows as Array<{ key: string }>, ["openai/gpt-5.4"]);
     });
   });
 
-  describe("provider filter canonicalization", () => {
-    it("matches alias-valued discovered providers against canonical provider filters", async () => {
+  describe("provider filter matching", () => {
+    it("matches discovered providers against exact provider filters", async () => {
       mocks.resolveConfiguredEntries.mockReturnValueOnce({ entries: [] });
       mocks.hasProviderStaticCatalogForFilter.mockResolvedValueOnce(true);
       mocks.loadModelRegistry.mockResolvedValueOnce({
@@ -1326,7 +1358,7 @@ describe("modelsListCommand forward-compat", () => {
 
       const runtime = createRuntime();
 
-      await modelsListCommand({ all: true, provider: "z-ai", json: true }, runtime as never);
+      await modelsListCommand({ all: true, provider: "z.ai", json: true }, runtime as never);
 
       expect(mocks.printModelTable).toHaveBeenCalled();
       expectRowKeys(lastPrintedRows<{ key: string }>(), ["z.ai/glm-4.5"]);

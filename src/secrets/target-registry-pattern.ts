@@ -1,3 +1,4 @@
+import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord, parseDotPath } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
@@ -92,7 +93,7 @@ export function matchPathTokens(
       return null;
     }
     const next = segments[index + 1];
-    if (!next || !/^\d+$/.test(next)) {
+    if (!next || parseConfigPathArrayIndex(next) === undefined) {
       return null;
     }
     captures.push(next);
@@ -122,7 +123,7 @@ export function materializePathTokens(
       continue;
     }
     const arrayIndex = captures[captureIndex];
-    if (!arrayIndex || !/^\d+$/.test(arrayIndex)) {
+    if (!arrayIndex || parseConfigPathArrayIndex(arrayIndex) === undefined) {
       return null;
     }
     out.push(token.field, arrayIndex);
@@ -158,7 +159,7 @@ export function expandPathTokens(root: unknown, tokens: PathPatternToken[]): Exp
         });
         return;
       }
-      if (!Object.prototype.hasOwnProperty.call(node, token.value)) {
+      if (!Object.hasOwn(node, token.value)) {
         return;
       }
       walk(node[token.value], tokenIndex + 1, [...segments, token.value], captures);

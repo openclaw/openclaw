@@ -34,6 +34,7 @@ export type AgentRunContext = {
   groupSpace?: string | null;
   currentChannelId?: string;
   currentThreadTs?: string;
+  currentInboundAudio?: boolean;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
 };
@@ -114,10 +115,14 @@ export type AgentCommandOpts = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** Internal runs can omit the channel message tool entirely. */
   disableMessageTool?: boolean;
+  /** Gateway ingress that already persisted visible activity can skip the duplicate pre-run touch. */
+  skipInitialSessionTouch?: boolean;
   /** Per-call stream param overrides (best-effort). */
   streamParams?: AgentStreamParams;
   /** Explicit workspace directory override (for subagents to inherit parent workspace). */
   workspaceDir?: SpawnedRunMetadata["workspaceDir"];
+  /** Explicit task working directory for this run. Bootstrap still uses workspaceDir. */
+  cwd?: string;
   /** Force bundled MCP teardown when a one-shot local run completes. */
   cleanupBundleMcpOnRunEnd?: boolean;
   /** Force long-lived CLI live session teardown when a one-shot local run completes. */

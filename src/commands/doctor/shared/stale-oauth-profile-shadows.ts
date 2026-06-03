@@ -1,11 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveAgentDir,
   resolveDefaultAgentDir,
   listAgentEntries,
 } from "../../../agents/agent-scope.js";
 import { AUTH_STORE_LOCK_OPTIONS } from "../../../agents/auth-profiles/constants.js";
+import {
+  isLegacyOAuthRef,
+  LEGACY_OAUTH_REF_PROVIDER,
+} from "../../../agents/auth-profiles/legacy-oauth-ref.js";
 import {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
@@ -18,7 +23,6 @@ import type { AuthProfileStore, OAuthCredential } from "../../../agents/auth-pro
 import { resolveStateDir } from "../../../config/paths.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { withFileLock } from "../../../infra/file-lock.js";
-import { isRecord } from "../../../shared/record-coerce.js";
 import { shortenHomePath } from "../../../utils.js";
 
 type StaleOAuthProfileShadow = {
@@ -26,19 +30,6 @@ type StaleOAuthProfileShadow = {
   authPath: string;
   profileId: string;
 };
-
-const LEGACY_OAUTH_REF_SOURCE = "openclaw-credentials";
-const LEGACY_OAUTH_REF_PROVIDER = "openai-codex";
-
-function isLegacyOAuthRef(value: unknown): boolean {
-  return (
-    isRecord(value) &&
-    value.source === LEGACY_OAUTH_REF_SOURCE &&
-    value.provider === LEGACY_OAUTH_REF_PROVIDER &&
-    typeof value.id === "string" &&
-    /^[a-f0-9]{32}$/.test(value.id)
-  );
-}
 
 async function loadRawAuthProfileStore(authPath: string): Promise<Record<string, unknown> | null> {
   try {
@@ -250,7 +241,9 @@ async function repairStaleOAuthProfilesForAgent(params: {
       if (result.removedProfileIds.length === 0) {
         return { status: "unchanged" };
       }
-      saveAuthProfileStore(result.store, params.agentDir);
+      saveAuthProfileStore(result.store, params.agentDir, {
+        pruneOrderProfileIds: result.removedProfileIds,
+      });
       return {
         status: "changed",
         removedProfileIds: result.removedProfileIds,
