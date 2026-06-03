@@ -65,6 +65,8 @@ function wrapStreamHandleUnhandledStopReason(
   model: Parameters<StreamFn>[0],
   stream: MutableAssistantMessageEventStream,
 ): MutableAssistantMessageEventStream {
+  // Keep the stream contract intact: callers may inspect either result() or
+  // iterate events, and both paths need the same safe assistant-error shape.
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     try {
@@ -111,6 +113,8 @@ function wrapStreamHandleUnhandledStopReason(
             if (!normalizedMessage) {
               throw err;
             }
+            // Iterator throws cannot be patched after the fact, so emit exactly
+            // one synthetic error event and then close the wrapped iterator.
             emittedSyntheticTerminal = true;
             return {
               done: false as const,
@@ -135,6 +139,13 @@ function wrapStreamHandleUnhandledStopReason(
   return stream;
 }
 
+/**
+ * Wraps provider stream functions so unsupported sensitive/refusal stop reasons
+ * become normal assistant error messages instead of uncaught provider errors.
+ *
+ * Handles every stream creation shape used by providers: synchronous throws,
+ * rejected stream promises, `result()` failures, and async-iterator failures.
+ */
 export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
     try {

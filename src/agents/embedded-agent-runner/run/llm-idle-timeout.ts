@@ -200,8 +200,12 @@ export function resolveLlmIdleTimeoutMs(params?: {
 }
 
 /**
- * Wraps a stream function with idle timeout detection.
- * If no token is received within the specified timeout, the request is aborted.
+ * Wraps a model stream function with chunk-level idle timeout detection.
+ *
+ * The watchdog covers both unresolved stream setup promises and gaps between
+ * iterator chunks. It aborts the provider request through the caller signal
+ * chain and also lowers `model.requestTimeoutMs` so transport-level timeouts do
+ * not outlive the embedded-run idle watchdog.
  *
  * @param baseFn - The base stream function to wrap
  * @param timeoutMs - Idle timeout in milliseconds

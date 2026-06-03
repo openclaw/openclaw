@@ -1,5 +1,12 @@
 import { normalizeUsage, type NormalizedUsage, type UsageLike } from "../usage.js";
 
+/**
+ * Tracks both run-wide token totals and the exact latest provider-call usage.
+ *
+ * The accumulated fields feed billing/reporting for an attempt that may issue
+ * several provider calls; the `last*` fields feed prompt-token and retry
+ * metadata that must describe only the final model call.
+ */
 export type UsageAccumulator = {
   input: number;
   output: number;
@@ -16,6 +23,7 @@ export type UsageAccumulator = {
   lastTotal: number;
 };
 
+/** Creates an empty usage accumulator with all run-wide and last-call fields reset. */
 export const createUsageAccumulator = (): UsageAccumulator => ({
   input: 0,
   output: 0,
@@ -47,6 +55,13 @@ const hasUsageValues = (usage: MaybeUsage): usage is NormalizedUsage => {
   ].some((value) => typeof value === "number" && Number.isFinite(value) && value > 0);
 };
 
+/**
+ * Adds one normalized provider-call usage snapshot to the run totals.
+ *
+ * Zero-only snapshots are ignored so an empty/no-usage call does not erase the
+ * previous `last*` fields; usable snapshots update both accumulated totals and
+ * the latest-call mirror.
+ */
 export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: MaybeUsage) => {
   if (!hasUsageValues(usage)) {
     return;
@@ -68,6 +83,7 @@ export const mergeUsageIntoAccumulator = (target: UsageAccumulator, usage: Maybe
   target.lastTotal = callTotal;
 };
 
+/** Converts accumulated run-wide usage into the normalized payload shape. */
 export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
   const hasUsage =
     usage.input > 0 ||
@@ -89,6 +105,7 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
   };
 };
 
+/** Converts only the latest provider-call snapshot into the normalized payload shape. */
 export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | undefined => {
   const hasUsage =
     usage.lastInput > 0 ||
@@ -110,6 +127,10 @@ export const toLastCallUsage = (usage: UsageAccumulator): NormalizedUsage | unde
   };
 };
 
+/**
+ * Resolves latest-call usage from the assistant payload, falling back to the
+ * accumulator when the provider omitted or returned unusable usage metadata.
+ */
 export const resolveLastCallUsage = (
   rawUsage: UsageLike | null | undefined,
   usageAccumulator: UsageAccumulator,

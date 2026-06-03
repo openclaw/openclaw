@@ -6,6 +6,9 @@ import {
   listTasksForOwnerOrRequesterSessionKeyForStatus,
 } from "../../../tasks/task-status-access.js";
 
+/**
+ * Stream-collected metadata for a tool call that spawned detached async work.
+ */
 export type AsyncStartedToolMeta = {
   toolName?: string;
   asyncStarted?: boolean;
@@ -13,6 +16,9 @@ export type AsyncStartedToolMeta = {
   asyncTaskId?: string;
 };
 
+/**
+ * Completion-required async media tasks observed before the next prompt starts.
+ */
 export type CompletionRequiredAsyncTaskWaitResult = {
   waitedRunIds: string[];
   timedOutRunIds: string[];
@@ -101,6 +107,8 @@ function collectAsyncTaskRunIds(
   if (!normalizedSessionKey) {
     return runIds;
   }
+  // Re-scan the task registry because detached media tools can be restored or
+  // registered after the attempt's immediate tool metadata was captured.
   for (const task of listTasksForOwnerOrRequesterSessionKeyForStatus(normalizedSessionKey)) {
     if (!COMPLETION_REQUIRED_TASK_KINDS.has(task.taskKind ?? "")) {
       continue;
@@ -130,6 +138,10 @@ function findTerminalTasks(runIds: readonly string[]): {
   return { pendingRunIds, terminalTasks };
 }
 
+/**
+ * Decide whether a cron attempt must wait for detached media work before the
+ * model is allowed to start another prompt.
+ */
 export function requiresCompletionRequiredAsyncTaskWait(params: {
   sessionKey: string | undefined;
   toolMetas: readonly AsyncStartedToolMeta[];
@@ -153,6 +165,13 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   );
 }
 
+/**
+ * Poll completion-required async media task runs until all are terminal or the
+ * run deadline is reached.
+ *
+ * The getter is re-read each loop so tasks discovered by late stream metadata
+ * or task-registry restoration are included without restarting the attempt.
+ */
 export async function waitForCompletionRequiredAsyncTasks(params: {
   getToolMetas: () => readonly AsyncStartedToolMeta[];
   sessionKey?: string;

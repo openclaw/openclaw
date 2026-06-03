@@ -14,6 +14,11 @@ function makeAbortError(signal: AbortSignal): Error {
   return err;
 }
 
+/**
+ * Races a promise against an AbortSignal and normalizes aborts to AbortError.
+ * The inner promise still owns its work; this wrapper only controls what the
+ * caller observes and removes the abort listener once either side settles.
+ */
 export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<T> {
   if (signal.aborted) {
     return Promise.reject(makeAbortError(signal));
@@ -37,6 +42,11 @@ export function abortable<T>(signal: AbortSignal, promise: Promise<T>): Promise<
   });
 }
 
+/**
+ * Converts non-Error promise rejections into Error objects for lint-safe
+ * propagation while preserving object/function properties when callers attach
+ * structured failure metadata.
+ */
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;

@@ -2,6 +2,12 @@ import type { AuthProfileFailureReason } from "../../auth-profiles/types.js";
 import type { FailoverReason } from "../../embedded-agent-helpers/types.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
 
+/**
+ * Maps run failover causes to shared auth-profile health failures.
+ *
+ * Returns `null` for local/transcript/request-shape failures so per-run problems
+ * do not cool down every session that shares the same provider credentials.
+ */
 export function resolveAuthProfileFailureReason(params: {
   failoverReason: FailoverReason | null;
   providerStarted?: boolean;

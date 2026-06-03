@@ -1,5 +1,12 @@
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
+/**
+ * Decides whether a Codex app-server interruption can be replayed once.
+ *
+ * Recovery is intentionally limited to stdio failures before any visible
+ * assistant output, tool activity, lifecycle item, or replay-unsafe state so a
+ * retry cannot duplicate side effects or hide partial work from the user.
+ */
 export function resolveCodexAppServerRecoveryRetry(params: {
   attempt: EmbeddedRunAttemptResult;
   alreadyRetried: boolean;
@@ -18,6 +25,8 @@ export function resolveCodexAppServerRecoveryRetry(params: {
     failure.kind === "turn_completion_idle_timeout" &&
     failure.turnWatchTimeoutKind !== "completion"
   ) {
+    // Progress/ping watchdog timeouts mean the turn may still be live or
+    // abandoned differently; only missing final turn/completed is replayable.
     return { retry: false, reason: failure.turnWatchTimeoutKind ?? "unknown_turn_watch_timeout" };
   }
   if (failure.transport !== "stdio") {
@@ -49,4 +58,5 @@ export function resolveCodexAppServerRecoveryRetry(params: {
   return { retry: true };
 }
 
+/** Backward-compatible name for the original client-close recovery gate. */
 export const resolveCodexAppServerClientCloseRetry = resolveCodexAppServerRecoveryRetry;

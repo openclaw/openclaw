@@ -2,6 +2,11 @@ import path from "node:path";
 import { isAcpSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers.js";
 
+/**
+ * Primary bootstrap runs are only top-level agent sessions. Subagents and ACP
+ * sessions inherit already-established context and should not restart workspace
+ * bootstrap onboarding.
+ */
 export function isPrimaryBootstrapRun(sessionKey?: string): boolean {
   return !isSubagentSessionKey(sessionKey) && !isAcpSessionKey(sessionKey);
 }
@@ -15,6 +20,11 @@ function isRelativePathInsideOrEqual(relativePath: string): boolean {
   );
 }
 
+/**
+ * Rewrites hook-injected context file paths from the source workspace to the
+ * target attempt workspace. Files outside the source workspace keep their
+ * original paths so unrelated absolute references are not silently retargeted.
+ */
 export function remapInjectedContextFilesToWorkspace(params: {
   files: EmbeddedContextFile[];
   sourceWorkspaceDir: string;

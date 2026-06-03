@@ -13,6 +13,11 @@ function asProviderRuntimeModel(
   return typeof model?.id === "string" ? (model as ProviderRuntimeModel) : undefined;
 }
 
+/**
+ * Resolves the transcript policy for an embedded attempt. Runtime plans get the
+ * first chance because provider plugins can supply model-specific policy; the
+ * core fallback keeps legacy provider/model/config behavior for generic runs.
+ */
 export function resolveAttemptTranscriptPolicy(params: {
   runtimePlan?: AgentRuntimePlan;
   runtimePlanModelContext: AttemptRuntimeModelContext;

@@ -32,6 +32,14 @@ type AssistantFailoverOutcome =
       error: FailoverError;
     };
 
+/**
+ * Resolves the assistant-stage failover action after the runner has classified
+ * the last assistant response and the current profile/model fallback state.
+ *
+ * The caller owns applying the returned action; this helper owns profile
+ * failure marking, same-model idle retries, model fallback errors, and deciding
+ * when a classified provider failure should stay on the normal payload path.
+ */
 export async function handleAssistantFailover(params: {
   initialDecision: AssistantFailoverDecision;
   aborted: boolean;
@@ -262,6 +270,13 @@ export async function handleAssistantFailover(params: {
   };
 }
 
+/**
+ * Builds the user-visible error text for surfaced assistant failover.
+ *
+ * Provider-formatted assistant errors win so billing/auth/rate-limit payloads
+ * keep their original context; synthesized copy is only a fallback for missing
+ * or timeout-only assistant content.
+ */
 function resolveAssistantFailoverErrorMessage(params: {
   lastAssistant: AssistantMessage | undefined;
   config: OpenClawConfig | undefined;
@@ -299,6 +314,13 @@ function resolveAssistantFailoverErrorMessage(params: {
   );
 }
 
+/**
+ * Chooses the concrete FailoverError reason for surface_error outcomes.
+ *
+ * A null decision reason can happen when the original failure signal was kept
+ * out of retry/fallback policy; preserve specific billing/auth/rate-limit
+ * signals before falling back to `unknown`.
+ */
 function resolveSurfaceErrorReason(
   declared: FailoverReason | null,
   params: {

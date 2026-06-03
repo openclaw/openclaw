@@ -11,13 +11,23 @@ export {
   finalizeHarnessContextEngineTurn as finalizeAttemptContextEngineTurn,
 } from "../../harness/context-engine-lifecycle.js";
 
+/**
+ * Embedded-attempt context engine facade used by runtime code and tests.
+ */
 export type AttemptContextEngine = ContextEngine;
 
+/**
+ * Bootstrap and context files selected for one embedded attempt.
+ */
 export type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
   bootstrapFiles: TBootstrapFile[];
   contextFiles: TContextFile[];
 };
 
+/**
+ * Resolve whether bootstrap/context injection should run for the current
+ * attempt and whether this successful full bootstrap should be recorded.
+ */
 export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFile>(params: {
   contextInjectionMode: "always" | "continuation-skip" | "never";
   bootstrapContextMode?: string;
@@ -58,6 +68,9 @@ export async function resolveAttemptBootstrapContext<TBootstrapFile, TContextFil
   };
 }
 
+/**
+ * Build the prompt-cache telemetry object surfaced on embedded attempt results.
+ */
 export function buildContextEnginePromptCacheInfo(params: {
   retention?: "none" | "short" | "long";
   lastCallUsage?: NormalizedUsage;
@@ -103,6 +116,9 @@ export function buildContextEnginePromptCacheInfo(params: {
   return Object.keys(promptCache).length > 0 ? promptCache : undefined;
 }
 
+/**
+ * Find the assistant message produced after the current prompt was submitted.
+ */
 export function findCurrentAttemptAssistantMessage(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;
@@ -126,7 +142,9 @@ function parsePromptCacheTouchTimestamp(value: unknown): number | null {
   return null;
 }
 
-/** Resolve the effective prompt-cache touch timestamp for the current assistant turn. */
+/**
+ * Resolve the effective prompt-cache touch timestamp for the current assistant turn.
+ */
 export function resolvePromptCacheTouchTimestamp(params: {
   lastCallUsage?: NormalizedUsage;
   assistantTimestamp?: unknown;
@@ -145,6 +163,9 @@ export function resolvePromptCacheTouchTimestamp(params: {
   );
 }
 
+/**
+ * Build prompt-cache telemetry from the live message snapshot after one loop.
+ */
 export function buildLoopPromptCacheInfo(params: {
   messagesSnapshot: AgentMessage[];
   prePromptMessageCount: number;

@@ -28,6 +28,13 @@ export type FailoverDecisionLoggerInput = {
 
 export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
+/**
+ * Fills observation-only failover reasons for timeout decisions.
+ *
+ * Some deadline timeouts have no provider error payload to classify, but
+ * failover logs still need stable reason fields for metrics and profile-health
+ * debugging.
+ */
 export function normalizeFailoverDecisionObservationBase(
   base: FailoverDecisionLoggerBase,
 ): FailoverDecisionLoggerBase {
@@ -38,6 +45,13 @@ export function normalizeFailoverDecisionObservationBase(
   };
 }
 
+/**
+ * Creates a structured logger for prompt/assistant failover decisions.
+ *
+ * The returned logger preserves machine-readable provider/source/profile fields,
+ * redacts identifiers for the console preview, and suppresses raw provider
+ * bodies that are unsafe or noisy to print inline.
+ */
 export function createFailoverDecisionLogger(
   base: FailoverDecisionLoggerBase,
 ): (

@@ -15,20 +15,32 @@
  */
 export const MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT = 5;
 
+/**
+ * Mutable run-loop breaker state shared across embedded attempts in one run.
+ */
 export type IdleTimeoutBreakerState = {
   consecutiveIdleTimeoutsBeforeOutput: number;
 };
 
+/**
+ * Create fresh breaker state for a new embedded run.
+ */
 export function createIdleTimeoutBreakerState(): IdleTimeoutBreakerState {
   return { consecutiveIdleTimeoutsBeforeOutput: 0 };
 }
 
+/**
+ * Outcome facts from one attempt that affect the idle-timeout breaker.
+ */
 export type IdleTimeoutBreakerInput = {
   idleTimedOut: boolean;
   completedModelProgress: boolean;
   outputTokens?: number;
 };
 
+/**
+ * Breaker counter after applying one attempt, plus whether the cap is reached.
+ */
 export type IdleTimeoutBreakerStep = {
   consecutive: number;
   tripped: boolean;

@@ -1,9 +1,11 @@
 import type { AgentMessage } from "../runtime/index.js";
 
 export const CHARS_PER_TOKEN_ESTIMATE = 4;
+/** Tool outputs are dense enough that context guards budget them more aggressively than prose. */
 export const TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE = 2;
 const IMAGE_CHAR_ESTIMATE = 8_000;
 
+/** Per-message estimate cache keyed by object identity during one pruning pass. */
 export type MessageCharEstimateCache = WeakMap<AgentMessage, number>;
 
 function isTextBlock(block: unknown): block is { type: "text"; text: string } {
@@ -130,6 +132,9 @@ function estimateMessageChars(msg: AgentMessage): number {
     // `details` is stripped before provider conversion; estimate only visible content.
     const content = getToolResultContent(msg);
     const chars = estimateContentBlockChars(content);
+    // Tool results are a truncation pressure point: scale text chars up to the
+    // tighter tool-result chars/token ratio while keeping malformed-block
+    // fallback estimates from shrinking.
     const weightedChars = Math.ceil(
       chars * (CHARS_PER_TOKEN_ESTIMATE / TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE),
     );
@@ -139,10 +144,12 @@ function estimateMessageChars(msg: AgentMessage): number {
   return 256;
 }
 
+/** Creates a WeakMap cache for repeated context-size passes over the same message objects. */
 export function createMessageCharEstimateCache(): MessageCharEstimateCache {
   return new WeakMap<AgentMessage, number>();
 }
 
+/** Returns a cached character estimate for a message, computing it on first use. */
 export function estimateMessageCharsCached(
   msg: AgentMessage,
   cache: MessageCharEstimateCache,
@@ -156,6 +163,7 @@ export function estimateMessageCharsCached(
   return estimated;
 }
 
+/** Sums cached message estimates for a candidate provider context. */
 export function estimateContextChars(
   messages: AgentMessage[],
   cache: MessageCharEstimateCache,
@@ -163,6 +171,7 @@ export function estimateContextChars(
   return messages.reduce((sum, msg) => sum + estimateMessageCharsCached(msg, cache), 0);
 }
 
+/** Drops a stale estimate after callers replace or mutate a tool-result message. */
 export function invalidateMessageCharsCacheEntry(
   cache: MessageCharEstimateCache,
   msg: AgentMessage,

@@ -89,6 +89,11 @@ function isKnownLocalCodingToolName(normalized: string): boolean {
   );
 }
 
+/**
+ * Applies the runtime toolsAllow policy after all candidate tools are built.
+ * Plugin metadata lets group/plugin-id allowlists expand through the shared
+ * policy path instead of embedding plugin naming rules in the attempt runner.
+ */
 export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   tools: T[],
   toolsAllow?: string[],
@@ -114,6 +119,12 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
 }
 
+/**
+ * Adds the message tool to explicit allowlists when the run must deliver
+ * through channel messaging. Wildcards already include it, while an empty
+ * allowlist becomes message-only so forced delivery cannot accidentally build
+ * unrelated tools.
+ */
 export function mergeForcedEmbeddedAttemptToolsAllow(
   toolsAllow: string[] | undefined,
   params: { forceMessageTool?: boolean },
@@ -167,6 +178,12 @@ function resolveCodingToolConstructionPlanForAllowlist(
   };
 }
 
+/**
+ * Resolves which tool families need construction before the final runtime
+ * allowlist filter runs. Unknown non-bundled names are treated as plugin tools
+ * so plugin-only allowlists still create the plugin runtime that can provide
+ * them.
+ */
 export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   disableTools?: boolean;
   isRawModelRun?: boolean;
@@ -206,10 +223,16 @@ export function resolveEmbeddedAttemptToolConstructionPlan(params: {
   };
 }
 
+/** Fast predicate for callers that only need to know whether core tools exist. */
 export function shouldBuildCoreCodingToolsForAllowlist(toolsAllow?: string[]): boolean {
   return resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow }).includeCoreTools;
 }
 
+/**
+ * Decides whether the bundled MCP runtime is worth starting for this attempt.
+ * Explicit allowlists only start it for bundle ids, bundle-qualified tool names,
+ * or the plugin group; the final filter still decides which tools are exposed.
+ */
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
@@ -233,6 +256,11 @@ export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   });
 }
 
+/**
+ * Decides whether bundled LSP tools can be materialized for this attempt. LSP
+ * tools are named by capability prefix, so explicit allowlists require an
+ * `lsp_` entry instead of the generic bundle MCP rules.
+ */
 export function shouldCreateBundleLspRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;

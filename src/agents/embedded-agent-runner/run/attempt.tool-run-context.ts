@@ -4,6 +4,12 @@ import {
 } from "../../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunTrigger } from "./params.js";
 
+/**
+ * Build the per-attempt context passed into coding-tool construction.
+ *
+ * This carries trigger/job/memory metadata into runtime tools and freezes the
+ * diagnostic trace before exposing it to tool factories.
+ */
 export function buildEmbeddedAttemptToolRunContext(params: {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;

@@ -7,6 +7,11 @@ import {
 } from "../../tool-search.js";
 import { collectAllowedToolNames } from "../tool-name-allowlist.js";
 
+/**
+ * Tool Search control names that can be injected automatically. They are
+ * tracked separately from user-visible allowlist entries so validation can still
+ * detect an explicit allowlist that would otherwise expose no callable tools.
+ */
 export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
@@ -16,6 +21,11 @@ export const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
 
 type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
 
+/**
+ * Tool Search planning output for one attempt. Visible names describe what the
+ * current compacted tool surface exposes; replay names preserve tools from the
+ * uncompacted surface so older transcript tool calls can still be recognized.
+ */
 export type ToolSearchRunPlan = {
   visibleAllowedToolNames: Set<string>;
   replayAllowedToolNames: Set<string>;
@@ -23,6 +33,11 @@ export type ToolSearchRunPlan = {
   emptyAllowlistCallableNames: string[];
 };
 
+/**
+ * Builds the synthetic callable-name list used to reject empty explicit
+ * allowlists. Auto-added controls are ignored, but cataloged tools hidden behind
+ * Tool Search still count because the model can discover and call them.
+ */
 export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   effectiveToolNames: string[];
   autoAddedToolSearchControlNames?: Set<string>;
@@ -39,6 +54,11 @@ export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
   ];
 }
 
+/**
+ * Identifies Tool Search controls that were added by the runtime instead of
+ * explicitly requested. Those names are removed from the empty-allowlist check
+ * so auto-injected discovery controls cannot mask a bad user allowlist.
+ */
 export function buildAutoAddedToolSearchControlNamesForAllowlistCheck(params: {
   toolSearchControlsEnabled: boolean;
   explicitAllowlistSources: Array<{ entries: string[] }>;
@@ -74,6 +94,11 @@ function collectExplicitlyAllowedClientToolNames(params: {
     .filter((name) => explicitNames.has(normalizeToolName(name)));
 }
 
+/**
+ * Builds the per-attempt Tool Search plan from visible compacted tools,
+ * uncompacted replay tools, client tools, and explicit allowlists. The result
+ * keeps model-visible discovery separate from transcript replay compatibility.
+ */
 export function buildToolSearchRunPlan(params: {
   visibleTools: CollectAllowedToolNamesParams["tools"];
   uncompactedTools: CollectAllowedToolNamesParams["tools"];

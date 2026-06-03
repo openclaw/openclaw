@@ -7,11 +7,21 @@ export type AttemptTrajectoryTerminalStatus = "success" | "error" | "interrupted
 
 export const NON_DELIVERABLE_TERMINAL_TURN_REASON = "non_deliverable_terminal_turn";
 
+/**
+ * Terminal trajectory result with an optional non-deliverable failure reason.
+ * `terminalError` is intentionally narrower than status so trajectory consumers
+ * can distinguish "attempt failed" from "attempt produced no durable outcome".
+ */
 export type AttemptTrajectoryTerminal = {
   status: AttemptTrajectoryTerminalStatus;
   terminalError?: typeof NON_DELIVERABLE_TERMINAL_TURN_REASON;
 };
 
+/**
+ * Inputs used to classify whether the attempt delivered anything terminal.
+ * This shape gathers all visible-progress channels before cleanup so trajectory
+ * metadata does not need to inspect provider/tool internals later.
+ */
 export type ResolveAttemptTrajectoryTerminalParams = {
   promptError?: unknown;
   aborted: boolean;
@@ -71,6 +81,8 @@ function hasCommittedMessagingDeliveryEvidence(
     "messagingToolSentTexts" | "messagingToolSentMediaUrls" | "messagingToolSentTargets"
   >,
 ): boolean {
+  // didSendViaMessagingTool means the tool path was attempted; only committed
+  // text/media/target evidence proves a reply actually reached users.
   return (
     hasNonEmptyString(params.messagingToolSentTexts) ||
     hasNonEmptyString(params.messagingToolSentMediaUrls) ||
@@ -82,6 +94,12 @@ function hasAsyncStartedToolActivity(toolMetas?: readonly { asyncStarted?: boole
   return (toolMetas ?? []).some((entry) => entry.asyncStarted === true);
 }
 
+/**
+ * Classifies the attempt's final trajectory status from delivery/progress
+ * evidence. Success requires visible text, committed delivery, accepted
+ * delegation, silent-turn policy, or other durable progress; plain tool
+ * metadata alone is not enough.
+ */
 export function resolveAttemptTrajectoryTerminal(
   params: ResolveAttemptTrajectoryTerminalParams,
 ): AttemptTrajectoryTerminal {

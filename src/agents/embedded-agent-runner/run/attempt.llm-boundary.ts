@@ -6,6 +6,11 @@ import { normalizeAssistantReplayContent } from "../replay-history.js";
 import { markTranscriptPromptText } from "../tool-result-context-guard.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
+/**
+ * Normalizes replay messages before provider conversion. Historical inbound
+ * metadata, tool-result diagnostics, assistant replay quirks, and stale runtime
+ * context are stripped here so providers see only the current safe prompt state.
+ */
 export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): AgentMessage[] {
   const normalized = stripUnsafeBlockedRunMetadata(
     stripToolResultDetails(normalizeAssistantReplayContent(messages)),
@@ -15,6 +20,11 @@ export function normalizeMessagesForLlmBoundary(messages: AgentMessage[]): Agent
   return stripHistoricalRuntimeContextCustomMessages(withoutHistoricalInboundMetadata);
 }
 
+/**
+ * Normalizes existing transcript messages as if the current prompt were already
+ * appended, then drops the synthetic prompt. This preserves "current user" rules
+ * for metadata stripping without mutating the real transcript.
+ */
 export function normalizeMessagesForCurrentPromptBoundary(params: {
   messages: AgentMessage[];
   prompt: string;
@@ -27,6 +37,11 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
   return normalizeMessagesForLlmBoundary([...params.messages, promptMessage]).slice(0, -1);
 }
 
+/**
+ * Installs a hidden runtime-context custom message for the next prompt. The
+ * cleanup function restores the original retry hook and removes the prompt-local
+ * message from agent state when the attempt finishes.
+ */
 export function installRuntimeContextMessageForPrompt(params: {
   session: {
     messages: AgentMessage[];
@@ -86,6 +101,11 @@ function appendRuntimeContextMessageForPrompt(params: {
   return [...params.messages, params.message];
 }
 
+/**
+ * Inserts runtime context immediately before the active user message. Overflow
+ * retries can rebuild state from persisted branches, so insertion is idempotent
+ * and falls back to appending when no active user turn exists.
+ */
 export function insertRuntimeContextMessageForPrompt(params: {
   message: RuntimeContextCustomMessage;
   messages: AgentMessage[];
@@ -174,6 +194,11 @@ function composeModelPromptContext(params: {
     .join("\n\n");
 }
 
+/**
+ * Installs a temporary model-prompt transform for the active user prompt. The
+ * persisted transcript keeps transcriptPrompt while the provider can receive
+ * modelPrompt plus hook-provided context for this attempt only.
+ */
 export function installModelPromptTransform(params: {
   session: {
     agent: {
@@ -210,6 +235,8 @@ export function installModelPromptTransform(params: {
         if (!params.shouldCapturePrompt()) {
           return false;
         }
+        // Capture the first eligible prompt timestamp so later transform calls
+        // cannot rewrite a different user message during retries or compaction.
         if (typeof timestamp === "number") {
           targetPromptTimestamp = timestamp;
         }

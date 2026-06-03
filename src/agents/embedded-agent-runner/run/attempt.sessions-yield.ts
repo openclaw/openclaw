@@ -12,6 +12,10 @@ function buildSessionsYieldContextMessage(message: string): string {
   return `${message}\n\n[Context: The previous turn ended intentionally via sessions_yield while waiting for a follow-up event.]`;
 }
 
+/**
+ * Wait for the abort path triggered by sessions_yield to settle, bounded by
+ * the embedded abort-settle timeout so cleanup cannot hang the run.
+ */
 export async function waitForSessionsYieldAbortSettle(params: {
   settlePromise: Promise<void> | null;
   runId: string;
@@ -45,7 +49,10 @@ export async function waitForSessionsYieldAbortSettle(params: {
   }
 }
 
-// Return a synthetic aborted response so agent runtime unwinds without a real provider call.
+/**
+ * Return a synthetic aborted stream response so the agent runtime unwinds
+ * without making another provider call after sessions_yield.
+ */
 export function createYieldAbortedResponse(model: {
   api?: string;
   provider?: string;
@@ -105,8 +112,10 @@ export function createYieldAbortedResponse(model: {
   };
 }
 
-// Queue a hidden steering message so agent runtime injects it before the next
-// LLM call once the current assistant turn finishes executing its tool calls.
+/**
+ * Queue a hidden steering message that interrupts the next provider call after
+ * the current assistant turn finishes executing its tool calls.
+ */
 export function queueSessionsYieldInterruptMessage(activeSession: {
   agent: { steer: (message: AgentMessage) => void };
 }) {
@@ -120,7 +129,10 @@ export function queueSessionsYieldInterruptMessage(activeSession: {
   });
 }
 
-// Append the caller-provided yield payload as a hidden session message once the run is idle.
+/**
+ * Persist the caller-provided sessions_yield payload as hidden context for the
+ * follow-up turn, without triggering a new turn immediately.
+ */
 export async function persistSessionsYieldContextMessage(
   activeSession: {
     sendCustomMessage: (
@@ -146,7 +158,10 @@ export async function persistSessionsYieldContextMessage(
   );
 }
 
-// Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
+/**
+ * Remove the synthetic yield interrupt and aborted assistant entries from the
+ * live transcript and backing session file state after the run is idle.
+ */
 export function stripSessionsYieldArtifacts(activeSession: {
   messages: AgentMessage[];
   agent: { state: { messages: AgentMessage[] } };

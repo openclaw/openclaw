@@ -6,6 +6,11 @@ import {
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
+/**
+ * Builds post-prompt session write-lock timing for embedded attempts. The
+ * returned max-hold bound follows compaction timeout, not overall run timeout,
+ * so abandoned live processes release session ownership on the cleanup window.
+ */
 export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
   config?: OpenClawConfig;
   compactionTimeoutMs: number;
@@ -22,12 +27,22 @@ export function resolveEmbeddedAttemptSessionWriteLockOptions(params: {
   });
 }
 
+/**
+ * Returns the auth profile that actually reached the provider runtime. The raw
+ * attempt authProfileId may name a local selection that was not forwarded, so
+ * stream diagnostics use only runtime-plan provenance.
+ */
 export function resolveAttemptStreamAuthProfileId(
   params: Pick<EmbeddedRunAttemptParams, "authProfileId" | "runtimePlan">,
 ): string | undefined {
   return params.runtimePlan?.auth.forwardedAuthProfileId;
 }
 
+/**
+ * Resolves the unknown-tool loop breaker threshold. The guard remains active
+ * even when broader loop detection is disabled because unregistered tool calls
+ * cannot represent valid progress for the current run.
+ */
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
   unknownToolThreshold?: number;
@@ -48,10 +63,20 @@ export function resolveUnknownToolGuardThreshold(loopDetection?: {
   return UNKNOWN_TOOL_THRESHOLD;
 }
 
+/**
+ * Suppresses llm_output hooks only when before_agent_run prevented model
+ * submission. Other prompt errors still flow through llm_output so downstream
+ * hooks can observe the provider-facing attempt result.
+ */
 export function shouldRunLlmOutputHooksForAttempt(params: { promptErrorSource: string | null }) {
   return params.promptErrorSource !== "hook:before_agent_run";
 }
 
+/**
+ * Picks the provider identity exposed to message-tool policy. Explicit provider
+ * metadata wins over the transport channel because integrations can share a
+ * channel while enforcing provider-specific delivery rules.
+ */
 export function resolveAttemptToolPolicyMessageProvider(params: {
   messageProvider?: string;
   messageChannel?: string;

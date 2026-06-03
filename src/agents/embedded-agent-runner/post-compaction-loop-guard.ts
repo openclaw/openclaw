@@ -5,12 +5,19 @@ const log = createSubsystemLogger("agents/post-compaction-guard");
 
 const DEFAULT_WINDOW_SIZE = 3;
 
+/**
+ * Hash-level identity for a post-compaction tool call observation.
+ *
+ * The guard compares hashes instead of raw args/results so it can detect
+ * repeated no-progress calls without retaining large or sensitive payloads.
+ */
 export type PostCompactionGuardObservation = {
   toolName: string;
   argsHash: string;
   resultHash: string;
 };
 
+/** Decision returned after observing a tool call inside the armed window. */
 export type PostCompactionGuardVerdict =
   | { shouldAbort: false; armed: boolean; remainingAttempts: number }
   | {
@@ -43,6 +50,13 @@ function asPositiveInt(value: number | undefined, fallback: number): number {
   return value;
 }
 
+/**
+ * Creates a guard that watches only the first few tool calls after compaction.
+ *
+ * Auto-compaction should break repeated tool loops; if the same tool arguments
+ * produce the same result throughout the armed window, the guard returns an
+ * abort verdict before the run spends more tokens on a persisted loop.
+ */
 export function createPostCompactionLoopGuard(
   config?: ToolLoopPostCompactionGuardConfig,
   options?: { enabled?: boolean },
@@ -106,6 +120,7 @@ export function createPostCompactionLoopGuard(
   return { armPostCompaction, observe, snapshot };
 }
 
+/** Error form used to propagate a persisted post-compaction loop abort. */
 export class PostCompactionLoopPersistedError extends Error {
   readonly detector: "compaction_loop_persisted";
   readonly count: number;

@@ -75,6 +75,14 @@ function classifyBusinessDenialErrorPayloadReason(
   }
 }
 
+/**
+ * Classifies embedded-agent run results that should advance model fallback.
+ *
+ * Fallback only triggers when there is no visible reply, no outbound delivery
+ * evidence, and no hook-block/abort condition that intentionally ended the run;
+ * the classifier then distinguishes harness-format failures from provider
+ * auth/billing business-denial payloads.
+ */
 export function classifyEmbeddedAgentRunResultForModelFallback(params: {
   provider: string;
   model: string;

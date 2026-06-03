@@ -350,11 +350,19 @@ const sessionFileOwnerState = resolveGlobalSingleton(
   }),
 );
 
+/**
+ * Process-local ownership handle for serializing embedded attempts per session
+ * file before the transcript write lock exists.
+ */
 export type EmbeddedAttemptSessionFileOwner = {
   sessionFileKey: string;
   release(): void;
 };
 
+/**
+ * Error raised when an embedded attempt cannot become the process-local owner
+ * for a session file before its wait deadline.
+ */
 export class EmbeddedAttemptSessionFileOwnerTimeoutError extends Error {
   constructor(sessionFile: string, timeoutMs: number) {
     super(`timed out waiting for embedded session file owner after ${timeoutMs}ms: ${sessionFile}`);
@@ -428,6 +436,10 @@ function waitForSessionFileOwnerRelease(params: {
   });
 }
 
+/**
+ * Acquire process-local ownership for a session file before constructing the
+ * attempt session manager and transcript write-lock controller.
+ */
 export async function acquireEmbeddedAttemptSessionFileOwner(params: {
   sessionFile: string;
   timeoutMs?: number;
@@ -561,6 +573,10 @@ function readSessionFileFingerprintSync(sessionFile: string): SessionFileFingerp
 
 async function waitForSessionEventQueue(_session: unknown): Promise<void> {}
 
+/**
+ * Raised when the session file changes outside the retained prompt-write lock
+ * while an embedded attempt is streaming.
+ */
 export class EmbeddedAttemptSessionTakeoverError extends Error {
   constructor(sessionFile: string) {
     super(`session file changed while embedded prompt lock was released: ${sessionFile}`);
@@ -568,6 +584,10 @@ export class EmbeddedAttemptSessionTakeoverError extends Error {
   }
 }
 
+/**
+ * Coordinates the retained session write lock across prompt submission,
+ * streaming, cleanup, and abort handling for one embedded attempt.
+ */
 export type EmbeddedAttemptSessionLockController = {
   releaseForPrompt(): Promise<void>;
   releaseHeldLockForAbort(): Promise<void>;
@@ -583,6 +603,10 @@ export type EmbeddedAttemptSessionLockController = {
   dispose(): Promise<void>;
 };
 
+/**
+ * Create a session-lock controller that can temporarily release the write lock
+ * for model streaming while fencing against unrelated transcript takeovers.
+ */
 export async function createEmbeddedAttemptSessionLockController(params: {
   acquireSessionWriteLock: AcquireSessionWriteLock;
   lockOptions: LockOptions;
@@ -1008,6 +1032,10 @@ export async function createEmbeddedAttemptSessionLockController(params: {
   };
 }
 
+/**
+ * Wrap the session stream function so prompt submission releases the retained
+ * write lock and reacquires it after the model call settles.
+ */
 export function installPromptSubmissionLockRelease(params: {
   session: unknown;
   waitForSessionEvents: (session: unknown) => Promise<void>;

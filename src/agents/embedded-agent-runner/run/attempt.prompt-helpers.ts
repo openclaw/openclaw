@@ -93,6 +93,11 @@ export function forgetPromptBuildDrainCacheForRun(runId: string | undefined): vo
   }
 }
 
+/**
+ * Runs prompt-build hook phases and merges their context additions in delivery
+ * order. Next-turn injections are drained once per runId so retry attempts keep
+ * the same queued context instead of consuming an already-drained session store.
+ */
 export async function resolvePromptBuildHookResult(params: {
   config: OpenClawConfig;
   prompt: string;
@@ -208,6 +213,11 @@ export async function resolvePromptBuildHookResult(params: {
   };
 }
 
+/**
+ * Chooses the prompt mode for session-owned background work. Cron and subagent
+ * sessions get minimal prompts because their context is already scoped by the
+ * runtime, while direct user sessions keep the full prompt surface.
+ */
 export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "full" {
   if (!sessionKey) {
     return "full";
@@ -215,6 +225,10 @@ export function resolvePromptModeForSession(sessionKey?: string): "minimal" | "f
   return isSubagentSessionKey(sessionKey) || isCronSessionKey(sessionKey) ? "minimal" : "full";
 }
 
+/**
+ * Enables heartbeat prompt injection only for the default agent heartbeat path
+ * when the configured heartbeat prompt actually resolves for that agent.
+ */
 export function shouldInjectHeartbeatPrompt(params: {
   config?: OpenClawConfig;
   agentId?: string;
@@ -235,6 +249,11 @@ export function shouldInjectHeartbeatPrompt(params: {
   );
 }
 
+/**
+ * Limits orphaned-user repair warnings to human-visible entry points. Background
+ * triggers can repair prompt shape quietly because no user sent the immediate
+ * message being rewritten.
+ */
 export function shouldWarnOnOrphanedUserRepair(
   trigger: EmbeddedRunAttemptParams["trigger"],
 ): boolean {
@@ -243,6 +262,11 @@ export function shouldWarnOnOrphanedUserRepair(
 
 export type PromptSubmissionSkipReason = "blank_user_prompt" | "empty_prompt_history_images";
 
+/**
+ * Classifies blank submissions before model dispatch. Visible history changes
+ * the operator-facing reason, but only a nonblank prompt or image payload makes
+ * the attempt worth sending to the provider.
+ */
 export function resolvePromptSubmissionSkipReason(params: {
   prompt: string;
   messages: readonly unknown[];
@@ -290,6 +314,8 @@ const MAX_STRUCTURED_JSON_DEPTH = 4;
 const MAX_STRUCTURED_JSON_ARRAY_ITEMS = 16;
 const MAX_STRUCTURED_JSON_OBJECT_KEYS = 32;
 
+// Structured queued messages may contain inline media or large provider JSON;
+// summaries preserve user intent for prompt repair without dumping blobs.
 function summarizeStructuredMediaRef(label: string, value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -463,6 +489,11 @@ function promptAlreadyIncludesQueuedUserMessage(prompt: string, orphanText: stri
   );
 }
 
+/**
+ * Merges a trailing orphaned user message back into the prompt. The result tells
+ * callers to remove the leaf either way because keeping the original transcript
+ * leaf would replay the same queued user content twice.
+ */
 export function mergeOrphanedTrailingUserPrompt(params: {
   prompt: string;
   trigger: EmbeddedRunAttemptParams["trigger"];
@@ -483,6 +514,11 @@ export function mergeOrphanedTrailingUserPrompt(params: {
   };
 }
 
+/**
+ * Resolves the effective filesystem-only tool policy for the session agent.
+ * Keeping this as a helper makes prompt construction use the same config merge
+ * path as tool construction.
+ */
 export function resolveAttemptFsWorkspaceOnly(params: {
   config?: OpenClawConfig;
   sessionAgentId: string;
@@ -493,6 +529,10 @@ export function resolveAttemptFsWorkspaceOnly(params: {
   });
 }
 
+/**
+ * Prepends dynamic system additions below the cache boundary, preserving the
+ * stable system-prompt prefix used for provider prompt caching.
+ */
 export function prependSystemPromptAddition(params: {
   systemPrompt: string;
   systemPromptAddition?: string;
@@ -504,6 +544,11 @@ export function prependSystemPromptAddition(params: {
 // be routed BELOW the system-prompt cache boundary (via prependSystemPromptAddition)
 // rather than placed in the static prepend slot — keeping them above the boundary
 // shifted the cacheable prefix turn-to-turn and broke prompt caching (#85203).
+/**
+ * Builds per-turn media task guidance for user/manual turns. The guidance is
+ * intentionally omitted for background triggers so task status does not churn
+ * cached system prompt bytes when no user is waiting on media progress.
+ */
 export function resolveAttemptMediaTaskSystemPromptAddition(params: {
   sessionKey?: string;
   trigger?: EmbeddedRunAttemptParams["trigger"];
@@ -544,7 +589,11 @@ type AfterTurnRuntimeContextAttempt = Pick<
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
 
-/** Build runtime context passed into context-engine afterTurn hooks. */
+/**
+ * Builds runtime context passed into context-engine afterTurn hooks. It carries
+ * prepared session/channel/process facts forward so after-turn hooks do not
+ * rediscover active runtime state after the model call has completed.
+ */
 export function buildAfterTurnRuntimeContext(params: {
   attempt: AfterTurnRuntimeContextAttempt;
   workspaceDir: string;
@@ -610,6 +659,11 @@ export function buildAfterTurnRuntimeContext(params: {
   };
 }
 
+/**
+ * Builds after-turn context when only provider usage is available. Prompt-token
+ * derivation stays here so callers pass raw usage without duplicating usage
+ * normalization logic.
+ */
 export function buildAfterTurnRuntimeContextFromUsage(
   params: Omit<Parameters<typeof buildAfterTurnRuntimeContext>[0], "currentTokenCount"> & {
     lastCallUsage?: NormalizedUsage;

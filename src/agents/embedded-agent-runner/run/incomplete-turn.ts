@@ -225,11 +225,17 @@ export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
 export const STRICT_AGENTIC_BLOCKED_TEXT =
   "Agent stopped after repeated plan-only turns without taking a concrete action. No concrete tool action or external side effect advanced the task.";
 
+/**
+ * Parsed visible plan details used when retrying turns that only promised work.
+ */
 export type PlanningOnlyPlanDetails = {
   explanation: string;
   steps: string[];
 };
 
+/**
+ * Summarize whether an attempt produced side effects that make replay unsafe.
+ */
 export function buildAttemptReplayMetadata(
   params: ReplayMetadataAttempt,
 ): EmbeddedRunAttemptResult["replayMetadata"] {
@@ -247,12 +253,19 @@ export function buildAttemptReplayMetadata(
   };
 }
 
+/**
+ * Return explicit replay metadata or the conservative unsafe fallback.
+ */
 export function resolveAttemptReplayMetadata(attempt: {
   replayMetadata?: EmbeddedRunAttemptResult["replayMetadata"] | null;
 }): EmbeddedRunAttemptResult["replayMetadata"] {
   return attempt.replayMetadata ?? REPLAY_UNSAFE_FALLBACK_METADATA;
 }
 
+/**
+ * Build the user-visible incomplete-turn warning when an attempt ended without
+ * a final assistant response.
+ */
 export function resolveIncompleteTurnPayloadText(params: {
   payloadCount: number;
   aborted: boolean;
@@ -321,6 +334,9 @@ export function resolveIncompleteTurnPayloadText(params: {
     : "⚠️ Agent couldn't generate a response. Please try again.";
 }
 
+/**
+ * Decide whether a fully missing assistant turn can be retried automatically.
+ */
 export function shouldRetryMissingAssistantTurn(params: {
   payloadCount: number;
   aborted: boolean;
@@ -476,6 +492,9 @@ export function resolveReplayInvalidFlag(params: {
   );
 }
 
+/**
+ * Map an attempt's terminal evidence to the liveness state exposed to callers.
+ */
 export function resolveRunLivenessState(params: {
   payloadCount: number;
   aborted: boolean;
@@ -588,6 +607,10 @@ function shouldSkipPlanningOnlyRetry(params: {
   );
 }
 
+/**
+ * Decide whether an empty non-visible assistant reply can be treated as a
+ * silent answer instead of an incomplete turn.
+ */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
   payloadCount: number;
@@ -607,6 +630,10 @@ export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   });
 }
 
+/**
+ * Build a retry instruction for turns that contain provider reasoning but no
+ * user-visible answer.
+ */
 export function resolveReasoningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -645,6 +672,9 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   return REASONING_ONLY_RETRY_INSTRUCTION;
 }
 
+/**
+ * Build a retry instruction for eligible turns with no visible assistant text.
+ */
 export function resolveEmptyResponseRetryInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -762,6 +792,9 @@ function normalizeAckPrompt(text: string): string {
   return normalizeLowercaseStringOrEmpty(normalized);
 }
 
+/**
+ * Detect short approval prompts that mean "proceed" after a plan.
+ */
 export function isLikelyExecutionAckPrompt(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 80 || trimmed.includes("\n") || trimmed.includes("?")) {
@@ -781,6 +814,10 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
 }
 
+/**
+ * Build the fast-path instruction for short approvals on providers with
+ * planning-only retry protection.
+ */
 export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
   modelId?: string;
@@ -820,6 +857,9 @@ function hasStructuredPlanningOnlyFormat(text: string): boolean {
   return (hasPlanningHeading && hasPlanningCueLine) || (bulletLineCount >= 2 && hasPlanningCueLine);
 }
 
+/**
+ * Extract the visible explanation and first steps from a plan-only response.
+ */
 export function extractPlanningOnlyPlanDetails(text: string): PlanningOnlyPlanDetails | null {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -889,6 +929,9 @@ function isSingleActionThenNarrativePattern(params: {
   );
 }
 
+/**
+ * Resolve the retry cap for plan-only turns under the active execution contract.
+ */
 export function resolvePlanningOnlyRetryLimit(
   executionContract?: EmbeddedAgentExecutionContract,
 ): number {
@@ -897,6 +940,10 @@ export function resolvePlanningOnlyRetryLimit(
     : DEFAULT_PLANNING_ONLY_RETRY_LIMIT;
 }
 
+/**
+ * Build a retry instruction for turns that only plan future action instead of
+ * taking a concrete tool or side-effecting step.
+ */
 export function resolvePlanningOnlyRetryInstruction(params: {
   provider?: string;
   modelId?: string;

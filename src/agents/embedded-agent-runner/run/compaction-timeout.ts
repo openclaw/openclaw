@@ -1,11 +1,20 @@
 import type { AgentMessage } from "../../runtime/index.js";
 
+/**
+ * Compact state used when the normal run timeout fires. Compaction can be
+ * pending, retrying, or actively running, and all three states need the same
+ * timeout-grace decision without exposing compaction internals to attempt.ts.
+ */
 export type CompactionTimeoutSignal = {
   isTimeout: boolean;
   isCompactionPendingOrRetrying: boolean;
   isCompactionInFlight: boolean;
 };
 
+/**
+ * Marks timeouts that overlap compaction work so callers can log the distinct
+ * "waiting for compaction" state instead of treating the run as ordinary idle.
+ */
 export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): boolean {
   if (!signal.isTimeout) {
     return false;
@@ -13,6 +22,11 @@ export function shouldFlagCompactionTimeout(signal: CompactionTimeoutSignal): bo
   return signal.isCompactionPendingOrRetrying || signal.isCompactionInFlight;
 }
 
+/**
+ * Allows one timeout extension while compaction may still produce a smaller
+ * transcript. A second timeout aborts so stuck compaction cannot keep the run
+ * alive indefinitely.
+ */
 export function resolveRunTimeoutDuringCompaction(params: {
   isCompactionPendingOrRetrying: boolean;
   isCompactionInFlight: boolean;
@@ -31,6 +45,11 @@ export function resolveRunTimeoutWithCompactionGraceMs(params: {
   return params.runTimeoutMs + params.compactionTimeoutMs;
 }
 
+/**
+ * Candidate transcript snapshots available after a timeout interrupts
+ * compaction. The pre-compaction snapshot may be older but can be safer when
+ * the current transcript ends with half-written assistant/tool-call state.
+ */
 export type SnapshotSelectionParams = {
   timedOutDuringCompaction: boolean;
   preCompactionSnapshot: AgentMessage[] | null;
@@ -39,6 +58,7 @@ export type SnapshotSelectionParams = {
   currentSessionId: string;
 };
 
+/** Chosen transcript snapshot and the session id that owns it. */
 export type SnapshotSelection = {
   messagesSnapshot: AgentMessage[];
   sessionIdUsed: string;
@@ -68,6 +88,12 @@ function trimToContinuableTail(messages: AgentMessage[]): AgentMessage[] | null 
   return end > 0 ? messages.slice(0, end) : null;
 }
 
+/**
+ * Picks the transcript snapshot used for timeout recovery. On compaction
+ * timeouts, it prefers the pre-compaction snapshot but trims non-continuable
+ * assistant/tool-call tails so the next attempt does not replay an incomplete
+ * model turn.
+ */
 export function selectCompactionTimeoutSnapshot(
   params: SnapshotSelectionParams,
 ): SnapshotSelection {

@@ -32,6 +32,14 @@ export type SessionManagerCache = {
   trackSessionManagerAccess: (sessionFile: string) => void;
 };
 
+/**
+ * Builds the short-lived session-file warmup cache used by attempt and
+ * compaction paths before they hand a JSONL session to SessionManager.
+ *
+ * The cache stores only paths that were recently accessed or successfully
+ * prewarmed; it never owns file contents, so TTL expiry is enough to keep stale
+ * session handles out of later runs.
+ */
 export function createSessionManagerCache(options?: {
   clock?: () => number;
   fsModule?: Pick<typeof fs, "open">;
@@ -63,7 +71,8 @@ export function createSessionManagerCache(options?: {
       }
 
       try {
-        // Read a small chunk to encourage OS page cache warmup.
+        // Read a small chunk to encourage OS page cache warmup without pulling
+        // large transcripts into user-space memory before SessionManager opens them.
         const handle = await fsModule.open(sessionFile, "r");
         try {
           const buffer = Buffer.alloc(4096);
@@ -84,10 +93,12 @@ export function createSessionManagerCache(options?: {
 
 const sessionManagerCache = createSessionManagerCache();
 
+/** Records a session-file access in the process-wide warmup cache. */
 export function trackSessionManagerAccess(sessionFile: string): void {
   sessionManagerCache.trackSessionManagerAccess(sessionFile);
 }
 
+/** Prewarms a session file through the process-wide cache before SessionManager reads it. */
 export async function prewarmSessionFile(sessionFile: string): Promise<void> {
   await sessionManagerCache.prewarmSessionFile(sessionFile);
 }

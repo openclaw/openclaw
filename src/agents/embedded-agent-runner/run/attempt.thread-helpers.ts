@@ -2,8 +2,16 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { normalizeStructuredPromptSection } from "../../prompt-cache-stability.js";
 
+/**
+ * Custom transcript entry type marking attempts where cache-TTL pruning was
+ * armed for an eligible provider/model pair.
+ */
 export const ATTEMPT_CACHE_TTL_CUSTOM_TYPE = "openclaw.cache-ttl";
 
+/**
+ * Compose hook-supplied system context around the base system prompt while
+ * preserving prompt-cache-stable section normalization.
+ */
 export function composeSystemPromptWithHookContext(params: {
   baseSystemPrompt?: string;
   prependSystemContext?: string;
@@ -25,6 +33,10 @@ export function composeSystemPromptWithHookContext(params: {
   });
 }
 
+/**
+ * Resolve the workspace path passed to spawned attempts when sandbox access is
+ * read-only or narrower than full read/write workspace access.
+ */
 export function resolveAttemptSpawnWorkspaceDir(params: {
   sandbox?: {
     enabled?: boolean;
@@ -55,6 +67,10 @@ function shouldAppendAttemptCacheTtl(params: {
   );
 }
 
+/**
+ * Append the cache-TTL marker entry when the current attempt qualifies for
+ * deferred cache pruning and no compaction already handled context pressure.
+ */
 export function appendAttemptCacheTtlIfNeeded(params: {
   sessionManager: {
     appendCustomEntry?: (customType: string, data: unknown) => void;
@@ -79,6 +95,11 @@ export function appendAttemptCacheTtlIfNeeded(params: {
   return true;
 }
 
+/**
+ * Decide whether a successful bootstrap turn should be written as completed
+ * after the attempt, excluding abort/error/compaction paths that already have
+ * their own transcript state.
+ */
 export function shouldPersistCompletedBootstrapTurn(params: {
   shouldRecordCompletedBootstrapTurn: boolean;
   promptError: unknown;

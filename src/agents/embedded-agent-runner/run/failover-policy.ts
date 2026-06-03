@@ -1,5 +1,8 @@
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 
+/**
+ * Closed decision shape for retry-limit, prompt, and assistant failover stages.
+ */
 export type RunFailoverDecision =
   | {
       action: "continue_normal";
@@ -16,16 +19,25 @@ export type RunFailoverDecision =
       action: "return_error_payload";
     };
 
+/**
+ * Retry-limit stage decisions either escalate to fallback model or return payload.
+ */
 export type RetryLimitFailoverDecision = Extract<
   RunFailoverDecision,
   { action: "fallback_model" | "return_error_payload" }
 >;
 
+/**
+ * Prompt-submission stage decisions exclude normal continuation.
+ */
 export type PromptFailoverDecision = Extract<
   RunFailoverDecision,
   { action: "rotate_profile" | "fallback_model" | "surface_error" }
 >;
 
+/**
+ * Assistant stage decisions can continue, rotate credentials, fallback, or surface errors.
+ */
 export type AssistantFailoverDecision = Extract<
   RunFailoverDecision,
   { action: "continue_normal" | "rotate_profile" | "fallback_model" | "surface_error" }
@@ -65,6 +77,9 @@ type AssistantDecisionParams = {
   profileRotated: boolean;
 };
 
+/**
+ * Stage-specific inputs consumed by the failover decision engine.
+ */
 export type RunFailoverDecisionParams =
   | RetryLimitDecisionParams
   | PromptDecisionParams
@@ -132,6 +147,10 @@ function assistantFallbackReason(params: AssistantDecisionParams): FailoverReaso
   return isAssistantTimeoutFailure(params) ? "timeout" : (failoverReason ?? "unknown");
 }
 
+/**
+ * Merge a newly observed failover reason with prior retry state, treating a
+ * timeout signal as an explicit failover reason when no model reason exists.
+ */
 export function mergeRetryFailoverReason(params: {
   previous: FailoverReason | null;
   failoverReason: FailoverReason | null;
@@ -140,13 +159,25 @@ export function mergeRetryFailoverReason(params: {
   return params.failoverReason ?? (params.timedOut ? "timeout" : null) ?? params.previous;
 }
 
+/**
+ * Resolve the next failover action for the retry-limit stage.
+ */
 export function resolveRunFailoverDecision(
   params: RetryLimitDecisionParams,
 ): RetryLimitFailoverDecision;
+/**
+ * Resolve the next failover action for prompt-submission failures.
+ */
 export function resolveRunFailoverDecision(params: PromptDecisionParams): PromptFailoverDecision;
+/**
+ * Resolve the next failover action after an assistant/model attempt.
+ */
 export function resolveRunFailoverDecision(
   params: AssistantDecisionParams,
 ): AssistantFailoverDecision;
+/**
+ * Resolve the next failover action from stage-specific failure and timeout state.
+ */
 export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): RunFailoverDecision {
   if (params.stage === "retry_limit") {
     if (params.fallbackConfigured && shouldEscalateRetryLimit(params.failoverReason)) {

@@ -17,6 +17,13 @@ function addName(names: Set<string>, value: unknown): void {
   }
 }
 
+/**
+ * Collects the effective tool names visible to an embedded run.
+ *
+ * This may include client tools when they are passed directly, but callers can
+ * omit them after Tool Search compaction so visible allowlists and replay
+ * allowlists can intentionally diverge.
+ */
 export function collectAllowedToolNames(params: {
   tools: AgentTool[];
   clientTools?: ClientToolDefinition[];
@@ -32,7 +39,10 @@ export function collectAllowedToolNames(params: {
 }
 
 /**
- * Collect the exact tool names registered with the embedded agent for this session.
+ * Collects the exact custom-tool names registered with the embedded agent.
+ *
+ * Session allowlists use this narrower source so hidden catalog tools do not
+ * appear as user-selectable tools while replay guards can still admit them.
  */
 export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set<string> {
   const names = new Set<string>();
@@ -42,6 +52,12 @@ export function collectRegisteredToolNames(tools: Array<{ name?: string }>): Set
   return names;
 }
 
+/**
+ * Collects core built-in tool names before Tool Search/catalog compaction.
+ *
+ * Client tool conflict checks use this broader namespace so a hidden core tool
+ * such as `exec` still blocks a client tool from taking the same name.
+ */
 export function collectCoreBuiltinToolNames(
   tools: Array<{ name?: string }>,
   options?: { isPluginTool?: (tool: { name?: string }) => boolean },
@@ -56,6 +72,10 @@ export function collectCoreBuiltinToolNames(
   return names;
 }
 
+/**
+ * Converts a collected tool-name set into the stable array shape persisted on
+ * agent sessions and prompt-cache-sensitive payloads.
+ */
 export function toSessionToolAllowlist(allowedToolNames: Iterable<string>): string[] {
   return [...new Set(allowedToolNames)].toSorted((a, b) => a.localeCompare(b));
 }

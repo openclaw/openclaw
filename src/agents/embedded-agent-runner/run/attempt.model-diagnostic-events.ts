@@ -481,6 +481,9 @@ function withDiagnosticTraceparentHeader(
     };
   }
 
+  // Provider options may already contain a caller-supplied traceparent. Replace
+  // it with the frozen child span so downstream provider logs correlate with
+  // the model.call.* event pair emitted for this exact stream invocation.
   const headers: Record<string, string> = {};
   for (const [key, value] of Object.entries(options?.headers ?? {})) {
     if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
@@ -506,6 +509,8 @@ async function safeReturnIterator(iterator: AsyncIterator<unknown>): Promise<voi
   if (!returnResult) {
     return;
   }
+  // Consumer cancellation should still close provider iterators, but diagnostic
+  // completion must not hang forever behind a provider return() implementation.
   let timeout: ReturnType<typeof setTimeout> | undefined;
   try {
     await Promise.race([
@@ -553,6 +558,8 @@ async function* observeModelCallIterator<T>(
     throw err;
   } finally {
     if (!terminalEmitted) {
+      // Early consumer exit is a successful observed stream from diagnostics'
+      // point of view: close the provider iterator, then emit completed once.
       await safeReturnIterator(iterator);
       emitModelCallCompleted(eventBase, startedAt, state);
     }
@@ -611,6 +618,14 @@ function observeModelCallResult(
   return result;
 }
 
+/**
+ * Wraps a provider stream function with model-call diagnostics.
+ *
+ * Emits started/completed/error events, propagates a per-call traceparent,
+ * measures request/response sizes, dispatches model-call hooks, and preserves
+ * the provider result shape whether the stream function returns synchronously,
+ * resolves later, throws, or returns an async iterable stream.
+ */
 export function wrapStreamFnWithDiagnosticModelCallEvents(
   streamFn: StreamFn,
   ctx: ModelCallDiagnosticContext,
