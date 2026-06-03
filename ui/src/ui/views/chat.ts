@@ -1529,7 +1529,11 @@ export function renderChat(props: ChatProps) {
   const isBusy = props.sending || props.stream !== null;
   const canAbort = Boolean(props.canAbort && props.onAbort);
   const showAbortableUi = canAbort && !hasTerminalRunStatus(props.runStatus);
-  const composerRunStatus = showAbortableUi ? { phase: "in-progress" as const } : props.runStatus;
+  // Only show "In progress" badge and Stop button while a local send/stream is
+  // actively in progress.  Without the isBusy guard, stale session-list state
+  // can keep the UI in abortable mode after the response has already completed.
+  const showActiveAbortUi = showAbortableUi && isBusy;
+  const composerRunStatus = showActiveAbortUi ? { phase: "in-progress" as const } : props.runStatus;
   const compactBusy =
     props.compactionStatus?.phase === "active" || props.compactionStatus?.phase === "retrying";
   const activeSession = props.sessions?.sessions?.find((row) => row.key === props.sessionKey);
@@ -2191,7 +2195,7 @@ export function renderChat(props: ChatProps) {
             ? html`<div class="agent-chat__composer-controls">${composerControls}</div>`
             : nothing}
           ${renderChatRunControls({
-            canAbort: showAbortableUi,
+            canAbort: showActiveAbortUi,
             connected: props.connected,
             draft: visibleDraft,
             hasMessages: props.messages.length > 0,
