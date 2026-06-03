@@ -1538,6 +1538,20 @@ describe("sendChatMessage", () => {
     expect(state.chatRunId).toBeNull();
     expect(state.chatStream).toBeNull();
     expect(state.chatStreamStartedAt).toBeNull();
+    const runState = state as ChatState & {
+      chatRunStatus?: unknown;
+      lastLocalTerminalReconcile?: unknown;
+    };
+    expect(runState.chatRunStatus).toMatchObject({
+      phase: "done",
+      runId: "gateway-complete-run",
+      sessionKey: "main",
+    });
+    expect(runState.lastLocalTerminalReconcile).toMatchObject({
+      phase: "done",
+      runId: "gateway-complete-run",
+      sessionKey: "main",
+    });
   });
 
   it("serializes non-image chat attachments as files", async () => {

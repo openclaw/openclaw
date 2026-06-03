@@ -949,9 +949,18 @@ export async function sendChatMessage(
   try {
     const ack = await requestChatSend(state, { message: msg, attachments, runId });
     if (ack.status === "ok") {
-      state.chatRunId = null;
-      state.chatStream = null;
-      state.chatStreamStartedAt = null;
+      reconcileChatRunLifecycle(
+        state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0],
+        {
+          outcome: "done",
+          sessionStatus: "done",
+          runId: ack.runId,
+          sessionKey: state.sessionKey,
+          clearLocalRun: true,
+          clearChatStream: true,
+          armLocalTerminalReconcile: true,
+        },
+      );
     } else {
       state.chatRunId = ack.runId;
     }

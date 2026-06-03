@@ -10,6 +10,7 @@ import {
   resetChatAttachmentPayloadStoreForTest,
 } from "./chat/attachment-payload-store.ts";
 import type { executeSlashCommand } from "./chat/slash-command-executor.ts";
+import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
@@ -2114,6 +2115,43 @@ describe("handleSendChat", () => {
     expect(host.chatMessages).toHaveLength(1);
     const userMessage = requireRecord(host.chatMessages[0], "user message");
     expect(userMessage.role).toBe("user");
+  });
+
+  it("keeps ACK-completed sends idle when sessions.list returns a stale active row", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "chat send payload");
+        return { runId: payload.idempotencyKey, status: "ok" };
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([
+          row("agent:main", { hasActiveRun: true, status: "running", startedAt: 1 }),
+        ]);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "already done",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: true, status: "running", startedAt: 1 }),
+      ]),
+    });
+
+    await handleSendChat(host);
+    await Promise.resolve();
+    await loadSessions(host as Parameters<typeof loadSessions>[0]);
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(hasAbortableSessionRun(host)).toBe(false);
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+    });
   });
 
   it("keeps delayed chat.send ACK effects scoped to the submitted session", async () => {
