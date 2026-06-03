@@ -27,6 +27,38 @@ export type CommandsSystemPromptBundle = {
   sandboxRuntime: ReturnType<typeof resolveSandboxRuntimeStatus>;
 };
 
+function collectReadableTools(tools: readonly AgentTool[]): {
+  tools: AgentTool[];
+  toolNames: string[];
+} {
+  const safeTools: AgentTool[] = [];
+  const names: string[] = [];
+  for (const tool of tools) {
+    try {
+      const name = tool.name;
+      if (typeof name === "string") {
+        names.push(name);
+        safeTools.push(withResolvedToolName(tool, name));
+      }
+    } catch {
+      // Prompt/report estimation should survive one malformed descriptor.
+    }
+  }
+  return { tools: safeTools, toolNames: names };
+}
+
+function withResolvedToolName(tool: AgentTool, name: string): AgentTool {
+  return Object.create(Object.getPrototypeOf(tool), {
+    ...Object.getOwnPropertyDescriptors(tool),
+    name: {
+      configurable: true,
+      enumerable: true,
+      value: name,
+      writable: true,
+    },
+  }) as AgentTool;
+}
+
 export async function resolveCommandsSystemPromptBundle(
   params: HandleCommandsParams,
 ): Promise<CommandsSystemPromptBundle> {
@@ -80,7 +112,7 @@ export async function resolveCommandsSystemPromptBundle(
     }
   })();
   const skillsPrompt = skillsSnapshot.snapshot.prompt ?? "";
-  const tools = (() => {
+  const createdTools = (() => {
     try {
       return createOpenClawCodingTools({
         config: params.cfg,
@@ -104,7 +136,7 @@ export async function resolveCommandsSystemPromptBundle(
       return [];
     }
   })();
-  const toolNames = tools.map((t) => t.name);
+  const { tools, toolNames } = collectReadableTools(createdTools);
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(params.sessionKey);
   const defaultModelRef = resolveDefaultModelForAgent({
     cfg: params.cfg,

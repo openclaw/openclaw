@@ -279,4 +279,33 @@ describe("resolveCommandsSystemPromptBundle", () => {
     expect(promptParams.subagentDelegationMode).toBe("prefer");
     expect(promptParams.toolNames).toEqual(["sessions_spawn"]);
   });
+
+  it("skips unreadable command prompt tool names while preserving healthy siblings", async () => {
+    const unreadableTool = Object.defineProperty(
+      {
+        description: "malformed descriptor",
+        execute: vi.fn(),
+        parameters: { type: "object", properties: {} },
+      },
+      "name",
+      {
+        get() {
+          throw new Error("context prompt tool name getter exploded");
+        },
+      },
+    );
+    createOpenClawCodingToolsMock.mockReturnValue([
+      unreadableTool,
+      { name: "sessions_spawn" },
+    ] as never);
+
+    const bundle = await resolveCommandsSystemPromptBundle(makeParams());
+
+    const promptParams = requireFirstArg(
+      vi.mocked(buildAgentSystemPrompt),
+      "buildAgentSystemPrompt",
+    );
+    expect(promptParams.toolNames).toEqual(["sessions_spawn"]);
+    expect(bundle.tools.map((tool) => tool.name)).toEqual(["sessions_spawn"]);
+  });
 });
