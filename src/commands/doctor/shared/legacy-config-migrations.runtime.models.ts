@@ -1001,9 +1001,83 @@ function migrateLegacyOpenAICodexProvider(raw: Record<string, unknown>, changes:
         `Moved models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} → models.providers.${OPENAI_PROVIDER_ID}.`,
       );
     } else {
-      changes.push(
-        `Removed models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} because models.providers.${OPENAI_PROVIDER_ID} already exists.`,
-      );
+      // Canonical openai provider already exists. Merge non-conflicting model
+      // entries from the legacy provider so disjoint models (e.g. a chat model
+      // on the Codex OAuth path alongside an embeddings-only openai provider)
+      // are preserved instead of silently dropped. (#90047)
+      const legacyModels: unknown[] = Array.isArray(normalized.value.models)
+        ? (normalized.value.models as unknown[])
+        : [];
+      const canonicalKey =
+        Object.keys(providers).find((k) => normalizeProviderId(k) === OPENAI_PROVIDER_ID) ??
+        OPENAI_PROVIDER_ID;
+      const canonical = getRecord(providers[canonicalKey]) ?? {};
+      const canonicalModels: unknown[] = Array.isArray(canonical.models)
+        ? (canonical.models as unknown[])
+        : [];
+      const canonicalModelIds = new Set<string>();
+      const canonicalModelNames = new Set<string>();
+      for (const m of canonicalModels) {
+        const mr = getRecord(m);
+        if (typeof mr?.id === "string" && mr.id) {
+          canonicalModelIds.add(mr.id);
+        }
+        if (typeof mr?.name === "string" && mr.name) {
+          canonicalModelNames.add(mr.name);
+        }
+      }
+      const modelsToMerge = legacyModels.filter((m) => {
+        const mr = getRecord(m);
+        if (!mr) {
+          return false;
+        }
+        const id = typeof mr.id === "string" ? mr.id : undefined;
+        const name = typeof mr.name === "string" ? mr.name : undefined;
+        if (!id && !name) {
+          return false;
+        }
+        return (!id || !canonicalModelIds.has(id)) && (!name || !canonicalModelNames.has(name));
+      });
+      // Stamp legacy provider-level baseUrl and api onto each merged model that
+      // lacks its own, so the model continues to route to the correct endpoint
+      // instead of inheriting the canonical provider's (e.g. api.openai.com).
+      const legacyBaseUrl =
+        typeof normalized.value.baseUrl === "string" ? normalized.value.baseUrl : undefined;
+      const legacyApi = typeof normalized.value.api === "string" ? normalized.value.api : undefined;
+      const stamped = modelsToMerge.map((m) => {
+        const mr = getRecord(m);
+        if (!mr) {
+          return m;
+        }
+        const patch: Record<string, unknown> = {};
+        if (legacyBaseUrl && !mr.baseUrl) {
+          patch.baseUrl = legacyBaseUrl;
+        }
+        if (legacyApi && !mr.api) {
+          patch.api = legacyApi;
+        }
+        return Object.keys(patch).length > 0 ? Object.assign({}, mr, patch) : m;
+      });
+      if (stamped.length > 0) {
+        providers[canonicalKey] = { ...canonical, models: [...canonicalModels, ...stamped] };
+        const mergedIds = stamped
+          .map((m) => {
+            const mr = getRecord(m);
+            return typeof mr?.id === "string" && mr.id
+              ? mr.id
+              : typeof mr?.name === "string" && mr.name
+                ? mr.name
+                : "unknown";
+          })
+          .join(", ");
+        changes.push(
+          `Merged ${stamped.length} model(s) from models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} into models.providers.${OPENAI_PROVIDER_ID}: ${mergedIds}.`,
+        );
+      } else {
+        changes.push(
+          `Removed models.providers.${LEGACY_OPENAI_CODEX_PROVIDER_ID} because models.providers.${OPENAI_PROVIDER_ID} already exists.`,
+        );
+      }
     }
     delete providers[providerId];
     providersChanged = true;
