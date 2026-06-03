@@ -671,23 +671,34 @@ export const IDLE_MODEL_TIMEOUT_NOTICE =
  * `null` when a notice would be wrong:
  * - the turn did not time out (`timedOut` is false — e.g. a user cancel, which
  *   is a distinct signal),
+ * - the timeout happened during compaction (`timedOutDuringCompaction`): that
+ *   turn is paused/resumable, not abandoned — emitting a notice would both
+ *   nag the user and override the `paused` liveness state the terminal path
+ *   otherwise preserves,
  * - some visible payload is already being returned (`payloadCount > 0`),
  * - an empty reply is intentionally silent here (cron/heartbeat contexts that
- *   set `allowEmptyAssistantReplyAsSilent`), or
- * - a messaging tool already delivered a reply out-of-band (avoid double-notify).
+ *   set `allowEmptyAssistantReplyAsSilent`),
+ * - a messaging tool already delivered a reply out-of-band, or
+ * - a deterministic approval prompt was already delivered out-of-band (payload
+ *   building intentionally suppresses assistant artifacts in that case) — both
+ *   avoid a double / spurious notice.
  */
 export function resolveTurnBudgetTimeoutNotice(params: {
   timedOut: boolean;
   idleTimedOut: boolean;
+  timedOutDuringCompaction: boolean;
   payloadCount: number;
   emptyAssistantReplyIsSilent: boolean;
   hasMessagingDelivery: boolean;
+  hasDeterministicApprovalPrompt: boolean;
 }): string | null {
   if (
     !params.timedOut ||
+    params.timedOutDuringCompaction ||
     params.payloadCount > 0 ||
     params.emptyAssistantReplyIsSilent ||
-    params.hasMessagingDelivery
+    params.hasMessagingDelivery ||
+    params.hasDeterministicApprovalPrompt
   ) {
     return null;
   }

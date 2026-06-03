@@ -4032,15 +4032,18 @@ async function runEmbeddedAgentInternal(
           // returning `undefined` and going completely silent on the channel
           // (indistinguishable from a hung process). Surface a recoverable notice
           // instead, mirroring the prompt-level timeout copy above. `timedOut` is
-          // distinct from a user cancel (`aborted`), and the notice is suppressed
-          // for intentionally-silent (cron/heartbeat) turns and when a messaging
-          // tool already delivered a reply out-of-band.
+          // distinct from a user cancel (`aborted`); the notice is suppressed for
+          // compaction timeouts (paused/resumable, not abandoned), for
+          // intentionally-silent (cron/heartbeat) turns, and when a messaging tool
+          // or a deterministic approval prompt already delivered out-of-band.
           const turnBudgetTimeoutNotice = resolveTurnBudgetTimeoutNotice({
             timedOut,
             idleTimedOut,
+            timedOutDuringCompaction,
             payloadCount,
             emptyAssistantReplyIsSilent,
             hasMessagingDelivery: hasMessagingToolDeliveryEvidence(attempt),
+            hasDeterministicApprovalPrompt: attempt.didSendDeterministicApprovalPrompt === true,
           });
           if (turnBudgetTimeoutNotice) {
             const replayInvalid = resolveReplayInvalidForAttempt(turnBudgetTimeoutNotice);
