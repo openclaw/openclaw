@@ -1228,12 +1228,17 @@ function isTailDuplicate(messages: unknown[], candidate: unknown): boolean {
   if (messages.length === 0) {
     return false;
   }
-  const candidateSig = messageDisplaySignature(candidate);
-  if (!candidateSig) {
+  const tail = messages[messages.length - 1];
+  if (!tail || !candidate || typeof tail !== "object" || typeof candidate !== "object") {
     return false;
   }
-  const tailSig = messageDisplaySignature(messages[messages.length - 1]);
-  return tailSig === candidateSig;
+  const tailContent = (tail as { content?: unknown }).content;
+  const candidateContent = (candidate as { content?: unknown }).content;
+  try {
+    return JSON.stringify(tailContent) === JSON.stringify(candidateContent);
+  } catch {
+    return false;
+  }
 }
 
 export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
