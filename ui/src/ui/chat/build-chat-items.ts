@@ -9,6 +9,7 @@ import { extractTextCached } from "./message-extract.ts";
 import { normalizeMessage, stripMessageDisplayMetadataText } from "./message-normalizer.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
 import { messageMatchesSearchQuery } from "./search-match.ts";
+import { trimAccumulatedStreamPrefix } from "./stream-text.ts";
 import { extractToolCardsCached, extractToolPreview } from "./tool-cards.ts";
 import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
 
@@ -298,13 +299,6 @@ function hasRenderableNormalizedMessage(message: unknown): boolean {
 function sanitizeStreamText(text: string): string {
   const stripped = stripMessageDisplayMetadataText(text);
   return stripped.trim().length > 0 ? stripped : "";
-}
-
-function trimAccumulatedStreamPrefix(text: string, previousText: string | null): string {
-  if (!previousText || !text.startsWith(previousText)) {
-    return text;
-  }
-  return text.slice(previousText.length).trimStart();
 }
 
 function shouldRenderQueuedSendInThread(item: ChatQueueItem): boolean {
