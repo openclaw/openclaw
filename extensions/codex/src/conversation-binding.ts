@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexAppServerAuthProfileIdForAgent } from "./app-server/auth-bridge.js";
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
+import { CodexAppServerServerRequestError } from "./app-server/client.js";
 import {
   codexSandboxPolicyForTurn,
   resolveOpenClawExecPolicyForCodexAppServer,
@@ -27,6 +28,7 @@ import {
 } from "./app-server/config.js";
 import type {
   CodexServiceTier,
+  CodexTurnInterruptParams,
   CodexThreadResumeResponse,
   CodexThreadStartResponse,
   CodexTurnStartResponse,
@@ -85,6 +87,15 @@ const MISSING_PROPOSED_PLAN_REFERENCE_RE =
   /\b(?:previous|above|earlier)\b[\s\S]{0,120}<proposed_plan>|<proposed_plan>[\s\S]{0,120}\b(?:previous|above|earlier)\b/iu;
 const NATIVE_CONVERSATION_INTERACTIVE_APPROVALS_UNAVAILABLE =
   "OpenClaw native Codex conversation binding cannot route interactive approvals yet; use the Codex harness or explicit /acp spawn codex for that workflow.";
+const CODEX_USER_INPUT_TIMEOUT_REPLY =
+  "Codex input request timed out before an answer was sent. I stopped the Codex turn so it will not continue with a default answer.";
+const CODEX_USER_INPUT_TIMEOUT_INTERRUPT_FAILED_REPLY =
+  "Codex input request timed out before an answer was sent, but OpenClaw could not stop the Codex turn. Use `/codex stop` if it is still running.";
+const CODEX_TURN_TRANSITION_SERVER_REQUEST_ERROR = {
+  code: -1,
+  message: "client request resolved because the turn state was changed",
+  data: { reason: "turnTransition" },
+} satisfies ConstructorParameters<typeof CodexAppServerServerRequestError>[0];
 
 export {
   createCodexConversationBindingData,
@@ -607,6 +618,20 @@ async function runBoundTurn(params: {
     normalizedReasoningEffort,
   );
   let activeTurnId: string | undefined;
+  let userInputTimedOut = false;
+  let userInputTimeoutInterruptFailed = false;
+  const interruptActiveTurnAfterUserInputTimeout = async () => {
+    const turnId = activeTurnId;
+    if (!turnId) {
+      return;
+    }
+    await client.request(
+      "turn/interrupt",
+      { threadId, turnId } satisfies CodexTurnInterruptParams,
+      { timeoutMs: runtime.requestTimeoutMs },
+    );
+    userInputTimedOut = true;
+  };
   const requestCleanup = client.addRequestHandler(
     async (request): Promise<JsonValue | undefined> => {
       if (request.method === "item/tool/call") {
@@ -638,11 +663,11 @@ async function runBoundTurn(params: {
         if (!params.sendProgressReply) {
           return emptyUserInputResponse();
         }
-        return await new Promise<JsonValue>((resolve) => {
+        return await new Promise<JsonValue>((resolve, reject) => {
           const resumeTurnTimeout = collector.suspendTimeout();
           let inputTimeout: ReturnType<typeof setTimeout> | undefined;
           let resolved = false;
-          const finish = (response: JsonValue) => {
+          const settle = (complete: () => void) => {
             if (resolved) {
               return;
             }
@@ -651,7 +676,17 @@ async function runBoundTurn(params: {
               clearTimeout(inputTimeout);
             }
             resumeTurnTimeout();
-            resolve(response);
+            complete();
+          };
+          const finish = (response: JsonValue) => {
+            settle(() => {
+              resolve(response);
+            });
+          };
+          const fail = (error: unknown) => {
+            settle(() => {
+              reject(error);
+            });
           };
           const { token, payload } = createCodexUserInputPromptControl({
             questions: requestParams.questions,
@@ -668,7 +703,18 @@ async function runBoundTurn(params: {
           });
           inputTimeout = setTimeout(() => {
             cancelCodexUserInput({ token });
-            finish(emptyUserInputResponse());
+            void interruptActiveTurnAfterUserInputTimeout()
+              .then(() =>
+                fail(
+                  new CodexAppServerServerRequestError(CODEX_TURN_TRANSITION_SERVER_REQUEST_ERROR),
+                ),
+              )
+              .catch((error: unknown) => {
+                userInputTimeoutInterruptFailed = true;
+                finish(emptyUserInputResponse());
+                throw error;
+              })
+              .catch(() => undefined);
           }, CODEX_PENDING_CONTROL_TTL_MS);
           inputTimeout.unref?.();
           void sendProgressReply(payload).catch(() => {
@@ -702,6 +748,20 @@ async function runBoundTurn(params: {
   );
   try {
     const completion = await runConversationTurn(params.prompt);
+    if (userInputTimeoutInterruptFailed) {
+      return {
+        reply: {
+          text: CODEX_USER_INPUT_TIMEOUT_INTERRUPT_FAILED_REPLY,
+        },
+      };
+    }
+    if (userInputTimedOut) {
+      return {
+        reply: {
+          text: CODEX_USER_INPUT_TIMEOUT_REPLY,
+        },
+      };
+    }
     let replyText = completion.replyText.trim();
     let planText = completion.planText.trim();
     let planReplyText = resolvePlanReplyText({ binding, replyText, planText });

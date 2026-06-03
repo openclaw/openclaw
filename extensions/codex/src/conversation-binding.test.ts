@@ -75,6 +75,7 @@ import {
 } from "./conversation-binding.js";
 import {
   answerCodexUserInputCallback,
+  CODEX_PENDING_CONTROL_TTL_MS,
   createCodexUserInputPrompt,
   resetCodexConversationChatControlsForTests,
 } from "./conversation-chat-controls.js";
@@ -1798,6 +1799,173 @@ describe("codex conversation binding", () => {
       }),
     );
     expect(userInputResponse).toEqual({ answers: { q1: { answers: ["Execute"] } } });
+  });
+
+  it("interrupts the Codex turn when chat user-input controls expire unanswered", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+      }),
+    );
+    let notificationHandler: ((notification: unknown) => void) | undefined;
+    let requestHandler:
+      | ((request: { method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    let userInputResponse: unknown;
+    let userInputError: unknown;
+    let interrupted = false;
+    const request = vi.fn(async (method: string) => {
+      if (method === "turn/start") {
+        setTimeout(async () => {
+          try {
+            userInputResponse = await requestHandler?.({
+              method: "item/tool/requestUserInput",
+              params: {
+                threadId: "thread-1",
+                turnId: "turn-1",
+                itemId: "input-1",
+                questions: [
+                  {
+                    id: "q1",
+                    header: "Mode",
+                    question: "Pick one",
+                    isOther: true,
+                    isSecret: false,
+                    options: [
+                      { label: "Plan", description: "Stay in plan" },
+                      { label: "Execute", description: "Run now" },
+                    ],
+                  },
+                ],
+              },
+            });
+          } catch (error) {
+            userInputError = error;
+          }
+          if (!interrupted) {
+            notificationHandler?.({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-1",
+                turn: {
+                  id: "turn-1",
+                  status: "completed",
+                  items: [
+                    {
+                      id: "assistant-1",
+                      type: "agentMessage",
+                      text: "continued after timeout",
+                    },
+                  ],
+                },
+              },
+            });
+          }
+        }, 0);
+        return { turn: { id: "turn-1" } };
+      }
+      if (method === "turn/interrupt") {
+        interrupted = true;
+        setTimeout(() => {
+          notificationHandler?.({
+            method: "turn/completed",
+            params: {
+              threadId: "thread-1",
+              turn: { id: "turn-1", status: "interrupted", items: [] },
+            },
+          });
+        }, 0);
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request,
+      addNotificationHandler: vi.fn((handler: (notification: unknown) => void) => {
+        notificationHandler = handler;
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn((handler) => {
+        requestHandler = handler;
+        return () => undefined;
+      }),
+    });
+    const sendProgressReply = vi.fn(async () => undefined);
+
+    vi.useFakeTimers();
+    try {
+      const result = handleCodexConversationInboundClaim(
+        {
+          content: "ask",
+          bodyForAgent: "ask",
+          channel: "telegram",
+          senderId: "user-1",
+          accountId: "default",
+          threadId: "chat-1",
+          sessionKey: "session-key",
+          isGroup: false,
+          commandAuthorized: true,
+        },
+        {
+          channelId: "telegram",
+          senderId: "user-1",
+          accountId: "default",
+          sessionKey: "session-key",
+          pluginBinding: {
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: tempDir,
+            channel: "telegram",
+            accountId: "default",
+            conversationId: "5185575566",
+            boundAt: Date.now(),
+            data: {
+              kind: "codex-app-server-session",
+              version: 1,
+              sessionFile,
+              workspaceDir: tempDir,
+            },
+          },
+        },
+        { timeoutMs: CODEX_PENDING_CONTROL_TTL_MS + 1_000, sendProgressReply },
+      );
+
+      await vi.waitFor(() => {
+        expect(sendProgressReply).toHaveBeenCalledWith(
+          expect.objectContaining({
+            payload: expect.objectContaining({
+              text: expect.stringContaining("Codex needs input:"),
+            }),
+          }),
+        );
+      });
+      await vi.advanceTimersByTimeAsync(CODEX_PENDING_CONTROL_TTL_MS);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await expect(result).resolves.toEqual({
+        handled: true,
+        reply: {
+          text: "Codex input request timed out before an answer was sent. I stopped the Codex turn so it will not continue with a default answer.",
+        },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(request).toHaveBeenCalledWith(
+      "turn/interrupt",
+      { threadId: "thread-1", turnId: "turn-1" },
+      { timeoutMs: 60_000 },
+    );
+    expect(userInputResponse).toBeUndefined();
+    expect(userInputError).toMatchObject({
+      message: "client request resolved because the turn state was changed",
+      data: { reason: "turnTransition" },
+    });
   });
 
   it("routes typed other replies to the pending Codex user-input request", async () => {

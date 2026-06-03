@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   testing,
   CodexAppServerClient,
+  CodexAppServerServerRequestError,
   MIN_CODEX_APP_SERVER_VERSION,
   isCodexAppServerApprovalRequest,
   readCodexVersionFromUserAgent,
@@ -477,6 +478,37 @@ describe("CodexAppServerClient", () => {
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
       id: "srv-1",
       result: { contentItems: [{ type: "inputText", text: "ok" }], success: true },
+    });
+  });
+
+  it("preserves structured errors from server-initiated request handlers", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    harness.client.addRequestHandler((request) => {
+      if (request.method === "item/tool/requestUserInput") {
+        throw new CodexAppServerServerRequestError({
+          code: -1,
+          message: "client request resolved because the turn state was changed",
+          data: { reason: "turnTransition" },
+        });
+      }
+      return undefined;
+    });
+
+    harness.send({
+      id: "srv-input",
+      method: "item/tool/requestUserInput",
+      params: { threadId: "thread-1", turnId: "turn-1" },
+    });
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "srv-input",
+      error: {
+        code: -1,
+        message: "client request resolved because the turn state was changed",
+        data: { reason: "turnTransition" },
+      },
     });
   });
 
