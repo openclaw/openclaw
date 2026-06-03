@@ -66,6 +66,7 @@ import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
 import { ClaudeAppServerEventProjector } from "./event-projector.js";
 import { resolveManagedClaudeBridgeStartOptions } from "./managed-binary.js";
+import { createClaudeProgressWatch, type ClaudeProgressWatch } from "./progress-watch.js";
 import {
   assertTurnStartParams,
   assertTurnStartResponse,
@@ -863,24 +864,18 @@ async function runTurn(
     let unsubscribe: () => void = () => {};
     let unsubscribeExit: () => void = () => {};
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
-    // Codex-consistent progress-watch state. lastProgressAt advances only on REAL
-    // activity (NOT the periodic keepalive heartbeat); openItems counts started-but-
-    // not-completed turn items (tool calls / native subagents) so the watch can
-    // suppress itself while work is genuinely in flight. See
-    // CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS above.
-    let progressTimer: ReturnType<typeof setTimeout> | null = null;
-    let lastProgressAt = Date.now();
-    let openItems = 0;
+    // Codex-consistent progress watch (createClaudeProgressWatch): advances only on
+    // REAL activity, suppresses itself while turn items are in flight, and fires a
+    // no-progress stall before the hard ceiling. Assigned after cleanup/reject are in
+    // scope; cleanup() disposes it.
+    let progressWatch: ClaudeProgressWatch | null = null;
 
     const cleanup = () => {
       if (idleTimer) {
         clearTimeout(idleTimer);
       }
       idleTimer = null;
-      if (progressTimer) {
-        clearTimeout(progressTimer);
-      }
-      progressTimer = null;
+      progressWatch?.dispose();
       ac.signal.removeEventListener("abort", onAbort);
       unsubscribe();
       unsubscribeExit();
@@ -914,24 +909,11 @@ async function runTurn(
       idleTimer.unref?.();
     };
 
-    // Self-reschedules against lastProgressAt; tears the turn down only when the full
-    // window has elapsed with NO work in flight (openItems === 0), else re-arms for
-    // the remainder. See CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS above.
-    const scheduleProgressWatch = () => {
-      if (progressTimer) {
-        clearTimeout(progressTimer);
-      }
-      const delay = Math.max(
-        1,
-        CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS - (Date.now() - lastProgressAt),
-      );
-      progressTimer = setTimeout(() => {
+    progressWatch = createClaudeProgressWatch({
+      timeoutMs: CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS,
+      isSettled: () => settled,
+      onStall: ({ idleMs, openItems }) => {
         if (settled) {
-          return;
-        }
-        const idleMs = Date.now() - lastProgressAt;
-        if (idleMs < CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS || openItems > 0) {
-          scheduleProgressWatch();
           return;
         }
         settled = true;
@@ -942,6 +924,7 @@ async function runTurn(
           turnId,
           progressIdleTimeoutMs: CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS,
           openItems,
+          idleMs,
         });
         client.request("turn/interrupt", { threadId, turnId }).catch(() => {});
         reject(
@@ -949,9 +932,8 @@ async function runTurn(
             `Claude turn made no progress for ${CLAUDE_TURN_PROGRESS_IDLE_TIMEOUT_MS}ms with no work in flight`,
           ),
         );
-      }, delay);
-      progressTimer.unref?.();
-    };
+      },
+    });
 
     // If the shared bridge child dies (crash or forced restart) mid-turn, fail
     // fast with the real exit cause instead of waiting out the idle watchdog and
@@ -980,17 +962,15 @@ async function runTurn(
         if (notif.method === "turn/progress") {
           const kind = (notif.params as { kind?: unknown } | undefined)?.kind;
           if (kind !== "heartbeat") {
-            lastProgressAt = Date.now();
+            progressWatch?.noteProgress();
           }
+        } else if (notif.method === "item/started") {
+          progressWatch?.noteItemStarted();
+        } else if (notif.method === "item/completed") {
+          progressWatch?.noteItemCompleted();
         } else {
-          lastProgressAt = Date.now();
-          if (notif.method === "item/started") {
-            openItems += 1;
-          } else if (notif.method === "item/completed") {
-            openItems = Math.max(0, openItems - 1);
-          }
+          progressWatch?.noteProgress();
         }
-        scheduleProgressWatch();
       }
       const outcome = projector.processNotification(notif);
       if (!outcome) {
@@ -1008,7 +988,7 @@ async function runTurn(
       }
     });
     resetIdleTimer();
-    scheduleProgressWatch();
+    progressWatch.arm();
   });
 
   projector.finalize();
