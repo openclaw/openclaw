@@ -1235,7 +1235,7 @@ export function createOpenClawCodingTools(options?: {
   // consumers cannot reach this code path because the symbol is not exported.
   const skipBeforeToolCallHook =
     options !== undefined &&
-    Object.prototype.hasOwnProperty.call(options, SKIP_BEFORE_TOOL_CALL_HOOK) &&
+    Object.hasOwn(options, SKIP_BEFORE_TOOL_CALL_HOOK) &&
     (options as Record<symbol, unknown>)[SKIP_BEFORE_TOOL_CALL_HOOK] === true;
   const withHooks = skipBeforeToolCallHook
     ? normalized
