@@ -237,7 +237,6 @@ export function applyAnthropicPayloadPolicyToParams(
     return;
   }
 
-  // Preserve Anthropic cache-write scope by only tagging the trailing user turn.
   applyAnthropicCacheControlToMessages(payloadObj.messages, policy.cacheControl);
 }
 

@@ -1151,8 +1151,6 @@ function convertMessages(
     } else if (msg.role === "toolResult") {
       // Collect all consecutive toolResult messages, needed for z.ai Anthropic endpoint
       const toolResults: ContentBlockParam[] = [];
-
-      // Add the current tool result
       toolResults.push({
         type: "tool_result",
         tool_use_id: msg.toolCallId,
@@ -1160,10 +1158,9 @@ function convertMessages(
         is_error: msg.isError,
       });
 
-      // Look ahead for consecutive toolResult messages
       let j = i + 1;
       while (j < transformedMessages.length && transformedMessages[j].role === "toolResult") {
-        const nextMsg = transformedMessages[j] as ToolResultMessage; // We know it's a toolResult
+        const nextMsg = transformedMessages[j] as ToolResultMessage;
         toolResults.push({
           type: "tool_result",
           tool_use_id: nextMsg.toolCallId,
@@ -1173,10 +1170,7 @@ function convertMessages(
         j++;
       }
 
-      // Skip the messages we've already processed
       i = j - 1;
-
-      // Add a single user message with all tool results
       params.push({
         role: "user",
         content: toolResults,
@@ -1184,13 +1178,10 @@ function convertMessages(
     }
   }
 
-  // Prefer the latest real user content over trailing tool-result carriers so
-  // tool loops do not move the conversation cache marker on every request.
   if (cacheControl && params.length > 0) {
     let fallbackToolResult: ContentBlockParam | undefined;
-    let applied = false;
 
-    for (let i = params.length - 1; i >= 0 && !applied; i--) {
+    for (let i = params.length - 1; i >= 0; i--) {
       const message = params[i];
       if (message.role !== "user") {
         continue;
@@ -1202,9 +1193,7 @@ function convertMessages(
           if (block.type === "text" || block.type === "image") {
             (block as typeof block & { cache_control?: typeof cacheControl }).cache_control =
               cacheControl;
-            fallbackToolResult = undefined;
-            applied = true;
-            break;
+            return params;
           }
           if (block.type === "tool_result" && fallbackToolResult === undefined) {
             fallbackToolResult = block;
@@ -1221,8 +1210,7 @@ function convertMessages(
             cache_control: cacheControl,
           },
         ] as ContentBlockParam[];
-        fallbackToolResult = undefined;
-        break;
+        return params;
       }
     }
 
