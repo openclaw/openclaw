@@ -22,6 +22,8 @@ export function resolveCommandAuthorizedFromAuthorizers(params: {
     if (mode === "deny") {
       return false;
     }
+    // `configured` preserves the old open-by-default behavior until a channel has at least one
+    // command authorizer configured, then enforces that configured source.
     const anyConfigured = authorizers.some((entry) => entry.configured);
     if (!anyConfigured) {
       return true;
@@ -58,6 +60,8 @@ export function resolveDualTextControlCommandGate(params: {
   hasControlCommand: boolean;
   modeWhenAccessGroupsOff?: CommandGatingModeWhenAccessGroupsOff;
 }): { commandAuthorized: boolean; shouldBlock: boolean } {
+  // Treat primary and secondary identities as independent authorization sources; channels use
+  // this when a text command can come from either a sender id or a platform-specific actor id.
   return resolveControlCommandGate({
     useAccessGroups: params.useAccessGroups,
     authorizers: [
