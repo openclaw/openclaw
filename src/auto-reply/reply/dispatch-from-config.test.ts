@@ -1830,7 +1830,9 @@ describe("dispatchReplyFromConfig", () => {
 
     // Give the second turn time to run its admission/recovery path. With the
     // bug it would force-fail the first turn's fresh recovery operation here.
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
     expect(recoveryOperation?.result).toBeNull();
     expect(secondReplyResolver).not.toHaveBeenCalled();
 
