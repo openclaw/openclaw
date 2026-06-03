@@ -499,31 +499,61 @@ function normalizeConfiguredMemoryEmbeddingProviderId(value: unknown): string | 
   return normalized;
 }
 
-function addConfiguredMemoryEmbeddingProviderId(target: Set<string>, memorySearch: unknown): void {
-  if (!isRecord(memorySearch) || memorySearch.enabled === false) {
-    return;
+function readMemorySearchEnabled(
+  memorySearch: Record<string, unknown> | undefined,
+): boolean | undefined {
+  const enabled = memorySearch?.enabled;
+  return typeof enabled === "boolean" ? enabled : undefined;
+}
+
+/**
+ * Resolve the effective memory embedding provider id for a single agent by
+ * merging its `memorySearch` override over `agents.defaults.memorySearch`,
+ * mirroring `resolveMemorySearchConfig` inheritance
+ * (`override?.enabled ?? defaults?.enabled ?? true`,
+ * `override?.provider ?? defaults?.provider`). Returns undefined when effective
+ * memory search is disabled, so an inherited-disabled default is not re-pulled
+ * into startup by a per-agent override that only sets `provider`. Sentinel ids
+ * ("auto"/"local"/"none") also resolve to undefined.
+ */
+function resolveEffectiveMemoryEmbeddingProviderId(
+  defaults: Record<string, unknown> | undefined,
+  override: Record<string, unknown> | undefined,
+): string | undefined {
+  const enabled = readMemorySearchEnabled(override) ?? readMemorySearchEnabled(defaults) ?? true;
+  if (!enabled) {
+    return undefined;
   }
-  const providerId = normalizeConfiguredMemoryEmbeddingProviderId(memorySearch.provider);
-  if (providerId) {
-    target.add(providerId);
-  }
+  return normalizeConfiguredMemoryEmbeddingProviderId(override?.provider ?? defaults?.provider);
 }
 
 /**
  * Collect explicitly configured `agents.*.memorySearch.provider` ids that map to
- * a plugin-owned memory embedding provider contract. Sentinel values
- * ("auto"/"local"/"none") and disabled memory search blocks are ignored.
+ * a plugin-owned memory embedding provider contract. Enablement and provider are
+ * resolved with the same defaults->override inheritance as runtime memory search,
+ * so inherited-disabled blocks and sentinel values ("auto"/"local"/"none") are
+ * ignored.
  */
 export function collectConfiguredMemoryEmbeddingProviderIds(
   config: OpenClawConfig,
 ): ReadonlySet<string> {
   const providerIds = new Set<string>();
-  addConfiguredMemoryEmbeddingProviderId(providerIds, config.agents?.defaults?.memorySearch);
+  const defaultsBlock = config.agents?.defaults?.memorySearch;
+  const defaults = isRecord(defaultsBlock) ? defaultsBlock : undefined;
+  const addEffectiveProviderId = (override: Record<string, unknown> | undefined) => {
+    const providerId = resolveEffectiveMemoryEmbeddingProviderId(defaults, override);
+    if (providerId) {
+      providerIds.add(providerId);
+    }
+  };
+  // Defaults baseline covers the default agent and every agent that does not
+  // override memorySearch.
+  addEffectiveProviderId(undefined);
   const agents = config.agents?.list;
   if (Array.isArray(agents)) {
     for (const agent of agents) {
       if (isRecord(agent)) {
-        addConfiguredMemoryEmbeddingProviderId(providerIds, agent.memorySearch);
+        addEffectiveProviderId(isRecord(agent.memorySearch) ? agent.memorySearch : undefined);
       }
     }
   }

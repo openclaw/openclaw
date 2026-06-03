@@ -1001,6 +1001,45 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "memory-core"],
     ],
     [
+      "skips a per-agent memory embedding provider when memory search is disabled by inherited defaults",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { enabled: false },
+          },
+          list: [{ id: "researcher", memorySearch: { provider: "openai" } }],
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "includes the inherited default provider when a per-agent override re-enables memory search",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { enabled: false, provider: "openai" },
+          },
+          list: [{ id: "researcher", memorySearch: { enabled: true } }],
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "memory-core"],
+    ],
+    [
+      "keeps the default-agent memory embedding provider when one agent disables memory search",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai" },
+          },
+          list: [{ id: "muted", memorySearch: { enabled: false } }],
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "memory-core"],
+    ],
+    [
       "includes explicitly selected external web search providers at startup",
       {
         channels: {},
