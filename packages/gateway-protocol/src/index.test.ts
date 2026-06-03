@@ -126,6 +126,7 @@ describe("lazy protocol validators", () => {
     expect(
       protocol.validateSkillsProposalRequestRevisionParams({
         proposalId: "support-file-sampler-20260531-68207b7b7f",
+        targetAgentId: "writer",
         instructions: "Make the support files 5",
         sessionKey: "agent:main:session:skill-workshop",
         idempotencyKey: "revision-run-1",

@@ -171,6 +171,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
     proposal: NonNullable<Awaited<ReturnType<typeof inspectSkillProposal>>>;
     sessionId?: string;
     sessionKey: string;
+    targetAgentId?: string;
   },
 ): Promise<void> {
   const { chatHandlers } = await import("./chat.js");
@@ -180,7 +181,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
   }
   const chatParams = {
     sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    agentId: params.targetAgentId ?? params.agentId,
     ...(params.sessionId ? { sessionId: params.sessionId } : {}),
     message: params.instructions,
     deliver: false,
@@ -463,6 +464,9 @@ export const skillsHandlers: GatewayRequestHandlers = {
           proposal,
           sessionId: parsedParams.sessionId,
           sessionKey: parsedParams.sessionKey,
+          targetAgentId: parsedParams.targetAgentId
+            ? normalizeAgentId(parsedParams.targetAgentId)
+            : undefined,
         });
         return SKILL_PROPOSAL_RESPONSE_HANDLED;
       },

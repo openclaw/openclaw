@@ -217,6 +217,7 @@ describe("skills proposal gateway handlers", () => {
       proposalId: created.record.id,
       instructions: "Make the support files 5",
       sessionKey: "agent:main:session:skill-workshop",
+      targetAgentId: "revision-target",
       idempotencyKey: "revision-run-1",
     });
 
@@ -231,7 +232,7 @@ describe("skills proposal gateway handlers", () => {
     };
     expect(forwarded.req?.method).toBe("chat.send");
     expect(forwarded.params).toMatchObject({
-      agentId: "main",
+      agentId: "revision-target",
       deliver: false,
       idempotencyKey: "revision-run-1",
       message: "Make the support files 5",

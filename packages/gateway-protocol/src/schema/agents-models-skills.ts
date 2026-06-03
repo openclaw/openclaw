@@ -767,6 +767,7 @@ export const SkillsProposalReviseParamsSchema = Type.Object(
 export const SkillsProposalRequestRevisionParamsSchema = Type.Object(
   {
     agentId: Type.Optional(NonEmptyString),
+    targetAgentId: Type.Optional(NonEmptyString),
     proposalId: NonEmptyString,
     instructions: Type.String({ minLength: 1, maxLength: 32_768 }),
     sessionKey: NonEmptyString,
