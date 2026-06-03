@@ -1,3 +1,7 @@
+/**
+ * Shared messaging-target parsing primitives for channel plugins and SDK consumers.
+ * Channel-specific grammars stay in plugins; this file owns common target shapes and parse order.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export type { DirectoryConfigParams } from "./plugins/directory-types.js";
