@@ -46,6 +46,41 @@ type DiagnosticStabilityChannelTurnLatencyMetricKey = Exclude<
   "recentSlow"
 >;
 
+type DiagnosticStabilityChannelTurnToolSummary = {
+  called: number;
+  results: number;
+  failedResults: number;
+  missingResults: number;
+  slowResults: number;
+  byTool: Record<
+    string,
+    {
+      called: number;
+      results: number;
+      failedResults: number;
+      missingResults: number;
+      slowResults: number;
+      maxDurationMs?: number;
+    }
+  >;
+  recentSlow: Array<{
+    seq: number;
+    ts: number;
+    channel?: string;
+    turnId?: string;
+    toolName?: string;
+    durationMs: number;
+  }>;
+  recentFailures: Array<{
+    seq: number;
+    ts: number;
+    channel?: string;
+    turnId?: string;
+    toolName?: string;
+    reason?: string;
+  }>;
+};
+
 export type DiagnosticStabilityHealthStatus = "ok" | "warning" | "degraded";
 
 export type DiagnosticStabilityChannelTurnHealthIssue = {
@@ -53,7 +88,10 @@ export type DiagnosticStabilityChannelTurnHealthIssue = {
     | "missing_visible_delivery"
     | "stale_message_at_receive"
     | "slow_receive_to_turn_start"
-    | "slow_start_to_delivery";
+    | "slow_start_to_delivery"
+    | "tool_result_failed"
+    | "tool_result_missing"
+    | "slow_tool_result";
   level: Exclude<DiagnosticStabilityHealthStatus, "ok">;
   message: string;
   metric?: string;
@@ -91,11 +129,13 @@ export type DiagnosticStabilityEventRecord = {
   transport?: string;
   brain?: string;
   toolName?: string;
+  toolCallId?: string;
   activeWorkKind?: string;
   pairedToolName?: string;
   provider?: string;
   model?: string;
   durationMs?: number;
+  isError?: boolean;
   requestBytes?: number;
   responseBytes?: number;
   timeToFirstByteMs?: number;
@@ -210,6 +250,7 @@ export type DiagnosticStabilitySnapshot = {
         reason?: string;
       }>;
       latency?: DiagnosticStabilityChannelTurnLatencySummary;
+      tools?: DiagnosticStabilityChannelTurnToolSummary;
       health: DiagnosticStabilityChannelTurnHealth;
     };
   };
@@ -397,7 +438,11 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       record.receivedToTurnStartMs = event.receivedToTurnStartMs;
       record.startToDeliveryMs = event.startToDeliveryMs;
       record.startToCompletionMs = event.startToCompletionMs;
-      assignReasonCode(record, event.reason);
+      record.toolName = event.toolName;
+      record.toolCallId = event.toolCallId;
+      record.durationMs = event.durationMs;
+      record.isError = event.isError;
+      assignReasonCode(record, event.reason ?? event.deniedReason ?? event.errorCategory);
       break;
     case "talk.event":
       record.talkEventType = event.talkEventType;
@@ -718,9 +763,10 @@ function summarizeRecords(
   };
   const channelTurns: Omit<
     NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>,
-    "latency"
+    "latency" | "tools"
   > & {
     latency: DiagnosticStabilityChannelTurnLatencySummary;
+    tools: DiagnosticStabilityChannelTurnToolSummary;
   } = {
     totalEvents: 0,
     deliveryRequired: 0,
@@ -737,6 +783,16 @@ function summarizeRecords(
     latency: {
       recentSlow: [],
     },
+    tools: {
+      called: 0,
+      results: 0,
+      failedResults: 0,
+      missingResults: 0,
+      slowResults: 0,
+      byTool: {},
+      recentSlow: [],
+      recentFailures: [],
+    },
     health: {
       status: "ok",
       issues: [],
@@ -751,6 +807,17 @@ function summarizeRecords(
     startToDeliveryMs: [],
     startToCompletionMs: [],
   };
+  const terminalChannelTurnIds = new Set<string>();
+  const activeChannelTurnTools = new Map<
+    string,
+    {
+      seq: number;
+      ts: number;
+      channel?: string;
+      turnId?: string;
+      toolName?: string;
+    }
+  >();
 
   function pushChannelTurnHealthIssue(issue: DiagnosticStabilityChannelTurnHealthIssue): void {
     channelTurns.health.issues.push(issue);
@@ -821,6 +888,108 @@ function summarizeRecords(
     }
   }
 
+  function resolveToolSummaryEntry(toolName: string) {
+    const tools = channelTurns.tools;
+    tools.byTool[toolName] ??= {
+      called: 0,
+      results: 0,
+      failedResults: 0,
+      missingResults: 0,
+      slowResults: 0,
+    };
+    return tools.byTool[toolName];
+  }
+
+  function recordChannelTurnToolEvent(record: DiagnosticStabilityEventRecord): void {
+    if (record.action !== "tool.called" && record.action !== "tool.result") {
+      return;
+    }
+    const tools = channelTurns.tools;
+    const toolName = record.toolName ?? "unknown";
+    const entry = resolveToolSummaryEntry(toolName);
+    const toolCallKey =
+      record.turnId && record.toolCallId ? `${record.turnId}:${record.toolCallId}` : undefined;
+    if (record.action === "tool.called") {
+      tools.called += 1;
+      entry.called += 1;
+      if (toolCallKey) {
+        activeChannelTurnTools.set(toolCallKey, {
+          seq: record.seq,
+          ts: record.ts,
+          channel: record.channel,
+          turnId: record.turnId,
+          toolName: record.toolName,
+        });
+      }
+      return;
+    }
+    tools.results += 1;
+    entry.results += 1;
+    if (toolCallKey) {
+      activeChannelTurnTools.delete(toolCallKey);
+    }
+    if (typeof record.durationMs === "number" && Number.isFinite(record.durationMs)) {
+      entry.maxDurationMs =
+        entry.maxDurationMs === undefined
+          ? record.durationMs
+          : Math.max(entry.maxDurationMs, record.durationMs);
+      if (record.durationMs >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+        tools.slowResults += 1;
+        entry.slowResults += 1;
+        tools.recentSlow.push({
+          seq: record.seq,
+          ts: record.ts,
+          channel: record.channel,
+          turnId: record.turnId,
+          toolName: record.toolName,
+          durationMs: record.durationMs,
+        });
+        if (tools.recentSlow.length > 10) {
+          tools.recentSlow.shift();
+        }
+      }
+    }
+    if (record.outcome === "failed" || record.isError === true) {
+      tools.failedResults += 1;
+      entry.failedResults += 1;
+      tools.recentFailures.push({
+        seq: record.seq,
+        ts: record.ts,
+        channel: record.channel,
+        turnId: record.turnId,
+        toolName: record.toolName,
+        reason: record.reason,
+      });
+      if (tools.recentFailures.length > 10) {
+        tools.recentFailures.shift();
+      }
+    }
+  }
+
+  function finalizeChannelTurnToolMetrics(): void {
+    for (const pending of activeChannelTurnTools.values()) {
+      if (!pending.turnId || !terminalChannelTurnIds.has(pending.turnId)) {
+        continue;
+      }
+      const tools = channelTurns.tools;
+      const toolName = pending.toolName ?? "unknown";
+      const entry = resolveToolSummaryEntry(toolName);
+      tools.missingResults += 1;
+      entry.missingResults += 1;
+      tools.recentFailures.push({
+        seq: pending.seq,
+        ts: pending.ts,
+        channel: pending.channel,
+        turnId: pending.turnId,
+        toolName: pending.toolName,
+        reason: "missing_tool_result",
+      });
+      if (tools.recentFailures.length > 10) {
+        tools.recentFailures.shift();
+      }
+    }
+  }
+
   for (const record of records) {
     byType[record.type] = (byType[record.type] ?? 0) + 1;
     if (record.memory) {
@@ -874,6 +1043,11 @@ function summarizeRecords(
         channelTurns.invalidCompletions += 1;
         channelSummary.invalidCompletions += 1;
       }
+      if (record.action === "turn.completed" || record.action === "turn.failed") {
+        if (record.turnId) {
+          terminalChannelTurnIds.add(record.turnId);
+        }
+      }
       if (record.reason === "missing_visible_delivery") {
         channelTurns.missingVisibleDelivery += 1;
         channelSummary.missingVisibleDelivery += 1;
@@ -894,9 +1068,11 @@ function summarizeRecords(
       recordChannelTurnLatency(record, "receivedToTurnStartMs", record.receivedToTurnStartMs);
       recordChannelTurnLatency(record, "startToDeliveryMs", record.startToDeliveryMs);
       recordChannelTurnLatency(record, "startToCompletionMs", record.startToCompletionMs);
+      recordChannelTurnToolEvent(record);
     }
   }
   finalizeChannelTurnLatencyMetrics();
+  finalizeChannelTurnToolMetrics();
 
   if (channelTurns.missingVisibleDelivery > 0) {
     pushChannelTurnHealthIssue({
@@ -960,6 +1136,36 @@ function summarizeRecords(
       count: startToDelivery.slowCount,
       guidance:
         "Use an early visible acknowledgement before long tool work; keep final delivery after verification.",
+    });
+  }
+  if (channelTurns.tools.failedResults > 0) {
+    pushChannelTurnHealthIssue({
+      code: "tool_result_failed",
+      level: "warning",
+      message: "A channel turn tool returned a failed result.",
+      count: channelTurns.tools.failedResults,
+      guidance:
+        "Inspect the failed tool before retrying the whole turn; keep the user-facing result grounded in verified tool outcomes.",
+    });
+  }
+  if (channelTurns.tools.missingResults > 0) {
+    pushChannelTurnHealthIssue({
+      code: "tool_result_missing",
+      level: "warning",
+      message: "A channel turn completed with a started tool that had no recorded result.",
+      count: channelTurns.tools.missingResults,
+      guidance:
+        "Check whether the run aborted, timed out, or lost tool-result events before considering the turn complete.",
+    });
+  }
+  if (channelTurns.tools.slowResults > 0) {
+    pushChannelTurnHealthIssue({
+      code: "slow_tool_result",
+      level: "warning",
+      message: "A channel turn tool result exceeded the slow latency threshold.",
+      count: channelTurns.tools.slowResults,
+      guidance:
+        "Move long work to Tasks/TaskFlow and send an early acknowledgement so direct chat remains responsive.",
     });
   }
 

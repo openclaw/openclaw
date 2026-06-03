@@ -592,6 +592,133 @@ describe("diagnostic stability recorder", () => {
     expect(JSON.stringify(snapshot)).not.toContain("+49123456789");
   });
 
+  it("summarizes channel turn tool lifecycle health without storing payloads", async () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-tool-ok",
+      turnEventType: "tool.called",
+      toolName: "exec",
+      toolCallId: "call-ok",
+      status: "started",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-tool-ok",
+      turnEventType: "tool.result",
+      toolName: "exec",
+      toolCallId: "call-ok",
+      status: "completed",
+      durationMs: 12_500,
+      isError: false,
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-tool-failed",
+      turnEventType: "tool.called",
+      toolName: "message",
+      toolCallId: "call-failed",
+      status: "started",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-tool-failed",
+      turnEventType: "tool.result",
+      toolName: "message",
+      toolCallId: "call-failed",
+      status: "failed",
+      durationMs: 250,
+      isError: true,
+      errorCategory: "network",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-tool-missing",
+      turnEventType: "tool.called",
+      toolName: "calendar",
+      toolCallId: "call-missing",
+      status: "started",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-tool-missing",
+      turnEventType: "turn.completed",
+      status: "valid",
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.channelTurns?.tools).toMatchObject({
+      called: 3,
+      results: 2,
+      failedResults: 1,
+      missingResults: 1,
+      slowResults: 1,
+      byTool: {
+        exec: {
+          called: 1,
+          results: 1,
+          failedResults: 0,
+          missingResults: 0,
+          slowResults: 1,
+          maxDurationMs: 12_500,
+        },
+        message: {
+          called: 1,
+          results: 1,
+          failedResults: 1,
+          missingResults: 0,
+          slowResults: 0,
+          maxDurationMs: 250,
+        },
+        calendar: {
+          called: 1,
+          results: 0,
+          failedResults: 0,
+          missingResults: 1,
+          slowResults: 0,
+        },
+      },
+    });
+    expect(snapshot.summary.channelTurns?.health.issues.map((issue) => issue.code)).toEqual([
+      "tool_result_failed",
+      "tool_result_missing",
+      "slow_tool_result",
+    ]);
+    expect(snapshot.summary.channelTurns?.tools?.recentSlow).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        turnId: "turn-tool-ok",
+        toolName: "exec",
+        durationMs: 12_500,
+      }),
+    ]);
+    expect(snapshot.summary.channelTurns?.tools?.recentFailures).toEqual([
+      expect.objectContaining({
+        channel: "telegram",
+        turnId: "turn-tool-failed",
+        toolName: "message",
+        reason: "network",
+      }),
+      expect.objectContaining({
+        channel: "telegram",
+        turnId: "turn-tool-missing",
+        toolName: "calendar",
+        reason: "missing_tool_result",
+      }),
+    ]);
+    expect(JSON.stringify(snapshot)).not.toContain("payload");
+    expect(JSON.stringify(snapshot)).not.toContain("secret");
+  });
+
   it("computes channel turn latency percentiles across samples", async () => {
     startDiagnosticStabilityRecorder();
 

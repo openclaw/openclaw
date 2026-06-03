@@ -2,7 +2,10 @@
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
-import { formatChannelTurnLatencyMetrics } from "../../commands/channel-turn-latency-format.js";
+import {
+  formatChannelTurnLatencyMetrics,
+  formatChannelTurnLatencyMs,
+} from "../../commands/channel-turn-latency-format.js";
 import type { HealthSummary } from "../../commands/health.js";
 import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
@@ -263,6 +266,41 @@ function formatChannelTurnSlaSummary(
     .join(", ");
   if (channelBreakdown) {
     lines.push(`  ${channelBreakdown}`);
+  }
+
+  const tools = channelTurns.tools;
+  if (tools && (tools.called > 0 || tools.results > 0)) {
+    lines.push(
+      `  ${colorize(rich, theme.muted, "Tools:")} called=${tools.called} results=${
+        tools.results
+      } failed=${tools.failedResults} missing=${tools.missingResults} slow=${tools.slowResults}`,
+    );
+    const toolBreakdown = Object.entries(tools.byTool)
+      .toSorted((a, b) => {
+        const failureDelta =
+          b[1].failedResults + b[1].missingResults - (a[1].failedResults + a[1].missingResults);
+        if (failureDelta !== 0) {
+          return failureDelta;
+        }
+        const durationDelta = (b[1].maxDurationMs ?? 0) - (a[1].maxDurationMs ?? 0);
+        if (durationDelta !== 0) {
+          return durationDelta;
+        }
+        return a[0].localeCompare(b[0]);
+      })
+      .slice(0, 5)
+      .map(
+        ([toolName, counts]) =>
+          `${toolName}=called:${counts.called}/results:${counts.results}/failed:${
+            counts.failedResults
+          }/missing:${counts.missingResults}/max:${formatChannelTurnLatencyMs(
+            counts.maxDurationMs,
+          )}`,
+      )
+      .join(", ");
+    if (toolBreakdown) {
+      lines.push(`  ${toolBreakdown}`);
+    }
   }
 
   const latency = channelTurns.latency;

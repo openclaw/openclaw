@@ -57,6 +57,34 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
     lines.push(latencyLine);
   }
 
+  if (channelTurns.tools && (channelTurns.tools.called > 0 || channelTurns.tools.results > 0)) {
+    lines.push(
+      `Tools: called=${channelTurns.tools.called}, results=${channelTurns.tools.results}, failed=${channelTurns.tools.failedResults}, missing=${channelTurns.tools.missingResults}, slow=${channelTurns.tools.slowResults}.`,
+    );
+    const topTools = Object.entries(channelTurns.tools.byTool)
+      .toSorted((a, b) => {
+        const failureDelta =
+          b[1].failedResults + b[1].missingResults - (a[1].failedResults + a[1].missingResults);
+        if (failureDelta !== 0) {
+          return failureDelta;
+        }
+        return (b[1].maxDurationMs ?? 0) - (a[1].maxDurationMs ?? 0);
+      })
+      .slice(0, 3);
+    if (topTools.length > 0) {
+      lines.push(
+        `Top tools: ${topTools
+          .map(
+            ([toolName, counts]) =>
+              `${toolName}(failed=${counts.failedResults}, missing=${
+                counts.missingResults
+              }, max=${formatChannelTurnLatencyMs(counts.maxDurationMs)})`,
+          )
+          .join("; ")}.`,
+      );
+    }
+  }
+
   for (const issue of channelTurns.health.issues.slice(0, 5)) {
     lines.push(formatChannelTurnIssueLine(issue));
     lines.push(`  Guidance: ${issue.guidance}`);

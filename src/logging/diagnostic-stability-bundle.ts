@@ -887,6 +887,106 @@ function readChannelTurnHealth(
   };
 }
 
+function readOptionalChannelTurnToolSummary(
+  value: unknown,
+): NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  const tools = readObject(value, "snapshot.summary.channelTurns.tools");
+  const byToolRaw = readObject(tools.byTool, "snapshot.summary.channelTurns.tools.byTool");
+  const byTool: NonNullable<
+    NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"]
+  >["byTool"] = {};
+  for (const [toolName, entry] of Object.entries(byToolRaw)) {
+    if (!SAFE_REASON_CODE.test(toolName)) {
+      continue;
+    }
+    const counts = readObject(entry, `snapshot.summary.channelTurns.tools.byTool.${toolName}`);
+    byTool[toolName] = {
+      called: readNumber(
+        counts.called,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.called`,
+      ),
+      results: readNumber(
+        counts.results,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.results`,
+      ),
+      failedResults: readNumber(
+        counts.failedResults,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.failedResults`,
+      ),
+      missingResults: readNumber(
+        counts.missingResults,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.missingResults`,
+      ),
+      slowResults: readNumber(
+        counts.slowResults,
+        `snapshot.summary.channelTurns.tools.byTool.${toolName}.slowResults`,
+      ),
+      ...(counts.maxDurationMs !== undefined
+        ? {
+            maxDurationMs: readNumber(
+              counts.maxDurationMs,
+              `snapshot.summary.channelTurns.tools.byTool.${toolName}.maxDurationMs`,
+            ),
+          }
+        : {}),
+    };
+  }
+  const readRecent = (raw: unknown, label: string) =>
+    Array.isArray(raw)
+      ? raw.map((entry, index) => {
+          const item = readObject(entry, `${label}[${index}]`);
+          return {
+            seq: readNumber(item.seq, `${label}[${index}].seq`),
+            ts: readTimestampMs(item.ts, `${label}[${index}].ts`),
+            ...(item.channel !== undefined
+              ? { channel: readOptionalCodeString(item.channel, `${label}[${index}].channel`) }
+              : {}),
+            ...(item.turnId !== undefined
+              ? { turnId: readOptionalCodeString(item.turnId, `${label}[${index}].turnId`) }
+              : {}),
+            ...(item.toolName !== undefined
+              ? { toolName: readOptionalCodeString(item.toolName, `${label}[${index}].toolName`) }
+              : {}),
+            ...(item.reason !== undefined
+              ? { reason: readOptionalCodeString(item.reason, `${label}[${index}].reason`) }
+              : {}),
+            ...(item.durationMs !== undefined
+              ? { durationMs: readNumber(item.durationMs, `${label}[${index}].durationMs`) }
+              : {}),
+          };
+        })
+      : [];
+  return {
+    called: readNumber(tools.called, "snapshot.summary.channelTurns.tools.called"),
+    results: readNumber(tools.results, "snapshot.summary.channelTurns.tools.results"),
+    failedResults: readNumber(
+      tools.failedResults,
+      "snapshot.summary.channelTurns.tools.failedResults",
+    ),
+    missingResults: readNumber(
+      tools.missingResults,
+      "snapshot.summary.channelTurns.tools.missingResults",
+    ),
+    slowResults: readNumber(tools.slowResults, "snapshot.summary.channelTurns.tools.slowResults"),
+    byTool,
+    recentSlow: readRecent(
+      tools.recentSlow,
+      "snapshot.summary.channelTurns.tools.recentSlow",
+    ) as NonNullable<
+      NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"]
+    >["recentSlow"],
+    recentFailures: readRecent(
+      tools.recentFailures,
+      "snapshot.summary.channelTurns.tools.recentFailures",
+    ) as NonNullable<
+      NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["tools"]
+    >["recentFailures"],
+  };
+}
+
 function readOptionalChannelTurnsSummary(
   value: unknown,
 ): DiagnosticStabilitySnapshot["summary"]["channelTurns"] | undefined {
@@ -1012,6 +1112,9 @@ function readOptionalChannelTurnsSummary(
     ...(channelTurns.latency !== undefined
       ? { latency: readOptionalChannelTurnLatencySummary(channelTurns.latency) }
       : {}),
+    ...(channelTurns.tools !== undefined
+      ? { tools: readOptionalChannelTurnToolSummary(channelTurns.tools) }
+      : {}),
     health:
       channelTurns.health === undefined
         ? { status: "ok", issues: [] }
@@ -1048,6 +1151,7 @@ function readStabilityEventRecord(
   assignOptionalCodeString(sanitized, "phase", record.phase, `${label}.phase`);
   assignOptionalCodeString(sanitized, "detector", record.detector, `${label}.detector`);
   assignOptionalCodeString(sanitized, "toolName", record.toolName, `${label}.toolName`);
+  assignOptionalCodeString(sanitized, "toolCallId", record.toolCallId, `${label}.toolCallId`);
   assignOptionalCodeString(
     sanitized,
     "activeWorkKind",
@@ -1143,6 +1247,7 @@ function readStabilityEventRecord(
     record.visibleDeliverySent,
     `${label}.visibleDeliverySent`,
   );
+  assignOptionalBoolean(sanitized, "isError", record.isError, `${label}.isError`);
   assignOptionalNumber(sanitized, "active", record.active, `${label}.active`);
   assignOptionalNumber(sanitized, "waiting", record.waiting, `${label}.waiting`);
   assignOptionalNumber(sanitized, "queued", record.queued, `${label}.queued`);

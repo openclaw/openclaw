@@ -110,6 +110,79 @@ describe("doctor gateway stability", () => {
     expect(note?.body).not.toContain("Direct channel turn completed without visible delivery.");
   });
 
+  it("reports channel turn tool failures without payload contents", () => {
+    const note = buildGatewayChannelTurnHealthDoctorNote({
+      snapshot: makeSnapshot({
+        totalEvents: 4,
+        deliveryRequired: 1,
+        deliverySent: 1,
+        deliveryFailed: 0,
+        invalidCompletions: 0,
+        missingVisibleDelivery: 0,
+        byChannel: {
+          telegram: {
+            deliveryRequired: 1,
+            deliverySent: 1,
+            deliveryFailed: 0,
+            invalidCompletions: 0,
+            missingVisibleDelivery: 0,
+          },
+        },
+        recentFailures: [],
+        tools: {
+          called: 2,
+          results: 1,
+          failedResults: 1,
+          missingResults: 1,
+          slowResults: 0,
+          byTool: {
+            exec: {
+              called: 1,
+              results: 1,
+              failedResults: 1,
+              missingResults: 0,
+              slowResults: 0,
+              maxDurationMs: 500,
+            },
+            calendar: {
+              called: 1,
+              results: 0,
+              failedResults: 0,
+              missingResults: 1,
+              slowResults: 0,
+            },
+          },
+          recentSlow: [],
+          recentFailures: [],
+        },
+        health: {
+          status: "warning",
+          issues: [
+            {
+              code: "tool_result_failed",
+              level: "warning",
+              count: 1,
+              message: "A channel turn tool returned a failed result.",
+              guidance: "Inspect the failed tool before retrying the whole turn.",
+            },
+            {
+              code: "tool_result_missing",
+              level: "warning",
+              count: 1,
+              message: "A channel turn completed with a started tool that had no recorded result.",
+              guidance: "Check whether the run aborted or timed out.",
+            },
+          ],
+        },
+      }),
+    });
+
+    expect(note?.body).toContain("Tools: called=2, results=1, failed=1, missing=1, slow=0.");
+    expect(note?.body).toContain("exec(failed=1, missing=0, max=500ms)");
+    expect(note?.body).toContain("calendar(failed=0, missing=1, max=unknown)");
+    expect(note?.body).not.toContain("payload");
+  });
+
   it("reports slow direct-message latency as a doctor health issue", () => {
     const note = buildGatewayChannelTurnHealthDoctorNote({
       snapshot: makeSnapshot({

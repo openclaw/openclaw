@@ -191,6 +191,12 @@ export type DiagnosticChannelTurnEvent = DiagnosticBaseEvent & {
   receivedToTurnStartMs?: number;
   startToDeliveryMs?: number;
   startToCompletionMs?: number;
+  toolName?: string;
+  toolCallId?: string;
+  durationMs?: number;
+  isError?: boolean;
+  deniedReason?: string;
+  errorCategory?: string;
 };
 
 export type DiagnosticTalkEvent = DiagnosticBaseEvent & {

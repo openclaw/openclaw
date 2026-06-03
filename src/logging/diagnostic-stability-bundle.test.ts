@@ -156,6 +156,29 @@ describe("diagnostic stability bundles", () => {
       visibleDeliverySent: false,
       receivedToTurnStartMs: 12_000,
     });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      turnEventType: "tool.called",
+      status: "started",
+      toolName: "exec",
+      toolCallId: "call-1",
+    });
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
+      sessionKey: "agent:main:telegram:direct:owner",
+      turnEventType: "tool.result",
+      status: "failed",
+      toolName: "exec",
+      toolCallId: "call-1",
+      durationMs: 15_000,
+      isError: true,
+      errorCategory: "timeout",
+    });
     await waitForDiagnosticEventsDrained();
 
     const result = writeDiagnosticStabilityBundleSync({
@@ -176,6 +199,16 @@ describe("diagnostic stability bundles", () => {
       type: "channel.turn.event",
       channel: "telegram",
       turnId: "telegram:acct:message:msg-1",
+      toolName: "exec",
+      toolCallId: "call-1",
+      durationMs: 15_000,
+      isError: true,
+      reason: "timeout",
+    });
+    expect(readResult.bundle.snapshot.events.at(1)).toMatchObject({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "telegram:acct:message:msg-1",
       messageId: "msg-1",
       reason: "missing_visible_delivery",
       completionAllowed: false,
@@ -184,7 +217,7 @@ describe("diagnostic stability bundles", () => {
       receivedToTurnStartMs: 12_000,
     });
     expect(readResult.bundle.snapshot.summary.channelTurns).toMatchObject({
-      totalEvents: 2,
+      totalEvents: 4,
       missingVisibleDelivery: 1,
       health: {
         status: "degraded",
@@ -208,7 +241,34 @@ describe("diagnostic stability bundles", () => {
             valueMs: 12_000,
             count: 1,
           },
+          {
+            code: "tool_result_failed",
+            level: "warning",
+            count: 1,
+          },
+          {
+            code: "slow_tool_result",
+            level: "warning",
+            count: 1,
+          },
         ],
+      },
+      tools: {
+        called: 1,
+        results: 1,
+        failedResults: 1,
+        missingResults: 0,
+        slowResults: 1,
+        byTool: {
+          exec: {
+            called: 1,
+            results: 1,
+            failedResults: 1,
+            missingResults: 0,
+            slowResults: 1,
+            maxDurationMs: 15_000,
+          },
+        },
       },
       latency: {
         messageAgeMs: {

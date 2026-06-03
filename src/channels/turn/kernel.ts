@@ -298,6 +298,22 @@ async function appendTurnEvent(params: {
       typeof recorded.metadata?.startToCompletionMs === "number"
         ? recorded.metadata.startToCompletionMs
         : undefined,
+    toolName:
+      typeof recorded.metadata?.toolName === "string" ? recorded.metadata.toolName : undefined,
+    toolCallId:
+      typeof recorded.metadata?.toolCallId === "string" ? recorded.metadata.toolCallId : undefined,
+    durationMs:
+      typeof recorded.metadata?.durationMs === "number" ? recorded.metadata.durationMs : undefined,
+    isError:
+      typeof recorded.metadata?.isError === "boolean" ? recorded.metadata.isError : undefined,
+    deniedReason:
+      typeof recorded.metadata?.deniedReason === "string"
+        ? recorded.metadata.deniedReason
+        : undefined,
+    errorCategory:
+      typeof recorded.metadata?.errorCategory === "string"
+        ? recorded.metadata.errorCategory
+        : undefined,
   });
   if (recorded) {
     params.events?.push(recorded);
