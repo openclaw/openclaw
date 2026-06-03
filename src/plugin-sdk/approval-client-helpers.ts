@@ -43,6 +43,7 @@ function isApprovalTargetsMode(cfg: OpenClawConfig): boolean {
 
 export { getExecApprovalReplyMetadata, matchesApprovalRequestFilters };
 
+/** Return whether a channel account has an enabled approval client and at least one approver. */
 export function isChannelExecApprovalClientEnabledFromConfig(params: {
   /** Configured channel approval enable mode. */
   enabled?: ChannelExecApprovalEnableMode;
@@ -55,6 +56,10 @@ export function isChannelExecApprovalClientEnabledFromConfig(params: {
   return params.enabled === true || params.enabled === "auto";
 }
 
+/**
+ * Return whether a sender is one of the configured global exec approval forward targets.
+ * Channel plugins provide the target matcher because `to` shapes differ by provider.
+ */
 export function isChannelExecApprovalTargetRecipient(params: {
   /** Full config containing global exec approval target routing. */
   cfg: OpenClawConfig;
@@ -88,6 +93,7 @@ export function isChannelExecApprovalTargetRecipient(params: {
     if (normalizeOptionalLowercaseString(target.channel) !== normalizedChannel) {
       return false;
     }
+    // Account-scoped targets only match the same account; targets without accountId stay global.
     if (
       normalizedAccountId &&
       target.accountId &&
@@ -103,6 +109,10 @@ export function isChannelExecApprovalTargetRecipient(params: {
   });
 }
 
+/**
+ * Build the common approval-client profile used by channel plugins.
+ * The returned helpers centralize enablement, approver auth, request filters, and local prompt suppression.
+ */
 export function createChannelExecApprovalProfile(params: {
   /** Resolves channel approval config for the current account. */
   resolveConfig: (params: ApprovalProfileParams) => ChannelApprovalConfig | undefined;
