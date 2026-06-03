@@ -98,6 +98,8 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
     storePath,
     (store) => {
       const resolved = resolveSessionStoreEntry({ store, sessionKey });
+      // Native slash may invoke `/name` before the fast path persists the entry.
+      // Seed a copy under the canonical key without mutating params on failed writes.
       const entry =
         resolved.existing ?? (params.sessionEntry ? { ...params.sessionEntry } : undefined);
       if (!entry) {
@@ -115,6 +117,8 @@ export const handleNameCommand: CommandHandler = async (params, allowTextCommand
       }
       entry.label = validated.label;
       entry.updatedAt = Math.max(entry.updatedAt ?? 0, Date.now());
+      // Persist through the canonical key and drop any legacy/case-folded
+      // aliases, mirroring `persistResolvedSessionEntry`.
       store[resolved.normalizedKey] = entry;
       for (const legacyKey of resolved.legacyKeys) {
         delete store[legacyKey];
