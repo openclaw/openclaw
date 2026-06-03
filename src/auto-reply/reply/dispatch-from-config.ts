@@ -2377,7 +2377,7 @@ export async function dispatchReplyFromConfig(
         ? { ...ttsPayload, text: directiveOnlyCaptionText }
         : ttsPayload;
       const normalizedPayload = await normalizeReplyMediaPayload(finalTtsPayload);
-      const deliveredMedia = resolveSendableOutboundReplyParts(normalizedPayload).hasMedia;
+      const payloadHasMedia = resolveSendableOutboundReplyParts(normalizedPayload).hasMedia;
       throwIfFinalDeliveryAborted();
       const result = await routeReplyToOriginating(normalizedPayload, {
         abortSignal,
@@ -2399,7 +2399,9 @@ export async function dispatchReplyFromConfig(
         return {
           queuedFinal: result.ok,
           routedFinalCount: isRoutedReplyDelivered(result) ? 1 : 0,
-          deliveredMedia,
+          // Only treat media as delivered when the route actually delivered it, so a
+          // failed/suppressed final send still lets the accumulated-text fallback run.
+          deliveredMedia: payloadHasMedia && isRoutedReplyDelivered(result),
         };
       }
       throwIfFinalDeliveryAborted();
@@ -2457,7 +2459,7 @@ export async function dispatchReplyFromConfig(
       return {
         queuedFinal,
         routedFinalCount: 0,
-        deliveredMedia,
+        deliveredMedia: payloadHasMedia && queuedFinal,
       };
     };
 
@@ -2995,8 +2997,7 @@ export async function dispatchReplyFromConfig(
                   // also covers presentation/interactive/channelData) because tool
                   // results with interactive/approval content but no media need their
                   // text preserved — it IS the content, not a duplicate caption.
-                  const hasMedia =
-                    resolveSendableOutboundReplyParts(visibleToolPayload).hasMedia;
+                  const hasMedia = resolveSendableOutboundReplyParts(visibleToolPayload).hasMedia;
                   if (hasMedia) {
                     visibleToolPayload = { ...visibleToolPayload, text: undefined };
                   }
