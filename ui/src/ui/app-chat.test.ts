@@ -2240,6 +2240,54 @@ describe("handleSendChat", () => {
     expect(userMessage.content).toEqual([{ type: "text", text: "Make the support files 5" }]);
   });
 
+  it("treats slash-like Skill Workshop revision drafts as revision instructions", async () => {
+    const sent = createDeferred<unknown>();
+    const request = vi.fn((method: string) => {
+      if (method === "skills.proposals.requestRevision") {
+        return sent.promise;
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+    });
+
+    const send = handleSendChat(host, "/reset examples", {
+      restoreDraft: true,
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+      },
+    });
+    await Promise.resolve();
+
+    const payload = findRequestPayload(
+      request as unknown as MockCallSource,
+      "skills.proposals.requestRevision",
+      "revision slash payload",
+    );
+    expect(payload).toMatchObject({
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "/reset examples",
+      sessionKey: "agent:main",
+    });
+    expect(payload).not.toHaveProperty("message");
+    expect(host.chatQueue[0]).toMatchObject({
+      refreshSessions: false,
+      text: "/reset examples",
+      skillWorkshopRevision: {
+        proposalId: "support-file-sampler-20260531-68207b7b7f",
+      },
+    });
+
+    sent.resolve({ runId: host.chatQueue[0]?.sendRunId, status: "started" });
+    await send;
+
+    expect(host.chatMessages[0]).toMatchObject({
+      role: "user",
+      content: [{ type: "text", text: "/reset examples" }],
+    });
+  });
+
   it("keeps ACK-completed sends idle when sessions.list returns a stale active row", async () => {
     const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "chat.send") {

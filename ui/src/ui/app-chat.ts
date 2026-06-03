@@ -1688,6 +1688,7 @@ export async function handleSendChat(
   const attachments = host.chatAttachments ?? [];
   const attachmentsToSend = messageOverride == null ? snapshotChatAttachments(attachments) : [];
   const hasAttachments = attachmentsToSend.length > 0;
+  const isSkillWorkshopRevisionSend = Boolean(opts?.skillWorkshopRevision);
 
   if (!message && !hasAttachments) {
     return;
@@ -1697,7 +1698,7 @@ export async function handleSendChat(
     return;
   }
 
-  if (isChatStopCommand(message)) {
+  if (!isSkillWorkshopRevisionSend && isChatStopCommand(message)) {
     if (messageOverride == null) {
       recordNonTranscriptInputHistory(host, message);
     }
@@ -1705,7 +1706,7 @@ export async function handleSendChat(
     return;
   }
 
-  if (isBtwCommand(message)) {
+  if (!isSkillWorkshopRevisionSend && isBtwCommand(message)) {
     const submitKey = chatSubmitKey(host, "btw", message, attachmentsToSend);
     await withChatSubmitGuard(host, submitKey, async () => {
       const modelSwitchReady = waitForPendingChatModelSwitch(host, submittedSessionKey);
@@ -1732,7 +1733,7 @@ export async function handleSendChat(
   }
 
   // Intercept local slash commands (/status, /model, /compact, etc.)
-  const parsed = parseSlashCommand(message);
+  const parsed = isSkillWorkshopRevisionSend ? null : parseSlashCommand(message);
   if (parsed?.command.executeLocal) {
     if (isChatBusy(host) && shouldQueueLocalSlashCommand(parsed.command.key)) {
       if (messageOverride == null) {
@@ -1761,7 +1762,7 @@ export async function handleSendChat(
     return;
   }
 
-  const refreshSessions = isChatResetCommand(message);
+  const refreshSessions = !isSkillWorkshopRevisionSend && isChatResetCommand(message);
   const submitKey = chatSubmitKey(
     host,
     "message",
