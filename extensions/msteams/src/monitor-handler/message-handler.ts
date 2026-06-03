@@ -775,6 +775,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
           const profile = await fetchAadUserProfile({
             token: graphToken,
             aadObjectId,
+            tenantId: activity.channelData?.tenant?.id,
             cacheTtlMs: msteamsCfg.senderIdentity.cacheTtlMs,
           });
           if (profile) {

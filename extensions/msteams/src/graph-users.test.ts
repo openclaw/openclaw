@@ -53,6 +53,28 @@ describe("fetchAadUserProfile", () => {
     expect(mockFetchGraphJson).toHaveBeenCalledOnce();
   });
 
+  it("isolates cache entries by tenantId", async () => {
+    const profileA = { id: "aad-same", displayName: "Tenant A User" };
+    const profileB = { id: "aad-same", displayName: "Tenant B User" };
+    mockFetchGraphJson.mockResolvedValueOnce(profileA);
+    mockFetchGraphJson.mockResolvedValueOnce(profileB);
+
+    const resultA = await fetchAadUserProfile({
+      token: "tok",
+      aadObjectId: "aad-same",
+      tenantId: "tenant-a",
+    });
+    const resultB = await fetchAadUserProfile({
+      token: "tok",
+      aadObjectId: "aad-same",
+      tenantId: "tenant-b",
+    });
+
+    expect(resultA?.displayName).toBe("Tenant A User");
+    expect(resultB?.displayName).toBe("Tenant B User");
+    expect(mockFetchGraphJson).toHaveBeenCalledTimes(2);
+  });
+
   it("returns null when Graph throws", async () => {
     mockFetchGraphJson.mockRejectedValueOnce(new Error("403 Forbidden"));
 
