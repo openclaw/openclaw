@@ -485,6 +485,27 @@ function formatChannelTurnSlaSummary(
   return lines;
 }
 
+function formatRuntimeRecommendations(
+  recommendations: NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>,
+  rich: boolean,
+): string[] {
+  const lines = [`${colorize(rich, theme.muted, "Runtime recommendations:")}`];
+  for (const recommendation of recommendations.slice(0, 5)) {
+    const parts = [
+      `${recommendation.priority}:${recommendation.code}`,
+      `source=${recommendation.source}`,
+      `reason=${recommendation.reason}`,
+      recommendation.metric ? `metric=${recommendation.metric}` : "",
+      recommendation.valueMs !== undefined
+        ? `value=${formatChannelTurnLatencyMs(recommendation.valueMs)}`
+        : "",
+      recommendation.count !== undefined ? `count=${recommendation.count}` : "",
+    ].filter(Boolean);
+    lines.push(`  ${parts.join(" ")} · ${recommendation.guidance}`);
+  }
+  return lines;
+}
+
 function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boolean): string[] {
   const lines = [
     colorize(rich, theme.heading, "Gateway Stability"),
@@ -541,6 +562,11 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   const queues = snapshot.summary.queues;
   if (queues) {
     lines.push(...formatQueueSummary(queues, rich));
+  }
+
+  const recommendations = snapshot.summary.recommendations;
+  if (recommendations && recommendations.length > 0) {
+    lines.push(...formatRuntimeRecommendations(recommendations, rich));
   }
 
   if (snapshot.events.length > 0) {

@@ -150,6 +150,23 @@ type DiagnosticStabilityQueueSummary = {
   }>;
 };
 
+export type DiagnosticStabilityRecommendation = {
+  code:
+    | "send_early_ack"
+    | "inspect_gateway_ingress"
+    | "clear_queue_pressure"
+    | "inspect_blocked_tool"
+    | "recover_stale_session"
+    | "inspect_missing_delivery";
+  priority: "high" | "medium" | "low";
+  source: "channel_turns" | "sessions" | "queues";
+  reason: string;
+  count?: number;
+  metric?: string;
+  valueMs?: number;
+  guidance: string;
+};
+
 export type DiagnosticStabilityHealthStatus = "ok" | "warning" | "degraded";
 
 export type DiagnosticStabilityChannelTurnHealthIssue = {
@@ -328,6 +345,7 @@ export type DiagnosticStabilitySnapshot = {
       attention: DiagnosticStabilitySessionAttentionSummary;
     };
     queues?: DiagnosticStabilityQueueSummary;
+    recommendations?: DiagnosticStabilityRecommendation[];
   };
 };
 
@@ -927,6 +945,124 @@ function summarizeRecords(
     }
   }
 
+  function buildRecommendations(): DiagnosticStabilityRecommendation[] {
+    const recommendations: DiagnosticStabilityRecommendation[] = [];
+    const pushRecommendation = (recommendation: DiagnosticStabilityRecommendation): void => {
+      recommendations.push(recommendation);
+    };
+
+    if (channelTurns.missingVisibleDelivery > 0) {
+      pushRecommendation({
+        code: "inspect_missing_delivery",
+        priority: "high",
+        source: "channel_turns",
+        reason: "missing_visible_delivery",
+        count: channelTurns.missingVisibleDelivery,
+        guidance:
+          "Inspect the visible channel dispatch path; direct DMs must record delivery.sent before the turn is considered healthy.",
+      });
+    }
+
+    const startToDeliveryMax = channelTurns.latency.startToDeliveryMs?.maxMs;
+    if (
+      channelTurns.tools.slowPreDeliveryResults > 0 ||
+      (startToDeliveryMax !== undefined && startToDeliveryMax >= 20_000)
+    ) {
+      pushRecommendation({
+        code: "send_early_ack",
+        priority: "high",
+        source: "channel_turns",
+        reason:
+          channelTurns.tools.slowPreDeliveryResults > 0
+            ? "slow_tool_before_visible_delivery"
+            : "slow_start_to_delivery",
+        count:
+          channelTurns.tools.slowPreDeliveryResults > 0
+            ? channelTurns.tools.slowPreDeliveryResults
+            : channelTurns.latency.startToDeliveryMs?.slowCount,
+        metric:
+          channelTurns.tools.slowPreDeliveryResults > 0
+            ? "slowPreDeliveryResults"
+            : "startToDeliveryMs",
+        ...(startToDeliveryMax !== undefined ? { valueMs: startToDeliveryMax } : {}),
+        guidance:
+          "Send a short visible acknowledgement before long tool work, then continue the verified work through the normal turn or Tasks/TaskFlow.",
+      });
+    }
+
+    const messageAgeMax = channelTurns.latency.messageAgeMs?.maxMs;
+    if (messageAgeMax !== undefined && messageAgeMax >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS) {
+      pushRecommendation({
+        code: "inspect_gateway_ingress",
+        priority: messageAgeMax >= 60_000 ? "high" : "medium",
+        source: "channel_turns",
+        reason: "stale_message_at_receive",
+        count: channelTurns.latency.messageAgeMs?.slowCount,
+        metric: "messageAgeMs",
+        valueMs: messageAgeMax,
+        guidance:
+          "Compare native channel send time with gateway receive time before blaming the agent; ingress may be delayed upstream of the turn.",
+      });
+    }
+
+    const receiveToStartMax = channelTurns.latency.receivedToTurnStartMs?.maxMs;
+    if (
+      queues.slowDequeues > 0 ||
+      (receiveToStartMax !== undefined && receiveToStartMax >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS)
+    ) {
+      pushRecommendation({
+        code: "clear_queue_pressure",
+        priority: (queues.maxWaitMs ?? receiveToStartMax ?? 0) >= 60_000 ? "high" : "medium",
+        source: queues.slowDequeues > 0 ? "queues" : "channel_turns",
+        reason: queues.slowDequeues > 0 ? "slow_queue_dequeue" : "slow_receive_to_turn_start",
+        count:
+          queues.slowDequeues > 0
+            ? queues.slowDequeues
+            : channelTurns.latency.receivedToTurnStartMs?.slowCount,
+        metric: queues.slowDequeues > 0 ? "waitMs" : "receivedToTurnStartMs",
+        valueMs: queues.maxWaitMs ?? receiveToStartMax,
+        guidance:
+          "Inspect queue/session pressure, stale work, and overlapping background jobs; direct control messages should not wait behind long work.",
+      });
+    }
+
+    const blockedToolCount = sessionAttention.byClassification.blocked_tool_call ?? 0;
+    if (sessionAttention.stalled > 0 || blockedToolCount > 0) {
+      pushRecommendation({
+        code: "inspect_blocked_tool",
+        priority: "high",
+        source: "sessions",
+        reason: blockedToolCount > 0 ? "blocked_tool_call" : "session_stalled",
+        count: Math.max(sessionAttention.stalled, blockedToolCount),
+        guidance:
+          "Inspect the active tool and its timeout/result path before retrying broad work; keep direct chat responsive while the tool is isolated.",
+      });
+    }
+
+    if (sessionAttention.stuck > 0 || sessionAttention.recoveryRequested > 0) {
+      pushRecommendation({
+        code: "recover_stale_session",
+        priority: sessionAttention.stuck > 0 ? "high" : "medium",
+        source: "sessions",
+        reason: sessionAttention.stuck > 0 ? "session_stuck" : "session_recovery_requested",
+        count: Math.max(sessionAttention.stuck, sessionAttention.recoveryRequested),
+        guidance:
+          "Use the official session recovery path and verify queued work is released without replaying stale user context.",
+      });
+    }
+
+    return recommendations
+      .toSorted((a, b) => {
+        const priorityRank = { high: 0, medium: 1, low: 2 } as const;
+        const priorityDelta = priorityRank[a.priority] - priorityRank[b.priority];
+        if (priorityDelta !== 0) {
+          return priorityDelta;
+        }
+        return a.code.localeCompare(b.code);
+      })
+      .slice(0, 8);
+  }
+
   function summarizeQueueLane(lane: string | undefined): string {
     if (!lane) {
       return "unknown";
@@ -1475,6 +1611,8 @@ function summarizeRecords(
     });
   }
 
+  const recommendations = buildRecommendations();
+
   return {
     byType,
     ...(latestMemory || pressureCount > 0
@@ -1497,6 +1635,7 @@ function summarizeRecords(
       ? { sessions: { attention: sessionAttention } }
       : {}),
     ...(queues.enqueued > 0 || queues.dequeued > 0 ? { queues } : {}),
+    ...(recommendations.length > 0 ? { recommendations } : {}),
   };
 }
 

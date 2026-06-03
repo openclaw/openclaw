@@ -215,6 +215,22 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events.find((event) => event.type === "session.stalled")).not.toHaveProperty(
       "sessionKey",
     );
+    expect(snapshot.summary.recommendations).toEqual([
+      expect.objectContaining({
+        code: "inspect_blocked_tool",
+        priority: "high",
+        source: "sessions",
+        reason: "blocked_tool_call",
+        count: 1,
+      }),
+      expect.objectContaining({
+        code: "recover_stale_session",
+        priority: "high",
+        source: "sessions",
+        reason: "session_stuck",
+        count: 1,
+      }),
+    ]);
     expect(JSON.stringify(snapshot)).not.toContain("private message body");
   });
 
@@ -277,6 +293,17 @@ describe("diagnostic stability recorder", () => {
         }),
       ],
     });
+    expect(snapshot.summary.recommendations).toEqual([
+      expect.objectContaining({
+        code: "clear_queue_pressure",
+        priority: "medium",
+        source: "queues",
+        reason: "slow_queue_dequeue",
+        metric: "waitMs",
+        valueMs: 12_500,
+        count: 1,
+      }),
+    ]);
     expect(JSON.stringify(snapshot.summary.queues)).not.toContain("telegram:direct:owner");
   });
 
@@ -722,6 +749,35 @@ describe("diagnostic stability recorder", () => {
     ]);
     expect(snapshot.events[0]).not.toHaveProperty("accountId");
     expect(snapshot.events[0]).toHaveProperty("target", "kind:named");
+    expect(snapshot.summary.recommendations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "inspect_missing_delivery",
+          priority: "high",
+          source: "channel_turns",
+          reason: "missing_visible_delivery",
+          count: 2,
+        }),
+        expect.objectContaining({
+          code: "inspect_gateway_ingress",
+          priority: "medium",
+          source: "channel_turns",
+          reason: "stale_message_at_receive",
+          metric: "messageAgeMs",
+          valueMs: 30_000,
+          count: 1,
+        }),
+        expect.objectContaining({
+          code: "clear_queue_pressure",
+          priority: "medium",
+          source: "channel_turns",
+          reason: "slow_receive_to_turn_start",
+          metric: "receivedToTurnStartMs",
+          valueMs: 12_000,
+          count: 1,
+        }),
+      ]),
+    );
     expect(JSON.stringify(snapshot)).not.toContain("hello");
     expect(JSON.stringify(snapshot)).not.toContain("sebastian");
   });
@@ -971,6 +1027,16 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.summary.channelTurns?.health.issues.map((issue) => issue.code)).toEqual([
       "slow_tool_result",
       "slow_tool_before_visible_delivery",
+    ]);
+    expect(snapshot.summary.recommendations).toEqual([
+      expect.objectContaining({
+        code: "send_early_ack",
+        priority: "high",
+        source: "channel_turns",
+        reason: "slow_tool_before_visible_delivery",
+        metric: "slowPreDeliveryResults",
+        count: 1,
+      }),
     ]);
   });
 

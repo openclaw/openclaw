@@ -1396,6 +1396,90 @@ function readOptionalQueueSummary(
   };
 }
 
+function readOptionalRecommendations(
+  value: unknown,
+): DiagnosticStabilitySnapshot["summary"]["recommendations"] | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("Invalid stability bundle: snapshot.summary.recommendations must be an array");
+  }
+  const recommendations = value.map((entry, index) => {
+    const recommendation = readObject(entry, `snapshot.summary.recommendations[${index}]`);
+    const code = readCodeString(
+      recommendation.code,
+      `snapshot.summary.recommendations[${index}].code`,
+    ) as NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>[number]["code"];
+    if (
+      code !== "send_early_ack" &&
+      code !== "inspect_gateway_ingress" &&
+      code !== "clear_queue_pressure" &&
+      code !== "inspect_blocked_tool" &&
+      code !== "recover_stale_session" &&
+      code !== "inspect_missing_delivery"
+    ) {
+      throw new Error(`Invalid stability bundle: snapshot.summary.recommendations[${index}].code`);
+    }
+    const priority = readCodeString(
+      recommendation.priority,
+      `snapshot.summary.recommendations[${index}].priority`,
+    ) as NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>[number]["priority"];
+    if (priority !== "high" && priority !== "medium" && priority !== "low") {
+      throw new Error(
+        `Invalid stability bundle: snapshot.summary.recommendations[${index}].priority`,
+      );
+    }
+    const source = readCodeString(
+      recommendation.source,
+      `snapshot.summary.recommendations[${index}].source`,
+    ) as NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>[number]["source"];
+    if (source !== "channel_turns" && source !== "sessions" && source !== "queues") {
+      throw new Error(
+        `Invalid stability bundle: snapshot.summary.recommendations[${index}].source`,
+      );
+    }
+    return {
+      code,
+      priority,
+      source,
+      reason: readCodeString(
+        recommendation.reason,
+        `snapshot.summary.recommendations[${index}].reason`,
+      ),
+      ...(recommendation.count !== undefined
+        ? {
+            count: readNumber(
+              recommendation.count,
+              `snapshot.summary.recommendations[${index}].count`,
+            ),
+          }
+        : {}),
+      ...(recommendation.metric !== undefined
+        ? {
+            metric: readCodeString(
+              recommendation.metric,
+              `snapshot.summary.recommendations[${index}].metric`,
+            ),
+          }
+        : {}),
+      ...(recommendation.valueMs !== undefined
+        ? {
+            valueMs: readNumber(
+              recommendation.valueMs,
+              `snapshot.summary.recommendations[${index}].valueMs`,
+            ),
+          }
+        : {}),
+      guidance: readString(
+        recommendation.guidance,
+        `snapshot.summary.recommendations[${index}].guidance`,
+      ),
+    };
+  });
+  return recommendations.length > 0 ? recommendations : undefined;
+}
+
 function readStabilityEventRecord(
   value: unknown,
   label: string,
@@ -1650,6 +1734,9 @@ function readStabilitySnapshot(value: unknown): DiagnosticStabilitySnapshot {
         ? { sessions: readOptionalSessionAttentionSummary(summary.sessions) }
         : {}),
       ...(summary.queues !== undefined ? { queues: readOptionalQueueSummary(summary.queues) } : {}),
+      ...(summary.recommendations !== undefined
+        ? { recommendations: readOptionalRecommendations(summary.recommendations) }
+        : {}),
     },
   };
 }

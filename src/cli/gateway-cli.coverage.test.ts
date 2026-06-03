@@ -277,6 +277,28 @@ describe("gateway-cli coverage", () => {
             },
           ],
         },
+        recommendations: [
+          {
+            code: "inspect_missing_delivery",
+            priority: "high",
+            source: "channel_turns",
+            reason: "missing_visible_delivery",
+            count: 1,
+            guidance:
+              "Inspect the visible channel dispatch path; direct DMs must record delivery.sent before the turn is considered healthy.",
+          },
+          {
+            code: "clear_queue_pressure",
+            priority: "medium",
+            source: "queues",
+            reason: "slow_queue_dequeue",
+            metric: "waitMs",
+            valueMs: 12_500,
+            count: 1,
+            guidance:
+              "Inspect queue/session pressure, stale work, and overlapping background jobs; direct control messages should not wait behind long work.",
+          },
+        ],
         channelTurns: {
           totalEvents: 4,
           deliveryRequired: 1,
@@ -400,6 +422,11 @@ describe("gateway-cli coverage", () => {
     expect(output).toContain("main=enq:1/deq:1/slow:0/maxWait:250ms/maxQueue:1");
     expect(output).toContain("Recent slow queue waits:");
     expect(output).toContain("lane=session wait=12500ms queueSize=2");
+    expect(output).toContain("Runtime recommendations:");
+    expect(output).toContain("high:inspect_missing_delivery source=channel_turns");
+    expect(output).toContain(
+      "medium:clear_queue_pressure source=queues reason=slow_queue_dequeue metric=waitMs value=12500ms count=1",
+    );
     expect(output).not.toContain("chat text");
   });
 

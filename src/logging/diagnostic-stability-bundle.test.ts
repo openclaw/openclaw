@@ -510,6 +510,64 @@ describe("diagnostic stability bundles", () => {
     );
   });
 
+  it("preserves runtime recommendations in bundles without raw private context", async () => {
+    startDiagnosticStabilityRecorder();
+    emitDiagnosticEvent({
+      type: "channel.turn.event",
+      channel: "telegram",
+      turnId: "turn-test",
+      messageId: "msg-test",
+      turnEventType: "delivery.failed",
+      status: "failed",
+      reason: "missing_visible_delivery",
+    });
+    emitDiagnosticEvent({
+      type: "queue.lane.dequeue",
+      lane: "session:agent:main:telegram:direct:owner",
+      queueSize: 2,
+      waitMs: 12_500,
+    });
+    await waitForDiagnosticEventsDrained();
+
+    const result = writeDiagnosticStabilityBundleSync({
+      reason: "gateway.restart_startup_failed",
+      stateDir: tempDir,
+      now: new Date("2026-04-22T12:00:00.000Z"),
+    });
+
+    if (result.status !== "written") {
+      throw new Error(`expected written bundle, got ${result.status}`);
+    }
+    const readResult = readDiagnosticStabilityBundleFileSync(result.path);
+    if (readResult.status !== "found") {
+      throw new Error(`expected readable bundle, got ${readResult.status}`);
+    }
+
+    expect(readResult.bundle.snapshot.summary.recommendations).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "inspect_missing_delivery",
+          priority: "high",
+          source: "channel_turns",
+          reason: "missing_visible_delivery",
+          count: 1,
+        }),
+        expect.objectContaining({
+          code: "clear_queue_pressure",
+          priority: "medium",
+          source: "queues",
+          reason: "slow_queue_dequeue",
+          metric: "waitMs",
+          valueMs: 12_500,
+          count: 1,
+        }),
+      ]),
+    );
+    expect(JSON.stringify(readResult.bundle.snapshot.summary.recommendations)).not.toContain(
+      "telegram:direct:owner",
+    );
+  });
+
   it("skips empty recorder snapshots by default", () => {
     const result = writeDiagnosticStabilityBundleSync({
       reason: "uncaught_exception",
