@@ -117,6 +117,7 @@ Docs: https://docs.openclaw.ai
 - Performance: prebuild QA runtime probes with generated plugin assets but without CLI startup metadata.
 - Performance: skip declaration bundling for runtime-only CLI startup and gateway watch build profiles.
 - Performance: reuse prepared provider handles, strict tool schemas, gateway runtime metadata, session maintenance config, plugin metadata, bundled skill allowlists, package-local plugin artifacts, single-entry store writes, and validated/serialized session prompt blobs.
+- Memory: load the plugin that owns a configured `memorySearch.provider` (for example `openai`) during Gateway startup so semantic recall uses embeddings instead of silently dropping to keyword/FTS-only search, and warn at startup when the configured memory embedding provider is not registered. (#89651)
 
 ## 2026.5.28
 

@@ -178,6 +178,7 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
           realtimeVoiceProviders: ["openai"],
           imageGenerationProviders: ["openai"],
           videoGenerationProviders: ["openai"],
+          memoryEmbeddingProviders: ["openai"],
         },
       },
       {
@@ -928,6 +929,78 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "memory-core"],
     ],
     [
+      "includes the owning plugin for a configured memory embedding provider at startup",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai" },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "memory-core"],
+    ],
+    [
+      "includes the owning plugin for a per-agent memory embedding provider at startup",
+      {
+        channels: {},
+        agents: {
+          list: [{ id: "researcher", memorySearch: { provider: "openai" } }],
+        },
+      } as OpenClawConfig,
+      ["browser", "openai", "memory-core"],
+    ],
+    [
+      "ignores sentinel memory embedding providers that no plugin owns",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "local" },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "skips memory embedding providers from disabled memory search blocks",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { enabled: false, provider: "openai" },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "honors explicit plugin disablement for configured memory embedding providers",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai" },
+          },
+        },
+        plugins: { entries: { openai: { enabled: false } } },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
+      "honors denied plugins for configured memory embedding providers",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: { provider: "openai" },
+          },
+        },
+        plugins: { deny: ["openai"] },
+      } as OpenClawConfig,
+      ["browser", "memory-core"],
+    ],
+    [
       "includes explicitly selected external web search providers at startup",
       {
         channels: {},
@@ -1541,6 +1614,32 @@ describe("resolveGatewayStartupPluginIds", () => {
         index,
       }),
     ).toEqual(["amazon-bedrock", "browser"]);
+  });
+
+  it("keeps configured memory embedding providers in restrictive startup metadata scopes", () => {
+    const registry = createManifestRegistryFixture();
+    const index = createInstalledPluginIndexFixture(registry);
+
+    expect(
+      resolveGatewayStartupMetadataPluginIds({
+        config: {
+          agents: {
+            defaults: {
+              memorySearch: { provider: "openai" },
+            },
+          },
+          channels: {},
+          plugins: {
+            allow: ["browser"],
+            slots: {
+              memory: "none",
+            },
+          },
+        } as OpenClawConfig,
+        env: createPluginPlanningTestEnv(),
+        index,
+      }),
+    ).toEqual(["browser", "openai"]);
   });
 
   it("uses installed-index model support for restrictive startup shorthand model scopes", () => {

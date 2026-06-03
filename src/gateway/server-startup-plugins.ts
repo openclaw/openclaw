@@ -2,9 +2,10 @@ import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent
 import { initSubagentRegistry } from "../agents/subagent-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { collectUnregisteredConfiguredMemoryEmbeddingProviderIds } from "../plugins/channel-plugin-ids.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
-import type { PluginRegistryParams } from "../plugins/registry-types.js";
+import type { PluginRegistry, PluginRegistryParams } from "../plugins/registry-types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
 import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
@@ -167,6 +168,19 @@ export async function prepareGatewayPluginBootstrap(params: {
     setActivePluginRegistry(pluginRegistry);
   }
 
+  const runtimePluginsLoaded =
+    !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins;
+  if (runtimePluginsLoaded) {
+    // Surface configured memory embedding providers that no loaded plugin
+    // registered so semantic recall silently dropping to keyword/FTS-only is
+    // diagnosable from gateway startup logs.
+    warnUnregisteredConfiguredMemoryEmbeddingProviders({
+      config: gatewayPluginConfig,
+      pluginRegistry,
+      log: params.log,
+    });
+  }
+
   return {
     gatewayPluginConfigAtStart: gatewayPluginConfig,
     defaultWorkspaceDir,
@@ -176,9 +190,32 @@ export async function prepareGatewayPluginBootstrap(params: {
     baseMethods,
     pluginRegistry,
     baseGatewayMethods,
-    runtimePluginsLoaded:
-      !params.minimalTestGateway && shouldLoadRuntimePlugins && !shouldLoadSetupRuntimePlugins,
+    runtimePluginsLoaded,
   };
+}
+
+/**
+ * Warn when `agents.*.memorySearch.provider` selects a memory embedding provider
+ * that no loaded plugin registered. Without the owning plugin, `active-memory`
+ * cannot embed and silently falls back to keyword/FTS-only recall.
+ */
+export function warnUnregisteredConfiguredMemoryEmbeddingProviders(params: {
+  config: OpenClawConfig;
+  pluginRegistry: Partial<Pick<PluginRegistry, "memoryEmbeddingProviders">>;
+  log: Pick<GatewayPluginBootstrapLog, "warn">;
+}): void {
+  const registeredProviderIds = new Set(
+    (params.pluginRegistry.memoryEmbeddingProviders ?? []).map((entry) => entry.provider.id),
+  );
+  const unregistered = collectUnregisteredConfiguredMemoryEmbeddingProviderIds({
+    config: params.config,
+    registeredProviderIds,
+  });
+  for (const providerId of unregistered) {
+    params.log.warn(
+      `memorySearch.provider="${providerId}" is configured, but no loaded plugin registered memory embedding provider "${providerId}". Semantic memory recall will fall back to keyword/FTS-only search. Ensure the plugin that provides "${providerId}" is installed and enabled.`,
+    );
+  }
 }
 
 /** Loads startup plugin runtimes through the deferred bootstrap boundary. */
