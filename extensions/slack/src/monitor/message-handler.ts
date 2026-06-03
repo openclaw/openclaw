@@ -11,6 +11,7 @@ import {
   acceptSlackInboundMessageIngress,
   completeSlackInboundMessageIngress,
   hasSlackInboundMessageDelivery,
+  listPendingSlackInboundMessageIngress,
   releaseSlackInboundMessageIngress,
   recordSlackInboundMessageDeliveries,
 } from "./inbound-delivery-state.js";
@@ -247,7 +248,11 @@ export function createSlackMessageHandler(params: {
     return true;
   };
 
-  return async (message, opts) => {
+  const processMessage = async (
+    message: SlackMessageEvent,
+    opts: { source: "message" | "app_mention"; wasMentioned?: boolean },
+    options?: { durableReplay?: boolean },
+  ) => {
     if (opts.source === "message" && message.type !== "message") {
       return;
     }
@@ -261,11 +266,16 @@ export function createSlackMessageHandler(params: {
       return;
     }
     const seenMessageKey = buildSeenMessageKey(message.channel, message.ts);
-    const ingress = await acceptSlackInboundMessageIngress({
-      accountId: ctx.accountId,
-      message,
-      opts,
-    });
+    const ingress = options?.durableReplay
+      ? ({ kind: "accepted" } as const)
+      : await acceptSlackInboundMessageIngress({
+          accountId: ctx.accountId,
+          message,
+          opts,
+        });
+    if (ingress.kind === "completed" || ingress.kind === "pending") {
+      return;
+    }
     if (
       seenMessageKey &&
       (await hasSlackInboundMessageDelivery({
@@ -274,7 +284,7 @@ export function createSlackMessageHandler(params: {
         ts: message.ts,
       }))
     ) {
-      if (ingress.accepted) {
+      if (ingress.kind === "accepted") {
         await completeSlackInboundMessageIngress({
           accountId: ctx.accountId,
           message,
@@ -294,7 +304,7 @@ export function createSlackMessageHandler(params: {
       // Allow exactly one app_mention retry if the same ts was previously dropped
       // from the message stream before it reached dispatch.
       if (opts.source !== "app_mention" || !consumeAppMentionRetryKey(seenMessageKey)) {
-        if (ingress.accepted) {
+        if (ingress.kind === "accepted") {
           await completeSlackInboundMessageIngress({
             accountId: ctx.accountId,
             message,
@@ -326,4 +336,17 @@ export function createSlackMessageHandler(params: {
     }
     await debouncer.enqueue({ message: resolvedMessage, opts });
   };
+
+  const replayPendingIngress = async () => {
+    const pending = await listPendingSlackInboundMessageIngress();
+    for (const record of pending) {
+      await processMessage(record.payload.message, record.payload.opts, { durableReplay: true });
+    }
+  };
+
+  void replayPendingIngress().catch((error) => {
+    ctx.runtime.error?.(`slack inbound pending replay failed: ${formatErrorMessage(error)}`);
+  });
+
+  return async (message, opts) => processMessage(message, opts);
 }
