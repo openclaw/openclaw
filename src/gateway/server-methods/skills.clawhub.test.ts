@@ -461,6 +461,7 @@ describe("skills gateway handlers (clawhub)", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/workspace-writer",
       slug: "calendar",
+      config: {},
     });
   });
 
