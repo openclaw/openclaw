@@ -78,7 +78,10 @@ export function coerceNativeSetting(value: unknown): boolean | "auto" | undefine
   return undefined;
 }
 
-/** Candidate mutable allowlist path inspected for dangerous name-matching warnings. */
+/**
+ * Candidate allowlist inspected for dangerous name/email/nick matching warnings.
+ * `pathLabel` is emitted in doctor output, so callers should pass the exact config path.
+ */
 export type ChannelMutableAllowlistCandidate = {
   pathLabel: string;
   list: unknown;
@@ -117,7 +120,10 @@ function collectMutableAllowlistWarningLines(
   ];
 }
 
-/** Creates a warning collector for mutable name/email/nick allowlists when matching is disabled. */
+/**
+ * Create a warning collector for mutable name/email/nick allowlists while stable-id matching is required.
+ * Channel plugins provide a detector for entries that depend on dangerous name matching.
+ */
 export function createDangerousNameMatchingMutableAllowlistWarningCollector(params: {
   channel: string;
   detector: (entry: string) => boolean;
@@ -154,7 +160,10 @@ export function createDangerousNameMatchingMutableAllowlistWarningCollector(para
   };
 }
 
-/** Compose the common DM policy resolver with restrict-senders group warnings. */
+/**
+ * Compose the common account-scoped DM policy resolver with restrict-senders group warnings.
+ * This is the shared adapter shape for channels whose DM security and group policy live together.
+ */
 export function createRestrictSendersChannelSecurity<
   ResolvedAccount extends { accountId?: string | null },
 >(params: {
