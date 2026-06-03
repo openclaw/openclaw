@@ -223,6 +223,38 @@ function shouldBypassTrustedOfficialUnchangedNpmCheck(params: {
   );
 }
 
+function expectedIntegrityForNpmUpdate(params: {
+  effectiveSpec: string | undefined;
+  metadata?: NpmSpecResolution;
+  record: PluginInstallRecord;
+  trustedSourceLinkedOfficialInstall: boolean;
+}): string | undefined {
+  if (params.record.source !== "npm") {
+    return undefined;
+  }
+  if (params.effectiveSpec === params.record.spec) {
+    return expectedIntegrityForUpdate(params.record.spec, params.record.integrity);
+  }
+  if (!params.trustedSourceLinkedOfficialInstall || !params.metadata) {
+    return undefined;
+  }
+  const metadataName = params.metadata.name ?? resolveNpmSpecPackageName(params.effectiveSpec);
+  const recordName =
+    params.record.resolvedName ??
+    resolveNpmSpecPackageName(params.record.resolvedSpec) ??
+    resolveNpmSpecPackageName(params.record.spec);
+  if (!metadataName || metadataName !== recordName) {
+    return undefined;
+  }
+  if (!params.metadata.version || params.metadata.version !== params.record.resolvedVersion) {
+    return undefined;
+  }
+  return expectedIntegrityForUpdate(
+    params.record.resolvedSpec ?? params.record.spec,
+    params.record.integrity,
+  );
+}
+
 function isNpmMetadataCompatibleWithCurrentHost(metadata: NpmSpecResolution): boolean {
   const hostVersion = resolveCompatibilityHostVersion();
   const installMetadata = metadata.packageOpenClaw?.install;
@@ -1116,19 +1148,20 @@ export async function updateNpmInstalledPlugins(params: {
     let officialNpmFallbackInstallSpec = officialNpmFallbackSpecs?.installSpec;
     let officialNpmFallbackRecordSpec = officialNpmFallbackSpecs?.recordSpec;
     let activeClawHubInstallSpec = effectiveSpec;
-    const expectedIntegrity =
-      record.source === "npm" && effectiveSpec === record.spec
-        ? expectedIntegrityForUpdate(record.spec, record.integrity)
-        : undefined;
-    const fallbackExpectedIntegrity =
-      record.source === "npm" && npmSpecs?.fallbackSpec === record.spec
-        ? expectedIntegrityForUpdate(record.spec, record.integrity)
-        : undefined;
     const trustedSourceLinkedOfficialInstall = isTrustedSourceLinkedOfficialNpmUpdate({
       pluginId,
       spec: effectiveSpec,
       record,
     });
+    let expectedIntegrity = expectedIntegrityForNpmUpdate({
+      effectiveSpec,
+      record,
+      trustedSourceLinkedOfficialInstall,
+    });
+    const fallbackExpectedIntegrity =
+      record.source === "npm" && npmSpecs?.fallbackSpec === record.spec
+        ? expectedIntegrityForUpdate(record.spec, record.integrity)
+        : undefined;
 
     if (record.source === "npm" && !effectiveSpec) {
       outcomes.push({
@@ -1219,6 +1252,12 @@ export async function updateNpmInstalledPlugins(params: {
         timeoutMs: params.timeoutMs,
       });
       if (metadataResult.ok) {
+        expectedIntegrity = expectedIntegrityForNpmUpdate({
+          effectiveSpec,
+          metadata: metadataResult.metadata,
+          record,
+          trustedSourceLinkedOfficialInstall,
+        });
         if (
           !shouldBypassTrustedOfficialUnchangedNpmCheck({
             metadata: metadataResult.metadata,
