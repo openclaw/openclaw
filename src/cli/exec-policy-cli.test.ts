@@ -78,8 +78,7 @@ const mocks = vi.hoisted(() => {
     tools: {
       exec: {
         host: "auto",
-        security: "allowlist",
-        ask: "on-miss",
+        mode: "ask",
       },
     },
   };
@@ -208,8 +207,7 @@ describe("exec-policy CLI", () => {
       tools: {
         exec: {
           host: "auto",
-          security: "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -306,8 +304,7 @@ describe("exec-policy CLI", () => {
       tools: {
         exec: {
           host: "node",
-          security: "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -347,8 +344,7 @@ describe("exec-policy CLI", () => {
 
     expect(mocks.getConfig().tools?.exec).toEqual({
       host: "gateway",
-      security: "full",
-      ask: "off",
+      mode: "full",
     });
     expect(mocks.getApprovals().defaults).toEqual({
       security: "full",
@@ -378,8 +374,7 @@ describe("exec-policy CLI", () => {
 
     expect(mocks.getConfig().tools?.exec).toEqual({
       host: "gateway",
-      security: "full",
-      ask: "off",
+      mode: "full",
     });
     expect(mocks.getApprovals().defaults).toEqual({
       security: "full",
@@ -388,13 +383,65 @@ describe("exec-policy CLI", () => {
     });
   });
 
+  it("writes canonical full-always mode when tightening existing full mode to ask always", async () => {
+    mocks.setConfig({
+      tools: {
+        exec: {
+          host: "gateway",
+          mode: "full",
+        },
+      },
+    });
+
+    await runExecPolicyCommand(["exec-policy", "set", "--ask", "always"]);
+
+    expect(mocks.getConfig().tools?.exec).toEqual({
+      host: "gateway",
+      mode: "full-always",
+    });
+    expect(mocks.getApprovals().defaults).toEqual({
+      security: "allowlist",
+      ask: "always",
+      askFallback: "deny",
+    });
+    expect(mocks.runtimeErrors).toEqual([]);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
+    expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves legacy exec policy when setting only the host", async () => {
+    mocks.setConfig({
+      tools: {
+        exec: {
+          host: "auto",
+          security: "deny",
+          ask: "off",
+        },
+      },
+    } as OpenClawConfig);
+
+    await runExecPolicyCommand(["exec-policy", "set", "--host", "gateway"]);
+
+    expect(mocks.getConfig().tools?.exec).toEqual({
+      host: "gateway",
+      mode: "deny",
+    });
+    expect(mocks.getApprovals().defaults).toEqual({
+      security: "allowlist",
+      ask: "on-miss",
+      askFallback: "deny",
+    });
+    expect(mocks.runtimeErrors).toEqual([]);
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(1);
+    expect(mocks.saveExecApprovals).toHaveBeenCalledTimes(1);
+  });
+
   it("sanitizes terminal control content before rendering the text table", async () => {
     mocks.setConfig({
       tools: {
         exec: {
           host: "auto",
-          security: "allowlist\u001B[31m" as unknown as "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });
@@ -469,8 +516,7 @@ describe("exec-policy CLI", () => {
       tools: {
         exec: {
           host: "node",
-          security: "allowlist",
-          ask: "on-miss",
+          mode: "ask",
         },
       },
     });

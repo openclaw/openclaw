@@ -13,8 +13,7 @@ function createExecHostDefaultsConfig(
     tools: {
       exec: {
         host: "auto",
-        security: "full",
-        ask: "off",
+        mode: "full",
       },
     },
     agents: {
@@ -53,8 +52,7 @@ describe("Agent-specific exec tool defaults", () => {
         deny: ["process"],
         exec: {
           host: "gateway",
-          security: "full",
-          ask: "off",
+          mode: "full",
         },
       },
     };
@@ -81,8 +79,7 @@ describe("Agent-specific exec tool defaults", () => {
       config: {
         tools: {
           exec: {
-            security: "full",
-            ask: "off",
+            mode: "full",
           },
         },
       },
@@ -144,7 +141,7 @@ describe("Agent-specific exec tool defaults", () => {
     expect(text).toContain("allowed");
   });
 
-  it("preserves mode-derived security for partial agent exec overrides", async () => {
+  it("uses canonical migrated mode for partial agent exec override behavior", async () => {
     const tools = createOpenClawCodingTools({
       config: {
         tools: {
@@ -159,7 +156,7 @@ describe("Agent-specific exec tool defaults", () => {
               id: "main",
               tools: {
                 exec: {
-                  ask: "off",
+                  mode: "allowlist",
                 },
               },
             },

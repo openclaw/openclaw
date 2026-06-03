@@ -249,7 +249,7 @@ More grammar examples:
 openclaw path resolve 'oc://config.jsonc/agents.defaults.models/"anthropic/claude-opus-4-7"/alias'
 
 # Deep JSON/JSONC paths can use slash segments; they normalize to dotted subsegments
-openclaw path set 'oc://openclaw.json/agents/list/0/tools/exec/security' 'allowlist' --dry-run
+openclaw path set 'oc://openclaw.json/agents/list/0/tools/exec/mode' 'ask' --dry-run
 
 # Replace a JSONC leaf with a parsed object
 openclaw path set 'oc://openclaw.json/gateway/auth/token' '{"source":"file","provider":"secrets","id":"/test"}' --value-json --dry-run

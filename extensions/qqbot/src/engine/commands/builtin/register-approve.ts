@@ -34,12 +34,10 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
           ``,
           `\`\`\`shell`,
           `# 开启审批（白名单模式）`,
-          `openclaw config set tools.exec.security allowlist`,
-          `openclaw config set tools.exec.ask on-miss`,
+          `openclaw config set tools.exec.mode ask`,
           ``,
           `# 关闭审批`,
-          `openclaw config set tools.exec.security full`,
-          `openclaw config set tools.exec.ask off`,
+          `openclaw config set tools.exec.mode full`,
           `\`\`\``,
         ].join("\n");
       }
@@ -50,40 +48,38 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
         const cfg = configApi.current();
         const tools = ((cfg as Record<string, unknown>).tools ?? {}) as Record<string, unknown>;
         const exec = (tools.exec ?? {}) as Record<string, unknown>;
-        const security = typeof exec.security === "string" ? exec.security : "deny";
-        const ask = typeof exec.ask === "string" ? exec.ask : "on-miss";
-        return { security, ask };
+        const mode = typeof exec.mode === "string" ? exec.mode : "ask";
+        return { mode };
       };
 
-      const writeExecConfig = async (security: string, ask: string) => {
+      const writeExecConfig = async (mode: string) => {
         const cfg = structuredClone(configApi.current() as Record<string, unknown>);
         const tools = (cfg.tools ?? {}) as Record<string, unknown>;
         const exec = (tools.exec ?? {}) as Record<string, unknown>;
-        exec.security = security;
-        exec.ask = ask;
+        exec.mode = mode;
+        delete exec.security;
+        delete exec.ask;
         tools.exec = exec;
         cfg.tools = tools;
         await configApi.replaceConfigFile({ nextConfig: cfg, afterWrite: { mode: "auto" } });
       };
 
-      const formatStatus = (security: string, ask: string) => {
-        const secIcon = security === "full" ? "🟢" : security === "allowlist" ? "🟡" : "🔴";
-        const askIcon = ask === "off" ? "🟢" : ask === "always" ? "🔴" : "🟡";
+      const formatStatus = (mode: string) => {
+        const modeIcon = mode === "full" ? "🟢" : mode === "deny" ? "🔴" : "🟡";
         return [
           `🔐 当前审批配置`,
           ``,
-          `${secIcon} 安全模式 (security): **${security}**`,
-          `${askIcon} 审批模式 (ask): **${ask}**`,
+          `${modeIcon} 执行模式 (mode): **${mode}**`,
           ``,
-          security === "deny"
+          mode === "deny"
             ? `⚠️ 当前为 deny 模式，所有命令执行被拒绝`
-            : security === "full" && ask === "off"
+            : mode === "full"
               ? `✅ 所有命令无需审批直接执行`
-              : security === "allowlist" && ask === "on-miss"
-                ? `🛡️ 白名单命令直接执行，其余需审批`
-                : ask === "always"
-                  ? `🔒 每次命令执行都需要人工审批`
-                  : `ℹ️ security=${security}, ask=${ask}`,
+              : mode === "always"
+                ? `🛡️ 严格审批模式，每次命令执行都需审批`
+                : mode === "ask" || mode === "auto"
+                  ? `🛡️ 白名单命令直接执行，其余需审批`
+                  : `ℹ️ mode=${mode}`,
         ].join("\n");
       };
 
@@ -100,9 +96,9 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
       }
 
       if (arg === "status") {
-        const { security, ask } = loadExecConfig();
+        const { mode } = loadExecConfig();
         return [
-          formatStatus(security, ask),
+          formatStatus(mode),
           ``,
           `<qqbot-cmd-input text="/bot-approve on" show="/bot-approve on"/> 开启审批`,
           `<qqbot-cmd-input text="/bot-approve off" show="/bot-approve off"/> 关闭审批`,
@@ -113,12 +109,11 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
 
       if (arg === "on") {
         try {
-          await writeExecConfig("allowlist", "on-miss");
+          await writeExecConfig("ask");
           return [
             `✅ 审批已开启`,
             ``,
-            `• security = allowlist（白名单模式）`,
-            `• ask = on-miss（未命中白名单时需审批）`,
+            `• mode = ask（未命中白名单时需审批）`,
             ``,
             `已批准的命令自动加入白名单，下次直接执行。`,
           ].join("\n");
@@ -129,12 +124,11 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
 
       if (arg === "off") {
         try {
-          await writeExecConfig("full", "off");
+          await writeExecConfig("full");
           return [
             `✅ 审批已关闭`,
             ``,
-            `• security = full（允许所有命令）`,
-            `• ask = off（不需要审批）`,
+            `• mode = full（允许所有命令，不需要审批）`,
             ``,
             `⚠️ 所有命令将直接执行，不会弹出审批确认。`,
           ].join("\n");
@@ -145,15 +139,10 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
 
       if (arg === "always" || arg === "strict") {
         try {
-          await writeExecConfig("allowlist", "always");
-          return [
-            `✅ 已切换为严格审批模式`,
-            ``,
-            `• security = allowlist`,
-            `• ask = always（每次执行都需审批）`,
-            ``,
-            `每个命令都会弹出审批按钮，需手动确认。`,
-          ].join("\n");
+          await writeExecConfig("always");
+          return [`✅ 已切换为严格审批模式`, ``, `• mode = always（每次命令执行都需审批）`].join(
+            "\n",
+          );
         } catch (err: unknown) {
           return `❌ 配置更新失败: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -164,6 +153,7 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
           const cfg = structuredClone(configApi.current() as Record<string, unknown>);
           const tools = (cfg.tools ?? {}) as Record<string, unknown>;
           const exec = (tools.exec ?? {}) as Record<string, unknown>;
+          delete exec.mode;
           delete exec.security;
           delete exec.ask;
           if (Object.keys(exec).length === 0) {
@@ -180,8 +170,8 @@ export function registerApproveCommands(registry: SlashCommandRegistry): void {
           return [
             `✅ 审批配置已重置`,
             ``,
-            `已移除 tools.exec.security 和 tools.exec.ask`,
-            `框架将使用默认值（security=deny, ask=on-miss）`,
+            `已移除 tools.exec.mode`,
+            `框架将使用默认值`,
             ``,
             `如需开启命令执行，请使用 /bot-approve on`,
           ].join("\n");

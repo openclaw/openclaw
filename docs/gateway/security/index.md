@@ -192,7 +192,7 @@ Use this baseline first, then selectively re-enable tools per trusted agent:
     profile: "messaging",
     deny: ["group:automation", "group:runtime", "group:fs", "sessions_spawn", "sessions_send"],
     fs: { workspaceOnly: true },
-    exec: { security: "deny", ask: "always" },
+    exec: { mode: "deny" },
     elevated: { enabled: false },
   },
   channels: {
@@ -509,8 +509,8 @@ Two built-in tools can make persistent control-plane changes:
 - `cron` can create scheduled jobs that keep running after the original chat/task ends.
 
 The agent-facing `gateway` runtime tool still refuses to rewrite
-`tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
-normalized to the same protected exec paths before the write.
+`tools.exec.mode`; legacy `tools.bash.*` aliases are normalized to protected
+exec paths before the write.
 Agent-driven `gateway config.apply` and `gateway config.patch` edits are
 fail-closed by default: only a narrow set of prompt, model, and mention-gating
 paths are agent-tunable. New sensitive config trees are therefore protected

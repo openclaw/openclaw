@@ -24,7 +24,7 @@ export type ExecHost = "sandbox" | "gateway" | "node";
 export type ExecTarget = "auto" | ExecHost;
 export type ExecSecurity = "deny" | "allowlist" | "full";
 export type ExecAsk = "off" | "on-miss" | "always";
-export type ExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
+export type ExecMode = "deny" | "allowlist" | "ask" | "always" | "auto" | "full" | "full-always";
 
 export const EXEC_TARGET_VALUES: readonly ExecTarget[] = ["auto", "sandbox", "gateway", "node"];
 
@@ -93,8 +93,10 @@ export function normalizeExecMode(value?: string | null): ExecMode | null {
     normalized === "deny" ||
     normalized === "allowlist" ||
     normalized === "ask" ||
+    normalized === "always" ||
     normalized === "auto" ||
-    normalized === "full"
+    normalized === "full" ||
+    normalized === "full-always"
   ) {
     return normalized;
   }
@@ -111,7 +113,13 @@ export function resolveExecModeFromPolicy(params: {
   if (params.security === "allowlist" && params.ask === "off") {
     return "allowlist";
   }
-  if (params.security === "full" && params.ask !== "always") {
+  if (params.security === "full" && params.ask === "always") {
+    return "full-always";
+  }
+  if (params.ask === "always") {
+    return "always";
+  }
+  if (params.security === "full") {
     return "full";
   }
   return "ask";
@@ -129,10 +137,14 @@ export function resolveExecPolicyForMode(mode: ExecMode): {
       return { security: "allowlist", ask: "off", autoReview: false };
     case "ask":
       return { security: "allowlist", ask: "on-miss", autoReview: false };
+    case "always":
+      return { security: "allowlist", ask: "always", autoReview: false };
     case "auto":
       return { security: "allowlist", ask: "on-miss", autoReview: true };
     case "full":
       return { security: "full", ask: "off", autoReview: false };
+    case "full-always":
+      return { security: "full", ask: "always", autoReview: false };
   }
   const exhaustiveMode: never = mode;
   throw new Error(`Unsupported exec mode: ${String(exhaustiveMode)}`);

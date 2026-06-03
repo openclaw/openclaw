@@ -58,9 +58,7 @@ function resolveScopedSandboxMode(
 function isYoloHostPosture(cfg: OpenClawConfig, agentId?: string): boolean {
   const scopedExec = resolveScopedExecConfig(cfg, agentId);
   const globalExec = cfg.tools?.exec;
-  const security = scopedExec?.security ?? globalExec?.security ?? "full";
-  const ask = scopedExec?.ask ?? globalExec?.ask ?? "off";
-  return security === "full" && ask === "off";
+  return (scopedExec?.mode ?? globalExec?.mode ?? "full") === "full";
 }
 
 export function resolveCrestodianRescuePolicy(
@@ -110,7 +108,7 @@ export function resolveCrestodianRescuePolicy(
       sandboxActive,
       reason: "not-yolo",
       message:
-        "Crestodian rescue auto-mode only opens in YOLO host posture: tools.exec.security=full, tools.exec.ask=off, and sandboxing off.",
+        "Crestodian rescue auto-mode only opens in YOLO host posture: tools.exec.mode=full and sandboxing off.",
     };
   }
   if (!input.senderIsOwner) {

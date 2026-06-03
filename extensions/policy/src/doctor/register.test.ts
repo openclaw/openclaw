@@ -6097,7 +6097,7 @@ describe("registerPolicyDoctorChecks", () => {
       tools: {
         profile: "coding",
         deny: ["write"],
-        exec: { security: "full", ask: "off", host: "gateway" },
+        exec: { mode: "full", host: "gateway" },
         fs: { workspaceOnly: false },
         elevated: { enabled: true, allowFrom: { whatsapp: ["+15550000001", 15550000002] } },
       },
@@ -6108,7 +6108,7 @@ describe("registerPolicyDoctorChecks", () => {
             tools: {
               profile: "messaging",
               deny: ["group:runtime", "group:fs"],
-              exec: { security: "deny", ask: "always", host: "sandbox" },
+              exec: { mode: "deny", host: "sandbox" },
               fs: { workspaceOnly: true },
               elevated: { enabled: false },
             },
@@ -6151,7 +6151,7 @@ describe("registerPolicyDoctorChecks", () => {
           id: "reviewer-exec-security",
           kind: "execSecurity",
           value: "deny",
-          source: "oc://openclaw.config/agents/list/#0/tools/exec/security",
+          source: "oc://openclaw.config/agents/list/#0/tools/exec/mode",
         }),
         expect.objectContaining({
           id: "tools-elevated-allow-from-whatsapp",
@@ -6176,12 +6176,12 @@ describe("registerPolicyDoctorChecks", () => {
         }),
         expect.objectContaining({
           checkId: "policy/tools-exec-security-unapproved",
-          ocPath: "oc://openclaw.config/tools/exec/security",
+          ocPath: "oc://openclaw.config/tools/exec/mode",
           requirement: "oc://policy.jsonc/tools/exec/allowSecurity",
         }),
         expect.objectContaining({
           checkId: "policy/tools-exec-ask-unapproved",
-          ocPath: "oc://openclaw.config/tools/exec/ask",
+          ocPath: "oc://openclaw.config/tools/exec/mode",
           requirement: "oc://policy.jsonc/tools/exec/requireAsk",
         }),
         expect.objectContaining({
@@ -6218,7 +6218,7 @@ describe("registerPolicyDoctorChecks", () => {
       tools: {
         profile: "messaging",
         deny: ["group:runtime", "group:fs"],
-        exec: { security: "deny", ask: "always", host: "sandbox" },
+        exec: { mode: "deny", host: "sandbox" },
         fs: { workspaceOnly: true },
         elevated: { enabled: false },
       },
@@ -6232,7 +6232,7 @@ describe("registerPolicyDoctorChecks", () => {
           fs: { requireWorkspaceOnly: true },
           exec: {
             allowSecurity: ["deny"],
-            requireAsk: ["always"],
+            requireAsk: ["off"],
             allowHosts: ["sandbox"],
           },
           elevated: { allow: false },
@@ -6468,11 +6468,11 @@ describe("registerPolicyDoctorChecks", () => {
       expect.arrayContaining([
         expect.objectContaining({
           checkId: "policy/tools-exec-security-unapproved",
-          ocPath: "oc://openclaw.config/tools/exec/security",
+          ocPath: "oc://openclaw.config/tools/exec/mode",
         }),
         expect.objectContaining({
           checkId: "policy/tools-exec-ask-unapproved",
-          ocPath: "oc://openclaw.config/tools/exec/ask",
+          ocPath: "oc://openclaw.config/tools/exec/mode",
         }),
       ]),
     );
@@ -6483,6 +6483,81 @@ describe("registerPolicyDoctorChecks", () => {
         }),
       ]),
     );
+  });
+
+  it("distinguishes auto-reviewed exec mode from human ask posture", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        exec: { mode: "auto" },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: {
+          exec: {
+            allowSecurity: ["allowlist"],
+            requireAsk: ["on-miss"],
+            allowHosts: ["auto"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const evidence = collectPolicyEvidence(cfg as unknown as Record<string, unknown>);
+
+    expect(evidence.toolPosture).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "tools-exec-ask",
+          kind: "execAsk",
+          value: "auto",
+          source: "oc://openclaw.config/tools/exec/mode",
+        }),
+      ]),
+    );
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-exec-ask-unapproved",
+        ocPath: "oc://openclaw.config/tools/exec/mode",
+        requirement: "oc://policy.jsonc/tools/exec/requireAsk",
+      }),
+    ]);
+  });
+
+  it("accepts canonical always exec mode for strict ask policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      tools: {
+        exec: { mode: "always" },
+      },
+    } as unknown as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        tools: {
+          exec: {
+            allowSecurity: ["allowlist"],
+            requireAsk: ["always"],
+            allowHosts: ["auto"],
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([]);
   });
 
   it("accepts omitted exec defaults and individual denies for required deny groups", async () => {
@@ -6680,7 +6755,7 @@ describe("registerPolicyDoctorChecks", () => {
           id: "tools-exec-security",
           kind: "execSecurity",
           value: "deny",
-          source: "oc://openclaw.config/tools/exec/security",
+          source: "oc://openclaw.config/tools/exec/mode",
         }),
       ]),
     );
@@ -6721,7 +6796,7 @@ describe("registerPolicyDoctorChecks", () => {
           id: "tools-exec-security",
           kind: "execSecurity",
           value: "deny",
-          source: "oc://openclaw.config/tools/exec/security",
+          source: "oc://openclaw.config/tools/exec/mode",
         }),
       ]),
     );
@@ -6762,14 +6837,14 @@ describe("registerPolicyDoctorChecks", () => {
           id: "tools-exec-security",
           kind: "execSecurity",
           value: "full",
-          source: "oc://openclaw.config/tools/exec/security",
+          source: "oc://openclaw.config/tools/exec/mode",
         }),
       ]),
     );
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/tools-exec-security-unapproved",
-        ocPath: "oc://openclaw.config/tools/exec/security",
+        ocPath: "oc://openclaw.config/tools/exec/mode",
         requirement: "oc://policy.jsonc/tools/exec/allowSecurity",
       }),
     ]);

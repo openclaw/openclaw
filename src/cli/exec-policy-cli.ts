@@ -13,13 +13,17 @@ import {
 } from "../infra/exec-approvals-effective.js";
 import {
   normalizeExecAsk,
+  normalizeExecMode,
   normalizeExecSecurity,
   normalizeExecTarget,
   readExecApprovalsSnapshot,
   restoreExecApprovalsSnapshot,
+  resolveExecModeFromPolicy,
+  resolveExecPolicyForMode,
   saveExecApprovals,
   type ExecApprovalsFile,
   type ExecAsk,
+  type ExecMode,
   type ExecSecurity,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
@@ -175,8 +179,9 @@ function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolic
     tools?: {
       exec?: {
         host?: ExecTarget;
-        security?: ExecSecurity;
-        ask?: ExecAsk;
+        mode?: ExecMode;
+        security?: string;
+        ask?: string;
       };
     };
   };
@@ -185,12 +190,44 @@ function applyConfigExecPolicy(draft: Record<string, unknown>, policy: ExecPolic
   if (policy.host !== undefined) {
     root.tools.exec.host = policy.host;
   }
-  if (policy.security !== undefined) {
-    root.tools.exec.security = policy.security;
+  const existingPolicy = resolveExistingConfigExecPolicy(root.tools.exec);
+  if (policy.security !== undefined || policy.ask !== undefined) {
+    const basePolicy = existingPolicy ?? { security: "full" as const, ask: "off" as const };
+    const security = policy.security ?? basePolicy.security;
+    const ask = policy.ask ?? basePolicy.ask;
+    root.tools.exec.mode = resolveConfigModeForExecPolicy({ security, ask });
+  } else if (!normalizeExecMode(root.tools.exec.mode) && existingPolicy) {
+    root.tools.exec.mode = resolveConfigModeForExecPolicy(existingPolicy);
   }
-  if (policy.ask !== undefined) {
-    root.tools.exec.ask = policy.ask;
+  delete (root.tools.exec as Record<string, unknown>).security;
+  delete (root.tools.exec as Record<string, unknown>).ask;
+}
+
+function resolveExistingConfigExecPolicy(exec: {
+  mode?: ExecMode;
+  security?: string;
+  ask?: string;
+}): { security: ExecSecurity; ask: ExecAsk } | null {
+  const existingMode = normalizeExecMode(exec.mode);
+  if (existingMode) {
+    return resolveExecPolicyForMode(existingMode);
   }
+  const security = normalizeExecSecurity(exec.security);
+  const ask = normalizeExecAsk(exec.ask);
+  if (!security && !ask) {
+    return null;
+  }
+  return {
+    security: security ?? "full",
+    ask: ask ?? "off",
+  };
+}
+
+function resolveConfigModeForExecPolicy(params: {
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): ExecMode {
+  return resolveExecModeFromPolicy(params);
 }
 
 function applyApprovalsDefaults(

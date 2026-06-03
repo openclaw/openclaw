@@ -23,6 +23,45 @@ const ALLOWLIST_DEFAULT_INGRESS_GROUP_POLICY_CHANNELS = new Set([
 ]);
 const OPEN_GROUPS_DEFAULT_TO_NO_MENTION_CHANNELS = new Set(["feishu", "qa-channel"]);
 
+type PolicyExecMode = "deny" | "allowlist" | "ask" | "always" | "auto" | "full" | "full-always";
+
+function readExecMode(value: unknown): PolicyExecMode | undefined {
+  const mode = readString(value);
+  return mode === "deny" ||
+    mode === "allowlist" ||
+    mode === "ask" ||
+    mode === "always" ||
+    mode === "auto" ||
+    mode === "full" ||
+    mode === "full-always"
+    ? mode
+    : undefined;
+}
+
+function resolveExecModePosture(mode: PolicyExecMode): {
+  readonly security: "deny" | "allowlist" | "full";
+  readonly ask: "off" | "on-miss" | "always" | "auto";
+} {
+  switch (mode) {
+    case "deny":
+      return { security: "deny", ask: "off" };
+    case "allowlist":
+      return { security: "allowlist", ask: "off" };
+    case "ask":
+      return { security: "allowlist", ask: "on-miss" };
+    case "always":
+      return { security: "allowlist", ask: "always" };
+    case "auto":
+      return { security: "allowlist", ask: "auto" };
+    case "full":
+      return { security: "full", ask: "off" };
+    case "full-always":
+      return { security: "full", ask: "always" };
+  }
+  mode satisfies never;
+  throw new Error("Unknown exec mode");
+}
+
 export type PolicyAttestation = {
   readonly checkedAt: string;
   readonly policy?: {
@@ -1298,30 +1337,35 @@ function pushToolExecPosture(
     inherited: localHost === undefined && inheritedHost !== undefined,
   });
 
-  const localSecurity = readString(localExec.security);
-  const inheritedSecurity = readString(inheritedExec.security);
+  const localMode = readExecMode(localExec.mode);
+  const inheritedMode = readExecMode(inheritedExec.mode);
+  const modePosture =
+    localMode !== undefined
+      ? resolveExecModePosture(localMode)
+      : inheritedMode !== undefined
+        ? resolveExecModePosture(inheritedMode)
+        : undefined;
   // Config conformance intentionally ignores exec-approvals.json runtime/operator state.
   const sandboxMode = readString(params.sandbox.mode) ?? readString(params.inheritedSandbox.mode);
   const sandboxCanApply = sandboxMode === "all";
   pushToolPostureValue(entries, params, {
     suffix: "exec/security",
+    sourceSuffix: "exec/mode",
     kind: "execSecurity",
     value:
-      localSecurity ??
-      inheritedSecurity ??
+      modePosture?.security ??
       (host === "sandbox" || (host === "auto" && sandboxCanApply) ? "deny" : "full"),
-    explicit: localSecurity !== undefined || inheritedSecurity !== undefined,
-    inherited: localSecurity === undefined && inheritedSecurity !== undefined,
+    explicit: localMode !== undefined || inheritedMode !== undefined,
+    inherited: localMode === undefined && inheritedMode !== undefined,
   });
 
-  const localAsk = readString(localExec.ask);
-  const inheritedAsk = readString(inheritedExec.ask);
   pushToolPostureValue(entries, params, {
     suffix: "exec/ask",
+    sourceSuffix: "exec/mode",
     kind: "execAsk",
-    value: localAsk ?? inheritedAsk ?? "off",
-    explicit: localAsk !== undefined || inheritedAsk !== undefined,
-    inherited: localAsk === undefined && inheritedAsk !== undefined,
+    value: modePosture?.ask ?? "off",
+    explicit: localMode !== undefined || inheritedMode !== undefined,
+    inherited: localMode === undefined && inheritedMode !== undefined,
   });
 }
 
@@ -1673,6 +1717,7 @@ function pushToolPostureValue(
   params: ToolPostureParams,
   entry: {
     readonly suffix: string;
+    readonly sourceSuffix?: string;
     readonly kind: PolicyToolPostureEvidence["kind"];
     readonly value: boolean | string | undefined;
     readonly explicit: boolean;
@@ -1682,7 +1727,7 @@ function pushToolPostureValue(
   entries.push({
     id: `${params.id}-${entry.suffix.replaceAll("/", "-")}`,
     kind: entry.kind,
-    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.suffix}`,
+    source: `${entry.inherited ? params.inheritedSourceBase : params.sourceBase}/${entry.sourceSuffix ?? entry.suffix}`,
     scope: params.scope,
     ...(params.agentId === undefined ? {} : { agentId: params.agentId }),
     ...(entry.value === undefined ? {} : { value: entry.value }),

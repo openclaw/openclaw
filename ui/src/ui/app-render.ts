@@ -1039,11 +1039,11 @@ export function extractQuickSettingsSecurity(state: AppViewState): {
     }
     const exec = (tools as Record<string, unknown>).exec;
     if (exec && typeof exec === "object") {
-      const security = (exec as Record<string, unknown>).security;
-      if (typeof security === "string") {
-        const trimmedSecurity = security.trim();
-        if (trimmedSecurity) {
-          execPolicy = trimmedSecurity;
+      const mode = (exec as Record<string, unknown>).mode;
+      if (typeof mode === "string") {
+        const trimmedMode = mode.trim();
+        if (trimmedMode) {
+          execPolicy = trimmedMode;
         }
       }
     }

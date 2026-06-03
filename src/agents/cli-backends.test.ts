@@ -136,7 +136,7 @@ function isTestYoloConfig(context?: CliBackendNormalizeConfigContext): boolean {
     ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
     : undefined;
   const exec = agentExec ?? context?.config?.tools?.exec;
-  return (exec?.security ?? "full") === "full" && (exec?.ask ?? "off") === "off";
+  return (exec?.mode ?? "full") === "full";
 }
 
 function normalizeTestPermissionMode(context?: CliBackendNormalizeConfigContext): {
@@ -556,7 +556,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
   it("keeps Claude permission mode unset when OpenClaw exec policy is not YOLO", () => {
     const resolved = requireCliBackendConfig("claude-cli", {
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      tools: { exec: { mode: "ask" } },
     });
 
     expect(resolved?.config.args).not.toContain("--permission-mode");
@@ -567,16 +567,16 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
   it("derives Claude permission mode from per-agent exec policy when an agent id is known", () => {
     const cfg = {
-      tools: { exec: { security: "full", ask: "off" } },
+      tools: { exec: { mode: "full" } },
       agents: {
         list: [
           {
             id: "reviewer",
-            tools: { exec: { security: "allowlist", ask: "on-miss" } },
+            tools: { exec: { mode: "ask" } },
           },
           {
             id: "builder",
-            tools: { exec: { security: "full", ask: "off" } },
+            tools: { exec: { mode: "full" } },
           },
         ],
       },
@@ -595,7 +595,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
 
   it("preserves raw Claude permission args during backend normalization", () => {
     const safe = resolveCliBackendConfig("claude-cli", {
-      tools: { exec: { security: "full", ask: "off" } },
+      tools: { exec: { mode: "full" } },
       agents: {
         defaults: {
           cliBackends: {
@@ -609,7 +609,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
       },
     });
     const yolo = resolveCliBackendConfig("claude-cli", {
-      tools: { exec: { security: "deny", ask: "always" } },
+      tools: { exec: { mode: "deny" } },
       agents: {
         defaults: {
           cliBackends: {
@@ -686,7 +686,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
           },
         },
       },
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      tools: { exec: { mode: "ask" } },
     } satisfies OpenClawConfig;
 
     const resolved = requireCliBackendConfig("claude-cli", cfg);
@@ -787,7 +787,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
         args: ["-p", "--setting-sources", "--output-format", "stream-json"],
         resumeArgs: ["-p", "--setting-sources", "--resume", "{sessionId}"],
       }),
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      tools: { exec: { mode: "ask" } },
     } satisfies OpenClawConfig;
 
     const resolved = requireCliBackendConfig("claude-cli", cfg);
@@ -803,7 +803,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
         args: ["-p", "--permission-mode", "--output-format", "stream-json"],
         resumeArgs: ["-p", "--permission-mode=--resume", "--resume", "{sessionId}"],
       }),
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      tools: { exec: { mode: "ask" } },
     } satisfies OpenClawConfig;
 
     const resolved = requireCliBackendConfig("claude-cli", cfg);
@@ -832,7 +832,7 @@ describe("resolveCliBackendConfig claude-cli defaults", () => {
           },
         },
       },
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      tools: { exec: { mode: "ask" } },
     } satisfies OpenClawConfig;
 
     const resolved = requireCliBackendConfig("claude-cli", cfg);

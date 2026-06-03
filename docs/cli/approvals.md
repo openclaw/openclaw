@@ -127,8 +127,7 @@ This changes the **host approvals file** only. To keep the requested OpenClaw po
 
 ```bash
 openclaw config set tools.exec.host gateway
-openclaw config set tools.exec.security full
-openclaw config set tools.exec.ask off
+openclaw config set tools.exec.mode full
 ```
 
 Why `tools.exec.host=gateway` in this example:

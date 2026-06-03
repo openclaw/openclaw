@@ -216,13 +216,13 @@ describe("resolveExecDefaults", () => {
         sandboxAvailable: false,
       }),
     ).toMatchObject({
-      mode: "ask",
+      mode: "full-always",
       security: "full",
       ask: "always",
     });
   });
 
-  it("keeps legacy security overrides ahead of higher-scope normalized mode", () => {
+  it("lets agent-scoped mode override higher-scope normalized mode", () => {
     expect(
       resolveExecDefaults({
         cfg: {
@@ -237,8 +237,7 @@ describe("resolveExecDefaults", () => {
                 id: "agent-a",
                 tools: {
                   exec: {
-                    security: "full",
-                    ask: "off",
+                    mode: "full",
                   },
                 },
               },
@@ -255,7 +254,7 @@ describe("resolveExecDefaults", () => {
     });
   });
 
-  it("preserves mode-derived security for partial legacy agent overrides", () => {
+  it("uses canonical migrated agent mode for partial legacy override behavior", () => {
     expect(
       resolveExecDefaults({
         cfg: {
@@ -270,7 +269,7 @@ describe("resolveExecDefaults", () => {
                 id: "agent-a",
                 tools: {
                   exec: {
-                    ask: "off",
+                    mode: "allowlist",
                   },
                 },
               },

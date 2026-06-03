@@ -377,8 +377,8 @@ describe("renderApp assistant avatar routing", () => {
     const state = createState({
       configForm: {
         browser: { enabled: false },
-        tools: { profile: "messaging", exec: { security: "full" } },
-        agents: { defaults: { exec: { security: "deny" } } },
+        tools: { profile: "messaging", exec: { mode: "full" } },
+        agents: { defaults: { exec: { mode: "deny" } } },
       },
     });
 
@@ -393,10 +393,10 @@ describe("renderApp assistant avatar routing", () => {
 
     expect(state.configForm?.browser).toEqual({ enabled: true });
     const tools = state.configForm?.tools as
-      | { profile?: string; exec?: { security?: string } }
+      | { profile?: string; exec?: { mode?: string } }
       | undefined;
     expect(tools?.profile).toBe("full");
-    expect(tools?.exec?.security).toBe("full");
+    expect(tools?.exec?.mode).toBe("full");
   });
 
   it("renders stale cron state containing a job without a payload", () => {

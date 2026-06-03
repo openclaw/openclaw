@@ -47,7 +47,7 @@ Where to execute. `auto` resolves to `sandbox` when a sandbox runtime is active 
 
 <ParamField path="security" type="'deny' | 'allowlist' | 'full'">
 Ignored for normal tool calls. `gateway` / `node` security is controlled by
-`tools.exec.security` and `~/.openclaw/exec-approvals.json`; elevated mode can
+`tools.exec.mode` and `~/.openclaw/exec-approvals.json`; elevated mode can
 force `security=full` only when the operator explicitly grants elevated access.
 </ParamField>
 
@@ -68,7 +68,7 @@ Notes:
 - `host` defaults to `auto`: sandbox when sandbox runtime is active for the session, otherwise gateway.
 - `host` only accepts `auto`, `sandbox`, `gateway`, or `node`. It is not a hostname selector; hostname-like values are rejected before the command runs.
 - `auto` is the default routing strategy, not a wildcard. Per-call `host=node` is allowed from `auto`; per-call `host=gateway` is only allowed when no sandbox runtime is active.
-- `tools.exec.mode` is the normalized policy knob. Values are `deny`, `allowlist`, `ask`, `auto`, and `full`. `auto` runs deterministic allowlist/safe-bin matches directly and routes every remaining exec approval case through OpenClaw's native auto reviewer before asking a human. `ask` / `ask=always` still asks a human every time.
+- `tools.exec.mode` is the normalized policy knob. Values are `deny`, `allowlist`, `ask`, `always`, `auto`, `full`, and `full-always`. `auto` runs deterministic allowlist/safe-bin matches directly and routes every remaining exec approval case through OpenClaw's native auto reviewer before asking a human. `ask` asks a human on allowlist misses; `always` asks on allowlist-backed commands every time; `full-always` asks on every full-access command.
 - With no extra config, `host=auto` still "just works": no sandbox means it resolves to `gateway`; a live sandbox means it stays in the sandbox.
 - `elevated` escapes the sandbox onto the configured host path: `gateway` by default, or `node` when `tools.exec.host=node` (or the session default is `host=node`). It is only available when elevated access is enabled for the current session/provider.
 - `gateway`/`node` approvals are controlled by `~/.openclaw/exec-approvals.json`.
@@ -108,9 +108,8 @@ Notes:
 - `tools.exec.approvalRunningNoticeMs` (default: 10000): emit a single "running" notice when an approval-gated exec runs longer than this (0 disables).
 - `tools.exec.timeoutSec` (default: 1800): default per-command exec timeout in seconds. Per-call `timeout` overrides it; per-call `timeout: 0` disables the exec process timeout.
 - `tools.exec.host` (default: `auto`; resolves to `sandbox` when sandbox runtime is active, `gateway` otherwise)
-- `tools.exec.security` (default: `deny` for sandbox, `full` for gateway + node when unset)
-- `tools.exec.ask` (default: `off`)
-- No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host `~/.openclaw/exec-approvals.json`; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval).
+- `tools.exec.mode` (default: derived from host policy; set `full-always`, `always`, `ask`, `auto`, `allowlist`, `deny`, or `full` explicitly)
+- No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten `tools.exec.mode` and the host `~/.openclaw/exec-approvals.json`; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval).
 - YOLO comes from the host-policy defaults (`security=full`, `ask=off`), not from `host=auto`. If you want to force gateway or node routing, set `tools.exec.host` or use `/exec host=...`.
 - In `security=full` plus `ask=off` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter or script-preflight rejection layer.
 - `tools.exec.node` (default: unset)

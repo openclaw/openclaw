@@ -301,13 +301,243 @@ describe("legacy agent system prompt override config migrate", () => {
   });
 });
 
+describe("legacy exec policy config migrate", () => {
+  it("moves representable global security and ask pairs to canonical mode", () => {
+    const raw = {
+      tools: {
+        exec: {
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+    };
+
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["tools.exec"]);
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.tools?.exec).toEqual({ mode: "ask" });
+    expect(res.changes).toEqual(['Moved legacy tools.exec.security/ask to tools.exec.mode="ask".']);
+  });
+
+  it("moves legacy full always-ask pairs to canonical full-always mode", () => {
+    const raw = {
+      tools: {
+        exec: {
+          security: "full",
+          ask: "always",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.tools?.exec).toEqual({ mode: "full-always" });
+    expect(res.changes).toEqual([
+      'Moved legacy tools.exec.security/ask to tools.exec.mode="full-always".',
+    ]);
+  });
+
+  it("materializes per-agent ask-only overrides when inherited mode makes them safe", () => {
+    const raw = {
+      tools: {
+        exec: {
+          mode: "auto",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "runner",
+            tools: {
+              exec: {
+                ask: "off",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.list?.[0]?.tools?.exec).toEqual({ mode: "allowlist" });
+    expect(res.changes).toEqual([
+      'Moved legacy agents.list.0.tools.exec.ask to agents.list.0.tools.exec.mode="allowlist" using inherited auto security.',
+    ]);
+  });
+
+  it("preserves inherited ask when migrating per-agent security-only overrides", () => {
+    const raw = {
+      tools: {
+        exec: {
+          mode: "always",
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "runner",
+            tools: {
+              exec: {
+                security: "full",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.list?.[0]?.tools?.exec).toEqual({ mode: "full-always" });
+    expect(res.changes).toEqual([
+      'Moved legacy agents.list.0.tools.exec.security to agents.list.0.tools.exec.mode="full-always".',
+    ]);
+  });
+
+  it("removes global ask-only on-miss config when no legacy security exists", () => {
+    const raw = {
+      tools: {
+        exec: {
+          ask: "on-miss",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.tools?.exec).toEqual({});
+    expect(res.changes).toEqual([
+      'Removed legacy tools.exec.ask="on-miss" because no legacy security value was available to convert it to mode.',
+    ]);
+  });
+
+  it("removes per-agent ask-only on-miss config when no inherited security exists", () => {
+    const raw = {
+      agents: {
+        list: [
+          {
+            id: "runner",
+            tools: {
+              exec: {
+                ask: "on-miss",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.list?.[0]?.tools?.exec).toEqual({});
+    expect(res.changes).toEqual([
+      'Removed legacy agents.list.0.tools.exec.ask="on-miss" because no legacy security value was available to convert it to mode.',
+    ]);
+    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(["agents.list"]);
+  });
+
+  it("moves global ask-only always policy to canonical full-always mode", () => {
+    const raw = {
+      tools: {
+        exec: {
+          ask: "always",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.tools?.exec).toEqual({ mode: "full-always" });
+    expect(res.changes).toEqual(['Moved legacy tools.exec.ask to tools.exec.mode="full-always".']);
+  });
+
+  it("preserves explicit sandbox host deny posture for ask-only always policy", () => {
+    const raw = {
+      tools: {
+        exec: {
+          host: "sandbox",
+          ask: "always",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.tools?.exec).toEqual({ host: "sandbox", mode: "deny" });
+    expect(res.changes).toEqual(['Moved legacy tools.exec.ask to tools.exec.mode="deny".']);
+  });
+
+  it("moves per-agent ask-only always policy to canonical full-always mode without inherited mode", () => {
+    const raw = {
+      agents: {
+        list: [
+          {
+            id: "runner",
+            tools: {
+              exec: {
+                ask: "always",
+              },
+            },
+          },
+        ],
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.agents?.list?.[0]?.tools?.exec).toEqual({ mode: "full-always" });
+    expect(res.changes).toEqual([
+      'Moved legacy agents.list.0.tools.exec.ask to agents.list.0.tools.exec.mode="full-always".',
+    ]);
+  });
+
+  it("removes redundant legacy keys when mode already preserves them", () => {
+    const raw = {
+      tools: {
+        exec: {
+          mode: "ask",
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.tools?.exec).toEqual({ mode: "ask" });
+    expect(res.changes).toEqual([
+      "Removed redundant legacy tools.exec.security/ask because tools.exec.mode already preserves it.",
+    ]);
+  });
+
+  it("does not let legacy ask override an explicit denied mode", () => {
+    const raw = {
+      tools: {
+        exec: {
+          mode: "deny",
+          ask: "always",
+        },
+      },
+    };
+
+    const res = migrateLegacyConfigForTest(raw);
+
+    expect(res.config?.tools?.exec).toEqual({ mode: "deny" });
+    expect(res.changes).toEqual([
+      "Removed legacy tools.exec.ask because tools.exec.mode is canonical.",
+    ]);
+  });
+});
+
 describe("profile configured tool section migrate", () => {
   it("does not add grants when configured sections are the only signal", () => {
     const raw = {
       tools: {
         profile: "messaging",
         alsoAllow: ["read", "write"],
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
         fs: { workspaceOnly: true },
       },
       agents: {
@@ -315,7 +545,7 @@ describe("profile configured tool section migrate", () => {
           {
             id: "sage",
             tools: {
-              exec: { security: "allowlist" },
+              exec: { mode: "allowlist" },
             },
           },
         ],
@@ -334,7 +564,7 @@ describe("profile configured tool section migrate", () => {
       tools: {
         profile: "messaging",
         allow: ["message"],
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
       },
     });
 
@@ -347,7 +577,7 @@ describe("profile configured tool section migrate", () => {
       tools: {
         profile: "messaging",
         allow: ["message", "exec", "process"],
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
       },
     });
 
@@ -366,7 +596,7 @@ describe("profile configured tool section migrate", () => {
         profile: "messaging",
         allow: ["message"],
         alsoAllow: ["exec"],
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
       },
     });
 
@@ -383,7 +613,7 @@ describe("profile configured tool section migrate", () => {
         profile: "messaging",
         allow: ["message", "exec", "process"],
         alsoAllow: ["browser"],
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
       },
     });
 
@@ -397,7 +627,7 @@ describe("profile configured tool section migrate", () => {
       tools: {
         profile: "messaging",
         allow: ["*"],
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
       },
     });
 
@@ -417,14 +647,14 @@ describe("profile configured tool section migrate", () => {
       tools: {
         profile: "messaging",
         allow: ["sessions_*"],
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
       },
     });
     const plugin = migrateLegacyConfigForTest({
       tools: {
         profile: "messaging",
         allow: ["gmail_search"],
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
       },
     });
 
@@ -443,7 +673,7 @@ describe("profile configured tool section migrate", () => {
             id: "sage",
             tools: {
               allow: ["message", "exec", "process"],
-              exec: { security: "allowlist" },
+              exec: { mode: "allowlist" },
             },
           },
         ],
@@ -457,7 +687,7 @@ describe("profile configured tool section migrate", () => {
   it("does not materialize provider grants when no provider grant intent is explicit", () => {
     const raw = {
       tools: {
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
         byProvider: {
           openai: {
             profile: "messaging",
@@ -469,7 +699,7 @@ describe("profile configured tool section migrate", () => {
           {
             id: "sage",
             tools: {
-              exec: { security: "allowlist" },
+              exec: { mode: "allowlist" },
             },
           },
         ],
@@ -486,7 +716,7 @@ describe("profile configured tool section migrate", () => {
     const raw = {
       tools: {
         profile: "messaging",
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
         byProvider: {
           openai: {
             allow: ["message", "exec", "process"],
@@ -504,7 +734,7 @@ describe("profile configured tool section migrate", () => {
   it("sets provider profile full when provider allow already contains configured-section grants", () => {
     const res = migrateLegacyConfigForTest({
       tools: {
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
         byProvider: {
           openai: {
             profile: "messaging",
@@ -535,7 +765,7 @@ describe("profile configured tool section migrate", () => {
           {
             id: "sage",
             tools: {
-              exec: { security: "allowlist" },
+              exec: { mode: "allowlist" },
               byProvider: {
                 "qwen/qwen-plus": {
                   allow: ["message", "exec", "process"],

@@ -14,6 +14,7 @@ import {
   minSecurity,
   normalizeExecAsk,
   resolveExecApprovalsFromFile,
+  resolveExecPolicyForMode,
   type ExecAsk,
   type ExecSecurity,
 } from "../../infra/exec-approvals.js";
@@ -757,8 +758,9 @@ function readConfiguredExecPolicy(context: PreparedCliRunContext): {
   const agentExec = context.params.config?.agents?.list?.find((agent) => agent.id === agentId)
     ?.tools?.exec;
   const exec = agentExec ?? context.params.config?.tools?.exec;
-  const security = exec?.security ?? "full";
-  const configuredAsk = exec?.ask ?? "off";
+  const policy = exec?.mode ? resolveExecPolicyForMode(exec.mode) : undefined;
+  const security = policy?.security ?? "full";
+  const configuredAsk = policy?.ask ?? "off";
   const sessionAsk = normalizeExecAsk(context.params.sessionEntry?.execAsk);
   return {
     agentId,

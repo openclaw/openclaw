@@ -71,6 +71,23 @@ const STRIP_PROTECTED_KEYS: Record<string, Set<string>> = {
   plugins: new Set(["installs"]),
 };
 
+function isLegacyExecPolicyKey(pathLocal: Array<string | number>, key: string): boolean {
+  if (key !== "security" && key !== "ask") {
+    return false;
+  }
+  if (pathLocal.length === 2 && pathLocal[0] === "tools" && pathLocal[1] === "exec") {
+    return true;
+  }
+  return (
+    pathLocal.length === 5 &&
+    pathLocal[0] === "agents" &&
+    pathLocal[1] === "list" &&
+    typeof pathLocal[2] === "number" &&
+    pathLocal[3] === "tools" &&
+    pathLocal[4] === "exec"
+  );
+}
+
 export function stripUnknownConfigKeys(config: OpenClawConfig): {
   config: OpenClawConfig;
   removed: string[];
@@ -109,6 +126,9 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
         continue;
       }
       if (protectedSet?.has(key)) {
+        continue;
+      }
+      if (isLegacyExecPolicyKey(issuePath, key)) {
         continue;
       }
       delete record[key];

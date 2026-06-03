@@ -28,10 +28,15 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: () => mocks.hookRunner,
 }));
 
-vi.mock("../infra/shell-env.js", () => ({
-  getShellPathFromLoginShell: vi.fn(() => null),
-  resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
-}));
+vi.mock("../infra/shell-env.js", async () => {
+  const mod =
+    await vi.importActual<typeof import("../infra/shell-env.js")>("../infra/shell-env.js");
+  return {
+    ...mod,
+    getShellPathFromLoginShell: vi.fn(() => null),
+    resolveShellEnvFallbackTimeoutMs: vi.fn(() => 0),
+  };
+});
 
 vi.mock("./bash-tools.exec-host-gateway.js", () => ({
   processGatewayAllowlist: vi.fn(
@@ -269,7 +274,7 @@ describe("exec resolve_exec_env hook wiring", () => {
       agentId: "main",
       sessionKey: "agent:main:telegram:chat-1",
       cwd: process.cwd(),
-      exec: { host: "gateway", security: "full", ask: "off" },
+      exec: { host: "gateway", mode: "full" },
     }).find((tool) => tool.name === "exec");
     expect(exec).toBeDefined();
     const [definition] = toToolDefinitions([exec!], {

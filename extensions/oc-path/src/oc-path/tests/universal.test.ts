@@ -279,18 +279,18 @@ describe("setOcPath — jsonc leaf with coercion", () => {
 
   it("resolves slash-deep JSONC paths", () => {
     const ast = parseJsonc(
-      '{ "agents": { "list": [{ "tools": { "exec": { "security": "deny" } } }] } }',
+      '{ "agents": { "list": [{ "tools": { "exec": { "mode": "deny" } } }] } }',
     ).ast;
     const r = setOcPath(
       ast,
-      parseOcPath("oc://openclaw.json/agents/list/0/tools/exec/security"),
+      parseOcPath("oc://openclaw.json/agents/list/0/tools/exec/mode"),
       "allowlist",
     );
     expect(r.ok).toBe(true);
     if (r.ok) {
       const ast2 = r.ast as Parameters<typeof emitJsonc>[0];
       expect(JSON.parse(emitJsonc(ast2))).toEqual({
-        agents: { list: [{ tools: { exec: { security: "allowlist" } } }] },
+        agents: { list: [{ tools: { exec: { mode: "allowlist" } } }] },
       });
     }
   });

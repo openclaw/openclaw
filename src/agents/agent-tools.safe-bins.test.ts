@@ -195,8 +195,7 @@ async function createSafeBinsExecTool(params: {
     tools: {
       exec: {
         host: "gateway",
-        security: "allowlist",
-        ask: "off",
+        mode: "allowlist",
         safeBins: params.safeBins,
         safeBinProfiles: params.safeBinProfiles,
       },

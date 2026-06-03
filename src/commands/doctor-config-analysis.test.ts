@@ -80,6 +80,30 @@ describe("doctor config analysis helpers", () => {
     });
   });
 
+  it("leaves legacy exec policy keys for the legacy migration owner", () => {
+    const result = stripUnknownConfigKeys({
+      tools: { exec: { security: "full", ask: "always", stale: true } },
+      agents: {
+        list: [
+          {
+            id: "ops",
+            tools: { exec: { ask: "always", stale: true } },
+          },
+        ],
+      },
+    } as never);
+
+    expect(result.removed).toContain("tools.exec.stale");
+    expect(result.removed).toContain("agents.list[0].tools.exec.stale");
+    expect(result.removed).not.toContain("tools.exec.security");
+    expect(result.removed).not.toContain("tools.exec.ask");
+    expect(result.removed).not.toContain("agents.list[0].tools.exec.ask");
+    expect(result.config).toMatchObject({
+      tools: { exec: { security: "full", ask: "always" } },
+      agents: { list: [{ tools: { exec: { ask: "always" } } }] },
+    });
+  });
+
   describe("stripUnknownConfigKeys during update", () => {
     const originalEnv = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
 

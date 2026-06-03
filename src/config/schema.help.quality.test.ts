@@ -304,8 +304,6 @@ const TARGET_KEYS = [
   "tools.exec",
   "tools.exec.host",
   "tools.exec.mode",
-  "tools.exec.security",
-  "tools.exec.ask",
   "tools.exec.node",
   "tools.agentToAgent.enabled",
   "tools.elevated.enabled",

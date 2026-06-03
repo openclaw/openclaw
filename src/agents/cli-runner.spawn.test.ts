@@ -1629,7 +1629,7 @@ ${JSON.stringify({
         prompt: "hello",
         backend: { liveSession: "claude-stdio" },
         config: {
-          tools: { exec: { security: "full", ask: "off" } },
+          tools: { exec: { mode: "full" } },
         } as PreparedCliRunContext["params"]["config"],
       }),
     );
@@ -1865,7 +1865,7 @@ ${JSON.stringify({
         prompt: "hello",
         backend: { liveSession: "claude-stdio" },
         config: {
-          tools: { exec: { security: "allowlist", ask: "on-miss" } },
+          tools: { exec: { mode: "ask" } },
         } as PreparedCliRunContext["params"]["config"],
       }),
     );
@@ -1931,7 +1931,7 @@ ${JSON.stringify({
           prompt: "hello",
           backend: { liveSession: "claude-stdio" },
           config: {
-            tools: { exec: { security: "allowlist", ask: "on-miss" } },
+            tools: { exec: { mode: "ask" } },
           } as PreparedCliRunContext["params"]["config"],
         }),
       );
@@ -2168,7 +2168,7 @@ ${JSON.stringify({
         },
         sessionEntry: { execAsk: "always" } as PreparedCliRunContext["params"]["sessionEntry"],
         config: {
-          tools: { exec: { security: "full", ask: "off" } },
+          tools: { exec: { mode: "full" } },
         } as PreparedCliRunContext["params"]["config"],
       }),
     );
@@ -2259,7 +2259,7 @@ ${JSON.stringify({
             },
             agentId: "reviewer",
             config: {
-              tools: { exec: { security: "full", ask: "off" } },
+              tools: { exec: { mode: "full" } },
             } as PreparedCliRunContext["params"]["config"],
           }),
         );
@@ -2352,7 +2352,7 @@ ${JSON.stringify({
             },
             sessionKey: "agent:reviewer:main",
             config: {
-              tools: { exec: { security: "full", ask: "off" } },
+              tools: { exec: { mode: "full" } },
             } as PreparedCliRunContext["params"]["config"],
           }),
         );
@@ -2435,7 +2435,7 @@ ${JSON.stringify({
           args: ["-p", "--output-format", "stream-json", "--permission-mode", "default"],
         },
         config: {
-          tools: { exec: { security: "full", ask: "off" } },
+          tools: { exec: { mode: "full" } },
         } as PreparedCliRunContext["params"]["config"],
       }),
     );

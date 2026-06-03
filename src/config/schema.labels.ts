@@ -242,8 +242,6 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.reviewer": "Exec Reviewer",
   "tools.exec.reviewer.model": "Exec Reviewer Model",
   "tools.exec.reviewer.timeoutMs": "Exec Reviewer Timeout (ms)",
-  "tools.exec.security": "Exec Security",
-  "tools.exec.ask": "Exec Ask",
   "tools.exec.node": "Exec Node Binding",
   "tools.agentToAgent": "Agent-to-Agent Tool Access",
   "tools.agentToAgent.enabled": "Enable Agent-to-Agent Tool",

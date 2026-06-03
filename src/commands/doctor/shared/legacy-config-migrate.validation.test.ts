@@ -94,7 +94,7 @@ describe("legacy config migrate validation", () => {
       tools: {
         profile: "messaging",
         allow: ["message", "exec", "process"],
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
       },
     });
   });

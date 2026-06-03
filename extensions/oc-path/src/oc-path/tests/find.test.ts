@@ -123,8 +123,8 @@ describe("findOcPaths — slash-deep JSONC paths", () => {
         },
       },
       agents: [
-        { id: "coder", tools: { exec: { security: "deny" } } },
-        { id: "reviewer", tools: { exec: { security: "allowlist" } } },
+        { id: "coder", tools: { exec: { mode: "deny" } } },
+        { id: "reviewer", tools: { exec: { mode: "allowlist" } } },
       ],
     }),
   ).ast;
@@ -140,7 +140,7 @@ describe("findOcPaths — slash-deep JSONC paths", () => {
   });
 
   it("expands * in a slash-deep JSON array path", () => {
-    const out = findOcPaths(jsonc, parseOcPath("oc://openclaw.json/agents/*/tools/exec/security"));
+    const out = findOcPaths(jsonc, parseOcPath("oc://openclaw.json/agents/*/tools/exec/mode"));
     expect(out).toHaveLength(2);
     const values = out.map((m) => (m.match.kind === "leaf" ? m.match.valueText : ""));
     expect(values.toSorted()).toEqual(["allowlist", "deny"]);
@@ -149,7 +149,7 @@ describe("findOcPaths — slash-deep JSONC paths", () => {
   it("expands predicates in slash-deep JSON array paths", () => {
     const out = findOcPaths(
       jsonc,
-      parseOcPath("oc://openclaw.json/agents/[id=reviewer]/tools/exec/security"),
+      parseOcPath("oc://openclaw.json/agents/[id=reviewer]/tools/exec/mode"),
     );
     expect(out).toHaveLength(1);
     expect(out[0]?.match.kind === "leaf" && out[0].match.valueText).toBe("allowlist");

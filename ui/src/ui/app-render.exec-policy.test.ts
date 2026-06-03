@@ -8,23 +8,19 @@ function makeState(config: Record<string, unknown>): AppViewState {
 }
 
 describe("extractQuickSettingsSecurity", () => {
-  it("reads execPolicy from the canonical tools.exec.security path", () => {
-    const result = extractQuickSettingsSecurity(
-      makeState({ tools: { exec: { security: "full" } } }),
-    );
+  it("reads execPolicy from the canonical tools.exec.mode path", () => {
+    const result = extractQuickSettingsSecurity(makeState({ tools: { exec: { mode: "full" } } }));
 
     expect(result.execPolicy).toBe("full");
   });
 
-  it("reads execPolicy from tools.exec.security when set to deny", () => {
-    const result = extractQuickSettingsSecurity(
-      makeState({ tools: { exec: { security: "deny" } } }),
-    );
+  it("reads execPolicy from tools.exec.mode when set to deny", () => {
+    const result = extractQuickSettingsSecurity(makeState({ tools: { exec: { mode: "deny" } } }));
 
     expect(result.execPolicy).toBe("deny");
   });
 
-  it("falls back to allowlist when tools.exec.security is missing", () => {
+  it("falls back to allowlist when tools.exec.mode is missing", () => {
     expect(extractQuickSettingsSecurity(makeState({})).execPolicy).toBe("allowlist");
     expect(extractQuickSettingsSecurity(makeState({ tools: { exec: {} } })).execPolicy).toBe(
       "allowlist",
@@ -47,20 +43,20 @@ describe("extractQuickSettingsSecurity", () => {
     expect(result.toolProfile).toBe("full");
   });
 
-  it("ignores agents.defaults.exec.security because it is not a schema path", () => {
+  it("ignores agents.defaults.exec.mode because it is not a schema path", () => {
     const result = extractQuickSettingsSecurity(
       makeState({
-        tools: { exec: { security: "full" } },
-        agents: { defaults: { exec: { security: "deny" } } },
+        tools: { exec: { mode: "full" } },
+        agents: { defaults: { exec: { mode: "deny" } } },
       }),
     );
 
     expect(result.execPolicy).toBe("full");
   });
 
-  it("does not treat agents.defaults.exec.security as a fallback", () => {
+  it("does not treat agents.defaults.exec.mode as a fallback", () => {
     const result = extractQuickSettingsSecurity(
-      makeState({ agents: { defaults: { exec: { security: "full" } } } }),
+      makeState({ agents: { defaults: { exec: { mode: "full" } } } }),
     );
 
     expect(result.execPolicy).toBe("allowlist");
@@ -68,11 +64,10 @@ describe("extractQuickSettingsSecurity", () => {
 
   it("trims whitespace and ignores empty strings", () => {
     expect(
-      extractQuickSettingsSecurity(makeState({ tools: { exec: { security: "  full  " } } }))
-        .execPolicy,
+      extractQuickSettingsSecurity(makeState({ tools: { exec: { mode: "  full  " } } })).execPolicy,
     ).toBe("full");
     expect(
-      extractQuickSettingsSecurity(makeState({ tools: { exec: { security: "   " } } })).execPolicy,
+      extractQuickSettingsSecurity(makeState({ tools: { exec: { mode: "   " } } })).execPolicy,
     ).toBe("allowlist");
     expect(
       extractQuickSettingsSecurity(makeState({ tools: { profile: "  coding  " } })).toolProfile,

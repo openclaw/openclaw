@@ -133,8 +133,7 @@ describe("gateway tool", () => {
           config: {
             tools: {
               exec: {
-                ask: "on-miss",
-                security: "allowlist",
+                mode: "ask",
               },
             },
           },
@@ -238,12 +237,7 @@ describe("gateway tool", () => {
         return {
           hash: "hash-1",
           config: {
-            tools: {
-              exec: {
-                ask: "on-miss",
-                security: "allowlist",
-              },
-            },
+            agents: { defaults: { reasoningDefault: "low" } },
           },
         };
       }
@@ -260,8 +254,7 @@ describe("gateway tool", () => {
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
-    const raw =
-      '{\n  agents: { defaults: { reasoningDefault: "medium" } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
+    const raw = '{\n  agents: { defaults: { reasoningDefault: "medium" } }\n}\n';
     const result = await tool.execute("call2", {
       action: "config.apply",
       raw,
@@ -333,15 +326,15 @@ describe("gateway tool", () => {
     });
   });
 
-  it("rejects config.patch when it changes exec approval settings", async () => {
+  it("rejects config.patch when it changes exec mode settings", async () => {
     const tool = requireGatewayTool();
 
     await expect(
       tool.execute("call-protected-patch", {
         action: "config.patch",
-        raw: '{ tools: { exec: { ask: "off" } } }',
+        raw: '{ tools: { exec: { mode: "full" } } }',
       }),
-    ).rejects.toThrow("gateway config.patch cannot change protected config paths: tools.exec.ask");
+    ).rejects.toThrow("gateway config.patch cannot change protected config paths: tools.exec.mode");
     expectGatewayMethodCalled("config.get");
     expectGatewayMethodNotCalled("config.patch");
   });
@@ -478,17 +471,15 @@ describe("gateway tool", () => {
     expectGatewayMethodNotCalled("config.patch");
   });
 
-  it("rejects config.apply when it changes exec security settings", async () => {
+  it("rejects config.apply when it changes exec mode settings", async () => {
     const tool = requireGatewayTool();
 
     await expect(
       tool.execute("call-protected-apply", {
         action: "config.apply",
-        raw: '{ tools: { exec: { ask: "on-miss", security: "full" } } }',
+        raw: '{ tools: { exec: { mode: "full" } } }',
       }),
-    ).rejects.toThrow(
-      "gateway config.apply cannot change protected config paths: tools.exec.security",
-    );
+    ).rejects.toThrow("gateway config.apply cannot change protected config paths: tools.exec.mode");
     expectGatewayMethodCalled("config.get");
     expectGatewayMethodNotCalled("config.apply");
   });
@@ -501,9 +492,7 @@ describe("gateway tool", () => {
         action: "config.apply",
         raw: '{ agents: { defaults: { reasoningDefault: "medium" } } }',
       }),
-    ).rejects.toThrow(
-      "gateway config.apply cannot change protected config paths: tools.exec.ask, tools.exec.security",
-    );
+    ).rejects.toThrow("gateway config.apply cannot change protected config paths: tools.exec.mode");
     expectGatewayMethodCalled("config.get");
     expectGatewayMethodNotCalled("config.apply");
   });
@@ -514,7 +503,7 @@ describe("gateway tool", () => {
     await expect(
       tool.execute("call-protected-safe-bin-trust-apply", {
         action: "config.apply",
-        raw: '{ tools: { exec: { ask: "on-miss", security: "allowlist", safeBinTrustedDirs: ["/tmp/openclaw-bin"] } } }',
+        raw: '{ tools: { exec: { mode: "ask", safeBinTrustedDirs: ["/tmp/openclaw-bin"] } } }',
       }),
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.safeBinTrustedDirs",
@@ -642,7 +631,7 @@ describe("gateway tool", () => {
         return {
           hash: "hash-1",
           config: {
-            tools: { exec: { ask: "on-miss", security: "allowlist" } },
+            tools: { exec: { mode: "ask" } },
             hooks: { gmail: { allowUnsafeExternalContent: true } },
           },
         };
@@ -667,7 +656,7 @@ describe("gateway tool", () => {
     await expect(
       tool.execute("call-dangerous-apply", {
         action: "config.apply",
-        raw: '{ tools: { exec: { ask: "on-miss", security: "allowlist", applyPatch: { workspaceOnly: false } } } }',
+        raw: '{ tools: { exec: { mode: "ask", applyPatch: { workspaceOnly: false } } } }',
       }),
     ).rejects.toThrow(
       "gateway config.apply cannot change protected config paths: tools.exec.applyPatch.workspaceOnly",

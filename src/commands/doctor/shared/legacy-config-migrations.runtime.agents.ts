@@ -13,6 +13,17 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { isBlockedObjectKey } from "../../../config/prototype-keys.js";
+import {
+  normalizeExecAsk,
+  normalizeExecMode,
+  normalizeExecSecurity,
+  normalizeExecTarget,
+  resolveExecModeFromPolicy,
+  resolveExecPolicyForMode,
+  type ExecAsk,
+  type ExecMode,
+  type ExecSecurity,
+} from "../../../infra/exec-approvals.js";
 import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
 
 const AGENT_HEARTBEAT_KEYS = new Set([
@@ -63,6 +74,21 @@ const LEGACY_MEMORY_SEARCH_AUTO_PROVIDER_RULES: LegacyConfigRule[] = [
     message:
       'agents.list[].memorySearch.provider = "auto" is legacy; use "openai" explicitly. Run "openclaw doctor --fix".',
     match: hasAgentListLegacyMemorySearchAutoProvider,
+  },
+];
+
+const LEGACY_EXEC_POLICY_CONFIG_RULES: LegacyConfigRule[] = [
+  {
+    path: ["tools", "exec"],
+    message:
+      'tools.exec.security/tools.exec.ask are legacy; use tools.exec.mode. Run "openclaw doctor --fix" to migrate representable exec policy config.',
+    match: hasLegacyExecPolicyConfigKeys,
+  },
+  {
+    path: ["agents", "list"],
+    message:
+      'agents.list[].tools.exec.security/tools.exec.ask are legacy; use agents.list[].tools.exec.mode. Run "openclaw doctor --fix" to migrate representable exec policy config.',
+    match: hasAgentListLegacyExecPolicyConfigKeys,
   },
 ];
 
@@ -236,6 +262,212 @@ const SYSTEM_PROMPT_OVERRIDE_LEGACY_RULES: LegacyConfigRule[] = [
     match: (value) => hasAgentListSystemPromptOverride(value),
   },
 ];
+
+function hasLegacyExecPolicyConfigKeys(value: unknown): boolean {
+  const exec = getRecord(value);
+  return exec !== null && (Object.hasOwn(exec, "security") || Object.hasOwn(exec, "ask"));
+}
+
+function hasAgentListLegacyExecPolicyConfigKeys(value: unknown): boolean {
+  return (
+    Array.isArray(value) &&
+    value.some((agent) => {
+      const exec = getRecord(getRecord(getRecord(agent)?.tools)?.exec);
+      return hasLegacyExecPolicyConfigKeys(exec);
+    })
+  );
+}
+
+function readExecPolicyMode(exec: Record<string, unknown> | null): ExecMode | undefined {
+  return typeof exec?.mode === "string" ? (normalizeExecMode(exec.mode) ?? undefined) : undefined;
+}
+
+function readLegacyExecHost(exec: Record<string, unknown>): string | undefined {
+  return typeof exec.host === "string" ? (normalizeExecTarget(exec.host) ?? undefined) : undefined;
+}
+
+function readLegacyExecPolicyPair(exec: Record<string, unknown>): {
+  hasSecurity: boolean;
+  hasAsk: boolean;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+  valid: boolean;
+} {
+  const hasSecurity = Object.hasOwn(exec, "security");
+  const hasAsk = Object.hasOwn(exec, "ask");
+  const security =
+    typeof exec.security === "string"
+      ? (normalizeExecSecurity(exec.security) ?? undefined)
+      : undefined;
+  const ask = typeof exec.ask === "string" ? (normalizeExecAsk(exec.ask) ?? undefined) : undefined;
+  return {
+    hasSecurity,
+    hasAsk,
+    security,
+    ask,
+    valid: (!hasSecurity || security !== undefined) && (!hasAsk || ask !== undefined),
+  };
+}
+
+function legacyExecPolicyMatchesMode(params: {
+  mode: ExecMode;
+  security?: ExecSecurity;
+  ask?: ExecAsk;
+}): boolean {
+  const policy = resolveExecPolicyForMode(params.mode);
+  return (
+    (params.security === undefined || params.security === policy.security) &&
+    (params.ask === undefined || params.ask === policy.ask)
+  );
+}
+
+function resolveLegacyExecPolicyMode(params: {
+  security: ExecSecurity;
+  ask: ExecAsk;
+}): ExecMode | null {
+  return resolveExecModeFromPolicy(params);
+}
+
+function formatLegacyExecFields(params: { hasSecurity: boolean; hasAsk: boolean }): string {
+  return [params.hasSecurity ? "security" : null, params.hasAsk ? "ask" : null]
+    .filter((field): field is string => field !== null)
+    .join("/");
+}
+
+function migrateLegacyExecPolicyConfig(params: {
+  exec: unknown;
+  pathLabel: string;
+  changes: string[];
+  inheritedMode?: ExecMode;
+  global: boolean;
+}): ExecMode | undefined {
+  const exec = getRecord(params.exec);
+  if (!exec) {
+    return undefined;
+  }
+  const existingMode = readExecPolicyMode(exec);
+  const pair = readLegacyExecPolicyPair(exec);
+  if (!pair.hasSecurity && !pair.hasAsk) {
+    return existingMode;
+  }
+  if (!pair.valid) {
+    return existingMode;
+  }
+  if (existingMode) {
+    if (
+      legacyExecPolicyMatchesMode({
+        mode: existingMode,
+        security: pair.security,
+        ask: pair.ask,
+      })
+    ) {
+      delete exec.security;
+      delete exec.ask;
+      params.changes.push(
+        `Removed redundant legacy ${params.pathLabel}.${formatLegacyExecFields(pair)} because ${params.pathLabel}.mode already preserves it.`,
+      );
+      return existingMode;
+    }
+    delete exec.security;
+    delete exec.ask;
+    params.changes.push(
+      `Removed legacy ${params.pathLabel}.${formatLegacyExecFields(pair)} because ${params.pathLabel}.mode is canonical.`,
+    );
+    return existingMode;
+  }
+  if (pair.security) {
+    const inheritedPolicy =
+      !params.global && params.inheritedMode
+        ? resolveExecPolicyForMode(params.inheritedMode)
+        : undefined;
+    const ask = pair.ask ?? inheritedPolicy?.ask ?? "off";
+    const mode = resolveLegacyExecPolicyMode({ security: pair.security, ask });
+    if (!mode) {
+      return undefined;
+    }
+    exec.mode = mode;
+    delete exec.security;
+    delete exec.ask;
+    params.changes.push(
+      `Moved legacy ${params.pathLabel}.${formatLegacyExecFields(pair)} to ${params.pathLabel}.mode="${mode}".`,
+    );
+    return mode;
+  }
+  if (params.global || !params.inheritedMode) {
+    if (pair.ask === "off") {
+      delete exec.ask;
+      params.changes.push(`Removed redundant legacy ${params.pathLabel}.ask="off".`);
+    }
+    if (pair.ask === "always") {
+      const mode = readLegacyExecHost(exec) === "sandbox" ? "deny" : "full-always";
+      exec.mode = mode;
+      delete exec.ask;
+      params.changes.push(
+        `Moved legacy ${params.pathLabel}.ask to ${params.pathLabel}.mode="${mode}".`,
+      );
+      return mode;
+    }
+    if (pair.ask === "on-miss") {
+      delete exec.ask;
+      params.changes.push(
+        `Removed legacy ${params.pathLabel}.ask="on-miss" because no legacy security value was available to convert it to mode.`,
+      );
+    }
+    return params.inheritedMode;
+  }
+  if (!pair.ask) {
+    return params.inheritedMode;
+  }
+  const inheritedPolicy = resolveExecPolicyForMode(params.inheritedMode);
+  if (pair.ask === inheritedPolicy.ask) {
+    delete exec.ask;
+    params.changes.push(
+      `Removed redundant legacy ${params.pathLabel}.ask="${pair.ask}" because inherited mode ${params.inheritedMode} already preserves it.`,
+    );
+    return params.inheritedMode;
+  }
+  const mode = resolveLegacyExecPolicyMode({
+    security: inheritedPolicy.security,
+    ask: pair.ask,
+  });
+  if (!mode) {
+    return params.inheritedMode;
+  }
+  if (mode !== params.inheritedMode) {
+    exec.mode = mode;
+  }
+  delete exec.ask;
+  params.changes.push(
+    mode === params.inheritedMode
+      ? `Removed legacy ${params.pathLabel}.ask because inherited mode ${params.inheritedMode} is an equivalent canonical policy.`
+      : `Moved legacy ${params.pathLabel}.ask to ${params.pathLabel}.mode="${mode}" using inherited ${params.inheritedMode} security.`,
+  );
+  return mode;
+}
+
+function migrateLegacyExecPolicyConfigTree(raw: Record<string, unknown>, changes: string[]): void {
+  const tools = getRecord(raw.tools);
+  const globalMode = migrateLegacyExecPolicyConfig({
+    exec: tools?.exec,
+    pathLabel: "tools.exec",
+    changes,
+    global: true,
+  });
+  const agents = getRecord(raw.agents);
+  if (!Array.isArray(agents?.list)) {
+    return;
+  }
+  for (const [index, agent] of agents.list.entries()) {
+    const agentExec = getRecord(getRecord(getRecord(agent)?.tools)?.exec);
+    migrateLegacyExecPolicyConfig({
+      exec: agentExec,
+      pathLabel: `agents.list.${index}.tools.exec`,
+      changes,
+      inheritedMode: globalMode,
+      global: false,
+    });
+  }
+}
 
 function sandboxScopeFromPerSession(perSession: boolean): "session" | "shared" {
   return perSession ? "session" : "shared";
@@ -1137,6 +1369,12 @@ function addProfileConfiguredSectionGrantsWithConfiguredGrants(
 }
 
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_AGENTS: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "tools.exec.security-ask->mode",
+    describe: "Move legacy exec security/ask config to canonical exec mode",
+    legacyRules: LEGACY_EXEC_POLICY_CONFIG_RULES,
+    apply: migrateLegacyExecPolicyConfigTree,
+  }),
   defineLegacyConfigMigration({
     id: "tools.profile-configured-sections-alsoAllow",
     describe: "Repair explicit configured-section tool grants filtered by profiles",

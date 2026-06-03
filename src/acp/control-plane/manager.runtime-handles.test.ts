@@ -63,7 +63,7 @@ describe("AcpSessionManager runtime handles", () => {
       ...baseCfg,
       tools: {
         exec: {
-          security: "allowlist",
+          mode: "allowlist",
           safeBins: ["git"],
         },
       },
@@ -72,7 +72,7 @@ describe("AcpSessionManager runtime handles", () => {
       ...baseCfg,
       tools: {
         exec: {
-          security: "deny",
+          mode: "deny",
           safeBins: ["node"],
         },
       },

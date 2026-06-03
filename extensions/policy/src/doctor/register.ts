@@ -387,7 +387,7 @@ export const POLICY_RULE_METADATA = [
     valueType: "string-list",
     checkIds: [CHECK_IDS.policyToolsExecAskUnapproved],
     emptyList: "disabled",
-    allowedValues: ["off", "on-miss", "always"],
+    allowedValues: ["off", "on-miss", "always", "auto"],
     scopeSelectors: ["agentIds"],
   },
   {
@@ -562,7 +562,7 @@ const SUPPORTED_AGENT_WORKSPACE_DENY_TOOLS = [
 ] as const;
 const SUPPORTED_TOOL_PROFILES = ["minimal", "coding", "messaging", "full"] as const;
 const SUPPORTED_TOOL_EXEC_SECURITY = ["deny", "allowlist", "full"] as const;
-const SUPPORTED_TOOL_EXEC_ASK = ["off", "on-miss", "always"] as const;
+const SUPPORTED_TOOL_EXEC_ASK = ["off", "on-miss", "always", "auto"] as const;
 const SUPPORTED_TOOL_EXEC_HOST = ["auto", "sandbox", "gateway", "node"] as const;
 const SUPPORTED_SANDBOX_MODES = ["off", "non-main", "all"] as const;
 let registered = false;

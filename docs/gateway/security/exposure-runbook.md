@@ -94,7 +94,7 @@ Use this shape as the starting point for exposed deployments:
   },
   tools: {
     profile: "messaging",
-    exec: { security: "deny", ask: "always" },
+    exec: { mode: "deny" },
     elevated: { enabled: false },
   },
 }
@@ -182,7 +182,7 @@ If the Gateway may be overexposed:
     slack: { dmPolicy: "disabled" },
   },
   tools: {
-    exec: { security: "deny", ask: "always" },
+    exec: { mode: "deny" },
     elevated: { enabled: false },
   },
 }

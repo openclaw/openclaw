@@ -637,7 +637,7 @@ describe("resolveEffectiveToolPolicy", () => {
   it("global tools.exec does not widen agent messaging profile (#47487)", () => {
     const cfg = {
       tools: {
-        exec: { security: "allowlist" },
+        exec: { mode: "allowlist" },
       },
       agents: {
         list: [
@@ -662,7 +662,7 @@ describe("resolveEffectiveToolPolicy", () => {
     try {
       const cfg = {
         tools: {
-          exec: { security: "allowlist" },
+          exec: { mode: "allowlist" },
           fs: { workspaceOnly: true },
         },
         agents: {
@@ -696,7 +696,7 @@ describe("resolveEffectiveToolPolicy", () => {
               id: "sage",
               tools: {
                 profile: "messaging",
-                exec: { security: "allowlist" },
+                exec: { mode: "allowlist" },
               },
             },
           ],
@@ -725,7 +725,7 @@ describe("resolveEffectiveToolPolicy", () => {
               tools: {
                 profile: "messaging",
                 alsoAllow: ["read", "write", "edit"],
-                exec: { security: "allowlist" },
+                exec: { mode: "allowlist" },
                 fs: { workspaceOnly: true },
               },
             },

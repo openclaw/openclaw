@@ -194,7 +194,7 @@ describe("normalizeClaudeBackendConfig", () => {
     expect(
       resolveClaudePermissionMode({
         backendId: "claude-cli",
-        config: { tools: { exec: { security: "allowlist", ask: "on-miss" } } },
+        config: { tools: { exec: { mode: "ask" } } },
       }),
     ).toEqual({ overrideExisting: false });
   });
@@ -205,12 +205,12 @@ describe("normalizeClaudeBackendConfig", () => {
         backendId: "claude-cli",
         agentId: "safe-agent",
         config: {
-          tools: { exec: { security: "full", ask: "off" } },
+          tools: { exec: { mode: "full" } },
           agents: {
             list: [
               {
                 id: "safe-agent",
-                tools: { exec: { security: "allowlist", ask: "on-miss" } },
+                tools: { exec: { mode: "ask" } },
               },
             ],
           },
@@ -222,12 +222,12 @@ describe("normalizeClaudeBackendConfig", () => {
         backendId: "claude-cli",
         agentId: "yolo-agent",
         config: {
-          tools: { exec: { security: "allowlist", ask: "on-miss" } },
+          tools: { exec: { mode: "ask" } },
           agents: {
             list: [
               {
                 id: "yolo-agent",
-                tools: { exec: { security: "full", ask: "off" } },
+                tools: { exec: { mode: "full" } },
               },
             ],
           },

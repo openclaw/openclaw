@@ -231,8 +231,7 @@ describe("exec approvals CLI", () => {
     readBestEffortConfig.mockResolvedValue({
       tools: {
         exec: {
-          security: "full",
-          ask: "off",
+          mode: "full",
         },
       },
     });
@@ -469,8 +468,7 @@ describe("exec approvals CLI", () => {
     readBestEffortConfig.mockResolvedValue({
       tools: {
         exec: {
-          security: "full",
-          ask: "off",
+          mode: "full",
         },
       },
       agents: {
@@ -486,12 +484,12 @@ describe("exec approvals CLI", () => {
     const toolsScope = scopeByLabel("tools.exec");
     expectFields(requireRecord(toolsScope.security, "tools.exec security"), "tools.exec security", {
       requested: "full",
-      requestedSource: "tools.exec.security",
+      requestedSource: "tools.exec.mode",
       effective: "full",
     });
     expectFields(requireRecord(toolsScope.ask, "tools.exec ask"), "tools.exec ask", {
       requested: "off",
-      requestedSource: "tools.exec.ask",
+      requestedSource: "tools.exec.mode",
       effective: "off",
     });
     expectFields(
@@ -506,12 +504,12 @@ describe("exec approvals CLI", () => {
     const agentScope = scopeByLabel("agent:runner");
     expectFields(requireRecord(agentScope.security, "agent security"), "agent security", {
       requested: "full",
-      requestedSource: "tools.exec.security",
+      requestedSource: "tools.exec.mode",
       effective: "allowlist",
     });
     expectFields(requireRecord(agentScope.ask, "agent ask"), "agent ask", {
       requested: "off",
-      requestedSource: "tools.exec.ask",
+      requestedSource: "tools.exec.mode",
       effective: "always",
     });
     expectFields(requireRecord(agentScope.askFallback, "agent askFallback"), "agent askFallback", {

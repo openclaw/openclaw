@@ -30,7 +30,7 @@ describe("resolveCrestodianRescuePolicy", () => {
 
   it("keeps auto rescue closed outside YOLO host posture", () => {
     const decision = decide({
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      tools: { exec: { mode: "ask" } },
     });
     expect(decision.allowed).toBe(false);
     if (decision.allowed) {

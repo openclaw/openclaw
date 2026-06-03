@@ -77,7 +77,7 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
   const summary = resolveExecPolicyScopeSummary({
     approvals,
     globalExecConfig: {
-      ask: "off",
+      mode: "full",
     },
     configPath: "agents.list.runner.tools.exec",
     scopeLabel: "agent:runner",
@@ -148,6 +148,8 @@ describe("exec approvals policy helpers", () => {
   it.each([
     { raw: " auto ", expected: "auto" },
     { raw: "ASK", expected: "ask" },
+    { raw: "always", expected: "always" },
+    { raw: "full-always", expected: "full-always" },
     { raw: "allowlist", expected: "allowlist" },
     { raw: "maybe", expected: null },
   ])("normalizes exec mode value %j", ({ raw, expected }) => {
@@ -168,7 +170,7 @@ describe("exec approvals policy helpers", () => {
     },
     { security: "full" as const, ask: "off" as const, expected: "full" as const },
     { security: "full" as const, ask: "on-miss" as const, expected: "full" as const },
-    { security: "full" as const, ask: "always" as const, expected: "ask" as const },
+    { security: "full" as const, ask: "always" as const, expected: "full-always" as const },
   ])("derives normalized exec mode from legacy policy %j", ({ security, ask, expected }) => {
     expect(resolveExecModeFromPolicy({ security, ask })).toBe(expected);
   });
@@ -187,12 +189,20 @@ describe("exec approvals policy helpers", () => {
       expected: { security: "allowlist" as const, ask: "on-miss" as const, autoReview: false },
     },
     {
+      mode: "always" as const,
+      expected: { security: "allowlist" as const, ask: "always" as const, autoReview: false },
+    },
+    {
       mode: "auto" as const,
       expected: { security: "allowlist" as const, ask: "on-miss" as const, autoReview: true },
     },
     {
       mode: "full" as const,
       expected: { security: "full" as const, ask: "off" as const, autoReview: false },
+    },
+    {
+      mode: "full-always" as const,
+      expected: { security: "full" as const, ask: "always" as const, autoReview: false },
     },
   ])("maps explicit exec mode to effective policy %j", ({ mode, expected }) => {
     expect(resolveExecPolicyForMode(mode)).toEqual(expected);
@@ -205,7 +215,7 @@ describe("exec approvals policy helpers", () => {
         ask: "always",
       }),
     ).toEqual({
-      mode: "ask",
+      mode: "full-always",
       security: "full",
       ask: "always",
       autoReview: false,
@@ -375,8 +385,7 @@ describe("exec approvals policy helpers", () => {
         },
       },
       scopeExecConfig: {
-        security: "full",
-        ask: "off",
+        mode: "full",
       },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
@@ -432,7 +441,7 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
-  it("lets narrower legacy policy override a global normalized mode in snapshots", () => {
+  it("lets agent-scoped mode override a global normalized mode in snapshots", () => {
     const summary = resolveExecPolicyScopeSummary({
       approvals: {
         version: 1,
@@ -441,8 +450,7 @@ describe("exec approvals policy helpers", () => {
         mode: "deny",
       },
       scopeExecConfig: {
-        security: "full",
-        ask: "off",
+        mode: "full",
       },
       configPath: "agents.list.runner.tools.exec",
       scopeLabel: "agent:runner",
@@ -451,18 +459,17 @@ describe("exec approvals policy helpers", () => {
 
     expectFields(summary.mode, {
       requested: "full",
-      requestedSource:
-        "derived from agents.list.runner.tools.exec.security and agents.list.runner.tools.exec.ask",
+      requestedSource: "agents.list.runner.tools.exec.mode",
       effective: "full",
     });
     expectFields(summary.security, {
       requested: "full",
-      requestedSource: "agents.list.runner.tools.exec.security",
+      requestedSource: "agents.list.runner.tools.exec.mode",
       effective: "full",
     });
   });
 
-  it("preserves mode-derived siblings for partial narrower legacy policy snapshots", () => {
+  it("reports doctor-migrated partial override behavior through canonical mode", () => {
     const summary = resolveExecPolicyScopeSummary({
       approvals: {
         version: 1,
@@ -471,7 +478,7 @@ describe("exec approvals policy helpers", () => {
         mode: "auto",
       },
       scopeExecConfig: {
-        ask: "off",
+        mode: "allowlist",
       },
       configPath: "agents.list.runner.tools.exec",
       scopeLabel: "agent:runner",
@@ -480,11 +487,11 @@ describe("exec approvals policy helpers", () => {
 
     expectFields(summary.security, {
       requested: "allowlist",
-      requestedSource: "tools.exec.mode",
+      requestedSource: "agents.list.runner.tools.exec.mode",
     });
     expectFields(summary.ask, {
       requested: "off",
-      requestedSource: "agents.list.runner.tools.exec.ask",
+      requestedSource: "agents.list.runner.tools.exec.mode",
     });
     expectFields(summary.mode, {
       requested: "allowlist",
@@ -501,7 +508,7 @@ describe("exec approvals policy helpers", () => {
         mode: "auto",
       },
       scopeExecConfig: {
-        security: "full",
+        mode: "full",
       },
       configPath: "agents.list.runner.tools.exec",
       scopeLabel: "agent:runner",
@@ -510,11 +517,11 @@ describe("exec approvals policy helpers", () => {
 
     expectFields(summary.security, {
       requested: "full",
-      requestedSource: "agents.list.runner.tools.exec.security",
+      requestedSource: "agents.list.runner.tools.exec.mode",
     });
     expectFields(summary.ask, {
-      requested: "on-miss",
-      requestedSource: "tools.exec.mode",
+      requested: "off",
+      requestedSource: "agents.list.runner.tools.exec.mode",
     });
     expectFields(summary.mode, {
       requested: "full",
@@ -533,8 +540,7 @@ describe("exec approvals policy helpers", () => {
         },
       },
       scopeExecConfig: {
-        security: "full",
-        ask: "off",
+        mode: "full",
       },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
@@ -549,7 +555,7 @@ describe("exec approvals policy helpers", () => {
     });
   });
 
-  it("does not let host ask=off suppress a stricter requested ask", () => {
+  it("does not let host ask=off suppress a stricter requested mode ask", () => {
     const summary = resolveExecPolicyScopeSummary({
       approvals: {
         version: 1,
@@ -558,16 +564,16 @@ describe("exec approvals policy helpers", () => {
         },
       },
       scopeExecConfig: {
-        ask: "always",
+        mode: "ask",
       },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
     });
 
     expectFields(summary.ask, {
-      requested: "always",
+      requested: "on-miss",
       host: "off",
-      effective: "always",
+      effective: "on-miss",
       note: "requested ask applies",
     });
   });
@@ -583,8 +589,7 @@ describe("exec approvals policy helpers", () => {
         },
       },
       scopeExecConfig: {
-        security: "allowlist",
-        ask: "always",
+        mode: "allowlist",
       },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
@@ -626,8 +631,7 @@ describe("exec approvals policy helpers", () => {
         },
       },
       scopeExecConfig: {
-        security: "full",
-        ask: "off",
+        mode: "full",
       },
       configPath: "agents.list.runner.tools.exec",
       scopeLabel: "agent:runner",
@@ -660,8 +664,7 @@ describe("exec approvals policy helpers", () => {
         },
       },
       globalExecConfig: {
-        security: "full",
-        ask: "off",
+        mode: "full",
       },
       configPath: "agents.list.runner.tools.exec",
       scopeLabel: "agent:runner",
@@ -670,13 +673,13 @@ describe("exec approvals policy helpers", () => {
 
     expectFields(summary.security, {
       requested: "full",
-      requestedSource: "tools.exec.security",
+      requestedSource: "tools.exec.mode",
       host: "allowlist",
       effective: "allowlist",
     });
     expectFields(summary.ask, {
       requested: "off",
-      requestedSource: "tools.exec.ask",
+      requestedSource: "tools.exec.mode",
       host: "always",
       effective: "always",
     });
@@ -703,8 +706,7 @@ describe("exec approvals policy helpers", () => {
       cfg: {
         tools: {
           exec: {
-            security: "full",
-            ask: "off",
+            mode: "full",
           },
         },
         agents: {
@@ -731,13 +733,13 @@ describe("exec approvals policy helpers", () => {
     ]);
     expectFields(snapshots[1]?.ask, {
       requested: "off",
-      requestedSource: "tools.exec.ask",
+      requestedSource: "tools.exec.mode",
       host: "always",
       effective: "always",
     });
     expectFields(snapshots[2]?.security, {
       requested: "full",
-      requestedSource: "tools.exec.security",
+      requestedSource: "tools.exec.mode",
       host: "allowlist",
       effective: "allowlist",
     });
@@ -748,8 +750,7 @@ describe("exec approvals policy helpers", () => {
       cfg: {
         tools: {
           exec: {
-            security: "full",
-            ask: "off",
+            mode: "full",
           },
         },
       } satisfies OpenClawConfig,
@@ -780,8 +781,7 @@ describe("exec approvals policy helpers", () => {
       cfg: {
         tools: {
           exec: {
-            security: "full",
-            ask: "off",
+            mode: "full",
           },
         },
         agents: {
@@ -790,7 +790,7 @@ describe("exec approvals policy helpers", () => {
               id: DEFAULT_AGENT_ID,
               tools: {
                 exec: {
-                  ask: "always",
+                  mode: "ask",
                 },
               },
             },
@@ -804,8 +804,8 @@ describe("exec approvals policy helpers", () => {
 
     expect(snapshots.map((snapshot) => snapshot.scopeLabel)).toEqual(["tools.exec", "agent:main"]);
     expectFields(snapshots[1]?.ask, {
-      requested: "always",
-      requestedSource: "agents.list.main.tools.exec.ask",
+      requested: "on-miss",
+      requestedSource: "agents.list.main.tools.exec.mode",
     });
   });
 });

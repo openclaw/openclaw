@@ -360,8 +360,7 @@ flowchart TD
   <Accordion title="Exec suddenly asks for approval">
     ```bash
     openclaw config get tools.exec.host
-    openclaw config get tools.exec.security
-    openclaw config get tools.exec.ask
+    openclaw config get tools.exec.mode
     openclaw gateway restart
     ```
 
@@ -369,17 +368,14 @@ flowchart TD
 
     - If `tools.exec.host` is unset, the default is `auto`.
     - `host=auto` resolves to `sandbox` when a sandbox runtime is active, `gateway` otherwise.
-    - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `security=full` plus `ask=off` on gateway/node.
-    - On `gateway` and `node`, unset `tools.exec.security` defaults to `full`.
-    - Unset `tools.exec.ask` defaults to `off`.
+    - `host=auto` is routing only; the no-prompt "YOLO" behavior comes from `tools.exec.mode=full` plus host approval defaults that do not ask.
     - Result: if you are seeing approvals, some host-local or per-session policy tightened exec away from the current defaults.
 
     Restore current default no-approval behavior:
 
     ```bash
     openclaw config set tools.exec.host gateway
-    openclaw config set tools.exec.security full
-    openclaw config set tools.exec.ask off
+    openclaw config set tools.exec.mode full
     openclaw gateway restart
     ```
 

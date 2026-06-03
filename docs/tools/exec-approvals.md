@@ -15,8 +15,8 @@ safety interlock: commands are allowed only when policy + allowlist +
 tool policy and elevated gating (unless elevated is set to `full`, which
 skips approvals).
 
-For a mode-first overview of `deny`, `allowlist`, `ask`, `auto`, `full`,
-Codex Guardian mapping, and ACPX harness permissions, see
+For a mode-first overview of `deny`, `allowlist`, `ask`, `always`, `auto`, `full`,
+`full-always`, Codex Guardian mapping, and ACPX harness permissions, see
 [Permission modes](/tools/permission-modes).
 
 <Note>
@@ -126,29 +126,15 @@ Values are:
 - `deny` - block host exec.
 - `allowlist` - run only allowlisted commands without asking.
 - `ask` - use allowlist policy and ask on misses.
+- `always` - use allowlist policy and ask on every command.
 - `auto` - use allowlist policy, run deterministic matches directly, and send approval misses through OpenClaw's native auto reviewer before falling back to a human approval route.
 - `full` - run host exec without approval prompts.
+- `full-always` - allow full host exec only after a human approval for every command.
 
-Legacy `tools.exec.security` / `tools.exec.ask` remain supported and still win
-when set at the narrower session or agent scope.
-
-### `exec.security`
-
-<ParamField path="security" type='"deny" | "allowlist" | "full"'>
-  - `deny` - block all host exec requests.
-  - `allowlist` - allow only allowlisted commands.
-  - `full` - allow everything (equivalent to elevated).
-
-</ParamField>
-
-### `exec.ask`
-
-<ParamField path="ask" type='"off" | "on-miss" | "always"'>
-  - `off` - never prompt.
-  - `on-miss` - prompt only when the allowlist does not match.
-  - `always` - prompt on every command. `allow-always` durable trust does **not** suppress prompts when effective ask mode is `always`.
-
-</ParamField>
+Doctor migrates legacy `tools.exec.security` / `tools.exec.ask` config into
+`tools.exec.mode` when the old pair has an equivalent mode, including
+allowlist always-ask policy as `tools.exec.mode=always` and full-access
+always-ask policy as `tools.exec.mode=full-always`.
 
 ### `askFallback`
 
@@ -207,17 +193,16 @@ If you want host exec to run without approval prompts, you must open
 
 YOLO is the default host behavior unless you tighten it explicitly:
 
-| Layer                 | YOLO setting               |
-| --------------------- | -------------------------- |
-| `tools.exec.security` | `full` on `gateway`/`node` |
-| `tools.exec.ask`      | `off`                      |
-| Host `askFallback`    | `full`                     |
+| Layer              | YOLO setting |
+| ------------------ | ------------ |
+| `tools.exec.mode`  | `full`       |
+| Host `askFallback` | `full`       |
 
 <Warning>
 **Important distinctions:**
 
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
-- YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
+- YOLO chooses **how** host exec is approved: `tools.exec.mode=full` plus host approval defaults that do not ask.
 - In YOLO mode, OpenClaw does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
 - `auto` does not make gateway routing a free override from a sandboxed session. A per-call `host=node` request is allowed from `auto`; `host=gateway` is only allowed from `auto` when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
@@ -234,7 +219,7 @@ restrictive effective exec policy normalizes live launches to
 mode.
 
 If you want a more conservative setup, tighten OpenClaw exec policy back to
-`allowlist` / `on-miss` or `deny`.
+`full-always`, `always`, `ask`, `auto`, `allowlist`, or `deny`.
 
 ### Persistent gateway-host "never prompt" setup
 
@@ -242,8 +227,7 @@ If you want a more conservative setup, tighten OpenClaw exec policy back to
   <Step title="Set the requested config policy">
     ```bash
     openclaw config set tools.exec.host gateway
-    openclaw config set tools.exec.security full
-    openclaw config set tools.exec.ask off
+    openclaw config set tools.exec.mode full
     openclaw gateway restart
     ```
   </Step>

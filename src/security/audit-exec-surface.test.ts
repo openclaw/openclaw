@@ -122,7 +122,7 @@ describe("security audit exec surface findings", () => {
       expect.objectContaining({
         severity: "warn",
         detail: expect.stringContaining("args=default"),
-        remediation: expect.stringContaining("tools.exec.security"),
+        remediation: expect.stringContaining("tools.exec.mode"),
       }),
     );
     expect(finding?.detail).toContain("resumeArgs=acceptEdits");
@@ -173,7 +173,7 @@ describe("security audit exec surface findings", () => {
 
   it("does not warn for restrictive Claude permission mode when OpenClaw exec is restrictive", () => {
     const findings = collectExecRuntimeFindings({
-      tools: { exec: { security: "allowlist", ask: "on-miss" } },
+      tools: { exec: { mode: "ask" } },
       agents: {
         defaults: {
           cliBackends: {
@@ -292,7 +292,7 @@ describe("security audit exec surface findings", () => {
       },
       tools: {
         exec: {
-          security: "allowlist",
+          mode: "allowlist",
           host: "gateway",
         },
       },
@@ -310,7 +310,7 @@ describe("security audit exec surface findings", () => {
       },
       tools: {
         exec: {
-          security: "full",
+          mode: "full",
         },
       },
     } satisfies OpenClawConfig);

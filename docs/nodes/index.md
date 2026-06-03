@@ -157,7 +157,7 @@ Configure defaults (gateway config):
 
 ```bash
 openclaw config set tools.exec.host node
-openclaw config set tools.exec.security allowlist
+openclaw config set tools.exec.mode ask
 openclaw config set tools.exec.node "<id-or-name>"
 ```
 

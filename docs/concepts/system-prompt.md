@@ -57,7 +57,7 @@ The prompt is intentionally compact and uses fixed sections:
   `config.schema.lookup`, patch config with `config.patch`, replace the full
   config with `config.apply`, and run `update.run` only on explicit user
   request. The agent-facing `gateway` tool also refuses to rewrite
-  `tools.exec.ask` / `tools.exec.security`, including legacy `tools.bash.*`
+  `tools.exec.mode`, including legacy `tools.bash.*`
   aliases that normalize to those protected exec paths.
 - **Workspace**: working directory (`agents.defaults.workspace`).
 - **Documentation**: local path to OpenClaw docs/source and when to read them.

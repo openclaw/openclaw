@@ -185,7 +185,7 @@ policy. `agents.workspace.denyTools` supports `exec`, `process`, `write`,
 `edit`, and `apply_patch`; OpenClaw config `group:fs` covers file mutation tools
 and `group:runtime` covers shell/process tools. Tool posture policy observes
 `tools.profile`, `tools.allow`, `tools.alsoAllow`, `tools.deny`,
-`tools.fs.workspaceOnly`, `tools.exec.security`, `tools.exec.ask`,
+`tools.fs.workspaceOnly`, `tools.exec.mode`,
 `tools.exec.host`, `tools.elevated.enabled`, and the same per-agent
 `agents.list[].tools.*` overrides. It does not read runtime/operator approval
 state such as exec-approvals.json, and it does not enforce tool calls at
@@ -420,8 +420,8 @@ allowlist such as `["all"]`.
 | ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
 | `tools.profiles.allow`          | `tools.profile` and `agents.list[].tools.profile`           | Allow only tool profile ids such as `minimal`, `messaging`, or `coding`.                                 |
 | `tools.fs.requireWorkspaceOnly` | `tools.fs.workspaceOnly` and per-agent `tools.fs` overrides | Set to `true` to require workspace-only filesystem tool posture.                                         |
-| `tools.exec.allowSecurity`      | `tools.exec.security` and per-agent exec security           | Allow only exec security modes such as `deny` or `allowlist`.                                            |
-| `tools.exec.requireAsk`         | `tools.exec.ask` and per-agent exec ask mode                | Require approval posture such as `always`.                                                               |
+| `tools.exec.allowSecurity`      | `tools.exec.mode` and per-agent exec mode                   | Allow only exec modes such as `deny` or `allowlist`.                                                     |
+| `tools.exec.requireAsk`         | `tools.exec.mode` and per-agent exec mode                   | Require approval posture such as `always`, `on-miss`, or `auto` for native auto review.                  |
 | `tools.exec.allowHosts`         | `tools.exec.host` and per-agent exec host routing           | Allow only exec host routing modes such as `sandbox`.                                                    |
 | `tools.elevated.allow`          | `tools.elevated.enabled` and per-agent elevated posture     | Set to `false` to require elevated tool mode to stay disabled.                                           |
 | `tools.alsoAllow.expected`      | `tools.alsoAllow` and per-agent `tools.alsoAllow`           | Require exact `alsoAllow` entries and report missing or unexpected additive tool grants.                 |

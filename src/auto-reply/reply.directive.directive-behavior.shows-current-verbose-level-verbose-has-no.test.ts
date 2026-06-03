@@ -120,8 +120,7 @@ describe("directive behavior", () => {
         tools: {
           exec: {
             host: "gateway",
-            security: "allowlist",
-            ask: "always",
+            mode: "always",
             node: "mac-1",
           },
         },

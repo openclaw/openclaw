@@ -28,7 +28,7 @@ async function withTempDir<T>(prefix: string, fn: (dir: string) => Promise<T>) {
 function createExecTool(workspaceDir: string) {
   const tools = createOpenClawCodingTools({
     workspaceDir,
-    exec: { host: "gateway", ask: "off", security: "full" },
+    exec: { host: "gateway", mode: "full" },
   });
   const execTool = tools.find((tool) => tool.name === "exec");
   if (!execTool) {

@@ -76,9 +76,7 @@ function isOpenClawRequestedYolo(context?: CliBackendNormalizeConfigContext): bo
     ? context.config?.agents?.list?.find((agent) => agent.id === context.agentId)?.tools?.exec
     : undefined;
   const exec = agentExec ?? context?.config?.tools?.exec;
-  const security = exec?.security ?? "full";
-  const ask = exec?.ask ?? "off";
-  return security === "full" && ask === "off";
+  return (exec?.mode ?? "full") === "full";
 }
 
 export function resolveClaudePermissionMode(context?: CliBackendNormalizeConfigContext): {

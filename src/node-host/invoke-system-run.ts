@@ -157,10 +157,6 @@ type EffectiveSystemRunExecPolicy = {
   autoReview: boolean;
 };
 
-function hasLegacyExecPolicyOverride(exec?: ExecToolConfig): boolean {
-  return exec?.security !== undefined || exec?.ask !== undefined;
-}
-
 function applyExecPolicyLayer(base: LayeredExecPolicy, layer?: ExecToolConfig): LayeredExecPolicy {
   if (!layer) {
     return base;
@@ -169,12 +165,6 @@ function applyExecPolicyLayer(base: LayeredExecPolicy, layer?: ExecToolConfig): 
     return {
       mode: layer.mode,
       ...resolveExecPolicyForMode(layer.mode),
-    };
-  }
-  if (hasLegacyExecPolicyOverride(layer)) {
-    return {
-      security: layer.security ?? base.security,
-      ask: layer.ask ?? base.ask,
     };
   }
   return base;

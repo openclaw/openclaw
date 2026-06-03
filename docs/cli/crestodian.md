@@ -290,8 +290,7 @@ Config shape:
 The default `"auto"` YOLO posture is:
 
 - sandbox mode resolves to `off`
-- `tools.exec.security` resolves to `full`
-- `tools.exec.ask` resolves to `off`
+- `tools.exec.mode` resolves to `full`
 
 Remote rescue is covered by the Docker lane:
 

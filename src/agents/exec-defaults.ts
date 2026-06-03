@@ -24,16 +24,15 @@ import { resolveSandboxRuntimeStatus } from "./sandbox/runtime-status.js";
 type ResolvedExecConfig = {
   host?: ExecTarget;
   mode?: ExecMode;
+  node?: string;
+};
+
+type ExecOverridesConfig = {
+  host?: ExecTarget;
   security?: ExecSecurity;
   ask?: ExecAsk;
   node?: string;
 };
-
-type ExecOverridesConfig = Omit<ResolvedExecConfig, "mode">;
-
-function hasLegacyExecPolicyOverride(exec?: ResolvedExecConfig): boolean {
-  return exec?.security !== undefined || exec?.ask !== undefined;
-}
 
 type LayeredExecPolicy = {
   mode?: ExecMode;
@@ -54,7 +53,17 @@ function applyExecPolicyLayer(
       ...resolveExecPolicyForMode(layer.mode),
     };
   }
-  if (hasLegacyExecPolicyOverride(layer)) {
+  return base;
+}
+
+function applyExecOverridesPolicyLayer(
+  base: LayeredExecPolicy,
+  layer?: ExecOverridesConfig,
+): LayeredExecPolicy {
+  if (!layer) {
+    return base;
+  }
+  if (layer.security !== undefined || layer.ask !== undefined) {
     return {
       security: layer.security ?? base.security,
       ask: layer.ask ?? base.ask,
@@ -203,14 +212,12 @@ export function resolveExecDefaults(params: {
     security: approvalDefaults?.security ?? defaultSecurity,
     ask: approvalDefaults?.ask ?? "off",
   };
-  const layeredPolicy = applyExecPolicyLayer(
-    applySessionLegacyExecPolicyLayer(
-      applyExecPolicyLayer(applyExecPolicyLayer(basePolicy, globalExec), agentExec),
-      params.sessionEntry,
-    ),
-    params.execOverrides,
+  const layeredPolicy = applySessionLegacyExecPolicyLayer(
+    applyExecPolicyLayer(applyExecPolicyLayer(basePolicy, globalExec), agentExec),
+    params.sessionEntry,
   );
-  const modePolicy = resolveExecModePolicy(layeredPolicy);
+  const overriddenPolicy = applyExecOverridesPolicyLayer(layeredPolicy, params.execOverrides);
+  const modePolicy = resolveExecModePolicy(overriddenPolicy);
   const security =
     approvalDefaults?.security !== undefined
       ? minSecurity(modePolicy.security, approvalDefaults.security)

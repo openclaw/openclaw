@@ -26,6 +26,9 @@ import {
   maxAsk,
   minSecurity,
   resolveExecApprovalsFromFile,
+  resolveExecPolicyForMode,
+  type ExecMode,
+  type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import {
   listInterpreterLikeSafeBins,
@@ -772,12 +775,14 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
     });
   }
 
+  const configuredExecSecurity = (mode: ExecMode | undefined): ExecSecurity =>
+    mode ? resolveExecPolicyForMode(mode).security : "deny";
   const effectiveExecScopes = Array.from(
     new Map(
       [
         {
           id: DEFAULT_AGENT_ID,
-          security: cfg.tools?.exec?.security ?? "deny",
+          security: configuredExecSecurity(cfg.tools?.exec?.mode),
           host: cfg.tools?.exec?.host ?? "auto",
         },
         ...agents
@@ -787,7 +792,7 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
           )
           .map((entry) => ({
             id: entry.id,
-            security: entry.tools?.exec?.security ?? cfg.tools?.exec?.security ?? "deny",
+            security: configuredExecSecurity(entry.tools?.exec?.mode ?? cfg.tools?.exec?.mode),
             host: entry.tools?.exec?.host ?? cfg.tools?.exec?.host ?? "auto",
           })),
       ].map((entry) => [entry.id, entry] as const),
@@ -801,14 +806,14 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
     findings.push({
       checkId: "tools.exec.security_full_configured",
       severity: openExecSurfacePaths.length > 0 ? "critical" : "warn",
-      title: "Exec security=full is configured",
+      title: "Full exec security is configured",
       detail:
         `Full exec trust is enabled for: ${fullExecScopes.map((entry) => entry.id).join(", ")}.` +
         (openExecSurfacePaths.length > 0
           ? ` Open channel access was also detected at:\n${openExecSurfacePaths.map((entry) => `- ${entry}`).join("\n")}`
           : ""),
       remediation:
-        'Prefer tools.exec.security="allowlist" with ask prompts, and reserve "full" for tightly scoped break-glass agents only.',
+        'Prefer tools.exec.mode="always", "ask", or "auto", and reserve "full" or "full-always" for tightly scoped break-glass agents only.',
     });
   }
 
@@ -819,7 +824,7 @@ export function collectExecRuntimeFindings(cfg: OpenClawConfig): SecurityAuditFi
       title: "Claude permission mode is ignored under YOLO exec",
       detail: `claude-cli sets ${claudePermissionModeHits.map((hit) => `${hit.argSet}=${hit.mode}`).join(", ")}, but OpenClaw exec is YOLO for: ${yoloExecScopeIds.join(", ")}. Managed Claude live sessions use --permission-mode bypassPermissions.`,
       remediation:
-        "Restrict OpenClaw tools.exec.security/tools.exec.ask, or remove the Claude --permission-mode override.",
+        "Restrict OpenClaw tools.exec.mode, or remove the Claude --permission-mode override.",
     });
   }
 
