@@ -391,24 +391,35 @@ describe("feishu_doc image fetch hardening", () => {
 
   it("skips image upload when markdown image URL is blocked", async () => {
     const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    readRemoteMediaBufferMock.mockRejectedValueOnce(
-      new Error("Blocked: resolves to private/internal IP address"),
-    );
+    try {
+      readRemoteMediaBufferMock.mockRejectedValueOnce(
+        new Error(
+          "Blocked https://user:pass@x.test/image.png?token=download-token&safe=value#frag: resolves to private/internal IP address",
+        ),
+      );
 
-    const feishuDocTool = resolveFeishuDocTool();
+      const feishuDocTool = resolveFeishuDocTool();
 
-    const result = await executeFeishuDocTool(feishuDocTool, {
-      action: "write",
-      doc_token: "doc_1",
-      content: "![x](https://x.test/image.png)",
-    });
+      const result = await executeFeishuDocTool(feishuDocTool, {
+        action: "write",
+        doc_token: "doc_1",
+        content: "![x](https://user:pass@x.test/image.png?token=download-token&safe=value#frag)",
+      });
 
-    expect(readRemoteMediaBufferMock).toHaveBeenCalled();
-    expect(driveUploadAllMock).not.toHaveBeenCalled();
-    expect(blockPatchMock).not.toHaveBeenCalled();
-    expect(result.details.images_processed).toBe(0);
-    expect(consoleErrorSpy).toHaveBeenCalled();
-    consoleErrorSpy.mockRestore();
+      expect(readRemoteMediaBufferMock).toHaveBeenCalled();
+      expect(driveUploadAllMock).not.toHaveBeenCalled();
+      expect(blockPatchMock).not.toHaveBeenCalled();
+      expect(result.details.images_processed).toBe(0);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+      const logged = consoleErrorSpy.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(logged).toContain("https://x.test/image.png");
+      expect(logged).not.toContain("user:pass");
+      expect(logged).not.toContain("download-token");
+      expect(logged).not.toContain("safe=value");
+      expect(logged).not.toContain("#frag");
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 
   it("create grants permission only to trusted Feishu requester", async () => {

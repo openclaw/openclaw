@@ -72,6 +72,33 @@ describe("engine/gateway/inbound-attachments", () => {
     expect(result.attachmentLocalPaths).toEqual([null]);
   });
 
+  it("redacts failed attachment URLs in logs", async () => {
+    downloadFileMock.mockResolvedValue(null);
+    const log = {
+      error: vi.fn(),
+      info: vi.fn(),
+      debug: vi.fn(),
+    };
+
+    await processAttachments(
+      [
+        {
+          content_type: "image/png",
+          url: "https://user:pass@cdn.example.test/a.png?token=download-token&safe=value#frag",
+          filename: "a.png",
+        },
+      ],
+      { accountId: "qq", cfg: {}, audioConvert, log },
+    );
+
+    expect(log.error).toHaveBeenCalledWith("Failed to download: https://cdn.example.test/a.png");
+    const logged = log.error.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(logged).not.toContain("user:pass");
+    expect(logged).not.toContain("download-token");
+    expect(logged).not.toContain("safe=value");
+    expect(logged).not.toContain("#frag");
+  });
+
   it("prefers voice_wav_url for voice downloads and transcribes with configured STT", async () => {
     downloadFileMock.mockResolvedValue("/tmp/openclaw-qqbot-downloads/voice.wav");
     resolveSTTConfigMock.mockReturnValue({

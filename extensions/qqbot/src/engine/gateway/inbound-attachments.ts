@@ -3,6 +3,7 @@ import { downloadFile } from "../utils/file-utils.js";
 import { getQQBotMediaDir } from "../utils/platform.js";
 import { normalizeOptionalString } from "../utils/string-normalize.js";
 import { transcribeAudio, resolveSTTConfig } from "../utils/stt.js";
+import { redactUrlForLog } from "../utils/url-redaction.js";
 
 // Re-export the port type for convenience.
 export type { AudioConvertPort } from "../adapter/audio.port.js";
@@ -147,7 +148,7 @@ export async function processAttachments(
         log?.debug?.(`Downloaded attachment to: ${localPath}`);
         return { localPath, type: "other" as const, filename: att.filename, meta };
       }
-      log?.error(`Failed to download: ${attUrl}`);
+      log?.error(`Failed to download: ${redactUrlForLog(attUrl)}`);
       if (att.content_type?.startsWith("image/")) {
         return {
           localPath: null,

@@ -115,6 +115,7 @@ describe("canvas host", () => {
     log: (..._args: Parameters<typeof console.log>) => {},
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
+  let escapeCanvasHostHtmlText: typeof import("./server.js").escapeCanvasHostHtmlText;
   let startCanvasHost: typeof import("./server.js").startCanvasHost;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
@@ -158,7 +159,8 @@ describe("canvas host", () => {
       };
     });
     vi.resetModules();
-    ({ createCanvasHostHandler, startCanvasHost } = await import("./server.js"));
+    ({ createCanvasHostHandler, escapeCanvasHostHtmlText, startCanvasHost } =
+      await import("./server.js"));
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -194,6 +196,22 @@ describe("canvas host", () => {
       expect(response.body).toContain(CANVAS_WS_PATH);
       expect(response.body).toContain('document.createElement("span")');
       expect(response.body).not.toContain("statusEl.innerHTML");
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it("escapes the canvas root in missing directory HTML", async () => {
+    expect(escapeCanvasHostHtmlText('<root>&"')).toBe("&lt;root&gt;&amp;&quot;");
+    const dir = path.join(fixtureRoot, `case-${fixtureCount++}&unsafe`);
+    await fs.mkdir(path.join(dir, "missing"), { recursive: true });
+    const handler = await createTestCanvasHostHandler(dir);
+
+    try {
+      const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/missing/`);
+      expect(response.status).toBe(404);
+      expect(response.body).toContain(`${escapeCanvasHostHtmlText(dir)}/index.html`);
+      expect(response.body).not.toContain(`${dir}/index.html`);
     } finally {
       await handler.close();
     }
@@ -388,6 +406,7 @@ describe("canvas host", () => {
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
     let createdBundle = false;
+    let createdSymlink = false;
 
     try {
       await fs.stat(bundlePath);
@@ -396,7 +415,14 @@ describe("canvas host", () => {
       createdBundle = true;
     }
 
-    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+    try {
+      await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+      createdSymlink = true;
+    } catch (error) {
+      if (process.platform !== "win32") {
+        throw error;
+      }
+    }
 
     try {
       const res = await captureA2uiResponse(`${A2UI_PATH}/`);
@@ -415,9 +441,11 @@ describe("canvas host", () => {
       const malformedRes = await captureA2uiResponse(`${A2UI_PATH}/%E0%A4%A`);
       expect(malformedRes.status).toBe(404);
       expect(malformedRes.body).toBe("not found");
-      const symlinkRes = await captureA2uiResponse(`${A2UI_PATH}/${linkName}`);
-      expect(symlinkRes.status).toBe(404);
-      expect(symlinkRes.body).toBe("not found");
+      if (createdSymlink) {
+        const symlinkRes = await captureA2uiResponse(`${A2UI_PATH}/${linkName}`);
+        expect(symlinkRes.status).toBe(404);
+        expect(symlinkRes.body).toBe("not found");
+      }
     } finally {
       await fs.rm(linkPath, { force: true });
       if (createdBundle) {

@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getDefaultSsrFPolicy } from "../urbit/context.js";
+import { redactTextForLog, redactUrlForLog } from "../url-redaction.js";
 
 const MAX_IMAGES_PER_MESSAGE = 8;
 const TLON_MEDIA_DOWNLOAD_IDLE_TIMEOUT_MS = 30_000;
@@ -63,7 +64,7 @@ export async function downloadMedia(
     // Validate URL is http/https before fetching
     const parsedUrl = new URL(url);
     if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-      console.warn(`[tlon-media] Rejected non-http(s) URL: ${url}`);
+      console.warn(`[tlon-media] Rejected non-http(s) URL: ${redactUrlForLog(url)}`);
       return null;
     }
 
@@ -100,7 +101,9 @@ export async function downloadMedia(
       originalUrl: url,
     };
   } catch (error: unknown) {
-    console.error(`[tlon-media] Error downloading ${url}: ${formatErrorMessage(error)}`);
+    console.error(
+      `[tlon-media] Error downloading ${redactUrlForLog(url)}: ${redactTextForLog(formatErrorMessage(error))}`,
+    );
     return null;
   }
 }
