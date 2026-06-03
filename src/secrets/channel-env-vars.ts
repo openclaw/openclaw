@@ -30,6 +30,9 @@ function appendUniqueEnvVarCandidates(
   }
 }
 
+/**
+ * Resolves plugin-declared channel environment variable names keyed by channel id.
+ */
 export function resolveChannelEnvVars(
   params?: ChannelEnvVarLookupParams,
 ): Record<string, readonly string[]> {
@@ -43,6 +46,7 @@ export function resolveChannelEnvVars(
     if (!plugin.channelEnvVars) {
       continue;
     }
+    // Sort channel ids before merging so prompt/test snapshots do not depend on manifest order.
     for (const [channelId, keys] of Object.entries(plugin.channelEnvVars).toSorted(
       ([left], [right]) => left.localeCompare(right),
     )) {
@@ -52,12 +56,18 @@ export function resolveChannelEnvVars(
   return candidates;
 }
 
+/**
+ * Returns the declared env var names for one channel id.
+ */
 export function getChannelEnvVars(channelId: string, params?: ChannelEnvVarLookupParams): string[] {
   const channelEnvVars = resolveChannelEnvVars(params);
   const envVars = Object.hasOwn(channelEnvVars, channelId) ? channelEnvVars[channelId] : undefined;
   return Array.isArray(envVars) ? [...envVars] : [];
 }
 
+/**
+ * Lists every known channel env var name across installed plugin metadata.
+ */
 export function listKnownChannelEnvVarNames(params?: ChannelEnvVarLookupParams): string[] {
   return uniqueStrings(Object.values(resolveChannelEnvVars(params)).flat());
 }
