@@ -32,6 +32,20 @@ describe("agent-tools.policy", () => {
     expect(filtered.map((tool) => tool.name)).toEqual(["read", "exec"]);
   });
 
+  it("drops unreadable tool names when applying a policy", () => {
+    const unreadable = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("policy filter name getter exploded");
+      },
+    }) as ReturnType<typeof createStubTool>;
+
+    const filtered = filterToolsByPolicy([unreadable, createStubTool("message")], {
+      allow: ["message"],
+    });
+
+    expect(filtered.map((tool) => tool.name)).toEqual(["message"]);
+  });
+
   it("treats * in deny as deny-all", () => {
     const tools = [createStubTool("read"), createStubTool("exec")];
     const filtered = filterToolsByPolicy(tools, { deny: ["*"] });

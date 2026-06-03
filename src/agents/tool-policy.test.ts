@@ -5,10 +5,12 @@ import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
 import {
+  buildPluginToolGroups,
   collectExplicitAllowlist,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
   normalizeToolName,
+  replaceWithEffectiveToolAllowlist,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
@@ -74,6 +76,35 @@ describe("tool-policy", () => {
     expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: [" * "] })])).toEqual([
       "*",
     ]);
+  });
+
+  it("skips unreadable tool names when replacing effective allowlists", () => {
+    const target: string[] = [];
+    const unreadable = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("policy name getter exploded");
+      },
+    }) as { name: string };
+
+    replaceWithEffectiveToolAllowlist(target, [unreadable, { name: "message" }]);
+
+    expect(target).toEqual(["message"]);
+  });
+
+  it("skips unreadable plugin tool names when building plugin groups", () => {
+    const unreadable = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("plugin group name getter exploded");
+      },
+    }) as { name: string };
+
+    const groups = buildPluginToolGroups({
+      tools: [unreadable, { name: "MESSAGE" }],
+      toolMeta: () => ({ pluginId: "demo-plugin" }),
+    });
+
+    expect(groups.all).toEqual(["message"]);
+    expect(groups.byPlugin.get("demo-plugin")).toEqual(["message"]);
   });
 });
 

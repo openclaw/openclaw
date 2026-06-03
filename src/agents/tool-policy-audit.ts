@@ -1,7 +1,12 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { SandboxConfig } from "./sandbox/types.js";
 import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
-import { normalizeToolList, normalizeToolName, type ToolPolicyLike } from "./tool-policy.js";
+import {
+  normalizeToolList,
+  normalizeToolName,
+  readToolPolicyName,
+  type ToolPolicyLike,
+} from "./tool-policy.js";
 
 const MAX_AUDIT_TOOL_NAMES = 50;
 const MAX_AUDIT_FIELD_LENGTH = 160;
@@ -27,7 +32,14 @@ function toolPolicyRuleKind(policy: ToolPolicyLike): ToolPolicyRuleKind {
 }
 
 function normalizedToolNames(tools: readonly { name: string }[]): string[] {
-  return normalizeToolList(tools.map((tool) => tool.name));
+  const names: string[] = [];
+  for (const tool of tools) {
+    const name = readToolPolicyName(tool);
+    if (name !== undefined) {
+      names.push(name);
+    }
+  }
+  return normalizeToolList(names);
 }
 
 function removedToolNamesByRule(params: {

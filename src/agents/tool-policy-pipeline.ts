@@ -7,6 +7,7 @@ import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   normalizeToolName,
+  readToolPolicyName,
   type ToolPolicyLike,
 } from "./tool-policy.js";
 
@@ -122,12 +123,16 @@ export function applyToolPolicyPipeline(params: {
   steps: ToolPolicyPipelineStep[];
   auditLogLevel?: ToolPolicyAuditLogLevel;
 }): AnyAgentTool[] {
-  const coreToolNames = new Set(
-    params.tools
-      .filter((tool) => !params.toolMeta(tool))
-      .map((tool) => normalizeToolName(tool.name))
-      .filter(Boolean),
-  );
+  const coreToolNames = new Set<string>();
+  for (const tool of params.tools) {
+    if (params.toolMeta(tool)) {
+      continue;
+    }
+    const name = readToolPolicyName(tool);
+    if (name) {
+      coreToolNames.add(name);
+    }
+  }
 
   const pluginGroups = buildPluginToolGroups({
     tools: params.tools,

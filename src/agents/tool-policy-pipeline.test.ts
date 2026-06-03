@@ -73,6 +73,30 @@ describe("tool-policy-pipeline", () => {
     expect(names).toEqual(["plugin_tool"]);
   });
 
+  test("drops unreadable tool names before policy audit", () => {
+    const unreadable = Object.defineProperty({}, "name", {
+      get() {
+        throw new Error("pipeline name getter exploded");
+      },
+    }) as DummyTool;
+    const tools = [unreadable, { name: "message" }] as unknown as DummyTool[];
+
+    const filtered = applyToolPolicyPipeline({
+      tools: tools as any,
+      toolMeta: () => undefined,
+      warn: () => {},
+      steps: [
+        {
+          policy: { allow: ["message"] },
+          label: "tools.allow",
+        },
+      ],
+      auditLogLevel: "debug",
+    });
+
+    expect(filtered.map((tool) => (tool as unknown as DummyTool).name)).toEqual(["message"]);
+  });
+
   test("warns about unknown allowlist entries", () => {
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];

@@ -52,7 +52,7 @@ export function replaceWithEffectiveToolAllowlist(
   target.length = 0;
   const seen = new Set<string>();
   for (const tool of tools) {
-    const normalized = normalizeToolName(tool.name);
+    const normalized = readToolPolicyName(tool);
     if (!normalized || seen.has(normalized)) {
       continue;
     }
@@ -105,6 +105,14 @@ export function collectExplicitDenylist(policies: Array<ToolPolicyLike | undefin
   return entries;
 }
 
+export function readToolPolicyName(tool: { name: string }): string | undefined {
+  try {
+    return normalizeToolName(tool.name);
+  } catch {
+    return undefined;
+  }
+}
+
 export function buildPluginToolGroups<T extends { name: string }>(params: {
   tools: T[];
   toolMeta: (tool: T) => { pluginId: string } | undefined;
@@ -116,7 +124,10 @@ export function buildPluginToolGroups<T extends { name: string }>(params: {
     if (!meta) {
       continue;
     }
-    const name = normalizeToolName(tool.name);
+    const name = readToolPolicyName(tool);
+    if (name === undefined) {
+      continue;
+    }
     all.push(name);
     const pluginId = normalizeOptionalLowercaseString(meta.pluginId);
     if (!pluginId) {
