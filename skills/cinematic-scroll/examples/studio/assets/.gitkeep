@@ -1,0 +1,3 @@
+# Generated stills land here as <chapter-id>.jpg after you run ../generate.mjs
+# (e.g. 0-hero.jpg, 1-belief.jpg …). Until then the page uses CSS placeholders.
+# These are meant to be COMMITTED once generated — they're the showcase imagery.
