@@ -287,6 +287,15 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
   { commandPath: ["nodes"], policy: { networkProxy: "bypass" } },
   { commandPath: ["pairing"], policy: { networkProxy: "bypass" } },
   { commandPath: ["proxy"], policy: { networkProxy: "bypass" } },
+  {
+    // Sandbox subcommands need plugin runtime so backend plugins (OpenShell,
+    // future third-party backends) register their managers before
+    // listSandboxContainers asks getSandboxBackendManager(entry.backendId).
+    // Without this, registry entries owned by a plugin backend report
+    // running=false because no manager is registered to describe them.
+    commandPath: ["sandbox"],
+    policy: { loadPlugins: "always", networkProxy: "bypass" },
+  },
   { commandPath: ["qr"], policy: { networkProxy: "bypass" } },
   { commandPath: ["reset"], policy: { networkProxy: "bypass" } },
   {

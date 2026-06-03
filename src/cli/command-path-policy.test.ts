@@ -245,6 +245,24 @@ describe("command-path-policy", () => {
     });
   });
 
+  it("loads plugins for sandbox subcommands so backend plugins register", () => {
+    // Sandbox-backed plugins (OpenShell today) only register their
+    // SandboxBackendManager during full plugin registration. Without
+    // loadPlugins=always, `sandbox list` falls back to the default
+    // no-plugin policy and reports plugin-owned runtimes as stopped.
+    for (const commandPath of [
+      ["sandbox"],
+      ["sandbox", "list"],
+      ["sandbox", "recreate"],
+      ["sandbox", "explain"],
+    ]) {
+      expectResolvedPolicy(commandPath, {
+        loadPlugins: "always",
+        networkProxy: "bypass",
+      });
+    }
+  });
+
   it("defaults unknown command paths to network proxy routing", () => {
     expect(resolveCliNetworkProxyPolicy(["node", "openclaw", "googlemeet", "login"])).toBe(
       "default",

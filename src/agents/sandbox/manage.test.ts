@@ -1,6 +1,7 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 let listSandboxBrowsers: typeof import("./manage.js").listSandboxBrowsers;
+let listSandboxContainers: typeof import("./manage.js").listSandboxContainers;
 let removeSandboxBrowserContainer: typeof import("./manage.js").removeSandboxBrowserContainer;
 
 const configMocks = vi.hoisted(() => ({
@@ -17,10 +18,15 @@ const registryMocks = vi.hoisted(() => ({
 const backendMocks = vi.hoisted(() => ({
   describeRuntime: vi.fn(),
   removeRuntime: vi.fn(),
+  getSandboxBackendManager: vi.fn(),
 }));
 
 vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: configMocks.getRuntimeConfig,
+}));
+
+vi.mock("./backend.js", () => ({
+  getSandboxBackendManager: backendMocks.getSandboxBackendManager,
 }));
 
 vi.mock("../../plugin-sdk/browser-bridge.js", () => ({
@@ -47,7 +53,8 @@ vi.mock("./browser-bridges.js", () => ({
 }));
 
 beforeAll(async () => {
-  ({ listSandboxBrowsers, removeSandboxBrowserContainer } = await import("./manage.js"));
+  ({ listSandboxBrowsers, listSandboxContainers, removeSandboxBrowserContainer } =
+    await import("./manage.js"));
 });
 
 function firstDescribeRuntimeInput(): { agentId?: string; entry?: { configLabelKind?: string } } {
@@ -153,5 +160,84 @@ describe("listSandboxBrowsers", () => {
     expect(removeInput?.entry?.runtimeLabel).toBe("browser-1");
     expect(removeInput?.entry?.backendId).toBe("docker");
     expect(registryMocks.removeBrowserRegistryEntry).toHaveBeenCalledWith("browser-1");
+  });
+});
+
+describe("listSandboxContainers", () => {
+  beforeEach(() => {
+    configMocks.getRuntimeConfig.mockReset();
+    registryMocks.readRegistry.mockReset();
+    backendMocks.describeRuntime.mockReset();
+    backendMocks.getSandboxBackendManager.mockReset();
+
+    configMocks.getRuntimeConfig.mockReturnValue({
+      agents: {
+        defaults: { sandbox: { backend: "openshell" } },
+        list: [],
+      },
+    });
+  });
+
+  it("asks the registered backend manager for live status when backendId is plugin-owned", async () => {
+    registryMocks.readRegistry.mockResolvedValue({
+      entries: [
+        {
+          containerName: "openclaw-openshell-agent-coder-main",
+          backendId: "openshell",
+          runtimeLabel: "openclaw-openshell-agent-coder-main",
+          sessionKey: "agent:coder:main",
+          image: "openshell:1.0",
+          configLabelKind: "Image",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+        },
+      ],
+    });
+    const openshellManager = {
+      describeRuntime: vi.fn(async () => ({
+        running: true,
+        actualConfigLabel: "openshell:1.0",
+        configLabelMatch: true,
+      })),
+      removeRuntime: vi.fn(),
+    };
+    backendMocks.getSandboxBackendManager.mockImplementation((id: string) =>
+      id === "openshell" ? openshellManager : null,
+    );
+
+    const results = await listSandboxContainers();
+
+    expect(backendMocks.getSandboxBackendManager).toHaveBeenCalledWith("openshell");
+    expect(openshellManager.describeRuntime).toHaveBeenCalledTimes(1);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.running).toBe(true);
+    expect(results[0]?.imageMatch).toBe(true);
+  });
+
+  it("falls back to stopped when no backend manager is registered for the entry's backendId", async () => {
+    // Regression for openclaw#59528: when the sandbox CLI runs without plugin
+    // registration, OpenShell's manager is missing and registry entries report
+    // running=false even though the OpenShell sandbox would actually run them.
+    registryMocks.readRegistry.mockResolvedValue({
+      entries: [
+        {
+          containerName: "openclaw-openshell-agent-coder-main",
+          backendId: "openshell",
+          runtimeLabel: "openclaw-openshell-agent-coder-main",
+          sessionKey: "agent:coder:main",
+          image: "openshell:1.0",
+          configLabelKind: "Image",
+          createdAtMs: 1,
+          lastUsedAtMs: 1,
+        },
+      ],
+    });
+    backendMocks.getSandboxBackendManager.mockReturnValue(null);
+
+    const results = await listSandboxContainers();
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.running).toBe(false);
+    expect(results[0]?.imageMatch).toBe(true);
   });
 });
