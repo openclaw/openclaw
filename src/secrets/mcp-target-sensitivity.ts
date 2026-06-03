@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
 import { isNonEmptyString } from "./shared.js";
 
