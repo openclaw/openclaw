@@ -44,9 +44,4 @@ export const KNIP_OPTIONAL_UNUSED_FILE_ALLOWLIST = [
   "ui/src/ui/browser-redact.ts",
   "extensions/qa-lab/src/auth-profile.fixture.ts",
   "extensions/qa-lab/src/codex-plugin.fixture.ts",
-  "src/agents/cache/agent-cache-store.sqlite.ts",
-  "src/agents/cache/agent-cache-store.ts",
-  "src/state/openclaw-agent-db.paths.ts",
-  "src/state/openclaw-agent-db.ts",
-  "src/state/openclaw-agent-schema.generated.ts",
 ];
