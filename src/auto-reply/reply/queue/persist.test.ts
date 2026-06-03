@@ -409,7 +409,7 @@ describe("persistFollowupQueues / restoreFollowupQueues", () => {
 
   it("doctor migration imports legacy JSON sidecar then restore repopulates the queue", async () => {
     const legacyPath = path.join(tmpDir, STATE_FILE);
-    await fs.writeFileSync(
+    fs.writeFileSync(
       legacyPath,
       JSON.stringify({
         version: 1,

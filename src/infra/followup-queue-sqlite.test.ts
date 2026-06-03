@@ -73,10 +73,10 @@ describe("followup-queue-sqlite", () => {
     });
     expect(hasFollowupQueueEntries(tmpDir)).toBe(true);
     const entries = loadFollowupQueueEntries(tmpDir);
-    expect(entries[0]?.[0]).toBe("agent:main:dm:sqlite-test");
-    expect((entries[0]?.[1] as { items?: Array<{ prompt?: string }> }).items?.[0]?.prompt).toBe(
-      "stored",
-    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0][0]).toBe("agent:main:dm:sqlite-test");
+    const queueData = entries[0][1] as { items?: Array<{ prompt?: string }> };
+    expect(queueData.items?.[0]?.prompt).toBe("stored");
 
     replaceFollowupQueueEntries({ stateDir: tmpDir, entries: [] });
     expect(hasFollowupQueueEntries(tmpDir)).toBe(false);

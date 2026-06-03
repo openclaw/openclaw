@@ -550,9 +550,9 @@ describe("state migrations", () => {
     );
     await expect(fs.readFile(legacyPath, "utf8")).resolves.toContain("stale json prompt");
     const entries = loadFollowupQueueEntries(stateDir);
-    expect((entries[0]?.[1] as { items?: Array<{ prompt?: string }> }).items?.[0]?.prompt).toBe(
-      "already in sqlite",
-    );
+    expect(entries).toHaveLength(1);
+    const sqliteQueue = entries[0][1] as { items?: Array<{ prompt?: string }> };
+    expect(sqliteQueue.items?.[0]?.prompt).toBe("already in sqlite");
   });
 
   it("keeps legacy delivery queue files when shared SQLite already has a conflicting row", async () => {
