@@ -22,6 +22,8 @@ type AnthropicPayloadPolicyInput = {
   serviceTier?: AnthropicServiceTier;
 };
 
+const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
+
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
 export type AnthropicPayloadPolicy = {
   allowsServiceTier: boolean;
@@ -136,8 +138,9 @@ function stripAnthropicSystemPromptBoundary(system: unknown): void {
 function applyAnthropicCacheControlToMessages(
   messages: unknown,
   cacheControl: AnthropicEphemeralCacheControl,
+  markerLimit: number,
 ): void {
-  if (!Array.isArray(messages) || messages.length === 0) {
+  if (!Array.isArray(messages) || messages.length === 0 || markerLimit <= 0) {
     return;
   }
 
@@ -156,6 +159,10 @@ function applyAnthropicCacheControlToMessages(
 
     const content = record.content;
     if (typeof content === "string") {
+      if (fallbackToolResult && markerLimit === 1) {
+        fallbackToolResult.cache_control = cacheControl;
+        return;
+      }
       record.content = [
         {
           type: "text",
@@ -163,6 +170,9 @@ function applyAnthropicCacheControlToMessages(
           cache_control: cacheControl,
         },
       ];
+      if (fallbackToolResult && markerLimit > 1) {
+        fallbackToolResult.cache_control = cacheControl;
+      }
       return;
     }
 
@@ -178,8 +188,12 @@ function applyAnthropicCacheControlToMessages(
 
       const blockRecord = block as Record<string, unknown>;
       if (blockRecord.type === "text" || blockRecord.type === "image") {
+        if (fallbackToolResult && markerLimit === 1) {
+          fallbackToolResult.cache_control = cacheControl;
+          return;
+        }
         blockRecord.cache_control = cacheControl;
-        if (fallbackToolResult) {
+        if (fallbackToolResult && markerLimit > 1) {
           fallbackToolResult.cache_control = cacheControl;
         }
         return;
@@ -193,6 +207,20 @@ function applyAnthropicCacheControlToMessages(
   if (fallbackToolResult) {
     fallbackToolResult.cache_control = cacheControl;
   }
+}
+
+function countAnthropicCacheControlMarkers(blocks: unknown): number {
+  if (!Array.isArray(blocks)) {
+    return 0;
+  }
+
+  let count = 0;
+  for (const block of blocks) {
+    if (block && typeof block === "object" && "cache_control" in block) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */
@@ -240,7 +268,14 @@ export function applyAnthropicPayloadPolicyToParams(
     return;
   }
 
-  applyAnthropicCacheControlToMessages(payloadObj.messages, policy.cacheControl);
+  const usedMarkers =
+    countAnthropicCacheControlMarkers(payloadObj.system) +
+    countAnthropicCacheControlMarkers(payloadObj.tools);
+  applyAnthropicCacheControlToMessages(
+    payloadObj.messages,
+    policy.cacheControl,
+    ANTHROPIC_CACHE_CONTROL_LIMIT - usedMarkers,
+  );
 }
 
 /** @deprecated Anthropic-family provider payload helper; do not use from third-party plugins. */

@@ -41,6 +41,8 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { adjustMaxTokensForThinking, buildBaseOptions } from "./simple-options.js";
 import { transformMessages } from "./transform-messages.js";
 
+const ANTHROPIC_CACHE_CONTROL_LIMIT = 4;
+
 /**
  * Resolve cache retention preference.
  * Defaults to "short" and uses OPENCLAW_CACHE_RETENTION for backward compatibility.
@@ -939,9 +941,27 @@ function buildParams(
   options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
   const { cacheControl } = getCacheControl(model, options?.cacheRetention);
+  const systemCacheControlCount = !cacheControl
+    ? 0
+    : isOAuthTokenResult
+      ? 1 + (context.systemPrompt ? 1 : 0)
+      : context.systemPrompt
+        ? 1
+        : 0;
+  const toolCacheControlCount = cacheControl && context.tools?.length ? 1 : 0;
+  const messageCacheControlLimit = Math.max(
+    0,
+    ANTHROPIC_CACHE_CONTROL_LIMIT - systemCacheControlCount - toolCacheControlCount,
+  );
   const params: MessageCreateParamsStreaming = {
     model: model.id,
-    messages: convertMessages(context.messages, model, isOAuthTokenResult, cacheControl),
+    messages: convertMessages(
+      context.messages,
+      model,
+      isOAuthTokenResult,
+      cacheControl,
+      messageCacheControlLimit,
+    ),
     max_tokens: options?.maxTokens ?? model.maxTokens,
     stream: true,
   };
@@ -1041,6 +1061,7 @@ function convertMessages(
   model: Model<"anthropic-messages">,
   isOAuthTokenValue: boolean,
   cacheControl?: CacheControlEphemeral,
+  messageCacheControlLimit = 4,
 ): MessageParam[] {
   const params: MessageParam[] = [];
 
@@ -1178,7 +1199,7 @@ function convertMessages(
     }
   }
 
-  if (cacheControl && params.length > 0) {
+  if (cacheControl && params.length > 0 && messageCacheControlLimit > 0) {
     let fallbackToolResult: ContentBlockParam | undefined;
 
     for (let i = params.length - 1; i >= 0; i--) {
@@ -1191,14 +1212,13 @@ function convertMessages(
         for (let j = message.content.length - 1; j >= 0; j--) {
           const block = message.content[j];
           if (block.type === "text" || block.type === "image") {
-            (block as typeof block & { cache_control?: typeof cacheControl }).cache_control =
-              cacheControl;
-            if (fallbackToolResult) {
-              (
-                fallbackToolResult as typeof fallbackToolResult & {
-                  cache_control?: typeof cacheControl;
-                }
-              ).cache_control = cacheControl;
+            if (fallbackToolResult && messageCacheControlLimit === 1) {
+              applyContentBlockCacheControl(fallbackToolResult, cacheControl);
+              return params;
+            }
+            applyContentBlockCacheControl(block, cacheControl);
+            if (fallbackToolResult && messageCacheControlLimit > 1) {
+              applyContentBlockCacheControl(fallbackToolResult, cacheControl);
             }
             return params;
           }
@@ -1210,6 +1230,10 @@ function convertMessages(
       }
 
       if (typeof message.content === "string") {
+        if (fallbackToolResult && messageCacheControlLimit === 1) {
+          applyContentBlockCacheControl(fallbackToolResult, cacheControl);
+          return params;
+        }
         message.content = [
           {
             type: "text",
@@ -1217,16 +1241,15 @@ function convertMessages(
             cache_control: cacheControl,
           },
         ] as ContentBlockParam[];
+        if (fallbackToolResult && messageCacheControlLimit > 1) {
+          applyContentBlockCacheControl(fallbackToolResult, cacheControl);
+        }
         return params;
       }
     }
 
     if (fallbackToolResult) {
-      (
-        fallbackToolResult as typeof fallbackToolResult & {
-          cache_control?: typeof cacheControl;
-        }
-      ).cache_control = cacheControl;
+      applyContentBlockCacheControl(fallbackToolResult, cacheControl);
     }
   }
 
@@ -1266,6 +1289,14 @@ function buildSystemPromptBlocks(
     blocks.push({ type: "text", text: sanitizeSurrogates(split.dynamicSuffix) });
   }
   return blocks.length > 0 ? blocks : [{ type: "text", text: "" }];
+}
+
+function applyContentBlockCacheControl(
+  block: ContentBlockParam,
+  cacheControl: CacheControlEphemeral,
+): void {
+  (block as ContentBlockParam & { cache_control?: CacheControlEphemeral }).cache_control =
+    cacheControl;
 }
 
 function shouldUseFineGrainedToolStreamingBeta(
