@@ -147,6 +147,18 @@ const replySpyHoisted = vi.hoisted(() => ({
   >,
 }));
 
+vi.mock("openclaw/plugin-sdk/reply-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/reply-runtime")>();
+  return {
+    ...actual,
+    getReplyFromConfig: (
+      ctx: MsgContext,
+      opts?: GetReplyOptions,
+      configOverride?: OpenClawConfig,
+    ) => replySpyHoisted.replySpy(ctx, opts, configOverride),
+  };
+});
+
 async function dispatchHarnessReplies(
   params: DispatchReplyHarnessParams,
   runReply: (
@@ -187,6 +199,12 @@ const dispatchReplyHoisted = vi.hoisted(() => ({
   dispatchReplyWithBufferedBlockDispatcher: vi.fn<DispatchReplyWithBufferedBlockDispatcherFn>(
     async (params: DispatchReplyHarnessParams) =>
       await dispatchHarnessReplies(params, async (dispatchParams) => {
+        if (dispatchParams.replyResolver) {
+          return await dispatchParams.replyResolver(
+            dispatchParams.ctx,
+            dispatchParams.replyOptions,
+          );
+        }
         return await replySpyHoisted.replySpy(dispatchParams.ctx, dispatchParams.replyOptions);
       }),
   ),
@@ -541,6 +559,12 @@ beforeEach(() => {
   dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
     async (params: DispatchReplyHarnessParams) =>
       await dispatchHarnessReplies(params, async (dispatchParams) => {
+        if (dispatchParams.replyResolver) {
+          return await dispatchParams.replyResolver(
+            dispatchParams.ctx,
+            dispatchParams.replyOptions,
+          );
+        }
         return await replySpy(dispatchParams.ctx, dispatchParams.replyOptions);
       }),
   );
