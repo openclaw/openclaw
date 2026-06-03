@@ -24,6 +24,7 @@ export type SourceDeliveryPlanReason =
 export type SourceDeliveryTarget = {
   channel?: string;
   to?: string;
+  aliases?: string[];
   accountId?: string;
   threadId?: string | number;
 };
@@ -85,7 +86,11 @@ function isMessageToolOwnedDelivery(owner: SourceVisibleDeliveryOwner): boolean 
 
 function normalizeDeliveryTarget(channel: string, to: string): string {
   const toTrimmed = to.trim();
-  return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
+  try {
+    return normalizeTargetForProvider(channel, toTrimmed) ?? toTrimmed;
+  } catch {
+    return toTrimmed;
+  }
 }
 
 const caseSensitivePrefixedTargetProviders = new Set(["googlechat", "mattermost", "matrix"]);
@@ -148,8 +153,14 @@ export function sourceDeliveryTargetsMatch(
     return false;
   }
   // Strip :topic:NNN from message targets and normalize Feishu/Lark prefixes on
-  // both sides so source-delivery suppression compares canonical IDs.
-  if (!deliveryTargetsMatch(channel, target.to.replace(/:topic:\d+$/, ""), delivery.to)) {
+  // both sides so source-delivery suppression compares canonical IDs. Delivery
+  // aliases preserve equivalent pre-canonical targets, e.g. Slack channel names
+  // before session/directory resolution canonicalizes them to channel IDs.
+  const targetTo = target.to.replace(/:topic:\d+$/, "");
+  const deliveryTargets = [delivery.to, ...(delivery.aliases ?? [])].filter(
+    (value): value is string => typeof value === "string" && value.trim().length > 0,
+  );
+  if (!deliveryTargets.some((deliveryTo) => deliveryTargetsMatch(channel, targetTo, deliveryTo))) {
     return false;
   }
   const deliveryThreadId = normalizeDeliveryThreadId(delivery.threadId);
