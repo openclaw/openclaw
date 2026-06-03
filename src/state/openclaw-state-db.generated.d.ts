@@ -590,6 +590,59 @@ export interface MediaBlobs {
   updated_at: number;
 }
 
+export interface MetaSkillEvidence {
+  created_at_ms: number;
+  evidence_id: string;
+  evidence_json: string;
+  gate_name: string;
+  proposal_id: string | null;
+  result: string;
+  risk_level: string | null;
+  run_id: string;
+  step_id: string | null;
+}
+
+export interface MetaSkillPauses {
+  confirmed_fields_json: string | null;
+  created_at_ms: number;
+  expires_at_ms: number;
+  pause_id: string;
+  prefill_json: string | null;
+  resumed_at_ms: number | null;
+  run_id: string;
+  schema_json: string;
+  session_key: string;
+  status: string;
+  step_id: string;
+}
+
+export interface MetaSkillRuns {
+  agent_id: string | null;
+  completed_at_ms: number | null;
+  created_at_ms: number;
+  final_text: string | null;
+  input_json: string;
+  run_id: string;
+  session_key: string | null;
+  skill_name: string;
+  status: string;
+  trigger_json: string | null;
+  updated_at_ms: number;
+}
+
+export interface MetaSkillSteps {
+  completed_at_ms: number | null;
+  error_json: string | null;
+  input_json: string | null;
+  kind: string;
+  output_json: string | null;
+  run_id: string;
+  started_at_ms: number | null;
+  status: string;
+  step_id: string;
+  updated_at_ms: number;
+}
+
 export interface MigrationRuns {
   finished_at: number | null;
   id: string;
@@ -980,6 +1033,10 @@ export interface DB {
   macos_port_guardian_records: MacosPortGuardianRecords;
   managed_outgoing_image_records: ManagedOutgoingImageRecords;
   media_blobs: MediaBlobs;
+  meta_skill_evidence: MetaSkillEvidence;
+  meta_skill_pauses: MetaSkillPauses;
+  meta_skill_runs: MetaSkillRuns;
+  meta_skill_steps: MetaSkillSteps;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
   model_capability_cache: ModelCapabilityCache;

@@ -27,6 +27,8 @@ const OPENCLAW_TOOL_FACTORY_NAMES = new Set([
   "image",
   "image_generate",
   "message",
+  "meta_invoke",
+  "meta_skill_creator",
   "music_generate",
   "nodes",
   "pdf",

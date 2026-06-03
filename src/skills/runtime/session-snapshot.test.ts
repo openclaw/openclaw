@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { MetaSkillCatalog } from "../meta/catalog.js";
 import type { SkillSnapshot } from "../types.js";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";
@@ -12,6 +13,27 @@ function strippedSnapshot(skillName = "test"): SkillSnapshot {
   };
 }
 
+const metaSkillCatalog = {
+  plans: [
+    {
+      name: "meta-test",
+      description: "Meta test",
+      triggers: [],
+      steps: [
+        {
+          id: "draft",
+          kind: "llm_chat",
+          dependsOn: [],
+          prompt: "Draft",
+          onFailure: { kind: "fail" },
+        },
+      ],
+      finalTextMode: { kind: "auto" },
+    },
+  ],
+  diagnostics: [],
+} satisfies MetaSkillCatalog;
+
 const {
   buildWorkspaceSkillSnapshotMock,
   ensureSkillsWatcherMock,
@@ -21,6 +43,7 @@ const {
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
     prompt: "",
     skills: [] as unknown[],
+    metaSkillCatalog: { plans: [], diagnostics: [] },
     resolvedSkills: [] as unknown[],
   })),
   ensureSkillsWatcherMock: vi.fn(),
@@ -48,26 +71,42 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     resetResolvedSkillsCacheForTests();
-    buildWorkspaceSkillSnapshotMock.mockReturnValue({ prompt: "", skills: [], resolvedSkills: [] });
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "",
+      skills: [],
+      metaSkillCatalog: { plans: [], diagnostics: [] },
+      resolvedSkills: [],
+    });
     getSkillsSnapshotVersionMock.mockReturnValue(0);
     shouldRefreshSnapshotForVersionMock.mockReturnValue(false);
   });
 
-  it("reuses cached resolvedSkills across calls with the same workspace, version, and filter", () => {
+  it("reuses cached runtime skill fields across calls with the same workspace, version, and filter", () => {
     const snapshot = strippedSnapshot();
+    const resolvedSkills = [{ name: "meta-test" }];
+    buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "",
+      skills: [],
+      metaSkillCatalog,
+      resolvedSkills,
+    });
 
-    resolveReusableWorkspaceSkillSnapshot({
+    const first = resolveReusableWorkspaceSkillSnapshot({
       workspaceDir: TEST_WORKSPACE_DIR,
       config: {},
       existingSnapshot: snapshot,
     });
+    expect(first.snapshot.metaSkillCatalog).toBe(metaSkillCatalog);
+    expect(first.snapshot.resolvedSkills).toBe(resolvedSkills);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
 
-    resolveReusableWorkspaceSkillSnapshot({
+    const second = resolveReusableWorkspaceSkillSnapshot({
       workspaceDir: TEST_WORKSPACE_DIR,
       config: {},
       existingSnapshot: { ...snapshot },
     });
+    expect(second.snapshot.metaSkillCatalog).toBe(metaSkillCatalog);
+    expect(second.snapshot.resolvedSkills).toBe(resolvedSkills);
     expect(buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
   });
 
@@ -120,6 +159,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
       return {
         prompt: "",
         skills: [],
+        metaSkillCatalog: { plans: [], diagnostics: [] },
         resolvedSkills: config?.channels?.discord?.token ? [{ name: "discord" }] : [],
       };
     });
@@ -149,6 +189,7 @@ describe("resolveReusableWorkspaceSkillSnapshot", () => {
     buildWorkspaceSkillSnapshotMock.mockReturnValue({
       prompt: "",
       skills: [],
+      metaSkillCatalog: { plans: [], diagnostics: [] },
       resolvedSkills: [{ name: "discord" }],
     });
 

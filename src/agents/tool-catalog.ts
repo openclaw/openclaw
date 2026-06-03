@@ -306,6 +306,23 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "meta_invoke",
+    label: "meta_invoke",
+    description: "Run a cataloged meta skill workflow",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "meta_skill_creator",
+    label: "meta_skill_creator",
+    description:
+      "Create, revise, or update a pending Skill Workshop proposal from a meta-skill workflow",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "image",
     label: "image",
     description: "Image understanding",

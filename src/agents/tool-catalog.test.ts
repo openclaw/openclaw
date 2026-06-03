@@ -46,6 +46,8 @@ describe("tool-catalog", () => {
       "update_goal",
       "update_plan",
       "skill_workshop",
+      "meta_invoke",
+      "meta_skill_creator",
       "image",
       "image_generate",
       "music_generate",

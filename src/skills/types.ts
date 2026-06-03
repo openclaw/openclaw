@@ -1,4 +1,5 @@
 import type { Skill } from "./loading/skill-contract.js";
+import type { MetaSkillCatalog } from "./meta/catalog.js";
 
 export type SkillInstallSpec = {
   id?: string;
@@ -103,6 +104,7 @@ export type SkillSnapshot = {
   skills: Array<{ name: string; primaryEnv?: string; requiredEnv?: string[] }>;
   /** Normalized agent-level filter used to build this snapshot; undefined means unrestricted. */
   skillFilter?: string[];
+  metaSkillCatalog?: MetaSkillCatalog;
   resolvedSkills?: Skill[];
   version?: number;
 };

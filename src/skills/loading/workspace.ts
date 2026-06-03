@@ -19,6 +19,7 @@ import {
 } from "../discovery/agent-filter.js";
 import { normalizeSkillFilter } from "../discovery/filter.js";
 import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
+import { buildMetaSkillCatalog } from "../meta/catalog.js";
 import type {
   OpenClawSkillMetadata,
   ParsedSkillFrontmatter,
@@ -1320,8 +1321,12 @@ export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
 ): SkillSnapshot {
-  const { eligible, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(workspaceDir, opts);
+  const { eligible, promptEntries, prompt, resolvedSkills } = resolveWorkspaceSkillPromptState(
+    workspaceDir,
+    opts,
+  );
   const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
+  const metaSkillCatalog = buildMetaSkillCatalog(promptEntries);
   return {
     prompt,
     skills: eligible.map((entry) => ({
@@ -1330,6 +1335,7 @@ export function buildWorkspaceSkillSnapshot(
       requiredEnv: entry.metadata?.requires?.env?.slice(),
     })),
     ...(skillFilter === undefined ? {} : { skillFilter }),
+    metaSkillCatalog,
     resolvedSkills,
     version: opts?.snapshotVersion,
   };
@@ -1374,12 +1380,13 @@ function resolveWorkspaceSkillPromptState(
   opts?: WorkspaceSkillBuildOptions,
 ): {
   eligible: SkillEntry[];
+  promptEntries: SkillEntry[];
   prompt: string;
   resolvedSkills: Skill[];
 } {
   const effectiveSkillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
   if (effectiveSkillFilter !== undefined && effectiveSkillFilter.length === 0) {
-    return { eligible: [], prompt: "", resolvedSkills: [] };
+    return { eligible: [], promptEntries: [], prompt: "", resolvedSkills: [] };
   }
   const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
   const eligible = filterSkillEntries(
@@ -1415,7 +1422,7 @@ function resolveWorkspaceSkillPromptState(
   ]
     .filter(Boolean)
     .join("\n");
-  return { eligible, prompt, resolvedSkills };
+  return { eligible, promptEntries, prompt, resolvedSkills };
 }
 
 export function resolveSkillsPromptForRun(params: {

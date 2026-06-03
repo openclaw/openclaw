@@ -158,6 +158,11 @@ import {
   isLocalModelLeanEnabled,
   resolveLocalModelLeanPreserveToolNames,
 } from "../../local-model-lean.js";
+import {
+  filterMetaInvokeTargetTools,
+  type MetaInvokeToolExecutorRef,
+  type MetaInvokeToolRef,
+} from "../../meta-invoke-runtime.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
@@ -1160,6 +1165,8 @@ export async function runEmbeddedAttempt(
       toolSearchControlsEnabledForRun ||
       codeModeControlsEnabledForRun;
     let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
+    const metaInvokeToolsRef: MetaInvokeToolRef = { current: [] };
+    const metaInvokeToolExecutorRef: MetaInvokeToolExecutorRef = {};
     toolSearchCatalogRef =
       toolSearchControlsEnabledForRun || codeModeControlsEnabledForRun
         ? createToolSearchCatalogRef()
@@ -1238,6 +1245,8 @@ export async function runEmbeddedAttempt(
               return toolSearchCatalogExecutor(toolParams);
             },
             toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
+            metaInvokeToolsRef,
+            metaInvokeToolExecutorRef,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             modelHasVision: params.model.input?.includes("image") ?? false,
@@ -1555,6 +1564,9 @@ export async function runEmbeddedAttempt(
     });
     const uncompactedEffectiveTools = [...uncompactedToolSchemaProjection.tools];
     let effectiveTools = uncompactedEffectiveTools;
+    // Meta plans execute through the same lifecycle executor as Tool Search, so their
+    // target set must stay on the authorized direct tools before catalog compaction.
+    metaInvokeToolsRef.current = filterMetaInvokeTargetTools(uncompactedEffectiveTools);
     const catalogToolHookContext = {
       agentId: sessionAgentId,
       config: params.config,
@@ -3320,6 +3332,7 @@ export async function runEmbeddedAttempt(
           throw error;
         }
       };
+      metaInvokeToolExecutorRef.current = toolSearchCatalogExecutor;
 
       const abortActiveRunExternally = () => {
         externalAbort = true;

@@ -8,6 +8,7 @@ import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
 import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import type { MetaSkillCatalog } from "../skills/meta/catalog.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -48,6 +49,8 @@ import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js"
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
+import { createMetaInvokeTool, type MetaInvokeRunPlan } from "./tools/meta-invoke-tool.js";
+import { createMetaSkillCreatorTool } from "./tools/meta-skill-creator-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
@@ -102,6 +105,8 @@ export function createOpenClawTools(
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
     config?: OpenClawConfig;
+    metaSkillCatalog?: MetaSkillCatalog;
+    runMetaPlan?: MetaInvokeRunPlan;
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
     /** Current channel ID for auto-threading. */
@@ -472,6 +477,17 @@ export function createOpenClawTools(
               ...(skillWorkshopMessageId ? { messageId: skillWorkshopMessageId } : {}),
             },
           }),
+          createMetaSkillCreatorTool({
+            workspaceDir,
+            config: resolvedConfig,
+            agentId: sessionAgentId,
+            origin: {
+              agentId: sessionAgentId,
+              ...(skillWorkshopSessionKey ? { sessionKey: skillWorkshopSessionKey } : {}),
+              ...(skillWorkshopRunId ? { runId: skillWorkshopRunId } : {}),
+              ...(skillWorkshopMessageId ? { messageId: skillWorkshopMessageId } : {}),
+            },
+          }),
         ]),
     ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
     createSessionsListTool({
@@ -540,6 +556,14 @@ export function createOpenClawTools(
         threadId: options?.currentThreadTs ?? options?.agentThreadId,
       },
     }),
+    ...(options?.metaSkillCatalog && options?.runMetaPlan
+      ? [
+          createMetaInvokeTool({
+            catalog: options.metaSkillCatalog,
+            runPlan: options.runMetaPlan,
+          }),
+        ]
+      : []),
     ...collectPresentOpenClawTools([webSearchTool, webFetchTool, imageTool, pdfTool]),
   ];
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");

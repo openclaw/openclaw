@@ -133,6 +133,10 @@ date: "2026-05-30T00:00:00.000Z"
 On apply, Skill Workshop writes the active `SKILL.md` and removes proposal-only
 fields: `status`, proposal `version`, and proposal `date`.
 
+Meta skill creator proposals include gate evidence in the proposal record. The
+proposal remains pending until applied through the normal Skill Workshop
+lifecycle.
+
 ## Support files
 
 Use `--proposal-dir` when the proposed skill needs files beside `PROPOSAL.md`:

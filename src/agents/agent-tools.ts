@@ -21,6 +21,10 @@ import { resolveMergedSafeBinProfileFixtures } from "../infra/exec-safe-bin-runt
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
+import {
+  resolveMetaInvokeRuntime,
+  type RuntimeMetaInvokePlanRunner,
+} from "../skills/meta/runtime.js";
 import type { SkillSnapshot } from "../skills/types.js";
 import { resolveGatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -67,6 +71,12 @@ import {
   filterLocalModelLeanTools,
   resolveLocalModelLeanPreserveToolNames,
 } from "./local-model-lean.js";
+import {
+  createAgentMetaInvokePlanRunner,
+  filterMetaInvokeTargetTools,
+  type MetaInvokeToolExecutorRef,
+  type MetaInvokeToolRef,
+} from "./meta-invoke-runtime.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
@@ -504,6 +514,10 @@ export function createOpenClawCodingTools(options?: {
   toolSearchCatalogExecutor?: ToolSearchCatalogToolExecutor;
   /** Runtime-local Tool Search catalog ref shared with attempt compaction. */
   toolSearchCatalogRef?: ToolSearchCatalogRef;
+  /** Runtime-local target tools that default meta tool_call steps may invoke. */
+  metaInvokeToolsRef?: MetaInvokeToolRef;
+  /** Executes default meta tool_call steps through the active agent run lifecycle. */
+  metaInvokeToolExecutorRef?: MetaInvokeToolExecutorRef;
   /** Limits which tool families are materialized before the shared policy pipeline runs. */
   toolConstructionPlan?: OpenClawCodingToolConstructionPlan;
   /** Trusted sender identity bit for command/channel-action auth; does not filter model tools. */
@@ -520,6 +534,8 @@ export function createOpenClawCodingTools(options?: {
   onToolOutcome?: ToolOutcomeObserver;
   /** Runtime-only resolved skill paths that the read tool may load under workspaceOnly. */
   skillsSnapshot?: SkillSnapshot;
+  /** Meta plan runner supplied by runtimes that can execute cataloged meta steps. */
+  runMetaPlan?: RuntimeMetaInvokePlanRunner;
 }): AnyAgentTool[] {
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
@@ -945,6 +961,23 @@ export function createOpenClawCodingTools(options?: {
         executeTool: options?.toolSearchCatalogExecutor,
       })
     : [];
+  const metaInvokeToolsRef: MetaInvokeToolRef = options?.metaInvokeToolsRef ?? { current: [] };
+  const defaultRunMetaPlan = createAgentMetaInvokePlanRunner({
+    toolsRef: metaInvokeToolsRef,
+    toolExecutorRef: options?.metaInvokeToolExecutorRef,
+    signal: options?.abortSignal,
+  });
+  const defaultMetaStepKinds = options?.metaInvokeToolExecutorRef
+    ? (["user_input", "tool_call"] as const)
+    : (["user_input"] as const);
+  const metaInvokeRuntime = resolveMetaInvokeRuntime(
+    options?.skillsSnapshot,
+    options?.runMetaPlan,
+    {
+      runMetaPlan: defaultRunMetaPlan,
+      stepKinds: defaultMetaStepKinds,
+    },
+  );
   const tools: AnyAgentTool[] = [
     ...base,
     ...(includeBaseCodingTools && sandboxRoot
@@ -1031,6 +1064,7 @@ export function createOpenClawCodingTools(options?: {
           onYield: options?.onYield,
           allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
           recordToolPrepStage: options?.recordToolPrepStage,
+          ...metaInvokeRuntime,
         })
       : pluginToolsOnly),
     ...toolSearchTools,
@@ -1166,6 +1200,7 @@ export function createOpenClawCodingTools(options?: {
     agentId,
   });
   options?.recordToolPrepStage?.("deferred-followup-descriptions");
+  metaInvokeToolsRef.current = filterMetaInvokeTargetTools(withDeferredFollowupDescriptions);
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // shared model runtime's Anthropic OAuth transport remaps tool names to Claude Code-style names

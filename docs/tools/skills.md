@@ -245,6 +245,18 @@ When the user asks to generate an image, use the `image_generate` tool...
   folder path.
 </Note>
 
+## Meta skills
+
+Meta skills are structured workflow skills declared with `kind: meta`. They use
+a `composition` DAG to describe model, tool, skill, agent, and clarification
+steps. OpenClaw exposes cataloged meta skills through `meta_invoke`; a step runs
+only when the runtime has a supported executor, and unsupported step kinds fail
+the meta run instead of silently succeeding.
+
+Generated skill output from meta workflows still goes through
+[Skill Workshop](/tools/skill-workshop). Meta skills do not write active
+`SKILL.md` files directly.
+
 ### Optional frontmatter keys
 
 <ParamField path="homepage" type="string">
