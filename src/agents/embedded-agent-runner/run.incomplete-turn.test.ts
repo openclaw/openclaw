@@ -1189,8 +1189,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toContain("Act now");
   });
 
-  it("treats a dummy sleep tool-use turn as planning-only in strict-agentic runs", () => {
-    const retryInstruction = resolvePlanningOnlyRetryInstruction({
+  function resolveStrictAgenticBashRetryInstruction(command: string): string | null {
+    return resolvePlanningOnlyRetryInstruction({
       provider: "openai",
       modelId: "gpt-5.4",
       executionContract: "strict-agentic",
@@ -1199,7 +1199,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       timedOut: false,
       attempt: makeAttemptResult({
         assistantTexts: ["I'll update the code now."],
-        toolMetas: [{ toolName: "bash", meta: "sleep 0.1" }],
+        toolMetas: [{ toolName: "bash", meta: command }],
         itemLifecycle: {
           startedCount: 1,
           completedCount: 1,
@@ -1216,86 +1216,30 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
               type: "tool_use",
               id: "tool_1",
               name: "bash",
-              input: { command: "sleep 0.1" },
+              input: { command },
             },
           ],
         } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
       }),
     });
+  }
+
+  it("treats a dummy sleep tool-use turn as planning-only in strict-agentic runs", () => {
+    const retryInstruction = resolveStrictAgenticBashRetryInstruction("sleep 0.1");
 
     expect(retryInstruction).toContain("Act now");
   });
 
   it("does not treat ordinary bash tool-use turns as planning-only", () => {
-    const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      executionContract: "strict-agentic",
-      prompt: "Please inspect the code, make the change, and run the checks.",
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: ["I'll update the code now."],
-        toolMetas: [{ toolName: "bash", meta: "pnpm test" }],
-        itemLifecycle: {
-          startedCount: 1,
-          completedCount: 1,
-          activeCount: 0,
-        },
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "toolUse",
-          provider: "openai",
-          model: "gpt-5.4",
-          content: [
-            { type: "text", text: "I'll update the code now." },
-            {
-              type: "tool_use",
-              id: "tool_1",
-              name: "bash",
-              input: { command: "pnpm test" },
-            },
-          ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    });
+    const retryInstruction = resolveStrictAgenticBashRetryInstruction("pnpm test");
 
     expect(retryInstruction).toBeNull();
   });
 
   it("does not treat sleep followed by shell grouping as planning-only", () => {
-    const retryInstruction = resolvePlanningOnlyRetryInstruction({
-      provider: "openai",
-      modelId: "gpt-5.4",
-      executionContract: "strict-agentic",
-      prompt: "Please inspect the code, make the change, and run the checks.",
-      aborted: false,
-      timedOut: false,
-      attempt: makeAttemptResult({
-        assistantTexts: ["I'll update the code now."],
-        toolMetas: [{ toolName: "bash", meta: "sleep 0.1; (touch /tmp/openclaw-sentinel)" }],
-        itemLifecycle: {
-          startedCount: 1,
-          completedCount: 1,
-          activeCount: 0,
-        },
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "toolUse",
-          provider: "openai",
-          model: "gpt-5.4",
-          content: [
-            { type: "text", text: "I'll update the code now." },
-            {
-              type: "tool_use",
-              id: "tool_1",
-              name: "bash",
-              input: { command: "sleep 0.1; (touch /tmp/openclaw-sentinel)" },
-            },
-          ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
-      }),
-    });
+    const retryInstruction = resolveStrictAgenticBashRetryInstruction(
+      "sleep 0.1; (touch /tmp/openclaw-sentinel)",
+    );
 
     expect(retryInstruction).toBeNull();
   });
