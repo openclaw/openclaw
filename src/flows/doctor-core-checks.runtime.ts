@@ -1,3 +1,4 @@
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { TOOL_NAME_SEPARATOR } from "../agents/agent-bundle-mcp-names.js";
 import {
   type McpToolCatalogDiagnostic,
@@ -767,12 +768,14 @@ function bundleMcpRuntimeLoadFailureFinding(error: unknown): HealthFinding {
 }
 
 function bundleMcpRuntimeDiagnosticFinding(diagnostic: McpToolCatalogDiagnostic): HealthFinding {
+  const serverName = sanitizeForLog(diagnostic.serverName);
+  const requirement = sanitizeForLog(diagnostic.message);
   return {
     checkId: "core/doctor/runtime-tool-schemas",
     severity: "error",
-    message: `Configured MCP server "${diagnostic.serverName}" could not expose runtime tools for schema validation.`,
-    path: `mcp.servers.${diagnostic.serverName}`,
-    requirement: diagnostic.message,
+    message: `Configured MCP server "${serverName}" could not expose runtime tools for schema validation.`,
+    path: `mcp.servers.${serverName}`,
+    requirement,
     fixHint:
       "Fix or disable the offending MCP server, then rerun doctor before relying on assistant tool startup.",
   };
