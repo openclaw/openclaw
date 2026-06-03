@@ -22,6 +22,7 @@ export {
   normalizeThinkLevel,
   normalizeUsageDisplay,
   normalizeVerboseLevel,
+  resolveMessagesResponseUsageDefault,
   resolveResponseUsageMode,
   resolveElevatedMode,
 } from "./thinking.shared.js";
@@ -30,6 +31,8 @@ export type {
   ElevatedMode,
   NoticeLevel,
   ReasoningLevel,
+  ResponseUsageDefaultConfig,
+  ResponseUsageInput,
   TraceLevel,
   ThinkLevel,
   ThinkingCatalogEntry,

@@ -139,6 +139,23 @@ export type MessagesConfig = {
    * Default: none
    */
   responsePrefix?: string;
+  /**
+   * Default per-reply usage footer mode (`responseUsage`) seeded into any session
+   * that has not set its own via `/usage`. Precedence: session value → channel entry
+   * → `default` → `off`. Absent ⇒ `off` (unchanged behavior).
+   *
+   * - string: one default for every channel, e.g. `"full"`.
+   * - object: per-channel with a fallback, e.g. `{ "default": "off", "discord": "full" }`.
+   */
+  responseUsage?:
+    | "on"
+    | "off"
+    | "tokens"
+    | "full"
+    | {
+        default?: "on" | "off" | "tokens" | "full";
+        [channel: string]: "on" | "off" | "tokens" | "full" | undefined;
+      };
   groupChat?: GroupChatConfig;
   queue?: QueueConfig;
   /** Debounce rapid inbound messages per sender (global + per-channel overrides). */
