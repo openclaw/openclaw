@@ -472,9 +472,9 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       const readScope = adapter.transcriptReadScope(paths);
       const event = {
         id: "event-1",
-        message: { role: "user", content: "hello" },
         parentId: null,
-        type: "message",
+        payload: { content: "hello" },
+        type: "metadata",
       };
 
       await adapter.appendTranscriptEvent(scope, { type: "session", sessionId: "session-1" });
@@ -491,9 +491,9 @@ describe.each([fileBackedAdapter, sqliteAdapter])(
       const readScope = sqliteAdapter.transcriptReadScope(paths);
       const event = {
         id: "event-1",
-        message: { role: "user", content: "hello" },
         parentId: null,
-        type: "message",
+        payload: { content: "hello" },
+        type: "metadata",
       };
 
       await sqliteAdapter.appendTranscriptEvent(scope, event);
@@ -868,5 +868,91 @@ describe("sqlite session normalization", () => {
       session_id: "normalized-session",
       updated_at: expect.any(Number),
     });
+  });
+
+  it("normalizes missing entry updatedAt before writing root and entry rows", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    await replaceSqliteSessionEntry(
+      {
+        agentId: "main",
+        env,
+        sessionKey: "agent:main:minimal",
+        storePath: paths.sqlitePath,
+      },
+      {
+        sessionId: "minimal-session",
+        sessionStartedAt: 123,
+      } as SessionEntry,
+    );
+
+    const loaded = loadSqliteSessionEntry({
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:minimal",
+      storePath: paths.sqlitePath,
+    });
+    expect(loaded).toMatchObject({
+      sessionId: "minimal-session",
+      sessionStartedAt: 123,
+      updatedAt: 123,
+    });
+
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env,
+      path: paths.sqlitePath,
+    });
+    const db = getNodeSqliteKysely<OpenClawAgentKyselyDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("sessions as s")
+        .innerJoin("session_entries as se", "se.session_id", "s.session_id")
+        .innerJoin("session_routes as sr", "sr.session_key", "se.session_key")
+        .select([
+          "s.created_at as root_created_at",
+          "s.updated_at as root_updated_at",
+          "se.entry_json",
+          "se.updated_at as entry_updated_at",
+          "sr.updated_at as route_updated_at",
+        ])
+        .where("s.session_id", "=", "minimal-session"),
+    );
+    expect(row).toEqual({
+      entry_json: JSON.stringify({
+        sessionId: "minimal-session",
+        sessionStartedAt: 123,
+        updatedAt: 123,
+      }),
+      entry_updated_at: 123,
+      root_created_at: 123,
+      root_updated_at: 123,
+      route_updated_at: 123,
+    });
+
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env,
+        sessionKey: "agent:main:minimal-upsert",
+        storePath: paths.sqlitePath,
+      },
+      {
+        sessionId: "minimal-upsert-session",
+      },
+    );
+    const upsertRow = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_entries")
+        .select(["entry_json", "updated_at"])
+        .where("session_key", "=", "agent:main:minimal-upsert"),
+    );
+    const upsertEntry = JSON.parse(upsertRow?.entry_json ?? "{}") as Partial<SessionEntry>;
+    expect(upsertEntry).toMatchObject({
+      sessionId: "minimal-upsert-session",
+      updatedAt: expect.any(Number),
+    });
+    expect(upsertRow?.updated_at).toBe(upsertEntry.updatedAt);
   });
 });
