@@ -507,6 +507,12 @@ type ComposerDraftMirror = {
 const chatItemsBySession = new Map<string, CachedChatItems>();
 const composerDraftMirrors = new Map<string, ComposerDraftMirror>();
 
+// UX-011 — track which sessions have tool errors (populated during render)
+export const sessionsWithToolErrors = new Set<string>();
+export function sessionHasKnownToolErrors(sessionKey: string): boolean {
+  return sessionsWithToolErrors.has(sessionKey);
+}
+
 function composerDraftMirrorKey(props: Pick<ChatProps, "currentAgentId" | "sessionKey">): string {
   return `${props.currentAgentId}\u0000${props.sessionKey}`;
 }
@@ -1524,6 +1530,27 @@ function renderSlashMenu(
   `;
 }
 
+function renderTokenMeter(
+  totalTokens: number | undefined,
+  contextWindow: number | null,
+): TemplateResult | typeof nothing {
+  if (!contextWindow || !Number.isFinite(totalTokens) || !totalTokens) {
+    return nothing;
+  }
+  const pct = Math.min(Math.round((totalTokens / contextWindow) * 100), 100);
+  const tier = pct < 60 ? "low" : pct < 85 ? "mid" : "high";
+  return html`<div
+    class="token-meter"
+    role="progressbar"
+    aria-valuemin="0"
+    aria-valuemax="100"
+    aria-valuenow=${pct}
+    aria-label="Context window usage"
+  >
+    <div class="token-meter__bar token-meter__bar--${tier}" style="width:${pct}%"></div>
+  </div>`;
+}
+
 export function renderChat(props: ChatProps) {
   const canCompose = props.connected;
   const isBusy = props.sending || props.stream !== null;
@@ -1601,6 +1628,22 @@ export function renderChat(props: ChatProps) {
   const hasRealtimeTalkConversation = (props.realtimeTalkConversation?.length ?? 0) > 0;
   const isEmpty = chatItems.length === 0 && !props.loading && !hasRealtimeTalkConversation;
   const showLoadingSkeleton = props.loading && chatItems.length === 0;
+
+  // UX-011 — detect tool errors in current session
+  const sessionHasToolErrors = chatItems.some((group) =>
+    group.messages.some((item) => {
+      const cards = extractToolCardsCached(item.message, item.key);
+      return cards.some(isToolCardError);
+    }),
+  );
+  // Update the global error-session tracker used by the sidebar
+  if (props.sessionKey) {
+    if (sessionHasToolErrors) {
+      sessionsWithToolErrors.add(props.sessionKey);
+    } else {
+      sessionsWithToolErrors.delete(props.sessionKey);
+    }
+  }
   const threadContextWindow =
     activeSession?.contextTokens ?? props.sessions?.defaults?.contextTokens ?? null;
 
@@ -1996,6 +2039,25 @@ export function renderChat(props: ChatProps) {
           `
         : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
+      ${sessionHasToolErrors
+        ? html`<div class="callout warning chat-tool-error-banner" role="alert">
+            <span class="callout__content">⚠ A tool call failed</span>
+            <button
+              class="callout__dismiss"
+              type="button"
+              aria-label="Dismiss tool error notice"
+              title="Dismiss"
+              @click=${(e: Event) => {
+                const banner = (e.target as HTMLElement).closest(".chat-tool-error-banner");
+                if (banner instanceof HTMLElement) {
+                  banner.style.display = "none";
+                }
+              }}
+            >
+              ${icons.x}
+            </button>
+          </div>`
+        : nothing}
 
       <div class="chat-workbench">
         <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
@@ -2204,6 +2266,7 @@ export function renderChat(props: ChatProps) {
             onStoreDraft: () => {},
             showSecondary: false,
           })}
+          ${renderTokenMeter(activeSession?.totalTokens, threadContextWindow)}
         </div>
       </div>
     </section>
