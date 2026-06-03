@@ -696,9 +696,9 @@ export function createCliJsonlStreamingParser(params: {
         isClaudeToolUseBlockType(evt.content_block.type)
       ) {
         if (assistantText.length > lastFlushedCommentaryLength) {
-          const trimmedCommentary = assistantText.trim();
-          if (trimmedCommentary) {
-            params.onCommentaryText(trimmedCommentary);
+          const newSegment = assistantText.slice(lastFlushedCommentaryLength).trim();
+          if (newSegment) {
+            params.onCommentaryText(newSegment);
           }
           lastFlushedCommentaryLength = assistantText.length;
         }

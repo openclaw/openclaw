@@ -1030,4 +1030,62 @@ describe("createCliJsonlStreamingParser", () => {
     // has no new accumulated text, so it does not fire again.
     expect(commentaryTexts).toEqual(["First, checking files."]);
   });
+
+  it("emits only the new segment on text-tool-text-tool sequences", () => {
+    const commentaryTexts: string[] = [];
+    const parser = createCliJsonlStreamingParser({
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      onAssistantDelta: () => undefined,
+      onCommentaryText: (text) => commentaryTexts.push(text),
+    });
+
+    parser.push(
+      [
+        JSON.stringify({ type: "init", session_id: "session-segment" }),
+        // First commentary text
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: "Reading the file now." },
+          },
+        }),
+        // First tool_use — flushes "Reading the file now."
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 1,
+            content_block: { type: "tool_use", id: "toolu_a", name: "Read", input: {} },
+          },
+        }),
+        // Second commentary text (new segment only)
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_delta",
+            delta: { type: "text_delta", text: " Now searching." },
+          },
+        }),
+        // Second tool_use — should flush only "Now searching.", not the full cumulative
+        JSON.stringify({
+          type: "stream_event",
+          event: {
+            type: "content_block_start",
+            index: 3,
+            content_block: { type: "tool_use", id: "toolu_b", name: "Grep", input: {} },
+          },
+        }),
+      ].join("\n") + "\n",
+    );
+    parser.finish();
+
+    expect(commentaryTexts).toEqual(["Reading the file now.", "Now searching."]);
+  });
 });
