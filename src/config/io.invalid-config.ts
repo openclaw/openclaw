@@ -1,5 +1,10 @@
+/**
+ * Shared invalid-config formatting, logging, and error helpers for config reads and mutations.
+ * All terminal-facing text is sanitized here so callers can reuse the same failure surface.
+ */
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 
+/** Minimal validation issue shape accepted from schema and mutation validation paths. */
 type ConfigValidationIssueLike = {
   path: string;
   message: string;
