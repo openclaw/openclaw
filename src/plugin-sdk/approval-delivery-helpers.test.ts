@@ -228,6 +228,21 @@ describe("createApproverRestrictedNativeApprovalAdapter", () => {
       }),
     ).toBe(false);
 
+    expect(
+      shouldSuppressForwardingFallback({
+        cfg: {} as never,
+        approvalKind: "exec",
+        target: { channel: "telegram", to: "target-1" },
+        request: {
+          request: {
+            command: "pwd",
+            turnSourceChannel: null,
+            turnSourceAccountId: "topic-1",
+          },
+        } as never,
+      }),
+    ).toBe(true);
+
     expect(isNativeDeliveryEnabled).toHaveBeenCalledWith({
       cfg: {} as never,
       accountId: "topic-1",
