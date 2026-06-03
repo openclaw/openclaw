@@ -49,6 +49,8 @@ export function registerWebhookTargetWithPluginRoute<T extends { path: string }>
       registerPluginHttpRoute({
         ...params.route,
         path,
+        // Webhook targets own this path while registered; default replacement lets
+        // plugin reload/setup refresh the handler without accumulating stale routes.
         replaceExisting: params.route.replaceExisting ?? true,
       }),
     onLastPathTargetRemoved: params.onLastPathTargetRemoved,
