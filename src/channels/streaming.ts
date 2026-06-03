@@ -860,6 +860,24 @@ function removeUnbalancedInlineBackticks(value: string): string {
   return value.trimStart().startsWith("`") ? value.replaceAll("`", "'") : value.replaceAll("`", "");
 }
 
+function removeUnbalancedLeadingItalicMarker(value: string): string {
+  const leadingItalicMatch = value.match(/^(\s*)_(?!_)(.*)$/su);
+  if (!leadingItalicMatch) {
+    return value;
+  }
+
+  const [, leadingWhitespace, detail] = leadingItalicMatch;
+  const hasClosingItalicMarker = /_(?=\s|$|[.,;:!?…])/u.test(detail);
+  if (hasClosingItalicMarker) {
+    return value;
+  }
+  return `${leadingWhitespace}${detail}`;
+}
+
+function removeUnbalancedInlineMarkdown(value: string): string {
+  return removeUnbalancedLeadingItalicMarker(removeUnbalancedInlineBackticks(value));
+}
+
 function compactPlainProgressLine(line: string, maxChars: number): string {
   const head = sliceCodePoints(line, 0, maxChars - 1).trimEnd();
   const boundary = head.search(/\s+\S*$/u);
@@ -888,7 +906,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     if (detailLimit < 8) {
       return undefined;
     }
-    return removeUnbalancedInlineBackticks(
+    return removeUnbalancedInlineMarkdown(
       `${prefix}${compactProgressLineDetail(detail, detailLimit)}`,
     );
   };
@@ -911,7 +929,7 @@ function compactChannelProgressDraftLine(line: string, maxChars: number): string
     }
   }
 
-  return removeUnbalancedInlineBackticks(compactPlainProgressLine(normalized, maxChars));
+  return removeUnbalancedInlineMarkdown(compactPlainProgressLine(normalized, maxChars));
 }
 
 function getProgressDraftLineText(line: string | ChannelProgressDraftLine): string {
