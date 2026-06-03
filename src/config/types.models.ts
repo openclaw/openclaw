@@ -34,6 +34,7 @@ type SupportedOpenAICompatFields = Pick<
   | "requiresToolResultName"
   | "requiresAssistantAfterToolResult"
   | "requiresThinkingAsText"
+  | "requiresReasoningContentOnAssistantMessages"
   | "openRouterRouting"
   | "vercelGatewayRouting"
   | "zaiToolStream"
