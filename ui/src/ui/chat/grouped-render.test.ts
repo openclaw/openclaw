@@ -13,7 +13,20 @@ import { normalizeMessage } from "./message-normalizer.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>
-  vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none" }) => value),
+  vi.fn(
+    (
+      value: string,
+      _options?: { codeBlockChrome?: "copy" | "none"; mathRendering?: "off" | "katex" },
+    ) => value,
+  ),
+);
+const markdownWithKatexRenderMock = vi.hoisted(() =>
+  vi.fn(
+    (
+      value: string,
+      _options?: { codeBlockChrome?: "copy" | "none"; mathRendering?: "off" | "katex" },
+    ) => value,
+  ),
 );
 const streamingTextRenderMock = vi.hoisted(() =>
   vi.fn((value: string) => `<div class="markdown-plain-text-fallback">${value}</div>`),
@@ -34,6 +47,7 @@ vi.mock("../markdown.ts", () => ({
   toSanitizedMarkdownHtml: markdownRenderMock,
   toStreamingMarkdownHtml: streamingMarkdownRenderMock,
   toStreamingPlainTextHtml: streamingTextRenderMock,
+  toSanitizedMarkdownHtmlWithKatex: markdownWithKatexRenderMock,
 }));
 
 vi.mock("../icons.ts", () => ({
@@ -592,7 +606,10 @@ describe("grouped chat rendering", () => {
       "user",
     );
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, { codeBlockChrome: "none" });
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      codeBlockChrome: "none",
+      mathRendering: undefined,
+    });
   });
 
   it("keeps assistant markdown code-block copy chrome enabled", () => {
@@ -605,7 +622,7 @@ describe("grouped chat rendering", () => {
       timestamp: 1000,
     });
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, undefined);
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, { mathRendering: undefined });
   });
 
   it("positions delete confirm by message side", () => {

@@ -15,4 +15,5 @@ export type ControlUiBootstrapConfig = {
   embedSandbox?: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   chatMessageMaxWidth?: string;
+  mathRendering?: "off" | "katex";
 };

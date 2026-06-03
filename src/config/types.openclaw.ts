@@ -112,6 +112,8 @@ export type OpenClawConfig = {
   ui?: {
     /** Accent color for OpenClaw UI chrome (hex). */
     seamColor?: string;
+    /** Math rendering mode. Default: "off". */
+    mathRendering?: "off" | "katex";
     assistant?: {
       /** Assistant display name for UI surfaces. */
       name?: string;
