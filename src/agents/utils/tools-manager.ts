@@ -399,7 +399,7 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
 
   if (isOfflineModeEnabled()) {
     if (!silent) {
-      console.log(
+      console.warn(
         chalk.yellow(`${config.name} not found. Offline mode enabled, skipping download.`),
       );
     }
@@ -411,25 +411,25 @@ export async function ensureTool(tool: "fd" | "rg", silent = false): Promise<str
   if (platform() === "android") {
     const pkgName = TERMUX_PACKAGES[tool] ?? tool;
     if (!silent) {
-      console.log(chalk.yellow(`${config.name} not found. Install with: pkg install ${pkgName}`));
+      console.warn(chalk.yellow(`${config.name} not found. Install with: pkg install ${pkgName}`));
     }
     return undefined;
   }
 
   // Tool not found - download it
   if (!silent) {
-    console.log(chalk.dim(`${config.name} not found. Downloading...`));
+    console.info(chalk.dim(`${config.name} not found. Downloading...`));
   }
 
   try {
     const path = await downloadTool(tool);
     if (!silent) {
-      console.log(chalk.dim(`${config.name} installed to ${path}`));
+      console.info(chalk.dim(`${config.name} installed to ${path}`));
     }
     return path;
   } catch (e) {
     if (!silent) {
-      console.log(
+      console.warn(
         chalk.yellow(
           `Failed to download ${config.name}: ${e instanceof Error ? e.message : String(e)}`,
         ),
