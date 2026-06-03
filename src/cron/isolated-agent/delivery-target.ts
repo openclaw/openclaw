@@ -25,6 +25,7 @@ export type DeliveryTargetResolution =
       ok: true;
       channel: Exclude<OutboundChannel, "none">;
       to: string;
+      aliases?: string[];
       accountId?: string;
       threadId?: string | number;
       mode: "explicit" | "implicit";
@@ -33,6 +34,7 @@ export type DeliveryTargetResolution =
       ok: false;
       channel?: Exclude<OutboundChannel, "none">;
       to?: string;
+      aliases?: string[];
       accountId?: string;
       threadId?: string | number;
       mode: "explicit" | "implicit";
@@ -128,6 +130,13 @@ function stripSelectedProviderPrefix(params: {
 
 function shouldStripResolvedTargetProviderPrefix(target: ResolvedMessagingTarget): boolean {
   return target.resolutionSource === "normalized";
+}
+
+function compactDeliveryTargetAliases(values: Array<string | undefined>): string[] | undefined {
+  const aliases = uniqueStrings(
+    values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)),
+  );
+  return aliases.length > 0 ? aliases : undefined;
 }
 
 /** Resolves cron delivery config into a concrete channel target and optional thread/account. */
@@ -443,6 +452,13 @@ export async function resolveDeliveryTarget(
       ok: true,
       channel,
       to: toCandidate,
+      aliases: compactDeliveryTargetAliases([
+        explicitTo,
+        preResolvedRouteTargetCandidate,
+        resolvedTarget.to,
+        route?.to,
+        lastTo,
+      ]),
       accountId,
       threadId,
       mode,
@@ -452,6 +468,13 @@ export async function resolveDeliveryTarget(
     ok: true,
     channel,
     to: toCandidate,
+    aliases: compactDeliveryTargetAliases([
+      explicitTo,
+      preResolvedRouteTargetCandidate,
+      resolvedTarget.to,
+      route?.to,
+      lastTo,
+    ]),
     accountId,
     threadId,
     mode,
