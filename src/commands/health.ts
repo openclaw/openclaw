@@ -13,12 +13,14 @@ import { listReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-on
 import { buildChannelAccountSnapshotFromAccount } from "../channels/plugins/status.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.public.js";
+import { probeGatewayStatus } from "../cli/daemon-cli/probe.js";
 import { withProgress } from "../cli/progress.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listContextEngineQuarantines } from "../context-engine/registry.js";
 import {
   buildGatewayConnectionDetails,
+  buildGatewayProbeConnectionDetails,
   callGateway,
   formatGatewayTransportErrorJson,
   isGatewayCredentialsRequiredError,
@@ -39,6 +41,11 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { buildChannelAccountBindings, resolvePreferredAccountId } from "../routing/bindings.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import {
+  buildCredentialsRequiredHealthDiagnostic,
+  GATEWAY_HEALTH_REACHABLE_LINE,
+  gatewayProbeResultSawGateway,
+} from "./gateway-health-auth-diagnostic.js";
 import { formatHealthChannelLines } from "./health-format.js";
 import type {
   AgentHealthSummary,
@@ -649,17 +656,34 @@ export async function healthCommand(
     );
   } catch (error) {
     if (isGatewayCredentialsRequiredError(error)) {
-      const message = formatErrorMessage(error);
-      if (opts.json) {
-        writeRuntimeJson(runtime, {
-          ok: false,
-          error: { type: "gateway_credentials_required", message },
-        });
-      } else {
-        runtime.error(message);
+      const details = await buildGatewayProbeConnectionDetails({
+        config: cfg,
+        token: opts.token,
+        password: opts.password,
+      });
+      const probe = await probeGatewayStatus({
+        url: details.url,
+        token: opts.token,
+        password: opts.password,
+        tlsFingerprint: details.tlsFingerprint,
+        preauthHandshakeTimeoutMs: details.preauthHandshakeTimeoutMs,
+        timeoutMs: opts.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+        config: cfg,
+        json: opts.json,
+      });
+      if (gatewayProbeResultSawGateway(probe)) {
+        const diagnostic = buildCredentialsRequiredHealthDiagnostic();
+        if (opts.json) {
+          writeRuntimeJson(runtime, diagnostic);
+          runtime.exit(1);
+          return;
+        }
+        runtime.log(GATEWAY_HEALTH_REACHABLE_LINE);
+        runtime.log(diagnostic.error.message);
+        runtime.exit(1);
+        return;
       }
-      runtime.exit(1);
-      return;
+      throw error;
     }
     if (opts.json) {
       const payload = formatGatewayTransportErrorJson(error);
