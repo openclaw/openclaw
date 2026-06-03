@@ -2,12 +2,14 @@
 import { CODEX_CONTROL_METHODS } from "./app-server/capabilities.js";
 import {
   isCodexFastServiceTier,
+  resolveCodexModelBackedReviewerPolicyContext,
   resolveCodexAppServerRuntimeOptions,
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
 } from "./app-server/config.js";
 import type { CodexServiceTier, CodexThreadResumeResponse } from "./app-server/protocol.js";
 import {
+  isCodexAppServerNativeAuthProfile,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
 } from "./app-server/session-binding.js";
@@ -139,9 +141,23 @@ export async function setCodexConversationModel(params: {
   }
   const lookup = buildBindingLookup(params);
   const binding = await requireThreadBinding(params.sessionFile, lookup);
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
-  const response = await resumeThreadWithOverrides({
+  const reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
+    provider: "codex",
+    model,
+    bindingModelProvider: binding.modelProvider,
+    bindingModel: binding.model,
+    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
+      authProfileId: binding.authProfileId,
+      ...lookup,
+    }),
+  });
+  const runtime = resolveCodexAppServerRuntimeOptions({
     pluginConfig: params.pluginConfig,
+    modelProvider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+  });
+  const response = await resumeThreadWithOverrides({
+    runtime,
     threadId: binding.threadId,
     authProfileId: binding.authProfileId,
     ...lookup,
@@ -262,7 +278,7 @@ async function requireThreadBinding(sessionFile: string, lookup: CodexAppServerB
 }
 
 async function resumeThreadWithOverrides(params: {
-  pluginConfig?: unknown;
+  runtime: ReturnType<typeof resolveCodexAppServerRuntimeOptions>;
   threadId: string;
   authProfileId?: string;
   agentDir?: string;
@@ -272,7 +288,7 @@ async function resumeThreadWithOverrides(params: {
   sandbox?: CodexAppServerSandboxMode;
   serviceTier?: CodexServiceTier;
 }): Promise<CodexThreadResumeResponse> {
-  const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig: params.pluginConfig });
+  const runtime = params.runtime;
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: runtime.start,
     timeoutMs: runtime.requestTimeoutMs,

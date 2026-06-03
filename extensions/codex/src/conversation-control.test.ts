@@ -108,6 +108,36 @@ describe("codex conversation controls", () => {
     expect(binding?.modelProvider).toBeUndefined();
   });
 
+  it("keeps Guardian reviewer when switching a stale local binding to a provider-qualified OpenAI model", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-1",
+      cwd: tempDir,
+      model: "local-model",
+      modelProvider: "lmstudio",
+      approvalPolicy: "on-request",
+      sandbox: "workspace-write",
+    });
+    const request = vi.fn(async () => ({
+      thread: { id: "thread-1", cwd: tempDir },
+      model: "openai/gpt-5.5",
+    }));
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({ request });
+
+    await expect(
+      setCodexConversationModel({
+        sessionFile,
+        model: "openai/gpt-5.5",
+        pluginConfig: { appServer: { mode: "guardian" } },
+      }),
+    ).resolves.toBe("Codex model set to openai/gpt-5.5.");
+
+    const resumeParams = request.mock.calls[0]?.[1] as Record<string, unknown> | undefined;
+    expect(resumeParams?.model).toBe("openai/gpt-5.5");
+    expect(resumeParams).not.toHaveProperty("modelProvider");
+    expect(resumeParams?.approvalsReviewer).toBe("auto_review");
+  });
+
   it("escapes model names returned from Codex before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await writeCodexAppServerBinding(sessionFile, {
