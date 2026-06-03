@@ -476,7 +476,25 @@ describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
     warnUnregisteredConfiguredMemoryEmbeddingProviders({
       config: {
         agents: { defaults: { memorySearch: { provider: "my-embeddings" } } },
-        models: { providers: { "my-embeddings": { api: "openai-completions" } } },
+        models: {
+          providers: {
+            "my-embeddings": {
+              api: "openai-completions",
+              baseUrl: "https://example.invalid/v1",
+              models: [
+                {
+                  id: "embedding-model",
+                  name: "Embedding Model",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 1024,
+                },
+              ],
+            },
+          },
+        },
       } as OpenClawConfig,
       pluginRegistry: registry([]),
       log,
