@@ -19,8 +19,10 @@ import { readPackageVersion } from "./package-json.js";
 import { applyPathPrepend } from "./path-prepend.js";
 import { parseSemver } from "./runtime-guard.js";
 
+/** Supported package managers for OpenClaw global install and update flows. */
 export type GlobalInstallManager = "npm" | "pnpm" | "bun";
 
+/** Runs package-manager commands with timeout and environment control. */
 export type CommandRunner = (
   argv: string[],
   options: { timeoutMs: number; cwd?: string; env?: NodeJS.ProcessEnv },
@@ -31,6 +33,10 @@ type ResolvedGlobalInstallCommand = {
   command: string;
 };
 
+/**
+ * Resolved package-manager command plus the root paths used for install,
+ * verification, and staged package swaps.
+ */
 export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
   globalRoot: string | null;
   packageRoot: string | null;
@@ -40,6 +46,7 @@ export type ResolvedGlobalInstallTarget = ResolvedGlobalInstallCommand & {
 const PRIMARY_PACKAGE_NAME = "openclaw";
 const ALL_PACKAGE_NAMES = [PRIMARY_PACKAGE_NAME] as const;
 const GLOBAL_RENAME_PREFIX = ".";
+/** npm-compatible spec used when the user asks to install the moving main branch. */
 export const OPENCLAW_MAIN_PACKAGE_SPEC = "github:openclaw/openclaw#main";
 const COREPACK_ENABLE_DOWNLOAD_PROMPT_DEFAULT = "0";
 const NPM_GLOBAL_INSTALL_QUIET_FLAGS = ["--no-fund", "--no-audit", "--loglevel=error"] as const;
@@ -51,6 +58,7 @@ const OMITTED_PRIVATE_QA_BUNDLED_PLUGIN_ROOTS = new Set([
   "dist/extensions/qa-matrix",
 ]);
 
+/** npm prefix layout paths needed to install, stage, and expose global bins. */
 export type NpmGlobalPrefixLayout = {
   prefix: string;
   globalRoot: string;
@@ -69,10 +77,15 @@ function normalizePackageVersionForComparison(value: string | null | undefined):
   return trimmed.replace(/^[vV](?=\d)/, "");
 }
 
+/** Returns true when a user target requests the moving main-branch package spec. */
 export function isMainPackageTarget(value: string): boolean {
   return normalizeLowercaseStringOrEmpty(normalizePackageTarget(value)) === "main";
 }
 
+/**
+ * Returns true for targets that should pass through as package-manager specs
+ * rather than being treated as registry dist-tags.
+ */
 export function isExplicitPackageInstallSpec(value: string): boolean {
   const trimmed = normalizePackageTarget(value);
   if (!trimmed) {
@@ -103,6 +116,11 @@ function isPnpmOpenClawSourceInstallSpec(spec: string): boolean {
   );
 }
 
+/**
+ * Extracts a pinned installed version from package specs like `openclaw@1.2.3`.
+ * Moving tags, URLs, git refs, and aliases return null because they cannot be
+ * compared reliably after install.
+ */
 export function resolveExpectedInstalledVersionFromSpec(
   packageName: string,
   spec: string,
@@ -125,6 +143,10 @@ export function resolveExpectedInstalledVersionFromSpec(
   return normalizePackageVersionForComparison(rawVersion);
 }
 
+/**
+ * Verifies that a global package root looks like a packaged OpenClaw install
+ * and, when supplied, matches the expected concrete version.
+ */
 export async function collectInstalledGlobalPackageErrors(params: {
   packageRoot: string;
   expectedVersion?: string | null;
