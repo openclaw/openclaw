@@ -3,15 +3,20 @@ import {
   isToolResultContentType,
   resolveToolUseId,
 } from "../../../../src/chat/tool-content.js";
+import { normalizeOptionalString } from "../string-coerce.ts";
 import { normalizeRoleForGrouping } from "./role-normalizer.ts";
+
+const TOOL_NAME_FIELDS = ["toolName", "tool_name"] as const;
+type ToolNameField = (typeof TOOL_NAME_FIELDS)[number];
+type ToolHistoryRecord = Record<string, unknown> & Partial<Record<ToolNameField, unknown>>;
 
 export type ToolMessageRef = {
   id: string;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | null {
+function asRecord(value: unknown): ToolHistoryRecord | null {
   return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
+    ? (value as ToolHistoryRecord)
     : null;
 }
 
@@ -27,8 +32,8 @@ function isToolLikeRole(role: unknown): boolean {
   return typeof role === "string" && normalizeRoleForGrouping(role).toLowerCase() === "tool";
 }
 
-function hasToolName(message: Record<string, unknown>): boolean {
-  return typeof message.toolName === "string" || typeof message.tool_name === "string";
+function hasToolName(message: ToolHistoryRecord): boolean {
+  return TOOL_NAME_FIELDS.some((field) => Boolean(normalizeOptionalString(message[field])));
 }
 
 function toolContentBlocks(message: Record<string, unknown>): Record<string, unknown>[] {
