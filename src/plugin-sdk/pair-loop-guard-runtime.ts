@@ -1,16 +1,24 @@
 /** Resolved pair-loop guard settings in milliseconds for runtime checks. */
 export type PairLoopGuardSettings = {
+  /** Whether protection is active after config and channel capability gates. */
   enabled: boolean;
+  /** Number of pair events allowed before cooldown starts. */
   maxEventsPerWindow: number;
+  /** Rolling event window size in milliseconds. */
   windowMs: number;
+  /** Suppression duration in milliseconds once the threshold is exceeded. */
   cooldownMs: number;
 };
 
 /** User-facing pair-loop guard config accepted by channel plugins. */
 export type PairLoopGuardConfig = {
+  /** Enables or disables loop protection for the channel/account scope. */
   enabled?: boolean;
+  /** Number of pair events allowed before cooldown starts. */
   maxEventsPerWindow?: number;
+  /** Rolling event window size in seconds for config files. */
   windowSeconds?: number;
+  /** Suppression duration in seconds for config files. */
   cooldownSeconds?: number;
 };
 
@@ -28,8 +36,11 @@ export type PairLoopGuardResult =
 
 /** Snapshot entry for observability and tests. */
 export type PairLoopGuardSnapshotEntry = {
+  /** Internal pair key containing scope, conversation, and unordered participant ids. */
   key: string;
+  /** Number of retained events in the current window. */
   recentCount: number;
+  /** Epoch milliseconds when cooldown ends, or zero when inactive. */
   cooldownUntilMs: number;
 };
 
