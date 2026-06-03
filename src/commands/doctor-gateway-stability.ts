@@ -29,6 +29,38 @@ function formatChannelTurnIssueLine(issue: ChannelTurnSummary["health"]["issues"
   return parts.join(" ");
 }
 
+function formatChannelTurnLatencyLine(latency: ChannelTurnSummary["latency"]): string | null {
+  if (!latency) {
+    return null;
+  }
+  const parts = [
+    latency.messageAgeMs
+      ? `messageAge latest=${formatMilliseconds(latency.messageAgeMs.latestMs)} max=${formatMilliseconds(
+          latency.messageAgeMs.maxMs,
+        )}`
+      : "",
+    latency.receivedToTurnStartMs
+      ? `receivedToStart latest=${formatMilliseconds(
+          latency.receivedToTurnStartMs.latestMs,
+        )} max=${formatMilliseconds(latency.receivedToTurnStartMs.maxMs)}`
+      : "",
+    latency.startToDeliveryMs
+      ? `startToDelivery latest=${formatMilliseconds(
+          latency.startToDeliveryMs.latestMs,
+        )} max=${formatMilliseconds(latency.startToDeliveryMs.maxMs)}`
+      : "",
+    latency.startToCompletionMs
+      ? `startToCompletion latest=${formatMilliseconds(
+          latency.startToCompletionMs.latestMs,
+        )} max=${formatMilliseconds(latency.startToCompletionMs.maxMs)}`
+      : "",
+  ].filter(Boolean);
+  if (parts.length === 0) {
+    return null;
+  }
+  return `Latency: ${parts.join("; ")}.`;
+}
+
 export function buildGatewayChannelTurnHealthDoctorNote(params: {
   snapshot: DiagnosticStabilitySnapshot;
   sourceLabel?: string;
@@ -44,9 +76,28 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
     `Delivery required=${channelTurns.deliveryRequired}, sent=${channelTurns.deliverySent}, failed=${channelTurns.deliveryFailed}, missing=${channelTurns.missingVisibleDelivery}.`,
   ];
 
+  const latencyLine = formatChannelTurnLatencyLine(channelTurns.latency);
+  if (latencyLine) {
+    lines.push(latencyLine);
+  }
+
   for (const issue of channelTurns.health.issues.slice(0, 5)) {
     lines.push(formatChannelTurnIssueLine(issue));
     lines.push(`  Guidance: ${issue.guidance}`);
+  }
+
+  const recentSlow = channelTurns.latency?.recentSlow.slice(-3).reverse() ?? [];
+  if (recentSlow.length > 0) {
+    lines.push("Recent slow turns:");
+    for (const slow of recentSlow) {
+      const details = [
+        `seq=${slow.seq}`,
+        slow.channel ? `channel=${slow.channel}` : "",
+        slow.metric ? `${slow.metric}=${formatMilliseconds(slow.valueMs)}` : "",
+        slow.turnId ? `turn=${slow.turnId}` : "",
+      ].filter(Boolean);
+      lines.push(`- ${details.join(" ")}`);
+    }
   }
 
   const recentFailures = channelTurns.recentFailures.slice(-3).reverse();

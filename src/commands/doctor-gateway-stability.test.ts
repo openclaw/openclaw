@@ -74,6 +74,10 @@ describe("doctor gateway stability", () => {
             reason: "missing_visible_delivery",
           },
         ],
+        latency: {
+          startToDeliveryMs: { count: 1, latestMs: 2_500, maxMs: 2_500 },
+          recentSlow: [],
+        },
         health: {
           status: "degraded",
           issues: [
@@ -151,5 +155,10 @@ describe("doctor gateway stability", () => {
 
     expect(note?.body).toContain("slow_receive_to_turn_start");
     expect(note?.body).toContain("receivedToTurnStartMs=15000ms");
+    expect(note?.body).toContain("Latency: receivedToStart latest=15000ms max=15000ms.");
+    expect(note?.body).toContain("Recent slow turns:");
+    expect(note?.body).toContain(
+      "- seq=9 channel=telegram receivedToTurnStartMs=15000ms turn=turn-2",
+    );
   });
 });
