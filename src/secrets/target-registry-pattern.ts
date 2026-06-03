@@ -2,11 +2,13 @@ import { parseConfigPathArrayIndex } from "../shared/path-array-index.js";
 import { isRecord, parseDotPath } from "./shared.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
 
+/** Tokenized segment in a secret target path pattern. */
 export type PathPatternToken =
   | { kind: "literal"; value: string }
   | { kind: "wildcard" }
   | { kind: "array"; field: string };
 
+/** Registry entry with compiled path/ref pattern tokens. */
 export type CompiledTargetRegistryEntry = SecretTargetRegistryEntry & {
   pathTokens: PathPatternToken[];
   pathDynamicTokenCount: number;
@@ -14,6 +16,7 @@ export type CompiledTargetRegistryEntry = SecretTargetRegistryEntry & {
   refPathDynamicTokenCount: number;
 };
 
+/** Concrete config value matched by expanding a path pattern. */
 export type ExpandedPathMatch = {
   segments: string[];
   captures: string[];
@@ -58,6 +61,7 @@ export function compileTargetRegistryEntry(
   if (requiresSiblingRefPath && !refPathTokens) {
     throw new Error(`Missing refPathPattern for sibling_ref target: ${entry.id}`);
   }
+  // Value and sibling-ref paths must capture the same wildcard/array values in the same order.
   if (refPathTokens && refPathDynamicTokenCount !== pathDynamicTokenCount) {
     throw new Error(`Mismatched wildcard shape for target ref path: ${entry.id}`);
   }
