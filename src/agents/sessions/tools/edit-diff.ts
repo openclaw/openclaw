@@ -198,12 +198,42 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
 }
 
 /**
+ * Map a character offset in fuzzy-normalized content back to the corresponding
+ * offset in the original (LF-normalized only) content. Both contents have the
+ * same number of lines because normalizeForFuzzyMatch only performs per-line
+ * trimEnd and single-character replacements (smart quotes, dashes, special
+ * spaces, NFKC). Within each line, character positions map 1:1.
+ */
+function mapNormalizedOffsetToOriginal(
+  origLines: string[],
+  normLines: string[],
+  normalizedOffset: number,
+): number {
+  let normPos = 0;
+  let origPos = 0;
+
+  for (let i = 0; i < normLines.length; i++) {
+    const normLineLen = normLines[i].length;
+    const origLineLen = origLines[i].length;
+
+    if (normalizedOffset <= normPos + normLineLen) {
+      return origPos + (normalizedOffset - normPos);
+    }
+
+    normPos += normLineLen + 1;
+    origPos += origLineLen + 1;
+  }
+
+  return origPos;
+}
+
+/**
  * Apply one or more exact-text replacements to LF-normalized content.
  *
  * All edits are matched against the same original content. Replacements are
- * then applied in reverse order so offsets remain stable. If any edit needs
- * fuzzy matching, the operation runs in fuzzy-normalized content space to
- * preserve current single-edit behavior.
+ * then applied in reverse order so offsets remain stable. When fuzzy matching
+ * is needed, match positions are mapped back to the original content so that
+ * only the matched region is affected — unrelated lines are never normalized.
  */
 export function applyEditsToNormalizedContent(
   normalizedContent: string,
@@ -221,32 +251,51 @@ export function applyEditsToNormalizedContent(
     }
   }
 
-  const initialMatches = normalizedEdits.map((edit) =>
-    fuzzyFindText(normalizedContent, edit.oldText),
-  );
-  const baseContent = initialMatches.some((match) => match.usedFuzzyMatch)
-    ? normalizeForFuzzyMatch(normalizedContent)
-    : normalizedContent;
+  const baseContent = normalizedContent;
+
+  // Lazily computed for position mapping when fuzzy matches are used
+  let origLines: string[] | undefined;
+  let normLines: string[] | undefined;
 
   const matchedEdits: MatchedEdit[] = [];
   for (let i = 0; i < normalizedEdits.length; i++) {
     const edit = normalizedEdits[i];
-    const matchResult = fuzzyFindText(baseContent, edit.oldText);
+    const matchResult = fuzzyFindText(normalizedContent, edit.oldText);
     if (!matchResult.found) {
       throw getNotFoundError(path, i, normalizedEdits.length);
     }
 
-    const occurrences = countOccurrences(baseContent, edit.oldText);
+    const occurrences = countOccurrences(normalizedContent, edit.oldText);
     if (occurrences > 1) {
       throw getDuplicateError(path, i, normalizedEdits.length, occurrences);
     }
 
-    matchedEdits.push({
-      editIndex: i,
-      matchIndex: matchResult.index,
-      matchLength: matchResult.matchLength,
-      newText: edit.newText,
-    });
+    if (matchResult.usedFuzzyMatch) {
+      // Map the fuzzy match position back to the original content
+      if (!origLines || !normLines) {
+        origLines = normalizedContent.split("\n");
+        normLines = normalizeForFuzzyMatch(normalizedContent).split("\n");
+      }
+      const origStart = mapNormalizedOffsetToOriginal(origLines, normLines, matchResult.index);
+      const origEnd = mapNormalizedOffsetToOriginal(
+        origLines,
+        normLines,
+        matchResult.index + matchResult.matchLength,
+      );
+      matchedEdits.push({
+        editIndex: i,
+        matchIndex: origStart,
+        matchLength: origEnd - origStart,
+        newText: edit.newText,
+      });
+    } else {
+      matchedEdits.push({
+        editIndex: i,
+        matchIndex: matchResult.index,
+        matchLength: matchResult.matchLength,
+        newText: edit.newText,
+      });
+    }
   }
 
   matchedEdits.sort((a, b) => a.matchIndex - b.matchIndex);
