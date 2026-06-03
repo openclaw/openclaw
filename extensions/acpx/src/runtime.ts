@@ -315,6 +315,8 @@ const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
 const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
+const CLAUDE_ACP_AGENT_ID = "claude";
+const CLAUDE_ACP_OPENCLAW_PREFIX = "anthropic/";
 const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["off", undefined],
@@ -539,6 +541,16 @@ function normalizeCodexAcpModelOverride(
     model,
     ...(reasoningEffort ? { reasoningEffort } : {}),
   };
+}
+
+function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string | undefined {
+  const raw = rawModel?.trim();
+  if (!raw) {
+    return undefined;
+  }
+  return raw.toLowerCase().startsWith(CLAUDE_ACP_OPENCLAW_PREFIX)
+    ? raw.slice(CLAUDE_ACP_OPENCLAW_PREFIX.length).trim() || raw
+    : raw;
 }
 
 function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
@@ -934,6 +946,10 @@ export class AcpxRuntime implements AcpRuntime {
       normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
         ? normalizeCodexAcpModelOverride(input.model, input.thinking)
         : undefined;
+    const claudeModelOverride =
+      normalizeAgentName(input.agent) === CLAUDE_ACP_AGENT_ID && isClaudeAcpCommand(command)
+        ? normalizeClaudeAcpModelOverride(input.model)
+        : undefined;
     const stableLaunchCommand =
       codexModelOverride && command
         ? appendCodexAcpConfigOverrides(command, codexModelOverride)
@@ -947,6 +963,9 @@ export class AcpxRuntime implements AcpRuntime {
     }));
 
     if (!codexModelOverride) {
+      const normalizedInput = claudeModelOverride
+        ? { ...input, model: claudeModelOverride }
+        : input;
       return await this.runWithLaunchLease({
         sessionKey: input.sessionKey,
         command: stableLaunchCommand,
@@ -955,7 +974,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(withAcpxSessionOptions(input)),
+            run: () => delegate.ensureSession(withAcpxSessionOptions(normalizedInput)),
           }),
       });
     }
@@ -1154,7 +1173,11 @@ export class AcpxRuntime implements AcpRuntime {
     const command = await this.resolveCommandForHandle(input.handle);
     const key = input.key.trim().toLowerCase();
     const isCodexAcp = isCodexAcpCommand(command);
-    if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcpCommand(command))) {
+    const isClaudeAcp = isClaudeAcpCommand(command);
+    if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcp)) {
+      return;
+    }
+    if (isClaudeAcp && key === "model") {
       return;
     }
     if (isCodexAcp) {

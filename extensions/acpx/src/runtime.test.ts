@@ -252,6 +252,40 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(ensureInput).not.toHaveProperty("thinking");
   });
 
+  it("normalizes OpenClaw Claude model ids for ACP startup", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "claude" ? "npx @agentclientprotocol/claude-agent-acp" : agentName,
+        list: () => ["claude", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "persistent",
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:claude:acp:test",
+      agent: "claude",
+      mode: "persistent",
+      model: "claude-sonnet-4-6",
+      sessionOptions: { model: "claude-sonnet-4-6" },
+    });
+  });
+
   it("adds Codex wrapper stderr tail to generic session initialization failures", async () => {
     const wrapperRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-acpx-runtime-"));
     const leaseStore = makeLeaseStore();
@@ -893,7 +927,7 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
-  it("still forwards non-timeout config controls for claude-agent-acp", async () => {
+  it("ignores unsupported claude-agent-acp model config controls after startup", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
         acpxRecordId: "agent:claude:acp:test",
@@ -913,15 +947,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     await runtime.setConfigOption({
       handle,
       key: "model",
-      value: "claude-sonnet-4.6",
+      value: "anthropic/claude-sonnet-4-6",
     });
 
-    expect(setConfigOption).toHaveBeenCalledOnce();
-    expect(setConfigOption).toHaveBeenCalledWith({
-      handle,
-      key: "model",
-      value: "claude-sonnet-4.6",
-    });
+    expect(setConfigOption).not.toHaveBeenCalled();
   });
 
   it("recognizes claude-agent-acp commands", () => {
