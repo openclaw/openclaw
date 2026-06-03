@@ -31,6 +31,8 @@ const fetchWithSsrFGuardMock = vi.hoisted(() =>
 
 const sendFailureNotificationAnnounceMock = vi.hoisted(() => vi.fn(async () => undefined));
 const closeTrackedBrowserTabsForSessionsMock = vi.hoisted(() => vi.fn(async () => 0));
+const TOOL_EXECUTION_STARTED_TIMEOUT =
+  "cron: job execution timed out (last phase: tool-execution-started)";
 
 vi.mock("../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: (...args: unknown[]) =>
@@ -1588,6 +1590,81 @@ describe("gateway server cron", () => {
         sessionKey: "agent:main:telegram:direct:123:thread:99",
         message: '⚠️ Cron job "primary delivery fallback" failed: unknown error',
       });
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
+
+  test("does not announce tool-execution-started cron watchdog timeouts", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-tool-timeout-suppressed-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: TOOL_EXECUTION_STARTED_TIMEOUT,
+        summary: "timed out while tool call was pending",
+      });
+      const jobId = await addWebhookCronJob({
+        ws,
+        name: "suppressed primary timeout fallback",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          channel: "matrix",
+        },
+      });
+
+      await runCronJobAndWaitForFinished(ws, jobId);
+
+      expect(sendFailureNotificationAnnounceMock).not.toHaveBeenCalled();
+    } finally {
+      await cleanupCronTestRun({ ws, server, prevSkipCron });
+    }
+  }, 45_000);
+
+  test("preserves failure-destination notifications for tool-execution-started cron watchdog timeouts", async () => {
+    const { prevSkipCron } = await setupCronTestRun({
+      tempPrefix: "openclaw-gw-cron-tool-timeout-failure-destination-suppressed-",
+      cronEnabled: false,
+    });
+
+    const { server, ws } = await startServerWithClient();
+    await connectOk(ws);
+
+    try {
+      cronIsolatedRun.mockResolvedValueOnce({
+        status: "error",
+        error: TOOL_EXECUTION_STARTED_TIMEOUT,
+        summary: "timed out while tool call was pending",
+      });
+      const jobId = await addWebhookCronJob({
+        ws,
+        name: "explicit failure destination timeout",
+        sessionTarget: "isolated",
+        delivery: {
+          mode: "announce",
+          channel: "matrix",
+          failureDestination: {
+            mode: "webhook",
+            to: "https://example.invalid/failure-destination",
+          },
+        },
+      });
+
+      await runCronJobAndWaitForFinished(ws, jobId);
+
+      const failureDestCall = getWebhookCall(0);
+      expect(failureDestCall.url).toBe("https://example.invalid/failure-destination");
+      expect(failureDestCall.body.message).toBe(
+        'Cron job "explicit failure destination timeout" failed: cron: job execution timed out (last phase: tool-execution-started)',
+      );
+      expect(sendFailureNotificationAnnounceMock).not.toHaveBeenCalled();
     } finally {
       await cleanupCronTestRun({ ws, server, prevSkipCron });
     }

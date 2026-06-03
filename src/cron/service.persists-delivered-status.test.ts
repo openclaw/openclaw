@@ -12,6 +12,8 @@ import {
 const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
+const TOOL_EXECUTION_STARTED_TIMEOUT =
+  "cron: job execution timed out (last phase: tool-execution-started)";
 
 type CronAddInput = Parameters<CronService["add"]>[0];
 
@@ -324,6 +326,96 @@ describe("CronService persists delivered status", () => {
     expect(capturedEvent?.delivered).toBeUndefined();
     expect(capturedEvent?.deliveryStatus).toBe("not-requested");
     expect(capturedEvent?.failureNotificationDelivery).toEqual({ status: "unknown" });
+  });
+
+  it("keeps tool-execution-started timeouts recorded while preserving explicit failure destinations", async () => {
+    let capturedEvent:
+      | {
+          delivered?: boolean;
+          deliveryStatus?: string;
+          failureNotificationDelivery?: {
+            delivered?: boolean;
+            status: string;
+            error?: string;
+          };
+        }
+      | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildFailureDestinationOnlyJob("failure-destination-tool-execution-timeout"),
+      status: "error",
+      error: TOOL_EXECUTION_STARTED_TIMEOUT,
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.lastError).toBe(TOOL_EXECUTION_STARTED_TIMEOUT);
+    expect(updated?.state.lastDelivered).toBeUndefined();
+    expect(updated?.state.lastDeliveryStatus).toBe("not-requested");
+    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("unknown");
+    expect(capturedEvent?.delivered).toBeUndefined();
+    expect(capturedEvent?.deliveryStatus).toBe("not-requested");
+    expect(capturedEvent?.failureNotificationDelivery).toEqual({ status: "unknown" });
+  });
+
+  it("keeps primary announce tool-execution-started timeouts from expecting fallback failure notifications", async () => {
+    let capturedEvent:
+      | {
+          delivered?: boolean;
+          deliveryStatus?: string;
+          failureNotificationDelivery?: {
+            delivered?: boolean;
+            status: string;
+            error?: string;
+          };
+        }
+      | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("announce-tool-execution-timeout"),
+      status: "error",
+      error: TOOL_EXECUTION_STARTED_TIMEOUT,
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.lastError).toBe(TOOL_EXECUTION_STARTED_TIMEOUT);
+    expect(updated?.state.lastDeliveryStatus).toBe("unknown");
+    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+    expect(capturedEvent?.deliveryStatus).toBe("unknown");
+    expect(capturedEvent?.failureNotificationDelivery).toBeUndefined();
+  });
+
+  it("suppresses failure notification state for delivered tool-execution-started timeouts", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("announce-delivered-tool-execution-timeout"),
+      status: "error",
+      delivered: true,
+      error: TOOL_EXECUTION_STARTED_TIMEOUT,
+    });
+
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
+  });
+
+  it("suppresses failure notification state for not-delivered tool-execution-started timeouts", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("announce-not-delivered-tool-execution-timeout"),
+      status: "error",
+      delivered: false,
+      error: TOOL_EXECUTION_STARTED_TIMEOUT,
+    });
+
+    expect(updated?.state.lastRunStatus).toBe("error");
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastFailureNotificationDelivered).toBeUndefined();
+    expect(updated?.state.lastFailureNotificationDeliveryStatus).toBe("not-requested");
   });
 
   it("does not treat primary error delivery as alternate failure-destination delivery", async () => {

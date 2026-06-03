@@ -14,6 +14,7 @@ import {
   sendFailureNotificationAnnounce,
 } from "../cron/delivery.js";
 import type { CronEvent } from "../cron/service.js";
+import { isToolExecutionStartedTimeoutError } from "../cron/service/execution-errors.js";
 import { resolveCronDeliverySessionKey } from "../cron/session-target.js";
 import type { CronJob, CronMessageChannel } from "../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../cron/webhook-url.js";
@@ -361,6 +362,10 @@ function dispatchCronFailureDestinationNotifications(params: {
         `⚠️ ${failureMessage}`,
       );
     }
+    return;
+  }
+
+  if (isToolExecutionStartedTimeoutError(params.evt.error)) {
     return;
   }
 

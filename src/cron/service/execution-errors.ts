@@ -59,3 +59,18 @@ export function normalizeCronRunErrorText(err: unknown): string {
   }
   return String(err);
 }
+
+const TOOL_EXECUTION_STARTED_TIMEOUT =
+  "cron: job execution timed out (last phase: tool-execution-started)";
+
+/**
+ * Returns true for cron watchdog timeouts that occurred after the embedded
+ * agent had already entered tool execution. These are still real run errors,
+ * but they are usually routing/tool-handoff noise rather than actionable
+ * destination-room failures.
+ */
+export function isToolExecutionStartedTimeoutError(err: unknown): boolean {
+  const text = normalizeCronRunErrorText(err).trim();
+  const normalized = text.startsWith("Error: ") ? text.slice("Error: ".length).trim() : text;
+  return normalized === TOOL_EXECUTION_STARTED_TIMEOUT;
+}
