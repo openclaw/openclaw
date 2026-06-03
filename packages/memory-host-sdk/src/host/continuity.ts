@@ -394,20 +394,14 @@ function truncateText(value: string | undefined, maxChars: number): string | und
 }
 
 async function readHead(absPath: string, maxLines: number, maxBytes: number): Promise<string> {
-  const handle = await fs.open(absPath, "r");
-  try {
-    const buffer = Buffer.alloc(maxBytes);
-    const { bytesRead } = await handle.read(buffer, 0, maxBytes, 0);
-    return buffer
-      .subarray(0, bytesRead)
-      .toString("utf-8")
-      .replace(/\r\n/g, "\n")
-      .split("\n")
-      .slice(0, maxLines)
-      .join("\n");
-  } finally {
-    await handle.close();
-  }
+  const { buffer } = await readRegularFile({ filePath: absPath });
+  return buffer
+    .subarray(0, Math.min(buffer.byteLength, maxBytes))
+    .toString("utf-8")
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .slice(0, maxLines)
+    .join("\n");
 }
 
 function pickSummary(
@@ -632,8 +626,11 @@ export async function buildContinuityManifest(params: {
   const statEntries = await Promise.all(
     files.map(async (absPath) => {
       try {
-        const stat = await fs.stat(absPath);
-        return { absPath, mtimeMs: stat.mtimeMs };
+        const regularFile = await statRegularFile(absPath);
+        if (regularFile.missing) {
+          return null;
+        }
+        return { absPath, mtimeMs: regularFile.stat.mtimeMs };
       } catch {
         return null;
       }

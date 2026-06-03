@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildContinuityManifest,
   formatContinuityManifest,
@@ -300,6 +300,73 @@ describe("readRecentContinuitySnapshot", () => {
 });
 
 describe("buildContinuityManifest", () => {
+  it("rejects candidates swapped to symlinks after enumeration", async () => {
+    const workspace = await makeWorkspace();
+    const candidate = path.join(workspace, "memory", "candidate.md");
+    await fs.writeFile(
+      candidate,
+      `# Safe Candidate
+
+- 状态：active
+- 优先级：high
+- 当前主任务：Safe manifest content
+`,
+      "utf-8",
+    );
+
+    const outside = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-continuity-outside-"));
+    tempDirs.push(outside);
+    const outsideLeak = path.join(outside, "leak.md");
+    await fs.writeFile(
+      outsideLeak,
+      `# Outside Secret
+
+- 状态：active
+- 优先级：highest
+- 当前主任务：LEAKED OUTSIDE CONTENT
+`,
+      "utf-8",
+    );
+
+    const probeLink = path.join(workspace, "memory", "probe-link.md");
+    const symlinkSupported = await trySymlink(outsideLeak, probeLink, "file");
+    await fs.rm(probeLink, { force: true });
+    if (!symlinkSupported) {
+      return;
+    }
+
+    vi.resetModules();
+    vi.doMock("./internal.js", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("./internal.js")>();
+      return {
+        ...actual,
+        listMemoryFiles: async (...args: Parameters<typeof actual.listMemoryFiles>) => {
+          const files = await actual.listMemoryFiles(...args);
+          if (files.includes(candidate)) {
+            await fs.rm(candidate, { force: true });
+            const swapped = await trySymlink(outsideLeak, candidate, "file");
+            if (!swapped) {
+              throw new Error("Expected symlink swap to succeed after preflight");
+            }
+          }
+          return files;
+        },
+      };
+    });
+
+    try {
+      const { buildContinuityManifest: buildManifestWithRacyList } =
+        await import("./continuity.js");
+      const manifest = await buildManifestWithRacyList({ workspaceDir: workspace });
+
+      expect(manifest).toEqual([]);
+      expect(JSON.stringify(manifest)).not.toContain("LEAKED OUTSIDE CONTENT");
+    } finally {
+      vi.doUnmock("./internal.js");
+      vi.resetModules();
+    }
+  });
+
   it("sorts active recent continuity ahead of stale memory", async () => {
     const workspace = await makeWorkspace();
     const latestPath = path.join(workspace, RECENT_CONTINUITY_LATEST);
