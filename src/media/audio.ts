@@ -35,7 +35,7 @@ export function isVoiceMessageCompatibleAudio(opts: {
   return VOICE_MESSAGE_AUDIO_EXTENSIONS.has(ext);
 }
 
-/** Backward-compatible alias for voice-message audio compatibility checks. */
+/** Compatibility alias for voice-message audio compatibility checks. */
 export function isVoiceCompatibleAudio(opts: {
   contentType?: string | null;
   fileName?: string | null;

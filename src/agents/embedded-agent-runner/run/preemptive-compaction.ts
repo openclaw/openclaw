@@ -223,7 +223,7 @@ export function estimateRenderedLlmBoundaryTokenPressure(params: {
   return Math.max(0, Math.ceil((systemTokens + promptTokens) * SAFETY_MARGIN));
 }
 
-/** Backward-compatible alias for callers that still name this a pre-prompt estimate. */
+/** Compatibility alias for callers that still name this a pre-prompt estimate. */
 export function estimatePrePromptTokens(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
