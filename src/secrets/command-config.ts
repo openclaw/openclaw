@@ -4,22 +4,26 @@ import { getPath } from "./path-utils.js";
 import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
+/** One resolved SecretRef value ready to inject into a command-scoped config view. */
 export type CommandSecretAssignment = {
   path: string;
   pathSegments: string[];
   value: unknown;
 };
 
+/** Resolved command assignments plus non-fatal diagnostics. */
 export type ResolveAssignmentsFromSnapshotResult = {
   assignments: CommandSecretAssignment[];
   diagnostics: string[];
 };
 
+/** Active or inactive command target that could not be materialized. */
 export type UnresolvedCommandSecretAssignment = {
   path: string;
   pathSegments: string[];
 };
 
+/** Full command assignment analysis before unresolved active refs are rejected. */
 export type AnalyzeAssignmentsFromSnapshotResult = {
   assignments: CommandSecretAssignment[];
   diagnostics: string[];
@@ -59,6 +63,8 @@ export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
 
     const resolved = getPath(params.resolvedConfig, target.pathSegments);
     if (!isExpectedResolvedSecretValue(resolved, target.entry.expectedResolvedValue)) {
+      // Inactive surfaces are diagnostics, not hard failures; active unresolved refs block the
+      // command because the runtime snapshot promised that target was usable.
       if (params.inactiveRefPaths?.has(target.path)) {
         diagnostics.push(
           `${target.path}: secret ref is configured on an inactive surface; skipping command-time assignment.`,
