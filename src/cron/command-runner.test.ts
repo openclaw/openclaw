@@ -70,4 +70,59 @@ describe("runCronCommandJob", () => {
       exitCode: 7,
     });
   });
+
+  it("marks command timeouts as cron errors", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+        timeoutSeconds: 0.05,
+      }),
+      nowMs: () => 456,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("command timed out");
+    expect(result.diagnostics?.entries[0]).toMatchObject({
+      ts: 456,
+      source: "exec",
+      severity: "error",
+    });
+  });
+
+  it("marks no-output timeouts as cron errors", async () => {
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [process.execPath, "-e", "setInterval(() => {}, 1000)"],
+        timeoutSeconds: 5,
+        noOutputTimeoutSeconds: 0.05,
+      }),
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("command produced no output before noOutputTimeoutSeconds");
+    expect(result.diagnostics?.entries[0]).toMatchObject({
+      source: "exec",
+      severity: "error",
+    });
+  });
+
+  it("marks aborted command runs as cron errors", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runCronCommandJob({
+      job: makeCommandJob({
+        kind: "command",
+        argv: [process.execPath, "-e", "process.stdout.write('should not run')"],
+        timeoutSeconds: 5,
+      }),
+      abortSignal: controller.signal,
+    });
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("command stopped");
+    expect(result.summary).toBeUndefined();
+  });
 });
