@@ -33,7 +33,9 @@ const telegramOutboundForTest = {
     const result = await sendTelegram(to, text, {
       cfg,
       replyToMessageId:
-        typeof replyToId === "string" && replyToId.trim().length > 0 ? Number(replyToId) : undefined,
+        typeof replyToId === "string" && replyToId.trim().length > 0
+          ? Number(replyToId)
+          : undefined,
     });
     return { channel: "telegram" as const, ...result };
   },

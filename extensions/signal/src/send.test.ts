@@ -140,7 +140,11 @@ describe("sendMessageSignal receipts", () => {
     });
 
     const params = signalRpcRequestMock.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(signalRpcRequestMock).toHaveBeenCalledWith("send", expect.any(Object), expect.any(Object));
+    expect(signalRpcRequestMock).toHaveBeenCalledWith(
+      "send",
+      expect.any(Object),
+      expect.any(Object),
+    );
     expect(params.groupId).toBe("test-group");
     expect(params["quote-timestamp"]).toBe(1700000000000);
     expect(params["quote-author"]).toBe("uuid:sender-1");
