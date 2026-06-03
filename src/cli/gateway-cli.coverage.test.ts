@@ -221,6 +221,22 @@ describe("gateway-cli coverage", () => {
     expect(callArgs.url).toBeUndefined();
   });
 
+  it("gateway health --port <N> marks the explicit port as config-preferred over env (#79100)", async () => {
+    callGateway.mockClear();
+
+    await withEnvOverride({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {
+      await runGatewayCommand(["gateway", "health", "--port", "18799", "--json"]);
+    });
+
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    const callArgs = firstMockArg(callGateway) as {
+      config?: { gateway?: { port?: number } };
+      preferConfigGatewayPort?: boolean;
+    };
+    expect(callArgs.config?.gateway?.port).toBe(18799);
+    expect(callArgs.preferConfigGatewayPort).toBe(true);
+  });
+
   it("gateway probe --port <N> (flag after the subcommand) also passes a numeric port (#79100)", async () => {
     gatewayStatusCommand.mockClear();
 
@@ -230,6 +246,18 @@ describe("gateway-cli coverage", () => {
     const probeArgs = firstMockArg(gatewayStatusCommand) as { port?: unknown; url?: unknown };
     expect(probeArgs.port).toBe(18799);
     expect(typeof probeArgs.url).not.toBe("string");
+  });
+
+  it("gateway probe --port <N> passes the explicit port even when OPENCLAW_GATEWAY_PORT is set (#79100)", async () => {
+    gatewayStatusCommand.mockClear();
+
+    await withEnvOverride({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {
+      await runGatewayCommand(["gateway", "probe", "--port", "18799", "--json"]);
+    });
+
+    expect(gatewayStatusCommand).toHaveBeenCalledTimes(1);
+    const probeArgs = firstMockArg(gatewayStatusCommand) as { port?: unknown };
+    expect(probeArgs.port).toBe(18799);
   });
 
   it("registers gateway stability and routes to diagnostics RPC", async () => {

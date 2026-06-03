@@ -18,7 +18,15 @@ const mocks = vi.hoisted(() => {
         auth: { token: "ltok" },
       },
     })),
-    resolveGatewayPort: vi.fn((_cfg?: unknown) => 18789),
+    resolveGatewayPort: vi.fn((cfg?: unknown, env?: NodeJS.ProcessEnv) => {
+      const envPortRaw = env?.OPENCLAW_GATEWAY_PORT?.trim();
+      const envPort = envPortRaw ? Number(envPortRaw) : NaN;
+      if (Number.isInteger(envPort) && envPort > 0 && envPort <= 65_535) {
+        return envPort;
+      }
+      const configPort = (cfg as { gateway?: { port?: unknown } } | undefined)?.gateway?.port;
+      return typeof configPort === "number" && configPort > 0 ? configPort : 18789;
+    }),
     discoverGatewayBeacons: vi.fn(async (_opts?: unknown): Promise<GatewayBonjourBeacon[]> => []),
     pickPrimaryTailnetIPv4: vi.fn(() => "100.64.0.10"),
     sshStop,
@@ -297,7 +305,14 @@ function mockLocalTokenEnvRefConfig(envTokenId = "MISSING_GATEWAY_TOKEN") {
 
 async function runGatewayStatus(
   runtime: ReturnType<typeof createRuntimeCapture>["runtime"],
-  opts: { timeout: string; json?: boolean; ssh?: string; sshAuto?: boolean; sshIdentity?: string },
+  opts: {
+    timeout: string;
+    json?: boolean;
+    port?: number;
+    ssh?: string;
+    sshAuto?: boolean;
+    sshIdentity?: string;
+  },
 ) {
   await gatewayStatusCommand(opts, asRuntimeEnv(runtime));
 }
@@ -367,6 +382,29 @@ describe("gateway-status command", () => {
     const firstTarget = requireRecord(targets[0], "first gateway target");
     requireRecord(firstTarget.health, "first target health");
     requireRecord(firstTarget.summary, "first target summary");
+  });
+
+  it("lets explicit --port override OPENCLAW_GATEWAY_PORT for probe targets and network hints", async () => {
+    const { runtime, runtimeLogs, runtimeErrors } = createRuntimeCapture();
+
+    await withEnvAsync({ OPENCLAW_GATEWAY_PORT: "19001" }, async () => {
+      readBestEffortConfig.mockResolvedValueOnce({
+        gateway: {
+          mode: "local",
+          auth: { mode: "token", token: "ltok" },
+        },
+      } as never);
+
+      await runGatewayStatus(runtime, { timeout: "1000", json: true, port: 18799 });
+    });
+
+    expect(runtimeErrors).toHaveLength(0);
+    expect(requireProbeCall("ws://127.0.0.1:18799").timeoutMs).toBe(1_000);
+    expect(readProbeCalls().some((call) => call.url === "ws://127.0.0.1:19001")).toBe(false);
+    const parsed = JSON.parse(runtimeLogs.join("\n")) as {
+      network?: { localLoopbackUrl?: string };
+    };
+    expect(parsed.network?.localLoopbackUrl).toBe("ws://127.0.0.1:18799");
   });
 
   it("surfaces degraded model-pricing health as a warning", async () => {

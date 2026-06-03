@@ -70,6 +70,7 @@ export const callGatewayCli = async (method: string, opts: GatewayRpcOpts, param
     async () =>
       await callGateway({
         config: await resolveConfigWithPort(opts.config, opts.port),
+        preferConfigGatewayPort: Boolean(opts.port),
         url: opts.url,
         token: opts.token,
         password: opts.password,

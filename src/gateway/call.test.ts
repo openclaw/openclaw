@@ -997,6 +997,38 @@ describe("buildGatewayConnectionDetails", () => {
     }
   });
 
+  it("lets explicit CLI port prefer config.gateway.port over OPENCLAW_GATEWAY_PORT", () => {
+    getRuntimeConfig.mockReturnValue({
+      gateway: { mode: "local", bind: "loopback", port: 18799 },
+    });
+    resolveGatewayPort.mockImplementation((cfg?: unknown, env?: NodeJS.ProcessEnv) => {
+      const envPortRaw = env?.OPENCLAW_GATEWAY_PORT?.trim();
+      const envPort = envPortRaw ? Number(envPortRaw) : NaN;
+      if (Number.isInteger(envPort) && envPort > 0 && envPort <= 65_535) {
+        return envPort;
+      }
+      const configPort = (cfg as OpenClawConfig | undefined)?.gateway?.port;
+      return typeof configPort === "number" && configPort > 0 ? configPort : 18789;
+    });
+    const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
+    try {
+      process.env.OPENCLAW_GATEWAY_PORT = "19001";
+
+      expect(buildGatewayConnectionDetails().url).toBe("ws://127.0.0.1:19001");
+      expect(
+        buildGatewayConnectionDetails({
+          preferConfigGatewayPort: true,
+        }).url,
+      ).toBe("ws://127.0.0.1:18799");
+    } finally {
+      if (previousPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousPort;
+      }
+    }
+  });
+
   it("falls back to the default config loader when test deps drift", () => {
     const tempStateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-call-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;

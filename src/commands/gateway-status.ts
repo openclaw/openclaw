@@ -36,6 +36,10 @@ function loadGatewayTlsModule() {
   return gatewayTlsModuleLoader.load();
 }
 
+function resolveGatewayPortIgnoringEnv(cfg?: Parameters<typeof resolveGatewayPort>[0]): number {
+  return resolveGatewayPort(cfg, { ...process.env, OPENCLAW_GATEWAY_PORT: undefined });
+}
+
 /** Resolves gateway status inputs, probes targets, then writes JSON or text output. */
 export async function gatewayStatusCommand(
   opts: {
@@ -65,9 +69,11 @@ export async function gatewayStatusCommand(
   const wideAreaDomain = resolveWideAreaDiscoveryDomain({
     configDomain: cfg.discovery?.wideArea?.domain,
   });
-  const baseTargets = resolveTargets(cfg, opts.url);
-  const network = buildNetworkHints(cfg);
-  const remotePort = resolveGatewayPort(cfg);
+  const resolveStatusGatewayPort =
+    opts.port != null && opts.port > 0 ? resolveGatewayPortIgnoringEnv : resolveGatewayPort;
+  const baseTargets = resolveTargets(cfg, opts.url, resolveStatusGatewayPort);
+  const network = buildNetworkHints(cfg, resolveStatusGatewayPort);
+  const remotePort = resolveStatusGatewayPort(cfg);
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
 
   let sshTarget = sanitizeSshTarget(opts.ssh) ?? sanitizeSshTarget(cfg.gateway?.remote?.sshTarget);
