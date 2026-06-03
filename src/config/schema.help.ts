@@ -5,6 +5,8 @@ export const FIELD_HELP: Record<string, string> = {
   meta: "Metadata fields automatically maintained by OpenClaw to record write/version history for this config file. Keep these values system-managed and avoid manual edits unless debugging migration history.",
   "meta.lastTouchedVersion": "Auto-set when OpenClaw writes the config.",
   "meta.lastTouchedAt": "ISO timestamp of the last config write (auto-set).",
+  instanceId:
+    "Opaque identifier for the Bench instance this harness belongs to. When set, per-instance resources (wiki vaults, shard directories) are scoped to this id. When unset, single-user Tier A defaults apply (~/.openclaw/wiki/main/). Required on Tier B (personal local) and Tier C (cloud-hosted) deployments.",
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
     "Shell environment import controls for loading variables from your login shell during startup. Keep this enabled when you depend on profile-defined secrets or PATH customizations.",
@@ -97,6 +99,22 @@ export const FIELD_HELP: Record<string, string> = {
     "Explicit gateway-level tool allowlist when you want a narrow set of tools available at runtime. Use this for locked-down environments where tool scope must be tightly controlled.",
   "gateway.tools.deny":
     "Explicit gateway-level tool denylist to block risky tools even if lower-level policies allow them. Use deny rules for emergency response and defense-in-depth hardening.",
+  "gateway.benchCloud":
+    "Bench cloud remote-brain bridge settings for routing eligible chat.send turns to the Bench cloud service. Keep disabled unless this instance has a Bench tenant identity and cloud auth flow.",
+  "gateway.benchCloud.enabled":
+    "Enables Bench cloud remote-brain dispatch for chat.send requests that include cloud auth. Default is false, so local chat.send behavior is unchanged unless explicitly enabled.",
+  "gateway.benchCloud.apiBaseUrl":
+    "Base URL for the Bench cloud API. Use the default production URL unless this instance is intentionally pointed at a staging or private Bench deployment.",
+  "gateway.benchCloud.instanceId":
+    "Bench instance id sent with remote-brain turn requests. It must be filesystem-safe alphanumeric text with optional underscore or hyphen.",
+  "gateway.benchCloud.installId":
+    "Optional Bench install id sent with remote-brain turn requests for install-level routing or diagnostics.",
+  "gateway.benchCloud.agentIdAliases":
+    "Map of local OpenClaw agent ids to canonical Bench cloud agent ids. Use this when local persona names differ from cloud agent ids.",
+  "gateway.benchCloud.pollIntervalMs":
+    "Interval in milliseconds between Bench cloud remote-brain status checks. Keep conservative to avoid unnecessary cloud/API load.",
+  "gateway.benchCloud.pollTimeoutMs":
+    "Maximum time in milliseconds to wait for a Bench cloud remote-brain turn before surfacing an unavailable error.",
   "gateway.handshakeTimeoutMs":
     "Pre-auth Gateway WebSocket handshake timeout in milliseconds. Use higher values on loaded or low-powered hosts where local clients can connect during startup warmup. OPENCLAW_HANDSHAKE_TIMEOUT_MS still takes precedence.",
   "gateway.channelHealthCheckMinutes":

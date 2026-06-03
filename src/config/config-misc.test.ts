@@ -236,6 +236,64 @@ describe("$schema key in config (#14998)", () => {
     expect(result.success).toBe(false);
   });
 
+  it("accepts top-level instanceId (Phase D2.1)", () => {
+    const result = OpenClawSchema.safeParse({ instanceId: "acme-corp_01" });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.instanceId).toBe("acme-corp_01");
+    }
+  });
+
+  it("accepts config without instanceId (Tier A single-user default)", () => {
+    const result = OpenClawSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.instanceId).toBeUndefined();
+    }
+  });
+
+  it("rejects instanceId with path-traversal characters", () => {
+    expect(OpenClawSchema.safeParse({ instanceId: "../evil" }).success).toBe(false);
+    expect(OpenClawSchema.safeParse({ instanceId: "has/slash" }).success).toBe(false);
+    expect(OpenClawSchema.safeParse({ instanceId: "" }).success).toBe(false);
+  });
+
+  it("accepts gateway benchCloud bridge config", () => {
+    const result = OpenClawSchema.safeParse({
+      gateway: {
+        benchCloud: {
+          enabled: true,
+          apiBaseUrl: "https://benchagi.example",
+          instanceId: "acme-corp_01",
+          installId: "install-01",
+          agentIdAliases: {
+            "local-sage": "sage",
+          },
+          pollIntervalMs: 250,
+          pollTimeoutMs: 60_000,
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.gateway?.benchCloud?.agentIdAliases?.["local-sage"]).toBe("sage");
+    }
+  });
+
+  it("rejects invalid gateway benchCloud bridge config", () => {
+    expect(
+      OpenClawSchema.safeParse({
+        gateway: { benchCloud: { instanceId: "../evil" } },
+      }).success,
+    ).toBe(false);
+    expect(
+      OpenClawSchema.safeParse({
+        gateway: { benchCloud: { pollIntervalMs: 0 } },
+      }).success,
+    ).toBe(false);
+  });
+
   it("accepts $schema during full config validation", () => {
     const result = validateConfigObject({
       $schema: "./schema.json",

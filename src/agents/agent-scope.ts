@@ -30,6 +30,7 @@ import {
 } from "./agent-scope-config.js";
 import { resolveEffectiveAgentSkillFilter } from "./skills/agent-filter.js";
 export {
+  canonicalizeAgentId,
   listAgentEntries,
   listAgentIds,
   resolveAgentConfig,

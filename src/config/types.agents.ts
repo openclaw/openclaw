@@ -79,6 +79,14 @@ export type AgentBinding = AgentRouteBinding | AgentAcpBinding;
 export type AgentConfig = {
   id: string;
   default?: boolean;
+  /**
+   * Optional alternate identifiers for this agent. Operators can pass any
+   * alias to `--agent` and have it resolve to this entry's canonical `id`.
+   * Useful when the persona is known by a different label than its config
+   * id (e.g. id "main", aliases ["aurelius"]). Resolution is case-insensitive
+   * and goes through normalizeAgentId before comparison.
+   */
+  aliases?: string[];
   name?: string;
   /** Optional human-authored agent description. */
   description?: string;

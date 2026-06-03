@@ -16,7 +16,7 @@
     },
     "vault.path": {
       "label": "Vault Path",
-      "help": "Filesystem path for the wiki vault root."
+      "help": "Optional filesystem path for the wiki vault root. When omitted, memory-wiki uses ~/.openclaw/wiki/{instanceId}, or ~/.openclaw/wiki/main when no instanceId is configured. Explicit paths override instance scoping."
     },
     "vault.renderMode": {
       "label": "Render Mode",

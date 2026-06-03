@@ -445,6 +445,23 @@ export type GatewayWebchatConfig = {
   chatHistoryMaxChars?: number;
 };
 
+export type GatewayBenchCloudConfig = {
+  /** Enable routing eligible chat.send turns through the Bench cloud bridge. Default: false. */
+  enabled?: boolean;
+  /** Base URL for the Bench cloud API. Default: https://benchagi.com. */
+  apiBaseUrl?: string;
+  /** Bench instance id used when dispatching cloud-brain turns. */
+  instanceId?: string;
+  /** Optional install id included with cloud-brain turn requests. */
+  installId?: string;
+  /** Local agent id aliases to canonical Bench cloud agent ids. */
+  agentIdAliases?: Record<string, string>;
+  /** Poll interval for remote-brain turn status checks in milliseconds. Default: 1000. */
+  pollIntervalMs?: number;
+  /** Poll timeout for remote-brain turn status checks in milliseconds. Default: 300000. */
+  pollTimeoutMs?: number;
+};
+
 export type GatewayConfig = {
   /** Single multiplexed port for Gateway WS + HTTP (default: 18789). */
   port?: number;
@@ -490,6 +507,8 @@ export type GatewayConfig = {
   tools?: GatewayToolsConfig;
   /** WebChat display/history settings. */
   webchat?: GatewayWebchatConfig;
+  /** Bench cloud remote-brain bridge settings. */
+  benchCloud?: GatewayBenchCloudConfig;
   /**
    * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
    * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.

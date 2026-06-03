@@ -10,7 +10,7 @@ import {
   isValidControlUiChatMessageMaxWidth,
   normalizeControlUiChatMessageMaxWidth,
 } from "./control-ui-css.js";
-import type { GatewayRemoteConfig } from "./types.gateway.js";
+import type { GatewayBenchCloudConfig, GatewayRemoteConfig } from "./types.gateway.js";
 import { SilentReplyPolicyConfigSchema } from "./zod-schema.agent-defaults.js";
 import { ToolsSchema } from "./zod-schema.agent-runtime.js";
 import { AgentsSchema, AudioSchema, BindingsSchema, BroadcastSchema } from "./zod-schema.agents.js";
@@ -69,6 +69,26 @@ const GatewayRemoteSchemaShape = {
 } satisfies ConfigSchemaShape<GatewayRemoteConfig>;
 
 const GatewayRemoteConfigSchema = z.object(GatewayRemoteSchemaShape).strict().optional();
+
+const GatewayBenchCloudSchemaShape = {
+  enabled: z.boolean().optional(),
+  apiBaseUrl: z.string().min(1).optional(),
+  instanceId: z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(
+      /^[A-Za-z0-9_-]+$/,
+      "gateway.benchCloud.instanceId must match /^[A-Za-z0-9_-]+$/ (alphanumeric, underscore, hyphen; 1-128 chars).",
+    )
+    .optional(),
+  installId: z.string().min(1).optional(),
+  agentIdAliases: z.record(z.string().min(1), z.string().min(1)).optional(),
+  pollIntervalMs: z.number().int().positive().optional(),
+  pollTimeoutMs: z.number().int().positive().optional(),
+} satisfies ConfigSchemaShape<GatewayBenchCloudConfig>;
+
+const GatewayBenchCloudConfigSchema = z.object(GatewayBenchCloudSchemaShape).strict().optional();
 
 const LegacyCanvasHostSchema = z
   .object({
@@ -430,6 +450,15 @@ export const OpenClawSchema = z
           .optional(),
       })
       .strict()
+      .optional(),
+    instanceId: z
+      .string()
+      .min(1)
+      .max(128)
+      .regex(
+        /^[A-Za-z0-9_-]+$/,
+        "instanceId must match /^[A-Za-z0-9_-]+$/ (alphanumeric, underscore, hyphen; 1-128 chars).",
+      )
       .optional(),
     env: z
       .object({
@@ -994,6 +1023,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
+        benchCloud: GatewayBenchCloudConfigSchema,
         handshakeTimeoutMs: z.number().int().min(1).optional(),
         channelHealthCheckMinutes: z.number().int().min(0).optional(),
         channelStaleEventThresholdMinutes: z.number().int().min(1).optional(),

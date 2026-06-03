@@ -235,7 +235,7 @@ Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YY
       "entries": {
         "bootstrap-extra-files": {
           "enabled": true,
-          "paths": ["packages/*/AGENTS.md", "packages/*/TOOLS.md"]
+          "paths": ["packages/*/AGENTS.md", "memory/ACTIVE_TASKS.md"]
         }
       }
     }
@@ -243,7 +243,7 @@ Extracts the last 15 user/assistant messages and saves to `<workspace>/memory/YY
 }
 ```
 
-Paths resolve relative to workspace. Only recognized bootstrap basenames are loaded (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`).
+Paths resolve relative to workspace. **Glob patterns** (containing `*`, `?`, `{}`) only match recognized bootstrap basenames (`AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, `MEMORY.md`) — this prevents a broad glob from sweeping in unrelated files. **Explicit literal paths** are operator-intentional and may name any workspace file, so they bypass the basename allowlist — use them to inject live operational context such as `memory/ACTIVE_TASKS.md` into every agent turn. Files are read fresh each run, so edits flow into the next turn; oversized files are token-budgeted (truncated head + a "read for full content" pointer).
 
 <a id="command-logger"></a>
 

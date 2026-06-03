@@ -193,15 +193,36 @@ function expandHomePath(inputPath: string, homedir: string): string {
   return inputPath;
 }
 
-export function resolveDefaultMemoryWikiVaultPath(homedir = os.homedir()): string {
-  return path.join(homedir, ".openclaw", "wiki", "main");
+/**
+ * Instance IDs follow the openclaw.json schema constraint (see
+ * `src/config/zod-schema.ts`): alphanumeric + underscore + hyphen, 1-128 chars.
+ * Kept as a local copy here because the memory-wiki extension doesn't import
+ * from `src/config/*` and the constraint is part of a path component that
+ * must stay filesystem-safe regardless.
+ */
+const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]{1,128}$/;
+
+function normalizeInstanceId(value: string | undefined | null): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  return INSTANCE_ID_PATTERN.test(value) ? value : undefined;
+}
+
+export function resolveDefaultMemoryWikiVaultPath(
+  homedir = os.homedir(),
+  instanceId?: string,
+): string {
+  const vaultName = normalizeInstanceId(instanceId) ?? "main";
+  return path.join(homedir, ".openclaw", "wiki", vaultName);
 }
 
 export function resolveMemoryWikiConfig(
   config: MemoryWikiPluginConfig | undefined,
-  options?: { homedir?: string },
+  options?: { homedir?: string; instanceId?: string },
 ): ResolvedMemoryWikiConfig {
   const homedir = options?.homedir ?? os.homedir();
+  const instanceId = normalizeInstanceId(options?.instanceId);
   const parsed = config ? MemoryWikiConfigSource.safeParse(config) : null;
   const safeConfig = parsed?.success ? parsed.data : (config ?? {});
 
@@ -209,7 +230,7 @@ export function resolveMemoryWikiConfig(
     vaultMode: safeConfig.vaultMode ?? DEFAULT_WIKI_VAULT_MODE,
     vault: {
       path: expandHomePath(
-        safeConfig.vault?.path ?? resolveDefaultMemoryWikiVaultPath(homedir),
+        safeConfig.vault?.path ?? resolveDefaultMemoryWikiVaultPath(homedir, instanceId),
         homedir,
       ),
       renderMode: safeConfig.vault?.renderMode ?? DEFAULT_WIKI_RENDER_MODE,

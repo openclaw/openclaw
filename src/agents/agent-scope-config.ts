@@ -99,8 +99,39 @@ export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
 }
 
 function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | undefined {
-  const id = normalizeAgentId(agentId);
-  return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
+  const requested = normalizeAgentId(agentId);
+  const entries = listAgentEntries(cfg);
+  const exact = entries.find((entry) => normalizeAgentId(entry.id) === requested);
+  if (exact) {
+    return exact;
+  }
+  return entries.find((entry) => {
+    const personaLabel = entry.identity?.name;
+    if (personaLabel && normalizeAgentId(personaLabel) === requested) {
+      return true;
+    }
+    if (Array.isArray(entry.aliases)) {
+      return entry.aliases.some(
+        (alias) => typeof alias === "string" && normalizeAgentId(alias) === requested,
+      );
+    }
+    return false;
+  });
+}
+
+/**
+ * Resolve a user-supplied agent identifier (canonical id, persona label,
+ * or alias) to the canonical agent id. Returns undefined when no agent
+ * matches. Use this at CLI/API boundaries so downstream code always sees
+ * canonical ids.
+ */
+export function canonicalizeAgentId(cfg: OpenClawConfig, agentId: string): string | undefined {
+  const requested = normalizeAgentId(agentId);
+  if (listAgentEntries(cfg).length === 0 && requested === DEFAULT_AGENT_ID) {
+    return DEFAULT_AGENT_ID;
+  }
+  const entry = resolveAgentEntry(cfg, agentId);
+  return entry ? normalizeAgentId(entry.id) : undefined;
 }
 
 export function resolveAgentConfig(

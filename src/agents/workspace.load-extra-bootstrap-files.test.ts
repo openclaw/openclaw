@@ -154,4 +154,49 @@ describe("loadExtraBootstrapFiles", () => {
     expect(files).toHaveLength(0);
     expect(diagnostics.map((diagnostic) => diagnostic.reason)).toContain("security");
   });
+
+  it("loads explicit literal paths with non-bootstrap basenames", async () => {
+    // Operator-intentional literal paths bypass the basename allowlist so live
+    // operational context (e.g. memory/ACTIVE_TASKS.md) can be injected on
+    // every turn — the "one memory system" that web/Slack/CLI all read.
+    const workspaceDir = await createWorkspaceDir("literal-operational");
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "ACTIVE_TASKS.md"), "today's plate", "utf-8");
+
+    const files = await loadExtraBootstrapFiles(workspaceDir, ["memory/ACTIVE_TASKS.md"]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "ACTIVE_TASKS.md",
+        path: path.join(memoryDir, "ACTIVE_TASKS.md"),
+        content: "today's plate",
+        missing: false,
+      },
+    ]);
+  });
+
+  it("still filters non-bootstrap basenames discovered via glob expansion", async () => {
+    const workspaceDir = await createWorkspaceDir("glob-filter");
+    const memoryDir = path.join(workspaceDir, "memory");
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "ACTIVE_TASKS.md"), "plate", "utf-8");
+    await fs.writeFile(path.join(memoryDir, "AGENTS.md"), "agents", "utf-8");
+
+    const { files, diagnostics } = await loadExtraBootstrapFilesWithDiagnostics(workspaceDir, [
+      "memory/*",
+    ]);
+
+    expect(files).toStrictEqual([
+      {
+        name: "AGENTS.md",
+        path: path.join(memoryDir, "AGENTS.md"),
+        content: "agents",
+        missing: false,
+      },
+    ]);
+    expect(diagnostics.map((diagnostic) => diagnostic.reason)).toContain(
+      "invalid-bootstrap-filename",
+    );
+  });
 });
