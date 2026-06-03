@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Maya Torres — Creative Director · cinematic-scroll example</title>
+<meta name="description" content="A brutalist Swiss-editorial cinematic-scroll page — giant grotesk type, monochrome + electric accent, parallax stills. The second flagship example for the cinematic-scroll Agent Skill." />
+
+<!-- Open Graph -->
+<meta property="og:title" content="Maya Torres — Creative Director" />
+<meta property="og:description" content="Brutalist cinematic scroll — giant type, monochrome, parallax. Built with the cinematic-scroll Agent Skill." />
+<meta property="og:type" content="website" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- Archivo (grotesk display + UI), JetBrains Mono (labels) -->
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800;900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+
+<!-- GSAP + ScrollTrigger (now 100% free) — powers ONE dedicated showcase beat:
+     a MONTAGE SNAP contact-sheet (taste-guardrails §2 "Montage") + a
+     VELOCITY-REACTIVE heading (scroll-patterns.md #3). Deferred + feature-
+     detected: if the CDN fails, the hand-rolled rAF engine below still runs and
+     the montage stays at its complete static state. -->
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/gsap.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/gsap/3.13.0/ScrollTrigger.min.js"></script>
+
+<style>
+  :root{
+    --ink:#111113; --grey:#E6E6E6; --grey2:#D4D4D6; --white:#FFFFFF;
+    --muted:#6B6B70; --accent:#0F4CFF;
+    --bg:#E6E6E6; --fg:#111113; --fg-muted:#6B6B70; --line:rgba(17,17,19,.16);
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    background:var(--bg); color:var(--fg);
+    font-family:'Archivo',system-ui,sans-serif; font-weight:500;
+    -webkit-font-smoothing:antialiased; overflow-x:hidden;
+    transition:background .6s linear, color .6s linear;
+  }
+  ::selection{ background:var(--accent); color:#fff; }
+
+  /* ── fixed masthead ───────────────────────────────────────── */
+  .masthead{
+    position:fixed; inset:0 0 auto 0; z-index:50;
+    display:flex; align-items:center; justify-content:space-between;
+    padding:22px clamp(18px,4vw,56px);
+    mix-blend-mode:difference; color:#fff; /* legible over any morph */
+    pointer-events:none;
+  }
+  .masthead .mark{ font-weight:800; letter-spacing:-.02em; font-size:16px; pointer-events:auto;}
+  .masthead nav{ display:flex; gap:clamp(14px,2.4vw,34px); font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.16em; text-transform:uppercase; pointer-events:auto;}
+  .masthead nav a{ color:inherit; text-decoration:none; opacity:.85;}
+  @media (max-width:680px){ .masthead nav{ display:none; } }
+
+  /* ── progress + index rail ────────────────────────────────── */
+  .rail{
+    position:fixed; right:clamp(12px,2vw,26px); top:50%; transform:translateY(-50%);
+    z-index:40; display:flex; flex-direction:column; gap:13px;
+    font-family:'JetBrains Mono',monospace; font-size:11px; mix-blend-mode:difference; color:#fff;
+  }
+  .rail .r{ display:flex; align-items:center; gap:10px; justify-content:flex-end; opacity:.5; transition:opacity .3s; }
+  .rail .r .ln{ width:22px; height:1px; background:currentColor; transition:width .3s; }
+  .rail .r.on{ opacity:1; }
+  .rail .r.on .ln{ width:46px; background:var(--accent); height:2px; }
+  @media (max-width:680px){ .rail{ display:none; } }
+
+  /* ── chapter section ──────────────────────────────────────── */
+  section{
+    position:relative; min-height:235vh;          /* pin room */
+  }
+  .stage{
+    position:sticky; top:0; height:100vh; overflow:hidden;
+    display:grid; grid-template-columns:1fr; align-content:center;
+    padding:0 clamp(18px,5vw,72px);
+    perspective:1400px;                 /* scroll-driven 3D camera depth */
+    perspective-origin:60% 50%;
+  }
+  .figwrap, .copytext, .aicard{ transform-style:preserve-3d; }
+  .figwrap .frame{ transform-style:preserve-3d; }
+
+  /* giant grotesk type — the hero element */
+  .copytext{ position:relative; z-index:6; max-width:min(92vw,1400px); will-change:transform,opacity; }
+  .eyebrow{ font-family:'JetBrains Mono',monospace; font-size:clamp(10px,1vw,12px); letter-spacing:.34em; text-transform:uppercase; color:var(--accent); margin-bottom:clamp(14px,2vw,26px); }
+  h2.giant{
+    font-weight:900; line-height:.86; letter-spacing:-.03em; text-transform:uppercase;
+    font-size:clamp(2.8rem,11.5vw,11rem);
+  }
+  h2.giant .w{ display:inline-block; margin-right:.12em; will-change:transform,opacity; }
+  h2.giant .w.accent{ color:var(--accent); }
+  .lede{ margin-top:clamp(20px,2.6vw,34px); max-width:46ch; font-size:clamp(1rem,1.5vw,1.32rem); line-height:1.5; color:var(--fg-muted); font-weight:500; }
+
+  /* ghost watermark word sliding across */
+  .ghost{
+    position:absolute; z-index:1; font-weight:900; text-transform:uppercase;
+    font-size:clamp(8rem,30vw,28rem); line-height:.8; letter-spacing:-.04em;
+    color:var(--fg); opacity:.04; white-space:nowrap; pointer-events:none;
+    top:50%; left:50%; transform:translate(-50%,-50%); will-change:transform;
+  }
+
+  /* framed parallax still (under the type) */
+  .figwrap{ position:absolute; z-index:3; right:clamp(18px,5vw,72px); top:50%;
+    width:clamp(280px,38vw,560px); aspect-ratio:4/5; transform:translateY(-50%);
+    will-change:transform,opacity; perspective:1200px; }
+  .frame{ position:relative; width:100%; height:100%; }
+  .pic{
+    position:absolute; inset:0; background-size:cover; background-position:center;
+    background-color:var(--grey2);
+    filter:grayscale(1) contrast(1.06);
+    transition:transform .25s ease-out;
+    box-shadow:0 30px 80px rgba(0,0,0,.28);
+  }
+  /* CSS-only placeholder visual (when no real image present) */
+  .pic.placeholder{
+    background-image:
+      repeating-linear-gradient(135deg, rgba(0,0,0,.05) 0 2px, transparent 2px 7px),
+      radial-gradient(120% 90% at 30% 20%, #fafafa 0%, #cfcfd2 55%, #2a2a2e 100%);
+  }
+  .pic::after{ /* grain */
+    content:""; position:absolute; inset:0; opacity:.5; mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.35'/%3E%3C/svg%3E");
+  }
+  .figcap{ position:absolute; left:0; bottom:-26px; display:flex; justify-content:space-between; width:100%;
+    font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.18em; color:var(--fg-muted); }
+  /* corner brackets */
+  .frame .br{ position:absolute; width:26px; height:26px; border:2px solid var(--accent); }
+  .frame .br.tl{ top:-1px; left:-1px; border-right:0; border-bottom:0; }
+  .frame .br.tr{ top:-1px; right:-1px; border-left:0; border-bottom:0; }
+  .frame .br.bl{ bottom:-1px; left:-1px; border-right:0; border-top:0; }
+  .frame .br.brc{ bottom:-1px; right:-1px; border-left:0; border-top:0; }
+
+  /* floating mono UI card (foreground) */
+  .aicard{ position:absolute; z-index:7; left:clamp(18px,5vw,72px); bottom:clamp(60px,12vh,120px);
+    width:min(300px,72vw); padding:14px 16px; background:rgba(255,255,255,.86);
+    border:1px solid var(--line); backdrop-filter:blur(6px);
+    font-family:'JetBrains Mono',monospace; will-change:transform,opacity; }
+  .aicard .t{ font-size:11px; color:var(--accent); margin-bottom:6px; letter-spacing:.04em; }
+  .aicard .b{ font-size:11px; line-height:1.5; color:var(--ink); }
+  section.dark .aicard{ background:rgba(20,20,22,.82); }
+  section.dark .aicard .b{ color:#e8e8ea; }
+
+  /* mobile / reduced-motion fallback */
+  @media (max-width:680px){
+    section{ min-height:auto; padding:14vh 0; }
+    .stage{ position:static; height:auto; display:block; }
+    .figwrap{ position:static; width:100%; transform:none; margin:24px 0 40px; aspect-ratio:16/10; opacity:1!important; }
+    .ghost{ display:none; }
+    .aicard{ position:static; margin-top:18px; }
+    h2.giant{ font-size:18vw; }
+    .copytext .w,.copytext .reveal{ opacity:1!important; transform:none!important; letter-spacing:normal!important; }
+  }
+  @media (prefers-reduced-motion:reduce){
+    html{ scroll-behavior:auto; }
+    .copytext .w,.copytext .reveal,.figwrap{ opacity:1!important; transform:none!important; letter-spacing:normal!important; }
+  }
+
+  footer{ padding:14vh clamp(18px,5vw,72px) 16vh; }
+  footer .big{ font-weight:900; text-transform:uppercase; font-size:clamp(2rem,8vw,6rem); line-height:.9; letter-spacing:-.03em; }
+  footer .big a{ color:var(--accent); text-decoration:none; }
+  footer .meta{ margin-top:28px; font-family:'JetBrains Mono',monospace; font-size:11px; letter-spacing:.14em; color:var(--fg-muted); text-transform:uppercase; }
+  footer .meta a{ color:inherit; }
+
+  /* ── GSAP SHOWCASE — "SELECTED WORK" CONTACT SHEET ────────────────────
+     The ONE GSAP-pinned beat (studio's normal chapters use CSS sticky, NOT
+     ScrollTrigger pins — so this is the only pin and never stacks >3 deep).
+     Technique 1 · MONTAGE SNAP (taste-guardrails §2 "Montage" / scroll-
+       patterns.md "Landing Sequence"): a horizontal track of N work-cards
+       advanced by transform:translate on the scrubbed pin timeline, snapping
+       card→card.
+     Technique 2 · VELOCITY-REACTIVE typography (pattern #3): the big display
+       heading compresses letter-spacing + scaleY on fast scroll.
+     STATIC DEFAULTS below keep it whole when GSAP is absent / reduced-motion /
+     mobile: the section is normal flow, the track wraps, all cards visible. */
+  section.showcase{ min-height:0; }              /* GSAP pin owns the scroll room when active */
+  .montage{ position:relative; padding:16vh clamp(18px,5vw,72px) 14vh; overflow:hidden; }
+  .montage .head{ margin-bottom:clamp(28px,5vh,56px); }
+  .montage .eyebrow{ font-family:'JetBrains Mono',monospace; font-size:clamp(10px,1vw,12px);
+    letter-spacing:.34em; text-transform:uppercase; color:var(--accent); margin-bottom:clamp(12px,1.6vw,20px); }
+  /* large display heading — the velocity-reactive target (≥48px, never body) */
+  .montage h2.mtitle{ font-weight:900; line-height:.86; letter-spacing:-.02em; text-transform:uppercase;
+    font-size:clamp(3rem,9vw,8rem); transform-origin:left center; }
+  .montage h2.mtitle .accent{ color:var(--accent); }
+  /* contact-sheet track — STATIC DEFAULT: flex-wrap grid (all cards on screen) */
+  .montage .track{ display:flex; flex-wrap:wrap; gap:clamp(14px,2vw,28px); }
+  .mcard{ position:relative; flex:1 1 clamp(200px,18vw,260px); aspect-ratio:4/5;
+    background:var(--white); border:1px solid var(--line); padding:16px 18px;
+    display:flex; flex-direction:column; justify-content:space-between; }
+  .mcard .mi{ font-weight:900; font-size:clamp(2.6rem,5vw,4.4rem); line-height:.9; letter-spacing:-.04em; color:var(--ink); }
+  .mcard .ml{ font-weight:700; font-size:clamp(1rem,1.5vw,1.3rem); line-height:1.12; color:var(--ink); }
+  .mcard .mm{ font-family:'JetBrains Mono',monospace; font-size:10px; letter-spacing:.16em;
+    text-transform:uppercase; color:var(--fg-muted); }
+  .mcard .mb{ position:absolute; top:0; left:0; height:3px; width:100%; background:var(--accent); transform-origin:left; }
+  /* accent on the last "open" card */
+  .mcard:last-child{ background:var(--ink); }
+  .mcard:last-child .mi,.mcard:last-child .ml{ color:var(--white); }
+  .mcard:last-child .mm{ color:#9A9AA0; }
+
+  @media (max-width:680px){
+    /* static stacked contact sheet — no pin, no snap, no velocity */
+    .montage{ padding:13vh 22px 11vh; }
+    .montage h2.mtitle{ font-size:14vw; transform:none!important; letter-spacing:-.02em!important; }
+    .montage .track{ flex-direction:column; flex-wrap:nowrap; gap:16px; }
+    .mcard{ flex:1 1 auto; aspect-ratio:16/9; }
+  }
+  @media (prefers-reduced-motion:reduce){
+    .montage h2.mtitle{ transform:none!important; letter-spacing:-.02em!important; }
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="mark">MAYA TORRES</div>
+  <nav>
+    <a href="#work">Work</a>
+    <a href="#recognition">Recognition</a>
+    <a href="#contact">Contact</a>
+  </nav>
+</header>
+
+<div class="rail" id="rail"></div>
+
+<main id="app"></main>
+
+<footer id="contact">
+  <div class="big">Let’s make work<br>that <a href="mailto:studio@example.com">matters →</a></div>
+  <div class="meta">Built with the <a href="https://github.com/MustBeSimo/cinematic-scroll-skill">cinematic-scroll</a> Agent Skill · fictional persona, no real brands · one of many possible aesthetics</div>
+</footer>
+
+<script type="module">
+import { CHAPTERS, PALETTE, MONTAGE } from './chapters.js';
+
+const clamp=(v,a,b)=>Math.min(b,Math.max(a,v));
+const smooth=(e0,e1,x)=>{ if(x<=e0)return 0; if(x>=e1)return 1; const t=(x-e0)/(e1-e0); return t*t*(3-2*t); };
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const isTouch = matchMedia('(pointer: coarse)').matches;
+const isMobile = () => innerWidth <= 680;
+
+const app = document.getElementById('app');
+const rail = document.getElementById('rail');
+
+// preflight: which real images exist? (fall back to CSS placeholder)
+function probe(src){ return new Promise(res=>{ const i=new Image(); i.onload=()=>res(true); i.onerror=()=>res(false); i.src=src; }); }
+
+const ghostWord = t => (t.flat().filter(x=>typeof x==='string').join(' ').split(' ')[0]||'').toUpperCase();
+
+(async () => {
+  for (const ch of CHAPTERS){
+    const sec = document.createElement('section');
+    sec.id = ch.id.replace(/^\d+-/,'');
+    if (ch.depthTextDark) sec.classList.add('dark');
+    sec.dataset.morph = ch.morph;
+    sec.dataset.dark = ch.depthTextDark ? '1':'0';
+
+    const titleHTML = ch.title.map(([chunk,acc]) =>
+      chunk.split(' ').map(w=>`<span class="w${acc?' accent':''}">${w}</span>`).join(' ')
+    ).join(' ');
+
+    const imgPath = `assets/${ch.id}.jpg`;
+    const hasImg = await probe(imgPath);
+    const picStyle = hasImg ? `background-image:url('${imgPath}')` : '';
+    const picClass = hasImg ? 'pic' : 'pic placeholder';
+
+    sec.innerHTML = `
+      <div class="stage">
+        <div class="ghost" data-depth="0.3">${ghostWord(ch.title)}</div>
+        <div class="figwrap" data-depth="0.5">
+          <div class="frame">
+            <span class="br tl"></span><span class="br tr"></span><span class="br bl"></span><span class="br brc"></span>
+            <div class="${picClass}" style="${picStyle}"></div>
+            <div class="figcap"><span>${ch.fig}</span><span>${ch.figLabel}</span></div>
+          </div>
+        </div>
+        <div class="copytext">
+          <div class="eyebrow">${ch.eyebrow}</div>
+          <h2 class="giant">${titleHTML}</h2>
+          <p class="lede reveal">${ch.body}</p>
+        </div>
+        <div class="aicard" data-depth="1.25">
+          <div class="t">${ch.card.tag}</div>
+          <div class="b">${ch.card.body}</div>
+        </div>
+      </div>`;
+    app.appendChild(sec);
+
+    const r = document.createElement('div');
+    r.className='r'; r.dataset.id=ch.id;
+    r.innerHTML = `<span>${ch.id.split('-')[0].padStart(2,'0')}</span><span class="ln"></span>`;
+    rail.appendChild(r);
+  }
+
+  /* ── APPEND THE GSAP SHOWCASE BEAT ("SELECTED WORK" contact sheet) ────
+     Inserted right after THE WORK chapter (2-work) so it reads: work →
+     contact-sheet montage → craft. Built BEFORE sections/rails are collected
+     so the centre-spy and index rail stay index-aligned (the spy uses
+     sections.indexOf against the parallel rails[] array). The montage is the
+     ONE GSAP-pinned section; studio's chapters are CSS-sticky (not pins), so
+     this never creates >3 consecutive ScrollTrigger pins (§1.3) and the
+     chapters on either side give >80vh of free-scroll release. Pure markup
+     here; motion is wired at the end (desktop-only, only if GSAP loaded). */
+  const cardsHTML = MONTAGE.map(c => `
+    <article class="mcard">
+      <span class="mb"></span>
+      <div class="mi">${c.idx}</div>
+      <div>
+        <div class="ml">${c.label}</div>
+        <div class="mm">${c.year} · ${c.meta}</div>
+      </div>
+    </article>`).join('');
+  const show = document.createElement('section');
+  show.className = 'showcase'; show.id = 'selected';
+  show.dataset.morph = '#E6E6E6'; show.dataset.dark = '0';
+  show.innerHTML = `
+    <div class="montage">
+      <div class="head">
+        <div class="eyebrow">SELECTED WORK · CONTACT SHEET</div>
+        <h2 class="mtitle">Twelve years<span class="accent">, on file.</span></h2>
+      </div>
+      <div class="track">${cardsHTML}</div>
+    </div>`;
+  const workSec = [...app.children].find(s => s.id === 'work');
+  app.insertBefore(show, workSec ? workSec.nextSibling : null);   // after 2-work
+  const sr = document.createElement('div');
+  sr.className = 'r'; sr.dataset.id = 'selected';
+  sr.innerHTML = `<span>W</span><span class="ln"></span>`;
+  const workRail = [...rail.children].find(r => r.dataset.id === '2-work');
+  rail.insertBefore(sr, workRail ? workRail.nextSibling : null);
+
+  const sections = [...document.querySelectorAll('section')];
+  const rails = [...rail.querySelectorAll('.r')];
+
+  /* background morph + active rail via whichever section crosses screen-center.
+     NOTE: sections are 235vh — taller than the viewport — so a threshold-based
+     observer (which needs N% of the element visible) can NEVER fire. Instead we
+     collapse the observer root to a 1px band at the vertical center via
+     rootMargin: the section whose body straddles the middle of the screen is the
+     active one. Reliable regardless of section height. */
+  function applyActive(sec){
+    const idx = sections.indexOf(sec);
+    document.body.style.background = sec.dataset.morph;
+    const dark = sec.dataset.dark==='1';
+    document.body.style.setProperty('--fg', dark ? '#FFFFFF':'#111113');
+    document.body.style.setProperty('--fg-muted', dark ? '#9A9AA0':'#6B6B70');
+    rails.forEach((r,i)=> r.classList.toggle('on', i===idx));
+  }
+  const spy = new IntersectionObserver((entries)=>{
+    entries.forEach(e=>{ if (e.isIntersecting) applyActive(e.target); });
+  },{ rootMargin: '-50% 0px -50% 0px', threshold: 0 });
+  sections.forEach(s=>spy.observe(s));
+  applyActive(sections[0]); // paint initial state immediately
+
+  /* mobile / reduced-motion: fade-up only */
+  if (reduce || isMobile()){
+    const up=new IntersectionObserver((es)=>{es.forEach(e=>{if(e.isIntersecting){e.target.classList.add('in');up.unobserve(e.target);}});},{threshold:.15});
+    document.querySelectorAll('.reveal').forEach(el=>up.observe(el));
+    return; // skip the rAF parallax engine entirely on mobile
+  }
+
+  /* desktop parallax — BOLD cinematic engine.
+     Unified approach→pin→exit timeline T∈[0,1]; never starts invisible.
+     Layers move on different planes with real scroll-driven 3D:
+       • figure: Y-drift + Z-dolly toward viewer + rotateY/rotateX camera swing
+       • giant type: per-word Z-stagger (words arrive at staggered depths) + rotateX settle
+       • ghost watermark: long horizontal sweep, counter-axis to the type
+       • card: faster drift + slight rotateY  */
+  let mx=0,my=0;            // pointer for the live 3D camera, blended with scroll
+  if(!isTouch && !reduce){
+    addEventListener('pointermove',e=>{ mx=(e.clientX/innerWidth-0.5); my=(e.clientY/innerHeight-0.5); },{passive:true});
+  }
+  let ticking=false;
+  function parallax(){
+    const vh=innerHeight;
+    for(const sec of sections){
+      const rect=sec.getBoundingClientRect();
+      const total=sec.offsetHeight+vh;
+      const T=clamp((vh-rect.top)/total,0,1);
+      const enter=smooth(0.06,0.32,T);
+      const exit=1-smooth(0.66,0.88,T);
+      const live=enter*exit;
+      const drift=0.46-T;                 // signed, ~0 at hold
+      const onStage = T>0.04 && T<0.96;   // only drive 3D while in view (perf)
+
+      const fig=sec.querySelector('.figwrap');
+      if(fig){ const d=+fig.dataset.depth;
+        // Z-dolly: arrives from -260px toward the viewer; bigger Y travel
+        const z = -260*(1-enter) + drift*120*d;
+        const y = drift*300*d;
+        const sc = 0.9 + 0.1*enter;
+        // scroll-driven camera swing + subtle pointer blend
+        const ry = drift*22 + (onStage? mx*10 : 0);
+        const rx = -drift*12 + (onStage? -my*7 : 0);
+        fig.style.transform =
+          `translateY(calc(-50% + ${y.toFixed(1)}px)) translateZ(${z.toFixed(1)}px) `+
+          `rotateY(${ry.toFixed(2)}deg) rotateX(${rx.toFixed(2)}deg) scale(${sc.toFixed(3)})`;
+        fig.style.opacity=(0.08+0.92*live).toFixed(3);
+      }
+      const ghost=sec.querySelector('.ghost');
+      if(ghost){ const d=+ghost.dataset.depth;
+        // long horizontal sweep + slight scale breathing, deep behind everything
+        ghost.style.transform=
+          `translate(calc(-50% + ${(drift*620*d).toFixed(0)}px),-50%) translateZ(-340px) scale(${(1.06-0.06*enter).toFixed(3)})`;
+      }
+      const copy=sec.querySelector('.copytext');
+      if(copy){
+        // whole block: gentle counter-drift + rotateX settle (type tilts up into place)
+        copy.style.transform=`translateY(${(drift*90).toFixed(1)}px) rotateX(${(drift*7).toFixed(2)}deg)`;
+        copy.style.opacity=(0.05+0.95*live).toFixed(3);
+        const words=copy.querySelectorAll('h2 .w'); const n=words.length;
+        words.forEach((w,k)=>{
+          const t0=0.05+(k/n)*0.20; const wp=smooth(t0,t0+0.14,T);
+          // each word flies in from its own depth + slight Y — staggered 3D arrival
+          const wz=(1-wp)*-220; const wy=(1-wp)*44;
+          w.style.opacity=wp.toFixed(3);
+          w.style.transform=`translateY(${wy.toFixed(1)}px) translateZ(${wz.toFixed(0)}px)`;
+        });
+        const rev=copy.querySelector('.reveal');
+        if(rev) rev.style.opacity=(smooth(0.14,0.34,T)*exit).toFixed(3);
+      }
+      const card=sec.querySelector('.aicard');
+      if(card){ const d=+card.dataset.depth;
+        card.style.transform=`translateY(${(drift*150*(d-1)*2.6).toFixed(1)}px) translateZ(40px) rotateY(${(drift*-10).toFixed(2)}deg)`;
+        card.style.opacity=(0.95*smooth(0.18,0.40,T)*(1-smooth(0.62,0.84,T))).toFixed(3);
+      }
+    }
+    ticking=false;
+  }
+  function onScroll(){ if(!ticking){ ticking=true; requestAnimationFrame(parallax); } }
+  addEventListener('scroll',onScroll,{passive:true});
+  addEventListener('resize',()=>{ticking=true;requestAnimationFrame(parallax);},{passive:true});
+  // pointer also re-renders so the figure's camera-swing blend stays live at rest
+  if(!isTouch && !reduce) addEventListener('pointermove',onScroll,{passive:true});
+  parallax(); // initial paint
+
+  /* second-order inner micro-tilt on the image itself (adds depth over the
+     figure's scroll camera; lives on .pic so it doesn't fight .figwrap) */
+  if(!isTouch && !reduce){
+    document.querySelectorAll('.frame').forEach(frame=>{
+      const pic=frame.querySelector('.pic');
+      frame.addEventListener('pointermove',ev=>{
+        const r=frame.getBoundingClientRect();
+        const px=(ev.clientX-r.left)/r.width-0.5, py=(ev.clientY-r.top)/r.height-0.5;
+        pic.style.transform=`translateZ(40px) rotateY(${px*7}deg) rotateX(${-py*5}deg)`;
+      });
+      frame.addEventListener('pointerleave',()=>{pic.style.transform='translateZ(0) rotateY(0) rotateX(0)';});
+    });
+  }
+
+  /* ── GSAP SHOWCASE WIRING — desktop & non-reduced only (matchMedia-gated so
+     it auto-kills on resize into a small/reduced context). Two cinematic
+     techniques on the #selected contact sheet:
+       • MONTAGE SNAP (taste-guardrails §2 "Montage" / "Landing Sequence") —
+         the card track advances via transform:translateX on the scrubbed pin
+         timeline; ScrollTrigger.snap snaps card→card. NEVER touches left/width.
+       • VELOCITY-REACTIVE typography (scroll-patterns.md #3) — the big display
+         heading compresses letter-spacing + scaleY from a lerped velocity
+         tracker, driven by gsap.quickTo. Large display type only; off on touch.
+     If GSAP never loads, #selected stays at its complete static (wrapped) state. */
+  (function wireShowcase(tries){
+    if(!window.gsap || !window.ScrollTrigger){
+      if(tries>0) requestAnimationFrame(()=>wireShowcase(tries-1));
+      return;
+    }
+    gsap.registerPlugin(ScrollTrigger);
+    ScrollTrigger.defaults({ scrub:0.5, fastScrollEnd:true, invalidateOnRefresh:true });
+    const mm = gsap.matchMedia();
+    mm.add('(min-width:769px) and (prefers-reduced-motion:no-preference)', () => {
+      const sec   = document.querySelector('#selected');
+      const wrap  = sec && sec.querySelector('.montage');
+      const track = sec && sec.querySelector('.track');
+      const title = sec && sec.querySelector('.mtitle');
+      if(!sec || !track || !title) return;
+      const cards = [...track.children];
+      const n = cards.length;
+
+      /* MONTAGE SNAP — horizontal track laid out in one row for the pinned beat,
+         advanced by translateX across the scrub timeline; snaps card→card.
+         These layout writes are one-time setup (not per-frame), transform-only
+         drives the motion. */
+      gsap.set(track, { display:'flex', flexWrap:'nowrap', willChange:'transform' });
+      gsap.set(cards, { flex:'0 0 clamp(220px,24vw,340px)' });
+
+      const shift = () => -(track.scrollWidth - wrap.clientWidth);   // cached on refresh
+      const tl = gsap.timeline({ scrollTrigger:{
+        trigger:'#selected', start:'top top', end:'+=' + (n*60) + '%',
+        pin:wrap, anticipatePin:1,
+        snap:{ snapTo: 1/(n-1), duration:{min:.2,max:.5}, ease:'power2.out' } } });
+      tl.fromTo(track, { x:0 }, { x:shift, ease:'none' }, 0);
+
+      /* VELOCITY-REACTIVE typography — lerped velocity tracker (deltaY/dt, lerp
+         0.15, capped) → gsap.quickTo on the heading's letter-spacing + scaleY.
+         Disabled on touch. Transform-based scaleY + letter-spacing (allowed on
+         ≥48px display type only, §1.4). Lives in this section's lifecycle only. */
+      let velRAF = null;
+      if(!isTouch){
+        const setLS = gsap.quickTo(title, 'letterSpacing', { duration:.3, ease:'power2.out' });
+        const setSY = gsap.quickTo(title, 'scaleY',        { duration:.3, ease:'power2.out' });
+        let lastY = scrollY, lastT = performance.now(), vel = 0;
+        const tick = (now) => {
+          const dt = Math.max(now - lastT, 1);
+          const dy = scrollY - lastY;
+          vel += (dy/dt - vel) * 0.15;            // lerp toward instantaneous velocity
+          lastY = scrollY; lastT = now;
+          const v = Math.min(Math.abs(vel), 3);   // cap px/ms
+          setLS((-0.02 - v*0.02) + 'em');         // -0.02em (calm) → ~-0.08em (fast)
+          setSY(1 - v*0.04);                       // scaleY 1 → ~0.88 on fast scroll
+          velRAF = requestAnimationFrame(tick);
+        };
+        velRAF = requestAnimationFrame(tick);
+      }
+
+      return () => {
+        if(velRAF) cancelAnimationFrame(velRAF);
+        gsap.set([track, ...cards, title], { clearProps:'all' });
+      };
+    });
+  })(120);
+})();
+</script>
+</body>
+</html>
