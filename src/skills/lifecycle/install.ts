@@ -15,7 +15,6 @@ import {
   hasBinary as defaultHasBinary,
   resolveSkillsInstallPreferences as defaultResolveSkillsInstallPreferences,
 } from "../loading/config.js";
-import { resolveSkillKey } from "../loading/frontmatter.js";
 import { resolveSkillSource } from "../loading/source.js";
 import { loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries } from "../loading/workspace.js";
 import type { SkillEntry, SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
@@ -537,8 +536,6 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       const setupResult = await runSkillSetupHook({
         targetDir: path.resolve(entry.skill.baseDir),
         mode: "install",
-        config: params.config,
-        skillKey: resolveSkillKey(entry.skill, entry),
       });
       if (!setupResult.ok) {
         return withWarnings(
@@ -608,8 +605,6 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
     const setupResult = await runSkillSetupHook({
       targetDir: path.resolve(entry.skill.baseDir),
       mode: "install",
-      config: params.config,
-      skillKey: resolveSkillKey(entry.skill, entry),
     });
     if (!setupResult.ok) {
       return withWarnings(

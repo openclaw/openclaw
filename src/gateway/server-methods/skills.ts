@@ -539,7 +539,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: p.slug,
         version: p.version,
         force: Boolean(p.force),
-        config: cfg,
         allowSetupHooks: p.allowSetupHooks === true,
         config: cfg,
       });
@@ -655,7 +654,6 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const results = await updateSkillsFromClawHub({
         workspaceDir,
         slug: p.slug,
-        config: cfg,
         allowSetupHooks: p.allowSetupHooks === true,
         config: cfg,
       });

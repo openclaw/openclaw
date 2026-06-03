@@ -110,8 +110,6 @@ export async function installUploadedSkillArchive(params: {
           source: { kind: "upload", authority: "user", mutable: false, network: false },
           requestedSpecifier: `upload:${params.uploadId}`,
         },
-        config: params.config,
-        skillKey: record.slug,
         allowSetupHooks: params.allowSetupHooks,
       });
       if (!install.ok) {

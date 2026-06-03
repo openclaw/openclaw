@@ -219,44 +219,6 @@ describe("installSkill install policy hooks", () => {
     });
   });
 
-  it("passes configured skill env to non-download setup hooks", async () => {
-    await withWorkspaceCase(async ({ workspaceDir }) => {
-      const skillDir = await writeInstallableSkill(workspaceDir, "setup-config-skill", {
-        setupScript: "scripts/setup.sh",
-        envVars: ["SETUP_TOKEN", "PRIMARY_TOKEN"],
-        primaryEnv: "PRIMARY_TOKEN",
-      });
-      const setupScriptPath = path.join(skillDir, "scripts", "setup.sh");
-      await fs.mkdir(path.dirname(setupScriptPath), { recursive: true });
-      await fs.writeFile(setupScriptPath, "#!/bin/sh\necho setup\n");
-      await fs.chmod(setupScriptPath, 0o755);
-
-      const result = await installSkill({
-        workspaceDir,
-        skillName: "setup-config-skill",
-        installId: "deps",
-        allowSetupHooks: true,
-        config: {
-          skills: {
-            entries: {
-              "setup-config-skill": {
-                env: { SETUP_TOKEN: "configured-token" },
-                apiKey: "configured-primary",
-              },
-            },
-          },
-        },
-      });
-
-      expect(result.ok).toBe(true);
-      expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(2);
-      const setupCall = lastRunCommandCall();
-      const options = setupCall?.[1] as { env?: Record<string, string> };
-      expect(options.env?.SETUP_TOKEN).toBe("configured-token");
-      expect(options.env?.PRIMARY_TOKEN).toBe("configured-primary");
-    });
-  });
-
   it("keeps the default npm prefix out of env-overridden state paths", () => {
     const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
     try {

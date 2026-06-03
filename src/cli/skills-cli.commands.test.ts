@@ -734,7 +734,6 @@ describe("skills cli commands", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/openclaw-config",
       slug: undefined,
-      config: {},
       allowSetupHooks: false,
       logger: expect.any(Object),
     });
@@ -762,7 +761,6 @@ describe("skills cli commands", () => {
     expect(updateSkillsFromClawHubMock).toHaveBeenCalledWith({
       workspaceDir: "/tmp/openclaw-config",
       slug: "calendar",
-      config: {},
       allowSetupHooks: false,
       logger: expect.any(Object),
     });

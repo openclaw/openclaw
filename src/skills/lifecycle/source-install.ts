@@ -237,8 +237,6 @@ async function installLocalSkillDir(params: {
           : { kind: "local-path", authority: "user", mutable: true, network: false },
       requestedSpecifier: params.sourceSpec,
     },
-    config: params.config,
-    skillKey: slug,
     allowSetupHooks: params.allowSetupHooks,
   });
   if (!install.ok) {
@@ -389,7 +387,6 @@ async function installPathSkill(params: {
     slug: params.slug,
     force: params.force,
     timeoutMs: params.timeoutMs,
-    config: params.config,
     allowSetupHooks: params.allowSetupHooks,
     logger: params.logger,
     config: params.config,

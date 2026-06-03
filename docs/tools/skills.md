@@ -409,11 +409,9 @@ metadata:
     When a trusted install/update call opts in, OpenClaw runs `setup.script`
     after the install payload is staged and before the new skill directory is
     published. Files written under `SKILL_DIR` are published with the skill; do
-    not persist `SKILL_DIR` itself as a stable final path. The hook receives
-    `SKILL_DIR`, `OPENCLAW_HOOK_KIND` (`install` or `update`), and env vars listed
-    in `requires.env` after host-exec sanitization. Reserved host variables such
-    as `OPENCLAW_*`, `GITHUB_*`, `NPM_*`, shell startup files, and path overrides
-    are not forwarded from the host unless OpenClaw owns them for the hook.
+    not persist `SKILL_DIR` itself as a stable final path. The hook receives only
+    `SKILL_DIR`, `OPENCLAW_HOOK_KIND` (`install` or `update`), and the host `PATH`;
+    skill-config env and `requires.env` values are not forwarded into setup hooks.
   </Accordion>
   <Accordion title="Sandboxing notes">
     `requires.bins` is checked on the **host** at skill load time. If an agent

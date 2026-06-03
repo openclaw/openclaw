@@ -70,10 +70,8 @@ function skillFileContent(name: string): string {
   return ["---", `name: ${name}`, "description: Test skill", "---", "", "# Test", ""].join("\n");
 }
 
-function setupSkillFileContent(name: string, script: string, envVars: string[] = []): string {
-  const metadata = JSON.stringify({
-    openclaw: { setup: { script }, ...(envVars.length ? { requires: { env: envVars } } : {}) },
-  });
+function setupSkillFileContent(name: string, script: string): string {
+  const metadata = JSON.stringify({ openclaw: { setup: { script } } });
   return [
     "---",
     `name: ${name}`,
@@ -84,6 +82,27 @@ function setupSkillFileContent(name: string, script: string, envVars: string[] =
     "# Test",
     "",
   ].join("\n");
+}
+
+async function prepareSetupSkill(params: { script?: string; scriptContent?: string }) {
+  const root = await tempDirs.make("openclaw-skill-archive-install-");
+  const extractedRoot = path.join(root, "source-skill");
+  const workspaceDir = path.join(root, "workspace");
+  await fs.mkdir(path.join(extractedRoot, "scripts"), { recursive: true });
+  await fs.writeFile(
+    path.join(extractedRoot, "SKILL.md"),
+    setupSkillFileContent("Setup Skill", params.script ?? "scripts/setup.sh"),
+    "utf8",
+  );
+  if (params.scriptContent) {
+    await fs.writeFile(
+      path.join(extractedRoot, "scripts", "setup.sh"),
+      params.scriptContent,
+      "utf8",
+    );
+    await fs.chmod(path.join(extractedRoot, "scripts", "setup.sh"), 0o755);
+  }
+  return { extractedRoot, workspaceDir };
 }
 
 afterEach(async () => {
@@ -251,134 +270,39 @@ describe("skill archive install", () => {
     expect(payload?.request?.mode).toBe("install");
   });
 
-  it("keeps archive setup hooks disabled by default", async () => {
-    const root = await tempDirs.make("openclaw-skill-archive-install-");
-    const extractedRoot = path.join(root, "source-skill");
-    const workspaceDir = path.join(root, "workspace");
-    await fs.mkdir(path.join(extractedRoot, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(extractedRoot, "SKILL.md"),
-      setupSkillFileContent("Setup Skill", "scripts/setup.sh"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(extractedRoot, "scripts", "setup.sh"),
-      '#!/bin/sh\nprintf "%s" "$OPENCLAW_HOOK_KIND" > setup-output.txt\n',
-      "utf8",
-    );
-    await fs.chmod(path.join(extractedRoot, "scripts", "setup.sh"), 0o755);
-
-    const result = await installExtractedSkillRoot({
+  it("runs archive setup hooks only when explicitly allowed", async () => {
+    const { extractedRoot, workspaceDir } = await prepareSetupSkill({
+      scriptContent: '#!/bin/sh\nprintf "%s" "$OPENCLAW_HOOK_KIND" > setup-output.txt\n',
+    });
+    const skipped = await installExtractedSkillRoot({
       workspaceDir,
       slug: "setup-skill",
       extractedRoot,
       mode: "install",
     });
 
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
+    expect(skipped.ok).toBe(true);
+    if (!skipped.ok) {
       return;
     }
-    await expect(fs.stat(path.join(result.targetDir, "setup-output.txt"))).rejects.toMatchObject({
+    await expect(fs.stat(path.join(skipped.targetDir, "setup-output.txt"))).rejects.toMatchObject({
       code: "ENOENT",
     });
-  });
 
-  it("fails allowed archive setup hooks with invalid declared script paths", async () => {
-    const root = await tempDirs.make("openclaw-skill-archive-install-");
-    const extractedRoot = path.join(root, "source-skill");
-    const workspaceDir = path.join(root, "workspace");
-    await fs.mkdir(extractedRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(extractedRoot, "SKILL.md"),
-      setupSkillFileContent("Setup Skill", "../outside.sh"),
-      "utf8",
-    );
-
-    const result = await installExtractedSkillRoot({
+    const allowed = await installExtractedSkillRoot({
       workspaceDir,
-      slug: "setup-skill",
+      slug: "setup-skill-allowed",
       extractedRoot,
       mode: "install",
-      scan: false,
       allowSetupHooks: true,
     });
 
-    expect(result).toMatchObject({ ok: false, failureKind: "unavailable" });
-    if (!result.ok) {
-      expect(result.error).toContain("path traversal");
-    }
-  });
-
-  it("passes configured skill env to allowed archive setup hooks", async () => {
-    const root = await tempDirs.make("openclaw-skill-archive-install-");
-    const extractedRoot = path.join(root, "source-skill");
-    const workspaceDir = path.join(root, "workspace");
-    await fs.mkdir(path.join(extractedRoot, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(extractedRoot, "SKILL.md"),
-      setupSkillFileContent("Setup Skill", "scripts/setup.sh", ["SETUP_TOKEN"]),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(extractedRoot, "scripts", "setup.sh"),
-      '#!/bin/sh\nprintf "%s" "$SETUP_TOKEN" > setup-output.txt\n',
-      "utf8",
-    );
-    await fs.chmod(path.join(extractedRoot, "scripts", "setup.sh"), 0o755);
-
-    const result = await installExtractedSkillRoot({
-      workspaceDir,
-      slug: "setup-skill",
-      extractedRoot,
-      mode: "install",
-      scan: false,
-      config: {
-        skills: { entries: { "setup-skill": { env: { SETUP_TOKEN: "configured-token" } } } },
-      },
-      allowSetupHooks: true,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
+    expect(allowed.ok).toBe(true);
+    if (!allowed.ok) {
       return;
     }
     await expect(
-      fs.readFile(path.join(result.targetDir, "setup-output.txt"), "utf8"),
-    ).resolves.toBe("configured-token");
-  });
-
-  it("runs archive setup hooks only when explicitly allowed", async () => {
-    const root = await tempDirs.make("openclaw-skill-archive-install-");
-    const extractedRoot = path.join(root, "source-skill");
-    const workspaceDir = path.join(root, "workspace");
-    await fs.mkdir(path.join(extractedRoot, "scripts"), { recursive: true });
-    await fs.writeFile(
-      path.join(extractedRoot, "SKILL.md"),
-      setupSkillFileContent("Setup Skill", "scripts/setup.sh"),
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(extractedRoot, "scripts", "setup.sh"),
-      '#!/bin/sh\nprintf "%s" "$OPENCLAW_HOOK_KIND" > setup-output.txt\n',
-      "utf8",
-    );
-    await fs.chmod(path.join(extractedRoot, "scripts", "setup.sh"), 0o755);
-
-    const result = await installExtractedSkillRoot({
-      workspaceDir,
-      slug: "setup-skill",
-      extractedRoot,
-      mode: "install",
-      allowSetupHooks: true,
-    });
-
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    await expect(
-      fs.readFile(path.join(result.targetDir, "setup-output.txt"), "utf8"),
+      fs.readFile(path.join(allowed.targetDir, "setup-output.txt"), "utf8"),
     ).resolves.toBe("install");
   });
 });
