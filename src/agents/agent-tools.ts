@@ -257,6 +257,8 @@ function applyModelProviderToolPolicy(
     config: params?.config,
     agentId: params?.agentId,
     sessionKey: params?.sessionKey,
+    modelProvider: params?.modelProvider,
+    modelId: params?.modelId,
     preserveToolNames: params?.localModelLeanPreserveToolNames ?? params?.runtimeToolAllowlist,
   });
 
@@ -603,6 +605,11 @@ export function createOpenClawCodingTools(options?: {
     return normalized === "*" || normalized === "message";
   });
   const localModelLeanPreserveToolNames = resolveLocalModelLeanPreserveToolNames({
+    config: options?.config,
+    agentId,
+    sessionKey: options?.sessionKey,
+    modelProvider: options?.modelProvider,
+    modelId: options?.modelId,
     toolNames: options?.runtimeToolAllowlist,
     forceMessageTool: options?.forceMessageTool,
     sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,

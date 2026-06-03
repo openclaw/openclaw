@@ -1,10 +1,20 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveAgentConfig, resolveDefaultAgentId } from "./agent-scope-config.js";
+import { resolveProviderToolPolicy } from "./agent-tools.policy.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
 import { expandToolGroups, normalizeToolName } from "./tool-policy.js";
 
-const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set(["browser", "cron", "message"]);
+const LOCAL_MODEL_LEAN_DENY_TOOL_NAMES = new Set([
+  "browser",
+  "cron",
+  "image_generate",
+  "message",
+  "music_generate",
+  "pdf",
+  "tts",
+  "video_generate",
+]);
 
 function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<string> {
   if (!names) {
@@ -17,12 +27,51 @@ function resolvePreservedLocalModelLeanToolNames(names?: Iterable<string>): Set<
   );
 }
 
+function collectConfiguredPreservedToolNames(params?: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  modelProvider?: string;
+  modelId?: string;
+}): string[] {
+  const names: string[] = [];
+  const collect = (policy?: {
+    allow?: string[];
+    alsoAllow?: string[];
+    byProvider?: Record<string, { allow?: string[]; alsoAllow?: string[] }>;
+  }) => {
+    if (!policy) {
+      return;
+    }
+    names.push(...(policy?.allow ?? []), ...(policy?.alsoAllow ?? []));
+    const providerPolicy = resolveProviderToolPolicy({
+      byProvider: policy.byProvider,
+      modelProvider: params?.modelProvider,
+      modelId: params?.modelId,
+    });
+    if (providerPolicy) {
+      collect(providerPolicy);
+    }
+  };
+  collect(params?.config?.tools);
+  const agentId = params?.config ? resolveLocalModelLeanAgentId(params) : undefined;
+  if (params?.config && agentId) {
+    collect(resolveAgentConfig(params.config, agentId)?.tools);
+  }
+  return names;
+}
+
 export function resolveLocalModelLeanPreserveToolNames(params?: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  sessionKey?: string;
+  modelProvider?: string;
+  modelId?: string;
   toolNames?: Iterable<string>;
   forceMessageTool?: boolean;
   sourceReplyDeliveryMode?: string;
 }): string[] {
-  const names = [...(params?.toolNames ?? [])];
+  const names = [...collectConfiguredPreservedToolNames(params), ...(params?.toolNames ?? [])];
   if (params?.forceMessageTool || params?.sourceReplyDeliveryMode === "message_tool_only") {
     names.push("message");
   }
@@ -67,12 +116,23 @@ export function filterLocalModelLeanTools(params: {
   config?: OpenClawConfig;
   agentId?: string;
   sessionKey?: string;
+  modelProvider?: string;
+  modelId?: string;
   preserveToolNames?: Iterable<string>;
 }): AnyAgentTool[] {
   if (!isLocalModelLeanEnabled(params)) {
     return params.tools;
   }
-  const preservedToolNames = resolvePreservedLocalModelLeanToolNames(params.preserveToolNames);
+  const preservedToolNames = resolvePreservedLocalModelLeanToolNames(
+    resolveLocalModelLeanPreserveToolNames({
+      config: params.config,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      modelProvider: params.modelProvider,
+      modelId: params.modelId,
+      toolNames: params.preserveToolNames,
+    }),
+  );
   return params.tools.filter((tool) => {
     const normalizedName = normalizeToolName(tool.name);
     return (
