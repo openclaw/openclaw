@@ -13,10 +13,23 @@ function hasRawExplicitPort(raw: string): boolean {
   return /:\d+$/.test(hostPort);
 }
 
+export type BrowserHttpUrlParseResult = {
+  /** Parsed URL object retained for callers that need protocol, host, path, or credentials. */
+  parsed: URL;
+  /** Effective TCP port, including inferred 80/443 defaults. */
+  port: number;
+  /** Whether the raw URL text included a port, even if URL normalization drops it. */
+  hasExplicitPort: boolean;
+  /** URL string normalized by WHATWG URL rules with a trailing slash removed. */
+  normalized: string;
+  /** Normalized URL string that preserves an explicitly supplied default port. */
+  normalizedWithPort: string;
+};
+
 /**
  * Parses a browser/CDP endpoint and returns both URL semantics and display-safe normalized forms.
  */
-export function parseBrowserHttpUrl(raw: string, label: string) {
+export function parseBrowserHttpUrl(raw: string, label: string): BrowserHttpUrlParseResult {
   const trimmed = raw.trim();
   const parsed = new URL(trimmed);
   const allowed = ["http:", "https:", "ws:", "wss:"];
