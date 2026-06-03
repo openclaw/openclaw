@@ -4,8 +4,10 @@ import fs from "node:fs/promises";
 import { setTimeout as sleep } from "node:timers/promises";
 
 type MemoryIndexFileOps = {
+  copyFile: typeof fs.copyFile;
   rename: typeof fs.rename;
   rm: typeof fs.rm;
+  unlink: typeof fs.unlink;
   wait: (ms: number) => Promise<void>;
 };
 
@@ -20,8 +22,10 @@ type MemoryIndexFileOptions = {
 type ResolvedMemoryIndexFileOptions = Required<MemoryIndexFileOptions>;
 
 const defaultFileOps: MemoryIndexFileOps = {
+  copyFile: fs.copyFile,
   rename: fs.rename,
   rm: fs.rm,
+  unlink: fs.unlink,
   wait: sleep,
 };
 
@@ -33,6 +37,10 @@ const defaultRemoveRetryDelayMs = 50;
 
 function isTransientFileError(err: unknown): boolean {
   return transientFileErrorCodes.has((err as NodeJS.ErrnoException).code ?? "");
+}
+
+function isFileErrorCode(err: unknown, code: string): boolean {
+  return (err as NodeJS.ErrnoException).code === code;
 }
 
 function resolveMemoryIndexFileOptions(
@@ -62,6 +70,11 @@ async function renameWithRetry(
         return;
       }
       if (!isTransientFileError(err) || attempt === options.maxRenameAttempts) {
+        if (isFileErrorCode(err, "EPERM")) {
+          await options.fileOps.copyFile(source, target);
+          await options.fileOps.unlink(source);
+          return;
+        }
         throw err;
       }
       await options.fileOps.wait(options.renameRetryDelayMs * attempt);

@@ -140,4 +140,10 @@ describe("package scripts", () => {
       "test/scripts/run-with-env.test.ts",
     );
   });
+
+  it("runs real memory index proof in Windows CI", () => {
+    expect(readPackageJson().scripts["test:windows:ci"]).toContain(
+      "scripts/check-windows-memory-index-proof.mjs",
+    );
+  });
 });

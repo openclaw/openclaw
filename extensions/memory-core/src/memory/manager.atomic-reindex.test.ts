@@ -94,7 +94,7 @@ describe("memory manager atomic reindex", () => {
     const wait = vi.fn().mockResolvedValue(undefined);
 
     await moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
-      fileOps: { rename, rm: fs.rm, wait },
+      fileOps: { copyFile: fs.copyFile, rename, rm: fs.rm, unlink: fs.unlink, wait },
       maxRenameAttempts: 3,
       renameRetryDelayMs: 10,
     });
@@ -110,7 +110,7 @@ describe("memory manager atomic reindex", () => {
 
     await expectRejectCode(
       moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
-        fileOps: { rename, rm: fs.rm, wait },
+        fileOps: { copyFile: fs.copyFile, rename, rm: fs.rm, unlink: fs.unlink, wait },
         maxRenameAttempts: 3,
         renameRetryDelayMs: 10,
       }),
@@ -123,6 +123,30 @@ describe("memory manager atomic reindex", () => {
     expect(wait).toHaveBeenNthCalledWith(2, 20);
   });
 
+  it("falls back to copy and unlink after persistent EPERM rename failures", async () => {
+    const rename = vi.fn().mockRejectedValue(Object.assign(new Error("locked"), { code: "EPERM" }));
+    const copyFile = vi.fn().mockResolvedValue(undefined);
+    const unlink = vi.fn().mockResolvedValue(undefined);
+    const wait = vi.fn().mockResolvedValue(undefined);
+
+    await moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
+      fileOps: { copyFile, rename, rm: fs.rm, unlink, wait },
+      maxRenameAttempts: 3,
+      renameRetryDelayMs: 10,
+    });
+
+    expect(rename).toHaveBeenCalledTimes(9);
+    expect(wait).toHaveBeenCalledTimes(6);
+    expect(copyFile).toHaveBeenCalledTimes(3);
+    expect(copyFile).toHaveBeenNthCalledWith(1, "index.sqlite.tmp", "index.sqlite");
+    expect(copyFile).toHaveBeenNthCalledWith(2, "index.sqlite.tmp-wal", "index.sqlite-wal");
+    expect(copyFile).toHaveBeenNthCalledWith(3, "index.sqlite.tmp-shm", "index.sqlite-shm");
+    expect(unlink).toHaveBeenCalledTimes(3);
+    expect(unlink).toHaveBeenNthCalledWith(1, "index.sqlite.tmp");
+    expect(unlink).toHaveBeenNthCalledWith(2, "index.sqlite.tmp-wal");
+    expect(unlink).toHaveBeenNthCalledWith(3, "index.sqlite.tmp-shm");
+  });
+
   it("does not retry missing optional sqlite sidecar files", async () => {
     const rename = vi
       .fn()
@@ -132,7 +156,7 @@ describe("memory manager atomic reindex", () => {
     const wait = vi.fn().mockResolvedValue(undefined);
 
     await moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
-      fileOps: { rename, rm: fs.rm, wait },
+      fileOps: { copyFile: fs.copyFile, rename, rm: fs.rm, unlink: fs.unlink, wait },
       maxRenameAttempts: 3,
       renameRetryDelayMs: 10,
     });
@@ -168,7 +192,7 @@ describe("memory manager atomic reindex", () => {
 
     await expectRejectCode(
       moveMemoryIndexFiles("index.sqlite.tmp", "index.sqlite", {
-        fileOps: { rename, rm: fs.rm, wait },
+        fileOps: { copyFile: fs.copyFile, rename, rm: fs.rm, unlink: fs.unlink, wait },
         maxRenameAttempts: 3,
         renameRetryDelayMs: 10,
       }),
@@ -192,7 +216,7 @@ describe("memory manager atomic reindex", () => {
       const wait = vi.fn().mockResolvedValue(undefined);
 
       await removeMemoryIndexFiles("index.sqlite.tmp", {
-        fileOps: { rename: fs.rename, rm, wait },
+        fileOps: { copyFile: fs.copyFile, rename: fs.rename, rm, unlink: fs.unlink, wait },
         maxRemoveAttempts: 3,
         removeRetryDelayMs: 10,
       });
@@ -214,7 +238,7 @@ describe("memory manager atomic reindex", () => {
 
     await expectRejectCode(
       removeMemoryIndexFiles("index.sqlite.tmp", {
-        fileOps: { rename: fs.rename, rm, wait },
+        fileOps: { copyFile: fs.copyFile, rename: fs.rename, rm, unlink: fs.unlink, wait },
         maxRemoveAttempts: 3,
         removeRetryDelayMs: 10,
       }),
@@ -233,7 +257,7 @@ describe("memory manager atomic reindex", () => {
 
     await expectRejectCode(
       removeMemoryIndexFiles("index.sqlite.tmp", {
-        fileOps: { rename: fs.rename, rm, wait },
+        fileOps: { copyFile: fs.copyFile, rename: fs.rename, rm, unlink: fs.unlink, wait },
         maxRemoveAttempts: 3,
         removeRetryDelayMs: 10,
       }),
@@ -260,7 +284,13 @@ describe("memory manager atomic reindex", () => {
           tempClosed = true;
         },
         fileOptions: {
-          fileOps: { rename: fs.rename, rm, wait: vi.fn().mockResolvedValue(undefined) },
+          fileOps: {
+            copyFile: fs.copyFile,
+            rename: fs.rename,
+            rm,
+            unlink: fs.unlink,
+            wait: vi.fn().mockResolvedValue(undefined),
+          },
         },
         build: async () => {
           throw new Error("embedding failure");
