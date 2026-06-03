@@ -1,3 +1,4 @@
+/** Standard live-transport behavior buckets used to compare channel QA suites. */
 export type LiveTransportStandardScenarioId =
   | "canary"
   | "mention-gating"
@@ -9,6 +10,7 @@ export type LiveTransportStandardScenarioId =
   | "reaction-observation"
   | "help-command";
 
+/** Transport-specific live QA scenario with optional mapping to a standard behavior bucket. */
 export type LiveTransportScenarioDefinition<TId extends string = string> = {
   /** Transport-specific scenario id accepted by CLI scenario filters. */
   id: TId;
@@ -90,6 +92,8 @@ const LIVE_TRANSPORT_STANDARD_SCENARIO_ID_SET = new Set(
 
 function assertKnownStandardScenarioIds(ids: readonly LiveTransportStandardScenarioId[]) {
   for (const id of ids) {
+    // Keep typoed standard ids failing at suite-definition time instead of
+    // silently weakening baseline coverage comparisons.
     if (!LIVE_TRANSPORT_STANDARD_SCENARIO_ID_SET.has(id)) {
       throw new Error(`unknown live transport standard scenario id: ${id}`);
     }
