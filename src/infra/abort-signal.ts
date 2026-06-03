@@ -5,6 +5,8 @@ export async function waitForAbortSignal(signal?: AbortSignal): Promise<void> {
   }
   await new Promise<void>((resolve) => {
     const onAbort = () => {
+      // Remove explicitly even with `{ once: true }`; tests use foreign
+      // AbortSignal-like objects, and cleanup must stay deterministic there.
       signal.removeEventListener("abort", onAbort);
       resolve();
     };
