@@ -34,6 +34,7 @@ export {
   normalizeExecTarget,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
+import { isLinuxChildOomScoreRaiseActive } from "../process/linux-oom-score.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
@@ -447,11 +448,39 @@ function classifyExecFailureKind(params: {
   return "aborted";
 }
 
-/** Formats a user-facing reason for a failed exec process exit. */
+/**
+ * Hint appended to bare-SIGKILL failure reasons when the current host
+ * raises `oom_score_adj` on exec children (see #69242 / #70404). cgroup OOM
+ * kills do not always surface in `journalctl -k`, so the explanation is the
+ * only way users correlate broad find/grep terminations with memory pressure.
+ */
+const LINUX_OOM_KILL_HINT =
+  "Likely an unprivileged cgroup OOM kill: OpenClaw raises this exec child's oom_score_adj to 1000 on Linux (see docs/platforms/linux.md), which makes it the preferred OOM victim under memory pressure even when no kernel OOM line shows in journalctl -k. Reduce the search scope (narrower path, lower -maxdepth, fewer -or branches), raise the host or cgroup memory limit, or set OPENCLAW_CHILD_OOM_SCORE_ADJ=0 in the gateway env to opt this child out of the raised score.";
+
+/**
+ * Adapter surface skew: `child.signalCode` returns a string `NodeJS.Signals`
+ * name ("SIGKILL"), but the node-pty `onExit` event carries the raw POSIX
+ * signal number (9). Both paths flow through `RunExit.exitSignal`, so the
+ * #69242 OOM hint and the user-visible signal label must treat numeric 9 and
+ * string "SIGKILL" as the same termination. The param accepts the broad
+ * `string` form so a future adapter that pre-stringifies the number ("9")
+ * still funnels through the same gate without extra casts at the call site.
+ */
+function isSigkillSignal(signal: number | string | null | undefined): boolean {
+  return signal === "SIGKILL" || signal === 9 || signal === "9";
+}
+
 export function formatExecFailureReason(params: {
   failureKind: ExecExitFailureKind;
   exitSignal: NodeJS.Signals | number | null;
   timeoutSec: number | null | undefined;
+  /**
+   * True when exec children are being tagged with the raised `oom_score_adj`
+   * shim (Linux + not opted out). Lets the `signal`/SIGKILL branch surface
+   * the OOM hint instead of the bare "aborted by signal SIGKILL" message
+   * that hides the root cause.
+   */
+  linuxOomKillLikely?: boolean;
 }): string {
   switch (params.failureKind) {
     case "shell-command-not-found":
@@ -464,8 +493,25 @@ export function formatExecFailureReason(params: {
         : "Command timed out. If this command is expected to take longer, re-run with a higher timeout (e.g., exec timeout=300). If it should keep running, start it with exec background=true or yieldMs so OpenClaw can register a pollable process session. Do not rely on shell backgrounding with a trailing &.";
     case "no-output-timeout":
       return "Command timed out waiting for output";
-    case "signal":
-      return `Command aborted by signal ${params.exitSignal}`;
+    case "signal": {
+      // Normalize the label so PTY-spawned children (raw POSIX `9`) and
+      // child_process children (string `"SIGKILL"`) produce the same
+      // user-visible message. Other signals keep their adapter-native form;
+      // we don't try to translate every numeric code because only SIGKILL
+      // gates the #69242 OOM hint.
+      const sigkill = isSigkillSignal(params.exitSignal);
+      const label = sigkill ? "SIGKILL" : params.exitSignal;
+      const base = `Command aborted by signal ${label}`;
+      // `failureKind === "signal"` only fires when the supervisor saw an
+      // external signal exit (no forcedReason). On Linux a bare SIGKILL with
+      // the OOM-score-raise shim active is almost always a cgroup OOM kill —
+      // see issue #69242. Keep the original line for other signals so SIGINT,
+      // SIGSEGV, etc. don't get misattributed.
+      if (params.linuxOomKillLikely && sigkill) {
+        return `${base}. ${LINUX_OOM_KILL_HINT}`;
+      }
+      return base;
+    }
     case "aborted":
       return "Command aborted before exit code was captured";
   }
@@ -478,6 +524,15 @@ export function buildExecExitOutcome(params: {
   aggregated: string;
   durationMs: number;
   timeoutSec: number | null | undefined;
+  /**
+   * Whether *this* spawned child was tagged with the raised Linux
+   * `oom_score_adj` shim. The caller must compute this from the spawn-time
+   * child env (see `runExecProcess`), not ambient `process.env`, so a
+   * per-child `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` opt-out is honored (#69242).
+   * Defaults to `false` (no hint) when the caller does not supply it. See
+   * `formatExecFailureReason` for how it shapes the message.
+   */
+  linuxOomKillLikely?: boolean;
 }): ExecProcessOutcome {
   const exitCode = params.exit.exitCode ?? 0;
   const isNormalExit = params.exit.reason === "exit";
@@ -505,6 +560,7 @@ export function buildExecExitOutcome(params: {
     failureKind,
     exitSignal: params.exit.exitSignal,
     timeoutSec: params.timeoutSec,
+    linuxOomKillLikely: params.linuxOomKillLikely ?? false,
   });
   return {
     status: "failed",
@@ -790,6 +846,13 @@ export async function runExecProcess(opts: {
     };
   })();
 
+  // Gate the #69242 SIGKILL OOM hint on whether *this* child was actually
+  // wrapped with the raised oom_score_adj shim. Derive it from the spawn-time
+  // child env (`spawnSpec.env`) — the exact env the supervisor adapters hand to
+  // `prepareOomScoreAdjustedSpawn` — not ambient `process.env`, so a per-child
+  // `OPENCLAW_CHILD_OOM_SCORE_ADJ=0` opt-out keeps the bare SIGKILL message.
+  const linuxOomKillLikely = isLinuxChildOomScoreRaiseActive({ env: spawnSpec.env });
+
   let managedRun: ManagedRun | null = null;
   let usingPty = spawnSpec.mode === "pty";
   const cursorResponse = buildCursorPositionResponse();
@@ -908,6 +971,7 @@ export async function runExecProcess(opts: {
         aggregated: session.aggregated.trim(),
         durationMs,
         timeoutSec: opts.timeoutSec,
+        linuxOomKillLikely,
       });
 
       markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);

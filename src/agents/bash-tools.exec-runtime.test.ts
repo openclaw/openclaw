@@ -11,6 +11,12 @@ const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
 const supervisorMock = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
+// Spy on the OOM-score predicate so the #69242 gate-wiring tests can assert
+// which env runExecProcess consults (spawn-time child env vs ambient) without
+// depending on the host platform. The predicate's own platform/opt-out logic
+// is covered in `linux-oom-score.test.ts`; here we delegate to the real
+// implementation by default and override per-test where needed.
+const oomScoreRaiseActiveMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/heartbeat-wake.js", () => ({
   requestHeartbeat: requestHeartbeatMock,
@@ -26,6 +32,11 @@ vi.mock("../process/supervisor/index.js", () => ({
   }),
 }));
 
+vi.mock("../process/linux-oom-score.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../process/linux-oom-score.js")>();
+  return { ...actual, isLinuxChildOomScoreRaiseActive: oomScoreRaiseActiveMock };
+});
+
 let markBackgrounded: typeof import("./bash-process-registry.js").markBackgrounded;
 let buildExecExitOutcome: typeof import("./bash-tools.exec-runtime.js").buildExecExitOutcome;
 let detectCursorKeyMode: typeof import("./bash-tools.exec-runtime.js").detectCursorKeyMode;
@@ -33,9 +44,14 @@ let formatExecFailureReason: typeof import("./bash-tools.exec-runtime.js").forma
 let renderExecUpdateText: typeof import("./bash-tools.exec-runtime.js").renderExecUpdateText;
 let resolveExecTarget: typeof import("./bash-tools.exec-runtime.js").resolveExecTarget;
 let runExecProcess: typeof import("./bash-tools.exec-runtime.js").runExecProcess;
+let actualIsLinuxChildOomScoreRaiseActive: typeof import("../process/linux-oom-score.js").isLinuxChildOomScoreRaiseActive;
 
 beforeAll(async () => {
   ({ markBackgrounded } = await import("./bash-process-registry.js"));
+  ({ isLinuxChildOomScoreRaiseActive: actualIsLinuxChildOomScoreRaiseActive } =
+    await vi.importActual<typeof import("../process/linux-oom-score.js")>(
+      "../process/linux-oom-score.js",
+    ));
   ({
     buildExecExitOutcome,
     detectCursorKeyMode,
@@ -50,6 +66,12 @@ beforeEach(() => {
   requestHeartbeatMock.mockClear();
   enqueueSystemEventMock.mockClear();
   supervisorMock.spawn.mockReset();
+  // Default to the real predicate so non-OOM tests keep production behavior;
+  // the #69242 wiring tests override the return value explicitly.
+  oomScoreRaiseActiveMock.mockReset();
+  oomScoreRaiseActiveMock.mockImplementation((options) =>
+    actualIsLinuxChildOomScoreRaiseActive(options),
+  );
 });
 
 function expectExecTarget(
@@ -502,6 +524,106 @@ describe("formatExecFailureReason", () => {
       }),
     ).toBe("Command not found");
   });
+
+  it("explains likely cgroup OOM kill when SIGKILL hits linux children with raised oom_score_adj (#69242)", () => {
+    const reason = formatExecFailureReason({
+      failureKind: "signal",
+      exitSignal: "SIGKILL",
+      timeoutSec: null,
+      linuxOomKillLikely: true,
+    });
+
+    expect(reason).toContain("Command aborted by signal SIGKILL");
+    // The hint must call out the root cause (raised oom_score_adj makes the
+    // child the preferred OOM victim) and the opt-out env knob so the user
+    // can act without correlating cgroup OOM data manually.
+    expect(reason).toContain("oom_score_adj");
+    expect(reason).toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
+    expect(reason).toContain("journalctl -k");
+  });
+
+  it("keeps the bare SIGKILL message off-linux or when oom score raise is opted out", () => {
+    expect(
+      formatExecFailureReason({
+        failureKind: "signal",
+        exitSignal: "SIGKILL",
+        timeoutSec: null,
+        linuxOomKillLikely: false,
+      }),
+    ).toBe("Command aborted by signal SIGKILL");
+  });
+
+  it("does not surface the OOM hint for non-SIGKILL signals even on linux", () => {
+    // Other external signals (SIGSEGV from a real crash, SIGINT from a user
+    // ^C, SIGPIPE from broken upstream) must not be misattributed to OOM.
+    for (const signal of ["SIGSEGV", "SIGINT", "SIGPIPE", "SIGTERM"] as const) {
+      const reason = formatExecFailureReason({
+        failureKind: "signal",
+        exitSignal: signal,
+        timeoutSec: null,
+        linuxOomKillLikely: true,
+      });
+      expect(reason).toBe(`Command aborted by signal ${signal}`);
+    }
+  });
+
+  it("treats numeric SIGKILL (9) from the PTY adapter the same as the string form", () => {
+    // node-pty's onExit event surfaces the raw POSIX signal number, so a
+    // PTY-spawned `find` killed by cgroup OOM lands here as `exitSignal: 9`,
+    // not the string `"SIGKILL"` that child_process produces. Both must
+    // trigger the hint, otherwise PTY users (the default exec path on macOS
+    // and the gateway TTY surface on Linux) keep seeing the bare "signal 9".
+    const reason = formatExecFailureReason({
+      failureKind: "signal",
+      exitSignal: 9,
+      timeoutSec: null,
+      linuxOomKillLikely: true,
+    });
+    expect(reason).toContain("Command aborted by signal SIGKILL");
+    expect(reason).toContain("oom_score_adj");
+    expect(reason).toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
+  });
+
+  it("accepts the stringified numeric form '9' as SIGKILL", () => {
+    // Defensive: if a future adapter pre-stringifies the signal number we
+    // still want the hint to fire rather than fall through to bare text.
+    const reason = formatExecFailureReason({
+      failureKind: "signal",
+      exitSignal: "9" as unknown as NodeJS.Signals,
+      timeoutSec: null,
+      linuxOomKillLikely: true,
+    });
+    expect(reason).toContain("Command aborted by signal SIGKILL");
+    expect(reason).toContain("oom_score_adj");
+  });
+
+  it("normalizes the SIGKILL label even when the OOM-wrap is opted out", () => {
+    // The numeric/string skew between adapters is user-visible regardless of
+    // the hint, so the bare message should also stop leaking raw signal
+    // numbers. Off-linux or with OPENCLAW_CHILD_OOM_SCORE_ADJ=0 the user
+    // still sees "signal SIGKILL" (no hint), not "signal 9".
+    expect(
+      formatExecFailureReason({
+        failureKind: "signal",
+        exitSignal: 9,
+        timeoutSec: null,
+        linuxOomKillLikely: false,
+      }),
+    ).toBe("Command aborted by signal SIGKILL");
+  });
+
+  it("does not relabel other numeric signals as SIGKILL", () => {
+    // Only signal 9 maps to SIGKILL. Numeric SIGTERM (15), SIGINT (2), etc.
+    // keep their adapter-native form and must never pick up the OOM hint.
+    const reason = formatExecFailureReason({
+      failureKind: "signal",
+      exitSignal: 15,
+      timeoutSec: null,
+      linuxOomKillLikely: true,
+    });
+    expect(reason).toBe("Command aborted by signal 15");
+    expect(reason).not.toContain("oom_score_adj");
+  });
 });
 
 describe("buildExecExitOutcome", () => {
@@ -578,6 +700,154 @@ describe("buildExecExitOutcome", () => {
     expect(outcome.timedOut).toBe(true);
     expect(outcome.reason).toContain("background=true");
     expect(outcome.reason).toContain("Do not rely on shell backgrounding");
+  });
+
+  it("plumbs linuxOomKillLikely into the signal-failure reason for #69242", () => {
+    // External SIGKILL from the kernel surfaces in the supervisor as
+    // `reason: "signal"` (no forcedReason), which maps to failureKind=signal.
+    // The classifier already separates user/timeout cancels (which set
+    // forcedReason) from kernel kills, so a true SIGKILL here is the OOM path.
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "signal",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "",
+      durationMs: 50,
+      timeoutSec: null,
+      linuxOomKillLikely: true,
+    });
+
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected signal exit to fail, got ${outcome.status}`);
+    }
+    expect(outcome.failureKind).toBe("signal");
+    expect(outcome.exitSignal).toBe("SIGKILL");
+    expect(outcome.reason).toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
+    expect(outcome.reason).toContain("oom_score_adj");
+  });
+
+  it("plumbs numeric SIGKILL (PTY adapter shape) through to the OOM hint for #69242", () => {
+    // RunExit.exitSignal carries `number | NodeJS.Signals | null` because the
+    // PTY adapter emits the raw POSIX signal number. Without normalization,
+    // the supervisor's "signal" failureKind would format "signal 9" and the
+    // SIGKILL gate on the hint would never fire for PTY-spawned children.
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "signal",
+        exitCode: null,
+        exitSignal: 9,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "",
+      durationMs: 50,
+      timeoutSec: null,
+      linuxOomKillLikely: true,
+    });
+
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected signal exit to fail, got ${outcome.status}`);
+    }
+    expect(outcome.failureKind).toBe("signal");
+    // exitSignal stays as the adapter-native value on the outcome — only the
+    // formatted reason normalizes to "SIGKILL" so downstream observers can
+    // still see what the adapter actually reported.
+    expect(outcome.exitSignal).toBe(9);
+    expect(outcome.reason).toContain("Command aborted by signal SIGKILL");
+    expect(outcome.reason).toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
+    expect(outcome.reason).toContain("oom_score_adj");
+  });
+
+  it("omits the OOM hint for numeric SIGKILL when the oom score raise is opted out", () => {
+    // Numeric SIGKILL with linuxOomKillLikely=false (off-linux or opted out)
+    // still normalizes the label but keeps the message bare, matching the
+    // string-form behavior.
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "signal",
+        exitCode: null,
+        exitSignal: 9,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "",
+      durationMs: 50,
+      timeoutSec: null,
+      linuxOomKillLikely: false,
+    });
+
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected signal exit to fail, got ${outcome.status}`);
+    }
+    expect(outcome.reason).toContain("Command aborted by signal SIGKILL");
+    expect(outcome.reason).not.toContain("oom_score_adj");
+    expect(outcome.reason).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
+  });
+
+  it("does not relabel numeric SIGTERM (15) as SIGKILL or attach the OOM hint", () => {
+    // Sibling-signal regression: a real SIGTERM from a supervisor outside
+    // the OpenClaw process tree must keep its numeric form and skip the hint.
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "signal",
+        exitCode: null,
+        exitSignal: 15,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "",
+      durationMs: 50,
+      timeoutSec: null,
+      linuxOomKillLikely: true,
+    });
+
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected signal exit to fail, got ${outcome.status}`);
+    }
+    expect(outcome.reason).toContain("Command aborted by signal 15");
+    expect(outcome.reason).not.toContain("oom_score_adj");
+  });
+
+  it("omits the OOM hint when the oom score raise is not active", () => {
+    const outcome = buildExecExitOutcome({
+      exit: {
+        reason: "signal",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      },
+      aggregated: "",
+      durationMs: 50,
+      timeoutSec: null,
+      linuxOomKillLikely: false,
+    });
+
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected signal exit to fail, got ${outcome.status}`);
+    }
+    expect(outcome.reason).not.toContain("oom_score_adj");
+    expect(outcome.reason).not.toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ");
+    expect(outcome.reason).toContain("Command aborted by signal SIGKILL");
   });
 });
 
@@ -709,5 +979,93 @@ describe("runExecProcess POSIX command wrapper", () => {
     const commandStr = spawnCall.argv.join(" ");
     expect(commandStr).not.toContain("export PATH=");
     expect(commandStr).toContain("echo test");
+  });
+});
+
+describe("runExecProcess OOM-hint gate (#69242)", () => {
+  function mockSigkillExit() {
+    supervisorMock.spawn.mockImplementationOnce(async () => ({
+      runId: "oom-run",
+      startedAtMs: Date.now(),
+      pid: 4242,
+      wait: async () => {
+        await new Promise((resolve) => {
+          setImmediate(resolve);
+        });
+        return {
+          reason: "signal" as const,
+          exitCode: null,
+          exitSignal: "SIGKILL" as const,
+          durationMs: 5,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          noOutputTimedOut: false,
+        };
+      },
+      cancel: vi.fn(),
+    }));
+  }
+
+  it("derives the SIGKILL OOM hint from the spawn-time child env, not ambient process.env", async () => {
+    // Simulate a host where the wrap shim is active for this child.
+    oomScoreRaiseActiveMock.mockReturnValue(true);
+    mockSigkillExit();
+
+    const run = await runExecProcess({
+      command: "find / -maxdepth 6",
+      workdir: "/tmp",
+      env: {},
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+    const outcome = await run.promise;
+
+    // The crux of the #69242 P1: the gate is consulted with the spawn-time
+    // child env (which carries the exec-injected OPENCLAW_SHELL marker), never
+    // with no args / ambient process.env.
+    expect(oomScoreRaiseActiveMock).toHaveBeenCalledWith({
+      env: expect.objectContaining({ OPENCLAW_SHELL: "exec" }),
+    });
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected signal exit to fail, got ${outcome.status}`);
+    }
+    expect(outcome.reason).toContain("Command aborted by signal SIGKILL");
+    expect(outcome.reason).toContain("oom_score_adj");
+    expect(outcome.reason).toContain("OPENCLAW_CHILD_OOM_SCORE_ADJ=0");
+  });
+
+  it("keeps the bare SIGKILL message when the child opted out via OPENCLAW_CHILD_OOM_SCORE_ADJ=0", async () => {
+    // Regression for the P1: a per-child opt-out must suppress the hint even
+    // when the gateway's ambient env never set the knob. runExecProcess passes
+    // the child env (carrying the opt-out) to the gate, so it returns false.
+    oomScoreRaiseActiveMock.mockReturnValue(false);
+    mockSigkillExit();
+
+    const run = await runExecProcess({
+      command: "find / -maxdepth 6",
+      workdir: "/tmp",
+      env: { OPENCLAW_CHILD_OOM_SCORE_ADJ: "0" },
+      usePty: false,
+      warnings: [],
+      maxOutput: 1000,
+      pendingMaxOutput: 1000,
+      notifyOnExit: false,
+      timeoutSec: null,
+    });
+    const outcome = await run.promise;
+
+    expect(oomScoreRaiseActiveMock).toHaveBeenCalledWith({
+      env: expect.objectContaining({ OPENCLAW_CHILD_OOM_SCORE_ADJ: "0" }),
+    });
+    if (outcome.status !== "failed") {
+      throw new Error(`Expected signal exit to fail, got ${outcome.status}`);
+    }
+    expect(outcome.reason).toContain("Command aborted by signal SIGKILL");
+    expect(outcome.reason).not.toContain("oom_score_adj");
   });
 });

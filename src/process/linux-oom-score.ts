@@ -142,3 +142,28 @@ export function hardenedEnvForChildOomWrap(
   }
   return hardenShellEnv(baseEnv);
 }
+
+/**
+ * Whether exec children spawned in the current environment have their
+ * `oom_score_adj` raised to 1000 by the wrap shim. When true, an external
+ * SIGKILL (`exit.reason === "signal"` with `exitSignal === "SIGKILL"`) on a
+ * broad search/discovery command is most plausibly an unprivileged cgroup OOM
+ * kill — see issue #69242. Cgroup/memcg OOM kills do not always surface in
+ * `journalctl -k`, so failure messages must explain the raised score and the
+ * opt-out before users can correlate the SIGKILL with memory pressure.
+ *
+ * Mirrors `shouldWrapChildForOomScore` minus the `/bin/sh` availability check
+ * because callers only need to know whether children would have been *tagged*
+ * for preferred OOM victim selection in this process.
+ */
+export function isLinuxChildOomScoreRaiseActive(options?: OomWrapOptions): boolean {
+  const platform = options?.platform ?? process.platform;
+  if (platform !== "linux") {
+    return false;
+  }
+  const env = options?.env ?? process.env;
+  if (isDisabled(env[CHILD_OOM_SCORE_ADJ_ENV_KEY])) {
+    return false;
+  }
+  return (options?.shellAvailable ?? defaultShellAvailable)();
+}
