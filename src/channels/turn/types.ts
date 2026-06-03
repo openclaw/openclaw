@@ -21,7 +21,7 @@ import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline
 import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
-import type { TurnEventRecorder } from "./turn-event-state.js";
+import type { TurnEventRecorder, TurnState } from "./turn-event-state.js";
 
 export type { InboundEventKind } from "../inbound-event/kind.js";
 
@@ -472,6 +472,8 @@ export type DispatchedChannelTurnResult<TDispatchResult = DispatchFromConfigResu
   ctxPayload: MsgContext;
   routeSessionKey: string;
   dispatchResult: TDispatchResult;
+  /** Materialized payload-free turn health derived from recorded runtime events. */
+  turnState?: TurnState;
 };
 
 /** Adapter contract for ingesting, classifying, resolving, and finalizing raw channel events. */

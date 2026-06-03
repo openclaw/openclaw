@@ -1311,6 +1311,16 @@ describe("channel turn kernel", () => {
     });
 
     expect(result.dispatched).toBe(true);
+    if (!result.dispatched) {
+      throw new Error("expected dispatch");
+    }
+    expect(result.turnState).toMatchObject({
+      currentState: "failed",
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: false,
+      completionAllowed: false,
+    });
+    expect(result.turnState?.errors).toContain("missing_visible_delivery");
     const events = turnEvents.list("telegram:message:msg-1");
     expect(events.map((event) => event.type)).toEqual([
       "message.received",
@@ -1588,6 +1598,16 @@ describe("channel turn kernel", () => {
     });
 
     expect(result.dispatched).toBe(true);
+    if (!result.dispatched) {
+      throw new Error("expected dispatch");
+    }
+    expect(result.turnState).toMatchObject({
+      currentState: "completed",
+      visibleDeliveryRequired: true,
+      visibleDeliverySent: true,
+      completionAllowed: true,
+      errors: [],
+    });
     const events = turnEvents.list("telegram:message:msg-1");
     expect(events.map((event) => event.type)).toEqual([
       "message.received",

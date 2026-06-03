@@ -822,8 +822,8 @@ async function runPreparedChannelTurnCoreInTrace<
       },
     });
   }
-  const turnState = materializeTurnState(recordedTurnEvents);
-  const completionErrors = validateTurnCompletion(turnState);
+  const preCompletionTurnState = materializeTurnState(recordedTurnEvents);
+  const completionErrors = validateTurnCompletion(preCompletionTurnState);
   const turnCompletedAt = Date.now();
   await appendTurnEvent({
     accountId: params.accountId,
@@ -840,12 +840,13 @@ async function runPreparedChannelTurnCoreInTrace<
         reason: completionErrors[0],
         messageId: params.messageId,
         completionAllowed: completionErrors.length === 0,
-        visibleDeliveryRequired: turnState.visibleDeliveryRequired,
-        visibleDeliverySent: turnState.visibleDeliverySent,
+        visibleDeliveryRequired: preCompletionTurnState.visibleDeliveryRequired,
+        visibleDeliverySent: preCompletionTurnState.visibleDeliverySent,
         startToCompletionMs: computePositiveDurationMs(turnCompletedAt, turnStartedAt),
       },
     },
   });
+  const turnState = materializeTurnState(recordedTurnEvents);
   emit({
     ...params,
     event: {
@@ -864,6 +865,7 @@ async function runPreparedChannelTurnCoreInTrace<
     ctxPayload: params.ctxPayload,
     routeSessionKey: params.routeSessionKey,
     dispatchResult,
+    turnState,
   };
 }
 
