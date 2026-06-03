@@ -327,6 +327,7 @@ export function createOAuthLoginCancelledError(): Error {
   return new Error("Login cancelled");
 }
 
+/** Throws the shared OAuth cancellation error when a login signal is already aborted. */
 export function throwIfOAuthLoginAborted(
   /** Abort signal attached to the OAuth login flow. */
   signal?: AbortSignal,
@@ -336,6 +337,7 @@ export function throwIfOAuthLoginAborted(
   }
 }
 
+/** Races a pending OAuth login step against the login abort signal and normalizes rejections. */
 export function withOAuthLoginAbort<T>(
   /** Pending OAuth login operation to race against abort. */
   promise: Promise<T>,
@@ -366,10 +368,12 @@ export function withOAuthLoginAbort<T>(
     signal.addEventListener("abort", abort, { once: true });
     promise.then(
       (value) => {
+        // The login step won the race; remove abort listeners so long-lived prompts do not leak.
         cleanup();
         resolve(value);
       },
       (error: unknown) => {
+        // Preserve Error rejections but wrap non-Error provider/prompt values for lint-safe callers.
         cleanup();
         reject(toLintErrorObject(error, "Non-Error rejection"));
       },
@@ -377,6 +381,7 @@ export function withOAuthLoginAbort<T>(
   });
 }
 
+/** Combines a caller abort signal with a bounded timeout signal for OAuth HTTP requests. */
 export function buildOAuthRequestSignal(options: {
   /** Optional caller-provided signal to combine with the timeout signal. */
   signal?: AbortSignal;
