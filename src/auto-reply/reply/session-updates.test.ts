@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SessionEntry } from "../../config/sessions/types.js";
 
 const TEST_WORKSPACE_DIR = "/tmp/workspace";
 
@@ -129,7 +130,7 @@ describe("ensureSkillSnapshot", () => {
       reread_policy: "request_only",
       write_policy: "deny",
     };
-    const sessionStore = {
+    const sessionStore: Record<string, SessionEntry & Record<string, unknown>> = {
       [sessionKey]: {
         sessionId: "session-1",
         updatedAt: 100,
