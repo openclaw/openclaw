@@ -1511,7 +1511,7 @@ export async function updateNpmInstalledPlugins(params: {
                     phase: "check",
                     error: probe.error,
                   }),
-          undefined,
+          npmChannelFallback,
         );
         continue;
       }
@@ -1770,7 +1770,7 @@ export async function updateNpmInstalledPlugins(params: {
                   phase: "update",
                   error: result.error,
                 }),
-        undefined,
+        npmChannelFallback,
       );
       continue;
     }
