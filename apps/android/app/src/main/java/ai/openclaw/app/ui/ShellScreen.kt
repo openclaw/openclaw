@@ -103,6 +103,8 @@ private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Setting
 private val shellContentInsets: WindowInsets
   @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
 
+internal fun shellBottomNavVisible(keyboardVisible: Boolean, commandOpen: Boolean): Boolean = !keyboardVisible && !commandOpen
+
 /** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
 fun ShellScreen(
@@ -150,13 +152,14 @@ fun ShellScreen(
 
     val density = LocalDensity.current
     val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
+    val showBottomNav = shellBottomNavVisible(keyboardVisible = keyboardVisible, commandOpen = commandOpen)
 
     Scaffold(
       modifier = modifier.fillMaxSize(),
       containerColor = ClawTheme.colors.canvas,
       contentWindowInsets = WindowInsets(0, 0, 0, 0),
       bottomBar = {
-        if (!keyboardVisible) {
+        if (showBottomNav) {
           ClawBottomNav(
             items = shellNavTabs.map { ClawNavItem(key = it.key, label = it.label, icon = it.icon) },
             selectedKey = if (activeTab in shellNavTabs) activeTab.key else Tab.Overview.key,

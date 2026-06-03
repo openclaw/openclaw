@@ -5,9 +5,18 @@ import ai.openclaw.app.GatewayChannelsSummary
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewayPendingDeviceSummary
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ShellScreenLogicTest {
+  @Test
+  fun bottomNavHidesForKeyboardAndCommandPalette() {
+    assertTrue(shellBottomNavVisible(keyboardVisible = false, commandOpen = false))
+    assertFalse(shellBottomNavVisible(keyboardVisible = true, commandOpen = false))
+    assertFalse(shellBottomNavVisible(keyboardVisible = false, commandOpen = true))
+  }
+
   @Test
   fun homeAttentionRowsSurfaceGatewayWhenDisconnected() {
     val rows =
