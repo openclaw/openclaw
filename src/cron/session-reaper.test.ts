@@ -137,6 +137,45 @@ describe("sweepCronRunSessions", () => {
     });
   });
 
+  it("prunes expired isolated cron sessions (no :run: suffix)", async () => {
+    const now = Date.now();
+    const store: Record<string, { sessionId: string; updatedAt: number }> = {
+      "agent:main:cron:job-isolated-expired": {
+        sessionId: "isolated-expired",
+        updatedAt: now - 25 * 3_600_000, // 25h ago — expired
+      },
+      "agent:main:cron:job-isolated-recent": {
+        sessionId: "isolated-recent",
+        updatedAt: now - 1 * 3_600_000, // 1h ago — not expired
+      },
+      "agent:main:cron:job-main-target": {
+        sessionId: "main-target-base",
+        updatedAt: now,
+      },
+      "agent:main:cron:job-main-target:run:run-123": {
+        sessionId: "main-target-run",
+        updatedAt: now - 25 * 3_600_000, // expired run
+      },
+    };
+    fs.writeFileSync(storePath, JSON.stringify(store));
+
+    const result = await sweepCronRunSessions({
+      sessionStorePath: storePath,
+      nowMs: now,
+      log,
+      force: true,
+    });
+
+    expect(result.swept).toBe(true);
+    expect(result.pruned).toBe(2);
+
+    const updated = JSON.parse(fs.readFileSync(storePath, "utf-8"));
+    expect(updated["agent:main:cron:job-isolated-expired"]).toBeUndefined();
+    expect(updated["agent:main:cron:job-isolated-recent"]).toBeDefined();
+    expect(updated["agent:main:cron:job-main-target"]).toBeDefined();
+    expect(updated["agent:main:cron:job-main-target:run:run-123"]).toBeUndefined();
+  });
+
   it("archives transcript files for pruned run sessions that are no longer referenced", async () => {
     const now = Date.now();
     const runSessionId = "old-run";

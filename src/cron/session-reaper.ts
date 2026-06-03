@@ -7,6 +7,40 @@ import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.j
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 
+/**
+ * Returns true when the key represents an isolated cron session — i.e. a
+ * `cron:<jobId>` key that is NOT a run descendant (`:run:` is absent).
+ *
+ * Main-target cron sessions use `cron:<jobId>:run:<uuid>`, which are
+ * already matched by `isCronRunSessionKey`.
+ */
+function isCronIsolatedSessionKey(sessionKey: string | undefined | null): boolean {
+  if (sessionKey == null || typeof sessionKey !== "string") {
+    return false;
+  }
+  const normalized = sessionKey.toLowerCase();
+  // Must be under agent:...:cron:<jobId> without :run: segment.
+  const agentPrefix = "agent:";
+  if (!normalized.startsWith(agentPrefix)) {
+    return false;
+  }
+  const parts = normalized.split(":");
+  // Need at least agent:<agentId>:cron:<jobId> (4 segments)
+  if (parts.length < 4) {
+    return false;
+  }
+  // parts[2] must be "cron"
+  if (parts[2] !== "cron") {
+    return false;
+  }
+  // Must NOT contain :run: anywhere after the cron segment
+  const afterCron = parts.slice(3).join(":");
+  if (afterCron.includes(":run:") || afterCron.startsWith("run:")) {
+    return false;
+  }
+  return true;
+}
+
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
 
 /** Minimum interval between reaper sweeps (avoid running every timer tick). */
@@ -72,7 +106,9 @@ export async function sweepCronRunSessions(params: {
     await updateSessionStore(storePath, (store) => {
       const cutoff = now - retentionMs;
       for (const key of Object.keys(store)) {
-        if (!isCronRunSessionKey(key)) {
+        const isRun = isCronRunSessionKey(key);
+        const isIsolated = isCronIsolatedSessionKey(key);
+        if (!isRun && !isIsolated) {
           continue;
         }
         const entry = store[key];
