@@ -21,6 +21,7 @@ import {
   buildGatewayConnectionDetails,
   callGateway,
   formatGatewayTransportErrorJson,
+  isGatewayCredentialsRequiredError,
 } from "../gateway/call.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
@@ -647,6 +648,19 @@ export async function healthCommand(
         }),
     );
   } catch (error) {
+    if (isGatewayCredentialsRequiredError(error)) {
+      const message = formatErrorMessage(error);
+      if (opts.json) {
+        writeRuntimeJson(runtime, {
+          ok: false,
+          error: { type: "gateway_credentials_required", message },
+        });
+      } else {
+        runtime.error(message);
+      }
+      runtime.exit(1);
+      return;
+    }
     if (opts.json) {
       const payload = formatGatewayTransportErrorJson(error);
       if (payload) {
