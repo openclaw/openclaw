@@ -123,6 +123,9 @@ describe("scripts/test-live-shard", () => {
 
   it("rejects unknown shard names", () => {
     expect(() => selectLiveShardFiles("native-live-missing")).toThrow(/Unknown live test shard/u);
+    expect(() => selectLiveShardFiles("native-live-extensions-l-z")).toThrow(
+      /Unknown live test shard/u,
+    );
   });
 
   it("parses list mode and rejects unknown live shard options", () => {

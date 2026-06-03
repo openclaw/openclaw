@@ -277,8 +277,6 @@ export function selectLiveShardFiles(shard, files = collectAllLiveTestFiles()) {
       return files.filter(isExtensionMediaMusicLiveTest);
     case "native-live-extensions-media-video":
       return files.filter(isExtensionMediaVideoLiveTest);
-    case "native-live-extensions-l-z":
-      return files.filter((file) => isExtensionInRange(file, "l", "z"));
     default:
       throw new Error(
         `Unknown live test shard '${shard}'. Expected one of: ${LIVE_TEST_SHARDS.join(", ")}`,
