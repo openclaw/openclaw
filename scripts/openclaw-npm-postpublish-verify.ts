@@ -409,6 +409,7 @@ export function collectInstalledPackageErrors(params: {
   }
 
   errors.push(...collectInstalledBundledExtensionManifestErrors(params.packageRoot));
+  errors.push(...collectInstalledAlwaysAllowedRuntimeFacadeErrors(params.packageRoot));
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkZodArtifactErrors(params.packageRoot));
   errors.push(...collectInstalledPluginSdkDeclarationErrors(params.packageRoot));
@@ -663,6 +664,8 @@ type ParsedImportSpecifiersResult =
   | { ok: true; specifiers: Set<string> }
   | { ok: false; error: string };
 
+type ParsedStringArrayResult = { ok: true; values: string[] } | { ok: false; error: string };
+
 function extractLiteralSpecifier(node: unknown): string | null {
   if (!node || typeof node !== "object") {
     return null;
@@ -734,6 +737,136 @@ function extractJavaScriptImportSpecifiers(source: string): ParsedImportSpecifie
   }
 
   return { ok: true, specifiers };
+}
+
+function extractStringArrayElements(node: unknown): string[] | null {
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+  const candidate = node as { type?: string; elements?: unknown[] };
+  if (candidate.type !== "ArrayExpression" || !Array.isArray(candidate.elements)) {
+    return null;
+  }
+  const values: string[] = [];
+  for (const element of candidate.elements) {
+    const value = extractLiteralSpecifier(element);
+    if (value === null) {
+      return null;
+    }
+    values.push(value);
+  }
+  return values;
+}
+
+function extractNewSetStringArrayArgument(node: unknown): string[] | null {
+  if (!node || typeof node !== "object") {
+    return null;
+  }
+  const candidate = node as {
+    type?: string;
+    callee?: { type?: string; name?: string };
+    arguments?: unknown[];
+  };
+  if (
+    candidate.type !== "NewExpression" ||
+    candidate.callee?.type !== "Identifier" ||
+    candidate.callee.name !== "Set" ||
+    !Array.isArray(candidate.arguments)
+  ) {
+    return null;
+  }
+  return extractStringArrayElements(candidate.arguments[0]);
+}
+
+function extractAlwaysAllowedRuntimeFacadeDirNames(source: string): ParsedStringArrayResult {
+  let program: unknown;
+  try {
+    program = acorn.parse(source, {
+      allowHashBang: true,
+      ecmaVersion: "latest",
+      sourceType: "module",
+    });
+  } catch (error) {
+    return { ok: false, error: formatErrorMessage(error) };
+  }
+
+  const pending: unknown[] = [program];
+  const visited = new Set<unknown>();
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current || typeof current !== "object" || visited.has(current)) {
+      continue;
+    }
+    visited.add(current);
+    const node = current as Record<string, unknown>;
+    const nodeType = typeof node.type === "string" ? node.type : null;
+    const id = node.id as { type?: string; name?: string } | undefined;
+    if (
+      nodeType === "VariableDeclarator" &&
+      id?.type === "Identifier" &&
+      id.name === "ALWAYS_ALLOWED_RUNTIME_DIR_NAMES"
+    ) {
+      const values = extractNewSetStringArrayArgument(node.init);
+      return values
+        ? { ok: true, values }
+        : {
+            ok: false,
+            error: "ALWAYS_ALLOWED_RUNTIME_DIR_NAMES must be initialized with new Set([...]).",
+          };
+    }
+
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) {
+        pending.push(...value);
+      } else if (value && typeof value === "object") {
+        pending.push(value);
+      }
+    }
+  }
+
+  return { ok: true, values: [] };
+}
+
+function isSafeBundledRuntimeFacadeDirName(value: string): boolean {
+  return (
+    value.length > 0 && !value.includes("/") && !value.includes("\\") && !value.startsWith(".")
+  );
+}
+
+export function collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot: string): string[] {
+  const errors: string[] = [];
+  for (const filePath of listInstalledRootDistJavaScriptFiles(packageRoot)) {
+    const fileStat = lstatSync(filePath);
+    const relativePath = relative(packageRoot, filePath).replaceAll("\\", "/");
+    if (!fileStat.isFile() || fileStat.size > MAX_INSTALLED_ROOT_DIST_JS_BYTES) {
+      return [
+        `installed package facade activation runtime '${relativePath}' is invalid or exceeds ${MAX_INSTALLED_ROOT_DIST_JS_BYTES} bytes.`,
+      ];
+    }
+    const source = readFileSync(filePath, "utf8");
+    if (!source.includes("ALWAYS_ALLOWED_RUNTIME_DIR_NAMES")) {
+      continue;
+    }
+    const parsed = extractAlwaysAllowedRuntimeFacadeDirNames(source);
+    if (!parsed.ok) {
+      return [
+        `installed package facade activation runtime '${relativePath}' could not be parsed for bundled runtime facade verification: ${parsed.error}`,
+      ];
+    }
+    for (const dirName of parsed.values) {
+      if (!isSafeBundledRuntimeFacadeDirName(dirName)) {
+        errors.push(`installed package declares invalid bundled runtime facade id: ${dirName}.`);
+        continue;
+      }
+      const requiredPath = `dist/extensions/${dirName}/runtime-api.js`;
+      if (!existsSync(join(packageRoot, ...requiredPath.split("/")))) {
+        errors.push(
+          `installed package allows bundled runtime facade ${dirName}/runtime-api.js but is missing required runtime sidecar: ${requiredPath}.`,
+        );
+      }
+    }
+  }
+  return errors;
 }
 
 export function collectInstalledRootDependencyManifestErrors(packageRoot: string): string[] {

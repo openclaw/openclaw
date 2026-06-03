@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildPublishedInstallCommandArgs,
   buildPublishedInstallScenarios,
+  collectInstalledAlwaysAllowedRuntimeFacadeErrors,
   collectInstalledBundledExtensionManifestErrors,
   collectInstalledBundledRuntimeSidecarPaths,
   collectInstalledContextEngineRuntimeErrors,
@@ -444,6 +445,64 @@ describe("collectInstalledPackageErrors", () => {
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
+  });
+});
+
+describe("collectInstalledAlwaysAllowedRuntimeFacadeErrors", () => {
+  function withInstalledPackageRoot(run: (packageRoot: string) => void): void {
+    const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-postpublish-facade-runtime-"));
+    try {
+      run(packageRoot);
+    } finally {
+      rmSync(packageRoot, { recursive: true, force: true });
+    }
+  }
+
+  function writeInstalledFile(packageRoot: string, relativePath: string, contents: string): void {
+    const filePath = join(packageRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(filePath), { recursive: true });
+    writeFileSync(filePath, contents, "utf8");
+  }
+
+  it("flags allowed runtime facades that have no packaged sidecar", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        'const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set(["image-generation-core", "speech-core"]);\n',
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/image-generation-core/runtime-api.js",
+        "export {};\n",
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toEqual([
+        "installed package allows bundled runtime facade speech-core/runtime-api.js but is missing required runtime sidecar: dist/extensions/speech-core/runtime-api.js.",
+      ]);
+    });
+  });
+
+  it("accepts allowed runtime facades that have packaged sidecars", () => {
+    withInstalledPackageRoot((packageRoot) => {
+      writeInstalledFile(
+        packageRoot,
+        "dist/facade-activation-check.runtime.js",
+        'const ALWAYS_ALLOWED_RUNTIME_DIR_NAMES = new Set(["image-generation-core", "media-understanding-core"]);\n',
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/image-generation-core/runtime-api.js",
+        "export {};\n",
+      );
+      writeInstalledFile(
+        packageRoot,
+        "dist/extensions/media-understanding-core/runtime-api.js",
+        "export {};\n",
+      );
+
+      expect(collectInstalledAlwaysAllowedRuntimeFacadeErrors(packageRoot)).toStrictEqual([]);
+    });
   });
 });
 
