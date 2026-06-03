@@ -44,7 +44,6 @@ import {
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   INSTALLED_PLUGIN_INDEX_VERSION,
   type InstalledPluginIndex,
-  type InstalledPluginInstallRecordInfo,
 } from "../plugins/installed-plugin-index.js";
 import {
   buildAgentMainSessionKey,
@@ -64,7 +63,6 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
-import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isWithinDir } from "./path-safety.js";
 import {
   ensureDir,
