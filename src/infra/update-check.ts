@@ -369,21 +369,6 @@ export async function resolveNpmChannelTag(params: {
 }): Promise<{ tag: string; version: string | null }> {
   const channelTag = channelToNpmTag(params.channel);
   const channelStatus = await fetchNpmTagVersion({ tag: channelTag, timeoutMs: params.timeoutMs });
-  if (params.channel !== "beta") {
-    return { tag: channelTag, version: channelStatus.version };
-  }
-
-  const latestStatus = await fetchNpmTagVersion({ tag: "latest", timeoutMs: params.timeoutMs });
-  if (!latestStatus.version) {
-    return { tag: channelTag, version: channelStatus.version };
-  }
-  if (!channelStatus.version) {
-    return { tag: "latest", version: latestStatus.version };
-  }
-  const cmp = compareSemverStrings(channelStatus.version, latestStatus.version);
-  if (cmp != null && cmp < 0) {
-    return { tag: "latest", version: latestStatus.version };
-  }
   return { tag: channelTag, version: channelStatus.version };
 }
 

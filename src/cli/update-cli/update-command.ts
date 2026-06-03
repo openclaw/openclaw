@@ -3124,7 +3124,6 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
   let currentVersion: string | null = null;
   let targetVersion: string | null = null;
   let downgradeRisk = false;
-  let fallbackToLatest = false;
   let packageInstallSpec: string | null = null;
   let packageAlreadyCurrent = false;
   let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
@@ -3186,7 +3185,6 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     } else {
       targetVersion = await resolveNpmChannelTag({ channel, timeoutMs }).then((resolved) => {
         tag = resolved.tag;
-        fallbackToLatest = channel === "beta" && resolved.tag === "latest";
         return resolved.version;
       });
     }
@@ -3201,7 +3199,6 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       (requestedChannel === null || requestedChannel === storedChannel);
     downgradeRisk =
       canResolveRegistryVersionForPackageTarget(tag) &&
-      !fallbackToLatest &&
       currentVersion != null &&
       (targetVersion == null || (cmp != null && cmp > 0));
     packageInstallSpec = resolveGlobalInstallSpec({
@@ -3251,9 +3248,6 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
     const notes: string[] = [];
     if (opts.tag && updateInstallKind === "git") {
       notes.push("--tag applies to npm installs only; git updates ignore it.");
-    }
-    if (fallbackToLatest) {
-      notes.push("Beta channel resolves to latest for this run (fallback).");
     }
     if (managedServiceRootRedirect) {
       notes.push(
