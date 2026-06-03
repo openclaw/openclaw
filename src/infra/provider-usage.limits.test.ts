@@ -24,10 +24,22 @@ describe("getProviderUsageLimits credential awareness", () => {
     expect(loadMock).not.toHaveBeenCalled();
   });
 
-  it("returns undefined for OpenAI with no credential type (no implicit oauth default)", async () => {
-    const out = await getProviderUsageLimits("openai");
-    expect(out).toBeUndefined();
-    expect(loadMock).not.toHaveBeenCalled();
+  it("resolves OpenAI limits for an auth-profile turn (mechanism, not credential type)", async () => {
+    loadMock.mockResolvedValue({
+      updatedAt: 0,
+      providers: [{ provider: "openai", displayName: "OpenAI", windows: [] }],
+    });
+    await getProviderUsageLimits("openai", { credentialType: "auth-profile" });
+    expect(loadMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves OpenAI limits when the credential type is absent (oauth-eligible)", async () => {
+    loadMock.mockResolvedValue({
+      updatedAt: 0,
+      providers: [{ provider: "openai", displayName: "OpenAI", windows: [] }],
+    });
+    await getProviderUsageLimits("openai");
+    expect(loadMock).toHaveBeenCalledTimes(1);
   });
 
   it("resolves OpenAI limits for an oauth turn", async () => {

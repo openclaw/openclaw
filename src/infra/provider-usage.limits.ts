@@ -18,6 +18,19 @@ type LimitsCacheEntry = {
 };
 const limitsCache = new Map<string, LimitsCacheEntry>();
 
+// Map a per-turn auth signal — which may be the auth *mechanism* (e.g.
+// "auth-profile"), not a credential *type* — to the usage-credential vocabulary
+// resolveUsageProviderId expects. api-key/aws-sdk resolve NO usage provider, so an
+// api-key turn never resolves "openai" and cannot borrow cached oauth windows;
+// oauth/token/auth-profile and a missing signal are usage-eligible, and the actual
+// credential is re-checked at fetch time before any usage request is made.
+function toUsageCredentialType(raw: string | null | undefined): string {
+  if (raw === "api-key" || raw === "aws-sdk") {
+    return raw;
+  }
+  return raw === "token" ? "token" : "oauth";
+}
+
 // Resolve the active provider to a usage-capable id and load its windows. Returns
 // undefined when the provider has no core-known usage (e.g. api-key-only or an
 // unmapped provider). Cached per usage-provider for 60s so a per-reply snapshot
@@ -26,12 +39,8 @@ export async function getProviderUsageLimits(
   provider: string | undefined | null,
   options?: { credentialType?: string | null; timeoutMs?: number; now?: number },
 ): Promise<ReplyUsageLimits | undefined> {
-  // Pass the turn's real credential type through unchanged. Do NOT default to
-  // "oauth": resolveUsageProviderId only returns the OpenAI usage provider for
-  // oauth/token, so defaulting would attach OAuth/ChatGPT windows to an API-key
-  // turn. A missing credential type ⇒ no OpenAI limits (correct, not OAuth).
   const usageId = resolveUsageProviderId(provider, {
-    credentialType: options?.credentialType ?? null,
+    credentialType: toUsageCredentialType(options?.credentialType),
   });
   if (!usageId) {
     return undefined;
@@ -107,12 +116,8 @@ export function getProviderUsageLimitsCached(
   provider: string | undefined | null,
   options?: { credentialType?: string | null; timeoutMs?: number },
 ): ReplyUsageLimits | undefined {
-  // Pass the turn's real credential type through unchanged. Do NOT default to
-  // "oauth": resolveUsageProviderId only returns the OpenAI usage provider for
-  // oauth/token, so defaulting would attach OAuth/ChatGPT windows to an API-key
-  // turn. A missing credential type ⇒ no OpenAI limits (correct, not OAuth).
   const usageId = resolveUsageProviderId(provider, {
-    credentialType: options?.credentialType ?? null,
+    credentialType: toUsageCredentialType(options?.credentialType),
   });
   if (!usageId) {
     return undefined;
