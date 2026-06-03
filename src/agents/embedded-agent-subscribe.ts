@@ -1262,6 +1262,10 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     getCompactionCount: () => compactionCount,
     getLastCompactionTokensAfter: () => state.lastCompactionTokensAfter,
     ...(params.abortRun ? { abortRun: params.abortRun } : {}),
+    ...(params.sourceReplyDeliveryMode
+      ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
+      : {}),
+    noteDirectReplyFinalText: pushAssistantText,
   };
 
   const sessionUnsubscribe = params.session.subscribe(createEmbeddedAgentSessionEventHandler(ctx));

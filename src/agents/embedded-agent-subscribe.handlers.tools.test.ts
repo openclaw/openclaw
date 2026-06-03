@@ -2199,6 +2199,59 @@ describe("handleToolExecutionEnd directReply path", () => {
     expect(abortRun).not.toHaveBeenCalled();
   });
 
+  it("message_tool_only: does NOT abort or emitBlockReply (source delivery suppressed)", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    ctx.sourceReplyDeliveryMode = "message_tool_only";
+
+    await runWithDirectReply(ctx, {
+      directReply: true,
+      content: [{ type: "text", text: "Hello world" }],
+    });
+
+    expect(emitBlockReply).not.toHaveBeenCalled();
+    expect(abortRun).not.toHaveBeenCalled();
+  });
+
+  it("automatic delivery: still aborts with direct_reply (default behavior)", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    ctx.sourceReplyDeliveryMode = "automatic";
+
+    await runWithDirectReply(ctx, {
+      directReply: true,
+      content: [{ type: "text", text: "Hello world" }],
+    });
+
+    expect(emitBlockReply).toHaveBeenCalledWith({ text: "Hello world" });
+    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+  });
+
+  it("text directReply records a final-text fallback before aborting", async () => {
+    const { ctx } = createTestContext();
+    const emitBlockReply = vi.fn();
+    const abortRun = vi.fn();
+    const noteDirectReplyFinalText = vi.fn();
+    ctx.emitBlockReply = emitBlockReply;
+    ctx.abortRun = abortRun;
+    ctx.noteDirectReplyFinalText = noteDirectReplyFinalText;
+
+    await runWithDirectReply(ctx, {
+      directReply: true,
+      content: [{ type: "text", text: "  Hello world  " }],
+    });
+
+    expect(noteDirectReplyFinalText).toHaveBeenCalledWith("Hello world");
+    expect(emitBlockReply).toHaveBeenCalledWith({ text: "Hello world" });
+    expect(abortRun).toHaveBeenCalledWith("direct_reply");
+  });
+
   it("directReply absent: neither emitBlockReply nor abortRun called (backward compat)", async () => {
     const { ctx } = createTestContext();
     const emitBlockReply = vi.fn();

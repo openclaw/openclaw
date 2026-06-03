@@ -1579,17 +1579,30 @@ export async function handleToolExecutionEnd(
         )
       : [];
     const hasContent = Boolean(outputText) || mediaUrls.length > 0;
-    if (hasContent) {
+    if (!hasContent) {
+      ctx.log.warn(
+        `directReply: tool=${toolName} ignored because no content was extracted (no text, no mediaUrls)`,
+      );
+    } else if (ctx.sourceReplyDeliveryMode === "message_tool_only") {
+      // `message_tool_only` keeps final, block, and preview output private, so a direct
+      // block reply would not reach the source conversation. Aborting here would finish the
+      // turn with no visible reply, so skip the early abort and let normal completion run.
+      ctx.log.warn(
+        `directReply: tool=${toolName} not aborted because source delivery is message_tool_only; deferring to normal completion`,
+      );
+    } else {
+      // Record the text as a final-payload fallback before aborting. When block streaming is
+      // disabled, text-only block replies are reconstructed from final text rather than sent
+      // live, so the answer would otherwise be lost once we skip further inference.
+      if (outputText) {
+        ctx.noteDirectReplyFinalText?.(outputText);
+      }
       ctx.emitBlockReply?.({
         ...(outputText ? { text: outputText } : {}),
         ...(mediaUrls.length > 0 ? { mediaUrls } : {}),
         ...(mediaArtifact?.audioAsVoice ? { audioAsVoice: true } : {}),
       });
       ctx.abortRun?.("direct_reply");
-    } else {
-      ctx.log.warn(
-        `directReply: tool=${toolName} ignored because no content was extracted (no text, no mediaUrls)`,
-      );
     }
   }
 }

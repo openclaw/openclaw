@@ -1,5 +1,6 @@
 import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
@@ -317,6 +318,18 @@ export type ToolHandlerContext = {
   emitBlockReply?: (payload: BlockReplyPayload) => void;
   /** Abort the current agent run, skipping further LLM inference. */
   abortRun?: (reason: string) => void;
+  /**
+   * Source delivery mode for this run. `message_tool_only` keeps final/block/preview
+   * output private, so a directReply block reply would not be visibly delivered and
+   * must not trigger an early abort.
+   */
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /**
+   * Record text as the run's final assistant text fallback. Used by directReply so the
+   * answer still surfaces through final delivery when block streaming is disabled (text
+   * blocks are otherwise reconstructed from final text rather than sent live).
+   */
+  noteDirectReplyFinalText?: (text: string) => void;
 };
 
 export type EmbeddedAgentSubscribeEvent =
