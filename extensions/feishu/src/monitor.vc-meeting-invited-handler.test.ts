@@ -1,0 +1,395 @@
+import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
+import { monitorSingleAccount } from "./monitor.account.js";
+import {
+  createFeishuVcMeetingInvitedHandler,
+  resolveVcMeetingInvitedTurn,
+} from "./monitor.vc-meeting-invited-handler.js";
+import { setFeishuRuntime } from "./runtime.js";
+import type { ResolvedFeishuAccount } from "./types.js";
+
+const createEventDispatcherMock = vi.hoisted(() => vi.fn());
+const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
+const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
+const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
+const maybeCreateDynamicAgentMock = vi.hoisted(() => vi.fn());
+const sendMessageFeishuMock = vi.hoisted(() => vi.fn());
+const dedupMocks = vi.hoisted(() => ({
+  claimUnprocessedFeishuMessage: vi.fn(async () => "claimed" as const),
+  forgetProcessedFeishuMessage: vi.fn(async () => true),
+  recordProcessedFeishuMessage: vi.fn(async () => true),
+  releaseFeishuMessageProcessing: vi.fn(),
+  warmupDedupFromDisk: vi.fn(async () => 0),
+  hasProcessedFeishuMessage: vi.fn(async () => false),
+}));
+
+let handlers: Record<string, (data: unknown) => Promise<void>> = {};
+
+vi.mock("./client.js", () => ({
+  createEventDispatcher: createEventDispatcherMock,
+}));
+
+vi.mock("./monitor.transport.js", () => ({
+  monitorWebSocket: monitorWebSocketMock,
+  monitorWebhook: monitorWebhookMock,
+}));
+
+vi.mock("./thread-bindings.js", () => ({
+  createFeishuThreadBindingManager: createFeishuThreadBindingManagerMock,
+}));
+
+vi.mock("./dynamic-agent.js", () => ({
+  maybeCreateDynamicAgent: maybeCreateDynamicAgentMock,
+}));
+
+vi.mock("./send.js", () => ({
+  sendMessageFeishu: sendMessageFeishuMock,
+}));
+
+vi.mock("./dedup.js", () => ({
+  claimUnprocessedFeishuMessage: dedupMocks.claimUnprocessedFeishuMessage,
+  forgetProcessedFeishuMessage: dedupMocks.forgetProcessedFeishuMessage,
+  recordProcessedFeishuMessage: dedupMocks.recordProcessedFeishuMessage,
+  releaseFeishuMessageProcessing: dedupMocks.releaseFeishuMessageProcessing,
+  warmupDedupFromDisk: dedupMocks.warmupDedupFromDisk,
+  hasProcessedFeishuMessage: dedupMocks.hasProcessedFeishuMessage,
+}));
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./monitor.transport.js");
+  vi.doUnmock("./thread-bindings.js");
+  vi.doUnmock("./dynamic-agent.js");
+  vi.doUnmock("./send.js");
+  vi.resetModules();
+});
+
+function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
+  return {
+    channels: {
+      feishu: {
+        enabled: true,
+        dmPolicy: "open",
+        allowFrom: ["*"],
+      },
+    },
+    ...overrides,
+  } as ClawdbotConfig;
+}
+
+function buildAccount(): ResolvedFeishuAccount {
+  return {
+    accountId: "default",
+    selectionSource: "explicit",
+    enabled: true,
+    configured: true,
+    appId: "cli_test",
+    appSecret: "secret_test", // pragma: allowlist secret
+    domain: "feishu",
+    config: {
+      enabled: true,
+      connectionMode: "websocket",
+    },
+  } as ResolvedFeishuAccount;
+}
+
+function buildRoute() {
+  return {
+    agentId: "main",
+    channel: "feishu",
+    accountId: "default",
+    sessionKey: "agent:main:feishu:direct:ou_inviter_1",
+    mainSessionKey: "agent:main:feishu",
+    lastRoutePolicy: "session" as const,
+    matchedBy: "binding.channel" as const,
+  };
+}
+
+function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex = 0, argIndex = 0) {
+  const call = mockFn.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  if (!(argIndex in call)) {
+    throw new Error(`expected ${label} call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
+}
+
+function createTestRuntime(overrides?: {
+  readAllowFromStore?: () => Promise<Array<string | number>>;
+  upsertPairingRequest?: () => Promise<{ code: string; created: boolean }>;
+}) {
+  const finalizeInboundContext = vi.fn((ctx: Record<string, unknown>) => ctx);
+  const dispatchReplyFromConfig = vi.fn(async () => ({
+    queuedFinal: true,
+    counts: { tool: 0, block: 0, final: 1 },
+  }));
+  const withReplyDispatcher = vi.fn(
+    async ({
+      dispatcher,
+      run,
+    }: {
+      dispatcher: { sendFinalReply?: (payload: unknown) => boolean };
+      run: () => Promise<unknown>;
+    }) => {
+      expect(dispatcher.sendFinalReply?.({ text: "visible reply" })).toBe(false);
+      return await run();
+    },
+  );
+  const recordInboundSession = vi.fn(async () => {});
+  const dispatchPreparedForTest = vi.fn(async (turn: PreparedInboundReply<unknown>) => {
+    await turn.recordInboundSession({
+      storePath: turn.storePath,
+      sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+      ctx: turn.ctxPayload,
+      updateLastRoute: turn.record?.updateLastRoute,
+      onRecordError: turn.record?.onRecordError ?? (() => undefined),
+    });
+    const dispatchResult = await turn.runDispatch();
+    return {
+      admission: { kind: "dispatch" as const },
+      dispatched: true,
+      ctxPayload: turn.ctxPayload,
+      routeSessionKey: turn.routeSessionKey,
+      dispatchResult,
+    };
+  });
+
+  return {
+    channel: {
+      routing: {
+        resolveAgentRoute: vi.fn(() => buildRoute()),
+        buildAgentSessionKey: vi.fn(),
+      },
+      reply: {
+        finalizeInboundContext,
+        dispatchReplyFromConfig,
+        withReplyDispatcher,
+      },
+      session: {
+        resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
+        recordInboundSession,
+      },
+      inbound: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["inbound"]["run"]>[0]) => {
+          const input = await params.adapter.ingest(params.raw);
+          if (!input) {
+            return {
+              admission: { kind: "drop" as const, reason: "ingest-null" },
+              dispatched: false,
+            };
+          }
+          const turn = await params.adapter.resolveTurn(
+            input,
+            { kind: "message", canStartAgentTurn: true },
+            {},
+          );
+          if (!("runDispatch" in turn)) {
+            throw new Error("vc meeting test runtime only supports prepared turns");
+          }
+          return await dispatchPreparedForTest(turn as PreparedInboundReply<unknown>);
+        }) as unknown as PluginRuntime["channel"]["inbound"]["run"],
+      },
+      pairing: {
+        readAllowFromStore: vi.fn(overrides?.readAllowFromStore ?? (async () => [])),
+        upsertPairingRequest: vi.fn(
+          overrides?.upsertPairingRequest ??
+            (async () => ({
+              code: "TESTCODE",
+              created: true,
+            })),
+        ),
+        buildPairingReply: vi.fn((code: string) => `Pairing code: ${code}`),
+      },
+      debounce: {
+        resolveInboundDebounceMs: vi.fn(() => 0),
+        createInboundDebouncer: vi.fn(),
+      },
+    },
+  } as unknown as PluginRuntime;
+}
+
+const vcEvent = {
+  event_id: "evt_vc_123",
+  call_id: "call_vc_123",
+  meeting: {
+    id: "6911188411934433028",
+    meeting_no: "123456789",
+    topic: "Weekly sync",
+  },
+  inviter: {
+    id: {
+      open_id: "ou_inviter_1",
+      user_id: "u_inviter_1",
+      union_id: "on_inviter_1",
+    },
+    user_name: "Alice",
+  },
+  invite_time: "1712345678",
+};
+
+describe("resolveVcMeetingInvitedTurn", () => {
+  it("builds a deterministic synthetic turn from the real event fields", () => {
+    expect(resolveVcMeetingInvitedTurn(vcEvent)).toEqual({
+      eventType: "vc.bot.meeting_invited_v1",
+      eventId: "evt_vc_123",
+      messageId: "vc-invited:event:evt_vc_123",
+      callId: "call_vc_123",
+      meetingId: "6911188411934433028",
+      meetingNo: "123456789",
+      topic: "Weekly sync",
+      inviteTime: "1712345678",
+      inviter: {
+        senderId: "ou_inviter_1",
+        openId: "ou_inviter_1",
+        userId: "u_inviter_1",
+        unionId: "on_inviter_1",
+        name: "Alice",
+      },
+      prompt:
+        'Use the available tool to join the meeting with meeting number 123456789 immediately. Do not ask for confirmation. When invoking the join tool, pass call_id="call_vc_123" so the server can correlate invite and join telemetry.',
+    });
+  });
+
+  it("skips malformed events without a meeting number or inviter identity", () => {
+    expect(resolveVcMeetingInvitedTurn({ ...vcEvent, meeting: { topic: "Weekly sync" } })).toBe(
+      null,
+    );
+    expect(resolveVcMeetingInvitedTurn({ ...vcEvent, inviter: { id: {} } })).toBe(null);
+  });
+});
+
+describe("createFeishuVcMeetingInvitedHandler", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    dedupMocks.claimUnprocessedFeishuMessage.mockResolvedValue("claimed");
+    dedupMocks.forgetProcessedFeishuMessage.mockResolvedValue(true);
+    dedupMocks.recordProcessedFeishuMessage.mockResolvedValue(true);
+    dedupMocks.warmupDedupFromDisk.mockResolvedValue(0);
+    dedupMocks.hasProcessedFeishuMessage.mockResolvedValue(false);
+    maybeCreateDynamicAgentMock.mockResolvedValue({ created: false });
+    sendMessageFeishuMock.mockResolvedValue({ messageId: "om_pair", chatId: "oc_dm" });
+  });
+
+  it("dispatches the VC invite through a synthetic no-reply inbound turn", async () => {
+    const runtime = createTestRuntime({
+      readAllowFromStore: async () => ["ou_inviter_1"],
+    });
+    setFeishuRuntime(runtime);
+    const handler = createFeishuVcMeetingInvitedHandler({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      }),
+      accountId: "default",
+      chatHistories: new Map(),
+      fireAndForget: false,
+    });
+
+    await handler(vcEvent);
+
+    const finalizeInboundContext = runtime.channel.reply.finalizeInboundContext as ReturnType<
+      typeof vi.fn
+    >;
+    const withReplyDispatcher = runtime.channel.reply.withReplyDispatcher as ReturnType<
+      typeof vi.fn
+    >;
+    const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
+      typeof vi.fn
+    >;
+    const finalizedContext = mockCallArg(finalizeInboundContext, "finalizeInboundContext") as
+      | Record<string, unknown>
+      | undefined;
+
+    expect(finalizedContext).toEqual(
+      expect.objectContaining({
+        From: "feishu:ou_inviter_1",
+        To: "vc-meeting:123456789",
+        Surface: "feishu-vc-meeting-invited",
+        MessageSid: "vc-invited:event:evt_vc_123",
+        SyntheticEventType: "vc.bot.meeting_invited_v1",
+        VcMeetingId: "6911188411934433028",
+        VcMeetingNo: "123456789",
+        VcCallId: "call_vc_123",
+        VcMeetingTopic: "Weekly sync",
+        VcInviterOpenId: "ou_inviter_1",
+        VcInviteTime: "1712345678",
+        OriginatingTo: "vc-meeting:123456789",
+      }),
+    );
+    expect(finalizedContext?.BodyForAgent).toContain(
+      "Use the available tool to join the meeting with meeting number 123456789 immediately.",
+    );
+    expect(finalizedContext?.BodyForAgent).toContain('pass call_id="call_vc_123"');
+    expect(withReplyDispatcher).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("sends a pairing challenge to the inviter when pairing mode blocks dispatch", async () => {
+    const runtime = createTestRuntime();
+    setFeishuRuntime(runtime);
+    const handler = createFeishuVcMeetingInvitedHandler({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "pairing",
+            allowFrom: [],
+          },
+        },
+      }),
+      accountId: "default",
+      chatHistories: new Map(),
+      fireAndForget: false,
+    });
+
+    await handler(vcEvent);
+
+    expect(runtime.channel.inbound.run).not.toHaveBeenCalled();
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    const pairingReply = mockCallArg(sendMessageFeishuMock, "sendMessageFeishu") as
+      | { to?: string; text?: string; accountId?: string }
+      | undefined;
+    expect(pairingReply?.to).toBe("user:ou_inviter_1");
+    expect(pairingReply?.accountId).toBe("default");
+    expect(pairingReply?.text).toContain("Pairing code:");
+    expect(pairingReply?.text).toContain("TESTCODE");
+  });
+});
+
+describe("monitorSingleAccount VC event registration", () => {
+  beforeEach(() => {
+    handlers = {};
+    vi.clearAllMocks();
+    dedupMocks.warmupDedupFromDisk.mockResolvedValue(0);
+    createEventDispatcherMock.mockReturnValue({
+      register: vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {
+        handlers = registered;
+      }),
+    });
+  });
+
+  it("registers vc.bot.meeting_invited_v1 with the Feishu event dispatcher", async () => {
+    await monitorSingleAccount({
+      cfg: buildConfig(),
+      account: buildAccount(),
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: "ou_bot",
+        botName: "OpenClaw Bot",
+      },
+      fireAndForget: false,
+      channelRuntime: createTestRuntime().channel,
+    });
+
+    expect(typeof handlers["vc.bot.meeting_invited_v1"]).toBe("function");
+  });
+});

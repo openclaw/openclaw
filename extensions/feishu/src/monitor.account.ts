@@ -25,6 +25,7 @@ import { fetchBotIdentityForMonitor } from "./monitor.startup.js";
 import { botNames, botOpenIds } from "./monitor.state.js";
 import { FeishuRetryableSyntheticEventError } from "./monitor.synthetic-error.js";
 import { monitorWebhook, monitorWebSocket } from "./monitor.transport.js";
+import { createFeishuVcMeetingInvitedHandler } from "./monitor.vc-meeting-invited-handler.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu } from "./send.js";
 import { getFeishuSequentialKey } from "./sequential-key.js";
@@ -332,6 +333,14 @@ function registerEventHandlers(
       accountId,
       runtime,
       fireAndForget,
+    }),
+    "vc.bot.meeting_invited_v1": createFeishuVcMeetingInvitedHandler({
+      cfg,
+      accountId,
+      runtime,
+      chatHistories,
+      fireAndForget,
+      channelRuntime,
     }),
     "im.message.reaction.created_v1": async (data) => {
       await runFeishuHandler({
