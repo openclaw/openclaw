@@ -132,6 +132,34 @@ test("sessions.delete rejects main and aborts active runs", async () => {
   });
 });
 
+test("sessions.delete removes trajectory artifacts for deleted session", async () => {
+  const { dir } = await createSessionStoreDir();
+  await writeSingleLineSession(dir, "sess-delete", "delete me");
+  const runtimePath = path.join(dir, "sess-delete.trajectory.jsonl");
+  const pointerPath = path.join(dir, "sess-delete.trajectory-path.json");
+  await fs.writeFile(
+    runtimePath,
+    `${JSON.stringify({ type: "session", sessionId: "sess-delete" })}\n`,
+    "utf-8",
+  );
+  await fs.writeFile(pointerPath, JSON.stringify({ runtimeFile: runtimePath }), "utf-8");
+
+  await writeSessionStore({
+    entries: {
+      "discord:group:dev": sessionStoreEntry("sess-delete"),
+    },
+  });
+
+  const deleted = await directSessionReq<{ ok: true; deleted: boolean }>("sessions.delete", {
+    key: "discord:group:dev",
+  });
+
+  expect(deleted.ok).toBe(true);
+  expect(deleted.payload?.deleted).toBe(true);
+  await expect(fs.stat(runtimePath)).rejects.toThrow();
+  await expect(fs.stat(pointerPath)).rejects.toThrow();
+});
+
 test("sessions.delete limits plugin-runtime cleanup to sessions owned by that plugin", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-owned", "owned");
