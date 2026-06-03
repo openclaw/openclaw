@@ -54,17 +54,17 @@ function isBareMissingModuleSpecifier(text: string): boolean {
   const specifier = match?.[1];
   return Boolean(
     specifier &&
-      !specifier.startsWith(".") &&
-      !specifier.startsWith("/") &&
-      !path.win32.isAbsolute(specifier),
+    !specifier.startsWith(".") &&
+    !specifier.startsWith("/") &&
+    !path.win32.isAbsolute(specifier),
   );
 }
 
 function hasExternalDistArtifactPath(text: string): boolean {
   const candidates = [
-    ...text.matchAll(/file:\/\/(\/[^\s)]+[\/\\]dist(?:-runtime)?[\/\\][^\s)]*)/gu),
+    ...text.matchAll(/file:\/\/(\/[^\s)]+[/\\]dist(?:-runtime)?[/\\][^\s)]*)/gu),
     ...text.matchAll(/(\b[A-Za-z]:\\[^\s)]+\\dist(?:-runtime)?\\[^\s)]*)/gu),
-    ...text.matchAll(/(\/[^\s)]+[\/\\]dist(?:-runtime)?[\/\\][^\s)]*)/gu),
+    ...text.matchAll(/(\/[^\s)]+[/\\]dist(?:-runtime)?[/\\][^\s)]*)/gu),
   ];
   return candidates.some((match) => {
     const candidate = match[1];
