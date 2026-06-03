@@ -2,6 +2,7 @@ export type AcpRuntimePromptMode = "prompt" | "steer";
 
 export type AcpRuntimeSessionMode = "persistent" | "oneshot";
 
+/** Runtime update tags emitted by ACP adapters; unknown backend tags are passed through. */
 export type AcpSessionUpdateTag =
   | "agent_message_chunk"
   | "agent_thought_chunk"
@@ -17,6 +18,7 @@ export type AcpSessionUpdateTag =
 
 export type AcpRuntimeControl = "session/set_mode" | "session/set_config_option" | "session/status";
 
+/** Stable handle returned by ensureSession and passed back into all ACP runtime operations. */
 export type AcpRuntimeHandle = {
   sessionKey: string;
   backend: string;
@@ -35,6 +37,7 @@ export type AcpRuntimeEnsureInput = {
   sessionKey: string;
   agent: string;
   mode: AcpRuntimeSessionMode;
+  /** Backend or agent session id to resume when reopening an existing conversation. */
   resumeSessionId?: string;
   /** Optional runtime model override that must be available during session creation. */
   model?: string;
@@ -49,6 +52,7 @@ export type AcpRuntimeTurnAttachment = {
   data: string;
 };
 
+/** Per-turn payload delivered to ACP adapters. */
 export type AcpRuntimeTurnInput = {
   handle: AcpRuntimeHandle;
   text: string;
@@ -86,6 +90,7 @@ export type AcpRuntimeDoctorReport = {
   details?: string[];
 };
 
+/** Streaming event union produced by ACP adapters while a turn is running. */
 export type AcpRuntimeEvent =
   | {
       type: "text_delta";
@@ -127,6 +132,7 @@ export type AcpRuntimeTurnResultError = {
   retryable?: boolean;
 };
 
+/** Terminal turn result, separated from the live event stream for reliable failure handling. */
 export type AcpRuntimeTurnResult =
   | {
       status: "completed";
@@ -145,10 +151,13 @@ export interface AcpRuntimeTurn {
   readonly requestId: string;
   readonly events: AsyncIterable<AcpRuntimeEvent>;
   readonly result: Promise<AcpRuntimeTurnResult>;
+  /** Requests backend cancellation while keeping result/error reporting adapter-owned. */
   cancel(input?: { reason?: string }): Promise<void>;
+  /** Closes the event stream when the caller stops listening before terminal result. */
   closeStream(input?: { reason?: string }): Promise<void>;
 }
 
+/** ACP adapter contract implemented by backend plugins and consumed by gateway/session flows. */
 export interface AcpRuntime {
   ensureSession(input: AcpRuntimeEnsureInput): Promise<AcpRuntimeHandle>;
 

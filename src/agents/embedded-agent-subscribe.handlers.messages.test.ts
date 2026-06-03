@@ -33,6 +33,9 @@ function createMessageUpdateContext(
     state?: Record<string, unknown>;
   } = {},
 ) {
+  const partialReplyDirectiveAccumulator = createStreamingDirectiveAccumulator();
+  const onAgentEvent = params.onAgentEvent as ((event: unknown) => void) | undefined;
+  const onPartialReply = params.onPartialReply as ((event: unknown) => void) | undefined;
   return {
     params: {
       runId: "run-1",
@@ -66,12 +69,27 @@ function createMessageUpdateContext(
     log: { debug: params.debug ?? vi.fn() },
     noteLastAssistant: vi.fn(),
     stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
-    consumePartialReplyDirectives: params.consumePartialReplyDirectives ?? vi.fn(() => null),
+    consumePartialReplyDirectives:
+      params.consumePartialReplyDirectives ??
+      vi.fn((text: string, options?: { final?: boolean }) =>
+        partialReplyDirectiveAccumulator.consume(text, options),
+      ),
     emitReasoningStream: vi.fn(),
     flushBlockReplyBuffer: params.flushBlockReplyBuffer ?? vi.fn(),
     resetAssistantMessageState: params.resetAssistantMessageState ?? vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
+    emitAssistantStreamData: vi.fn(
+      (
+        data: Parameters<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>[0],
+        options?: { emitPartialReply?: boolean },
+      ) => {
+        onAgentEvent?.({ stream: "assistant", data });
+        if (options?.emitPartialReply === true && (params.shouldEmitPartialReplies ?? true)) {
+          onPartialReply?.(data);
+        }
+      },
+    ),
   } as unknown as EmbeddedAgentSubscribeContext;
 }
 
@@ -90,6 +108,7 @@ function createMessageEndContext(
     state?: Record<string, unknown>;
   } = {},
 ) {
+  const onAgentEvent = params.onAgentEvent as ((event: unknown) => void) | undefined;
   return {
     params: {
       runId: "run-1",
@@ -136,6 +155,11 @@ function createMessageEndContext(
     builtinToolNames: params.builtinToolNames,
     stripBlockTags: (text: string) => text,
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
+    emitAssistantStreamData: vi.fn(
+      (data: Parameters<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>[0]) => {
+        onAgentEvent?.({ stream: "assistant", data });
+      },
+    ),
     emitBlockReply: params.emitBlockReply ?? vi.fn(),
     consumeReplyDirectives: params.consumeReplyDirectives ?? vi.fn(() => ({ text: "Need send." })),
     emitReasoningStream: vi.fn(),
@@ -330,6 +354,85 @@ describe("handleMessageUpdate text signatures", () => {
         data: { text: "Hello world", delta: " world" },
       },
     ]);
+  });
+
+  it("holds incomplete streaming directive tails without emitting them as text", () => {
+    const onAgentEvent = vi.fn();
+    const accumulator = createStreamingDirectiveAccumulator();
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
+        accumulator.consume(text, options),
+      ),
+    });
+
+    const createNonPhaseEvent = (delta: string) =>
+      ({
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta,
+        },
+      }) as never;
+
+    handleMessageUpdate(context, createNonPhaseEvent("Hello\n"));
+    handleMessageUpdate(context, createNonPhaseEvent("M"));
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+      stream: "assistant",
+      data: { text: "Hello", delta: "Hello" },
+    });
+    expect(context.state.lastStreamedAssistantCleaned).toBe("Hello");
+  });
+
+  it("keeps stripped reply directives out of later plain deltas", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+
+    const createNonPhaseEvent = (delta: string) =>
+      ({
+        type: "message_update",
+        message: { role: "assistant", content: [] },
+        assistantMessageEvent: {
+          type: "text_delta",
+          delta,
+        },
+      }) as never;
+
+    handleMessageUpdate(context, createNonPhaseEvent("[[reply_to_current]]\nHello"));
+    handleMessageUpdate(context, createNonPhaseEvent(" world"));
+
+    expect(onAgentEvent.mock.calls.map(([event]) => event)).toMatchObject([
+      {
+        stream: "assistant",
+        data: { text: "Hello", delta: "Hello" },
+      },
+      {
+        stream: "assistant",
+        data: { text: "Hello world", delta: " world" },
+      },
+    ]);
+  });
+
+  it("does not expose complete legacy media directives on plain deltas", () => {
+    const onAgentEvent = vi.fn();
+    const context = createMessageUpdateContext({ onAgentEvent });
+
+    handleMessageUpdate(context, {
+      type: "message_update",
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: {
+        type: "text_delta",
+        delta: "Here it is.\nMEDIA:/tmp/final.png\n",
+      },
+    } as never);
+
+    expect(firstMockArg(onAgentEvent, "agent event")).toMatchObject({
+      stream: "assistant",
+      data: { text: "Here it is.", delta: "Here it is." },
+    });
   });
 
   it("uses full partial text for suffix deltas after a suppressed commentary item", () => {
@@ -771,7 +874,9 @@ describe("handleMessageEnd", () => {
       [unroutedEnvelope, undefined, new Set(["message"]), undefined, unroutedEnvelope],
     ] as const) {
       const emitBlockReply = vi.fn();
-      const consumeReplyDirectives = vi.fn((text: string) => (text ? { text } : null));
+      const consumeReplyDirectives = vi.fn((textLocal: string) =>
+        textLocal ? { text: textLocal } : null,
+      );
       const ctx = createMessageEndContext({
         emitBlockReply,
         consumeReplyDirectives,

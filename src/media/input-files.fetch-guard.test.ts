@@ -17,7 +17,9 @@ vi.mock("@openclaw/media-core/mime", () => ({
 }));
 
 async function waitForMicrotaskTurn(): Promise<void> {
-  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  await new Promise<void>((resolve) => {
+    queueMicrotask(resolve);
+  });
 }
 
 let fetchWithGuard: typeof import("./input-files.js").fetchWithGuard;

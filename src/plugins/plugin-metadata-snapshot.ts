@@ -14,7 +14,7 @@ import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snap
 import { resolveDefaultPluginNpmDir, resolvePluginNpmProjectsDir } from "./install-paths.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
-import { resolveInstalledPluginIndexStorePath } from "./installed-plugin-index-store-path.js";
+import { readPersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   loadPluginManifestRegistryForInstalledIndex,
@@ -111,15 +111,6 @@ function directoryChildPackageJsonFingerprint(directoryPath: string): unknown {
   ];
 }
 
-function readJsonObject(filePath: string): Record<string, unknown> | undefined {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8"));
-    return isRecord(parsed) ? parsed : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
 function stableMemoValue(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map(stableMemoValue);
@@ -207,15 +198,18 @@ function resolvePersistedRegistryFastMemoFingerprint(params: {
   if (disabled) {
     return { disabled: true };
   }
-  const indexPath = resolveInstalledPluginIndexStorePath({
-    env: params.env,
-    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-  });
   const npmRoot = params.stateDir
     ? path.join(params.stateDir, "npm")
     : resolveDefaultPluginNpmDir(params.env);
   return {
-    index: fileFingerprint(indexPath),
+    index: hashJson(
+      stableMemoValue(
+        readPersistedInstalledPluginIndexSync({
+          env: params.env,
+          ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+        }),
+      ) ?? null,
+    ),
     npmPackageJson: fileFingerprint(path.join(npmRoot, "package.json")),
     npmProjectPackageJsons: directoryChildPackageJsonFingerprint(
       resolvePluginNpmProjectsDir(npmRoot),
@@ -268,11 +262,12 @@ function resolvePersistedRegistryMemoState(params: {
       fingerprint: fastFingerprint,
     };
   }
-  const indexPath = resolveInstalledPluginIndexStorePath({
-    env: params.env,
-    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
-  });
-  const index = params.index ?? readJsonObject(indexPath);
+  const index =
+    params.index ??
+    readPersistedInstalledPluginIndexSync({
+      env: params.env,
+      ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+    });
   return {
     contextHash,
     fastHash,

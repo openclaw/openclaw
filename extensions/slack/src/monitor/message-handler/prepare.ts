@@ -774,6 +774,14 @@ export async function prepareSlackMessage(params: {
     sessionKey,
     historyKey,
   } = routing;
+  const isAssistantThreadMessage = Boolean(isDirectMessage && messageAssistantThreadContext);
+  const shouldForceAssistantReplyThread = Boolean(
+    assistantThreadContext?.threadTs &&
+    (isThreadReply || isAssistantThreadMessage || replyToMode !== "off"),
+  );
+  const forcedAssistantReplyThreadTs = shouldForceAssistantReplyThread
+    ? assistantThreadContext?.threadTs
+    : undefined;
   if (runtimeBinding && shouldLogVerbose()) {
     logVerbose(
       `slack: routed via bound conversation ${runtimeBinding.conversation.conversationId} -> ${runtimeBinding.targetSessionKey}`,
@@ -1099,7 +1107,7 @@ export async function prepareSlackMessage(params: {
           client: ctx.app.client,
         }).then(
           () => true,
-          (err) => {
+          (err: unknown) => {
             logVerbose(
               `slack react failed for channel ${message.channel}: ${formatSlackError(err)}`,
             );
@@ -1439,9 +1447,7 @@ export async function prepareSlackMessage(params: {
           : undefined,
     },
     replyToMode,
-    ...(assistantThreadContext?.threadTs
-      ? { forcedReplyThreadTs: assistantThreadContext.threadTs }
-      : {}),
+    ...(forcedAssistantReplyThreadTs ? { forcedReplyThreadTs: forcedAssistantReplyThreadTs } : {}),
     ...(assistantThreadContext
       ? { slackMessageMetadata: buildSlackAssistantThreadMetadata(assistantThreadContext) }
       : {}),

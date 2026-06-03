@@ -1736,6 +1736,29 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
   });
 
+  it("retries empty Ollama stop turns when nonzero output tokens were generated", () => {
+    const retryInstruction = resolveEmptyResponseRetryInstruction({
+      provider: "ollama",
+      modelId: "minimax-m2.7:cloud",
+      payloadCount: 0,
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "ollama",
+          model: "minimax-m2.7:cloud",
+          content: [],
+          usage: { input: 100, output: 6, totalTokens: 106 },
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+  });
+
   it("does not retry empty turns after an accepted sessions_spawn delivery", () => {
     const retryInstruction = resolveEmptyResponseRetryInstruction({
       provider: "ollama",

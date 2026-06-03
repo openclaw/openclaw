@@ -13,6 +13,8 @@ const mocks = vi.hoisted(() => ({
   maybeRepairGroupAllowFromFallback: vi.fn(),
   maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(),
   maybeRepairLegacyOAuthSidecarProfiles: vi.fn(),
+  maybeRepairOpenAICodexAuthConfig: vi.fn(),
+  maybeRepairOpenAICodexAuthProfileStores: vi.fn(),
   maybeRepairOpenPolicyAllowFrom: vi.fn(),
   maybeRepairStaleManagedNpmBundledPlugins: vi.fn(),
   maybeRepairStalePluginConfig: vi.fn(),
@@ -33,6 +35,12 @@ vi.mock("../doctor-plugin-registry.js", () => ({
 
 vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
   maybeRepairLegacyOAuthSidecarProfiles: mocks.maybeRepairLegacyOAuthSidecarProfiles,
+}));
+
+vi.mock("../doctor-auth-flat-profiles.js", () => ({
+  collectOpenAICodexAuthProfileStoreIdMap: () => new Map(),
+  maybeRepairOpenAICodexAuthConfig: mocks.maybeRepairOpenAICodexAuthConfig,
+  maybeRepairOpenAICodexAuthProfileStores: mocks.maybeRepairOpenAICodexAuthProfileStores,
 }));
 
 vi.mock("./shared/missing-configured-plugin-install.js", () => ({
@@ -222,6 +230,15 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     });
+    mocks.maybeRepairOpenAICodexAuthConfig.mockImplementation((cfg: OpenClawConfig) => ({
+      changes: [],
+      config: cfg,
+      warnings: [],
+    }));
+    mocks.maybeRepairOpenAICodexAuthProfileStores.mockResolvedValue({
+      changes: [],
+      warnings: [],
+    });
     mocks.maybeRepairOpenPolicyAllowFrom.mockImplementation((cfg: OpenClawConfig) => ({
       config: cfg,
       changes: [],
@@ -399,6 +416,29 @@ describe("doctor repair sequencing", () => {
       "Removed stale OAuth auth profile shadow openai-codex.",
     ]);
     expect(result.warningNotes).toEqual(["Sidecar warning"]);
+    expect(result.authProfilesRepaired).toBe(true);
+  });
+
+  it("reports auth profiles repaired after OpenAI Codex auth-provider migration", async () => {
+    mocks.maybeRepairOpenAICodexAuthProfileStores.mockResolvedValueOnce({
+      changes: ["Migrated OpenAI Codex auth-provider profile openai-codex."],
+      warnings: [],
+    });
+
+    const result = await runDoctorRepairSequence({
+      state: {
+        cfg: {} as OpenClawConfig,
+        candidate: {} as OpenClawConfig,
+        pendingChanges: false,
+        fixHints: [],
+      },
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(result.changeNotes).toEqual([
+      "Migrated OpenAI Codex auth-provider profile openai-codex.",
+    ]);
+    expect(result.authProfilesRepaired).toBe(true);
   });
 
   it("emits Discord warnings when unsafe numeric ids block repair", async () => {
@@ -434,16 +474,16 @@ describe("doctor repair sequencing", () => {
 
   it("emits active tool schema projection warnings during doctor repair", async () => {
     mocks.collectActiveToolSchemaProjectionWarnings.mockReturnValueOnce([
-      '- agents.main: active tool "dofbot_move_angles" from plugin "dofbot" has unsupported runtime input schema.',
+      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
     ]);
 
     const result = await runDoctorRepairSequence({
       state: {
         cfg: {
-          tools: { allow: ["dofbot_move_angles"] },
+          tools: { allow: ["fuzzplugin_move_angles"] },
         } as OpenClawConfig,
         candidate: {
-          tools: { allow: ["dofbot_move_angles"] },
+          tools: { allow: ["fuzzplugin_move_angles"] },
         } as OpenClawConfig,
         pendingChanges: false,
         fixHints: [],
@@ -453,11 +493,11 @@ describe("doctor repair sequencing", () => {
 
     expect(result.changeNotes).toStrictEqual([]);
     expect(result.warningNotes).toContain(
-      '- agents.main: active tool "dofbot_move_angles" from plugin "dofbot" has unsupported runtime input schema.',
+      '- agents.main: active tool "fuzzplugin_move_angles" from plugin "fuzzplugin" has unsupported runtime input schema.',
     );
     expect(mocks.collectActiveToolSchemaProjectionWarnings).toHaveBeenCalledWith({
       cfg: {
-        tools: { allow: ["dofbot_move_angles"] },
+        tools: { allow: ["fuzzplugin_move_angles"] },
       },
       env: process.env,
     });

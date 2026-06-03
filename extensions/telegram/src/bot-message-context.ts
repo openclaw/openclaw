@@ -490,7 +490,7 @@ export const buildTelegramMessageContext = async ({
   // expensive context/session construction without showing typing for dropped turns.
   if (!isGroup) {
     initialTypingCueSent = true;
-    void sendTyping().catch((err) => {
+    void sendTyping().catch((err: unknown) => {
       logVerbose(`telegram early direct typing cue failed for chat ${chatId}: ${String(err)}`);
     });
   }
@@ -585,7 +585,7 @@ export const buildTelegramMessageContext = async ({
                     chat: msg.chat,
                     chatId,
                     getChat: getChatApi ?? undefined,
-                  }).catch((err) => {
+                  }).catch((err: unknown) => {
                     logVerbose(
                       `telegram status-reaction available_reactions lookup failed for chat ${chatId}: ${String(err)}`,
                     );
@@ -630,7 +630,7 @@ export const buildTelegramMessageContext = async ({
             reactionApi(chatId, msg.message_id, [{ type: "emoji", emoji: ackReactionEmoji }]),
         }).then(
           () => true,
-          (err) => {
+          (err: unknown) => {
             logVerbose(`telegram react failed for chat ${chatId}: ${String(err)}`);
             return false;
           },

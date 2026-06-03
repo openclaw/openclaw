@@ -158,7 +158,15 @@ const config = {
       ],
     },
     ui: {
-      entry: ["index.html!", "src/main.ts!", "vite.config.ts!", "vitest*.ts!"],
+      entry: [
+        "index.html!",
+        "src/main.ts!",
+        "src/ui/browser-redact.ts!",
+        "vite.config.ts!",
+        "vitest*.ts!",
+      ],
+      // Workboard lazy-loads Three.js at runtime; Knip's dependency pass misses it.
+      ignoreDependencies: ["three"],
       project: ["src/**/*.{ts,tsx}!"],
     },
     "packages/sdk": {

@@ -813,7 +813,10 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
 function applyPostPluginStreamWrappers(
   ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
 ): void {
-  ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
+  const streamParams = ctx.override
+    ? { ...ctx.effectiveExtraParams, ...ctx.override }
+    : ctx.effectiveExtraParams;
+  ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn, streamParams);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAICompletionsToolsCompatWrapper(ctx.agent.streamFn);
@@ -917,6 +920,7 @@ function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): bool
   const normalizedModelId = normalizeDeepSeekV4CandidateId(model.id);
   return (
     model.api === "openai-completions" &&
+    model.provider !== "microsoft-foundry" &&
     (normalizedModelId === "deepseek-v4-flash" || normalizedModelId === "deepseek-v4-pro")
   );
 }

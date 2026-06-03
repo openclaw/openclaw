@@ -342,6 +342,26 @@ export function extractToolCards(message: unknown, prefix = "tool"): ToolCard[] 
   return cards;
 }
 
+const toolCardsByMessage = new WeakMap<object, Map<string, ToolCard[]>>();
+
+export function extractToolCardsCached(message: unknown, prefix = "tool"): ToolCard[] {
+  if (!message || typeof message !== "object") {
+    return extractToolCards(message, prefix);
+  }
+  let byPrefix = toolCardsByMessage.get(message);
+  if (!byPrefix) {
+    byPrefix = new Map();
+    toolCardsByMessage.set(message, byPrefix);
+  }
+  const cached = byPrefix.get(prefix);
+  if (cached) {
+    return cached;
+  }
+  const cards = extractToolCards(message, prefix);
+  byPrefix.set(prefix, cards);
+  return cards;
+}
+
 export function buildToolCardSidebarContent(card: ToolCard): string {
   const display = resolveToolDisplay({ name: card.name, args: card.args });
   const detail = formatToolDetail(display);
@@ -584,7 +604,7 @@ export function resolveCollapsedToolDetail(card: ToolCard, displayDetail: string
   return formatCollapsedToolPreviewText(inputText);
 }
 
-function resolveCollapsedToolSummaryParts(params: {
+export function resolveCollapsedToolSummaryParts(params: {
   card: ToolCard;
   displayLabel: string;
   displayDetail: string | undefined;

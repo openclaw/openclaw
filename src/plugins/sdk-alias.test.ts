@@ -1690,12 +1690,13 @@ describe("plugin sdk alias helpers", () => {
       srcFile: "render.ts",
       distFile: "render.mjs",
     });
-    const terminalCore = writeWorkspacePackageEntry({
+    const ignoredTerminalCore = writeWorkspacePackageEntry({
       root: fixture.root,
       packageDir: "terminal-core",
       srcFile: "links.ts",
       distFile: "links.mjs",
     });
+    void ignoredTerminalCore;
     const terminalCoreRootDistFile = path.join(fixture.root, "dist", "terminal-core", "links.js");
     mkdirSafeDir(path.dirname(terminalCoreRootDistFile));
     fs.writeFileSync(terminalCoreRootDistFile, "export {};\n", "utf-8");
@@ -1750,6 +1751,28 @@ describe("plugin sdk alias helpers", () => {
     expect(
       fs.realpathSync(aliases["@openclaw/model-catalog-core/provider-model-id-normalize"] ?? ""),
     ).toBe(fs.realpathSync(modelCatalogCore.distFile));
+  });
+
+  it("derives acp-core aliases from packaged root dist when package metadata is absent", () => {
+    const fixture = createPluginSdkAliasFixture();
+    const sourcePluginEntry = writePluginEntry(
+      fixture.root,
+      bundledPluginFile("demo", "src/index.ts"),
+    );
+    const acpRuntimeErrors = path.join(fixture.root, "dist", "acp-core", "runtime", "errors.js");
+    mkdirSafeDir(path.dirname(acpRuntimeErrors));
+    fs.writeFileSync(acpRuntimeErrors, "export {};\n", "utf-8");
+    const cwdWithoutOpenClawPackage = makeTempDir();
+
+    const aliases = withCwd(cwdWithoutOpenClawPackage, () =>
+      withEnv({ NODE_ENV: undefined }, () =>
+        buildPluginLoaderAliasMap(sourcePluginEntry, undefined, undefined, "dist"),
+      ),
+    );
+
+    expect(fs.realpathSync(aliases["@openclaw/acp-core/runtime/errors"] ?? "")).toBe(
+      fs.realpathSync(acpRuntimeErrors),
+    );
   });
 
   it("aliases bundled plugin package public surfaces for source plugin transforms", () => {

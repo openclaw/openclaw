@@ -154,7 +154,7 @@ describe("RealtimeTalkSession consult handoff", () => {
           return { runId: "run-1" };
         }
         if (method === "agent.wait") {
-          return new Promise(() => undefined);
+          return new Promise(() => {});
         }
         throw new Error(`unexpected request: ${method}`);
       });

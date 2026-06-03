@@ -1,5 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { readResponseTextSnippet, readResponseWithLimit } from "./read-response-with-limit.js";
 
 function makeStream(chunks: Uint8Array[], delayMs?: number) {
@@ -7,7 +7,9 @@ function makeStream(chunks: Uint8Array[], delayMs?: number) {
     async start(controller) {
       for (const chunk of chunks) {
         if (delayMs) {
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
         }
         controller.enqueue(chunk);
       }

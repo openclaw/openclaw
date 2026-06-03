@@ -18,6 +18,7 @@ import type { SkillSnapshot } from "../../skills/types.js";
 import type { BootstrapContextMode } from "../bootstrap-files.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
+import type { FailoverReason } from "../embedded-agent-helpers.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
 import type {
   CurrentInboundPromptContext,
@@ -54,6 +55,7 @@ export type RunCliAgentParams = {
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   silentReplyPromptMode?: SilentReplyPromptMode;
+  allowEmptyAssistantReplyAsSilent?: boolean;
   /** Static portion of extraSystemPrompt (excluding per-message inbound metadata) for session reuse hashing. */
   extraSystemPromptStatic?: string;
   streamParams?: import("../command/types.js").AgentStreamParams;
@@ -61,6 +63,11 @@ export type RunCliAgentParams = {
   cliSessionId?: string;
   cliSessionBinding?: CliSessionBinding;
   authProfileId?: string;
+  onBeforeFreshCliSessionRetry?: (params: {
+    provider: string;
+    reason: FailoverReason;
+    sessionId: string;
+  }) => boolean | Promise<boolean>;
   bootstrapPromptWarningSignaturesSeen?: string[];
   bootstrapPromptWarningSignature?: string;
   bootstrapContextMode?: BootstrapContextMode;
@@ -73,6 +80,7 @@ export type RunCliAgentParams = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  currentInboundAudio?: boolean;
   agentAccountId?: string;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;

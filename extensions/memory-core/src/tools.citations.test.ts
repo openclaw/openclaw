@@ -467,7 +467,7 @@ describe("memory tools", () => {
         ];
       });
       registerMemoryCorpusSupplement("memory-wiki", {
-        search: async () => await new Promise(() => undefined),
+        search: async () => await new Promise(() => {}),
         get: async () => null,
       });
 
@@ -503,7 +503,7 @@ describe("memory tools", () => {
       let searchCalls = 0;
       setMemorySearchImpl(async () => {
         searchCalls += 1;
-        return await new Promise(() => undefined);
+        return await new Promise(() => {});
       });
       registerMemoryCorpusSupplement("memory-wiki", {
         search: async () => [

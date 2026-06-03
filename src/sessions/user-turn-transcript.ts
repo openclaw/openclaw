@@ -193,12 +193,12 @@ function normalizeMediaEntryForTranscript(media: PersistedUserTurnMediaInput):
       type: string;
     }
   | undefined {
-  const path = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
-  if (!path) {
+  const pathLocal = normalizeOptionalText(media.path) ?? normalizeOptionalText(media.url);
+  if (!pathLocal) {
     return undefined;
   }
   return {
-    path,
+    path: pathLocal,
     type: mediaTypeForTranscript(media),
   };
 }

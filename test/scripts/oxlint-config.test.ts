@@ -175,8 +175,6 @@ describe("oxlint config", () => {
         ],
         rules: {
           "typescript/no-explicit-any": "off",
-          "typescript/unbound-method": "off",
-          "eslint/no-unsafe-optional-chaining": "off",
         },
       },
     ]);

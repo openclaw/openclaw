@@ -316,16 +316,16 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     run: (ctx: { tempHome: string }) => Promise<T>;
   }): Promise<T> {
     const tempHome = sharedOpenClawHome;
-    const previousOpenClawHome = process.env.OPENCLAW_HOME;
+    const previousOpenClawHomeLocal = process.env.OPENCLAW_HOME;
     process.env.OPENCLAW_HOME = tempHome;
     saveExecApprovals(params.approvals);
     try {
       return await params.run({ tempHome });
     } finally {
-      if (previousOpenClawHome === undefined) {
+      if (previousOpenClawHomeLocal === undefined) {
         delete process.env.OPENCLAW_HOME;
       } else {
-        process.env.OPENCLAW_HOME = previousOpenClawHome;
+        process.env.OPENCLAW_HOME = previousOpenClawHomeLocal;
       }
     }
   }
@@ -1143,7 +1143,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       const sendInvokeResult = vi.fn(async () => {});
       await withPathTokenCommand({
         tmpPrefix: "openclaw-allowlist-path-pin-",
-        run: async ({ link, expected }) => {
+        run: async ({ link: _link, expected }) => {
           await withTempApprovalsHome({
             approvals: {
               version: 1,
@@ -1746,8 +1746,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expect(benign.runCommand).toHaveBeenCalledTimes(1);
           expectInvokeOk(benign.sendInvokeResult, { payloadContains: "awk-ok" });
           const allowlist = loadExecApprovals().agents?.main?.allowlist ?? [];
-          expect(allowlist).toHaveLength(1);
+          expect(allowlist).toHaveLength(2);
           expect(allowlist[0]?.pattern).toBe(fs.realpathSync(executablePath));
+          expect(allowlist[0]?.lastUsedCommand).toBeUndefined();
+          expect(allowlist[1]?.pattern).toMatch(/^=node-command:[0-9a-f]{16}$/);
+          expect(allowlist[1]?.lastUsedCommand).toBeUndefined();
 
           const malicious = await runSystemInvoke({
             preferMacAppExecHost: false,

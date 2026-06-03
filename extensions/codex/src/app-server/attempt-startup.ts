@@ -109,6 +109,7 @@ export async function startCodexAttemptThread(params: {
       onTimeout: async () => {
         await params.onStartupTimeout();
         await releaseStartupResourcesOnTimeout?.();
+        clearSharedCodexAppServerClientIfCurrent(startupClientForAbandonedRequestCleanup);
       },
       operation: async () => {
         const threadConfig = mergeCodexThreadConfigs(
@@ -266,6 +267,7 @@ export async function startCodexAttemptThread(params: {
                 mcpServersFingerprintEvaluated: params.bundleMcpThreadConfig.evaluated,
                 environmentSelection: startupEnvironmentSelection,
                 contextEngineProjection: params.contextEngineProjection,
+                signal: params.signal,
                 pluginThreadConfig: pluginThreadConfigRequired
                   ? {
                       enabled: true,
@@ -337,7 +339,6 @@ export async function startCodexAttemptThread(params: {
             if (startupClientForAbandonedRequestCleanup === failedClient) {
               startupClientForAbandonedRequestCleanup = undefined;
             }
-            attemptedClient = undefined;
             if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
               embeddedAgentLog.warn(
                 "codex app-server connection closed during startup; retries exhausted",

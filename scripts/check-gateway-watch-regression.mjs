@@ -39,12 +39,14 @@ const WATCH_GATEWAY_SKIP_ENV = {
   OPENCLAW_SKIP_CHANNELS: "1",
   OPENCLAW_SKIP_CRON: "1",
   OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+  OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
   OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
   NODE_ENV: "test",
 };
 
 export const WATCH_LOG_CAPTURE_MAX_CHARS = 2 * 1024 * 1024;
 const WATCH_BUILD_DETECTION_MAX_CHARS = 4096;
+const NON_NEGATIVE_INTEGER_PATTERN = /^(0|[1-9]\d*)$/u;
 
 export function appendBoundedWatchLog(current, chunk, maxChars = WATCH_LOG_CAPTURE_MAX_CHARS) {
   const next = `${current}${String(chunk)}`;
@@ -72,6 +74,18 @@ export function updateWatchBuildDetection(state, chunk) {
   };
 }
 
+export function readNonNegativeInteger(value, label) {
+  const raw = String(value).trim();
+  if (!NON_NEGATIVE_INTEGER_PATTERN.test(raw)) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${label} must be a safe integer`);
+  }
+  return parsed;
+}
+
 export function parseArgs(argv) {
   const args = stripLeadingPackageManagerSeparator(argv);
   const options = { ...DEFAULTS };
@@ -90,31 +104,37 @@ export function parseArgs(argv) {
         options.outputDir = path.resolve(readValue());
         break;
       case "--window-ms":
-        options.windowMs = Number(readValue());
+        options.windowMs = readNonNegativeInteger(readValue(), "--window-ms");
         break;
       case "--ready-timeout-ms":
-        options.readyTimeoutMs = Number(readValue());
+        options.readyTimeoutMs = readNonNegativeInteger(readValue(), "--ready-timeout-ms");
         break;
       case "--ready-settle-ms":
-        options.readySettleMs = Number(readValue());
+        options.readySettleMs = readNonNegativeInteger(readValue(), "--ready-settle-ms");
         break;
       case "--sigkill-grace-ms":
-        options.sigkillGraceMs = Number(readValue());
+        options.sigkillGraceMs = readNonNegativeInteger(readValue(), "--sigkill-grace-ms");
         break;
       case "--sigkill-exit-grace-ms":
-        options.sigkillExitGraceMs = Number(readValue());
+        options.sigkillExitGraceMs = readNonNegativeInteger(readValue(), "--sigkill-exit-grace-ms");
         break;
       case "--cpu-warn-ms":
-        options.cpuWarnMs = Number(readValue());
+        options.cpuWarnMs = readNonNegativeInteger(readValue(), "--cpu-warn-ms");
         break;
       case "--cpu-fail-ms":
-        options.cpuFailMs = Number(readValue());
+        options.cpuFailMs = readNonNegativeInteger(readValue(), "--cpu-fail-ms");
         break;
       case "--dist-runtime-file-growth-max":
-        options.distRuntimeFileGrowthMax = Number(readValue());
+        options.distRuntimeFileGrowthMax = readNonNegativeInteger(
+          readValue(),
+          "--dist-runtime-file-growth-max",
+        );
         break;
       case "--dist-runtime-byte-growth-max":
-        options.distRuntimeByteGrowthMax = Number(readValue());
+        options.distRuntimeByteGrowthMax = readNonNegativeInteger(
+          readValue(),
+          "--dist-runtime-byte-growth-max",
+        );
         break;
       case "--skip-build":
         options.skipBuild = true;
@@ -298,7 +318,9 @@ function runCheckedCommand(command, args) {
 }
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function parsePsCpuTimeMs(timeText) {
@@ -402,7 +424,7 @@ async function allocateLoopbackPort() {
       const { port } = address;
       server.close((closeErr) => {
         if (closeErr) {
-          reject(closeErr);
+          reject(closeErr instanceof Error ? closeErr : new Error(String(closeErr)));
           return;
         }
         resolve(port);
@@ -482,100 +504,142 @@ function parseTimingFile(timeFilePath) {
   };
 }
 
-async function runTimedWatch(options, outputDir) {
+export async function runTimedWatch(options, outputDir, deps = {}) {
+  const allocatePort = deps.allocateLoopbackPort ?? allocateLoopbackPort;
+  const parseTiming = deps.parseTimingFile ?? parseTimingFile;
+  const readCpuMs = deps.readProcessTreeCpuMs ?? readProcessTreeCpuMs;
+  const sleepMs = deps.sleep ?? sleep;
+  const spawnCommand = deps.spawn ?? spawn;
+  const stopChild = deps.stopTimedWatchChild ?? stopTimedWatchChild;
+  const waitReady = deps.waitForGatewayReady ?? waitForGatewayReady;
   const pidFilePath = path.join(outputDir, "watch.pid");
   const timeFilePath = path.join(outputDir, "watch.time.log");
   const isolatedHomeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-watch-"));
   fs.writeFileSync(path.join(outputDir, "watch.home.txt"), `${isolatedHomeDir}\n`, "utf8");
-  const stdoutPath = path.join(outputDir, "watch.stdout.log");
-  const stderrPath = path.join(outputDir, "watch.stderr.log");
-  for (const stalePath of [pidFilePath, timeFilePath, stdoutPath, stderrPath]) {
-    removePathIfExists(stalePath);
-  }
-  const port = await allocateLoopbackPort();
-  fs.writeFileSync(path.join(outputDir, "watch.port.txt"), `${String(port)}\n`, "utf8");
-  const { command, args, env } = buildTimedWatchCommand(
-    pidFilePath,
-    timeFilePath,
-    isolatedHomeDir,
-    port,
-  );
-  const child = spawn(command, args, {
-    cwd: process.cwd(),
-    env: { ...process.env, ...env },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  let stdout = "";
-  let stderr = "";
-  let stdoutTruncated = false;
-  let stderrTruncated = false;
-  let buildDetection = { buffer: "", triggered: false, reason: null };
-  child.stdout?.on("data", (chunk) => {
-    const next = appendBoundedWatchLog(stdout, chunk);
-    stdout = next.text;
-    stdoutTruncated ||= next.truncated;
-    buildDetection = updateWatchBuildDetection(buildDetection, chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    const next = appendBoundedWatchLog(stderr, chunk);
-    stderr = next.text;
-    stderrTruncated ||= next.truncated;
-    buildDetection = updateWatchBuildDetection(buildDetection, chunk);
-  });
-
-  let spawnError = null;
-  const spawnErrorExit = new Promise((resolve) => {
-    child.once("error", (error) => {
-      spawnError = error;
-      resolve({ code: null, signal: null, error: error.message });
-    });
-  });
-
-  let watchPid = null;
-  for (let attempt = 0; attempt < 50; attempt += 1) {
-    if (fs.existsSync(pidFilePath)) {
-      watchPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
-      break;
+  try {
+    const stdoutPath = path.join(outputDir, "watch.stdout.log");
+    const stderrPath = path.join(outputDir, "watch.stderr.log");
+    for (const stalePath of [pidFilePath, timeFilePath, stdoutPath, stderrPath]) {
+      removePathIfExists(stalePath);
     }
-    await sleep(100);
+    const port = await allocatePort();
+    fs.writeFileSync(path.join(outputDir, "watch.port.txt"), `${String(port)}\n`, "utf8");
+    const { command, args, env } = buildTimedWatchCommand(
+      pidFilePath,
+      timeFilePath,
+      isolatedHomeDir,
+      port,
+    );
+    const child = spawnCommand(command, args, {
+      cwd: process.cwd(),
+      env: { ...process.env, ...env },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+    let buildDetection = { buffer: "", triggered: false, reason: null };
+    child.stdout?.on("data", (chunk) => {
+      const next = appendBoundedWatchLog(stdout, chunk);
+      stdout = next.text;
+      stdoutTruncated ||= next.truncated;
+      buildDetection = updateWatchBuildDetection(buildDetection, chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      const next = appendBoundedWatchLog(stderr, chunk);
+      stderr = next.text;
+      stderrTruncated ||= next.truncated;
+      buildDetection = updateWatchBuildDetection(buildDetection, chunk);
+    });
+
+    let spawnError = null;
+    const spawnErrorExit = new Promise((resolve) => {
+      child.once("error", (error) => {
+        spawnError = error;
+        resolve({ code: null, signal: null, error: error.message });
+      });
+    });
+    const raceSpawnError = async (operation) =>
+      await Promise.race([
+        Promise.resolve(operation).then((value) => ({ type: "value", value })),
+        spawnErrorExit.then((value) => ({ type: "spawn-error", value })),
+      ]);
+
+    let watchPid = null;
+    let exit = null;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      if (fs.existsSync(pidFilePath)) {
+        watchPid = Number(fs.readFileSync(pidFilePath, "utf8").trim());
+        break;
+      }
+      const waitResult = await raceSpawnError(sleepMs(100));
+      if (waitResult.type === "spawn-error") {
+        exit = waitResult.value;
+        break;
+      }
+    }
+
+    let readyBeforeWindow = false;
+    let idleCpuStartMs = null;
+    let idleCpuEndMs = null;
+    if (!exit) {
+      const readyResult = await raceSpawnError(
+        waitReady(() => `${stdout}\n${stderr}`, options.readyTimeoutMs),
+      );
+      if (readyResult.type === "spawn-error") {
+        exit = readyResult.value;
+      } else {
+        readyBeforeWindow = readyResult.value;
+      }
+    }
+    if (!exit && readyBeforeWindow && options.readySettleMs > 0) {
+      const settleResult = await raceSpawnError(sleepMs(options.readySettleMs));
+      if (settleResult.type === "spawn-error") {
+        exit = settleResult.value;
+      }
+    }
+    if (!exit) {
+      idleCpuStartMs = watchPid ? readCpuMs(watchPid) : null;
+      const windowResult = await raceSpawnError(sleepMs(options.windowMs));
+      if (windowResult.type === "spawn-error") {
+        exit = windowResult.value;
+      } else {
+        idleCpuEndMs = watchPid ? readCpuMs(watchPid) : null;
+      }
+    }
+    if (!exit) {
+      const stopResult = await raceSpawnError(stopChild(child, watchPid, options));
+      exit = stopResult.value;
+    }
+
+    fs.writeFileSync(stdoutPath, formatCapturedWatchLog(stdout, stdoutTruncated), "utf8");
+    fs.writeFileSync(stderrPath, formatCapturedWatchLog(stderr, stderrTruncated), "utf8");
+    const timingFileMissing = !fs.existsSync(timeFilePath);
+    const timing = timingFileMissing
+      ? { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN }
+      : parseTiming(timeFilePath);
+
+    return {
+      exit,
+      spawnError: spawnError ? spawnError.message : null,
+      timingFileMissing,
+      timing,
+      readyBeforeWindow,
+      idleCpuMs:
+        idleCpuStartMs == null || idleCpuEndMs == null
+          ? null
+          : Math.max(0, idleCpuEndMs - idleCpuStartMs),
+      stdoutPath,
+      stderrPath,
+      timeFilePath,
+      watchTriggeredBuild: buildDetection.triggered,
+      watchBuildReason: buildDetection.reason,
+    };
+  } finally {
+    fs.rmSync(isolatedHomeDir, { force: true, recursive: true });
   }
-
-  const readyBeforeWindow = await waitForGatewayReady(
-    () => `${stdout}\n${stderr}`,
-    options.readyTimeoutMs,
-  );
-  if (readyBeforeWindow && options.readySettleMs > 0) {
-    await sleep(options.readySettleMs);
-  }
-  const idleCpuStartMs = watchPid ? readProcessTreeCpuMs(watchPid) : null;
-  await sleep(options.windowMs);
-  const idleCpuEndMs = watchPid ? readProcessTreeCpuMs(watchPid) : null;
-
-  const exit = await Promise.race([stopTimedWatchChild(child, watchPid, options), spawnErrorExit]);
-  fs.writeFileSync(stdoutPath, formatCapturedWatchLog(stdout, stdoutTruncated), "utf8");
-  fs.writeFileSync(stderrPath, formatCapturedWatchLog(stderr, stderrTruncated), "utf8");
-  const timingFileMissing = !fs.existsSync(timeFilePath);
-  const timing = timingFileMissing
-    ? { userSeconds: Number.NaN, sysSeconds: Number.NaN, elapsedSeconds: Number.NaN }
-    : parseTimingFile(timeFilePath);
-
-  return {
-    exit,
-    spawnError: spawnError ? spawnError.message : null,
-    timingFileMissing,
-    timing,
-    readyBeforeWindow,
-    idleCpuMs:
-      idleCpuStartMs == null || idleCpuEndMs == null
-        ? null
-        : Math.max(0, idleCpuEndMs - idleCpuStartMs),
-    stdoutPath,
-    stderrPath,
-    timeFilePath,
-    watchTriggeredBuild: buildDetection.triggered,
-    watchBuildReason: buildDetection.reason,
-  };
 }
 
 export async function stopTimedWatchChild(child, watchPid, options, deps = {}) {

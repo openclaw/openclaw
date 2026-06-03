@@ -39,12 +39,44 @@ const SUPPORTED_SUITES = new Set([
 ]);
 const SUPPORTED_OS_IDS = new Set(["ubuntu", "windows", "macos"]);
 
+const CROSS_OS_SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+const CROSS_OS_ACTIVE_CHILD_TREE_KILLERS = new Set<(signal: NodeJS.Signals) => void>();
+let forwardedSignalExitCode: number | undefined;
+let forwardedSignalForceKillTimer: NodeJS.Timeout | undefined;
+
 export const CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS",
   600,
 );
 export const CROSS_OS_COMMAND_CAPTURE_TAIL_BYTES = 16 * 1024 * 1024;
+const CROSS_OS_PROCESS_TREE_KILL_AFTER_MS = parsePositiveIntegerEnv(
+  "OPENCLAW_CROSS_OS_PROCESS_TREE_KILL_AFTER_MS",
+  15_000,
+);
 const CROSS_OS_AGENT_TURN_OPTIONAL = resolveCrossOsAgentTurnOptional();
+
+for (const signal of Object.keys(CROSS_OS_SIGNAL_EXIT_CODES) as NodeJS.Signals[]) {
+  process.on(signal, () => {
+    forwardedSignalExitCode ??= CROSS_OS_SIGNAL_EXIT_CODES[signal];
+    if (CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.size === 0) {
+      process.exit(forwardedSignalExitCode);
+    }
+    const activeKillers = Array.from(CROSS_OS_ACTIVE_CHILD_TREE_KILLERS);
+    for (const killChildTree of activeKillers) {
+      killChildTree(signal);
+    }
+    forwardedSignalForceKillTimer ??= setTimeout(() => {
+      for (const killChildTree of activeKillers) {
+        killChildTree("SIGKILL");
+      }
+      process.exit(forwardedSignalExitCode);
+    }, CROSS_OS_PROCESS_TREE_KILL_AFTER_MS);
+  });
+}
 
 const providerConfig = {
   openai: {
@@ -121,6 +153,10 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
 ];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
+export const CROSS_OS_DISCORD_FETCH_TIMEOUT_MS = parsePositiveIntegerEnv(
+  "OPENCLAW_CROSS_OS_DISCORD_FETCH_TIMEOUT_MS",
+  10_000,
+);
 export const CROSS_OS_FETCH_BODY_MAX_CHARS = 1024 * 1024;
 export const CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS = 30_000;
 export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
@@ -172,10 +208,13 @@ export function parseArgs(argv) {
   return parsed;
 }
 
-function parsePositiveIntegerEnv(name, fallback) {
-  const raw = process.env[name]?.trim();
+export function parsePositiveIntegerEnv(name, fallback, env = process.env) {
+  const raw = env[name]?.trim();
   if (!raw) {
     return fallback;
+  }
+  if (!/^\d+$/u.test(raw)) {
+    throw new Error(`${name} must be a positive integer. Got: ${JSON.stringify(raw)}`);
   }
   const value = Number(raw);
   if (!Number.isSafeInteger(value) || value <= 0) {
@@ -654,7 +693,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
       continue;
     }
     const distDir = join(packageRoot, rootEntry.name);
-    let distEntries = [];
+    let distEntries;
     try {
       distEntries = readdirSync(distDir, { withFileTypes: true });
     } catch (error) {
@@ -668,7 +707,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
         continue;
       }
       const extensionsDir = join(distDir, distEntry.name);
-      let extensionEntries = [];
+      let extensionEntries;
       try {
         extensionEntries = readdirSync(extensionsDir, { withFileTypes: true });
       } catch (error) {
@@ -683,7 +722,7 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
           continue;
         }
         const extensionPath = join(extensionsDir, extensionEntry.name);
-        let stagingEntries = [];
+        let stagingEntries;
         try {
           stagingEntries = readdirSync(extensionPath, { withFileTypes: true });
         } catch (error) {
@@ -982,6 +1021,15 @@ async function runUpgradeLane(params) {
           logPath: join(params.logsDir, "upgrade-update-fallback-install.log"),
           ignoreScripts: true,
         });
+        const fallbackInstalledVersion = readInstalledVersion(lane.prefixDir);
+        verifyWindowsPackagedUpgradeFallbackInstall({
+          installedVersion: fallbackInstalledVersion,
+          candidateVersion: params.build.candidateVersion,
+        });
+        appendFileSync(
+          updateLogPath,
+          `\n[release-checks] Windows fallback install verified candidate version ${fallbackInstalledVersion}\n`,
+        );
       });
     } else {
       verifyPackagedUpgradeUpdateResult(updateResult, {
@@ -1598,6 +1646,17 @@ export function shouldRunPackagedUpgradeStatusProbe({
   usedWindowsPackagedUpgradeFallback,
 } = {}) {
   return !(platform === "win32" && usedWindowsPackagedUpgradeFallback);
+}
+
+export function verifyWindowsPackagedUpgradeFallbackInstall({
+  installedVersion,
+  candidateVersion,
+}) {
+  if (installedVersion !== candidateVersion) {
+    throw new Error(
+      `Windows packaged upgrade fallback installed ${installedVersion || "unknown"}, expected ${candidateVersion}`,
+    );
+  }
 }
 
 export function resolveExplicitBaselineVersion(baselineSpec) {
@@ -2311,7 +2370,7 @@ async function runInstalledAgentTurn(params) {
 }
 
 export function verifyDevUpdateStatus(stdout, options = {}) {
-  let payload = null;
+  let payload;
   try {
     payload = JSON.parse(stdout);
   } catch {
@@ -2506,15 +2565,18 @@ export async function readBoundedCrossOsResponseText(
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
-    const response = await fetch(
-      `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
-      {
-        headers: {
-          Authorization: `Bot ${params.token}`,
-        },
-      },
-    );
-    const text = await readBoundedCrossOsResponseText(response);
+    let response;
+    let text;
+    try {
+      response = await fetch(
+        `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
+        buildDiscordFetchInit(params.token),
+      );
+      text = await readBoundedCrossOsResponseText(response);
+    } catch {
+      await sleep(2_000);
+      continue;
+    }
     if (!response.ok) {
       await sleep(2_000);
       continue;
@@ -2527,20 +2589,30 @@ async function waitForDiscordMessage(params) {
   throw new Error(`Discord host-side visibility check timed out for ${params.needle}.`);
 }
 
+export function buildDiscordFetchInit(token, init = {}) {
+  return {
+    ...init,
+    signal: init.signal ?? AbortSignal.timeout(CROSS_OS_DISCORD_FETCH_TIMEOUT_MS),
+    headers: {
+      ...init.headers,
+      Authorization: `Bot ${token}`,
+    },
+  };
+}
+
 async function postDiscordMessage(params) {
   const response = await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages`,
-    {
+    buildDiscordFetchInit(params.token, {
       method: "POST",
       headers: {
-        Authorization: `Bot ${params.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         content: params.content,
         flags: 4096,
       }),
-    },
+    }),
   );
   const text = await readBoundedCrossOsResponseText(response);
   if (!response.ok) {
@@ -2559,12 +2631,9 @@ async function deleteDiscordMessage(params) {
   }
   await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
-    {
+    buildDiscordFetchInit(params.token, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bot ${params.token}`,
-      },
-    },
+    }),
   ).catch(() => undefined);
 }
 
@@ -2972,6 +3041,7 @@ async function exerciseManagedGatewayLifecycle(params) {
 
 async function startGateway(params) {
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
+  const useProcessGroup = process.platform !== "win32";
   const child = spawn(
     process.execPath,
     [
@@ -2988,9 +3058,11 @@ async function startGateway(params) {
       cwd: params.lane.homeDir,
       env: params.env,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: useProcessGroup,
       windowsHide: true,
     },
   );
+  const activeChildTree = registerActiveChildProcessTree(child);
   child.stdout?.on("data", (chunk) => {
     gatewayLog.write(chunk);
   });
@@ -3009,9 +3081,11 @@ async function startGateway(params) {
     });
   };
   child.once("close", () => {
+    activeChildTree.unregister();
     void closeLog();
   });
   child.once("error", () => {
+    activeChildTree.unregister();
     void closeLog();
   });
   return { child, closeLog, logPath: params.logPath };
@@ -3383,17 +3457,43 @@ async function stopGateway(gateway) {
       return;
     }
     if (hasChildExited(gateway.child)) {
+      signalChildProcessTree(gateway.child, "SIGTERM");
+      await sleep(2_000);
+      signalChildProcessTree(gateway.child, "SIGKILL");
       return;
     }
-    gateway.child.kill("SIGTERM");
+    signalChildProcessTree(gateway.child, "SIGTERM");
     const exitedAfterTerm = await waitForChildExit(gateway.child, 2_000);
     if (!exitedAfterTerm && !hasChildExited(gateway.child)) {
-      gateway.child.kill("SIGKILL");
+      signalChildProcessTree(gateway.child, "SIGKILL");
       await waitForChildExit(gateway.child, 5_000);
     }
   } finally {
     await gateway?.closeLog?.();
   }
+}
+
+function signalChildProcessTree(child, signal) {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // The child may have exited before its process group was signaled.
+    }
+  }
+  child.kill(signal);
+}
+
+function registerActiveChildProcessTree(child) {
+  const killChildTree = (signal) => signalChildProcessTree(child, signal);
+  CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.add(killChildTree);
+  return {
+    killChildTree,
+    unregister: () => {
+      CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.delete(killChildTree);
+    },
+  };
 }
 
 async function waitForChildExit(child, timeoutMs) {
@@ -3622,14 +3722,17 @@ export async function runCommand(command, args, options) {
 async function runCommandInvocation(invocation, options) {
   return new Promise((resolvePromise, rejectPromise) => {
     const commandLabel = `${invocation.command} ${invocation.args.join(" ")}`;
+    const useProcessGroup = process.platform !== "win32";
     const child = spawn(invocation.command, invocation.args, {
       cwd: options.cwd,
       env: options.env,
       shell: invocation.shell,
       stdio: ["ignore", "pipe", "pipe"],
+      detached: useProcessGroup,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       windowsHide: true,
     });
+    const activeChildTree = registerActiveChildProcessTree(child);
     const logStream = createWriteStream(options.logPath, { flags: "a" });
     let stdout = "";
     let stderr = "";
@@ -3679,7 +3782,7 @@ async function runCommandInvocation(invocation, options) {
           return;
         }
       }
-      child.kill(process.platform === "win32" ? undefined : "SIGKILL");
+      activeChildTree.killChildTree("SIGKILL");
     };
 
     timer =
@@ -3724,10 +3827,15 @@ async function runCommandInvocation(invocation, options) {
     });
 
     child.on("error", (error) => {
+      activeChildTree.unregister();
       finalize(() => rejectPromise(error));
     });
 
     child.on("close", (exitCode) => {
+      activeChildTree.unregister();
+      if (forwardedSignalExitCode !== undefined) {
+        return;
+      }
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,
@@ -3968,7 +4076,9 @@ function formatError(error) {
 }
 
 function sleep(ms) {
-  return new Promise((resolvePromise) => setTimeout(resolvePromise, ms));
+  return new Promise((resolvePromise) => {
+    setTimeout(resolvePromise, ms);
+  });
 }
 
 async function withAllocatedGatewayPort(lane, callback) {
@@ -3987,7 +4097,10 @@ async function withAllocatedGatewayPort(lane, callback) {
       await sleep(250 * attempt);
     }
   }
-  throw lastError ?? new Error("Failed to allocate a gateway port.");
+  throw toLintErrorObject(
+    lastError ?? new Error("Failed to allocate a gateway port."),
+    "Non-Error thrown",
+  );
 }
 
 function reservePort() {
@@ -4021,4 +4134,18 @@ function reservePort() {
 function isAddressInUseError(error) {
   const message = formatError(error);
   return message.includes("EADDRINUSE") || /address.+in use/iu.test(message);
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

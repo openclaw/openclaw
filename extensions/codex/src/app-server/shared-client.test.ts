@@ -133,8 +133,8 @@ describe("shared Codex app-server client", () => {
 
   afterEach(() => {
     resetSharedCodexAppServerClientForTests();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     mocks.bridgeCodexAppServerStartOptions.mockClear();
     mocks.applyCodexAppServerAuthProfile.mockClear();
     mocks.resolveCodexAppServerAuthProfileIdForAgent.mockClear();
@@ -704,7 +704,9 @@ describe("shared Codex app-server client", () => {
     });
 
     try {
-      await new Promise<void>((resolve) => server.once("listening", resolve));
+      await new Promise<void>((resolve) => {
+        server.once("listening", resolve);
+      });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("expected websocket test server port");
@@ -741,9 +743,9 @@ describe("shared Codex app-server client", () => {
       expect(authHeaders).toEqual(["Bearer tok-first", "Bearer tok-second"]);
     } finally {
       clearSharedCodexAppServerClient();
-      await new Promise<void>((resolve, reject) =>
-        server.close((error) => (error ? reject(error) : resolve())),
-      );
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
   });
 });

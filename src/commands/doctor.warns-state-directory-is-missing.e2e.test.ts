@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   callGateway,
   createDoctorRuntime,
@@ -12,6 +12,8 @@ import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-h
 import "./doctor.fast-path-mocks.js";
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;
+let defaultDoctorCommand: typeof import("./doctor.js").doctorCommand;
+let reloadDefaultDoctorCommand = false;
 
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
@@ -99,11 +101,35 @@ function requireTerminalNote(params: { title?: string; messageIncludes?: string 
   return note;
 }
 
+function mockDoctorBrowserFastPath(): void {
+  vi.doMock("./doctor-browser.js", () => ({
+    detectLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue(null),
+    maybeArchiveLegacyClawdBrowserProfileResidue: vi.fn().mockResolvedValue({
+      changes: [],
+      warnings: [],
+    }),
+    noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
+  }));
+}
+
 describe("doctor command", () => {
-  beforeEach(async () => {
-    doctorCommand = await loadDoctorCommandForTest({
+  beforeAll(async () => {
+    defaultDoctorCommand = await loadDoctorCommandForTest({
       unmockModules: ["../flows/doctor-health-contributions.js", "./doctor-state-integrity.js"],
     });
+  });
+
+  beforeEach(async () => {
+    if (reloadDefaultDoctorCommand) {
+      vi.doUnmock("../plugin-sdk/facade-loader.js");
+      mockDoctorBrowserFastPath();
+      defaultDoctorCommand = await loadDoctorCommandForTest({
+        unmockModules: ["../flows/doctor-health-contributions.js", "./doctor-state-integrity.js"],
+      });
+      reloadDefaultDoctorCommand = false;
+    }
+    doctorCommand = defaultDoctorCommand;
+    terminalNoteMock.mockClear();
   });
 
   it("warns when the state directory is missing", async () => {
@@ -134,33 +160,37 @@ describe("doctor command", () => {
         loadBundledPluginPublicSurfaceModuleSync,
       };
     });
-    doctorCommand = await loadDoctorCommandForTest({
-      unmockModules: [
-        "../flows/doctor-health-contributions.js",
-        "./doctor-browser.js",
-        "./doctor-state-integrity.js",
-      ],
-    });
+    try {
+      doctorCommand = await loadDoctorCommandForTest({
+        unmockModules: [
+          "../flows/doctor-health-contributions.js",
+          "./doctor-browser.js",
+          "./doctor-state-integrity.js",
+        ],
+      });
 
-    mockDoctorConfigSnapshot({
-      config: {
-        browser: {
-          defaultProfile: "user",
+      mockDoctorConfigSnapshot({
+        config: {
+          browser: {
+            defaultProfile: "user",
+          },
         },
-      },
-    });
+      });
 
-    await runDoctorNonInteractive();
+      await runDoctorNonInteractive();
 
-    expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
-      dirName: "browser",
-      artifactBasename: "browser-doctor.js",
-    });
-    const browserFallbackNote = requireTerminalNote({
-      title: "Browser",
-      messageIncludes: "Browser health check is unavailable",
-    });
-    expect(String(browserFallbackNote[0])).toContain("missing browser doctor facade");
+      expect(loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+        dirName: "browser",
+        artifactBasename: "browser-doctor.js",
+      });
+      const browserFallbackNote = requireTerminalNote({
+        title: "Browser",
+        messageIncludes: "Browser health check is unavailable",
+      });
+      expect(String(browserFallbackNote[0])).toContain("missing browser doctor facade");
+    } finally {
+      reloadDefaultDoctorCommand = true;
+    }
   });
 
   it("warns about opencode provider overrides", async () => {

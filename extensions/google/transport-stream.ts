@@ -703,6 +703,9 @@ export function buildGoogleGenerativeAiParams(
   if (typeof options?.maxTokens === "number") {
     generationConfig.maxOutputTokens = options.maxTokens;
   }
+  if (options?.stop !== undefined && options.stop.length > 0) {
+    generationConfig.stopSequences = options.stop;
+  }
   const thinkingConfig = resolveGoogleThinkingConfig(model, options);
   if (thinkingConfig) {
     generationConfig.thinkingConfig = thinkingConfig;
@@ -1098,6 +1101,7 @@ async function* parseGoogleSseChunks(
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let completed = false;
   const abortHandler = () => {
     void reader.cancel().catch(() => undefined);
   };
@@ -1109,6 +1113,7 @@ async function* parseGoogleSseChunks(
       }
       const { done, value } = await reader.read();
       if (done) {
+        completed = true;
         break;
       }
       buffer += decoder.decode(value, { stream: true }).replace(/\r/g, "");
@@ -1134,6 +1139,10 @@ async function* parseGoogleSseChunks(
     }
   } finally {
     signal?.removeEventListener("abort", abortHandler);
+    if (!completed) {
+      await reader.cancel(signal?.reason).catch(() => undefined);
+    }
+    reader.releaseLock();
   }
 }
 

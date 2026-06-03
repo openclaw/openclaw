@@ -107,7 +107,7 @@ function buildInputOptions(options: InputOptionsArg): InputOptionsReturn {
       return false;
     }
     const haystack = normalizedLogHaystack(log);
-    return SUPPRESSED_EVAL_WARNING_PATHS.some((path) => haystack.includes(path));
+    return SUPPRESSED_EVAL_WARNING_PATHS.some((pathLocal) => haystack.includes(pathLocal));
   }
 
   return {
@@ -198,9 +198,11 @@ const explicitNeverBundleDependencies = [
   "@larksuiteoapi/node-sdk",
   "@matrix-org/matrix-sdk-crypto-nodejs",
   "@vitest/expect",
+  "jimp",
   "matrix-js-sdk",
   "prism-media",
   "qrcode-terminal",
+  "sharp",
   "typescript",
   "vitest",
 ].toSorted((left, right) => left.localeCompare(right));
@@ -457,13 +459,35 @@ function buildMediaCoreDistEntries(): Record<string, string> {
   };
 }
 
-function buildAcpCoreDistEntries(): Record<string, string> {
-  return {
-    index: "packages/acp-core/src/index.ts",
-    "normalize-text": "packages/acp-core/src/normalize-text.ts",
-    "record-shared": "packages/acp-core/src/record-shared.ts",
-    "runtime/types": "packages/acp-core/src/runtime/types.ts",
+function buildPackageDistEntriesFromExports(packageDir: string): Record<string, string> {
+  const packageJsonPath = path.join("packages", packageDir, "package.json");
+  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8")) as {
+    exports?: Record<string, unknown>;
   };
+  const entries: Record<string, string> = {};
+  for (const [exportKey, value] of Object.entries(packageJson.exports ?? {})) {
+    const entry =
+      exportKey === "." ? "index" : exportKey.startsWith("./") ? exportKey.slice(2) : "";
+    if (!entry || entry.includes("..")) {
+      continue;
+    }
+    const importPath =
+      typeof value === "object" && value !== null && !Array.isArray(value)
+        ? (value as Record<string, unknown>).import
+        : value;
+    if (typeof importPath !== "string" || !importPath.startsWith("./dist/")) {
+      continue;
+    }
+    const sourcePath = importPath
+      .replace(/^\.\/dist\//u, `packages/${packageDir}/src/`)
+      .replace(/\.mjs$/u, ".ts");
+    entries[entry] = sourcePath;
+  }
+  return Object.fromEntries(Object.entries(entries).toSorted(([a], [b]) => a.localeCompare(b)));
+}
+
+function buildAcpCoreDistEntries(): Record<string, string> {
+  return buildPackageDistEntriesFromExports("acp-core");
 }
 
 function buildTerminalCoreDistEntries(): Record<string, string> {

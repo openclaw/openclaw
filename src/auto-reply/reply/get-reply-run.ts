@@ -3,6 +3,7 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   clearAutoFallbackPrimaryProbeSelection,
+  hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
   type AutoFallbackPrimaryProbe,
 } from "../../agents/agent-scope.js";
@@ -12,7 +13,7 @@ import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runn
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/embedded-agent-runner/types.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook-helpers.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
 import { resolveIngressWorkspaceOverrideForSpawnedRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
@@ -72,7 +73,7 @@ import {
   buildGroupIntro,
   resolveGroupSilentReplyBehavior,
 } from "./groups.js";
-import { hasInboundMedia } from "./inbound-media.js";
+import { hasInboundAudio, hasInboundMedia } from "./inbound-media.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -334,9 +335,6 @@ const agentRunnerRuntimeLoader = createLazyImportLoader(() => import("./agent-ru
 const sessionUpdatesRuntimeLoader = createLazyImportLoader(
   () => import("./session-updates.runtime.js"),
 );
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
-);
 
 function loadEmbeddedAgentRuntime() {
   return embeddedAgentRuntimeLoader.load();
@@ -348,10 +346,6 @@ function loadAgentRunnerRuntime() {
 
 function loadSessionUpdatesRuntime() {
   return sessionUpdatesRuntimeLoader.load();
-}
-
-function loadSessionStoreRuntime() {
-  return sessionStoreRuntimeLoader.load();
 }
 
 function stripPromptThinkingDirectives(body: string): string {
@@ -536,7 +530,7 @@ export async function runPreparedReply(
       defaultLevel: resolvedElevatedLevel ?? "off",
     },
   });
-  let currentSystemSent = systemSent;
+  const currentSystemSent = systemSent;
 
   const isFirstTurnInSession = isNewSession || !currentSystemSent;
   const isGroupChat =
@@ -846,7 +840,6 @@ export async function runPreparedReply(
           });
         });
   sessionEntry = skillResult.sessionEntry ?? sessionEntry;
-  currentSystemSent = skillResult.systemSent;
   const skillsSnapshot = skillResult.skillsSnapshot;
   let {
     prefixedCommandBody,
@@ -903,24 +896,9 @@ export async function runPreparedReply(
       catalog: thinkingCatalog,
     });
     if (fallbackThinkLevel !== resolvedThinkLevel) {
-      const previousThinkLevel = resolvedThinkLevel;
+      // Execution fallbacks are turn-local; directive/model persistence owns
+      // durable thinking remaps so explicit session overrides survive replies.
       resolvedThinkLevel = fallbackThinkLevel;
-      if (
-        sessionEntry &&
-        sessionStore &&
-        sessionKey &&
-        sessionEntry.thinkingLevel === previousThinkLevel
-      ) {
-        sessionEntry.thinkingLevel = fallbackThinkLevel;
-        sessionEntry.updatedAt = Date.now();
-        sessionStore[sessionKey] = sessionEntry;
-        if (storePath) {
-          const { updateSessionStore } = await loadSessionStoreRuntime();
-          await updateSessionStore(storePath, (store) => {
-            store[sessionKey] = sessionEntry;
-          });
-        }
-      }
     }
   }
   const internalOpts = opts as InternalGetReplyOptions | undefined;
@@ -1112,8 +1090,8 @@ export async function runPreparedReply(
           isReplyRunStreamingForSessionId(replyOperationActiveSessionId)),
     };
   };
-  let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
-  let activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
+  const { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
+  const activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
   const isHeartbeatRun = opts?.isHeartbeat === true;
   const shouldSteer =
     !isRoomEvent &&
@@ -1170,13 +1148,17 @@ export async function runPreparedReply(
       typing.cleanup();
       return queueState.reply;
     }
-    ({ activeSessionId, isActive, isStreaming } = queueState.busyState);
-    activeRunAcceptsCurrentThread = resolveActiveRunAcceptsCurrentThread({ isActive });
+    resolveActiveRunAcceptsCurrentThread({ isActive });
   }
-  const runHasSessionModelOverride = Boolean(
+  const runHasStoredSessionModelOverride = Boolean(
     normalizeOptionalString(preparedSessionState.sessionEntry?.modelOverride) ||
     normalizeOptionalString(preparedSessionState.sessionEntry?.providerOverride),
   );
+  const runHasLegacyAutoFallbackWithoutOrigin =
+    runHasStoredSessionModelOverride &&
+    hasLegacyAutoFallbackWithoutOrigin(preparedSessionState.sessionEntry);
+  const runHasSessionModelOverride =
+    runHasStoredSessionModelOverride && !runHasLegacyAutoFallbackWithoutOrigin;
   const runModelOverrideSource = runHasSessionModelOverride
     ? preparedSessionState.sessionEntry?.modelOverrideSource
     : undefined;
@@ -1241,6 +1223,7 @@ export async function runPreparedReply(
     transcriptPrompt: transcriptCommandBody,
     ...(userTurnTranscriptRecorder ? { userTurnTranscriptRecorder } : {}),
     currentInboundEventKind: inboundEventKind,
+    currentInboundAudio: hasInboundAudio(sessionCtx),
     currentInboundContext,
     ...(queuedFollowupAbortSignal ? { abortSignal: queuedFollowupAbortSignal } : {}),
     deliveryCorrelations: opts?.queuedDeliveryCorrelations,

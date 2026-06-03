@@ -6,6 +6,7 @@ import { coerceSecretRef } from "../../config/types.secrets.js";
 import { loadJsonFile } from "../../infra/json-file.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, log } from "./constants.js";
+import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import {
   hasOAuthIdentity,
   hasUsableOAuthCredential,
@@ -106,7 +107,14 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
   if (!("type" in entry) && typeof entry["mode"] === "string") {
     entry["type"] = entry["mode"];
   }
-  if (!("key" in entry) && typeof entry["apiKey"] === "string") {
+  if (entry.type === "apiKey") {
+    entry.type = "api_key";
+  }
+  if (
+    !("key" in entry) &&
+    !coerceSecretRef(entry["keyRef"]) &&
+    typeof entry["apiKey"] === "string"
+  ) {
     entry["key"] = entry["apiKey"];
   }
   normalizeSecretBackedField({ entry, valueField: "key", refField: "keyRef" });
@@ -119,11 +127,10 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
     const key = normalizeOptionalCredentialString(entry.key);
     const keyRef = coerceSecretRef(entry.keyRef);
     const metadata = normalizeCredentialMetadata(entry.metadata);
-    if (key !== undefined) {
-      normalized.key = key;
-    }
     if (keyRef) {
       normalized.keyRef = keyRef;
+    } else if (key !== undefined) {
+      normalized.key = key;
     }
     if (metadata) {
       normalized.metadata = metadata;
@@ -154,6 +161,9 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
       type: "oauth",
       ...normalizeCommonCredentialFields(entry),
     };
+    if (isLegacyOAuthRef(entry.oauthRef)) {
+      normalized.oauthRef = entry.oauthRef;
+    }
     for (const field of [
       "access",
       "refresh",
@@ -245,10 +255,7 @@ function coerceLegacyAuthStore(raw: unknown): LegacyAuthStore | null {
   return Object.keys(entries).length > 0 ? entries : null;
 }
 
-export function coercePersistedAuthProfileStore(
-  raw: unknown,
-  _options?: LoadPersistedAuthProfileStoreOptions,
-): AuthProfileStore | null {
+export function coercePersistedAuthProfileStore(raw: unknown): AuthProfileStore | null {
   if (!isRecord(raw)) {
     return null;
   }
@@ -524,7 +531,10 @@ export function mergeAuthProfileStores(
         Object.entries(mergedOrder)
           .map(([provider, profileIds]) => [
             provider,
-            profileIds.filter((profileId) => profiles[profileId]),
+            profileIds.filter(
+              (profileId) =>
+                profiles[profileId] || !removedRuntimeExternalProfileIds.has(profileId),
+            ),
           ])
           .filter(([, profileIds]) => profileIds.length > 0),
       )
@@ -680,11 +690,11 @@ export function mergeOAuthFileIntoStore(store: AuthProfileStore): boolean {
 
 export function loadPersistedAuthProfileStore(
   agentDir?: string,
-  options?: LoadPersistedAuthProfileStoreOptions,
+  _options?: LoadPersistedAuthProfileStoreOptions,
 ): AuthProfileStore | null {
   const authPath = resolveAuthStorePath(agentDir);
   const raw = loadJsonFile(authPath);
-  const store = coercePersistedAuthProfileStore(raw, options);
+  const store = coercePersistedAuthProfileStore(raw);
   if (!store) {
     return null;
   }

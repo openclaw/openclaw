@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import {
@@ -97,6 +98,14 @@ function sourcePackageAlias(packageId: string, subpath?: string) {
   };
 }
 
+function sourcePackageAliasesFromExports(packageId: string, exports: Record<string, unknown>) {
+  return Object.keys(exports)
+    .map((exportKey) => (exportKey === "." ? undefined : exportKey.slice(2)))
+    .filter((subpath) => subpath === undefined || (subpath && !subpath.includes("..")))
+    .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))
+    .map((subpath) => sourcePackageAlias(packageId, subpath));
+}
+
 export function resolveSharedVitestWorkerConfig(params: {
   env?: Record<string, string | undefined>;
   isCI?: boolean;
@@ -129,6 +138,10 @@ const workerConfig = resolveSharedVitestWorkerConfig({
   isWindows,
   localScheduling,
 });
+const dependencyModuleDirectories = ["/node_modules/", "/openclaw-pnpm-node-modules/"];
+const dependencyExternalPatterns = [
+  /\/openclaw-pnpm-node-modules\/(?!.*\/?vite\w*\/dist\/client\/env\.mjs$).*\.(?:cjs\.js|mjs)$/u,
+];
 const sourcePluginSdkSubpaths = [
   ...new Set([...pluginSdkSubpaths, ...privateLocalOnlyPluginSdkSubpaths]),
 ].toSorted((left, right) => left.localeCompare(right));
@@ -401,10 +414,7 @@ export const sharedVitestConfig = {
       sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
       sourcePackageAlias("media-core", "read-response-with-limit"),
       sourcePackageAlias("media-core"),
-      sourcePackageAlias("acp-core", "normalize-text"),
-      sourcePackageAlias("acp-core", "record-shared"),
-      sourcePackageAlias("acp-core", "runtime/types"),
-      sourcePackageAlias("acp-core"),
+      ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -430,6 +440,14 @@ export const sharedVitestConfig = {
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,
+    deps: {
+      moduleDirectories: dependencyModuleDirectories,
+    },
+    server: {
+      deps: {
+        external: dependencyExternalPatterns,
+      },
+    },
     forceRerunTriggers: [
       "package.json",
       "pnpm-lock.yaml",

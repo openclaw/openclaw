@@ -33,6 +33,10 @@ Use this page after the base [Codex harness](/plugins/codex-harness) is working.
 conversation bindings, or other harnesses because those paths do not create
 Codex app-server threads with native `apps` config.
 
+OpenAI-side Codex access, app availability, and workspace app/plugin controls
+come from the signed-in Codex account. For the OpenAI account and admin model,
+see [Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan).
+
 ## Quickstart
 
 Preview migration from the source Codex home:
@@ -88,6 +92,49 @@ typical migrated config looks like this:
 After changing `codexPlugins`, new Codex conversations pick up the updated app
 set automatically. Use `/new` or `/reset` to refresh the current conversation.
 A gateway restart is not required for plugin enable or disable changes.
+
+## Manual first-party marketplace entries
+
+Migration writes `openai-curated` entries for eligible source-installed plugins.
+For first-party plugins that live in Codex's bundled or primary-runtime
+marketplaces, add explicit entries after confirming the target Codex app-server
+inventory exposes that marketplace and plugin.
+
+Use the same config shape for every first-party marketplace:
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        enabled: true,
+        config: {
+          codexPlugins: {
+            enabled: true,
+            plugins: {
+              chrome: {
+                enabled: true,
+                marketplaceName: "openai-bundled",
+                pluginName: "chrome",
+              },
+              documents: {
+                enabled: true,
+                marketplaceName: "openai-primary-runtime",
+                pluginName: "documents",
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The key under `plugins` is OpenClaw's local config key. `pluginName` and
+`marketplaceName` must match the Codex app-server inventory exactly. If the
+plugin is not listed in `/codex plugins list` or Codex app diagnostics, OpenClaw
+keeps the entry configured but cannot expose its apps to Codex turns.
 
 ## Manage plugins from chat
 

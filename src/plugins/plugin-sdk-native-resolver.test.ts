@@ -389,6 +389,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
       "acp-core",
       path.join("runtime", "types.ts"),
     );
+    const llmCoreSource = writeInternalCorePackageSource(root, "llm-core", "index.ts");
     const externalPluginEntry = writeExternalPluginEntry(path.join(root, "external-plugin"));
     const coreSourceParent = path.join(root, "src", "config", "plugin-web-search-config.ts");
     fs.mkdirSync(path.dirname(coreSourceParent), { recursive: true });
@@ -403,6 +404,7 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(installedAliases).toContain("@openclaw/normalization-core/string-coerce");
     expect(installedAliases).toContain("@openclaw/media-core/mime");
     expect(installedAliases).toContain("@openclaw/acp-core/runtime/types");
+    expect(installedAliases).toContain("@openclaw/llm-core");
     const requireFromCoreSource = createRequire(coreSourceParent);
     const requireFromPlugin = createRequire(externalPluginEntry);
     expect(
@@ -414,9 +416,13 @@ describe("installOpenClawPluginSdkNativeResolver", () => {
     expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/acp-core/runtime/types"))).toBe(
       fs.realpathSync(acpCoreSource),
     );
+    expect(fs.realpathSync(requireFromCoreSource.resolve("@openclaw/llm-core"))).toBe(
+      fs.realpathSync(llmCoreSource),
+    );
     expect(() => requireFromPlugin.resolve("@openclaw/normalization-core/string-coerce")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/media-core/mime")).toThrow();
     expect(() => requireFromPlugin.resolve("@openclaw/acp-core/runtime/types")).toThrow();
+    expect(() => requireFromPlugin.resolve("@openclaw/llm-core")).toThrow();
   });
 
   it("does not register source-only SDK subpaths for native resolution", () => {

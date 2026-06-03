@@ -597,6 +597,8 @@ BlueBubbles support was removed. `channels.bluebubbles` is not a supported runti
 
 If the Gateway is not running on the signed-in Messages Mac, keep `channels.imessage.enabled=true` and set `channels.imessage.cliPath` to an SSH wrapper that runs `imsg "$@"` on that Mac. The default local `imsg` path is macOS-only.
 
+Before relying on an SSH wrapper for production sends, verify an outbound `imsg send` through that exact wrapper. Some macOS TCC states assign Messages Automation to `/usr/libexec/sshd-keygen-wrapper`, which can make reads and probes work while sends fail with AppleEvents `-1743`; see [SSH wrapper sends fail with AppleEvents -1743](/channels/imessage#ssh-wrapper-sends-fail-with-appleevents-1743).
+
 ```json5
 {
   channels: {

@@ -64,7 +64,16 @@ describe("skill_workshop tool", () => {
 
   it("creates pending skill proposals without applying them", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-");
-    const tool = createSkillWorkshopTool({ workspaceDir, config: {}, agentId: "main" });
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      origin: {
+        agentId: "main",
+        sessionKey: "agent:main:dashboard:workshop-test",
+        runId: "run-workshop-test",
+      },
+    });
 
     const result = await tool.execute("call-1", {
       action: "create",
@@ -102,6 +111,24 @@ describe("skill_workshop tool", () => {
         "utf8",
       ),
     ).resolves.toContain("status: proposal");
+    await expect(
+      fs
+        .readFile(
+          path.join(
+            stateDir,
+            "skill-workshop",
+            "proposals",
+            (result.details as { id: string }).id,
+            "proposal.json",
+          ),
+          "utf8",
+        )
+        .then((raw) => JSON.parse(raw).origin),
+    ).resolves.toEqual({
+      agentId: "main",
+      sessionKey: "agent:main:dashboard:workshop-test",
+      runId: "run-workshop-test",
+    });
     await expect(
       fs.readFile(
         path.join(

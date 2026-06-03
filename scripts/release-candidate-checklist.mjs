@@ -12,6 +12,7 @@ const DEFAULT_RELEASE_PROFILE = "beta";
 const DEFAULT_NPM_DIST_TAG = "beta";
 const DEFAULT_PLUGIN_SCOPE = "all-publishable";
 const DEFAULT_TELEGRAM_PROVIDER_MODE = "mock-openai";
+const DEFAULT_GITHUB_API_TIMEOUT_MS = 30_000;
 
 function usage() {
   return `Usage: pnpm release:candidate -- --tag vYYYY.M.D-beta.N [options]
@@ -182,15 +183,43 @@ function readJson(path, label) {
   }
 }
 
-async function githubApi(path) {
-  const token = run("gh", ["auth", "token"], { capture: true }).trim();
-  const response = await fetch(`https://api.github.com/${path}`, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-    },
-  });
+function githubApiTimeoutMs() {
+  const raw = process.env.OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS;
+  if (!raw) {
+    return DEFAULT_GITHUB_API_TIMEOUT_MS;
+  }
+  const value = Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error("OPENCLAW_RELEASE_CANDIDATE_GITHUB_API_TIMEOUT_MS must be a positive number");
+  }
+  return Math.trunc(value);
+}
+
+function githubApiTimedOut(error) {
+  return (
+    error instanceof DOMException && (error.name === "AbortError" || error.name === "TimeoutError")
+  );
+}
+
+export async function githubApi(path, options = {}) {
+  const token = options.token ?? run("gh", ["auth", "token"], { capture: true }).trim();
+  const timeoutMs = options.timeoutMs ?? githubApiTimeoutMs();
+  let response;
+  try {
+    response = await (options.fetchImpl ?? fetch)(`https://api.github.com/${path}`, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${token}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+    });
+  } catch (error) {
+    if (githubApiTimedOut(error)) {
+      throw new Error(`GitHub API ${path} timed out after ${timeoutMs}ms`, { cause: error });
+    }
+    throw error;
+  }
   if (!response.ok) {
     throw new Error(`GitHub API ${path} failed with ${response.status}: ${await response.text()}`);
   }
@@ -209,11 +238,11 @@ async function workflowRuns(repo, workflowFile) {
   const data = await githubApi(
     `repos/${repo}/actions/workflows/${workflowFile}/runs?event=workflow_dispatch&per_page=100`,
   );
-  return (data.workflow_runs ?? []).map((run) => ({
-    databaseId: run.id,
-    workflowName: run.name,
-    event: run.event,
-    createdAt: run.created_at,
+  return (data.workflow_runs ?? []).map((runEntry) => ({
+    databaseId: runEntry.id,
+    workflowName: runEntry.name,
+    event: runEntry.event,
+    createdAt: runEntry.created_at,
   }));
 }
 
@@ -249,7 +278,9 @@ async function resolveRunArtifactName(repo, runId, preferredName, prefix) {
 }
 
 async function beforeRunIds(repo, workflowFile) {
-  return new Set((await workflowRuns(repo, workflowFile)).map((run) => String(run.databaseId)));
+  return new Set(
+    (await workflowRuns(repo, workflowFile)).map((runResult) => String(runResult.databaseId)),
+  );
 }
 
 function runAndEcho(command, args) {
@@ -286,17 +317,19 @@ export function parseRunIdFromDispatchOutput(output) {
 }
 
 async function wait(ms) {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function findNewRunId(repo, workflowFile, workflowName, beforeIds) {
   for (let attempt = 0; attempt < 60; attempt += 1) {
     const match = (await workflowRuns(repo, workflowFile))
       .filter(
-        (run) =>
-          run.workflowName === workflowName &&
-          run.event === "workflow_dispatch" &&
-          !beforeIds.has(String(run.databaseId)),
+        (runValue) =>
+          runValue.workflowName === workflowName &&
+          runValue.event === "workflow_dispatch" &&
+          !beforeIds.has(String(runValue.databaseId)),
       )
       .toSorted((a, b) => String(b.createdAt ?? "").localeCompare(String(a.createdAt ?? "")))[0];
     if (match?.databaseId) {
@@ -473,7 +506,7 @@ export function buildPublishCommand(options) {
     ["npm_dist_tag", options.npmDistTag],
     ["plugin_publish_scope", options.pluginPublishScope],
     ["publish_openclaw_npm", "true"],
-    ["release_profile", options.releaseProfile],
+    ["release_profile", "from-validation"],
     ["wait_for_clawhub", "false"],
   ];
   if (options.npmTelegramRunId) {
@@ -574,14 +607,14 @@ async function runTelegramIfNeeded(options, artifactName) {
   const runId =
     dispatchedRunId ||
     (await findNewRunId(options.repo, workflowFile, "NPM Telegram Beta E2E", before));
-  const run = await waitForSuccessfulRun(options.repo, runId, {
+  const runLocal = await waitForSuccessfulRun(options.repo, runId, {
     workflowName: "NPM Telegram Beta E2E",
     workflowRef: options.workflowRef,
   });
   return {
     status: "passed",
     runId,
-    url: run.url,
+    url: runLocal.url,
     artifactName,
     providerMode: options.telegramProviderMode,
   };
@@ -760,8 +793,10 @@ async function main() {
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await main().catch((error) => {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  });
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(1);
+    },
+  );
 }

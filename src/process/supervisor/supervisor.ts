@@ -312,7 +312,7 @@ export function createProcessSupervisor(): ProcessSupervisor {
           exitSignal: exit.exitSignal,
         });
         return exit;
-      })().catch((err) => {
+      })().catch((err: unknown) => {
         if (!settled) {
           settled = true;
           clearTimers();

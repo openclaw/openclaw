@@ -87,7 +87,7 @@ describe("loadModelCatalogForBrowse", () => {
       }) as unknown as typeof globalThis.setTimeout,
       clearTimeout: clearTimeout as unknown as typeof globalThis.clearTimeout,
     });
-    const loadCatalog = vi.fn(() => new Promise<ModelCatalogEntry[]>(() => undefined));
+    const loadCatalog = vi.fn(() => new Promise<ModelCatalogEntry[]>(() => {}));
 
     const resultPromise = loadModelCatalogForBrowse({
       cfg: config(),
@@ -98,7 +98,7 @@ describe("loadModelCatalogForBrowse", () => {
 
     await expect(resultPromise).resolves.toEqual([]);
     expect(onTimeout).toHaveBeenCalledExactlyOnceWith(5);
-    expect(timeoutHandle.unref).toHaveBeenCalledOnce();
+    expect(timeoutHandle["unref"]).toHaveBeenCalledOnce();
     expect(clearTimeout).toHaveBeenCalledExactlyOnceWith(timeoutHandle);
   });
 

@@ -20,6 +20,38 @@ const privateLocalOnlyPluginSdkPackageDtsPaths = Object.fromEntries(
   ]),
 ) as Record<string, readonly string[]>;
 
+function buildPackageBoundaryDtsPaths(params: {
+  packageName: string;
+  packageDir: string;
+}): Record<string, readonly string[]> {
+  const packageJson = JSON.parse(
+    readFileSync(join("packages", params.packageDir, "package.json"), "utf8"),
+  ) as { exports?: Record<string, unknown> };
+  return Object.fromEntries(
+    Object.entries(packageJson.exports ?? {}).flatMap(([exportKey, value]) => {
+      const subpath =
+        exportKey === "." ? "" : exportKey.startsWith("./") ? exportKey.slice(2) : null;
+      const importPath =
+        value && typeof value === "object" && !Array.isArray(value)
+          ? (value as Record<string, unknown>).import
+          : value;
+      if (subpath === null || subpath.includes("..") || typeof importPath !== "string") {
+        return [];
+      }
+      if (!importPath.startsWith("./dist/") || !importPath.endsWith(".mjs")) {
+        return [];
+      }
+      const specifier = subpath ? `${params.packageName}/${subpath}` : params.packageName;
+      return [
+        [
+          specifier,
+          [`../dist/plugin-sdk/packages/${params.packageDir}/src/${subpath || "index"}.d.ts`],
+        ],
+      ];
+    }),
+  );
+}
+
 export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "openclaw/extension-api": ["../src/extensionAPI.ts"],
   "openclaw/plugin-sdk": ["../dist/plugin-sdk/index.d.ts"],
@@ -147,16 +179,10 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
     "../dist/plugin-sdk/packages/normalization-core/src/string-coerce.d.ts",
   ],
   "@openclaw/normalization-core/*": ["../dist/plugin-sdk/packages/normalization-core/src/*.d.ts"],
-  "@openclaw/acp-core": ["../dist/plugin-sdk/packages/acp-core/src/index.d.ts"],
-  "@openclaw/acp-core/normalize-text": [
-    "../dist/plugin-sdk/packages/acp-core/src/normalize-text.d.ts",
-  ],
-  "@openclaw/acp-core/record-shared": [
-    "../dist/plugin-sdk/packages/acp-core/src/record-shared.d.ts",
-  ],
-  "@openclaw/acp-core/runtime/types": [
-    "../dist/plugin-sdk/packages/acp-core/src/runtime/types.d.ts",
-  ],
+  ...buildPackageBoundaryDtsPaths({
+    packageName: "@openclaw/acp-core",
+    packageDir: "acp-core",
+  }),
   "@openclaw/acp-core/*": ["../dist/plugin-sdk/packages/acp-core/src/*.d.ts"],
   "@openclaw/terminal-core": ["../dist/plugin-sdk/packages/terminal-core/src/index.d.ts"],
   "@openclaw/terminal-core/ansi": ["../dist/plugin-sdk/packages/terminal-core/src/ansi.d.ts"],
@@ -270,9 +296,8 @@ type ExtensionPackageBoundaryPackageJson = {
   devDependencies?: Record<string, string>;
 };
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Boundary helper lets callers ascribe JSON file shape.
-function readJsonFile<T>(filePath: string): T {
-  return JSON.parse(readFileSync(filePath, "utf8")) as T;
+function readJsonFile(filePath: string): unknown {
+  return JSON.parse(readFileSync(filePath, "utf8"));
 }
 
 function collectBundledExtensionIds(rootDir = resolve(".")): string[] {
@@ -294,18 +319,18 @@ export function readExtensionPackageBoundaryTsconfig(
   extensionId: string,
   rootDir = resolve("."),
 ): ExtensionPackageBoundaryTsConfigJson {
-  return readJsonFile<ExtensionPackageBoundaryTsConfigJson>(
+  return readJsonFile(
     resolveExtensionTsconfigPath(extensionId, rootDir),
-  );
+  ) as ExtensionPackageBoundaryTsConfigJson;
 }
 
 export function readExtensionPackageBoundaryPackageJson(
   extensionId: string,
   rootDir = resolve("."),
 ): ExtensionPackageBoundaryPackageJson {
-  return readJsonFile<ExtensionPackageBoundaryPackageJson>(
+  return readJsonFile(
     resolveExtensionPackageJsonPath(extensionId, rootDir),
-  );
+  ) as ExtensionPackageBoundaryPackageJson;
 }
 
 export function isOptInExtensionPackageBoundaryTsconfig(

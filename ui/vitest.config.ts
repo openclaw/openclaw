@@ -15,6 +15,7 @@ const sharedUiTestConfig = {
 } as const;
 const nodeDrivenBrowserLayoutTests = [
   "src/ui/chat/chat-responsive.browser.test.ts",
+  "src/ui/form-controls.browser.test.ts",
   "src/ui/views/sessions.browser.test.ts",
 ] as const;
 

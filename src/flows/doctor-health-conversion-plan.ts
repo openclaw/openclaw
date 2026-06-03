@@ -82,6 +82,12 @@ export const doctorHealthConversionRules = [
     rule: "Detect stale plugin registry state and let repair return the next config.",
   },
   {
+    contributionId: "doctor:disk-space",
+    conversion: "terminal-side-effect",
+    target: ["doctor-run/disk-space"],
+    rule: "Currently emits low/critical free-space warnings via note(); convert to a path-scoped read-only finding (no repair) when the disk-space check gains a structured detector.",
+  },
+  {
     contributionId: "doctor:state-integrity",
     conversion: "repair-backed-detect",
     target: ["core/doctor/state-integrity"],
@@ -178,6 +184,12 @@ export const doctorHealthConversionRules = [
     conversion: "detect-only",
     target: ["core/doctor/tool-result-cap"],
     rule: "Detect explicit live tool-result cap overrides that are stale or ineffective; preserve deep-mode effective cap output as finding metadata.",
+  },
+  {
+    contributionId: "doctor:provider-catalog-projection",
+    conversion: "detect-only",
+    target: ["core/doctor/provider-catalog-projection"],
+    rule: "Validate provider catalog hooks against unified text catalog projection and report malformed plugin catalog rows during doctor.",
   },
   {
     contributionId: "doctor:runtime-tool-schemas",

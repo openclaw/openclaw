@@ -129,7 +129,7 @@ export function createReplyMediaPathNormalizer(params: {
       mediaAccess: resolveMediaAccessForSource(media),
     })
       .then((saved) => saved.path)
-      .catch((err) => {
+      .catch((err: unknown) => {
         persistedMediaBySource.delete(media);
         throw err;
       });

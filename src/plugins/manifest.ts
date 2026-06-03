@@ -575,11 +575,11 @@ function normalizeStringRecord(value: unknown): Record<string, string> | undefin
   const normalized: Record<string, string> = Object.create(null);
   for (const [rawKey, rawValue] of Object.entries(value)) {
     const key = normalizeOptionalString(rawKey) ?? "";
-    const value = normalizeOptionalString(rawValue) ?? "";
-    if (!key || isBlockedObjectKey(key) || !value) {
+    const valueLocal = normalizeOptionalString(rawValue) ?? "";
+    if (!key || isBlockedObjectKey(key) || !valueLocal) {
       continue;
     }
-    normalized[key] = value;
+    normalized[key] = valueLocal;
   }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
@@ -742,12 +742,12 @@ function normalizeCapabilityProviderModeConfigSignal(
   if (!isRecord(value)) {
     return undefined;
   }
-  const path = normalizeOptionalString(value.path);
+  const pathResult = normalizeOptionalString(value.path);
   const defaultValue = normalizeOptionalString(value.default);
   const allowed = normalizeTrimmedStringList(value.allowed);
   const disallowed = normalizeTrimmedStringList(value.disallowed);
   const signal = {
-    ...(path ? { path } : {}),
+    ...(pathResult ? { path: pathResult } : {}),
     ...(defaultValue ? { default: defaultValue } : {}),
     ...(allowed.length > 0 ? { allowed } : {}),
     ...(disallowed.length > 0 ? { disallowed } : {}),
@@ -925,11 +925,11 @@ function normalizeManifestDangerousConfigFlags(
     if (!isRecord(entry)) {
       continue;
     }
-    const path = normalizeOptionalString(entry.path) ?? "";
-    if (!path || !isManifestConfigLiteral(entry.equals)) {
+    const pathValue = normalizeOptionalString(entry.path) ?? "";
+    if (!pathValue || !isManifestConfigLiteral(entry.equals)) {
       continue;
     }
-    normalized.push({ path, equals: entry.equals });
+    normalized.push({ path: pathValue, equals: entry.equals });
   }
   return normalized.length > 0 ? normalized : undefined;
 }
@@ -945,13 +945,13 @@ function normalizeManifestSecretInputPaths(
     if (!isRecord(entry)) {
       continue;
     }
-    const path = normalizeOptionalString(entry.path) ?? "";
-    if (!path) {
+    const pathLocal = normalizeOptionalString(entry.path) ?? "";
+    if (!pathLocal) {
       continue;
     }
     const expected = entry.expected === "string" ? entry.expected : undefined;
     normalized.push({
-      path,
+      path: pathLocal,
       ...(expected ? { expected } : {}),
     });
   }

@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildPackageArtifacts,
   packOpenClawPackageForDocker,
@@ -20,7 +20,9 @@ function isProcessAlive(pid: number): boolean {
 }
 
 async function sleep(ms: number): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
@@ -173,7 +175,7 @@ describe("package-openclaw-for-docker", () => {
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-timeout-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    let childPid = 0;
+    let childPid;
     try {
       const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
         "",
@@ -212,7 +214,7 @@ describe("package-openclaw-for-docker", () => {
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-package-descendant-"));
     const childPidPath = path.join(tempDir, "child.pid");
-    let childPid = 0;
+    let childPid;
     try {
       const childScript = ["process.on('SIGTERM', () => {});", "setInterval(() => {}, 1000);"].join(
         "",
@@ -244,6 +246,37 @@ describe("package-openclaw-for-docker", () => {
     }
   });
 
+  it("does not fire delayed SIGKILL after a timed-out child exits during grace", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const killSpy = vi.spyOn(process, "kill");
+    try {
+      const script = [
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("");
+
+      await expect(
+        runCommandForTest(process.execPath, ["-e", script], process.cwd(), {
+          killAfterMs: 100,
+          timeoutMs: 25,
+        }),
+      ).rejects.toThrow(/timed out after 25ms/u);
+
+      const sigkillCallsAfterExit = killSpy.mock.calls.filter(
+        ([, signal]) => signal === "SIGKILL",
+      ).length;
+      await sleep(150);
+      expect(killSpy.mock.calls.filter(([, signal]) => signal === "SIGKILL")).toHaveLength(
+        sigkillCallsAfterExit,
+      );
+    } finally {
+      killSpy.mockRestore();
+    }
+  });
+
   it("fails captured commands that exceed the stdout limit", async () => {
     const script = [
       "process.stdout.write('x'.repeat(2048));",
@@ -270,7 +303,7 @@ describe("package-openclaw-for-docker", () => {
     const childPidPath = path.join(tempDir, "child.pid");
     const scriptUrl = pathToFileURL(path.resolve("scripts/package-openclaw-for-docker.mjs")).href;
     let childPid = 0;
-    let runnerPid = 0;
+    let runnerPid;
     try {
       const childScript = "setInterval(() => {}, 1000);";
       const parentScript = [

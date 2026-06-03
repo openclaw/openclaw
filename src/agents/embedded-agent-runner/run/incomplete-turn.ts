@@ -1,3 +1,4 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -70,6 +71,18 @@ type PlanningOnlyAttempt = Pick<
   | "messagingToolSentTargets"
   | "toolMetas"
 >;
+
+function hasPositiveOutputTokenUsage(message: AgentMessage | null): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const usage = (message as { usage?: unknown }).usage;
+  if (!usage || typeof usage !== "object") {
+    return false;
+  }
+  const output = asFiniteNumber((usage as { output?: unknown }).output);
+  return output !== undefined && output > 0;
+}
 
 type SilentToolResultAttempt = Pick<
   EmbeddedRunAttemptResult,
@@ -660,7 +673,8 @@ export function resolveEmptyResponseRetryInstruction(params: {
     assistant?.stopReason === "stop" &&
     OLLAMA_INCOMPLETE_TURN_PROVIDER_ID_PATTERN.test(
       normalizeLowercaseStringOrEmpty(params.provider ?? ""),
-    )
+    ) &&
+    !hasPositiveOutputTokenUsage(assistant)
   ) {
     return null;
   }
