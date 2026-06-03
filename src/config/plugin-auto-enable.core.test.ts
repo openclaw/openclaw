@@ -1028,6 +1028,99 @@ describe("applyPluginAutoEnable core", () => {
     expect(second.config).toEqual(first.config);
   });
 
+  it("reuses same-turn auto-enable results for identical fanout inputs", async () => {
+    setupRegistryMock.resolvePluginSetupAutoEnableReasons.mockClear();
+    const config: OpenClawConfig = {
+      plugins: {
+        entries: {
+          browser: {
+            config: {},
+          },
+        },
+      },
+    };
+
+    const first = applyPluginAutoEnable({ config, env });
+    const second = applyPluginAutoEnable({ config, env });
+
+    expect(second).toBe(first);
+    expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(1);
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    const third = applyPluginAutoEnable({ config, env });
+
+    expect(third).not.toBe(first);
+    expect(third).toEqual(first);
+    expect(setupRegistryMock.resolvePluginSetupAutoEnableReasons).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not reuse same-turn auto-enable results across registry or env inputs", () => {
+    const channelConfig: OpenClawConfig = {
+      channels: { apn: { someKey: "value" } },
+    };
+
+    const firstRegistry = applyPluginAutoEnable({
+      config: channelConfig,
+      env,
+      manifestRegistry: makeRegistry([{ id: "apn-one", channels: ["apn"] }]),
+    });
+    const secondRegistry = applyPluginAutoEnable({
+      config: channelConfig,
+      env,
+      manifestRegistry: makeRegistry([{ id: "apn-two", channels: ["apn"] }]),
+    });
+
+    expect(firstRegistry.config.plugins?.entries?.["apn-one"]?.enabled).toBe(true);
+    expect(secondRegistry.config.plugins?.entries?.["apn-two"]?.enabled).toBe(true);
+    expect(secondRegistry).not.toBe(firstRegistry);
+
+    const envConfig: OpenClawConfig = {};
+    const configuredIrc = applyPluginAutoEnable({
+      config: envConfig,
+      env: makeIsolatedEnv({
+        IRC_HOST: "irc.libera.chat",
+        IRC_NICK: "openclaw-bot",
+      }),
+    });
+    const unconfiguredIrc = applyPluginAutoEnable({
+      config: envConfig,
+      env: makeIsolatedEnv(),
+    });
+
+    expect(configuredIrc.config.channels?.irc?.enabled).toBe(true);
+    expect(unconfiguredIrc.config.channels?.irc).toBeUndefined();
+    expect(unconfiguredIrc).not.toBe(configuredIrc);
+  });
+
+  it("does not reuse same-turn auto-enable results after config mutates in place", () => {
+    const config: OpenClawConfig = {};
+    const manifestRegistry = makeRegistry([{ id: "apn-channel", channels: ["apn"] }]);
+
+    const first = applyPluginAutoEnable({ config, env, manifestRegistry });
+    config.channels = { apn: { someKey: "value" } };
+    const second = applyPluginAutoEnable({ config, env, manifestRegistry });
+
+    expect(first.config.plugins?.entries?.["apn-channel"]).toBeUndefined();
+    expect(second.config.plugins?.entries?.["apn-channel"]?.enabled).toBe(true);
+    expect(second).not.toBe(first);
+  });
+
+  it("does not reuse same-turn auto-enable results after env mutates in place", () => {
+    const config: OpenClawConfig = {};
+    const mutableEnv = makeIsolatedEnv();
+
+    const first = applyPluginAutoEnable({ config, env: mutableEnv });
+    mutableEnv.IRC_HOST = "irc.libera.chat";
+    mutableEnv.IRC_NICK = "openclaw-bot";
+    const second = applyPluginAutoEnable({ config, env: mutableEnv });
+
+    expect(first.config.channels?.irc).toBeUndefined();
+    expect(second.config.channels?.irc?.enabled).toBe(true);
+    expect(second).not.toBe(first);
+  });
+
   it("respects explicit disable", () => {
     const result = applyPluginAutoEnable({
       config: {

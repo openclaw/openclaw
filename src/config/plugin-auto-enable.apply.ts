@@ -10,7 +10,91 @@ import type {
   PluginAutoEnableCandidate,
   PluginAutoEnableResult,
 } from "./plugin-auto-enable.types.js";
+import { hashRuntimeConfigValue } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
+
+const ABSENT_PLUGIN_AUTO_ENABLE_INPUT = {};
+
+type PluginAutoEnableCacheEntry = {
+  configFingerprint: string;
+  envFingerprint: string;
+  result: PluginAutoEnableResult;
+};
+type PluginAutoEnableDiscoveryCache = WeakMap<object, PluginAutoEnableCacheEntry>;
+type PluginAutoEnableRegistryCache = WeakMap<object, PluginAutoEnableDiscoveryCache>;
+type PluginAutoEnableEnvCache = WeakMap<object, PluginAutoEnableRegistryCache>;
+type PluginAutoEnableConfigCache = WeakMap<object, PluginAutoEnableEnvCache>;
+
+let sameTurnApplyCache: PluginAutoEnableConfigCache | undefined;
+let sameTurnApplyCacheClearScheduled = false;
+
+function scheduleSameTurnApplyCacheClear(): void {
+  if (sameTurnApplyCacheClearScheduled) {
+    return;
+  }
+  sameTurnApplyCacheClearScheduled = true;
+  // process.env and discovery inputs can mutate; only dedupe one RPC fanout turn.
+  const handle = setImmediate(() => {
+    sameTurnApplyCache = undefined;
+    sameTurnApplyCacheClearScheduled = false;
+  });
+  handle.unref?.();
+}
+
+function getOrCreateWeakMap<K extends object, V>(
+  parent: WeakMap<K, V>,
+  key: K,
+  create: () => V,
+): V {
+  const existing = parent.get(key);
+  if (existing) {
+    return existing;
+  }
+  const next = create();
+  parent.set(key, next);
+  return next;
+}
+
+function resolveInputIdentityKey(value: object | undefined): object {
+  return value ?? ABSENT_PLUGIN_AUTO_ENABLE_INPUT;
+}
+
+function stableFingerprintValue(value: unknown): string {
+  if (value === null || typeof value !== "object") {
+    return JSON.stringify(value) ?? "null";
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableFingerprintValue(entry)).join(",")}]`;
+  }
+  const record = value as Record<string, unknown>;
+  return `{${Object.keys(record)
+    .toSorted((left, right) => left.localeCompare(right))
+    .map((key) => `${JSON.stringify(key)}:${stableFingerprintValue(record[key])}`)
+    .join(",")}}`;
+}
+
+function createPluginAutoEnableCacheEntry(params: {
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  result: PluginAutoEnableResult;
+}): PluginAutoEnableCacheEntry {
+  return {
+    configFingerprint: hashRuntimeConfigValue(params.config),
+    envFingerprint: stableFingerprintValue(params.env),
+    result: params.result,
+  };
+}
+
+function isPluginAutoEnableCacheEntryFresh(params: {
+  entry: PluginAutoEnableCacheEntry;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  return (
+    params.entry.configFingerprint === hashRuntimeConfigValue(params.config) &&
+    params.entry.envFingerprint === stableFingerprintValue(params.env)
+  );
+}
 
 /** Applies already detected plugin auto-enable candidates to config. */
 export function materializePluginAutoEnableCandidates(params: {
@@ -49,6 +133,42 @@ export function applyPluginAutoEnable(params: {
   manifestRegistry?: PluginManifestRegistry;
   discovery?: PluginDiscoveryResult;
 }): PluginAutoEnableResult {
+  const config = params.config;
+  if (config && typeof config === "object") {
+    const env = params.env ?? process.env;
+    const manifestRegistry = resolveInputIdentityKey(params.manifestRegistry);
+    const discovery = resolveInputIdentityKey(params.discovery);
+    const envCache = getOrCreateWeakMap(
+      (sameTurnApplyCache ??= new WeakMap()),
+      config,
+      () => new WeakMap<object, PluginAutoEnableRegistryCache>(),
+    );
+    const registryCache = getOrCreateWeakMap(
+      envCache,
+      env,
+      () => new WeakMap<object, PluginAutoEnableDiscoveryCache>(),
+    );
+    const discoveryCache = getOrCreateWeakMap(
+      registryCache,
+      manifestRegistry,
+      () => new WeakMap<object, PluginAutoEnableCacheEntry>(),
+    );
+    const cached = discoveryCache.get(discovery);
+    if (cached && isPluginAutoEnableCacheEntryFresh({ entry: cached, config, env })) {
+      return cached.result;
+    }
+    const candidates = detectPluginAutoEnableCandidates(params);
+    const result = materializePluginAutoEnableCandidates({
+      config,
+      candidates,
+      env: params.env,
+      manifestRegistry: params.manifestRegistry,
+    });
+    discoveryCache.set(discovery, createPluginAutoEnableCacheEntry({ config, env, result }));
+    scheduleSameTurnApplyCacheClear();
+    return result;
+  }
+
   const candidates = detectPluginAutoEnableCandidates(params);
   return materializePluginAutoEnableCandidates({
     config: params.config,
