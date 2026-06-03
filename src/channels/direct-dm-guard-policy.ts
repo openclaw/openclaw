@@ -1,5 +1,6 @@
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 
+/** Runtime limits applied before direct-DM encrypted payloads are decrypted. */
 export type DirectDmPreCryptoGuardPolicy = {
   allowedKinds: readonly number[];
   maxFutureSkewSec: number;
@@ -13,13 +14,14 @@ export type DirectDmPreCryptoGuardPolicy = {
   };
 };
 
+/** Partial overrides for channel plugins that need stricter pre-crypto limits. */
 export type DirectDmPreCryptoGuardPolicyOverrides = Partial<
   Omit<DirectDmPreCryptoGuardPolicy, "rateLimit">
 > & {
   rateLimit?: Partial<DirectDmPreCryptoGuardPolicy["rateLimit"]>;
 };
 
-/** Shared policy object for DM-style pre-crypto guardrails. */
+/** Builds the shared policy object for DM-style pre-crypto guardrails. */
 export function createDirectDmPreCryptoGuardPolicy(
   overrides: DirectDmPreCryptoGuardPolicyOverrides = {},
 ): DirectDmPreCryptoGuardPolicy {
