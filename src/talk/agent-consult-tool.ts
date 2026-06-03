@@ -94,11 +94,127 @@ export function resolveRealtimeVoiceAgentConsultTools(
     tools.set(REALTIME_VOICE_AGENT_CONSULT_TOOL.name, REALTIME_VOICE_AGENT_CONSULT_TOOL);
   }
   for (const tool of customTools) {
-    if (!tools.has(tool.name)) {
-      tools.set(tool.name, tool);
+    const projectedTool = projectRealtimeVoiceTool(tool);
+    if (projectedTool && !tools.has(projectedTool.name)) {
+      tools.set(projectedTool.name, projectedTool);
     }
   }
   return [...tools.values()];
+}
+
+function projectRealtimeVoiceTool(tool: RealtimeVoiceTool): RealtimeVoiceTool | undefined {
+  const nameRead = readRealtimeVoiceToolField(tool, "name");
+  if (!nameRead.readable || typeof nameRead.value !== "string" || !nameRead.value) {
+    return undefined;
+  }
+  const descriptionRead = readRealtimeVoiceToolField(tool, "description");
+  if (!descriptionRead.readable || typeof descriptionRead.value !== "string") {
+    return undefined;
+  }
+  const parametersRead = readRealtimeVoiceToolField(tool, "parameters");
+  if (!parametersRead.readable) {
+    return undefined;
+  }
+  const parameters = projectRealtimeVoiceToolParameters(parametersRead.value);
+  if (!parameters) {
+    return undefined;
+  }
+  return {
+    type: "function",
+    name: nameRead.value,
+    description: descriptionRead.value,
+    parameters,
+  };
+}
+
+function projectRealtimeVoiceToolParameters(
+  value: unknown,
+): RealtimeVoiceTool["parameters"] | undefined {
+  let text: string | undefined;
+  try {
+    text = JSON.stringify(value);
+  } catch {
+    return undefined;
+  }
+  if (!text) {
+    return undefined;
+  }
+  const parsed = JSON.parse(text) as unknown;
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return undefined;
+  }
+  const schema = parsed as Record<string, unknown>;
+  if (schema.type !== undefined && schema.type !== "object") {
+    return undefined;
+  }
+  if (
+    schema.properties !== undefined &&
+    (!schema.properties ||
+      typeof schema.properties !== "object" ||
+      Array.isArray(schema.properties))
+  ) {
+    return undefined;
+  }
+  if (hasRealtimeVoiceDynamicSchemaKeyword(schema)) {
+    return undefined;
+  }
+  return {
+    ...schema,
+    type: "object",
+    properties: (schema.properties ?? {}) as Record<string, unknown>,
+  } as RealtimeVoiceTool["parameters"];
+}
+
+const REALTIME_VOICE_SCHEMA_MAP_KEYWORDS = new Set([
+  "$defs",
+  "definitions",
+  "dependencies",
+  "dependentSchemas",
+  "patternProperties",
+  "properties",
+]);
+
+function hasRealtimeVoiceDynamicSchemaKeyword(value: unknown, inspectCurrent = true): boolean {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((entry) => hasRealtimeVoiceDynamicSchemaKeyword(entry));
+  }
+  const record = value as Record<string, unknown>;
+  if (inspectCurrent && ("$dynamicRef" in record || "$dynamicAnchor" in record)) {
+    return true;
+  }
+  for (const [key, child] of Object.entries(record)) {
+    if (!child || typeof child !== "object") {
+      continue;
+    }
+    if (REALTIME_VOICE_SCHEMA_MAP_KEYWORDS.has(key) && !Array.isArray(child)) {
+      if (
+        Object.values(child as Record<string, unknown>).some((entry) =>
+          hasRealtimeVoiceDynamicSchemaKeyword(entry),
+        )
+      ) {
+        return true;
+      }
+      continue;
+    }
+    if (hasRealtimeVoiceDynamicSchemaKeyword(child)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function readRealtimeVoiceToolField<TField extends keyof RealtimeVoiceTool>(
+  tool: RealtimeVoiceTool,
+  field: TField,
+): { readable: true; value: RealtimeVoiceTool[TField] } | { readable: false } {
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
 }
 
 export function resolveRealtimeVoiceAgentConsultToolsAllow(

@@ -10,6 +10,7 @@ import {
   resolveRealtimeVoiceAgentConsultTools,
   resolveRealtimeVoiceAgentConsultToolsAllow,
 } from "./agent-consult-tool.js";
+import type { RealtimeVoiceTool } from "./provider-types.js";
 
 describe("realtime voice agent consult tool", () => {
   it("normalizes shared tool arguments for browser chat forwarding", () => {
@@ -113,5 +114,112 @@ describe("realtime voice agent consult tool", () => {
       resolveRealtimeVoiceAgentConsultTools("safe-read-only", [duplicateConsultTool, customTool]),
     ).toStrictEqual([REALTIME_VOICE_AGENT_CONSULT_TOOL, customTool]);
     expect(resolveRealtimeVoiceAgentConsultTools("none", [customTool])).toEqual([customTool]);
+  });
+
+  it("quarantines unreadable custom realtime tools before consult tool exposure", () => {
+    const unreadableName = {
+      type: "function" as const,
+      name: "fuzzplugin_unreadable_name",
+      description: "Bad name",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    Object.defineProperty(unreadableName, "name", {
+      get() {
+        throw new Error("fuzzplugin realtime tool name is unreadable");
+      },
+    });
+    const unreadableDescription = {
+      type: "function" as const,
+      name: "fuzzplugin_unreadable_description",
+      description: "Bad description",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    Object.defineProperty(unreadableDescription, "description", {
+      get() {
+        throw new Error("fuzzplugin realtime tool description is unreadable");
+      },
+    });
+    const invalidParameters = {
+      type: "function" as const,
+      name: "fuzzplugin_invalid_schema",
+      description: "Bad schema",
+      parameters: { type: "array" as const, items: { type: "string" } },
+    };
+    const dynamicParameters = {
+      type: "function" as const,
+      name: "fuzzplugin_dynamic_schema",
+      description: "Dynamic schema",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          target: { $dynamicRef: "#target" },
+        },
+      },
+    };
+    const arrayDynamicParameters = {
+      type: "function" as const,
+      name: "fuzzplugin_array_dynamic_schema",
+      description: "Array dynamic schema",
+      parameters: {
+        type: "object" as const,
+        anyOf: [{ $dynamicRef: "#target" }],
+        properties: {},
+      },
+    };
+    let flakyNameReads = 0;
+    const flakyName = {
+      type: "function" as const,
+      name: "fuzzplugin_flaky_name",
+      description: "Safe snapshot",
+      parameters: { type: "object" as const, properties: {} },
+    };
+    Object.defineProperty(flakyName, "name", {
+      get() {
+        flakyNameReads += 1;
+        if (flakyNameReads > 1) {
+          throw new Error("fuzzplugin realtime tool name was reread");
+        }
+        return "fuzzplugin_flaky_name";
+      },
+    });
+
+    const tools = resolveRealtimeVoiceAgentConsultTools("safe-read-only", [
+      unreadableName,
+      unreadableDescription,
+      invalidParameters as unknown as RealtimeVoiceTool,
+      dynamicParameters,
+      arrayDynamicParameters,
+      flakyName,
+    ]);
+
+    expect(tools.map((tool) => tool.name)).toEqual([
+      REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+      "fuzzplugin_flaky_name",
+    ]);
+    expect(tools[1]).toEqual({
+      type: "function",
+      name: "fuzzplugin_flaky_name",
+      description: "Safe snapshot",
+      parameters: { type: "object", properties: {} },
+    });
+    expect(flakyNameReads).toBe(1);
+  });
+
+  it("keeps custom realtime tools with dynamic-keyword argument names", () => {
+    const literalDynamicNameTool = {
+      type: "function" as const,
+      name: "fuzzplugin_literal_dynamic_name",
+      description: "Literal dynamic keyword argument name",
+      parameters: {
+        type: "object" as const,
+        properties: {
+          $dynamicRef: { type: "string" },
+        },
+      },
+    };
+
+    expect(resolveRealtimeVoiceAgentConsultTools("none", [literalDynamicNameTool])).toEqual([
+      literalDynamicNameTool,
+    ]);
   });
 });
