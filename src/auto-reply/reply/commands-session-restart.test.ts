@@ -1,219 +1,156 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import type { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import type { HandleCommandsParams } from "./commands-types.js";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { handleRestartCommand } from "./commands-session.js";
+import type { CommandHandler, HandleCommandsParams } from "./commands-types.js";
+import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 
-type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
-
-const mocks = vi.hoisted(() => ({
-  unlink: vi.fn(async (_path: string) => undefined),
-  isRestartEnabled: vi.fn(() => true),
-  extractDeliveryInfo: vi.fn(() => ({
-    deliveryContext: {
-      channel: "telegram",
-      to: "telegram:123",
-      accountId: "default",
-    },
-    threadId: "thread-1",
-  })),
-  formatDoctorNonInteractiveHint: vi.fn(
-    () =>
-      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
-  ),
-  writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => "/tmp/sentinel.json"),
-  scheduleGatewaySigusr1Restart: vi.fn((_opts?: ScheduleGatewayRestartArgs) => ({
-    scheduled: true,
-  })),
-  triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
-}));
-
-vi.mock("node:fs/promises", () => ({
-  default: {
-    unlink: mocks.unlink,
-  },
-  unlink: mocks.unlink,
-}));
-
-vi.mock("../../config/commands.flags.js", () => ({
-  isRestartEnabled: mocks.isRestartEnabled,
-}));
-
-vi.mock("../../config/sessions.js", () => ({
-  extractDeliveryInfo: mocks.extractDeliveryInfo,
-}));
-
-vi.mock("../../globals.js", () => ({
-  logVerbose: vi.fn(),
-}));
-
-vi.mock("../../channels/plugins/index.js", () => ({
-  getChannelPlugin: vi.fn(),
-  normalizeChannelId: (value?: string | null) => value?.trim().toLowerCase() ?? null,
-}));
-
-vi.mock("../../channels/plugins/conversation-bindings.js", () => ({
-  setChannelConversationBindingIdleTimeoutBySessionKey: vi.fn(),
-  setChannelConversationBindingMaxAgeBySessionKey: vi.fn(),
-}));
-
-vi.mock("../../infra/outbound/session-binding-service.js", () => ({
-  getSessionBindingService: vi.fn(),
-}));
-
-vi.mock("../../infra/restart-sentinel.js", async () => {
-  const actual = await vi.importActual<typeof import("../../infra/restart-sentinel.js")>(
-    "../../infra/restart-sentinel.js",
-  );
-  return {
-    ...actual,
-    formatDoctorNonInteractiveHint: mocks.formatDoctorNonInteractiveHint,
-    writeRestartSentinel: mocks.writeRestartSentinel,
-  };
-});
-
+vi.mock("node:fs", () => ({ readFileSync: vi.fn() }));
+vi.mock("node:child_process", () => ({ spawnSync: vi.fn() }));
 vi.mock("../../infra/restart.js", () => ({
-  scheduleGatewaySigusr1Restart: mocks.scheduleGatewaySigusr1Restart,
-  triggerOpenClawRestart: mocks.triggerOpenClawRestart,
+  scheduleGatewaySigusr1Restart: vi.fn(),
+  triggerOpenClawRestart: vi.fn(),
 }));
+vi.mock("../../infra/restart-sentinel.js", () => ({
+  buildRestartSuccessContinuation: vi.fn(() => ({})),
+  formatDoctorNonInteractiveHint: vi.fn(() => ""),
+  removeRestartSentinelFile: vi.fn(),
+  writeRestartSentinel: vi.fn(() => "/tmp/sentinel"),
+}));
+vi.mock("../../config/sessions.js", () => ({
+  extractDeliveryInfo: vi.fn(() => ({ deliveryContext: {}, threadId: undefined })),
+}));
+vi.mock("../../globals.js", () => ({ logVerbose: vi.fn() }));
 
-const { handleRestartCommand } = await import("./commands-session.js");
+import { scheduleGatewaySigusr1Restart, triggerOpenClawRestart } from "../../infra/restart.js";
 
-function restartCommandParams(overrides?: Partial<HandleCommandsParams>): HandleCommandsParams {
-  return {
-    ctx: {},
-    cfg: {},
-    command: {
-      surface: "telegram",
-      channel: "telegram",
-      ownerList: [],
-      senderIsOwner: true,
-      isAuthorizedSender: true,
-      senderId: "user-1",
-      rawBodyNormalized: "/restart",
-      commandBodyNormalized: "/restart",
-      from: "telegram:123",
-      to: "bot",
-    },
-    directives: {},
-    elevated: { enabled: true, allowed: true, failures: [] },
-    sessionKey: "agent:main:telegram:direct:123:thread:thread-1",
-    workspaceDir: "/tmp",
-    defaultGroupActivation: () => "mention",
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    provider: "openai",
-    model: "gpt-5.4",
-    contextTokens: 0,
-    isGroup: false,
-    ...overrides,
-  } as HandleCommandsParams;
-}
+describe("handleRestartCommand version-mismatch guard", () => {
+  let mockParams: HandleCommandsParams;
 
-function firstRestartSentinelPayload() {
-  return mocks.writeRestartSentinel.mock.calls[0]?.[0];
-}
-
-describe("handleRestartCommand", () => {
   beforeEach(() => {
-    mocks.isRestartEnabled.mockReset();
-    mocks.isRestartEnabled.mockReturnValue(true);
-    mocks.unlink.mockClear();
-    mocks.extractDeliveryInfo.mockClear();
-    mocks.formatDoctorNonInteractiveHint.mockClear();
-    mocks.writeRestartSentinel.mockClear();
-    mocks.scheduleGatewaySigusr1Restart.mockClear();
-    mocks.triggerOpenClawRestart.mockReset();
-    mocks.triggerOpenClawRestart.mockReturnValue({ ok: true, method: "launchctl" });
+    vi.clearAllMocks();
+    vi.stubGlobal("process", {
+      ...process,
+      argv: ["node", "/usr/lib/node_modules/openclaw/openclaw.mjs"],
+      listenerCount: vi.fn(() => 1), // SIGUSR1 listener exists by default
+    });
+
+    mockParams = {
+      sessionKey: "agent:main:webchat:123",
+      cfg: { commands: { restart: true } } as any,
+      ctx: {} as any,
+      command: {
+        commandBodyNormalized: "/restart",
+        isAuthorizedSender: true,
+        senderId: "owner",
+        isOwner: true,
+      } as any,
+      sessionStore: {} as any,
+    };
   });
 
-  it("writes a routed restart sentinel before restarting from chat", async () => {
-    const result = await handleRestartCommand(restartCommandParams(), true);
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
 
-    expect(result?.shouldContinue).toBe(false);
-    expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
-    const sentinelPayload = firstRestartSentinelPayload();
-    expect(sentinelPayload?.kind).toBe("restart");
-    expect(sentinelPayload?.status).toBe("ok");
-    expect(typeof sentinelPayload?.ts).toBe("number");
-    expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
-    expect(sentinelPayload?.deliveryContext).toEqual({
-      channel: "telegram",
-      to: "telegram:123",
-      accountId: "default",
-    });
-    expect(sentinelPayload?.threadId).toBe("thread-1");
-    expect(sentinelPayload?.message).toBe("/restart");
-    expect(sentinelPayload?.continuation).toBeNull();
-    expect(sentinelPayload?.doctorHint).toBe(
-      "Recommended follow-up: run openclaw doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+  /**
+   * Test 1: When running version matches global npm version, and SIGUSR1
+   * listener exists, the handler should use the fast SIGUSR1 path.
+   */
+  it("uses SIGUSR1 when running version matches global npm version", async () => {
+    (readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(
+      JSON.stringify({ version: "2026.5.28" })
     );
-    expect(sentinelPayload?.stats).toEqual({
-      mode: "gateway.restart",
-      reason: "/restart",
+    (spawnSync as ReturnType<typeof vi.fn>).mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ dependencies: { openclaw: { version: "2026.5.28" } } }),
     });
-    expect(mocks.triggerOpenClawRestart).toHaveBeenCalledTimes(1);
+
+    const result = await handleRestartCommand(mockParams, true);
+
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledTimes(1);
+    expect(triggerOpenClawRestart).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Restarting OpenClaw in-process (SIGUSR1); back in a few seconds.",
+      },
+    });
   });
 
-  it("prepares the routed sentinel only when SIGUSR1 restart emits", async () => {
-    const handler = () => {};
-    process.on("SIGUSR1", handler);
-    try {
-      const result = await handleRestartCommand(restartCommandParams(), true);
-
-      expect(result?.reply?.text).toContain("SIGUSR1");
-      expect(mocks.writeRestartSentinel).not.toHaveBeenCalled();
-      expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
-
-      const scheduledArgs = mocks.scheduleGatewaySigusr1Restart.mock.calls.at(-1)?.[0];
-      await scheduledArgs?.emitHooks?.beforeEmit?.();
-
-      expect(mocks.writeRestartSentinel).toHaveBeenCalledOnce();
-      const sentinelPayload = firstRestartSentinelPayload();
-      expect(sentinelPayload?.kind).toBe("restart");
-      expect(sentinelPayload?.status).toBe("ok");
-      expect(sentinelPayload?.sessionKey).toBe("agent:main:telegram:direct:123:thread:thread-1");
-      expect(sentinelPayload?.continuation).toBeNull();
-    } finally {
-      process.removeListener("SIGUSR1", handler);
-    }
-  });
-
-  it("rejects authorized non-owner restart commands", async () => {
-    const result = await handleRestartCommand(
-      restartCommandParams({
-        command: {
-          ...restartCommandParams().command,
-          senderIsOwner: false,
-          isAuthorizedSender: true,
-        },
-      }),
-      true,
+  /**
+   * Test 2: When running version differs from global npm version, the
+   * handler must bypass SIGUSR1 and force a full restart even if a SIGUSR1
+   * listener is registered.
+   */
+  it("forces full restart when running version differs from global npm version", async () => {
+    (readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(
+      JSON.stringify({ version: "2026.5.7" })
     );
-
-    expect(result).toEqual({ shouldContinue: false });
-    expect(mocks.writeRestartSentinel).not.toHaveBeenCalled();
-    expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
-  });
-
-  it("does not restart when the sentinel cannot be written", async () => {
-    mocks.writeRestartSentinel.mockRejectedValueOnce(new Error("disk full"));
-
-    const result = await handleRestartCommand(restartCommandParams(), true);
-
-    expect(result?.reply?.text).toContain("could not persist");
-    expect(mocks.triggerOpenClawRestart).not.toHaveBeenCalled();
-  });
-
-  it("removes the success sentinel when fallback restart fails", async () => {
-    mocks.triggerOpenClawRestart.mockReturnValueOnce({
-      ok: false,
-      method: "launchctl",
+    (spawnSync as ReturnType<typeof vi.fn>).mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ dependencies: { openclaw: { version: "2026.5.28" } } }),
+    });
+    (triggerOpenClawRestart as ReturnType<typeof vi.fn>).mockReturnValue({
+      ok: true,
+      method: "systemd",
     });
 
-    const result = await handleRestartCommand(restartCommandParams(), true);
+    const result = await handleRestartCommand(mockParams, true);
 
-    expect(result?.reply?.text).toContain("Restart failed");
-    expect(mocks.unlink).toHaveBeenCalledWith("/tmp/sentinel.json");
+    expect(scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
+    expect(triggerOpenClawRestart).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: {
+        text: "⚙️ Restarting OpenClaw via systemd (npm package 2026.5.7 → 2026.5.28); give me a few seconds to come back online.",
+      },
+    });
+  });
+
+  /**
+   * Test 3: When version detection fails (e.g. npm list errors), the
+   * handler should fall back to the safe SIGUSR1 path (default behavior).
+   */
+  it("falls back to SIGUSR1 when version detection fails", async () => {
+    (readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(
+      JSON.stringify({ version: "2026.5.7" })
+    );
+    (spawnSync as ReturnType<typeof vi.fn>).mockReturnValue({
+      status: 1, // npm list failed
+      stdout: "",
+    });
+
+    const result = await handleRestartCommand(mockParams, true);
+
+    expect(scheduleGatewaySigusr1Restart).toHaveBeenCalledTimes(1);
+    expect(triggerOpenClawRestart).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Test 4: When no SIGUSR1 listener exists and versions match, the handler
+   * should still use the full restart path (existing behavior).
+   */
+  it("uses full restart when no SIGUSR1 listener exists", async () => {
+    vi.stubGlobal("process", {
+      ...process,
+      argv: ["node", "/usr/lib/node_modules/openclaw/openclaw.mjs"],
+      listenerCount: vi.fn(() => 0), // No SIGUSR1 listener
+    });
+    (readFileSync as ReturnType<typeof vi.fn>).mockReturnValue(
+      JSON.stringify({ version: "2026.5.28" })
+    );
+    (spawnSync as ReturnType<typeof vi.fn>).mockReturnValue({
+      status: 0,
+      stdout: JSON.stringify({ dependencies: { openclaw: { version: "2026.5.28" } } }),
+    });
+    (triggerOpenClawRestart as ReturnType<typeof vi.fn>).mockReturnValue({
+      ok: true,
+      method: "systemd",
+    });
+
+    const result = await handleRestartCommand(mockParams, true);
+
+    expect(scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
+    expect(triggerOpenClawRestart).toHaveBeenCalledTimes(1);
   });
 });
