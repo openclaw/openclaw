@@ -7,6 +7,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
+import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import {
   OPENAI_CODEX_PROVIDER_ID,
@@ -14,8 +15,9 @@ import {
   resolveContextConfigProviderForRuntime,
 } from "../../agents/openai-routing.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { logVerbose } from "../../globals.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
+import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
 
@@ -53,15 +55,13 @@ function extractCompactInstructions(params: {
 }
 
 function isCompactionSkipReason(reason?: string): boolean {
-  const text = normalizeOptionalLowercaseString(reason) ?? "";
+  const classification = classifyCompactionReason(reason);
   // Manual /compact mirrors preflight semantics: already-small sessions are a
   // successful no-op, not a failed compaction.
   return (
-    text.includes("nothing to compact") ||
-    text.includes("below threshold") ||
-    text.includes("already under target") ||
-    text.includes("already compacted") ||
-    text.includes("no real conversation messages")
+    classification === "no_compactable_entries" ||
+    classification === "below_threshold" ||
+    classification === "already_compacted_recently"
   );
 }
 
@@ -71,23 +71,20 @@ function formatCompactionReason(reason?: string): string | undefined {
     return undefined;
   }
 
-  const lower = normalizeLowercaseStringOrEmpty(text);
-  if (lower.includes("nothing to compact")) {
-    return "nothing compactable in this session yet";
+  const classification = classifyCompactionReason(reason);
+  const lower = normalizeLowercaseStringOrEmpty(reason);
+  switch (classification) {
+    case "no_compactable_entries":
+      return "nothing compactable in this session yet";
+    case "below_threshold":
+      return lower.includes("already under target")
+        ? "context is already under the compaction target"
+        : "context is below the compaction threshold";
+    case "already_compacted_recently":
+      return "session was already compacted recently";
+    default:
+      return text;
   }
-  if (lower.includes("below threshold")) {
-    return "context is below the compaction threshold";
-  }
-  if (lower.includes("already under target")) {
-    return "context is already under the compaction target";
-  }
-  if (lower.includes("already compacted")) {
-    return "session was already compacted recently";
-  }
-  if (lower.includes("no real conversation messages")) {
-    return "no real conversation messages yet";
-  }
-  return text;
 }
 
 function isCodexNativeCompactionStartedResult(result: { result?: { details?: unknown } }): boolean {
@@ -204,17 +201,18 @@ export const handleCompactCommand: CommandHandler = async (params) => {
   if (!compactRequested) {
     return null;
   }
-  if (!params.command.isAuthorizedSender) {
-    logVerbose(
-      `Ignoring /compact from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
-    );
-    return { shouldContinue: false };
+  const unauthorized = rejectUnauthorizedCommand(params, "/compact");
+  if (unauthorized) {
+    return unauthorized;
   }
   const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   if (!targetSessionEntry?.sessionId) {
     return {
       shouldContinue: false,
-      reply: { text: "⚙️ Compaction unavailable (missing session id)." },
+      reply: markReplyPayloadForSourceSuppressionDelivery({
+        text: "⚙️ Compaction unavailable (missing session id).",
+        isStatusNotice: true,
+      }),
     };
   }
   const runtime = await loadCompactRuntime();
@@ -328,5 +326,11 @@ export const handleCompactCommand: CommandHandler = async (params) => {
     ? `${compactLabel}: ${reason} • ${contextSummary}`
     : `${compactLabel} • ${contextSummary}`;
   runtime.enqueueSystemEvent(line, { sessionKey: params.sessionKey });
-  return { shouldContinue: false, reply: { text: `⚙️ ${line}` } };
+  return {
+    shouldContinue: false,
+    reply: markReplyPayloadForSourceSuppressionDelivery({
+      text: `⚙️ ${line}`,
+      isStatusNotice: true,
+    }),
+  };
 };

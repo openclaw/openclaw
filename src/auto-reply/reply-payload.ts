@@ -215,6 +215,22 @@ export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(p
   });
 }
 
+// Command handlers (/compact, /status, /stop, etc.) emit user-initiated system
+// feedback, not assistant source content. Mark replies so dispatch-from-config
+// does not drop them when sourceReplyDeliveryMode === "message_tool_only".
+// Native slash fast path must apply the same marking as handleInlineActions.
+export function markCommandReplyForDelivery(
+  reply: ReplyPayload | ReplyPayload[] | undefined,
+): ReplyPayload | ReplyPayload[] | undefined {
+  if (!reply) {
+    return reply;
+  }
+  if (Array.isArray(reply)) {
+    return reply.map((payload) => markReplyPayloadForSourceSuppressionDelivery(payload));
+  }
+  return markReplyPayloadForSourceSuppressionDelivery(reply);
+}
+
 /** Returns true for internal status/notice payloads, not assistant answer content. */
 export function isReplyPayloadStatusNotice(
   payload: Pick<ReplyPayload, "isCompactionNotice" | "isFallbackNotice" | "isStatusNotice">,

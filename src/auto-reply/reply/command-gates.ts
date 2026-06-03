@@ -3,13 +3,14 @@ import { isCommandFlagEnabled, type CommandFlagKey } from "../../config/commands
 import { logVerbose } from "../../globals.js";
 import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "../command-turn-context.js";
+import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
 
 function buildNativeCommandGateReply(text: string): CommandHandlerResult {
   return {
     shouldContinue: false,
-    reply: { text },
+    reply: markReplyPayloadForSourceSuppressionDelivery({ text }),
   };
 }
 
