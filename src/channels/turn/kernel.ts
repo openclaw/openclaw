@@ -168,6 +168,19 @@ function emit(params: {
   });
 }
 
+function projectTurnStateLogFields(
+  turnState: ChannelTurnLogEvent["turnState"],
+): Pick<ChannelTurnLogEvent, "reason" | "turnState"> {
+  if (!turnState) {
+    return {};
+  }
+  const reason = turnState.errors[0];
+  return {
+    ...(reason ? { reason } : {}),
+    turnState,
+  };
+}
+
 function resolveTurnEventTurnId(params: {
   accountId?: string;
   channel: string;
@@ -781,8 +794,7 @@ async function runPreparedChannelTurnCoreInTrace<
         messageId: params.messageId,
         sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
         admission: admission.kind,
-        reason: dispatchErrorTurnState.errors[0],
-        turnState: dispatchErrorTurnState,
+        ...projectTurnStateLogFields(dispatchErrorTurnState),
         error: err,
       },
     });
@@ -1088,12 +1100,7 @@ export async function runChannelTurn<
         messageId: input.id,
         sessionKey: resolved.routeSessionKey,
         admission: admission.kind,
-        ...(result.dispatched && result.turnState
-          ? {
-              reason: result.turnState.errors[0],
-              turnState: result.turnState,
-            }
-          : {}),
+        ...projectTurnStateLogFields(result.dispatched ? result.turnState : undefined),
       },
     });
   } catch (err) {
@@ -1107,12 +1114,7 @@ export async function runChannelTurn<
         sessionKey: resolved.routeSessionKey,
         admission: admission.kind,
         error: err,
-        ...(result.dispatched && result.turnState
-          ? {
-              reason: result.turnState.errors[0],
-              turnState: result.turnState,
-            }
-          : {}),
+        ...projectTurnStateLogFields(result.dispatched ? result.turnState : undefined),
       },
     });
     throw err;

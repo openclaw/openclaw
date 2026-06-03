@@ -1647,10 +1647,12 @@ describe("channel turn kernel", () => {
   });
 
   it("marks telegram direct turns with visible delivery as completed", async () => {
+    const log = vi.fn();
     const turnEvents = new InMemoryTurnEventStore({ now: () => 1 });
     const result = await runChannelTurn({
       channel: "telegram",
       raw: {},
+      log,
       turnEvents,
       adapter: {
         ingest: () => ({ id: "msg-1", rawText: "hello" }),
@@ -1695,6 +1697,17 @@ describe("channel turn kernel", () => {
     expect(state.currentState).toBe("completed");
     expect(state.visibleDeliverySent).toBe(true);
     expect(state.completionAllowed).toBe(true);
+    const finalizeLog = loggedEvents(log).at(-1);
+    expect(finalizeLog).toMatchObject({
+      stage: "finalize",
+      event: "done",
+      messageId: "msg-1",
+      turnState: {
+        completionAllowed: true,
+        errors: [],
+      },
+    });
+    expect(finalizeLog).not.toHaveProperty("reason");
   });
 
   it("does not require direct-message delivery for telegram group turns", async () => {
