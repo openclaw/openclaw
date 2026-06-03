@@ -56,9 +56,6 @@ export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 export type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 
 export function chunkTextForOutbound(text: string, limit: number): string[] {
-  if (!text) {
-    return [];
-  }
   if (limit <= 0 || text.length <= limit) {
     return [text];
   }
