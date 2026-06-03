@@ -10,6 +10,7 @@ import {
   createReadStream,
   createWriteStream,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -746,6 +747,47 @@ function collectLegacyPluginDependencyStagingDebrisPaths(packageRoot) {
   return debris.toSorted((left, right) => left.localeCompare(right));
 }
 
+function collectPackageDistSymlinkPaths(packageRoot) {
+  const distRoot = join(packageRoot, "dist");
+  const symlinks = [];
+  let distRootStats;
+  try {
+    distRootStats = lstatSync(distRoot);
+  } catch (error) {
+    if (isNotFoundError(error)) {
+      return symlinks;
+    }
+    throw error;
+  }
+  if (distRootStats.isSymbolicLink() || !distRootStats.isDirectory()) {
+    symlinks.push("dist");
+    return symlinks;
+  }
+  const visit = (dir) => {
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch (error) {
+      if (isNotFoundError(error)) {
+        return;
+      }
+      throw error;
+    }
+    for (const entry of entries) {
+      const entryPath = join(dir, entry.name);
+      if (entry.isSymbolicLink()) {
+        symlinks.push(normalizeRelativePath(relative(packageRoot, entryPath)));
+        continue;
+      }
+      if (entry.isDirectory()) {
+        visit(entryPath);
+      }
+    }
+  };
+  visit(distRoot);
+  return symlinks.toSorted((left, right) => left.localeCompare(right));
+}
+
 function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
   const debris = collectLegacyPluginDependencyStagingDebrisPaths(packageRoot);
   if (debris.length === 0) {
@@ -754,6 +796,14 @@ function assertNoLegacyPluginDependencyStagingDebris(packageRoot) {
   throw new Error(
     `unexpected legacy plugin dependency staging debris in package dist: ${debris.join(", ")}`,
   );
+}
+
+function assertNoPackageDistSymlinks(packageRoot) {
+  const symlinks = collectPackageDistSymlinkPaths(packageRoot);
+  if (symlinks.length === 0) {
+    return;
+  }
+  throw new Error(`unsafe package dist symlink: ${symlinks.join(", ")}`);
 }
 
 function isPackagedDistPath(relativePath) {
@@ -785,7 +835,7 @@ function buildPackageDistContentInventory(packageRoot, inventory) {
   return inventory
     .map((relativePath) => {
       const filePath = join(packageRoot, relativePath);
-      const stats = statSync(filePath);
+      const stats = lstatSync(filePath);
       if (!stats.isFile() || stats.isSymbolicLink()) {
         throw new Error(`unsafe package dist path: ${relativePath}`);
       }
@@ -801,6 +851,7 @@ function buildPackageDistContentInventory(packageRoot, inventory) {
 
 export async function writePackageDistInventoryForCandidate(params) {
   assertNoLegacyPluginDependencyStagingDebris(params.sourceDir);
+  assertNoPackageDistSymlinks(params.sourceDir);
   const dryRun = await runCommand(
     npmCommand(),
     ["pack", "--dry-run", "--ignore-scripts", "--json"],

@@ -1566,6 +1566,58 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     }
   });
 
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked dist files before candidate content inventory generation",
+    async () => {
+      const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-content-symlink-"));
+      try {
+        mkdirSync(join(packageRoot, "dist"), { recursive: true });
+        writeFileSync(
+          join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+          "utf8",
+        );
+        writeFileSync(join(packageRoot, "dist", "target.js"), "export const target = true;\n");
+        symlinkSync("target.js", join(packageRoot, "dist", "index.js"));
+
+        await expect(
+          writePackageDistInventoryForCandidate({
+            sourceDir: packageRoot,
+            logPath: join(packageRoot, "npm-pack-dry-run.log"),
+          }),
+        ).rejects.toThrow("unsafe package dist symlink: dist/index.js");
+      } finally {
+        rmSync(packageRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a symlinked dist root before candidate content inventory generation",
+    async () => {
+      const packageRoot = mkdtempSync(join(tmpdir(), "openclaw-cross-os-content-dist-symlink-"));
+      try {
+        mkdirSync(join(packageRoot, "real-dist"), { recursive: true });
+        writeFileSync(
+          join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw-fixture", version: "0.0.0", files: ["dist/"] }),
+          "utf8",
+        );
+        writeFileSync(join(packageRoot, "real-dist", "index.js"), "export {};\n");
+        symlinkSync("real-dist", join(packageRoot, "dist"));
+
+        await expect(
+          writePackageDistInventoryForCandidate({
+            sourceDir: packageRoot,
+            logPath: join(packageRoot, "npm-pack-dry-run.log"),
+          }),
+        ).rejects.toThrow("unsafe package dist symlink: dist");
+      } finally {
+        rmSync(packageRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("accepts a git main dev-channel update status payload", () => {
     expect(
       verifyDevUpdateStatus(

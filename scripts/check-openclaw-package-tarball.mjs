@@ -184,6 +184,66 @@ function resolveExtractedTarEntry(entryPath, packageScoped) {
   return candidate.startsWith(rootPrefix) ? candidate : null;
 }
 
+function hasUnsafeExtractedAncestor(candidate, root) {
+  const resolvedRoot = path.resolve(root);
+  const resolvedCandidate = path.resolve(candidate);
+  const relativePath = path.relative(resolvedRoot, resolvedCandidate);
+  if (relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    return true;
+  }
+  let current = resolvedRoot;
+  for (const part of relativePath.split(path.sep).slice(0, -1)) {
+    current = path.join(current, part);
+    if (!fs.existsSync(current)) {
+      return false;
+    }
+    const stats = fs.lstatSync(current);
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function collectUnsafeExtractedDistTreeErrors() {
+  const roots = [
+    { label: "dist", root: path.join(extractDir, "dist") },
+    { label: "package/dist", root: path.join(extractDir, "package", "dist") },
+  ];
+  const treeErrors = [];
+  const visit = (dir, label) => {
+    const dirEntries = fs.readdirSync(dir, { withFileTypes: true });
+    for (const entry of dirEntries) {
+      const entryPath = path.join(dir, entry.name);
+      const entryLabel = `${label}/${entry.name}`;
+      if (entry.isSymbolicLink()) {
+        treeErrors.push(`unsafe extracted dist entry: ${entryLabel}`);
+        continue;
+      }
+      if (entry.isDirectory()) {
+        visit(entryPath, entryLabel);
+      }
+    }
+  };
+  for (const { label, root } of roots) {
+    let stats;
+    try {
+      stats = fs.lstatSync(root);
+    } catch (error) {
+      if (error && typeof error === "object" && error.code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    if (stats.isSymbolicLink() || !stats.isDirectory()) {
+      treeErrors.push(`unsafe extracted dist root: ${label}`);
+      continue;
+    }
+    visit(root, label);
+  }
+  return treeErrors;
+}
+
 function readTarEntry(entryPath) {
   const candidates = [
     resolveExtractedTarEntry(entryPath, true),
@@ -199,15 +259,25 @@ function readTarEntry(entryPath) {
 
 function readTarEntryBuffer(entryPath) {
   const candidates = [
-    resolveExtractedTarEntry(entryPath, true),
-    resolveExtractedTarEntry(entryPath, false),
+    {
+      candidate: resolveExtractedTarEntry(entryPath, true),
+      root: path.join(extractDir, "package"),
+    },
+    { candidate: resolveExtractedTarEntry(entryPath, false), root: extractDir },
   ];
-  for (const candidate of candidates) {
+  for (const { candidate, root } of candidates) {
     if (candidate && fs.existsSync(candidate)) {
-      return fs.readFileSync(candidate);
+      if (hasUnsafeExtractedAncestor(candidate, root)) {
+        return { error: `unsafe content inventory tar entry ${entryPath}` };
+      }
+      const stats = fs.lstatSync(candidate);
+      if (!stats.isFile() || stats.isSymbolicLink()) {
+        return { error: `unsafe content inventory tar entry ${entryPath}` };
+      }
+      return { content: fs.readFileSync(candidate) };
     }
   }
-  return null;
+  return { content: null };
 }
 
 function sha256Hex(content) {
@@ -246,6 +316,13 @@ for (const [entry, count] of normalizedEntryCounts) {
   if (count > 1) {
     errors.push(`duplicate normalized tar entry: ${entry}`);
   }
+}
+const unsafeExtractedDistTreeErrors = collectUnsafeExtractedDistTreeErrors();
+if (unsafeExtractedDistTreeErrors.length > 0) {
+  fs.rmSync(extractDir, { recursive: true, force: true });
+  fail(
+    `OpenClaw package tarball integrity failed:\n${[...errors, ...unsafeExtractedDistTreeErrors].join("\n")}`,
+  );
 }
 
 if (!entrySet.has("package.json")) {
@@ -431,7 +508,11 @@ if (entrySet.has("dist/postinstall-content-inventory.json")) {
           errors.push(`content inventory references missing tar entry ${contentEntry.path}`);
           continue;
         }
-        const content = readTarEntryBuffer(contentEntry.path);
+        const { content, error } = readTarEntryBuffer(contentEntry.path);
+        if (error) {
+          errors.push(error);
+          continue;
+        }
         if (!content) {
           errors.push(`content inventory references missing tar entry ${contentEntry.path}`);
           continue;

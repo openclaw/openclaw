@@ -7,6 +7,7 @@ import {
   mkdirSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,6 +30,7 @@ function withTarball(
     includeShrinkwrap?: boolean;
     extraRootFiles?: Record<string, string>;
     extraPackEntries?: string[];
+    packageSymlinks?: Record<string, string>;
   } = {},
 ) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
@@ -68,6 +70,11 @@ function withTarball(
       const filePath = join(packageRoot, relativePath);
       mkdirSync(dirname(filePath), { recursive: true });
       writeFileSync(filePath, body);
+    }
+    for (const [relativePath, target] of Object.entries(options.packageSymlinks ?? {})) {
+      const filePath = join(packageRoot, relativePath);
+      mkdirSync(dirname(filePath), { recursive: true });
+      symlinkSync(target, filePath);
     }
     for (const [relativePath, body] of Object.entries(options.extraRootFiles ?? {})) {
       const filePath = join(root, relativePath);
@@ -352,6 +359,203 @@ describe("check-openclaw-package-tarball", () => {
       { extraPackEntries: ["package/./dist/index.js"] },
     );
   });
+
+  it.runIf(process.platform !== "win32")("rejects symlinked content inventory tar entries", () => {
+    const targetBody = "export const target = true;\n";
+    withTarball(
+      ["dist/index.js"],
+      {
+        "dist/target.js": targetBody,
+        "dist/postinstall-content-inventory.json": JSON.stringify([
+          {
+            path: "dist/index.js",
+            sha256: createHash("sha256").update(targetBody).digest("hex"),
+            mode: 0o644,
+            size: Buffer.byteLength(targetBody),
+          },
+        ]),
+      },
+      (tarball) => {
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("unsafe extracted dist entry: package/dist/index.js");
+      },
+      "2026.5.21",
+      {
+        includeContentInventory: false,
+        packageSymlinks: { "dist/index.js": "target.js" },
+      },
+    );
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects content inventory reads through symlinked dist parents",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-package-dist-symlink-test-"));
+      try {
+        const targetBody = "export const target = true;\n";
+        const packageRoot = join(root, "package");
+        const rootDist = join(root, "dist");
+        mkdirSync(packageRoot, { recursive: true });
+        mkdirSync(join(rootDist, "control-ui", "assets"), { recursive: true });
+        writeFileSync(
+          join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.5.21" }),
+        );
+        writeFileSync(
+          join(packageRoot, "npm-shrinkwrap.json"),
+          JSON.stringify({
+            name: "openclaw",
+            version: "2026.5.21",
+            lockfileVersion: 3,
+            packages: { "": { name: "openclaw", version: "2026.5.21" } },
+          }),
+        );
+        symlinkSync("../dist", join(packageRoot, "dist"));
+        writeFileSync(join(rootDist, "index.js"), targetBody);
+        writeFileSync(
+          join(rootDist, "control-ui", "index.html"),
+          "<!doctype html><openclaw-app></openclaw-app>",
+        );
+        writeFileSync(join(rootDist, "control-ui", "assets", "app.js"), "console.log('ok');\n");
+        writeFileSync(
+          join(rootDist, "postinstall-inventory.json"),
+          JSON.stringify(["dist/index.js"]),
+        );
+        writeFileSync(
+          join(rootDist, "postinstall-content-inventory.json"),
+          JSON.stringify([
+            {
+              path: "dist/index.js",
+              sha256: createHash("sha256").update(targetBody).digest("hex"),
+              mode: 0o644,
+              size: Buffer.byteLength(targetBody),
+            },
+          ]),
+        );
+        const tarball = join(root, "openclaw.tgz");
+        const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package", "dist"], {
+          encoding: "utf8",
+        });
+        expect(pack.status, pack.stderr).toBe(0);
+
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("unsafe extracted dist root: package/dist");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rejects symlinked dist parents before parsing empty content inventories",
+    () => {
+      const root = mkdtempSync(join(tmpdir(), "openclaw-package-empty-dist-symlink-test-"));
+      try {
+        const packageRoot = join(root, "package");
+        const rootDist = join(root, "dist");
+        mkdirSync(packageRoot, { recursive: true });
+        mkdirSync(join(rootDist, "control-ui", "assets"), { recursive: true });
+        writeFileSync(
+          join(packageRoot, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "2026.5.21" }),
+        );
+        writeFileSync(
+          join(packageRoot, "npm-shrinkwrap.json"),
+          JSON.stringify({
+            name: "openclaw",
+            version: "2026.5.21",
+            lockfileVersion: 3,
+            packages: { "": { name: "openclaw", version: "2026.5.21" } },
+          }),
+        );
+        symlinkSync("../dist", join(packageRoot, "dist"));
+        writeFileSync(
+          join(rootDist, "control-ui", "index.html"),
+          "<!doctype html><openclaw-app></openclaw-app>",
+        );
+        writeFileSync(join(rootDist, "control-ui", "assets", "app.js"), "console.log('ok');\n");
+        writeFileSync(join(rootDist, "postinstall-inventory.json"), JSON.stringify([]));
+        writeFileSync(join(rootDist, "postinstall-content-inventory.json"), JSON.stringify([]));
+        const tarball = join(root, "openclaw.tgz");
+        const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package", "dist"], {
+          encoding: "utf8",
+        });
+        expect(pack.status, pack.stderr).toBe(0);
+
+        const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+        expect(result.status).not.toBe(0);
+        expect(result.stderr).toContain("unsafe extracted dist root: package/dist");
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("rejects broken symlinked dist parents", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-package-broken-dist-symlink-test-"));
+    try {
+      const packageRoot = join(root, "package");
+      const rootDist = join(root, "dist");
+      mkdirSync(packageRoot, { recursive: true });
+      mkdirSync(join(rootDist, "control-ui", "assets"), { recursive: true });
+      writeFileSync(
+        join(packageRoot, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.5.21" }),
+      );
+      writeFileSync(
+        join(packageRoot, "npm-shrinkwrap.json"),
+        JSON.stringify({
+          name: "openclaw",
+          version: "2026.5.21",
+          lockfileVersion: 3,
+          packages: { "": { name: "openclaw", version: "2026.5.21" } },
+        }),
+      );
+      symlinkSync("../missing-dist", join(packageRoot, "dist"));
+      writeFileSync(
+        join(rootDist, "control-ui", "index.html"),
+        "<!doctype html><openclaw-app></openclaw-app>",
+      );
+      writeFileSync(join(rootDist, "control-ui", "assets", "app.js"), "console.log('ok');\n");
+      writeFileSync(join(rootDist, "postinstall-inventory.json"), JSON.stringify([]));
+      writeFileSync(join(rootDist, "postinstall-content-inventory.json"), JSON.stringify([]));
+      const tarball = join(root, "openclaw.tgz");
+      const pack = spawnSync("tar", ["-czf", tarball, "-C", root, "package", "dist"], {
+        encoding: "utf8",
+      });
+      expect(pack.status, pack.stderr).toBe(0);
+
+      const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("unsafe extracted dist root: package/dist");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects uninventoried symlinked dist children before content inventory reads",
+    () => {
+      withTarball(
+        [],
+        {},
+        (tarball) => {
+          const result = spawnSync("node", [CHECK_SCRIPT, tarball], { encoding: "utf8" });
+
+          expect(result.status).not.toBe(0);
+          expect(result.stderr).toContain("unsafe extracted dist entry: package/dist/evil.js");
+        },
+        "2026.5.21",
+        { packageSymlinks: { "dist/evil.js": "target.js" } },
+      );
+    },
+  );
 
   it("rejects stale deep plugin SDK declaration inventory entries", () => {
     withTarball(
