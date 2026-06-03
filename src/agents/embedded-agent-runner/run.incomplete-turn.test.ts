@@ -32,9 +32,12 @@ import {
   resolveReplayInvalidFlag,
   resolveRunLivenessState,
   resolveSilentToolResultReplyPayload,
+  resolveTurnBudgetTimeoutNotice,
   shouldRetryMissingAssistantTurn,
   shouldRetrySilentErrorAssistantTurn,
   shouldTreatEmptyAssistantReplyAsSilent,
+  TURN_BUDGET_TIMEOUT_NOTICE,
+  IDLE_MODEL_TIMEOUT_NOTICE,
 } from "./run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
@@ -3399,5 +3402,45 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.payloads).toBeUndefined();
     expect(result.meta.livenessState).toBe("working");
     expectNoWarnMessageWith("planning");
+  });
+});
+
+describe("resolveTurnBudgetTimeoutNotice", () => {
+  const silentTimeout = {
+    timedOut: true,
+    idleTimedOut: false,
+    payloadCount: 0,
+    emptyAssistantReplyIsSilent: false,
+    hasMessagingDelivery: false,
+  };
+
+  it("returns the turn-budget notice when a real turn times out with no visible reply", () => {
+    expect(resolveTurnBudgetTimeoutNotice(silentTimeout)).toBe(TURN_BUDGET_TIMEOUT_NOTICE);
+  });
+
+  it("returns the idle-model notice when the timeout was an idle/no-output timeout", () => {
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, idleTimedOut: true })).toBe(
+      IDLE_MODEL_TIMEOUT_NOTICE,
+    );
+  });
+
+  it("returns null when the turn did not time out (e.g. a user cancel)", () => {
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, timedOut: false })).toBeNull();
+  });
+
+  it("returns null when a visible payload is already being returned", () => {
+    expect(resolveTurnBudgetTimeoutNotice({ ...silentTimeout, payloadCount: 1 })).toBeNull();
+  });
+
+  it("returns null when an empty reply is intentionally silent (cron/heartbeat)", () => {
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, emptyAssistantReplyIsSilent: true }),
+    ).toBeNull();
+  });
+
+  it("returns null when a messaging tool already delivered a reply (no double-notify)", () => {
+    expect(
+      resolveTurnBudgetTimeoutNotice({ ...silentTimeout, hasMessagingDelivery: true }),
+    ).toBeNull();
   });
 });

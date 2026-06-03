@@ -645,6 +645,55 @@ function shouldSkipNonVisibleTurnRetry(params: {
   );
 }
 
+// User-facing notice emitted when an agent turn exhausts its time budget
+// (`agents.defaults.timeoutSeconds`) or a run-level deadline and ends without
+// producing any visible reply. Without this the turn returns no payload and the
+// channel goes completely silent — indistinguishable from a hung process to the
+// user. Mirrors the prompt-level timeout copy already surfaced in run.ts.
+export const TURN_BUDGET_TIMEOUT_NOTICE =
+  "⚠️ I hit my time budget on this request and stopped before finishing. " +
+  "Ask me to continue, or simplify the request. " +
+  "If this happens often, raise `agents.defaults.timeoutSeconds` in your config.";
+
+// Variant for an idle (no-output) model timeout that ends the turn with no
+// visible reply, pointing at the provider-level timeout knob in addition to the
+// agent run ceiling.
+export const IDLE_MODEL_TIMEOUT_NOTICE =
+  "⚠️ The model didn't respond before its idle timeout, so I stopped before finishing. " +
+  "Ask me to try again, or use a faster model. " +
+  "For slow local or self-hosted providers, raise `models.providers.<id>.timeoutSeconds` " +
+  "(and `agents.defaults.timeoutSeconds` too if that ceiling is lower).";
+
+/**
+ * Decide whether a terminating agent turn should surface a user-visible
+ * turn-timeout notice. Returns the notice text when the turn timed out and is
+ * about to deliver nothing visible to a real (non-silent) conversation, or
+ * `null` when a notice would be wrong:
+ * - the turn did not time out (`timedOut` is false — e.g. a user cancel, which
+ *   is a distinct signal),
+ * - some visible payload is already being returned (`payloadCount > 0`),
+ * - an empty reply is intentionally silent here (cron/heartbeat contexts that
+ *   set `allowEmptyAssistantReplyAsSilent`), or
+ * - a messaging tool already delivered a reply out-of-band (avoid double-notify).
+ */
+export function resolveTurnBudgetTimeoutNotice(params: {
+  timedOut: boolean;
+  idleTimedOut: boolean;
+  payloadCount: number;
+  emptyAssistantReplyIsSilent: boolean;
+  hasMessagingDelivery: boolean;
+}): string | null {
+  if (
+    !params.timedOut ||
+    params.payloadCount > 0 ||
+    params.emptyAssistantReplyIsSilent ||
+    params.hasMessagingDelivery
+  ) {
+    return null;
+  }
+  return params.idleTimedOut ? IDLE_MODEL_TIMEOUT_NOTICE : TURN_BUDGET_TIMEOUT_NOTICE;
+}
+
 /** Allows configured silent handling for replay-safe empty, reasoning-only, or explicit silent turns. */
 export function shouldTreatEmptyAssistantReplyAsSilent(params: {
   allowEmptyAssistantReplyAsSilent?: boolean;
