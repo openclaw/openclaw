@@ -89,19 +89,60 @@ export function createFeishuApiError(
   return new Error(formatFeishuApiFailure(error, errorPrefix, options), { cause: error });
 }
 
+// Feishu message-API error codes that signal a transient rate limit; safe to retry with backoff.
+// 230020: per-chat rate limit (ext=chat rate limit) — confirmed by real concurrent load test.
+// Distinct from FEISHU_BACKOFF_CODES in typing.ts, which covers the reaction API (99991400+).
+const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020]);
+const FEISHU_SEND_MAX_RETRIES = 2;
+const FEISHU_SEND_RETRY_BASE_MS = 500;
+
+/**
+ * Returns the Feishu body error code when an AxiosError signals a retryable
+ * message-API rate limit. The code lives in `error.response.data.code` on the
+ * HTTP 400 response the Feishu API returns on frequency limit. Returns `undefined`
+ * for all other errors.
+ */
+export function getFeishuSendRateLimitCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const data = isRecord(response?.data) ? response.data : undefined;
+  const code = data?.code;
+  return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+}
+
 export async function requestFeishuApi<T>(
   request: () => Promise<T>,
   errorPrefix: string,
   options: {
     includeConfigParams?: boolean;
     includeNestedErrorLogId?: boolean;
+    /** Base delay per retry attempt in ms; multiplied by attempt index. @internal */
+    retryDelayMs?: number;
   } = {},
 ): Promise<T> {
-  try {
-    return await request();
-  } catch (error) {
-    throw createFeishuApiError(error, errorPrefix, options);
+  const retryDelayMs = options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS;
+  for (let attempt = 0; attempt <= FEISHU_SEND_MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      // Linear backoff: delay grows with each attempt to give the rate-limit window time to reset.
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, attempt * retryDelayMs);
+      });
+    }
+    try {
+      return await request();
+    } catch (error) {
+      const isRetryable =
+        attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
+      if (!isRetryable) {
+        throw createFeishuApiError(error, errorPrefix, options);
+      }
+      // Rate-limit on a non-final attempt — loop continues to next retry.
+    }
   }
+  // Unreachable: every iteration either returns or throws. Required for TypeScript exhaustiveness.
+  throw createFeishuApiError(new Error("unreachable"), errorPrefix, options);
 }
 
 type ParsedCommentDocumentRef = {
