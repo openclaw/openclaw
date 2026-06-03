@@ -172,6 +172,7 @@ export async function runCodexAppServerSideQuestion(
       config: params.cfg,
     }) ??
     resolveCodexBindingModelProviderFallback({
+      provider: params.provider,
       currentModel: params.model,
       bindingModel: binding.model,
       bindingModelProvider: binding.modelProvider,

@@ -4861,6 +4861,52 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
   });
 
+  it("does not inherit a bound local provider for explicit native OpenAI resumed runs", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      authProfileId: "openai-profile",
+      model: "local-model",
+      modelProvider: "lmstudio",
+    });
+    const { requests, waitForMethod, completeTurn } = createResumeHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.provider = "openai";
+    params.authProfileId = "openai-profile";
+    params.modelId = "gpt-5.5";
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-profile": {
+          type: "oauth",
+          provider: "openai",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+          accountId: "account-work",
+          email: "work@example.test",
+        },
+      },
+    };
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        appServer: {
+          mode: "guardian",
+        },
+      },
+    });
+    await waitForMethod("turn/start");
+    await completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await run;
+
+    const resumeRequest = requests.find((request) => request.method === "thread/resume");
+    const resumeRequestParams = resumeRequest?.params as Record<string, unknown> | undefined;
+    expect(resumeRequestParams?.model).toBe("gpt-5.5");
+    expect(resumeRequestParams).not.toHaveProperty("modelProvider");
+    expect(resumeRequestParams?.approvalsReviewer).toBe("auto_review");
+  });
+
   it("does not apply bound local model providers to provider-qualified resumed models", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");

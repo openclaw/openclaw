@@ -1010,6 +1010,46 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(forkParams?.approvalsReviewer).toBe("auto_review");
   });
 
+  it("does not inherit a bound local provider for explicit native OpenAI side threads", async () => {
+    const client = createFakeClient();
+    getSharedCodexAppServerClientMock.mockResolvedValue(client);
+    isCodexAppServerNativeAuthProfileMock.mockReturnValue(true);
+    readCodexAppServerBindingMock.mockResolvedValue({
+      schemaVersion: 1,
+      threadId: "parent-thread",
+      sessionFile: "/tmp/session-1.jsonl",
+      cwd: "/tmp/workspace",
+      authProfileId: "openai:work",
+      model: "local-model",
+      modelProvider: "lmstudio",
+      approvalPolicy: "never",
+      sandbox: "danger-full-access",
+      createdAt: new Date(0).toISOString(),
+      updatedAt: new Date(0).toISOString(),
+    });
+
+    await expect(
+      runCodexAppServerSideQuestion(
+        sideParams({
+          provider: "openai",
+          model: "gpt-5.5",
+        }),
+        {
+          pluginConfig: {
+            appServer: {
+              mode: "guardian",
+            },
+          },
+        },
+      ),
+    ).resolves.toEqual({ text: "Side answer." });
+
+    const forkParams = mockCall(client.request)[1] as Record<string, unknown> | undefined;
+    expect(forkParams?.model).toBe("gpt-5.5");
+    expect(forkParams).not.toHaveProperty("modelProvider");
+    expect(forkParams?.approvalsReviewer).toBe("auto_review");
+  });
+
   it("keeps native hook relays alive across side-thread startup and completion timeouts", async () => {
     const client = createFakeClient();
     const requestTimeoutMs = 400_000;

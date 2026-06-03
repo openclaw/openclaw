@@ -349,6 +349,7 @@ export async function startOrResumeThread(params: {
         config: params.params.config,
       }) ??
       resolveCodexBindingModelProviderFallback({
+        provider: params.params.provider,
         currentModel: params.params.modelId,
         bindingModel: binding.model,
         bindingModelProvider: binding.modelProvider,
@@ -986,10 +987,15 @@ export function buildThreadResumeParams(
 }
 
 export function resolveCodexBindingModelProviderFallback(params: {
+  provider?: string;
   currentModel: string | undefined;
   bindingModel: string | undefined;
   bindingModelProvider: string | undefined;
 }): string | undefined {
+  const provider = params.provider?.trim().toLowerCase();
+  if (provider && provider !== "codex") {
+    return undefined;
+  }
   const currentModel = params.currentModel?.trim();
   const bindingModel = params.bindingModel?.trim();
   if (
