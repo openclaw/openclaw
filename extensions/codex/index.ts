@@ -160,10 +160,25 @@ export default definePluginEntry({
               payload,
               payloadContext,
             });
-            await adapter.sendPayload({
+            const results = await adapter.sendPayload({
               ...payloadContext,
               text: renderedPayload.text ?? "",
               payload: renderedPayload,
+            });
+            // Route through the adapter's after-delivery hook so the
+            // channel can register the delivered message id (Discord
+            // uses this to disable stale Codex user-input buttons when
+            // the freeform answer is processed).
+            await adapter.afterDeliverPayload?.({
+              cfg,
+              target: {
+                channel: replyEvent.channel,
+                to,
+                ...(accountId ? { accountId } : {}),
+                ...(threadId != null ? { threadId } : {}),
+              },
+              payload: renderedPayload,
+              results: results ? [results] : [],
             });
             return;
           }
