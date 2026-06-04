@@ -2747,9 +2747,12 @@ describe("renderWorkboard", () => {
       "Renamed",
     );
     expect(
-      [...container.querySelectorAll<HTMLSelectElement>(".workboard-draft__meta select")].at(1)
-        ?.value,
-    ).toBe("high");
+      [
+        ...(container
+          .querySelector(".workboard-draft")
+          ?.querySelectorAll<HTMLElement>(".workboard-select__value") ?? []),
+      ].at(1)?.textContent,
+    ).toBe("High");
   });
 
   it("locks edit-modal actions while a comment request is in flight", () => {
