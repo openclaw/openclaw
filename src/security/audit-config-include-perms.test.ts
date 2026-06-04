@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
-import { collectIncludeFilePermFindings } from "./audit-extra.async.js";
 
 describe("security audit config include permissions", () => {
   it("flags group/world-readable config include files", async () => {
@@ -31,6 +30,7 @@ describe("security audit config include permissions", () => {
       legacyIssues: [],
     };
 
+    const { collectIncludeFilePermFindings } = await import("./audit-extra.async.js");
     const findings = await collectIncludeFilePermFindings({
       configSnapshot,
       platform: "linux",
