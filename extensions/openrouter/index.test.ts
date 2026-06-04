@@ -56,6 +56,15 @@ describe("openrouter provider hooks", () => {
     expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toContain("auto");
   });
 
+  it("defaults dynamic model tool support off unless OpenRouter reports tools support", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const resolved = provider.resolveDynamicModel?.({
+      modelId: "unknown/provider-model",
+    } as never);
+
+    expect(resolved?.compat).toEqual({ supportsTools: false });
+  });
+
   it("does not include retired stealth models in the bundled catalog", () => {
     const modelIds = buildOpenrouterProvider().models?.map((model) => model.id) ?? [];
     expect(modelIds).not.toContain("openrouter/hunter-alpha");
@@ -401,7 +410,10 @@ describe("openrouter provider hooks", () => {
         const payload = {
           messages: [
             { role: "user", content: "read file" },
-            { role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] },
+            {
+              role: "assistant",
+              tool_calls: [{ id: "call_1", type: "function" }],
+            },
             { role: "tool", content: "ok" },
             { role: "assistant", content: "done" },
           ],
@@ -497,7 +509,12 @@ describe("openrouter provider hooks", () => {
         ...args: Parameters<import("openclaw/plugin-sdk/agent-core").StreamFn>
       ): ReturnType<import("openclaw/plugin-sdk/agent-core").StreamFn> => {
         const payload = {
-          messages: [{ role: "assistant", tool_calls: [{ id: "call_1", type: "function" }] }],
+          messages: [
+            {
+              role: "assistant",
+              tool_calls: [{ id: "call_1", type: "function" }],
+            },
+          ],
         };
         void args[2]?.onPayload?.(payload, args[0]);
         payloads.push(payload);

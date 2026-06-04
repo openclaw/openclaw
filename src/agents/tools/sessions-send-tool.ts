@@ -335,11 +335,24 @@ export function createSessionsSendTool(opts?: {
       const sessionKeyParam = readStringParam(params, "sessionKey");
       const labelParam = normalizeOptionalString(readStringParam(params, "label"));
       const labelAgentIdParam = normalizeOptionalString(readStringParam(params, "agentId"));
-      if (sessionKeyParam && labelParam) {
-        return jsonResult({
+      const targetSelectorCount =
+        (sessionKeyParam ? 1 : 0) + (labelParam ? 1 : 0) + (labelAgentIdParam ? 1 : 0);
+      const terminalErrorResult = (payload: Record<string, unknown>) => {
+        const base = jsonResult(payload);
+        return {
+          ...base,
+          terminate: true,
+          details: {
+            ...(base.details as Record<string, unknown> | undefined),
+            isError: true,
+          },
+        };
+      };
+      if (targetSelectorCount > 1) {
+        return terminalErrorResult({
           runId: crypto.randomUUID(),
           status: "error",
-          error: "Provide either sessionKey or label (not both).",
+          error: "Provide exactly one target selector: sessionKey, label, or agentId.",
         });
       }
 
@@ -351,7 +364,7 @@ export function createSessionsSendTool(opts?: {
           mainKey,
         });
         if (!agentMainKey) {
-          return jsonResult({
+          return terminalErrorResult({
             runId: crypto.randomUUID(),
             status: "error",
             error: `agent not found: ${labelAgentIdParam}`,
@@ -366,7 +379,7 @@ export function createSessionsSendTool(opts?: {
           : undefined;
 
         if (restrictToSpawned && requestedAgentId && requestedAgentId !== requesterAgentId) {
-          return jsonResult({
+          return terminalErrorResult({
             runId: crypto.randomUUID(),
             status: "forbidden",
             error: "Sandboxed sessions_send label lookup is limited to this agent",
@@ -375,7 +388,7 @@ export function createSessionsSendTool(opts?: {
 
         if (requesterAgentId && requestedAgentId && requestedAgentId !== requesterAgentId) {
           if (!a2aPolicy.enabled) {
-            return jsonResult({
+            return terminalErrorResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
               error:
@@ -383,7 +396,7 @@ export function createSessionsSendTool(opts?: {
             });
           }
           if (!a2aPolicy.isAllowed(requesterAgentId, requestedAgentId)) {
-            return jsonResult({
+            return terminalErrorResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
               error: "Agent-to-agent messaging denied by tools.agentToAgent.allow.",
@@ -407,13 +420,13 @@ export function createSessionsSendTool(opts?: {
         } catch (err) {
           const msg = formatErrorMessage(err);
           if (restrictToSpawned) {
-            return jsonResult({
+            return terminalErrorResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
               error: "Session not visible from this sandboxed agent session.",
             });
           }
-          return jsonResult({
+          return terminalErrorResult({
             runId: crypto.randomUUID(),
             status: "error",
             error: msg || `No session found with label: ${labelParam}`,
@@ -422,13 +435,13 @@ export function createSessionsSendTool(opts?: {
 
         if (!resolvedKey) {
           if (restrictToSpawned) {
-            return jsonResult({
+            return terminalErrorResult({
               runId: crypto.randomUUID(),
               status: "forbidden",
               error: "Session not visible from this sandboxed agent session.",
             });
           }
-          return jsonResult({
+          return terminalErrorResult({
             runId: crypto.randomUUID(),
             status: "error",
             error: `No session found with label: ${labelParam}`,
@@ -438,10 +451,10 @@ export function createSessionsSendTool(opts?: {
       }
 
       if (!sessionKey) {
-        return jsonResult({
+        return terminalErrorResult({
           runId: crypto.randomUUID(),
           status: "error",
-          error: "Either sessionKey or label is required",
+          error: "Either sessionKey, label, or agentId is required",
         });
       }
       const resolvedSession = await resolveSessionReference({
@@ -452,7 +465,7 @@ export function createSessionsSendTool(opts?: {
         restrictToSpawned,
       });
       if (!resolvedSession.ok) {
-        return jsonResult({
+        return terminalErrorResult({
           runId: crypto.randomUUID(),
           status: resolvedSession.status,
           error: resolvedSession.error,
@@ -465,7 +478,7 @@ export function createSessionsSendTool(opts?: {
         visibilitySessionKey: sessionKey,
       });
       if (!visibleSession.ok) {
-        return jsonResult({
+        return terminalErrorResult({
           runId: crypto.randomUUID(),
           status: visibleSession.status,
           error: visibleSession.error,
@@ -483,7 +496,7 @@ export function createSessionsSendTool(opts?: {
       const idempotencyKey = crypto.randomUUID();
       let runId: string = idempotencyKey;
       if (parseSessionThreadInfoFast(resolvedKey).threadId) {
-        return jsonResult({
+        return terminalErrorResult({
           runId: crypto.randomUUID(),
           status: "error",
           error:
@@ -499,7 +512,7 @@ export function createSessionsSendTool(opts?: {
       });
       const access = visibilityGuard.check(resolvedKey);
       if (!access.allowed) {
-        return jsonResult({
+        return terminalErrorResult({
           runId: crypto.randomUUID(),
           status: access.status,
           error: access.error,
@@ -514,7 +527,7 @@ export function createSessionsSendTool(opts?: {
         mainKey,
       });
       if (!ensuredSession.ok) {
-        return jsonResult({
+        return terminalErrorResult({
           runId: crypto.randomUUID(),
           status: "error",
           error: ensuredSession.error,
@@ -709,7 +722,7 @@ export function createSessionsSendTool(opts?: {
         });
       }
       if (result.status === "error") {
-        return jsonResult({
+        return terminalErrorResult({
           runId,
           status: "error",
           error: result.error ?? "agent error",

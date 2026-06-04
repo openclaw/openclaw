@@ -142,7 +142,7 @@ function normalizeProviderDoneMessage(
   return promotedMessage ? { kind: "promoted", message: promotedMessage } : undefined;
 }
 
-function wrapPlainTextToolCallStream(
+export function wrapPlainTextToolCallStream(
   source: ReturnType<StreamFn>,
   context: Parameters<StreamFn>[1],
 ): ReturnType<StreamFn> {
@@ -152,7 +152,10 @@ function wrapPlainTextToolCallStream(
   }
   const matcher = createProviderToolNameMatcher(toolNames);
   const output = createAssistantMessageEventStream();
-  const stream = output as unknown as { push(event: unknown): void; end(): void };
+  const stream = output as unknown as {
+    push(event: unknown): void;
+    end(): void;
+  };
 
   void (async () => {
     let ended = false;
@@ -209,15 +212,7 @@ export function createPlainTextToolCallCompatWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const maybeStream = underlying(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapPlainTextToolCallStream(stream, context),
-      ) as ReturnType<StreamFn>;
-    }
-    return wrapPlainTextToolCallStream(maybeStream, context);
-  };
+  return (model, context, options) => underlying(model, context, options);
 }
 
 /** @deprecated Bundled provider stream helper; do not use from third-party plugins. */
@@ -353,7 +348,10 @@ export function isOpenAICompatibleThinkingEnabled(params: {
   thinkingLevel: OpenAICompatibleThinkingLevel;
   options: Parameters<StreamFn>[2];
 }): boolean {
-  const options = (params.options ?? {}) as { reasoningEffort?: unknown; reasoning?: unknown };
+  const options = (params.options ?? {}) as {
+    reasoningEffort?: unknown;
+    reasoning?: unknown;
+  };
   const raw = options.reasoningEffort ?? options.reasoning ?? params.thinkingLevel ?? "high";
   if (typeof raw !== "string") {
     return true;
@@ -473,7 +471,11 @@ function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
     if (!block || typeof block !== "object") {
       continue;
     }
-    const typedBlock = block as { type?: unknown; text?: unknown; thinking?: unknown };
+    const typedBlock = block as {
+      type?: unknown;
+      text?: unknown;
+      thinking?: unknown;
+    };
     if (
       typedBlock.type === "text" &&
       typeof typedBlock.text === "string" &&
@@ -530,7 +532,10 @@ function wrapThinkingOnlyFinalTextStream(
         async next() {
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
+            const event = result.value as {
+              partial?: unknown;
+              message?: unknown;
+            };
             promoteThinkingOnlyFinalOutputToText(event.partial);
             promoteThinkingOnlyFinalOutputToText(event.message);
           }
@@ -860,7 +865,10 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   }
 
   if (
-    stripInvalidGoogleThinkingBudget({ thinkingConfig: thinkingConfigObj, modelId: params.modelId })
+    stripInvalidGoogleThinkingBudget({
+      thinkingConfig: thinkingConfigObj,
+      modelId: params.modelId,
+    })
   ) {
     if (Object.keys(thinkingConfigObj).length === 0) {
       delete configObj.thinkingConfig;

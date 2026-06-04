@@ -322,12 +322,20 @@ describe("extractAssistantText", () => {
         {
           type: "text",
           text: "internal reasoning",
-          textSignature: JSON.stringify({ v: 1, id: "item_commentary", phase: "commentary" }),
+          textSignature: JSON.stringify({
+            v: 1,
+            id: "item_commentary",
+            phase: "commentary",
+          }),
         },
         {
           type: "text",
           text: "Done.",
-          textSignature: JSON.stringify({ v: 1, id: "item_final", phase: "final_answer" }),
+          textSignature: JSON.stringify({
+            v: 1,
+            id: "item_final",
+            phase: "final_answer",
+          }),
         },
       ],
     };
@@ -611,7 +619,9 @@ describe("sessions_list gating", () => {
         path: "/tmp/sessions.json",
         sessions: [{ key: "current", kind: "direct" }],
       })
-      .mockResolvedValueOnce({ messages: [{ role: "assistant", content: [] }] });
+      .mockResolvedValueOnce({
+        messages: [{ role: "assistant", content: [] }],
+      });
 
     await createMainSessionsListTool().execute("call1", { messageLimit: 1 });
 
@@ -782,7 +792,30 @@ describe("sessions_send gating", () => {
 
     const details = requireDetails(result);
     expect(details.status).toBe("error");
-    expect(details.error).toBe("Either sessionKey or label is required");
+    expect(details.error).toBe("Either sessionKey, label, or agentId is required");
+    expect(result.terminate).toBe(true);
+    expect((result.details as { isError?: unknown }).isError).toBe(true);
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
+  it("returns a terminal error when multiple target selectors are provided", async () => {
+    const tool = createMainSessionsSendTool();
+
+    const result = await tool.execute("call-mixed-targets", {
+      sessionKey: MAIN_AGENT_SESSION_KEY,
+      label: "main",
+      agentId: "main",
+      message: "hi",
+      timeoutSeconds: 5,
+    });
+
+    const details = requireDetails(result);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe(
+      "Provide exactly one target selector: sessionKey, label, or agentId.",
+    );
+    expect(result.terminate).toBe(true);
+    expect((result.details as { isError?: unknown }).isError).toBe(true);
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
@@ -896,7 +929,10 @@ describe("sessions_send gating", () => {
     };
 
     callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: Record<string, unknown> };
+      const request = opts as {
+        method?: string;
+        params?: Record<string, unknown>;
+      };
       if (request.method === "sessions.list") {
         return {
           path: "/tmp/sessions.json",

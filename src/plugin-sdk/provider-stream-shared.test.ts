@@ -9,6 +9,7 @@ import {
   createAnthropicThinkingPrefillPayloadWrapper,
   createPayloadPatchStreamWrapper,
   createPlainTextToolCallCompatWrapper,
+  wrapPlainTextToolCallStream,
   defaultToolStreamExtraParams,
   isOpenAICompatibleThinkingEnabled,
   stripTrailingAnthropicAssistantPrefillWhenThinking,
@@ -25,7 +26,10 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 
 function createEventStream(events: unknown[]): ReturnType<StreamFn> {
   const output = createAssistantMessageEventStream();
-  const stream = output as unknown as { push(event: unknown): void; end(): void };
+  const stream = output as unknown as {
+    push(event: unknown): void;
+    end(): void;
+  };
   queueMicrotask(() => {
     for (const event of events) {
       stream.push(event);
@@ -37,15 +41,12 @@ function createEventStream(events: unknown[]): ReturnType<StreamFn> {
 
 function createControlledPlainTextToolCallCompatStream() {
   const source = createAssistantMessageEventStream();
-  const baseStream: StreamFn = () => source as ReturnType<StreamFn>;
-  const wrapped = createPlainTextToolCallCompatWrapper(baseStream);
-  const stream = wrapped(
-    { provider: "test", api: "openai-completions", id: "test-model" } as never,
+  const stream = wrapPlainTextToolCallStream(
+    source as ReturnType<StreamFn>,
     {
       messages: [],
       tools: [{ name: "read", description: "Read", parameters: { type: "object" } }],
     } as never,
-    {},
   );
   return { source, stream };
 }
@@ -113,7 +114,12 @@ describe("isOpenAICompatibleThinkingEnabled", () => {
   });
 
   it("defaults to enabled for missing or non-string values", () => {
-    expect(isOpenAICompatibleThinkingEnabled({ thinkingLevel: undefined, options: {} })).toBe(true);
+    expect(
+      isOpenAICompatibleThinkingEnabled({
+        thinkingLevel: undefined,
+        options: {},
+      }),
+    ).toBe(true);
     expect(
       isOpenAICompatibleThinkingEnabled({
         thinkingLevel: "off",
@@ -131,7 +137,11 @@ describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
         { role: "assistant", tool_calls: [{ id: "call_1", name: "read" }] },
         { role: "tool", content: "ok" },
         { role: "assistant", content: "done" },
-        { role: "assistant", content: "kept", reasoning_content: "native reasoning" },
+        {
+          role: "assistant",
+          content: "kept",
+          reasoning_content: "native reasoning",
+        },
       ],
     };
     const baseStreamFn: StreamFn = (_model, _context, options) => {
@@ -198,19 +208,20 @@ describe("createPayloadPatchStreamWrapper", () => {
   });
 });
 
-describe("createPlainTextToolCallCompatWrapper", () => {
-  it("promotes standalone text tool calls into tool-call stream events", async () => {
+describe("wrapPlainTextToolCallStream", () => {
+  it("compat wrapper delegates without promoting text tool calls", async () => {
+    const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>
       createEventStream([
         { type: "text_start", content: "" },
-        { type: "text_delta", delta: '[tool:read] {"path":"/tmp/file.txt"}' },
+        { type: "text_delta", delta: rawToolText },
         { type: "text_end" },
         {
           type: "done",
           reason: "stop",
           message: {
             role: "assistant",
-            content: '[tool:read] {"path":"/tmp/file.txt"}',
+            content: rawToolText,
           },
         },
       ]);
@@ -226,11 +237,51 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     }
 
     expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "text_start",
+      "text_delta",
+      "text_end",
+      "done",
+    ]);
+    expect((events.at(-1) as { message?: { content?: unknown } }).message?.content).toBe(
+      rawToolText,
+    );
+  });
+
+  it("promotes standalone text tool calls into tool-call stream events", async () => {
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        { type: "text_start", content: "" },
+        { type: "text_delta", delta: '[tool:read] {"path":"/tmp/file.txt"}' },
+        { type: "text_end" },
+        {
+          type: "done",
+          reason: "stop",
+          message: {
+            role: "assistant",
+            content: '[tool:read] {"path":"/tmp/file.txt"}',
+          },
+        },
+      ]);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
       "toolcall_start",
       "toolcall_delta",
       "done",
     ]);
-    const done = events.at(-1) as { message?: { content?: unknown; stopReason?: unknown } };
+    const done = events.at(-1) as {
+      message?: { content?: unknown; stopReason?: unknown };
+    };
     expect(done.message?.stopReason).toBe("toolUse");
     expect(done.message?.content).toEqual([
       expect.objectContaining({
@@ -255,7 +306,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -271,7 +323,10 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       "toolcall_delta",
       "done",
     ]);
-    const done = events.at(-1) as { reason?: unknown; message?: { stopReason?: unknown } };
+    const done = events.at(-1) as {
+      reason?: unknown;
+      message?: { stopReason?: unknown };
+    };
     expect(done.reason).toBe("toolUse");
     expect(done.message?.stopReason).toBe("toolUse");
   });
@@ -289,7 +344,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -464,7 +520,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const stream = await resolveStream(
       wrapped({} as never, { tools: [{ name: "read" }] } as never, {}),
     );
@@ -522,7 +579,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const stream = await resolveStream(
       wrapped({} as never, { tools: [{ name: "read" }] } as never, {}),
     );
@@ -578,7 +636,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const stream = await resolveStream(
       wrapped({} as never, { tools: [{ name: "read" }] } as never, {}),
     );
@@ -621,7 +680,12 @@ describe("createPlainTextToolCallCompatWrapper", () => {
         reason: "stop",
         message: {
           role: "assistant",
-          content: [{ type: "text", text: '[read]\r{"path":"src/index.ts"}\r[END_TOOL_REQUEST]' }],
+          content: [
+            {
+              type: "text",
+              text: '[read]\r{"path":"src/index.ts"}\r[END_TOOL_REQUEST]',
+            },
+          ],
           stopReason: "stop",
         },
       } as never);
@@ -708,7 +772,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -758,7 +823,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -799,7 +865,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -858,7 +925,11 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       reason: "length",
       message: { role: "assistant", content: [], stopReason: "length" },
     });
-    expect(result).toMatchObject({ role: "assistant", content: [], stopReason: "length" });
+    expect(result).toMatchObject({
+      role: "assistant",
+      content: [],
+      stopReason: "length",
+    });
     expect(JSON.stringify(events)).not.toContain("[tool:read]");
     expect(JSON.stringify(result)).not.toContain("[tool:read]");
   });
@@ -880,7 +951,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -924,7 +996,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -964,7 +1037,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1005,7 +1079,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1042,7 +1117,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1082,7 +1158,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1122,7 +1199,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1163,7 +1241,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1195,13 +1274,17 @@ describe("createPlainTextToolCallCompatWrapper", () => {
               { type: "text", text: intro },
               { type: "text", text: "[tool:read]\n<parameter=path>" },
               { type: "text", text: "x".repeat(256_001) },
-              { type: "text", text: ["</parameter>", "</function>"].join("\n") },
+              {
+                type: "text",
+                text: ["</parameter>", "</function>"].join("\n"),
+              },
             ],
             stopReason: "stop",
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1239,7 +1322,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1276,13 +1360,17 @@ describe("createPlainTextToolCallCompatWrapper", () => {
             content: [
               { type: "text", text: incompleteOverCapTool },
               { type: "text", text: completeTool },
-              { type: "text", text: "Visible text after the tool-looking blocks." },
+              {
+                type: "text",
+                text: "Visible text after the tool-looking blocks.",
+              },
             ],
             stopReason: "stop",
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1326,7 +1414,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1362,7 +1451,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1395,7 +1485,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1430,7 +1521,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1476,7 +1568,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1518,7 +1611,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1555,7 +1649,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1602,7 +1697,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1644,7 +1740,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1685,7 +1782,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1721,7 +1819,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1765,7 +1864,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1811,7 +1911,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -1853,7 +1954,8 @@ describe("createPlainTextToolCallCompatWrapper", () => {
           },
         },
       ]);
-    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const wrapped: StreamFn = (model, context, options) =>
+      wrapPlainTextToolCallStream(baseStreamFn(model, context, options), context);
     const events: unknown[] = [];
 
     for await (const event of wrapped(
@@ -2005,7 +2107,10 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       } as never);
 
       const event = await nextEvent(iterator, "normal final prose");
-      expect(event).toMatchObject({ type: "text_delta", delta: "final answer starts here" });
+      expect(event).toMatchObject({
+        type: "text_delta",
+        delta: "final answer starts here",
+      });
     } finally {
       source.push({ type: "done", reason: "stop", message: {} } as never);
       source.end();
@@ -2034,14 +2139,20 @@ describe("stripTrailingAnthropicAssistantPrefillWhenThinking", () => {
       thinking: { type: "adaptive" },
       messages: [
         { role: "user", content: "Read a file." },
-        { role: "assistant", content: [{ type: "tool_use", id: "toolu_1", name: "Read" }] },
+        {
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_1", name: "Read" }],
+        },
       ],
     };
     const openAiPayload = {
       thinking: { type: "adaptive" },
       messages: [
         { role: "user", content: "Read a file." },
-        { role: "assistant", content: [{ type: "toolCall", id: "call_1", name: "Read" }] },
+        {
+          role: "assistant",
+          content: [{ type: "toolCall", id: "call_1", name: "Read" }],
+        },
       ],
     };
     const toolCallsPayload = {

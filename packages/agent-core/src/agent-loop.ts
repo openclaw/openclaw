@@ -228,6 +228,7 @@ async function runLoop(
   // Outer loop: continues when queued follow-up messages arrive after agent would stop
   while (true) {
     let hasMoreToolCalls = true;
+    const invalidToolCallCounts = new Map<string, number>();
 
     // Inner loop: process tool calls and steering messages
     while (hasMoreToolCalls || pendingMessages.length > 0) {
@@ -278,7 +279,19 @@ async function runLoop(
           emit,
         );
         toolResults.push(...executedToolBatch.messages);
-        hasMoreToolCalls = !executedToolBatch.terminate;
+        let poisonTerminate = false;
+        for (const result of executedToolBatch.messages) {
+          if (result.isError !== true) {
+            continue;
+          }
+          const signature = `${result.toolName}:${JSON.stringify(result.content ?? [])}`;
+          const count = (invalidToolCallCounts.get(signature) ?? 0) + 1;
+          invalidToolCallCounts.set(signature, count);
+          if (count >= 2) {
+            poisonTerminate = true;
+          }
+        }
+        hasMoreToolCalls = !executedToolBatch.terminate && !poisonTerminate;
 
         for (const result of toolResults) {
           currentContext.messages.push(result);
@@ -775,6 +788,9 @@ async function finalizeExecutedToolCall(
 ): Promise<FinalizedToolCallOutcome> {
   let result = executed.result;
   let isError = executed.isError;
+  if (result.details && typeof result.details === "object" && "isError" in result.details) {
+    isError = (result.details as { isError?: unknown }).isError === true;
+  }
 
   if (config.afterToolCall) {
     try {
