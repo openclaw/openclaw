@@ -69,7 +69,7 @@
           },
           {
             "id": "claude-haiku-4-5-20251001",
-            "name": "Claude Haiku 4.5",
+            "name": "Claude Haiku 4.5 (Claude CLI)",
             "reasoning": true,
             "input": [
               "text",
