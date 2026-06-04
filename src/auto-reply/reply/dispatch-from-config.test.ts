@@ -8053,7 +8053,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("uses Codex direct source delivery defaults before a session entry exists", async () => {
+  it("recovers Telegram direct final replies when Codex message-tool delivery misses the message tool", async () => {
     setNoAbort();
     registerAgentHarness({
       id: "codex",
@@ -8066,7 +8066,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      return { text: "private first reply" } satisfies ReplyPayload;
+      return { text: "visible recovered reply" } satisfies ReplyPayload;
     });
 
     const result = await dispatchReplyFromConfig({
@@ -8083,8 +8083,8 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(result.queuedFinal).toBe(false);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(result.queuedFinal).toBe(true);
+    expect(firstFinalReplyPayload(dispatcher)?.text).toBe("visible recovered reply");
   });
 
   it("uses channel model overrides before Codex first-turn direct source delivery defaults", async () => {

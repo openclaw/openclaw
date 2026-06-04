@@ -2713,11 +2713,18 @@ export async function dispatchReplyFromConfig(
     // Uses the same helper as the source-reply visibility policy so the bypass
     // and the policy stay aligned.
     const explicitCommandTurnCtx = isExplicitSourceReplyCommand(ctx, cfg);
+    const isTelegramDirectMessageToolOnlyReply =
+      sourceReplyDeliveryMode === "message_tool_only" &&
+      params.replyOptions?.sourceReplyDeliveryMode !== "message_tool_only" &&
+      chatType === "direct" &&
+      ctx.InboundEventKind !== "room_event" &&
+      normalizeMessageChannel(ctx.Provider ?? ctx.Surface) === "telegram";
     const shouldDeliverDespiteSourceReplySuppression = (reply: ReplyPayload) =>
       suppressAutomaticSourceDelivery &&
       !sendPolicyDenied &&
-      getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
-      (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx);
+      ((getReplyPayloadMetadata(reply)?.deliverDespiteSourceReplySuppression === true &&
+        (ctx.InboundEventKind !== "room_event" || explicitCommandTurnCtx)) ||
+        isTelegramDirectMessageToolOnlyReply);
     for (const reply of replies) {
       throwIfDispatchOperationAborted();
       // Suppress reasoning payloads from channel delivery — channels using this

@@ -1770,6 +1770,8 @@ export async function runReplyAgent(params: {
       messagingToolSentTexts: runResult.messagingToolSentTexts,
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
+      suppressFinalPayloadsAfterMessagingToolSend:
+        followupRun.run.sourceReplyDeliveryMode === "message_tool_only",
       originatingChannel: sessionCtx.OriginatingChannel,
       originatingTo: resolveOriginMessageTo({
         originatingTo: sessionCtx.OriginatingTo,

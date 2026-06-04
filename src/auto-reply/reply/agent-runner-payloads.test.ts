@@ -289,6 +289,59 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(replyPayloads).toHaveLength(0);
   });
 
+  it("suppresses non-error final payloads after a same-route messaging tool send when requested", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [{ text: "텔레그램으로 보냈어요." }, { text: "실패 알림", isError: true }],
+      messageProvider: "telegram",
+      originatingTo: "telegram:123",
+      messagingToolSentTexts: ["형, 여기 있어."],
+      messagingToolSentTargets: [
+        { tool: "message", provider: "telegram", to: "telegram:123", text: "형, 여기 있어." },
+      ],
+      suppressFinalPayloadsAfterMessagingToolSend: true,
+    });
+
+    expect(replyPayloads).toHaveLength(1);
+    expect(replyPayloads[0]?.text).toBe("실패 알림");
+  });
+
+  it("suppresses recovered Telegram direct finals after a default source message tool send", async () => {
+    const { replyPayloads } = await buildReplyPayloads({
+      ...baseParams,
+      payloads: [
+        {
+          text: [
+            "응 형, 가능해.",
+            "",
+            "엑셀 파일 보내주면 먼저 구조부터 보고 핵심 인사이트로 요약해줄게.",
+          ].join("\n"),
+        },
+      ],
+      messageProvider: "telegram",
+      originatingTo: "telegram:8180190219",
+      messagingToolSentTexts: [
+        [
+          "응 형, 가능해.",
+          "",
+          "엑셀 파일 보내주면 내가 할 수 있는 건:",
+          "- 시트별 구조 파악",
+          "- 매출/비용/마진/수수료 요약",
+        ].join("\n"),
+      ],
+      messagingToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          text: "응 형, 가능해.\n\n엑셀 파일 보내주면 내가 할 수 있는 건:",
+        },
+      ],
+      suppressFinalPayloadsAfterMessagingToolSend: true,
+    });
+
+    expect(replyPayloads).toHaveLength(0);
+  });
+
   it("dedupes final media only against message-tool media sent to the same route", async () => {
     const { replyPayloads } = await buildReplyPayloads({
       ...baseParams,

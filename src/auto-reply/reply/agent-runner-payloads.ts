@@ -33,6 +33,31 @@ function loadReplyPayloadsDedupeRuntime() {
   return replyPayloadsDedupeRuntimeLoader.load();
 }
 
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function normalizeProviderForSourceSend(value: unknown): string | undefined {
+  return normalizeOptionalString(value)?.toLowerCase();
+}
+
+function hasDefaultTelegramSourceMessageSend(params: {
+  messageProvider?: string;
+  messagingToolSentTargets: MessagingToolSend[];
+}): boolean {
+  if (params.messageProvider !== "telegram") {
+    return false;
+  }
+  return params.messagingToolSentTargets.some((target) => {
+    const provider = normalizeProviderForSourceSend(target.provider) ?? params.messageProvider;
+    return (
+      provider === "telegram" &&
+      target.tool === "message" &&
+      normalizeOptionalString(target.to) === undefined
+    );
+  });
+}
+
 async function normalizeReplyPayloadMedia(params: {
   payload: ReplyPayload;
   normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
@@ -172,6 +197,7 @@ export async function buildReplyPayloads(params: {
   messagingToolSentTexts?: string[];
   messagingToolSentMediaUrls?: string[];
   messagingToolSentTargets?: MessagingToolSend[];
+  suppressFinalPayloadsAfterMessagingToolSend?: boolean;
   originatingChannel?: OriginatingChannelType;
   originatingTo?: string;
   accountId?: string;
@@ -260,6 +286,10 @@ export async function buildReplyPayloads(params: {
     !params.blockReplyPipeline?.isAborted();
   const messagingToolSentTexts = params.messagingToolSentTexts ?? [];
   const messagingToolSentTargets = params.messagingToolSentTargets ?? [];
+  const replyMessageProvider = resolveOriginMessageProvider({
+    originatingChannel: params.originatingChannel,
+    provider: params.messageProvider,
+  });
   const shouldCheckMessagingToolDedupe =
     messagingToolSentTexts.length > 0 ||
     (params.messagingToolSentMediaUrls?.length ?? 0) > 0 ||
@@ -268,10 +298,7 @@ export async function buildReplyPayloads(params: {
     ? await loadReplyPayloadsDedupeRuntime()
     : null;
   const messagingToolPayloadDedupe = dedupeRuntime?.resolveMessagingToolPayloadDedupe({
-    messageProvider: resolveOriginMessageProvider({
-      originatingChannel: params.originatingChannel,
-      provider: params.messageProvider,
-    }),
+    messageProvider: replyMessageProvider,
     messagingToolSentTargets,
     originatingTo: resolveOriginMessageTo({
       originatingTo: params.originatingTo,
@@ -327,6 +354,18 @@ export async function buildReplyPayloads(params: {
         sentTexts: sentTextsForDedupe,
       })
     : mediaFilteredPayloads;
+  const messagingToolSentToSource =
+    params.suppressFinalPayloadsAfterMessagingToolSend === true &&
+    shouldCheckMessagingToolDedupe &&
+    (messagingToolPayloadDedupe.matchingRoute ||
+      messagingToolSentTargets.length === 0 ||
+      hasDefaultTelegramSourceMessageSend({
+        messageProvider: replyMessageProvider,
+        messagingToolSentTargets,
+      }));
+  const sourceVisiblePayloads = messagingToolSentToSource
+    ? dedupedPayloads.filter((payload) => payload.isError === true || payload.isFallbackNotice)
+    : dedupedPayloads;
   const isDirectlySentBlockPayload = (payload: ReplyPayload) =>
     Boolean(params.directlySentBlockKeys?.has(createBlockReplyContentKey(payload)));
   const preserveUnsentMediaAfterBlockStream = (payload: ReplyPayload): ReplyPayload | null => {
@@ -358,7 +397,7 @@ export async function buildReplyPayloads(params: {
   const contentSuppressedPayloads = shouldDropFinalPayloads
     ? (() => {
         const preserved: ReplyPayload[] = [];
-        for (const payload of dedupedPayloads) {
+        for (const payload of sourceVisiblePayloads) {
           const next = preserveUnsentMediaAfterBlockStream(payload);
           if (next) {
             preserved.push(next);
@@ -369,7 +408,7 @@ export async function buildReplyPayloads(params: {
     : params.blockStreamingEnabled
       ? (() => {
           const unsent: ReplyPayload[] = [];
-          for (const payload of dedupedPayloads) {
+          for (const payload of sourceVisiblePayloads) {
             if (
               !params.blockReplyPipeline?.hasSentPayload(payload) &&
               !isDirectlySentBlockPayload(payload)
@@ -382,14 +421,14 @@ export async function buildReplyPayloads(params: {
       : params.directlySentBlockKeys?.size
         ? (() => {
             const unsent: ReplyPayload[] = [];
-            for (const payload of dedupedPayloads) {
+            for (const payload of sourceVisiblePayloads) {
               if (!params.directlySentBlockKeys.has(createBlockReplyContentKey(payload))) {
                 unsent.push(payload);
               }
             }
             return unsent;
           })()
-        : dedupedPayloads;
+        : sourceVisiblePayloads;
   const blockSentMediaUrls = params.blockStreamingEnabled
     ? await normalizeSentMediaUrlsForDedupe({
         sentMediaUrls: params.blockReplyPipeline?.getSentMediaUrls() ?? [],
