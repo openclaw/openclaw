@@ -441,6 +441,42 @@ async function streamAssistantResponse(
   return finalMessage;
 }
 
+function readAgentToolName(tool: AgentTool): string | undefined {
+  try {
+    return typeof tool.name === "string" ? tool.name : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function findAgentToolByName(
+  tools: readonly AgentTool[] | undefined,
+  name: string,
+): AgentTool | undefined {
+  for (const tool of tools ?? []) {
+    if (readAgentToolName(tool) === name) {
+      return tool;
+    }
+  }
+  return undefined;
+}
+
+function readAgentToolExecutionMode(
+  tool: AgentTool | undefined,
+): AgentTool["executionMode"] | undefined {
+  if (!tool) {
+    return undefined;
+  }
+  try {
+    const mode = tool.executionMode;
+    return mode === "sequential" || mode === "parallel" ? mode : undefined;
+  } catch {
+    // Broken scheduling metadata should not abort the whole assistant turn.
+    // Run the selected tool conservatively one-at-a-time.
+    return "sequential";
+  }
+}
+
 /**
  * Execute tool calls from an assistant message.
  */
@@ -453,7 +489,9 @@ async function executeToolCalls(
 ): Promise<ExecutedToolCallBatch> {
   const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
   const hasSequentialToolCall = toolCalls.some(
-    (tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
+    (tc) =>
+      readAgentToolExecutionMode(findAgentToolByName(currentContext.tools, tc.name)) ===
+      "sequential",
   );
   if (config.toolExecution === "sequential" || hasSequentialToolCall) {
     return executeToolCallsSequential(
@@ -669,7 +707,7 @@ async function prepareToolCall(
   config: AgentLoopConfig,
   signal: AbortSignal | undefined,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
-  const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+  const tool = findAgentToolByName(currentContext.tools, toolCall.name);
   if (!tool) {
     return {
       kind: "immediate",

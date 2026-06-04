@@ -24,6 +24,38 @@ function isJsonSchemaObject(value: unknown): value is JsonSchemaObject {
   return isRecord(value);
 }
 
+function formatErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function readToolName(tool: Tool, fallback?: string): string {
+  try {
+    return typeof tool.name === "string" && tool.name ? tool.name : (fallback ?? "<unknown>");
+  } catch {
+    return fallback ?? "<unknown>";
+  }
+}
+
+function findToolByName(tools: readonly Tool[], name: string): Tool | undefined {
+  for (const tool of tools) {
+    if (readToolName(tool) === name) {
+      return tool;
+    }
+  }
+  return undefined;
+}
+
+function readToolParameters(tool: Tool, toolName: string): Tool["parameters"] {
+  try {
+    return tool.parameters;
+  } catch (error) {
+    throw new Error(
+      `Validation failed for tool "${toolName}": unable to read parameter schema: ${formatErrorMessage(error)}`,
+      { cause: error },
+    );
+  }
+}
+
 function hasTypeBoxMetadata(schema: unknown): boolean {
   return isRecord(schema) && Object.getOwnPropertySymbols(schema).includes(TYPEBOX_KIND);
 }
@@ -283,7 +315,7 @@ function formatValidationPath(error: TLocalizedValidationError): string {
 
 /** Finds the target tool and validates/coerces a model-emitted tool call. */
 export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
-  const tool = tools.find((t) => t.name === toolCall.name);
+  const tool = findToolByName(tools, toolCall.name);
   if (!tool) {
     throw new Error(`Tool "${toolCall.name}" not found`);
   }
@@ -292,24 +324,36 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
 
 /** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
+  const toolName = readToolName(tool, toolCall.name);
+  const parameters = readToolParameters(tool, toolName);
   const args = structuredClone(toolCall.arguments);
-  Value.Convert(tool.parameters, args);
+  let validator: ReturnType<typeof Compile>;
 
-  const validator = getValidator(tool.parameters);
-  if (!hasTypeBoxMetadata(tool.parameters) && isJsonSchemaObject(tool.parameters)) {
-    // TypeBox Value.Convert is intentionally conservative for plain JSON schemas;
-    // mirror the provider-facing coercions so model-emitted string numbers validate.
-    const coerced = coerceWithJsonSchema(args, tool.parameters);
-    if (coerced !== args) {
-      if (isRecord(args) && isRecord(coerced)) {
-        for (const key of Object.keys(args)) {
-          delete args[key];
+  try {
+    Value.Convert(parameters, args);
+    validator = getValidator(parameters);
+    if (!hasTypeBoxMetadata(parameters) && isJsonSchemaObject(parameters)) {
+      // TypeBox Value.Convert is intentionally conservative for plain JSON schemas;
+      // mirror the provider-facing coercions so model-emitted string numbers validate.
+      const coerced = coerceWithJsonSchema(args, parameters);
+      if (coerced !== args) {
+        if (isRecord(args) && isRecord(coerced)) {
+          for (const key of Object.keys(args)) {
+            delete args[key];
+          }
+          Object.assign(args, coerced);
+        } else {
+          return validator.Check(coerced) ? coerced : args;
         }
-        Object.assign(args, coerced);
-      } else {
-        return validator.Check(coerced) ? coerced : args;
       }
     }
+  } catch (error) {
+    if (error instanceof Error && error.message.startsWith(`Validation failed for tool "`)) {
+      throw error;
+    }
+    throw new Error(`Validation failed for tool "${toolName}": ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
   }
 
   if (validator.Check(args)) {
@@ -323,6 +367,6 @@ export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
       .join("\n") || "Unknown validation error";
 
   throw new Error(
-    `Validation failed for tool "${toolCall.name}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`,
+    `Validation failed for tool "${toolName}":\n${errors}\n\nReceived arguments:\n${JSON.stringify(toolCall.arguments, null, 2)}`,
   );
 }
