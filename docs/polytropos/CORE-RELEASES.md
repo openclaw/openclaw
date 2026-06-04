@@ -35,17 +35,24 @@ Core releases are staged by the release script:
 
 - [`scripts/polytropos-release.mjs`](../../scripts/polytropos-release.mjs)
 
-Usage (tag-driven CI release staging):
+Usage (canonical):
 
 ```bash
-node scripts/polytropos-release.mjs release --tgz /path/to/openclaw-<ver>.tgz
+node scripts/polytropos-release.mjs release
+```
+
+Optional overrides (rare):
+
+```bash
+node scripts/polytropos-release.mjs release --tag v2026.4.1+poly.24
+node scripts/polytropos-release.mjs release --workflow polytropos-build-pack.yml
 ```
 
 What staging does:
 
 - requires the current branch to match `release/YYYY.M.D`
 - creates and pushes the next `v<version>+poly.<N> (e.g. v2026.4.1+poly.21)` tag from that release branch
-- waits for the GitHub Actions release workflow triggered by the tag
+- waits for the default GitHub Actions release workflow (`polytropos-build-pack.yml`) triggered by the tag
 - downloads the built artifact from Actions
 - derives base upstream version `v<ver>` from the nearest reachable tag
 - computes next global build number `poly.N` and creates tag `v<version>+poly.<N> (e.g. v2026.4.1+poly.21)`
