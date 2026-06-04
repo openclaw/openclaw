@@ -472,6 +472,7 @@ async function cleanupStaleSessionLocks(params: {
         sessionsDir,
         config: params.cfg,
         removeStale: true,
+        startupMode: true,
         log: { warn: (message) => params.log.warn(message) },
       });
       if (result.cleaned.length > 0) {

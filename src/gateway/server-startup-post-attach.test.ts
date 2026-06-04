@@ -920,6 +920,9 @@ describe("startGatewayPostAttachRuntime", () => {
       markCrashedMainSessionsFromRemainingLocks: markCrashedMainSessionsFromRemainingLocks as never,
     });
 
+    expect(cleanStaleLockFiles).toHaveBeenCalledWith(
+      expect.objectContaining({ startupMode: true }),
+    );
     expect(markRestartAbortedMainSessionsFromLocks).not.toHaveBeenCalled();
     expect(markCrashedMainSessionsFromRemainingLocks).toHaveBeenCalledWith({
       sessionsDir: "/sessions/x",

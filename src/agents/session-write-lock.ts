@@ -792,6 +792,7 @@ export async function cleanStaleLockFiles(params: {
   staleMs?: number;
   removeStale?: boolean;
   nowMs?: number;
+  startupMode?: boolean;
   readOwnerProcessArgs?: SessionLockOwnerProcessArgsReader;
   log?: {
     warn?: (message: string) => void;
@@ -876,12 +877,14 @@ export async function cleanStaleLockFiles(params: {
       !lockInfo.pidAlive &&
       lockInfo.stale &&
       !lockInfo.staleReasons.some((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason)) &&
-      !lockInspectionNeedsMtimeStaleFallback(lockInfo)
+      (params.startupMode || !lockInspectionNeedsMtimeStaleFallback(lockInfo))
     ) {
-      // Stale lock with dead owner and no report-only or orphan-grace reasons:
-      // cleanup chose not to remove it (removeStale=false or edge case).
-      // Safe to mark for recovery since owner is provably dead and the lock
-      // is not protected by the orphan-payload grace window.
+      // Stale lock with dead/absent owner and no report-only reasons.
+      // In startupMode, include orphan-payload locks within the grace window
+      // because no live owner can be writing metadata before Gateway accepts
+      // connections — they are crash residue.  Outside startupMode, exclude
+      // grace-window-protected orphan locks because a live owner may still be
+      // writing the payload.
       safeToRecover.push(lockInfo);
     }
 
