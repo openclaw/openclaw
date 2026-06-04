@@ -1,6 +1,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fs.writeFileSync(tempFile, "temp");
+    fs.symlinkSync(tempFile, tempLink, "file");
+    fs.unlinkSync(tempLink);
+    fs.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -175,7 +189,7 @@ describe("LINE accounts", () => {
       expect(account.tokenSource).toBe("file");
     });
 
-    it.runIf(process.platform !== "win32")("rejects symlinked token and secret files", () => {
+    it.skipIf(!canCreateFileSymlinks)("rejects symlinked token and secret files", () => {
       const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-account-"));
       tempDirs.push(dir);
       const tokenFile = path.join(dir, "token.txt");
@@ -184,8 +198,8 @@ describe("LINE accounts", () => {
       const secretLink = path.join(dir, "secret-link.txt");
       fs.writeFileSync(tokenFile, "file-token\n", "utf8");
       fs.writeFileSync(secretFile, "file-secret\n", "utf8");
-      fs.symlinkSync(tokenFile, tokenLink);
-      fs.symlinkSync(secretFile, secretLink);
+      fs.symlinkSync(tokenFile, tokenLink, "file");
+      fs.symlinkSync(secretFile, secretLink, "file");
 
       const cfg: OpenClawConfig = {
         channels: {
