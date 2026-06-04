@@ -72,7 +72,7 @@ describe("config backup rotation", () => {
   });
 
   // chmod is a no-op on Windows — 0o600 can never be observed there.
-  it("hardenBackupPermissions sets 0o600 on all backup files", async () => {
+  it.skipIf(IS_WINDOWS)("hardenBackupPermissions sets 0o600 on all backup files", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
 
@@ -87,6 +87,20 @@ describe("config backup rotation", () => {
 
       expectPosixMode(bakStat.mode, 0o600);
       expectPosixMode(bak1Stat.mode, 0o600);
+    });
+  });
+
+  it.runIf(IS_WINDOWS)("hardenBackupPermissions does not throw and preserves backup files on Windows", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+
+      await fs.writeFile(`${configPath}.bak`, "secret");
+      await fs.writeFile(`${configPath}.bak.1`, "secret");
+
+      await hardenBackupPermissions(configPath, fs);
+
+      await expectRegularFile(`${configPath}.bak`);
+      await expectRegularFile(`${configPath}.bak.1`);
     });
   });
 
