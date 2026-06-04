@@ -66,6 +66,12 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
     throw new Error(sandboxBlock);
   }
   const timeoutMs = params.timeoutMs ?? 60_000;
+  const abortCtrl = new AbortController();
+  const timer = setTimeout(() => {
+    abortCtrl.abort(new Error(`codex app-server ${params.method} timed out`));
+  }, timeoutMs);
+  timer.unref?.();
+
   return await withTimeout(
     (async () => {
       const client = await (
@@ -78,8 +84,12 @@ export async function requestCodexAppServerJson<T = JsonValue | undefined>(param
         config: params.config,
       });
       try {
-        return await client.request<T>(params.method, params.requestParams, { timeoutMs });
+        return await client.request<T>(params.method, params.requestParams, {
+          timeoutMs,
+          signal: abortCtrl.signal,
+        });
       } finally {
+        clearTimeout(timer);
         if (params.isolated) {
           // Wait for the child to actually exit (with a SIGKILL fallback) so
           // the parent process doesn't hang on an orphaned codex app-server.

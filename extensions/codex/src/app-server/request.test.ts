@@ -64,7 +64,11 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       }),
     ).resolves.toEqual({ ok: true });
 
-    expect(request).toHaveBeenCalledWith("thread/list", { limit: 10 }, { timeoutMs: 60_000 });
+    expect(request).toHaveBeenCalledWith(
+      "thread/list",
+      { limit: 10 },
+      { timeoutMs: 60_000, signal: expect.any(AbortSignal) },
+    );
   });
 
   it("fails closed for config-level exec host=node even without a session key", async () => {
@@ -128,7 +132,54 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       }),
     ).resolves.toEqual({ thread: { id: "thread-1" }, model: "gpt-5.5" });
 
-    expect(request).toHaveBeenCalledWith("thread/start", params, { timeoutMs: 60_000 });
+    expect(request).toHaveBeenCalledWith(
+      "thread/start",
+      params,
+      { timeoutMs: 60_000, signal: expect.any(AbortSignal) },
+    );
+  });
+});
+
+describe("requestCodexAppServerJson timeout", () => {
+  beforeEach(() => {
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockReset();
+    sharedClientMocks.getSharedCodexAppServerClient.mockReset();
+  });
+
+  it("calls closeAndWait when client.request hangs and times out in an isolated request", async () => {
+    const request = vi.fn((_method, _params, options?: { signal?: AbortSignal }) => {
+      return new Promise((_resolve, reject) => {
+        if (options?.signal?.aborted) {
+          reject(options.signal.reason ?? new Error("aborted"));
+          return;
+        }
+        options?.signal?.addEventListener("abort", () => {
+          reject(options.signal?.reason ?? new Error("aborted"));
+        });
+      });
+    });
+    const closeAndWait = vi.fn(async () => undefined);
+    const client = { request, closeAndWait };
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
+
+    await expect(
+      requestCodexAppServerJson({
+        method: "item/tool/call",
+        requestParams: {},
+        timeoutMs: 10,
+        isolated: true,
+      }),
+    ).rejects.toThrow("codex app-server item/tool/call timed out");
+
+    expect(closeAndWait).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledWith(
+      "item/tool/call",
+      {},
+      {
+        timeoutMs: 10,
+        signal: expect.any(AbortSignal),
+      },
+    );
   });
 
   it("blocks thread starts with sandbox environments when exec host=node is active", async () => {
