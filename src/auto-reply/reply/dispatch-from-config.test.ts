@@ -7031,8 +7031,10 @@ describe("before_dispatch hook", () => {
     const dispatcher = createDispatcher();
     const ctx = createHookCtx({
       ReplyToId: "discord-reply-123",
+      ReplyToIdFull: "discord:channel-1:discord-reply-123",
       ReplyToBody: "the quoted parent message",
       ReplyToSender: "Ada",
+      ReplyToIsQuote: true,
     });
 
     await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher });
@@ -7044,25 +7046,33 @@ describe("before_dispatch hook", () => {
       | [
           {
             replyToId?: unknown;
+            replyToIdFull?: unknown;
             replyToBody?: unknown;
             replyToSender?: unknown;
+            replyToIsQuote?: unknown;
           },
           {
             replyToId?: unknown;
+            replyToIdFull?: unknown;
             replyToBody?: unknown;
             replyToSender?: unknown;
+            replyToIsQuote?: unknown;
           },
         ]
       | undefined;
     expect(beforeDispatchCall?.[0]).toMatchObject({
       replyToId: "discord-reply-123",
+      replyToIdFull: "discord:channel-1:discord-reply-123",
       replyToBody: "the quoted parent message",
       replyToSender: "Ada",
+      replyToIsQuote: true,
     });
     expect(beforeDispatchCall?.[1]).toMatchObject({
       replyToId: "discord-reply-123",
+      replyToIdFull: "discord:channel-1:discord-reply-123",
       replyToBody: "the quoted parent message",
       replyToSender: "Ada",
+      replyToIsQuote: true,
     });
   });
 

@@ -420,8 +420,10 @@ export type PluginHookBeforeDispatchEvent = {
   sessionKey?: string;
   senderId?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  replyToIsQuote?: boolean;
   isGroup?: boolean;
   timestamp?: number;
 };
@@ -433,8 +435,10 @@ export type PluginHookBeforeDispatchContext = {
   sessionKey?: string;
   senderId?: string;
   replyToId?: string;
+  replyToIdFull?: string;
   replyToBody?: string;
   replyToSender?: string;
+  replyToIsQuote?: boolean;
 };
 
 export type PluginHookBeforeDispatchResult = {
