@@ -240,7 +240,19 @@ async function assertOpenAISdkStreamContentType(params: {
   localServiceLease?: ProviderLocalServiceLease;
 }): Promise<void> {
   const contentType = params.response.headers.get("content-type") ?? "";
-  if (!params.response.ok || !params.response.body || isOpenAISdkStreamContentType(contentType)) {
+  // The ChatGPT/Codex Responses backend (api=openai-chatgpt-responses) streams valid SSE
+  // but omits the content-type header entirely (Cloudflare + openai-proxy-wasm). Treat a
+  // missing content-type on a successful Responses stream as SSE instead of rejecting it.
+  // Scoped to empty (not wrong) content-type on this one api, so HTML/error envelopes -
+  // which carry their own content-type - are still rejected. (openclaw/openclaw#90382)
+  const allowMissingContentTypeForResponses =
+    contentType === "" && params.model.api === "openai-chatgpt-responses";
+  if (
+    !params.response.ok ||
+    !params.response.body ||
+    isOpenAISdkStreamContentType(contentType) ||
+    allowMissingContentTypeForResponses
+  ) {
     return;
   }
   const body = await readResponseTextLimited(params.response).catch(() => "");
