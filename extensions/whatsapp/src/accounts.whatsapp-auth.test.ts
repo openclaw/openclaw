@@ -1,6 +1,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fs.writeFileSync(tempFile, "temp");
+    fs.symlinkSync(tempFile, tempLink, "file");
+    fs.unlinkSync(tempLink);
+    fs.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hasAnyWhatsAppAuth, listWhatsAppAuthDirs, resolveWhatsAppAuthDir } from "./accounts.js";
@@ -37,11 +51,11 @@ describe("hasAnyWhatsAppAuth", () => {
     expect(hasAnyWhatsAppAuth({})).toBe(true);
   });
 
-  it.runIf(process.platform !== "win32")("ignores symlinked legacy creds", () => {
+  it.skipIf(!canCreateFileSymlinks)("ignores symlinked legacy creds", () => {
     const targetPath = path.join(tempOauthDir ?? "", "target-creds.json");
     const credsPath = path.join(tempOauthDir ?? "", "creds.json");
     fs.writeFileSync(targetPath, JSON.stringify({ me: {} }));
-    fs.symlinkSync(targetPath, credsPath);
+    fs.symlinkSync(targetPath, credsPath, "file");
 
     expect(hasAnyWhatsAppAuth({})).toBe(false);
     expect(resolveWhatsAppAuthDir({ cfg: {}, accountId: "default" })).toEqual({
