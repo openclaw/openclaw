@@ -117,6 +117,17 @@ export function resolveModelAuthLabel(params: {
     // misleading auth mode for an incompatible provider/profile pairing.
     return "unknown";
   }
+  if (providerEntryProfileRef.kind === "literal") {
+    return "api-key (models.json)";
+  }
+
+  const customKey = resolveUsableCustomProviderApiKey({
+    cfg: params.cfg,
+    provider: providerKey,
+  });
+  if (customKey) {
+    return `api-key (models.json)`;
+  }
 
   const envKey = resolveEnvApiKey(providerKey, process.env, {
     config: params.cfg,
@@ -140,14 +151,6 @@ export function resolveModelAuthLabel(params: {
     readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
   ) {
     return "oauth (claude-cli)";
-  }
-
-  const customKey = resolveUsableCustomProviderApiKey({
-    cfg: params.cfg,
-    provider: providerKey,
-  });
-  if (customKey) {
-    return `api-key (models.json)`;
   }
 
   return "unknown";

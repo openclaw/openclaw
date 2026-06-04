@@ -22,6 +22,7 @@ import {
   resolveEnvApiKey,
   resolveModelAuthMode,
 } from "./model-auth.js";
+import { resolveModelAuthLabel } from "./model-auth-label.js";
 import { hasAuthForModelProvider } from "./model-provider-auth.js";
 
 async function expectVertexAdcEnvApiKey(params: {
@@ -1932,5 +1933,39 @@ describe("resolveApiKeyForProvider — per-entry apiKey as profile ID reference"
         },
       }),
     ).rejects.toThrow(/matched a stored profile but failed to resolve/);
+  });
+});
+
+describe("resolveModelAuthLabel — custom provider keys (#82020)", () => {
+  const sharedBaseUrl = "https://open.bigmodel.cn/api/coding/paas/v4";
+
+  it("labels zai-light models.json keys before shared ZAI env vars", async () => {
+    await withEnvAsync({ ZAI_API_KEY: "zai-env-key" }, async () => {
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            zai: {
+              api: "openai-completions",
+              baseUrl: sharedBaseUrl,
+              apiKey: "zai-api-key",
+              models: [],
+            },
+            "zai-light": {
+              api: "openai-completions",
+              baseUrl: sharedBaseUrl,
+              apiKey: "sk-light-only",
+              models: [{ id: "glm-5-turbo" }],
+            },
+          },
+        },
+      };
+
+      const auth = await resolveApiKeyForProvider({ provider: "zai-light", cfg });
+      const label = resolveModelAuthLabel({ provider: "zai-light", cfg });
+
+      expect(auth.apiKey).toBe("sk-light-only");
+      expect(auth.source).toBe("models.json");
+      expect(label).toBe("api-key (models.json)");
+    });
   });
 });
