@@ -552,19 +552,19 @@ function collectDiskCompactionCheckpointPreviewDirs(params: {
 function hydrateDiskCompactionCheckpointPreviewIndexesSync(params: {
   storePath: string;
   entries: readonly [string, SessionEntry][];
-  rowContext: SessionListRowContext;
+  checkpointPreviewsByDir: Map<string, DiskCompactionCheckpointPreviewIndex | null>;
 }) {
   for (const sessionDir of collectDiskCompactionCheckpointPreviewDirs(params)) {
-    if (params.rowContext.checkpointPreviewsByDir.has(sessionDir)) {
+    if (params.checkpointPreviewsByDir.has(sessionDir)) {
       continue;
     }
     try {
-      params.rowContext.checkpointPreviewsByDir.set(
+      params.checkpointPreviewsByDir.set(
         sessionDir,
         buildDiskCompactionCheckpointPreviewIndexSync(sessionDir),
       );
     } catch {
-      params.rowContext.checkpointPreviewsByDir.set(sessionDir, null);
+      params.checkpointPreviewsByDir.set(sessionDir, null);
     }
   }
 }
@@ -572,19 +572,19 @@ function hydrateDiskCompactionCheckpointPreviewIndexesSync(params: {
 async function hydrateDiskCompactionCheckpointPreviewIndexesAsync(params: {
   storePath: string;
   entries: readonly [string, SessionEntry][];
-  rowContext: SessionListRowContext;
+  checkpointPreviewsByDir: Map<string, DiskCompactionCheckpointPreviewIndex | null>;
 }) {
   for (const sessionDir of collectDiskCompactionCheckpointPreviewDirs(params)) {
-    if (params.rowContext.checkpointPreviewsByDir.has(sessionDir)) {
+    if (params.checkpointPreviewsByDir.has(sessionDir)) {
       continue;
     }
     try {
-      params.rowContext.checkpointPreviewsByDir.set(
+      params.checkpointPreviewsByDir.set(
         sessionDir,
         await buildDiskCompactionCheckpointPreviewIndexAsync(sessionDir),
       );
     } catch {
-      params.rowContext.checkpointPreviewsByDir.set(sessionDir, null);
+      params.checkpointPreviewsByDir.set(sessionDir, null);
     }
   }
 }
@@ -966,26 +966,21 @@ function buildSingleRowStoreChildSessionsByKey(params: {
   return storeChildSessions ? new Map([[params.key, storeChildSessions]]) : new Map();
 }
 
-function buildSingleRowContextWithDiskCompactionCheckpointPreviews(params: {
+function buildSingleRowDiskCompactionCheckpointPreviewsByDir(params: {
   storePath: string;
   key: string;
   entry?: SessionEntry;
-  now: number;
-  storeChildSessionsByKey?: Map<string, string[]>;
-}): SessionListRowContext | undefined {
+}): Map<string, DiskCompactionCheckpointPreviewIndex | null> | undefined {
   if (!params.entry) {
     return undefined;
   }
-  const rowContext = buildSessionListRowContextFromParts({
-    subagentRuns: buildSubagentRunReadIndex(params.now),
-    storeChildSessionsByKey: params.storeChildSessionsByKey ?? new Map(),
-  });
+  const checkpointPreviewsByDir = new Map<string, DiskCompactionCheckpointPreviewIndex | null>();
   hydrateDiskCompactionCheckpointPreviewIndexesSync({
     storePath: params.storePath,
     entries: [[params.key, params.entry]],
-    rowContext,
+    checkpointPreviewsByDir,
   });
-  return rowContext;
+  return checkpointPreviewsByDir.size > 0 ? checkpointPreviewsByDir : undefined;
 }
 
 function createSessionRowModelCacheKey(provider: string | undefined, model: string | undefined) {
@@ -2125,6 +2120,7 @@ export function buildGatewaySessionRow(params: {
   transcriptUsageMaxBytes?: number;
   storeChildSessionsByKey?: Map<string, string[]>;
   rowContext?: SessionListRowContext;
+  checkpointPreviewsByDir?: Map<string, DiskCompactionCheckpointPreviewIndex | null>;
   agentId?: string;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
@@ -2311,7 +2307,7 @@ export function buildGatewaySessionRow(params: {
     key,
     storePath,
     entry,
-    checkpointPreviewsByDir: rowContext?.checkpointPreviewsByDir,
+    checkpointPreviewsByDir: params.checkpointPreviewsByDir ?? rowContext?.checkpointPreviewsByDir,
   });
   const compactionCheckpointPreviews = [
     ...storedCompactionCheckpointPreviews,
@@ -2626,12 +2622,10 @@ export function loadGatewaySessionRow(
     key: canonicalKey,
     now,
   });
-  const rowContext = buildSingleRowContextWithDiskCompactionCheckpointPreviews({
+  const checkpointPreviewsByDir = buildSingleRowDiskCompactionCheckpointPreviewsByDir({
     storePath,
     key: canonicalKey,
     entry,
-    now,
-    storeChildSessionsByKey,
   });
   return buildGatewaySessionRow({
     cfg,
@@ -2644,7 +2638,7 @@ export function loadGatewaySessionRow(
     includeLastMessage: options?.includeLastMessage,
     transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
     storeChildSessionsByKey,
-    rowContext,
+    checkpointPreviewsByDir,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
   });
 }
@@ -2671,12 +2665,10 @@ export function buildGatewaySessionInfo(params: {
     key: params.key,
     now,
   });
-  const rowContext = buildSingleRowContextWithDiskCompactionCheckpointPreviews({
+  const checkpointPreviewsByDir = buildSingleRowDiskCompactionCheckpointPreviewsByDir({
     storePath: params.storePath,
     key: params.key,
     entry: params.entry,
-    now,
-    storeChildSessionsByKey,
   });
   return buildGatewaySessionRow({
     cfg: params.cfg,
@@ -2691,7 +2683,7 @@ export function buildGatewaySessionInfo(params: {
     includeLastMessage: params.includeLastMessage,
     transcriptUsageMaxBytes: params.transcriptUsageMaxBytes,
     storeChildSessionsByKey,
-    rowContext,
+    checkpointPreviewsByDir,
     skipTranscriptUsageFallback: params.skipTranscriptUsageFallback ?? true,
     lightweightListRow: params.lightweightListRow ?? true,
   });
@@ -2991,7 +2983,7 @@ export function listSessionsFromStore(params: {
     hydrateDiskCompactionCheckpointPreviewIndexesSync({
       storePath,
       entries,
-      rowContext: sharedRowContext,
+      checkpointPreviewsByDir: sharedRowContext.checkpointPreviewsByDir,
     });
   }
 
@@ -3088,7 +3080,7 @@ export async function listSessionsFromStoreAsync(params: {
     await hydrateDiskCompactionCheckpointPreviewIndexesAsync({
       storePath,
       entries,
-      rowContext: sharedRowContext,
+      checkpointPreviewsByDir: sharedRowContext.checkpointPreviewsByDir,
     });
   }
 

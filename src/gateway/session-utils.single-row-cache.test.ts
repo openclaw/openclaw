@@ -1,6 +1,8 @@
 /**
  * Tests single-row session cache behavior in gateway session utilities.
  */
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -214,6 +216,39 @@ describe("single gateway session row child-session cache", () => {
         expect(rowA?.childSessions).toEqual(["agent:main:subagent:child-a"]);
         expect(rowB?.childSessions).toEqual(["agent:main:subagent:child-b"]);
         expect(rowAAfterWindow?.childSessions).toEqual(["agent:main:subagent:child-a"]);
+        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  test("includes disk checkpoint previews without reading the subagent registry", async () => {
+    await withSingleRowCacheStore(
+      "openclaw-single-row-cache-checkpoint-",
+      "/tmp/openclaw-single-row-cache-checkpoint",
+      async ({ now, storePath }) => {
+        const sessionsDir = path.dirname(storePath);
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const sessionFile = path.join(sessionsDir, "checkpoint-row.jsonl");
+        const checkpointId = "55555555-5555-4555-8555-555555555555";
+        const checkpointFile = path.join(
+          sessionsDir,
+          `checkpoint-row.checkpoint.${checkpointId}.jsonl`,
+        );
+        fs.writeFileSync(sessionFile, "", "utf8");
+        fs.writeFileSync(checkpointFile, "", "utf8");
+        fs.utimesSync(checkpointFile, 1_700_000_040.123, 1_700_000_041.789);
+        await saveSessionStore(storePath, {
+          "agent:main:main": {
+            sessionId: "checkpoint-row",
+            sessionFile: path.basename(sessionFile),
+            updatedAt: now,
+          },
+        });
+
+        const row = loadGatewaySessionRow("agent:main:main", { now });
+
+        expect(row?.compactionCheckpointCount).toBe(1);
+        expect(row?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
         expect(subagentRegistryReadMock.buildSubagentRunReadIndex).not.toHaveBeenCalled();
       },
     );
