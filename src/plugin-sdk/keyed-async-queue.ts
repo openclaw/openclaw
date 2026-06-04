@@ -1,3 +1,4 @@
+// Keyed async queue helpers serialize async plugin work by key while preserving parallelism.
 export type KeyedAsyncQueueHooks = {
   onEnqueue?: () => void;
   onSettle?: () => void;

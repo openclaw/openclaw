@@ -1,3 +1,4 @@
+// Cleanup utility tests cover filesystem cleanup helpers, temp paths, and command runtime behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

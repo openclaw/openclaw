@@ -1,3 +1,4 @@
+// ACP bind live gateway tests exercise real ACP runtime sessions, cron visibility, and image probe routing.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import net from "node:net";

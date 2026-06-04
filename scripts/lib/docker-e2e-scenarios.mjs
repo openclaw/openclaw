@@ -694,11 +694,14 @@ const releasePathBundledChannelLanes = [
 ];
 
 const releasePathPackageInstallOpenAiLanes = [
-  npmLane(
+  liveLane(
     "install-e2e-openai",
     "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e",
     {
-      resources: ["service"],
+      e2eImageKind: "bare",
+      needsLiveImage: false,
+      provider: "openai",
+      resources: ["npm", "service"],
       timeoutMs: 15 * 60 * 1000,
       weight: 3,
     },
@@ -714,11 +717,14 @@ const releasePathPackageInstallOpenAiLanes = [
 ];
 
 const releasePathPackageInstallAnthropicLanes = [
-  npmLane(
+  liveLane(
     "install-e2e-anthropic",
     "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e",
     {
-      resources: ["service"],
+      e2eImageKind: "bare",
+      needsLiveImage: false,
+      provider: "claude",
+      resources: ["npm", "service"],
       weight: 3,
     },
   ),

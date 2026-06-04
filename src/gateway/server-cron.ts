@@ -1,6 +1,6 @@
+// Gateway cron runtime service runs scheduled agent turns, heartbeat wakeups,
+// plugin hooks, notifications, and cron lifecycle cleanup.
 import { retireSessionMcpRuntime } from "../agents/agent-bundle-mcp-tools.js";
-// Gateway cron runtime service.
-// Runs scheduled agent turns, heartbeat wakeups, plugin hooks, and cron notifications.
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { abortAndDrainEmbeddedAgentRun } from "../agents/embedded-agent.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../browser-lifecycle-cleanup.js";

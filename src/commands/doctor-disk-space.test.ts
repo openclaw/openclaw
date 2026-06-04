@@ -1,3 +1,4 @@
+// Doctor disk-space tests cover byte formatting, warning generation, and note rendering.
 import { describe, expect, it, vi } from "vitest";
 import { buildDiskSpaceWarnings, formatBytes, noteDiskSpace } from "./doctor-disk-space.js";
 
