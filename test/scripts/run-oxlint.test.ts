@@ -635,6 +635,24 @@ describe("run-oxlint", () => {
     expect(fs.existsSync(tmpDir)).toBe(false);
   });
 
+  it("refuses bundled extension oxlint when strict native refusal is enabled", () => {
+    const result = spawnSync(process.execPath, ["scripts/run-bundled-extension-oxlint.mjs"], {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CI: "",
+        GITHUB_ACTIONS: "",
+        OPENCLAW_LOCAL_CHECK_MODE: "",
+        OPENCLAW_REFUSE_LOCAL_NATIVE_TYPECHECK: "1",
+      },
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Refusing to start oxlint-bundled-extensions");
+    expect(result.stderr).not.toContain("prepare-extension-package-boundary-artifacts");
+  });
+
   it("delegates sharded metadata-only commands before heavy setup", () => {
     const tmpDir = path.join(createTempDir("openclaw-run-oxlint-metadata-"), "heavy-tmp");
     const result = spawnSync(process.execPath, ["scripts/run-oxlint-shards.mjs", "--help"], {

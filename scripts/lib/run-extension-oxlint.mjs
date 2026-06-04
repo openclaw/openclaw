@@ -5,15 +5,51 @@ import path from "node:path";
 import {
   acquireLocalHeavyCheckLockSync,
   applyLocalOxlintPolicy,
+  getLocalNativeTypecheckRefusalError,
 } from "./local-heavy-check-runtime.mjs";
 import { createManagedCommandInvocation } from "./managed-child-process.mjs";
 
 export function runExtensionOxlint(params) {
   const repoRoot = process.cwd();
   const oxlintPath = path.resolve("node_modules", ".bin", "oxlint");
+  const extensionFiles = params.roots.flatMap((root) =>
+    collectTypeScriptFiles(path.resolve(repoRoot, root)),
+  );
+
+  if (extensionFiles.length === 0) {
+    console.log(params.emptyMessage);
+    if (params.allowEmpty === true) {
+      return;
+    }
+    process.exit(1);
+  }
+
+  const previewArgs = [
+    "-c",
+    "<extension-oxlint-config>",
+    ...process.argv.slice(2),
+    ...extensionFiles,
+  ];
+  const { args: previewFinalArgs, env: previewEnv } = applyLocalOxlintPolicy(
+    previewArgs,
+    process.env,
+  );
+  const nativeTypecheckRefusalError = getLocalNativeTypecheckRefusalError({
+    args: previewFinalArgs,
+    env: previewEnv,
+    shouldRunHeavyCheck: true,
+    toolName: params.toolName,
+  });
+
+  if (nativeTypecheckRefusalError) {
+    console.error(nativeTypecheckRefusalError);
+    process.exitCode = 1;
+    return;
+  }
+
   const releaseLock = acquireLocalHeavyCheckLockSync({
     cwd: repoRoot,
-    env: process.env,
+    env: previewEnv,
     toolName: params.toolName,
     lockName: params.lockName,
   });
@@ -23,23 +59,10 @@ export function runExtensionOxlint(params) {
 
   try {
     prepareExtensionPackageBoundaryArtifacts(repoRoot);
-
-    const extensionFiles = params.roots.flatMap((root) =>
-      collectTypeScriptFiles(path.resolve(repoRoot, root)),
-    );
-
-    if (extensionFiles.length === 0) {
-      console.log(params.emptyMessage);
-      if (params.allowEmpty === true) {
-        return;
-      }
-      process.exit(1);
-    }
-
     writeTempOxlintConfig(repoRoot, tempConfigPath);
 
     const baseArgs = ["-c", tempConfigPath, ...process.argv.slice(2), ...extensionFiles];
-    const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, process.env);
+    const { args: finalArgs, env } = applyLocalOxlintPolicy(baseArgs, previewEnv);
     const oxlint = createManagedCommandInvocation({
       args: finalArgs,
       bin: oxlintPath,
