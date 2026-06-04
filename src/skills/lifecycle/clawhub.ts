@@ -889,7 +889,7 @@ async function performClawHubSkillInstall(
       };
     }
 
-    let version: string;
+    let version!: string;
     let detail: ClawHubSkillDetail | undefined;
     let latestResolution: Extract<ClawHubSkillInstallResolutionResponse, { ok: true }> | undefined;
     let install:

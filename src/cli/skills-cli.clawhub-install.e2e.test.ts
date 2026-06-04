@@ -45,7 +45,6 @@ async function buildGitHubSkillZip(commit: string): Promise<Buffer> {
   zip.file("skills-main/skills/aiq-deploy/SKILL.md", "# AIQ Deploy\n");
   zip.file("skills-main/skills/aiq-deploy/skill-card.md", "# Card\n");
   zip.file("skills-main/skills/other/SKILL.md", "# Other\n");
-  zip.comment = commit;
   return await zip.generateAsync({ type: "nodebuffer" });
 }
 
