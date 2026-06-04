@@ -8,8 +8,11 @@ import {
   SAFE_BIN_PROFILES,
   buildLongFlagPrefixMap,
   collectKnownLongFlags,
+  normalizeSafeBinProfileFixtures,
   renderDefaultSafeBinsDocText,
   renderSafeBinDeniedFlagsDocBullets,
+  resolveSafeBinProfiles,
+  type SafeBinProfileFixtures,
   validateSafeBinArgv,
 } from "./exec-safe-bin-policy.js";
 
@@ -161,6 +164,22 @@ describe("exec safe bin policy boolean flags", () => {
 
   it("keeps mixed boolean+value short clusters working", () => {
     expect(validateSafeBinArgv(["-cf", "2"], SAFE_BIN_PROFILES.uniq)).toBe(true);
+  });
+
+  it("keeps allowedBooleanFlags on built-in default profiles", () => {
+    expect(SAFE_BIN_PROFILES.wc.allowedBooleanFlags?.has("-l")).toBe(true);
+    expect(validateSafeBinArgv(["-l"], SAFE_BIN_PROFILES.wc)).toBe(true);
+  });
+
+  it("does not let custom config profiles widen the boolean allowlist", () => {
+    const customFixtures = {
+      wc: { allowedBooleanFlags: ["-l"], deniedFlags: ["--files0-from"] },
+    } as unknown as SafeBinProfileFixtures;
+    const normalized = normalizeSafeBinProfileFixtures(customFixtures);
+    expect("allowedBooleanFlags" in normalized.wc).toBe(false);
+    const profiles = resolveSafeBinProfiles(customFixtures);
+    expect(profiles.wc.allowedBooleanFlags?.size ?? 0).toBe(0);
+    expect(validateSafeBinArgv(["-l"], profiles.wc)).toBe(false);
   });
 });
 
