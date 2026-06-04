@@ -942,8 +942,18 @@ describe("editMessageMatrix mentions", () => {
     expect(newContent(content)[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
   });
 
-  it("keeps thread context in m.new_content without making the replace a main-room reply", async () => {
-    const { client, sendMessage } = makeClient();
+  it("edits threaded originals with a pure replace relation", async () => {
+    const { client, getEvent, sendMessage } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "before",
+        msgtype: "m.text",
+        "m.relates_to": {
+          rel_type: "m.thread",
+          event_id: "$thread",
+        },
+      },
+    });
 
     await editMessageMatrix("room:!room:example", "$original", "done", {
       client,
@@ -956,10 +966,26 @@ describe("editMessageMatrix mentions", () => {
       rel_type: "m.replace",
       event_id: "$original",
     });
-    expect(newContent(content)["m.relates_to"]).toEqual({
-      rel_type: "m.thread",
-      event_id: "$thread",
+    expect(newContent(content)).not.toHaveProperty("m.relates_to");
+  });
+
+  it("rejects thread edits when the original event is not already in that thread", async () => {
+    const { client, getEvent, sendMessage } = makeClient();
+    getEvent.mockResolvedValue({
+      content: {
+        body: "before",
+        msgtype: "m.text",
+      },
     });
+
+    await expect(
+      editMessageMatrix("room:!room:example", "$original", "done", {
+        client,
+        cfg: {} as never,
+        threadId: "$thread",
+      }),
+    ).rejects.toThrow("cannot add or change the original event thread relation");
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 });
 
