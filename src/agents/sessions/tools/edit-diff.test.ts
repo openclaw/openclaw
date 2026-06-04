@@ -127,6 +127,28 @@ describe("applyEditsToNormalizedContent", () => {
     expect(result.newContent).toBe('\uFB01nd \uFB03x = "world";');
   });
 
+  it("fuzzy match preserves decomposed combining characters before the match", () => {
+    // e + U+0301 (combining acute accent) composes to é under NFKC (2 chars -> 1 char).
+    // A smart-quote fuzzy match AFTER the combining sequence must not
+    // miscalculate the replacement position due to NFKC composition.
+    const content = "const caf\u0065\u0301 = \u2018latte\u2019;";
+    //                         ^ e + combining acute    ^ smart quotes
+
+    const result = applyEditsToNormalizedContent(
+      normalizeToLF(content),
+      [
+        {
+          oldText: "const caf\u0065\u0301 = 'latte';",
+          newText: "const caf\u0065\u0301 = 'mocha';",
+        },
+      ],
+      "test.ts",
+    );
+
+    // The decomposed e + combining acute must survive; only the smart quotes change.
+    expect(result.newContent).toBe("const caf\u0065\u0301 = 'mocha';");
+  });
+
   it("baseContent is always the original content", () => {
     const content = "line with smart\u2019s\nline with trailing   ";
 
