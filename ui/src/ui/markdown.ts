@@ -851,11 +851,11 @@ export function toSanitizedMarkdownHtml(
  * When mathRendering === "off" or undefined, behaves identically to toSanitizedMarkdownHtml.
  */
 export function toSanitizedMarkdownHtmlWithKatex(
-  markdown: string,
+  markdownLocal: string,
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
-  const input = stripUnsupportedCitationControlMarkers(markdown).trim();
+  const input = stripUnsupportedCitationControlMarkers(markdownLocal).trim();
   if (!input) {
     return "";
   }
