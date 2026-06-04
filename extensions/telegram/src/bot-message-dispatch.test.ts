@@ -2776,6 +2776,44 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(sendMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not add empty-response fallback after message-tool-only delivery skips final text", async () => {
+    setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { kind: "final", reason: "silent" });
+      dispatcherOptions.onSkip?.(
+        { text: "automatic final suppressed" },
+        { kind: "final", reason: "cancelled" },
+      );
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-100123",
+          ChatType: "group",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        primaryCtx: {
+          message: { chat: { id: -100123, type: "supergroup" } },
+        } as TelegramMessageContext["primaryCtx"],
+        msg: {
+          chat: { id: -100123, type: "supergroup" },
+          message_id: 456,
+        } as TelegramMessageContext["msg"],
+        chatId: -100123,
+        isGroup: true,
+      }),
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
+  });
+
   it("runs ambient room events as tool-only invisible turns", async () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([
