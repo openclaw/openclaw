@@ -668,11 +668,11 @@
   "contracts": {
     "mediaUnderstandingProviders": ["google"],
     "memoryEmbeddingProviders": ["gemini"],
-    "imageGenerationProviders": ["google"],
+    "imageGenerationProviders": ["google", "google-vertex"],
     "musicGenerationProviders": ["google"],
     "realtimeVoiceProviders": ["google"],
     "speechProviders": ["google"],
-    "videoGenerationProviders": ["google"],
+    "videoGenerationProviders": ["google", "google-vertex"],
     "webSearchProviders": ["gemini"]
   },
   "mediaUnderstandingProviderMetadata": {
