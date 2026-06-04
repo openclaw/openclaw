@@ -11,6 +11,7 @@ type InstallScanLogger = {
   warn?: (message: string) => void;
 };
 
+/** Result returned by plugin/skill install security policy checks. */
 export type InstallSecurityScanResult = {
   blocked?: {
     code?: "security_scan_blocked" | "security_scan_failed";
@@ -18,8 +19,10 @@ export type InstallSecurityScanResult = {
   };
 };
 
+/** Plugin install request kinds that share install policy without skill install semantics. */
 export type PluginInstallRequestKind = Exclude<InstallPolicyRequestKind, "skill-install">;
 
+/** Skill install metadata shape passed into shared install policy evaluation. */
 export type SkillInstallSpecMetadata = {
   id?: string;
   kind: "brew" | "node" | "go" | "uv" | "download";
@@ -36,16 +39,19 @@ export type SkillInstallSpecMetadata = {
   targetDir?: string;
 };
 
+/** Package executable metadata used to scope dependency and entrypoint scans. */
 export type PackageExecutableScanMetadata = {
   runtimeExtensions?: readonly string[];
   runtimeSetupEntry?: string;
   setupEntry?: string;
 };
 
+/** Lazily loads install scanning so normal plugin startup avoids policy/runtime imports. */
 async function loadInstallSecurityScanRuntime() {
   return await import("./install-security-scan.runtime.js");
 }
 
+/** Scans an unpacked bundle source before plugin install/update. */
 export async function scanBundleInstallSource(
   params: InstallSafetyOverrides & {
     config?: OpenClawConfig;
@@ -63,6 +69,7 @@ export async function scanBundleInstallSource(
   return await scanBundleInstallSourceRuntime(params);
 }
 
+/** Scans a package source directory and executable metadata before install/update. */
 export async function scanPackageInstallSource(
   params: InstallSafetyOverrides & {
     config?: OpenClawConfig;
@@ -84,6 +91,7 @@ export async function scanPackageInstallSource(
   return await scanPackageInstallSourceRuntime(params);
 }
 
+/** Scans the installed package dependency tree after npm resolution. */
 export async function scanInstalledPackageDependencyTree(params: {
   additionalPackageDirs?: string[];
   allowManagedNpmRootPackagePeerSymlinks?: boolean;
@@ -103,6 +111,7 @@ export async function scanInstalledPackageDependencyTree(params: {
   return await scanInstalledPackageDependencyTreeRuntime(params);
 }
 
+/** Scans one file-based plugin install source. */
 export async function scanFileInstallSource(
   params: InstallSafetyOverrides & {
     config?: OpenClawConfig;
@@ -118,6 +127,7 @@ export async function scanFileInstallSource(
   return await scanFileInstallSourceRuntime(params);
 }
 
+/** Runs npm install policy checks before package install side effects. */
 export async function preflightPluginNpmInstallPolicy(params: {
   config?: OpenClawConfig;
   logger: InstallScanLogger;
@@ -133,6 +143,7 @@ export async function preflightPluginNpmInstallPolicy(params: {
   return await preflightPluginNpmInstallPolicyRuntime(params);
 }
 
+/** Runs git install policy checks before plugin install side effects. */
 export async function preflightPluginGitInstallPolicy(params: {
   config?: OpenClawConfig;
   logger: InstallScanLogger;
@@ -146,6 +157,7 @@ export async function preflightPluginGitInstallPolicy(params: {
   return await preflightPluginGitInstallPolicyRuntime(params);
 }
 
+/** Evaluates shared install policy for skill-managed dependency installs. */
 export async function evaluateSkillInstallPolicy(params: {
   config?: OpenClawConfig;
   installId: string;
