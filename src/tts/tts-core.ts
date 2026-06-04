@@ -80,6 +80,8 @@ const USER_SUMMARY_PROMPT_ECHO_RE = /^the user (?:wants|asks|asked|requested) me
 const SELF_SUMMARY_PROMPT_ECHO_RE =
   /^i (?:need|should|will|'ll) (?:to )?(?:summarize|include|keep|maintain|craft|write|produce)\b/i;
 const CRAFT_SUMMARY_PROMPT_ECHO_RE = /^let me (?:craft|write|produce|summarize)\b/i;
+const GENERIC_USER_SUMMARY_TARGET_RE =
+  /\b(?:(?:provided|following|above|original|given|this)\s+(?:text|content|message|response|passage)|text to summarize|key points?|important information|original tone|tone and style|approximately|characters?|concise|audio|tts)\b/i;
 const SUMMARY_PROMPT_META_RE =
   /\b(?:summari[sz]e|summary|key points?|important information|original tone|tone and style|approximately|characters?|concise|audio|text to summarize)\b/i;
 const PROMPT_ECHO_SEPARATOR_RE = /\s*(?::|—|–|\s-\s)\s*/;
@@ -107,7 +109,7 @@ function splitPromptEchoPrefix(text: string): { prefix: string; rest: string } |
 
 function isLeadingSummaryPromptEchoSentence(sentence: string): boolean {
   if (USER_SUMMARY_PROMPT_ECHO_RE.test(sentence)) {
-    return true;
+    return GENERIC_USER_SUMMARY_TARGET_RE.test(sentence);
   }
   if (SELF_SUMMARY_PROMPT_ECHO_RE.test(sentence) || CRAFT_SUMMARY_PROMPT_ECHO_RE.test(sentence)) {
     return SUMMARY_PROMPT_META_RE.test(sentence);
@@ -115,12 +117,20 @@ function isLeadingSummaryPromptEchoSentence(sentence: string): boolean {
   return false;
 }
 
+function isSeparatedSummaryPromptEchoPrefix(prefix: string): boolean {
+  return (
+    USER_SUMMARY_PROMPT_ECHO_RE.test(prefix) ||
+    (SELF_SUMMARY_PROMPT_ECHO_RE.test(prefix) && SUMMARY_PROMPT_META_RE.test(prefix)) ||
+    (CRAFT_SUMMARY_PROMPT_ECHO_RE.test(prefix) && SUMMARY_PROMPT_META_RE.test(prefix))
+  );
+}
+
 function stripLeadingSummaryPromptEcho(text: string): string {
   let remaining = text.trimStart();
   let stripped = false;
   while (remaining) {
     const separated = splitPromptEchoPrefix(remaining);
-    if (separated && isLeadingSummaryPromptEchoSentence(separated.prefix)) {
+    if (separated && isSeparatedSummaryPromptEchoPrefix(separated.prefix)) {
       stripped = true;
       remaining = separated.rest;
       continue;
