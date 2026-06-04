@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { isExplicitOpenClawHomeStateDir } from "./config/state-dir-names.js";
 import { MAX_TIMER_TIMEOUT_MS } from "./shared/number-coercion.js";
 import { withTempDir } from "./test-helpers/temp-dir.js";
 import {
@@ -100,6 +101,15 @@ describe("resolveConfigDir", () => {
     it("still appends .openclaw when OPENCLAW_HOME is a non-state-dir path", () => {
       const env = { OPENCLAW_HOME: "/srv/openclaw-home" } as NodeJS.ProcessEnv;
       expect(resolveConfigDir(env)).toBe(path.resolve("/srv/openclaw-home", ".openclaw"));
+    });
+
+    it("keeps the helper wired to the leaf state-dir module", () => {
+      expect(
+        isExplicitOpenClawHomeStateDir(
+          { OPENCLAW_HOME: "/home/user/.openclaw" } as NodeJS.ProcessEnv,
+          "/home/user/.openclaw",
+        ),
+      ).toBe(true);
     });
   });
 });
