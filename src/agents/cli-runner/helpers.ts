@@ -124,7 +124,7 @@ export function buildCliAgentSystemPrompt(params: {
       surface: "cli_backend",
     }),
     runtimeInfo,
-    toolNames: params.tools.map((tool) => tool.name),
+    toolNames: collectReadableCliToolNames(params.tools),
     skillsPrompt: params.skillsPrompt,
     userTimezone,
     userTime,
@@ -134,6 +134,26 @@ export function buildCliAgentSystemPrompt(params: {
 }
 
 export const buildSystemPrompt = buildCliAgentSystemPrompt;
+
+function collectReadableCliToolNames(tools: readonly AgentTool[]): string[] {
+  const names: string[] = [];
+  for (const tool of tools) {
+    try {
+      const rawName = tool.name;
+      if (typeof rawName !== "string") {
+        continue;
+      }
+      const name = rawName.trim();
+      if (name) {
+        names.push(name);
+      }
+    } catch {
+      // Runtime schema projection owns invalid-tool diagnostics; prompt setup must
+      // not let one unreadable tool descriptor abort the whole CLI turn.
+    }
+  }
+  return names;
+}
 
 export function normalizeCliModel(modelId: string, backend: CliBackendConfig): string {
   const trimmed = modelId.trim();

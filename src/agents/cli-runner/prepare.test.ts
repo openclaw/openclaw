@@ -1161,9 +1161,57 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       }));
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
       const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const unreadableNameTool = Object.defineProperty(
+        {
+          name: "broken_name",
+          label: "Broken Name",
+          description: "bad name",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+        "name",
+        {
+          get() {
+            throw new Error("loopback tool name getter exploded");
+          },
+        },
+      );
+      const unreadableDescriptionTool = Object.defineProperty(
+        {
+          name: "memory_describe",
+          label: "Memory Describe",
+          description: "bad description",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+        "description",
+        {
+          get() {
+            throw new Error("loopback tool description getter exploded");
+          },
+        },
+      );
+      const unreadableParametersTool = Object.defineProperty(
+        {
+          name: "memory_bad_schema",
+          label: "Bad Schema",
+          description: "bad schema",
+          parameters: { type: "object", properties: {} },
+          execute: vi.fn(),
+        },
+        "parameters",
+        {
+          get() {
+            throw new Error("loopback tool parameters getter exploded");
+          },
+        },
+      );
       const resolveMcpLoopbackScopedTools = vi.fn(() => ({
         agentId: "main",
         tools: [
+          unreadableNameTool,
+          unreadableDescriptionTool,
+          unreadableParametersTool,
           {
             name: "memory_search",
             label: "Memory Search",
@@ -1229,12 +1277,16 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         sourceReplyDeliveryMode: undefined,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
-      expect(context.systemPrompt).toContain("tools=memory_search");
+      expect(context.systemPrompt).toContain("tools=memory_describe,memory_search");
       expect(context.systemPromptReport.tools.entries.map((entry) => entry.name)).toEqual([
+        "memory_describe",
         "memory_search",
       ]);
+      expect(context.systemPromptReport.tools.entries[0]?.summaryChars).toBe(
+        "memory_describe".length,
+      );
       expect(context.promptToolNamesHash).toBe(
-        hashCliSessionText(JSON.stringify(["memory_search"])),
+        hashCliSessionText(JSON.stringify(["memory_describe", "memory_search"])),
       );
       expect(context.reusableCliSession).toEqual({ invalidatedReason: "system-prompt" });
     } finally {
