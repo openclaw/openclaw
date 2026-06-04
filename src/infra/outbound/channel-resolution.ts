@@ -21,7 +21,7 @@ import type {
   ChannelThreadingAdapter,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginChannelRegistry, getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   isDeliverableMessageChannel,
   normalizeMessageChannel,
@@ -111,18 +111,75 @@ function maybeBootstrapChannelPlugin(params: {
   bootstrapOutboundChannelPlugin(params);
 }
 
-function resolveDirectFromActiveRegistry(channel: string): ChannelPlugin | undefined {
-  const activeRegistry = getActivePluginRegistry();
-  if (!activeRegistry) {
+function resolveDirectFromRegistry(
+  registry: ReturnType<typeof getActivePluginRegistry>,
+  channel: string,
+): ChannelPlugin | undefined {
+  if (!registry) {
     return undefined;
   }
-  for (const entry of activeRegistry.channels) {
+  for (const entry of registry.channels) {
     const plugin = entry?.plugin;
     if (plugin?.id === channel) {
       return plugin;
     }
   }
   return undefined;
+}
+
+function resolveDirectFromActiveRegistry(channel: string): ChannelPlugin | undefined {
+  return resolveDirectFromRegistry(getActivePluginRegistry(), channel);
+}
+
+function channelPluginHasRuntimeOutboundSurface(plugin: ChannelPlugin | undefined): boolean {
+  return Boolean(plugin?.outbound ?? plugin?.message);
+}
+
+function resolveRuntimeOutboundPluginCandidate(params: {
+  loaded?: ChannelPlugin;
+  active?: ChannelPlugin;
+  bundled?: ChannelPlugin;
+  allowSetupShell?: boolean;
+}): ChannelPlugin | undefined {
+  if (channelPluginHasRuntimeOutboundSurface(params.loaded)) {
+    return params.loaded;
+  }
+  if (channelPluginHasRuntimeOutboundSurface(params.active)) {
+    return params.active;
+  }
+  if (channelPluginHasRuntimeOutboundSurface(params.bundled)) {
+    return params.bundled;
+  }
+  if (params.allowSetupShell) {
+    return params.loaded ?? params.active ?? params.bundled;
+  }
+  return undefined;
+}
+
+function resolveValueFromRuntimeRegistries<TValue>(
+  channel: string,
+  resolveValue: (plugin: ChannelPlugin) => TValue | undefined,
+): TValue | undefined {
+  const channelRegistry = getActivePluginChannelRegistry();
+  const channelPlugin = resolveDirectFromRegistry(channelRegistry, channel);
+  if (channelPlugin) {
+    const value = resolveValue(channelPlugin);
+    if (value !== undefined) {
+      return value;
+    }
+  }
+  const activeRegistry = getActivePluginRegistry();
+  if (activeRegistry && activeRegistry !== channelRegistry) {
+    const activePlugin = resolveDirectFromRegistry(activeRegistry, channel);
+    if (activePlugin) {
+      return resolveValue(activePlugin);
+    }
+  }
+  return undefined;
+}
+
+function resolveDirectFromRuntimeRegistries(channel: string): ChannelPlugin | undefined {
+  return resolveValueFromRuntimeRegistries(channel, (plugin) => plugin);
 }
 
 function toOutboundChannelRuntime(plugin: ChannelPlugin): OutboundChannelRuntime {
@@ -191,17 +248,16 @@ export function resolveOutboundChannelPlugin(params: {
   const resolveLoaded = () => getLoadedChannelPlugin(normalized);
   const resolve = () => getChannelPlugin(normalized);
   const current = resolveLoaded();
-  if (current) {
-    return current;
-  }
   const directCurrent = resolveDirectFromActiveRegistry(normalized);
-  if (directCurrent) {
-    return directCurrent;
-  }
-
   const bundledCurrent = resolve();
-  if (bundledCurrent) {
-    return bundledCurrent;
+  const candidate = resolveRuntimeOutboundPluginCandidate({
+    loaded: current,
+    active: directCurrent,
+    bundled: bundledCurrent,
+    allowSetupShell: params.allowBootstrap !== true,
+  });
+  if (candidate) {
+    return candidate;
   }
 
   if (params.allowBootstrap !== true) {
@@ -209,7 +265,11 @@ export function resolveOutboundChannelPlugin(params: {
   }
 
   maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
-  return resolveLoaded() ?? resolveDirectFromActiveRegistry(normalized) ?? resolve();
+  return resolveRuntimeOutboundPluginCandidate({
+    loaded: resolveLoaded(),
+    active: resolveDirectFromActiveRegistry(normalized),
+    bundled: resolve(),
+  });
 }
 
 /** Resolves the message adapter for a deliverable outbound channel. */
@@ -218,7 +278,23 @@ export function resolveOutboundChannelMessageAdapter(params: {
   cfg?: OpenClawConfig;
   allowBootstrap?: boolean;
 }): ChannelMessageAdapterShape | undefined {
-  return resolveOutboundChannelPlugin(params)?.message;
+  const normalized = normalizeDeliverableOutboundChannel(params.channel);
+  if (!normalized) {
+    return undefined;
+  }
+  const current =
+    getLoadedChannelPlugin(normalized)?.message ??
+    resolveValueFromRuntimeRegistries(normalized, (plugin) => plugin.message) ??
+    getChannelPlugin(normalized)?.message;
+  if (current || params.allowBootstrap !== true) {
+    return current;
+  }
+  maybeBootstrapChannelPlugin({ channel: normalized, cfg: params.cfg });
+  return (
+    getLoadedChannelPlugin(normalized)?.message ??
+    resolveValueFromRuntimeRegistries(normalized, (plugin) => plugin.message) ??
+    getChannelPlugin(normalized)?.message
+  );
 }
 
 /** Resolves a channel plugin for read-only metadata paths. */
@@ -235,7 +311,7 @@ export function resolveOutboundChannelPluginForRead(params: {
   if (current) {
     return current;
   }
-  const directCurrent = resolveDirectFromActiveRegistry(normalized);
+  const directCurrent = resolveDirectFromRuntimeRegistries(normalized);
   if (directCurrent) {
     return directCurrent;
   }
@@ -244,7 +320,7 @@ export function resolveOutboundChannelPluginForRead(params: {
     maybeBootstrapChannelPlugin({ channel: deliverable, cfg: params.cfg });
     return (
       getLoadedChannelPlugin(deliverable) ??
-      resolveDirectFromActiveRegistry(deliverable) ??
+      resolveDirectFromRuntimeRegistries(deliverable) ??
       getChannelPlugin(deliverable)
     );
   }
@@ -270,6 +346,6 @@ export function resolveLoadedOutboundChannelPluginForRead(params: {
   }
   return (
     getLoadedChannelPlugin(normalized as Parameters<typeof getLoadedChannelPlugin>[0]) ??
-    resolveDirectFromActiveRegistry(normalized)
+    resolveDirectFromRuntimeRegistries(normalized)
   );
 }
