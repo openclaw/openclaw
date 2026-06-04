@@ -25,6 +25,7 @@ vi.mock("./model-selection.runtime.js", () => ({
 }));
 
 function requireFirstEmbeddedAgentRequest(): {
+  config?: OpenClawConfig;
   provider?: string;
   model?: string;
   disableTools?: boolean;
@@ -224,6 +225,9 @@ describe("commitment extraction runtime", () => {
     expect(request.provider).toBe("openai");
     expect(request.model).toBe("gpt-5.5");
     expect(request.disableTools).toBe(true);
+    expect(request.config?.session?.store).toMatch(
+      /commitments\/extractor-sessions\/main\/sessions\.json$/,
+    );
   });
 
   it("backs off hidden extraction after terminal model or auth failures", async () => {

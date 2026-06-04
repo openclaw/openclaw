@@ -5,6 +5,7 @@ import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-e
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
+import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
 
 export type CompactEmbeddedAgentSessionParams = {
@@ -35,6 +36,9 @@ export type CompactEmbeddedAgentSessionParams = {
   groupSpace?: string | null;
   /** Parent session key for subagent policy inheritance. */
   spawnedBy?: string | null;
+  /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
+  sessionTarget?: AgentRunSessionTarget;
+  /** Active file-backed artifact for current compaction internals. */
   sessionFile: string;
   /** Optional caller-observed live prompt tokens used for compaction diagnostics. */
   currentTokenCount?: number;
@@ -95,6 +99,14 @@ export type CompactEmbeddedAgentSessionParams = {
   }) => void | Promise<void>;
   /** Allow runtime plugins for this compaction to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
+};
+
+export type CompactEmbeddedAgentSessionRuntimeParams = Omit<
+  CompactEmbeddedAgentSessionParams,
+  "sessionFile"
+> & {
+  /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
+  sessionFile?: string;
 };
 
 export type CompactionMessageMetrics = {

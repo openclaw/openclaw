@@ -1,4 +1,7 @@
+import path from "node:path";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 
 /**
@@ -23,6 +26,20 @@ export type ParentForkDecision =
       message: string;
     };
 
+type ParentForkDecisionParams = {
+  parentEntry: SessionEntry;
+  agentId?: string;
+  config?: OpenClawConfig;
+  storePath?: string;
+};
+
+type ForkSessionFromParentParams = {
+  parentEntry: SessionEntry;
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionsDir?: string;
+};
+
 function loadSessionForkRuntime(): Promise<typeof import("./session-fork.runtime.js")> {
   return sessionForkRuntimeLoader.load();
 }
@@ -37,14 +54,31 @@ function formatParentForkTooLargeMessage(params: {
   );
 }
 
-export async function resolveParentForkDecision(params: {
-  parentEntry: SessionEntry;
-  storePath: string;
-}): Promise<ParentForkDecision> {
+function resolveParentForkStorePath(params: {
+  agentId?: string;
+  config?: OpenClawConfig;
+  storePath?: string;
+}): string {
+  return (
+    params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: params.agentId })
+  );
+}
+
+function resolveParentForkSessionsDir(params: {
+  agentId: string;
+  config?: OpenClawConfig;
+  sessionsDir?: string;
+}): string {
+  return params.sessionsDir ?? path.dirname(resolveParentForkStorePath(params));
+}
+
+export async function resolveParentForkDecision(
+  params: ParentForkDecisionParams,
+): Promise<ParentForkDecision> {
   const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
   const parentTokens = await resolveParentForkTokenCount({
     parentEntry: params.parentEntry,
-    storePath: params.storePath,
+    storePath: resolveParentForkStorePath(params),
   });
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
@@ -62,13 +96,14 @@ export async function resolveParentForkDecision(params: {
   };
 }
 
-export async function forkSessionFromParent(params: {
-  parentEntry: SessionEntry;
-  agentId: string;
-  sessionsDir: string;
-}): Promise<{ sessionId: string; sessionFile: string } | null> {
+export async function forkSessionFromParent(
+  params: ForkSessionFromParentParams,
+): Promise<{ sessionId: string; sessionFile: string } | null> {
   const runtime = await loadSessionForkRuntime();
-  return runtime.forkSessionFromParentRuntime(params);
+  return runtime.forkSessionFromParentRuntime({
+    ...params,
+    sessionsDir: resolveParentForkSessionsDir(params),
+  });
 }
 
 async function resolveParentForkTokenCount(params: {

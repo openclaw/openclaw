@@ -447,6 +447,27 @@ describe("Engine contract tests", () => {
     });
   });
 
+  it("delegateCompactionToRuntime uses runtime session identity when available", async () => {
+    const compactRuntimeSpy = installCompactRuntimeSpy();
+
+    await delegateCompactionToRuntime({
+      sessionId: "s3",
+      sessionFile: "/tmp/session.json",
+      runtimeContext: {
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        sessionFile: "/tmp/runtime-context-session.json",
+        workspaceDir: "/tmp/workspace",
+      },
+    });
+
+    expect(compactRuntimeSpy).toHaveBeenCalledTimes(1);
+    const compactRuntimeParams = requireCompactRuntimeParams(0);
+    expect(compactRuntimeParams.agentId).toBe("main");
+    expect(compactRuntimeParams.sessionKey).toBe("agent:main:main");
+    expect(compactRuntimeParams.sessionFile).toBeUndefined();
+  });
+
   it("builds a normalized memory system prompt addition from the active memory prompt path", () => {
     registerMemoryPromptSection(({ citationsMode }) => [
       "## Memory Recall",

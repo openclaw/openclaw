@@ -294,13 +294,21 @@ describe("realtime voice agent consult runtime", () => {
 
     expect(resolveParentForkDecision).toHaveBeenCalledWith({
       parentEntry: sessionStore["agent:main:main"],
-      storePath: "/tmp/sessions.json",
+      agentId: "main",
+      config: {},
     });
     expect(forkSessionFromParent).toHaveBeenCalledWith({
       parentEntry: sessionStore["agent:main:main"],
       agentId: "main",
-      sessionsDir: "/tmp",
+      config: {},
     });
+    expect(runtime.session.patchSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        config: {},
+        sessionKey: "agent:main:subagent:google-meet:meet-1",
+      }),
+    );
     const forkedEntry = sessionStore["agent:main:subagent:google-meet:meet-1"];
     if (!forkedEntry) {
       throw new Error("Expected forked consult session entry");
@@ -315,7 +323,7 @@ describe("realtime voice agent consult runtime", () => {
     expectPositiveTimestamp(forkedEntry.updatedAt);
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call.sessionId).toBe("forked-session");
-    expect(call.sessionFile).toBe("/tmp/forked.jsonl");
+    expect(call.sessionFile).toBeUndefined();
     expect(call.spawnedBy).toBe("agent:main:main");
   });
 

@@ -1,6 +1,6 @@
-import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
+import type { CompactEmbeddedAgentSessionRuntimeParams } from "./compact.types.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type CompactEmbeddedAgentSessionDirect = (
-  params: CompactEmbeddedAgentSessionParams,
+  params: CompactEmbeddedAgentSessionRuntimeParams,
 ) => Promise<EmbeddedAgentCompactResult>;

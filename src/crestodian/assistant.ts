@@ -181,9 +181,16 @@ async function runLocalRuntimePlanner(
   const tempDir = await (params.deps?.createTempDir ?? createTempPlannerDir)();
   try {
     const runId = `crestodian-planner-${randomUUID()}`;
-    const sessionFile = path.join(tempDir, "session.jsonl");
     const sessionId = `${runId}-session`;
     const sessionKey = `temp:crestodian-planner:${runId}`;
+    const backendConfig = backend.buildConfig(tempDir);
+    const helperConfig = {
+      ...backendConfig,
+      session: {
+        ...backendConfig.session,
+        store: path.join(tempDir, "sessions.json"),
+      },
+    };
     switch (backend.runner) {
       case "cli": {
         const runCli = params.deps?.runCliAgent ?? (await loadRunCliAgent());
@@ -192,9 +199,8 @@ async function runLocalRuntimePlanner(
           sessionKey,
           agentId: "crestodian",
           trigger: "manual",
-          sessionFile,
           workspaceDir: tempDir,
-          config: backend.buildConfig(tempDir),
+          config: helperConfig,
           prompt: params.prompt,
           provider: backend.provider,
           model: backend.model,
@@ -215,9 +221,8 @@ async function runLocalRuntimePlanner(
           sessionKey,
           agentId: "crestodian",
           trigger: "manual",
-          sessionFile,
           workspaceDir: tempDir,
-          config: backend.buildConfig(tempDir),
+          config: helperConfig,
           prompt: params.prompt,
           provider: backend.provider,
           model: backend.model,

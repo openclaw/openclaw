@@ -14,7 +14,7 @@ import {
 import type {
   CliPreparedBackend,
   PreparedCliRunContext,
-  RunCliAgentParams,
+  PreparedRunCliAgentParams,
 } from "./cli-runner/types.js";
 
 // This e2e spins a real stdio MCP server plus a spawned CLI process. Keep the
@@ -151,7 +151,7 @@ async function prepareBundleMcpExecutionContext(params: {
     workspaceDir: params.workspaceDir,
     config: params.config,
   })) as CliPreparedBackend;
-  const runParams: RunCliAgentParams = {
+  const runParams: PreparedRunCliAgentParams = {
     sessionId: params.sessionId,
     sessionFile: params.sessionFile,
     workspaceDir: params.workspaceDir,

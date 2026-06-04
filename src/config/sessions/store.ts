@@ -14,6 +14,7 @@ import {
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { getFileStatSnapshot } from "../cache-utils.js";
 import { getRuntimeConfig } from "../io.js";
+import type { OpenClawConfig } from "../types.openclaw.js";
 import { enforceSessionDiskBudget, type SessionDiskBudgetSweepResult } from "./disk-budget.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
 import { resolveStorePath } from "./paths.js";
@@ -184,6 +185,7 @@ type SingleEntryPersistencePatch = {
 
 type SessionEntryWorkflowOptions = {
   agentId?: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   hydrateSkillPromptRefs?: boolean;
   storePath?: string;
@@ -200,7 +202,8 @@ function resolveSessionWorkflowStorePath(
     return options.storePath;
   }
   const agentId = options.agentId ?? resolveAgentIdFromSessionKey(options.sessionKey);
-  return resolveStorePath(getRuntimeConfig().session?.store, {
+  const storeConfig = options.config?.session?.store ?? getRuntimeConfig().session?.store;
+  return resolveStorePath(storeConfig, {
     agentId,
     env: options.env,
   });
