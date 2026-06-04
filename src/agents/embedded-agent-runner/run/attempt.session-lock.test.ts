@@ -3872,6 +3872,66 @@ describe("embedded attempt session lock lifecycle", () => {
     });
   });
 
+  it("does not stack retry-default and lock-release wrappers across repeated installs", async () => {
+    const events: string[] = [];
+    const streamFn = vi.fn(async (..._args: unknown[]) => {
+      events.push("stream");
+    });
+    const waitForSessionEvents = vi.fn(async () => {
+      events.push("drain");
+    });
+    const releaseForPrompt = vi.fn(async () => {
+      events.push("release");
+    });
+    const reacquireAfterPrompt = vi.fn(async () => {
+      events.push("reacquire");
+    });
+    const session = { agent: { streamFn } };
+
+    const installBoth = () => {
+      installEmbeddedPromptRetryDefault(session);
+      installPromptSubmissionLockRelease({
+        session,
+        waitForSessionEvents,
+        releaseForPrompt,
+        reacquireAfterPrompt,
+      });
+    };
+
+    // Each embedded turn re-runs both installers; repeated installs must be no-ops
+    // so a single model call is not surrounded by stacked retry/release wrappers.
+    installBoth();
+    installBoth();
+
+    await session.agent.streamFn("model", "context");
+    await session.agent.streamFn("model", "context", { maxRetries: 3, temperature: 0.2 });
+
+    // Inner provider streamFn runs once per turn, not once per stacked wrapper.
+    expect(streamFn).toHaveBeenCalledTimes(2);
+    expect(streamFn).toHaveBeenNthCalledWith(1, "model", "context", { maxRetries: 0 });
+    expect(streamFn).toHaveBeenNthCalledWith(2, "model", "context", {
+      maxRetries: 3,
+      temperature: 0.2,
+    });
+
+    // Two drains per turn (before + after), one release/reacquire per turn — not doubled.
+    expect(waitForSessionEvents).toHaveBeenCalledTimes(4);
+    expect(releaseForPrompt).toHaveBeenCalledTimes(2);
+    expect(reacquireAfterPrompt).toHaveBeenCalledTimes(2);
+    expect(events).toEqual([
+      "drain",
+      "release",
+      "stream",
+      "drain",
+      "reacquire",
+      "drain",
+      "release",
+      "stream",
+      "drain",
+      "reacquire",
+    ]);
+  });
+
   it("keeps prompt-stream transcript appends from blocking session-locked hook writes", async () => {
     const sessionFile = await createTempSessionFile();
     const controller = await createEmbeddedAttemptSessionLockController({
