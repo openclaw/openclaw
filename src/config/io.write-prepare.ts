@@ -829,6 +829,15 @@ export function applyUnsetPathsForWrite(
   return next;
 }
 
+export function hasRootEditorSchemaUnsetPath(unsetPaths: readonly string[][] | undefined): boolean {
+  return Boolean(
+    unsetPaths?.some(
+      (unsetPath) =>
+        Array.isArray(unsetPath) && unsetPath.length === 1 && unsetPath[0] === "$schema",
+    ),
+  );
+}
+
 export function resolveManagedUnsetPathsForWrite(
   unsetPaths: readonly string[][] | undefined,
 ): string[][] {

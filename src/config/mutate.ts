@@ -21,7 +21,11 @@ import {
   type ConfigWriteOptions,
   type ConfigWriteResult,
 } from "./io.js";
-import { applyUnsetPathsForWrite, resolveManagedUnsetPathsForWrite } from "./io.write-prepare.js";
+import {
+  applyUnsetPathsForWrite,
+  hasRootEditorSchemaUnsetPath,
+  resolveManagedUnsetPathsForWrite,
+} from "./io.write-prepare.js";
 import { assertConfigWriteAllowedInCurrentMode } from "./nix-mode-write-guard.js";
 import { resolveConfigPath } from "./paths.js";
 import {
@@ -347,12 +351,16 @@ async function stampRootEditorSchemaRef(params: {
 async function tryWriteEditorConfigArtifactsForIncludeMutation(params: {
   snapshot: ConfigFileSnapshot;
   pluginMetadataSnapshot?: ConfigWriteOptions["basePluginMetadataSnapshot"];
+  stampRootSchemaRef?: boolean;
 }): Promise<{ committedRootSchemaRefHash: string | null }> {
   let committedRootSchemaRefHash: string | null = null;
   await writeEditorConfigSchemaFile({
     configPath: params.snapshot.path,
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,
   }).catch(() => {});
+  if (params.stampRootSchemaRef === false) {
+    return { committedRootSchemaRefHash };
+  }
   await stampRootEditorSchemaRef({ snapshot: params.snapshot })
     .then((result) => {
       committedRootSchemaRefHash = result?.committedHash ?? null;
@@ -424,6 +432,7 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     ({ committedRootSchemaRefHash } = await writeEditorConfigArtifacts({
       snapshot: params.snapshot,
       pluginMetadataSnapshot: params.writeOptions?.basePluginMetadataSnapshot,
+      stampRootSchemaRef: !hasRootEditorSchemaUnsetPath(params.writeOptions?.unsetPaths),
     }).catch(() => ({ committedRootSchemaRefHash: null })));
 
     if (

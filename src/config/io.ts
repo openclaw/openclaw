@@ -71,6 +71,7 @@ import {
   createMergePatch,
   formatConfigValidationFailure,
   applyUnsetPathsForWrite,
+  hasRootEditorSchemaUnsetPath,
   projectSourceOntoRuntimeShape,
   restoreEnvRefsFromMap,
   resolvePersistCandidateForWrite,
@@ -2335,10 +2336,13 @@ export function createConfigIO(
       deps.homedir(),
     ) as OpenClawConfig;
     const outputConfig = applyUnsetPathsForWrite(tildeRestoredOutputConfig, unsetPaths);
+    const editorSchemaOutputConfig = hasRootEditorSchemaUnsetPath(unsetPaths)
+      ? outputConfig
+      : ensureEditorSchemaRef(outputConfig);
     // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(
-      ensureEditorSchemaRef(outputConfig),
+      editorSchemaOutputConfig,
       options.lastTouchedVersionOverride,
     );
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");

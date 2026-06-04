@@ -665,6 +665,29 @@ describe("config io write", () => {
     });
   });
 
+  it("preserves explicit root $schema removals", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createFastConfigIO(home);
+
+      await io.writeConfigFile({
+        $schema: "./openclaw.schema.json",
+        gateway: { mode: "local", port: 18789 },
+      });
+      await io.writeConfigFile(
+        { gateway: { mode: "local", port: 18789 } },
+        { unsetPaths: [["$schema"]] },
+      );
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+        gateway?: { mode?: string; port?: number };
+      };
+      expect(persisted.$schema).toBeUndefined();
+      expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "tightens world-writable state dir when writing the default config",
     async () => {
