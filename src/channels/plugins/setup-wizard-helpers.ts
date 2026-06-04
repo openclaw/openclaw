@@ -51,6 +51,14 @@ function asAllowFromList(value: unknown): ReadonlyArray<string | number> | undef
     : undefined;
 }
 
+function normalizeRequiredPromptText(value: unknown): string {
+  const normalized = normalizeOptionalString(value);
+  if (!normalized) {
+    throw new Error("Required");
+  }
+  return normalized;
+}
+
 export const promptAccountId: PromptAccountId = async (params: PromptAccountIdParams) => {
   const existingIds = params.listAccountIds(params.cfg);
   const initial = params.currentId?.trim() || params.defaultAccountId || DEFAULT_ACCOUNT_ID;
@@ -74,8 +82,9 @@ export const promptAccountId: PromptAccountId = async (params: PromptAccountIdPa
     message: `New ${params.label} account id`,
     validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
   });
-  const normalized = normalizeAccountId(entered);
-  if ((normalizeOptionalString(entered) ?? "") !== normalized) {
+  const enteredValue = normalizeRequiredPromptText(entered);
+  const normalized = normalizeAccountId(enteredValue);
+  if (enteredValue !== normalized) {
     await params.prompter.note(
       `Normalized account id to "${normalized}".`,
       `${params.label} account`,
@@ -983,12 +992,12 @@ export async function promptSingleChannelToken(params: {
   inputPrompt: string;
 }): Promise<{ useEnv: boolean; token: string | null }> {
   const promptToken = async (): Promise<string> =>
-    (
+    normalizeRequiredPromptText(
       await params.prompter.text({
         message: params.inputPrompt,
-        validate: (value) => (value?.trim() ? undefined : "Required"),
-      })
-    ).trim();
+        validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
+      }),
+    );
 
   if (params.canUseEnv) {
     const keepEnv = await params.prompter.confirm({
@@ -1215,7 +1224,11 @@ export async function promptParsedAllowFromForAccount<TConfig extends OpenClawCo
       return params.parseEntries(raw).error;
     },
   });
-  const parsed = params.parseEntries(entry);
+  const raw = normalizeRequiredPromptText(entry);
+  const parsed = params.parseEntries(raw);
+  if (parsed.error) {
+    throw new Error(parsed.error);
+  }
   const unique =
     params.mergeEntries?.({
       existing,
@@ -1512,7 +1525,7 @@ export async function promptResolvedAllowFrom(params: {
       initialValue: params.existing[0] ? String(params.existing[0]) : undefined,
       validate: (value) => (normalizeOptionalString(value) ? undefined : "Required"),
     });
-    const parts = params.parseInputs(entry);
+    const parts = params.parseInputs(normalizeRequiredPromptText(entry));
     if (!params.token) {
       const ids = parts.map(params.parseId).filter(Boolean) as string[];
       if (ids.length !== parts.length) {

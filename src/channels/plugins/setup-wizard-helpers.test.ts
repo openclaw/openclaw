@@ -377,6 +377,31 @@ describe("promptResolvedAllowFrom", () => {
     );
     expect(resolveEntries).toHaveBeenCalledTimes(2);
   });
+
+  it("rejects nullish required allowFrom prompt results", async () => {
+    const prompter = {
+      text: vi.fn(async (params: { validate?: (value: string) => string | undefined }) => {
+        expect(params.validate?.(undefined as unknown as string)).toBe("Required");
+        return undefined as unknown as string;
+      }),
+      note: vi.fn(async () => undefined),
+    };
+
+    await expect(
+      promptResolvedAllowFrom({
+        prompter: prompter as any,
+        existing: [],
+        token: "",
+        message: "msg",
+        placeholder: "placeholder",
+        label: "allowlist",
+        parseInputs: parseCsvInputs,
+        parseId: (value) => value,
+        invalidWithoutTokenNote: "ids only",
+        resolveEntries: vi.fn(),
+      }),
+    ).rejects.toThrow("Required");
+  });
 });
 
 describe("promptLegacyChannelAllowFrom", () => {
@@ -518,6 +543,25 @@ describe("promptSingleChannelToken", () => {
     });
     expect(result).toEqual(expected);
     expect(prompter.text).toHaveBeenCalledTimes(expectTextCalls);
+  });
+
+  it("rejects nullish required token prompt results", async () => {
+    const prompter = {
+      confirm: vi.fn(async () => false),
+      text: vi.fn(async (params: { validate?: (value: string) => string | undefined }) => {
+        expect(params.validate?.(undefined as unknown as string)).toBe("Required");
+        return undefined as unknown as string;
+      }),
+    };
+
+    await expect(
+      runPromptSingleToken({
+        prompter: prompter as ReturnType<typeof createTokenPrompter>,
+        accountConfigured: false,
+        canUseEnv: false,
+        hasConfigToken: false,
+      }),
+    ).rejects.toThrow("Required");
   });
 });
 
@@ -709,6 +753,33 @@ describe("promptParsedAllowFromForScopedChannel", () => {
     });
 
     expect(next.channels?.imessage?.allowFrom).toEqual(["ok"]);
+  });
+
+  it("rejects nullish parsed allowFrom prompt results", async () => {
+    const parseEntries = vi.fn((raw: string) => ({ entries: [raw.trim()] }));
+    const prompter = {
+      note: vi.fn(async () => undefined),
+      text: vi.fn(async (params: { validate?: (value: string) => string | undefined }) => {
+        expect(params.validate?.(undefined as unknown as string)).toBe("Required");
+        return undefined as unknown as string;
+      }),
+    };
+
+    await expect(
+      promptParsedAllowFromForScopedChannel({
+        cfg: {},
+        channel: "imessage",
+        defaultAccountId: DEFAULT_ACCOUNT_ID,
+        prompter,
+        noteTitle: "title",
+        noteLines: [],
+        message: "msg",
+        placeholder: "placeholder",
+        parseEntries,
+        getExistingAllowFrom: () => [],
+      }),
+    ).rejects.toThrow("Required");
+    expect(parseEntries).not.toHaveBeenCalled();
   });
 });
 

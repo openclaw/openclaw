@@ -50,6 +50,10 @@ function buildOptionSearchText<T>(option: Option<T>): string {
   return normalizeLowercaseStringOrEmpty(`${label} ${hint} ${value}`);
 }
 
+function normalizeTextPromptResult(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
 export function tokenizedOptionFilter<T>(search: string, option: Option<T>): boolean {
   const tokens = normalizeSearchTokens(search);
   if (tokens.length === 0) {
@@ -128,20 +132,24 @@ export function createClackPrompter(): WizardPrompter {
     text: async (params) => {
       const validate = params.validate;
       if (params.sensitive) {
-        return guardCancel(
-          await password({
-            message: stylePromptMessage(params.message),
-            validate: validate ? (value) => validate(value ?? "") : undefined,
-          }),
+        return normalizeTextPromptResult(
+          guardCancel(
+            await password({
+              message: stylePromptMessage(params.message),
+              validate: validate ? (value) => validate(value ?? "") : undefined,
+            }),
+          ),
         );
       }
-      return guardCancel(
-        await text({
-          message: stylePromptMessage(params.message),
-          initialValue: params.initialValue,
-          placeholder: params.placeholder,
-          validate: validate ? (value) => validate(value ?? "") : undefined,
-        }),
+      return normalizeTextPromptResult(
+        guardCancel(
+          await text({
+            message: stylePromptMessage(params.message),
+            initialValue: params.initialValue,
+            placeholder: params.placeholder,
+            validate: validate ? (value) => validate(value ?? "") : undefined,
+          }),
+        ),
       );
     },
     confirm: async (params) =>
