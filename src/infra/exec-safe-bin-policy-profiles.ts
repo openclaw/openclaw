@@ -18,11 +18,14 @@ export type SafeBinProfileFixture = {
   minPositional?: number;
   maxPositional?: number;
   allowedValueFlags?: readonly string[];
-  allowedBooleanFlags?: readonly string[];
   deniedFlags?: readonly string[];
 };
 
 export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
+
+type BuiltinSafeBinProfileFixture = SafeBinProfileFixture & {
+  allowedBooleanFlags?: readonly string[];
+};
 
 const NO_FLAGS: ReadonlySet<string> = new Set();
 
@@ -82,7 +85,7 @@ export function buildLongFlagPrefixMap(
   return prefixMap;
 }
 
-function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
+function compileSafeBinProfile(fixture: BuiltinSafeBinProfileFixture): SafeBinProfile {
   const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
   const allowedBooleanFlags = toFlagSet(fixture.allowedBooleanFlags);
   const deniedFlags = toFlagSet(fixture.deniedFlags);
@@ -100,14 +103,14 @@ function compileSafeBinProfile(fixture: SafeBinProfileFixture): SafeBinProfile {
 }
 
 function compileSafeBinProfiles(
-  fixtures: Record<string, SafeBinProfileFixture>,
+  fixtures: Record<string, BuiltinSafeBinProfileFixture>,
 ): Record<string, SafeBinProfile> {
   return Object.fromEntries(
     Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(fixture)]),
   ) as Record<string, SafeBinProfile>;
 }
 
-export const SAFE_BIN_PROFILE_FIXTURES: Record<string, SafeBinProfileFixture> = {
+export const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = {
   jq: {
     maxPositional: 1,
     allowedValueFlags: ["--arg", "--argjson", "--argstr"],
