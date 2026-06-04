@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import {
   lstat,
   mkdir,
@@ -11,6 +12,20 @@ import {
 } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fsSync.writeFileSync(tempFile, "temp");
+    fsSync.symlinkSync(tempFile, tempLink, "file");
+    fsSync.unlinkSync(tempLink);
+    fsSync.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { API, Credentials, LoginQRCallbackEvent } from "./zca-client.js";
@@ -411,7 +426,7 @@ describe("zalouser credential persistence", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "refuses to write credentials through a symlinked file",
     async () => {
       const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
@@ -426,7 +441,7 @@ describe("zalouser credential persistence", () => {
 
       await mkdir(path.dirname(filePath), { recursive: true });
       await writeFile(targetPath, "sentinel", "utf8");
-      await symlink(targetPath, filePath);
+      await symlink(targetPath, filePath, "file");
 
       createZaloMock.mockResolvedValueOnce({
         loginQR: async (_options: unknown, callback?: (event: LoginQRCallbackEvent) => unknown) => {
