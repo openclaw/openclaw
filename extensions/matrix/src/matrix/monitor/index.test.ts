@@ -1105,4 +1105,20 @@ describe("monitorMatrixProvider", () => {
       trackerOpts.shouldKeepLocallyPromotedDirectRoom("!room:example.org"),
     ).resolves.toBeUndefined();
   });
+
+  it("preserves root bypassMentionInBoundThreads when account overrides only threadBindings.idleHours", async () => {
+    (hoisted.accountConfig as Record<string, unknown>).threadBindings = {
+      bypassMentionInBoundThreads: true,
+    };
+    (hoisted.accountConfig as Record<string, unknown>).accounts = {
+      default: { threadBindings: { idleHours: 4 } },
+    };
+
+    await startMonitorAndAbortAfterStartup();
+
+    const handlerParams = mockCallArg(hoisted.createMatrixRoomMessageHandler) as {
+      bypassMentionInBoundThreads?: unknown;
+    };
+    expect(handlerParams.bypassMentionInBoundThreads).toBe(true);
+  });
 });

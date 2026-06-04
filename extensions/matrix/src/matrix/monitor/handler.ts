@@ -222,6 +222,8 @@ export type MatrixMonitorHandlerParams = {
   threadReplies: "off" | "inbound" | "always";
   /** DM-specific threadReplies override. Falls back to threadReplies when absent. */
   dmThreadReplies?: "off" | "inbound" | "always";
+  bypassMentionInBoundThreads?: boolean;
+  threadBindingIdleTimeoutMs?: number;
   /** DM session grouping behavior. */
   dmSessionScope?: "per-user" | "per-room";
   streaming: MatrixStreamingMode;
@@ -436,6 +438,8 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
     groupPolicy,
     replyToMode,
     threadReplies,
+    bypassMentionInBoundThreads = false,
+    threadBindingIdleTimeoutMs = 0,
     dmThreadReplies,
     dmSessionScope,
     streaming,
@@ -1036,14 +1040,38 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
                 ? roomConfig?.requireMention
                 : true
           : false;
+        const inThreadReply = bypassMentionInBoundThreads && thread.threadId !== undefined;
+        let threadSessionExists = false;
+        if (inThreadReply) {
+          try {
+            const threadCheckStorePath = core.channel.session.resolveStorePath(cfg.session?.store, {
+              agentId: _route.agentId,
+            });
+            const threadSessionUpdatedAt = core.channel.session.readSessionUpdatedAt({
+              storePath: threadCheckStorePath,
+              sessionKey: _route.sessionKey,
+            });
+            const sessionRecordPresent =
+              threadSessionUpdatedAt !== undefined && threadSessionUpdatedAt !== null;
+            const idleBoundMs = Math.max(0, Math.floor(threadBindingIdleTimeoutMs));
+            const referenceTs = typeof eventTs === "number" ? eventTs : Date.now();
+            const sessionFresh =
+              idleBoundMs <= 0 ||
+              (sessionRecordPresent && referenceTs - (threadSessionUpdatedAt ?? 0) <= idleBoundMs);
+            threadSessionExists = sessionRecordPresent && sessionFresh;
+          } catch {
+            threadSessionExists = false;
+          }
+        }
+        const inExistingBoundThread =
+          inThreadReply && (threadSessionExists || _runtimeBindingId !== null);
         const shouldBypassMention =
-          allowTextCommands &&
           isRoom &&
           shouldRequireMention &&
           !wasMentioned &&
           !hasExplicitMention &&
-          commandAuthorized &&
-          hasControlCommandInMessage;
+          ((allowTextCommands && commandAuthorized && hasControlCommandInMessage) ||
+            inExistingBoundThread);
         const canDetectMention = agentMentionRegexes.length > 0 || hasExplicitMention;
         if (isRoom && shouldRequireMention && !wasMentioned && !shouldBypassMention) {
           const pendingHistoryBody = pendingHistoryText || pendingHistoryPollText;

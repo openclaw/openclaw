@@ -1103,6 +1103,242 @@ describe("matrix monitor handler pairing account scope", () => {
     expectMockCallWithFields(recordInboundSession, { sessionKey: "agent:ops:main:thread:$root" });
   });
 
+  it("bypasses requireMention for in-thread replies when a session record already exists for the thread", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "always",
+      bypassMentionInBoundThreads: true,
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      readSessionUpdatedAt: () => Date.now() - 5_000,
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "@bot please help",
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-1",
+        body: "follow up without mention",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it("bypasses requireMention for in-thread replies when an explicit runtime binding exists (e.g. /focus)", async () => {
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "ops",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "$root"
+          ? {
+              bindingId: "ops:thread:$root",
+              targetSessionKey: "agent:ops:main:thread:$root",
+              targetKind: "session",
+              conversation: {
+                channel: "matrix",
+                accountId: "ops",
+                conversationId: "$root",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: { boundBy: "focus-cmd" },
+            }
+          : null,
+      touch: vi.fn(),
+    });
+
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "always",
+      bypassMentionInBoundThreads: true,
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      readSessionUpdatedAt: () => undefined,
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "@bot please help",
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-2",
+        body: "follow up without mention",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).toHaveBeenCalled();
+  });
+
+  it("still drops in-thread replies without mention when bypassMentionInBoundThreads is off (default)", async () => {
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "always",
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "just chatting amongst ourselves",
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-no-binding",
+        body: "follow up without mention",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
+  it("drops in-thread replies when the thread session record is older than the configured idle window", async () => {
+    const nowMs = 1_780_000_000_000;
+    const twoHoursAgoMs = nowMs - 2 * 60 * 60 * 1000;
+    const oneHourMs = 60 * 60 * 1000;
+
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "always",
+      bypassMentionInBoundThreads: true,
+      threadBindingIdleTimeoutMs: oneHourMs,
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      readSessionUpdatedAt: () => twoHoursAgoMs,
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "@bot please help",
+            originServerTs: nowMs - 3 * 60 * 60 * 1000,
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-stale",
+        body: "follow up without mention",
+        originServerTs: nowMs,
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
+  it("still drops m.thread-relation replies when threadReplies is off and only a room-level binding/session exists", async () => {
+    registerSessionBindingAdapter({
+      channel: "matrix",
+      accountId: "ops",
+      listBySession: () => [],
+      resolveByConversation: (ref) =>
+        ref.conversationId === "!room:example.org"
+          ? {
+              bindingId: "ops:room:!room:example.org",
+              targetSessionKey: "agent:ops:main",
+              targetKind: "session",
+              conversation: {
+                channel: "matrix",
+                accountId: "ops",
+                conversationId: "!room:example.org",
+              },
+              status: "active",
+              boundAt: Date.now(),
+              metadata: { boundBy: "focus-cmd" },
+            }
+          : null,
+      touch: vi.fn(),
+    });
+
+    const { handler, recordInboundSession } = createMatrixHandlerTestHarness({
+      isDirectMessage: false,
+      threadReplies: "off",
+      bypassMentionInBoundThreads: true,
+      roomsConfig: {
+        "!room:example.org": { requireMention: true },
+      },
+      mentionRegexes: [/@bot/i],
+      readSessionUpdatedAt: () => Date.now() - 5_000,
+      client: {
+        getEvent: async () =>
+          createMatrixTextMessageEvent({
+            eventId: "$root",
+            sender: "@alice:example.org",
+            body: "@bot please help",
+          }),
+      },
+      getMemberDisplayName: async () => "sender",
+    });
+
+    await handler(
+      "!room:example.org",
+      createMatrixTextMessageEvent({
+        eventId: "$thread-reply-room-scoped",
+        body: "follow up without mention",
+        relatesTo: {
+          rel_type: "m.thread",
+          event_id: "$root",
+          "m.in_reply_to": { event_id: "$root" },
+        },
+      }),
+    );
+
+    expect(recordInboundSession).not.toHaveBeenCalled();
+  });
+
   it("keeps threaded DMs flat when dm threadReplies is off", async () => {
     const { handler, finalizeInboundContext, recordInboundSession } =
       createMatrixHandlerTestHarness({
