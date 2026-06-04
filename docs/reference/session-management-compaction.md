@@ -160,7 +160,8 @@ Each `sessionKey` points at a current `sessionId` (the transcript file that cont
 Rules of thumb:
 
 - **Reset** (`/new`, `/reset`) creates a new `sessionId` for that `sessionKey`.
-- **Daily reset** (default 4:00 AM local time on the gateway host) creates a new `sessionId` on the next message after the reset boundary.
+- **Daily reset** (default 4:00 AM local time on the gateway host for direct and group sessions) creates a new `sessionId` on the next message after the reset boundary.
+- **Thread-scoped sessions** default to idle reset without an inactivity expiry when no reset policy is configured, so topic/thread sessions keep their `sessionId` across the daily boundary by default.
 - **Idle expiry** (`session.reset.idleMinutes` or legacy `session.idleMinutes`) creates a new `sessionId` when a message arrives after the idle window. When daily + idle are both configured, whichever expires first wins.
 - **System events** (heartbeat, cron wakeups, exec notifications, gateway bookkeeping) may mutate the session row but do not extend daily/idle reset freshness. Reset rollover discards queued system-event notices for the previous session before the fresh prompt is built.
 - **Parent fork policy** uses OpenClaw's active branch when creating a thread or subagent fork. If that branch is too large, OpenClaw starts the child with isolated context instead of failing or inheriting unusable history. The sizing policy is automatic; legacy `session.parentForkMaxTokens` config is removed by `openclaw doctor --fix`.
