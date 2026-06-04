@@ -71,7 +71,7 @@ export const SERVICE_AUDIT_CODES = {
   systemdAfterNetworkOnline: "systemd-after-network-online",
   systemdRestartSec: "systemd-restart-sec",
   systemdWantsNetworkOnline: "systemd-wants-network-online",
-  systemdKillModeProcessOrNone: "systemd-kill-mode-process-or-none",
+  systemdKillModeNotMixed: "systemd-kill-mode-not-mixed",
 } as const;
 
 /** Returns whether audit issues require migrating a daemon to a stable Node runtime. */
@@ -202,12 +202,11 @@ async function auditSystemdUnit(
     });
   }
   const killMode = normalizeLowercaseStringOrEmpty(parsed.killMode);
-  if (killMode === "process" || killMode === "none") {
+  if (killMode !== "mixed") {
     issues.push({
-      code: SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
-      message:
-        "KillMode is process/none; service child processes can survive gateway stops and restarts.",
-      detail: `${unitPath}: ${killMode}`,
+      code: SERVICE_AUDIT_CODES.systemdKillModeNotMixed,
+      message: "KillMode should be mixed so the gateway can drain before child cleanup.",
+      detail: `${unitPath}: ${killMode || "unset"}`,
       level: "recommended",
     });
   }

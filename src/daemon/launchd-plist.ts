@@ -1,12 +1,13 @@
 /** Reads and renders macOS LaunchAgent plists for gateway service installs. */
 import fs from "node:fs/promises";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS } from "./service-stop-timeout.js";
 import type { GatewayServiceEnvironmentValueSource } from "./service-types.js";
 
 // launchd defaults to a 10s spawn throttle. Keep that default explicitly so
 // crash loops back off instead of respawning every second while still allowing
 // explicit kickstart restarts to take effect.
 export const LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS = 10;
-export const LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = 20;
+export const LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS = GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS;
 // launchd stores plist integer values in decimal; 0o077 renders as 63 (owner-only files).
 export const LAUNCH_AGENT_UMASK_DECIMAL = 0o077;
 export const LAUNCH_AGENT_PROCESS_TYPE = "Interactive";

@@ -426,7 +426,7 @@ describe("auditGatewayServiceConfig", () => {
     expectTokenAudit(audit, { embedded: true, mismatch: true });
   });
 
-  it.each(["process", "none"])(
+  it.each(["control-group", "process", "none"])(
     `warns when KillMode is %s in explicit unit file`,
     async (killMode) => {
       const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
@@ -446,20 +446,17 @@ describe("auditGatewayServiceConfig", () => {
         },
       });
       expect(
-        audit.issues.some(
-          (entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone,
-        ),
+        audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeNotMixed),
       ).toBe(true);
     },
   );
 
-  it.each(["control-group", "mixed"])("does not warn when KillMode is %s", async (killMode) => {
+  it("warns when systemd KillMode is unset", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
     await writeSystemdUnitForAudit(home, [
       "After=network-online.target",
       "Wants=network-online.target",
       "RestartSec=5",
-      `KillMode=${killMode}`,
     ]);
     const audit = await auditGatewayServiceConfig({
       env: { HOME: home },
@@ -470,7 +467,28 @@ describe("auditGatewayServiceConfig", () => {
       },
     });
     expect(
-      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeProcessOrNone),
+      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeNotMixed),
+    ).toBe(true);
+  });
+
+  it("does not warn when KillMode is mixed", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
+    await writeSystemdUnitForAudit(home, [
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartSec=5",
+      "KillMode=mixed",
+    ]);
+    const audit = await auditGatewayServiceConfig({
+      env: { HOME: home },
+      platform: "linux",
+      command: {
+        programArguments: ["/usr/bin/node", "gateway"],
+        environment: { PATH: "/usr/bin:/bin" },
+      },
+    });
+    expect(
+      audit.issues.some((entry) => entry.code === SERVICE_AUDIT_CODES.systemdKillModeNotMixed),
     ).toBe(false);
   });
 
@@ -480,7 +498,7 @@ describe("auditGatewayServiceConfig", () => {
       "After=network-online.target",
       "Wants=network-online.target",
       "RestartSec=5s",
-      "KillMode=control-group",
+      "KillMode=mixed",
     ]);
     const audit = await auditGatewayServiceConfig({
       env: { HOME: home },
