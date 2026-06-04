@@ -4021,6 +4021,71 @@ describe("diagnostics-otel service", () => {
     await service.stop?.(ctx);
   });
 
+  test("sibling runs sharing one OTel trace do not cross-stamp captured I/O", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
+      traces: true,
+      metrics: true,
+      captureContent: { enabled: true, inputMessages: true, outputMessages: true },
+    });
+    await service.start(ctx);
+
+    // Two distinct runs whose spans share one OTel trace id (the mock hands every span the same
+    // traceId) — the exact shape that trace-id-keyed stamping would cross-contaminate.
+    emitTrustedDiagnosticEvent({
+      type: "run.started",
+      runId: "run-1",
+      provider: "openai",
+      model: "gpt-5.4",
+      trace: { traceId: TRACE_ID, spanId: CHILD_SPAN_ID, parentSpanId: SPAN_ID, traceFlags: "01" },
+    });
+    emitTrustedDiagnosticEvent({
+      type: "run.started",
+      runId: "run-2",
+      provider: "openai",
+      model: "gpt-5.4",
+      trace: {
+        traceId: TRACE_ID,
+        spanId: GRANDCHILD_SPAN_ID,
+        parentSpanId: SPAN_ID,
+        traceFlags: "01",
+      },
+    });
+    emitTrustedModelCallCompletedWithContent(
+      { runId: "run-1", callId: "call-1", provider: "openai", model: "gpt-5.4", durationMs: 50 },
+      { inputMessages: ["run one prompt"], outputMessages: ["run one reply"] },
+    );
+    emitTrustedModelCallCompletedWithContent(
+      { runId: "run-2", callId: "call-2", provider: "openai", model: "gpt-5.4", durationMs: 50 },
+      { inputMessages: ["run two prompt"], outputMessages: ["run two reply"] },
+    );
+    await flushDiagnosticEvents();
+
+    const runSpans = telemetryState.spans.filter((s) => s.name === "openclaw.run");
+    expect(runSpans).toHaveLength(2);
+    const mergedAttrs = (span: (typeof runSpans)[number]) =>
+      Object.assign(
+        {},
+        ...span.setAttributes.mock.calls.map((call) => call[0] as Record<string, unknown>),
+      ) as Record<string, unknown>;
+    const run1Attrs = mergedAttrs(runSpans[0]);
+    const run2Attrs = mergedAttrs(runSpans[1]);
+
+    // Each run's root span carries ONLY its own conversation, at both trace and observation level.
+    expect(String(run1Attrs["langfuse.trace.input"])).toContain("run one prompt");
+    expect(String(run1Attrs["input.value"])).toContain("run one prompt");
+    expect(String(run1Attrs["langfuse.trace.output"])).toContain("run one reply");
+    expect(String(run1Attrs["output.value"])).toContain("run one reply");
+    expect(JSON.stringify(run1Attrs)).not.toContain("run two");
+
+    expect(String(run2Attrs["langfuse.trace.input"])).toContain("run two prompt");
+    expect(String(run2Attrs["input.value"])).toContain("run two prompt");
+    expect(String(run2Attrs["output.value"])).toContain("run two reply");
+    expect(JSON.stringify(run2Attrs)).not.toContain("run one");
+
+    await service.stop?.(ctx);
+  });
+
   test("exports bounded redacted content when capture fields are opted in", async () => {
     const service = createDiagnosticsOtelService();
     const ctx = createOtelContext(OTEL_TEST_ENDPOINT, {
