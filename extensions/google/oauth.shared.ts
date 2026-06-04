@@ -15,7 +15,9 @@ export const LOAD_CODE_ASSIST_ENDPOINTS = [
   CODE_ASSIST_ENDPOINT_DAILY,
   CODE_ASSIST_ENDPOINT_AUTOPUSH,
 ];
-export const DEFAULT_FETCH_TIMEOUT_MS = 10_000;
+// OAuth token exchanges can take 10-14 seconds on slow networks; give enough
+// headroom so that routine refreshes do not trip the hard timeout.
+export const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 export const SCOPES = [
   "https://www.googleapis.com/auth/cloud-platform",
   "https://www.googleapis.com/auth/userinfo.email",
