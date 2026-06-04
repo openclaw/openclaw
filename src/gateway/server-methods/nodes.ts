@@ -24,7 +24,12 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import {
+  getPairedDevice,
+  hasEffectivePairedDeviceRole,
+  listDevicePairing,
+  removePairedDeviceRole,
+} from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   approveNodePairing,
@@ -61,6 +66,11 @@ import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.j
 import type { NodeSession } from "../node-registry.js";
 import { refreshClientPluginNodeCapability } from "../plugin-node-capability.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
+import {
+  deniesCrossDeviceManagement,
+  pairedDeviceHasNonOperatorRole,
+  resolveDeviceManagementAuthz,
+} from "./device-management-authz.js";
 import {
   NODE_WAKE_RECONNECT_POLL_MS,
   NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
@@ -282,6 +292,85 @@ function prunePendingNodeActions(nodeId: string, nowMs: number): PendingNodeActi
   }
   pendingNodeActionsById.set(nodeId, live);
   return live;
+}
+
+function clearRemovedNodeRuntimeState(params: {
+  nodeId: string;
+  context: Pick<GatewayRequestContext, "nodeRegistry">;
+}) {
+  pendingNodeActionsById.delete(params.nodeId);
+  params.context.nodeRegistry.updateSurface(params.nodeId, {
+    caps: [],
+    commands: [],
+    permissions: undefined,
+  });
+  removeRemoteNodeInfo(params.nodeId);
+}
+
+function broadcastRemovedNodePairing(params: {
+  context: Pick<GatewayRequestContext, "broadcast">;
+  nodeId: string;
+}) {
+  params.context.broadcast(
+    "node.pair.resolved",
+    {
+      requestId: "",
+      nodeId: params.nodeId,
+      decision: "removed",
+      ts: Date.now(),
+    },
+    { dropIfSlow: true },
+  );
+}
+
+async function removePairedDeviceBackedNode(params: {
+  nodeId: string;
+  client: GatewayClient | null;
+  context: Pick<
+    GatewayRequestContext,
+    "disconnectClientsForDevice" | "invalidateClientsForDevice" | "logGateway"
+  >;
+}): Promise<
+  | { status: "removed"; nodeId: string; disconnectDeviceId: string }
+  | { status: "denied"; message: string }
+  | { status: "unknown" }
+> {
+  const nodeId = params.nodeId.trim();
+  if (!nodeId) {
+    return { status: "unknown" };
+  }
+  const paired = await getPairedDevice(nodeId);
+  if (!paired || !hasEffectivePairedDeviceRole(paired, "node")) {
+    return { status: "unknown" };
+  }
+
+  const authz = resolveDeviceManagementAuthz(params.client, nodeId);
+  if (deniesCrossDeviceManagement(authz)) {
+    params.context.logGateway.warn(
+      `node pairing removal denied node=${nodeId} reason=device-ownership-mismatch`,
+    );
+    return { status: "denied", message: "node pairing removal denied" };
+  }
+  if (!authz.isAdminCaller && pairedDeviceHasNonOperatorRole(paired)) {
+    params.context.logGateway.warn(
+      `node pairing removal denied node=${nodeId} reason=role-management-requires-admin`,
+    );
+    return { status: "denied", message: "node pairing removal denied" };
+  }
+
+  const removed = await removePairedDeviceRole({ deviceId: nodeId, role: "node" });
+  if (!removed) {
+    return { status: "unknown" };
+  }
+  params.context.logGateway.info(`node pairing removed device-backed node=${removed.deviceId}`);
+  // Match device.pair.remove: invalidate before responding so pipelined frames
+  // on the affected device token are rejected. The caller queues the hard close
+  // only after the success response is emitted.
+  params.context.invalidateClientsForDevice?.(removed.deviceId, {
+    role: "node",
+    reason: "device-pair-removed",
+  });
+  return { status: "removed", nodeId: removed.deviceId, disconnectDeviceId: removed.deviceId };
 }
 
 function enqueuePendingNodeAction(params: {
@@ -849,7 +938,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       respond(true, rejected, undefined);
     });
   },
-  "node.pair.remove": async ({ params, respond, context }) => {
+  "node.pair.remove": async ({ params, respond, context, client }) => {
     if (!validateNodePairRemoveParams(params)) {
       respondInvalidParams({
         respond,
@@ -860,29 +949,31 @@ export const nodeHandlers: GatewayRequestHandlers = {
     }
     const { nodeId } = params as { nodeId: string };
     await respondUnavailableOnThrow(respond, async () => {
-      const removed = await removePairedNode(nodeId);
-      if (!removed) {
+      const requestedNodeId = nodeId.trim();
+      const deviceBacked = await removePairedDeviceBackedNode({ nodeId, client, context });
+      if (deviceBacked.status === "denied") {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, deviceBacked.message));
+        return;
+      }
+      const legacyNodeId =
+        deviceBacked.status === "removed" ? deviceBacked.nodeId : requestedNodeId;
+      const removed = await removePairedNode(legacyNodeId);
+      const removedNodeId =
+        removed?.nodeId ?? (deviceBacked.status === "removed" ? deviceBacked.nodeId : undefined);
+      if (!removedNodeId) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
       }
-      pendingNodeActionsById.delete(removed.nodeId);
-      context.nodeRegistry.updateSurface(removed.nodeId, {
-        caps: [],
-        commands: [],
-        permissions: undefined,
-      });
-      removeRemoteNodeInfo(removed.nodeId);
-      context.broadcast(
-        "node.pair.resolved",
-        {
-          requestId: "",
-          nodeId: removed.nodeId,
-          decision: "removed",
-          ts: Date.now(),
-        },
-        { dropIfSlow: true },
-      );
-      respond(true, removed, undefined);
+      clearRemovedNodeRuntimeState({ nodeId: removedNodeId, context });
+      broadcastRemovedNodePairing({ nodeId: removedNodeId, context });
+      respond(true, { nodeId: removedNodeId }, undefined);
+      if (deviceBacked.status === "removed") {
+        queueMicrotask(() => {
+          context.disconnectClientsForDevice?.(deviceBacked.disconnectDeviceId, {
+            role: "node",
+          });
+        });
+      }
     });
   },
   "node.pair.verify": async ({ params, respond }) => {
