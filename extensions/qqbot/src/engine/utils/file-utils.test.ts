@@ -112,7 +112,7 @@ describe("qqbot file-utils downloadFile", () => {
     expect(adapterMocks.fetchMedia).not.toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform === "win32" ? !canCreateFileSymlinks : false)("rejects symlinked local media helpers", async () => {
+  it.skipIf(!canCreateFileSymlinks)("rejects symlinked local media helpers", async () => {
     const targetPath = path.join(tempDir, "target.png");
     const linkPath = path.join(tempDir, "link.png");
     await fs.promises.writeFile(targetPath, "image-bytes");
