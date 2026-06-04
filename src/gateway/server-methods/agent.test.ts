@@ -3701,6 +3701,49 @@ describe("gateway agent handler", () => {
     expect(call.sessionKey).toBe("agent:main:main");
   });
 
+  it("uses an agent-scoped to value as the gateway session selector", async () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+    mocks.resolveExplicitAgentSessionKey.mockReturnValue("agent:main:main");
+    mocks.loadSessionEntry.mockImplementation((key: string) => ({
+      cfg: {},
+      storePath: "/tmp/sessions.json",
+      entry: {
+        sessionId: key === sessionKey ? "wechat-session-id" : "main-session-id",
+        updatedAt: Date.now(),
+      },
+      canonicalKey: key,
+    }));
+    mocks.updateSessionStore.mockImplementation(async (_path, updater) => {
+      const store: Record<string, Record<string, unknown>> = {
+        "agent:main:main": { sessionId: "main-session-id", updatedAt: Date.now() },
+        [sessionKey]: { sessionId: "wechat-session-id", updatedAt: Date.now() },
+      };
+      return await updater(store);
+    });
+    mocks.agentCommand.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: { durationMs: 100 },
+    });
+
+    await invokeAgent(
+      {
+        message: "callback result",
+        to: sessionKey,
+        idempotencyKey: "wechat-session-key-to",
+      },
+      { reqId: "wechat-session-key-to" },
+    );
+
+    const call = await waitForAgentCommandCall<{
+      sessionId?: string;
+      sessionKey?: string;
+      to?: string;
+    }>();
+    expect(call.sessionId).toBe("wechat-session-id");
+    expect(call.sessionKey).toBe(sessionKey);
+    expect(call.to).toBeUndefined();
+  });
+
   it("rolls stale gateway agent sessions even when updatedAt was recently touched", async () => {
     const now = Date.parse("2026-04-25T12:00:00.000Z");
     vi.useFakeTimers();

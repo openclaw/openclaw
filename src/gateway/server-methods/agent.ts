@@ -1275,7 +1275,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const requestedSessionKeyRaw = normalizeOptionalString(request.sessionKey);
+    const requestedSessionKeyParam = normalizeOptionalString(request.sessionKey);
+    const requestedSessionId = normalizeOptionalString(request.sessionId);
+    const requestedToRaw = normalizeOptionalString(request.to);
+    const sessionKeyFromTo =
+      !requestedSessionKeyParam &&
+      !requestedSessionId &&
+      classifySessionKeyShape(requestedToRaw) === "agent"
+        ? requestedToRaw
+        : undefined;
+    const requestedSessionKeyRaw = requestedSessionKeyParam ?? sessionKeyFromTo;
     if (
       requestedSessionKeyRaw &&
       classifySessionKeyShape(requestedSessionKeyRaw) === "malformed_agent"
@@ -1349,7 +1358,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const requestedSessionId = normalizeOptionalString(request.sessionId);
     let requestedSessionKey =
       requestedSessionKeyRaw ??
       (!requestedSessionId
@@ -1492,7 +1500,7 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       const voiceWakeTrigger = normalizeOptionalString(request.voiceWakeTrigger) ?? "";
       const replyTo = normalizeOptionalString(request.replyTo) ?? "";
-      const to = normalizeOptionalString(request.to) ?? "";
+      const to = sessionKeyFromTo ? "" : (requestedToRaw ?? "");
       const explicitVoiceWakeSessionTarget =
         !agentId && requestedSessionKeyRaw
           ? (() => {
@@ -1776,7 +1784,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         };
         const requestDeliveryHint = normalizeDeliveryContext({
           channel: request.channel?.trim(),
-          to: request.to?.trim(),
+          to,
           accountId: request.accountId?.trim(),
           // Pass threadId directly — normalizeDeliveryContext handles both
           // string and numeric threadIds (e.g., Matrix uses integers).
@@ -2189,11 +2197,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
 
       const wantsDelivery = request.deliver === true;
-      const explicitTo =
-        normalizeOptionalString(request.replyTo) ?? normalizeOptionalString(request.to);
+      const explicitTo = replyTo || to || undefined;
       const explicitThreadId = normalizeOptionalString(request.threadId);
       const turnSourceChannel = normalizeOptionalString(request.channel);
-      const turnSourceTo = normalizeOptionalString(request.to);
+      const turnSourceTo = to || undefined;
       const turnSourceAccountId = normalizeOptionalString(request.accountId);
       const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
         cfg: cfgForAgent ?? cfg,
