@@ -287,7 +287,10 @@ API key auth, and dynamic model resolution.
                 }),
               };
             },
-            staticRun: async () => ({
+          },
+          staticCatalog: {
+            order: "simple",
+            run: async () => ({
               provider: {
                 baseUrl: "https://api.acme-ai.com/v1",
                 api: "openai-completions",
