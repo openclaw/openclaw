@@ -162,13 +162,49 @@ describe("buildOpenAIProvider", () => {
       env: {},
     } as never);
 
-    if (!result || !("provider" in result)) {
+    if (!result || "provider" in result) {
       throw new Error("expected OpenAI static provider catalog");
     }
-    const gpt55 = result.provider.models.find((model) => model.id === "gpt-5.5");
+    const gpt55 = result.providers.openai?.models.find((model) => model.id === "gpt-5.5");
     expect(gpt55?.mediaInput).toEqual({
       image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
     });
+  });
+
+  it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
+    const provider = buildOpenAIProvider();
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      Response.json({
+        data: [{ id: "gpt-5.5", object: "model" }],
+      }),
+    );
+
+    try {
+      const result = await provider.catalog?.run({
+        resolveProviderAuth: () => ({
+          mode: "api_key",
+          apiKey: "sk-openai",
+          discoveryApiKey: "sk-discovery",
+          source: "profile",
+        }),
+      } as never);
+
+      if (!result || "provider" in result) {
+        throw new Error("expected OpenAI live provider catalog");
+      }
+      expect(Object.keys(result.providers)).toEqual(["openai"]);
+      expect(result.providers.openai?.apiKey).toBe("sk-openai");
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      const fetchInit = fetchSpy.mock.calls[0]?.[1];
+      const headers = fetchInit?.headers;
+      expect(headers).toBeInstanceOf(Headers);
+      if (!(headers instanceof Headers)) {
+        throw new Error("expected fetch headers");
+      }
+      expect(headers.get("Authorization")).toBe("Bearer sk-discovery");
+    } finally {
+      fetchSpy.mockRestore();
+    }
   });
 
   it("filters the OpenAI API-key catalog against live model ids", async () => {

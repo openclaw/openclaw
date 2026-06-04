@@ -392,16 +392,18 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         return {
-          provider: await buildOpenAILiveProviderConfig({
-            apiKey: auth.apiKey,
-            discoveryApiKey: auth.discoveryApiKey,
-          }),
+          providers: {
+            [PROVIDER_ID]: await buildOpenAILiveProviderConfig({
+              apiKey: auth.apiKey,
+              discoveryApiKey: auth.discoveryApiKey,
+            }),
+          },
         };
       },
     },
     staticCatalog: {
       order: "simple",
-      run: async () => ({ provider: OPENAI_MANIFEST_PROVIDER }),
+      run: async () => ({ providers: { [PROVIDER_ID]: OPENAI_MANIFEST_PROVIDER } }),
     },
     resolveDynamicModel: (ctx) =>
       shouldResolveDynamicModelThroughCodex(ctx)
