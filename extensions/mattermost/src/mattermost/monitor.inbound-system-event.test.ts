@@ -6,9 +6,13 @@ import {
   resolveChannelProgressDraftMaxLines,
   type ChannelProgressDraftLine,
 } from "openclaw/plugin-sdk/channel-outbound";
+import type { ReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorMattermostProvider } from "./monitor.js";
 import type { OpenClawConfig, RuntimeEnv } from "./runtime-api.js";
+
+type CreateReplyDispatcherWithTypingFn =
+  typeof import("openclaw/plugin-sdk/reply-runtime").createReplyDispatcherWithTyping;
 
 class FakeWebSocket {
   public readonly sent: string[] = [];
@@ -165,6 +169,21 @@ function createRuntimeCore(
     createInboundDebouncer?: typeof createInboundDebouncer;
   } = {},
 ) {
+  const createReplyDispatcherWithTypingMock = (
+    params: Parameters<CreateReplyDispatcherWithTypingFn>[0],
+  ): ReturnType<CreateReplyDispatcherWithTypingFn> => ({
+    dispatcher: createReplyDispatcher(),
+    replyOptions: {
+      onReplyStart: params.onReplyStart ?? params.typingCallbacks?.onReplyStart,
+      onTypingCleanup: params.onCleanup ?? params.typingCallbacks?.onCleanup,
+      onTypingController: () => {},
+    },
+    markDispatchIdle: () => {
+      params.typingCallbacks?.onIdle?.();
+      params.onIdle?.();
+    },
+    markRunComplete: () => {},
+  });
   const dispatchPreparedForTest = vi.fn(
     async (turn: {
       storePath: string;
@@ -276,12 +295,7 @@ function createRuntimeCore(
         buildPairingReply: () => "pairing required",
       },
       reply: {
-        createReplyDispatcherWithTyping: vi.fn(() => ({
-          dispatcher: {},
-          replyOptions: {},
-          markDispatchIdle: vi.fn(),
-          markRunComplete: vi.fn(),
-        })),
+        createReplyDispatcherWithTyping: vi.fn(createReplyDispatcherWithTypingMock),
         dispatchReplyFromConfig: mockState.dispatchReplyFromConfig,
         finalizeInboundContext: (context: unknown) => context,
         formatInboundEnvelope: (params: { channel: string; from: string; body: string }) =>
@@ -340,6 +354,18 @@ function createRuntimeCore(
         resolveTextChunkLimit: () => 4000,
       },
     },
+  };
+}
+
+function createReplyDispatcher(): ReplyDispatcher {
+  return {
+    sendToolResult: () => true,
+    sendBlockReply: () => true,
+    sendFinalReply: () => true,
+    getQueuedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
+    markComplete: () => {},
+    waitForIdle: async () => {},
   };
 }
 
@@ -463,12 +489,23 @@ describe("mattermost inbound user posts", () => {
     const runtimeCore = createRuntimeCore(testConfig);
     mockState.runtimeCore = runtimeCore;
 
-    runtimeCore.channel.reply.createReplyDispatcherWithTyping = vi.fn((params) => ({
-      dispatcher: {},
-      replyOptions: params.replyOptions,
-      markDispatchIdle: vi.fn(),
-      markRunComplete: vi.fn(),
-    }));
+    runtimeCore.channel.reply.createReplyDispatcherWithTyping = vi.fn(
+      (
+        params: Parameters<CreateReplyDispatcherWithTypingFn>[0],
+      ): ReturnType<CreateReplyDispatcherWithTypingFn> => ({
+        dispatcher: createReplyDispatcher(),
+        replyOptions: {
+          onReplyStart: params.onReplyStart ?? params.typingCallbacks?.onReplyStart,
+          onTypingCleanup: params.onCleanup ?? params.typingCallbacks?.onCleanup,
+          onTypingController: () => {},
+        },
+        markDispatchIdle: () => {
+          params.typingCallbacks?.onIdle?.();
+          params.onIdle?.();
+        },
+        markRunComplete: () => {},
+      }),
+    );
     mockState.dispatchReplyFromConfig.mockImplementation(async () => {
       mockState.abortController?.abort();
     });
