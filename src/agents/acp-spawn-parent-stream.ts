@@ -24,7 +24,7 @@ import {
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { appendRegularFile } from "../infra/regular-file.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
@@ -99,10 +99,45 @@ function mergeStreamingEntry(
   if (!override) {
     return base;
   }
+  const overrideStreaming = asObjectRecord(override.streaming);
+  const legacyOverrideMode =
+    override.streamMode !== undefined &&
+    (override.streaming === undefined || overrideStreaming) &&
+    overrideStreaming?.mode === undefined
+      ? { mode: override.streamMode }
+      : undefined;
   return {
     ...base,
     ...override,
-    streaming: mergeStreamingConfig(base.streaming, override.streaming),
+    streaming: mergeStreamingConfig(
+      mergeStreamingConfig(base.streaming, override.streaming),
+      legacyOverrideMode,
+    ),
+  };
+}
+
+function hasConfiguredPreviewStreamMode(entry: StreamingCompatEntry): boolean {
+  return (
+    asObjectRecord(entry.streaming)?.mode !== undefined ||
+    typeof entry.streaming === "string" ||
+    typeof entry.streaming === "boolean" ||
+    entry.streamMode !== undefined
+  );
+}
+
+function applyParentPreviewStreamModeDefault(
+  entry: StreamingCompatEntry,
+  channelId: string,
+): StreamingCompatEntry {
+  if (channelId !== "discord" || hasConfiguredPreviewStreamMode(entry)) {
+    return entry;
+  }
+  return {
+    ...entry,
+    streaming: {
+      ...(asObjectRecord(entry.streaming) ?? {}),
+      mode: "progress",
+    },
   };
 }
 
@@ -121,20 +156,25 @@ function resolveParentProgressStreamingEntry(params: {
   if (!channelCfg) {
     return undefined;
   }
-  const accountCfg = resolveAccountEntry(
+  const accountCfg = resolveNormalizedAccountEntry(
     channelCfg.accounts,
     normalizeAccountId(params.deliveryContext?.accountId),
+    normalizeAccountId,
   );
-  return mergeStreamingEntry(channelCfg, accountCfg);
+  return applyParentPreviewStreamModeDefault(
+    mergeStreamingEntry(channelCfg, accountCfg),
+    channelId,
+  );
 }
 
 function resolveParentProgressCommentary(params: {
   cfg: OpenClawConfig | undefined;
   deliveryContext: DeliveryContext | undefined;
 }): boolean {
+  const channelId = normalizeOptionalString(params.deliveryContext?.channel);
   return resolveChannelStreamingProgressCommentary(
     resolveParentProgressStreamingEntry(params),
-    true,
+    channelId === "discord",
   );
 }
 
@@ -364,6 +404,8 @@ export function startAcpSpawnParentStreamRelay(params: {
 
   let disposed = false;
   let pendingText = "";
+  let pendingProgressKind: string | undefined;
+  const itemProgressTextById = new Map<string, string>();
   let lastProgressAt = Date.now();
   let stallNotified = false;
   let promptSubmittedAt: number | undefined;
@@ -396,6 +438,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     }
     const snippet = truncate(compactWhitespace(pendingText), STREAM_SNIPPET_MAX_CHARS);
     pendingText = "";
+    pendingProgressKind = undefined;
     if (!snippet) {
       return;
     }
@@ -412,7 +455,7 @@ export function startAcpSpawnParentStreamRelay(params: {
     flushTimer.unref?.();
   };
 
-  const appendVisibleProgress = (delta: string) => {
+  const appendVisibleProgress = (delta: string, kind: string) => {
     if (stallNotified) {
       stallNotified = false;
       recordTaskRunProgressByRunId({
@@ -427,6 +470,10 @@ export function startAcpSpawnParentStreamRelay(params: {
 
     lastProgressAt = Date.now();
     firstVisibleOutputAt ??= lastProgressAt;
+    if (pendingText && pendingProgressKind && pendingProgressKind !== kind) {
+      flushPending();
+    }
+    pendingProgressKind = kind;
     pendingText += delta;
     if (pendingText.length > STREAM_BUFFER_MAX_CHARS) {
       pendingText = pendingText.slice(-STREAM_BUFFER_MAX_CHARS);
@@ -436,6 +483,19 @@ export function startAcpSpawnParentStreamRelay(params: {
       return;
     }
     scheduleFlush();
+  };
+
+  const appendItemProgressSnapshot = (params: { itemId: string; text: string }) => {
+    const previous = itemProgressTextById.get(params.itemId) ?? "";
+    if (params.text === previous) {
+      return;
+    }
+    itemProgressTextById.set(params.itemId, params.text);
+    const delta =
+      previous && params.text.startsWith(previous)
+        ? params.text.slice(previous.length)
+        : params.text;
+    appendVisibleProgress(delta, `item:${params.itemId}`);
   };
 
   const buildNoOutputNotice = () => {
@@ -532,7 +592,27 @@ export function startAcpSpawnParentStreamRelay(params: {
         return;
       }
 
-      appendVisibleProgress(delta);
+      appendVisibleProgress(delta, `assistant:${assistantPhase ?? "unknown"}`);
+      return;
+    }
+
+    if (event.stream === "item") {
+      const data = event.data as
+        | {
+            itemId?: unknown;
+            kind?: unknown;
+            progressText?: unknown;
+          }
+        | undefined;
+      const itemId = normalizeOptionalString(data?.itemId);
+      const kind = normalizeOptionalString(data?.kind);
+      const progressText = normalizeOptionalString(data?.progressText);
+      if (kind === "preamble" && progressText) {
+        lastProgressAt = Date.now();
+        if (shouldRelayProgressCommentary && itemId) {
+          appendItemProgressSnapshot({ itemId, text: progressText });
+        }
+      }
       return;
     }
 
@@ -571,7 +651,7 @@ export function startAcpSpawnParentStreamRelay(params: {
             projectionSettings: acpProjectionSettings,
           })
         ) {
-          appendVisibleProgress(`${text}\n\n`);
+          appendVisibleProgress(`${text}\n\n`, "acp:status");
           return;
         }
         lastProgressAt = Date.now();
