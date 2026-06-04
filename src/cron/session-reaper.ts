@@ -3,7 +3,7 @@ import { loadSessionStore } from "../config/sessions/store-load.js";
 import { archiveRemovedSessionTranscripts, updateSessionStore } from "../config/sessions/store.js";
 import type { CronConfig } from "../config/types.cron.js";
 import { cleanupArchivedSessionTranscripts } from "../gateway/session-utils.fs.js";
-import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, isCronSessionKey } from "../sessions/session-key-utils.js";
 import type { Logger } from "./service/state.js";
 
 const DEFAULT_RETENTION_MS = 24 * 3_600_000; // 24 hours
@@ -35,10 +35,8 @@ type ReaperResult = {
 };
 
 /**
- * Sweeps completed isolated cron run sessions while preserving base cron sessions.
- *
- * Must run outside the cron service `locked()` section because this acquires
- * the session-store file lock; reversing that order can deadlock timer ticks.
+ * Must run outside the cron service `locked()` section — acquires the session-store
+ * file lock; reversing that order deadlocks timer ticks.
  */
 export async function sweepCronRunSessions(params: {
   cronConfig?: CronConfig;
@@ -48,6 +46,12 @@ export async function sweepCronRunSessions(params: {
   log: Logger;
   /** Override for testing — skips the min-interval throttle. */
   force?: boolean;
+  /**
+   * Agent-scoped session keys for non-isolated cron jobs (e.g. main-target or
+   * persistent named sessions). These base keys are never pruned regardless of
+   * age, so accumulated job context survives between infrequent runs.
+   */
+  knownPersistentCronSessionKeys?: ReadonlySet<string>;
 }): Promise<ReaperResult> {
   const now = params.nowMs ?? Date.now();
   const storePath = params.sessionStorePath;
@@ -70,9 +74,34 @@ export async function sweepCronRunSessions(params: {
   try {
     await updateSessionStore(storePath, (store) => {
       const cutoff = now - retentionMs;
-      for (const key of Object.keys(store)) {
-        if (!isCronRunSessionKey(key)) {
+      const storeKeys = Object.keys(store);
+
+      // Pre-scan before pruning: base cron keys that still have :run: sibling
+      // sessions in the store belong to main-target jobs and must be preserved
+      // even when the base key itself is stale.
+      const baseKeysWithRunSiblings = new Set<string>();
+      for (const k of storeKeys) {
+        if (!isCronRunSessionKey(k)) {
           continue;
+        }
+        const runIdx = k.indexOf(":run:");
+        if (runIdx !== -1) {
+          baseKeysWithRunSiblings.add(k.slice(0, runIdx));
+        }
+      }
+
+      for (const key of storeKeys) {
+        if (!isCronSessionKey(key)) {
+          continue;
+        }
+        if (!isCronRunSessionKey(key)) {
+          // Base cron key: preserve persistent named sessions and main-target jobs.
+          if (params.knownPersistentCronSessionKeys?.has(key)) {
+            continue;
+          }
+          if (baseKeysWithRunSiblings.has(key)) {
+            continue;
+          }
         }
         const entry = store[key];
         if (!entry) {
@@ -98,8 +127,6 @@ export async function sweepCronRunSessions(params: {
   if (prunedSessions.size > 0) {
     try {
       const store = loadSessionStore(storePath, { skipCache: true });
-      // Archive only transcripts that no remaining session references; base
-      // cron sessions intentionally keep their transcript history.
       const referencedSessionIds = new Set(
         Object.values(store)
           .map((entry) => entry?.sessionId)

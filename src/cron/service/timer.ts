@@ -16,6 +16,7 @@ import { deliveryContextFromSession } from "../../utils/delivery-context.shared.
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
+import { resolveCronAgentSessionKey } from "../isolated-agent/session-key.js";
 import { resolveCronExecutionRetryHint } from "../retry-hint.js";
 import {
   createCronRunDiagnosticsFromError,
@@ -24,6 +25,7 @@ import {
 } from "../run-diagnostics.js";
 import { computeNextRunAtMs } from "../schedule.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
+import { resolveCronSessionTargetSessionKey } from "../session-target.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -930,6 +932,25 @@ export async function onTimer(state: CronServiceState) {
 
     if (storePaths.size > 0) {
       const nowMs = state.deps.nowMs();
+      const defaultAgentId = state.deps.defaultAgentId ?? DEFAULT_AGENT_ID;
+      // Session keys for non-isolated jobs (main-target, persistent named, etc.)
+      // must never be pruned by the reaper regardless of age.
+      const knownPersistentCronSessionKeys = new Set<string>();
+      for (const job of state.store?.jobs ?? []) {
+        if (job.sessionTarget === "isolated") {
+          continue;
+        }
+        try {
+          const sessionKey =
+            resolveCronSessionTargetSessionKey(job.sessionTarget) ?? `cron:${job.id}`;
+          const agentId =
+            typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : defaultAgentId;
+          knownPersistentCronSessionKeys.add(resolveCronAgentSessionKey({ sessionKey, agentId }));
+        } catch {
+          // Skip malformed sessionTarget (e.g. "session:" empty id) — prevents
+          // an uncaught throw from escaping the finally block and silencing the timer.
+        }
+      }
       for (const storePath of storePaths) {
         try {
           await sweepCronRunSessions({
@@ -937,6 +958,7 @@ export async function onTimer(state: CronServiceState) {
             sessionStorePath: storePath,
             nowMs,
             log: state.deps.log,
+            knownPersistentCronSessionKeys,
           });
         } catch (err) {
           state.deps.log.warn({ err: String(err), storePath }, "cron: session reaper sweep failed");
