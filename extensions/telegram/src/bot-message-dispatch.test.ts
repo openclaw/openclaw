@@ -1075,6 +1075,39 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectRecordFields((delivery.replies as Array<unknown>)[0], { replyToId: "9001" });
   });
 
+  it("keeps bot-reply answers anchored to the current user message", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Hello", replyToId: "1001" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        msg: {
+          message_id: 1001,
+          reply_to_message: {
+            message_id: 9001,
+            from: { is_bot: true },
+          },
+        } as unknown as TelegramMessageContext["msg"],
+        ctxPayload: {
+          MessageSid: "1001",
+          ReplyToId: "9001",
+          ReplyToBody: "quoted bot reply",
+          ReplyToQuoteText: " quoted bot reply\n",
+          ReplyToIsQuote: true,
+        } as unknown as TelegramMessageContext["ctxPayload"],
+      }),
+    });
+
+    const delivery = expectDeliverRepliesParams({
+      replyQuoteMessageId: 9001,
+      replyQuoteText: " quoted bot reply\n",
+    });
+    expectRecordFields((delivery.replies as Array<unknown>)[0], { replyToId: "1001" });
+  });
+
   it("keeps answer draft stream for current message replies with native quote candidates", async () => {
     const draftStream = createDraftStream();
     createTelegramDraftStream.mockReturnValue(draftStream);
