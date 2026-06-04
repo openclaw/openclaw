@@ -52,7 +52,7 @@ type SlashHttpHandlerParams = {
   /** Expected token from registered commands (for validation). */
   commandTokens: Set<string>;
   /** Exact trigger expected for each registered token. */
-  commandTokenTriggers?: ReadonlyMap<string, string>;
+  commandTokenTriggers: ReadonlyMap<string, string>;
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
@@ -94,12 +94,9 @@ function matchesRegisteredCommandToken(
 }
 
 function resolveRegisteredCommandTrigger(
-  commandTokenTriggers: ReadonlyMap<string, string> | undefined,
+  commandTokenTriggers: ReadonlyMap<string, string>,
   candidateToken: string,
 ): string | undefined {
-  if (!commandTokenTriggers) {
-    return undefined;
-  }
   for (const [token, trigger] of commandTokenTriggers.entries()) {
     if (safeEqualSecret(candidateToken, token)) {
       return trigger;
@@ -283,7 +280,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // Extract command info
     const trigger = payload.command.replace(/^\//, "").trim();
     const expectedTrigger = resolveRegisteredCommandTrigger(commandTokenTriggers, payload.token);
-    if (expectedTrigger && expectedTrigger !== trigger) {
+    if (expectedTrigger !== trigger) {
       sendJsonResponse(res, 401, {
         response_type: "ephemeral",
         text: "Unauthorized: invalid command token.",

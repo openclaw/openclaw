@@ -126,13 +126,14 @@ vi.mock("./slash-commands.js", () => ({
 let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 
 function createRequest(body = "token=valid-token"): IncomingMessage {
-  const incoming = new PassThrough() as IncomingMessage;
+  const stream = new PassThrough();
+  const incoming = stream as unknown as IncomingMessage;
   incoming.method = "POST";
   incoming.headers = {
     "content-type": "application/x-www-form-urlencoded",
   };
   process.nextTick(() => {
-    incoming.end(body);
+    stream.end(body);
   });
   return incoming;
 }

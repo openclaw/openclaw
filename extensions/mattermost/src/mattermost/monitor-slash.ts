@@ -168,9 +168,10 @@ export async function registerMattermostMonitorSlashCommands(params: {
       gatewayHost: params.cfg.gateway?.customBindHost ?? undefined,
     });
 
-    if (!slashConfig.callbackUrl && !isHttpsUrl(slashCallbackUrl)) {
+    if (!isHttpsUrl(slashCallbackUrl)) {
+      const source = slashConfig.callbackUrl ? "explicit" : "derived";
       params.runtime.error?.(
-        `mattermost: native slash commands require an explicit HTTPS channels.mattermost.commands.callbackUrl; refusing derived callback ${slashCallbackUrl}`,
+        `mattermost: native slash commands require an HTTPS channels.mattermost.commands.callbackUrl; refusing ${source} callback ${slashCallbackUrl}`,
       );
       return;
     }

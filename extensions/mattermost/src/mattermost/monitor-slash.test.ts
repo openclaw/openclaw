@@ -166,7 +166,7 @@ describe("mattermost monitor slash", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      "mattermost: native slash commands require an explicit HTTPS channels.mattermost.commands.callbackUrl; refusing derived callback http://127.0.0.1:18789/slash",
+      "mattermost: native slash commands require an HTTPS channels.mattermost.commands.callbackUrl; refusing derived callback http://127.0.0.1:18789/slash",
     );
     expect(registerSlashCommands).not.toHaveBeenCalled();
     expect(activateSlashCommands).not.toHaveBeenCalled();
@@ -201,7 +201,41 @@ describe("mattermost monitor slash", () => {
     expect(registerSlashCommands).not.toHaveBeenCalled();
     expect(activateSlashCommands).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
-      "mattermost: native slash commands require an explicit HTTPS channels.mattermost.commands.callbackUrl; refusing derived callback http://gateway.example.com:18789/api/channels/mattermost/command",
+      "mattermost: native slash commands require an HTTPS channels.mattermost.commands.callbackUrl; refusing derived callback http://gateway.example.com:18789/api/channels/mattermost/command",
+    );
+  });
+
+  it("refuses insecure explicitly configured callback URLs", async () => {
+    resolveSlashCommandConfig.mockReturnValue({
+      enabled: true,
+      nativeSkills: false,
+      callbackUrl: "http://public-server.example.com/slash",
+    });
+    isSlashCommandsEnabled.mockReturnValue(true);
+    parseStrictPositiveInteger.mockReturnValue(18789);
+    fetchMattermostUserTeams.mockResolvedValue([{ id: "team-1" }]);
+    resolveCallbackUrl.mockReturnValue("http://public-server.example.com/slash");
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+    };
+
+    await registerMattermostMonitorSlashCommands({
+      client: {} as never,
+      cfg: { gateway: { customBindHost: "gateway.example.com" } } as never,
+      runtime: runtime as never,
+      account: {
+        config: { commands: { callbackUrl: "http://public-server.example.com/slash" } },
+        accountId: "default",
+      } as never,
+      baseUrl: "https://chat.example.com",
+      botUserId: "bot-user",
+    });
+
+    expect(registerSlashCommands).not.toHaveBeenCalled();
+    expect(activateSlashCommands).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "mattermost: native slash commands require an HTTPS channels.mattermost.commands.callbackUrl; refusing explicit callback http://public-server.example.com/slash",
     );
   });
 });
