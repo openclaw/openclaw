@@ -387,6 +387,29 @@ describe("models-config merge helpers", () => {
     expect(merged["responses-local"]?.apiKey).toBe("LOCAL_PROXY_KEY"); // pragma: allowlist secret
   });
 
+  it("preserves Ollama service-alias baseUrl with local marker auth", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        "ollama-sidecar": createConfigProvider({
+          baseUrl: "http://localhost:11434",
+          api: "ollama",
+          apiKey: undefined,
+        }),
+      },
+      existingProviders: {
+        "ollama-sidecar": createExistingProvider({
+          baseUrl: "http://ollama-sidecar:11434",
+          api: "ollama",
+          apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+        }),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged["ollama-sidecar"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+    expect(merged["ollama-sidecar"]?.baseUrl).toBe("http://ollama-sidecar:11434");
+  });
+
   it("does not preserve existing local marker auth when refreshed provider is remote", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {

@@ -4,11 +4,7 @@
  * model catalogs without discarding existing credentials.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import {
-  isLocalApiKeyMarker,
-  isLocalBaseUrl,
-  isUsableLocalAuthMarker,
-} from "./model-auth-local.js";
+import { isLocalApiKeyMarker, isUsableLocalAuthMarker } from "./model-auth-local.js";
 import {
   NON_ENV_SECRETREF_MARKER,
   isNonSecretApiKeyMarker,
@@ -248,7 +244,21 @@ function shouldPreserveExistingBaseUrl(params: {
   }
   if (typeof existing.apiKey === "string" && isLocalApiKeyMarker(existing.apiKey)) {
     const nextBaseUrl = typeof nextEntry.baseUrl === "string" ? nextEntry.baseUrl.trim() : "";
-    if (!isLocalBaseUrl(existingBaseUrl) || !nextBaseUrl || !isLocalBaseUrl(nextBaseUrl)) {
+    const existingApi = resolveProviderApiSurface(existing) ?? resolveProviderApiSurface(nextEntry);
+    const nextApi = resolveProviderApiSurface(nextEntry) ?? existingApi;
+    if (
+      !nextBaseUrl ||
+      !isUsableLocalAuthMarker({
+        api: existingApi,
+        apiKey: existing.apiKey,
+        baseUrl: existingBaseUrl,
+      }) ||
+      !isUsableLocalAuthMarker({
+        api: nextApi,
+        apiKey: existing.apiKey,
+        baseUrl: nextBaseUrl,
+      })
+    ) {
       return undefined;
     }
   }
