@@ -106,6 +106,7 @@ let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetM
 
 type ParsedProviderConfig = {
   baseUrl?: string;
+  auth?: string;
   apiKey?: string;
   models?: Array<{ id: string }>;
 };
@@ -232,7 +233,7 @@ describe("models-config", () => {
     });
   });
 
-  it("omits unresolved api-key/token providers and keeps aws-sdk/local auth providers", async () => {
+  it("omits unresolved api-key/token providers and keeps oauth/aws-sdk/local auth providers", async () => {
     await withTempHome(async () => {
       await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS], async () => {
         unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS]);
@@ -322,7 +323,8 @@ describe("models-config", () => {
         const providers = await readGeneratedProviders(resolveDefaultAgentDir({}));
 
         expect(providers["unresolved"]).toBeUndefined();
-        expect(providers["unresolved-oauth"]).toBeUndefined();
+        expect(providers["unresolved-oauth"]?.auth).toBe("oauth");
+        expect(providers["unresolved-oauth"]?.apiKey).toBeUndefined();
         expect(providers["secretref-marker"]).toBeUndefined();
         expect(providers["oauth-marker"]).toBeUndefined();
         expect(providers["oauth-local-looking-marker"]).toBeUndefined();

@@ -302,7 +302,8 @@ describe("models-config merge helpers", () => {
     expect(merged["auth-only"]?.apiKey).toBe(preservedApiKey);
     expect(merged["amazon-bedrock"]?.apiKey).toBeUndefined();
     expect(merged["amazon-bedrock"]?.models?.[0]?.id).toBe("anthropic.claude-sonnet-4-6");
-    expect(merged["stale-oauth"]).toBeUndefined();
+    expect(merged["stale-oauth"]?.auth).toBe("oauth");
+    expect(merged["stale-oauth"]?.apiKey).toBeUndefined();
     expect(merged["stale-oauth-marker"]).toBeUndefined();
     expect(merged["ollama-local"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
     expect(merged["ollama-docker"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);

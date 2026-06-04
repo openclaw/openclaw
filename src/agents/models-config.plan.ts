@@ -170,7 +170,8 @@ function isWritableProviderConfig(providerKey: string, provider: ProviderConfig)
   return (
     Boolean(provider.baseUrl?.trim()) &&
     (hasWritableProviderApiKey(providerKey, provider) ||
-      isMissingApiKeyProviderAuthAllowed(provider.auth))
+      (isProviderApiKeyAbsent(provider.apiKey) &&
+        isMissingApiKeyProviderAuthAllowed(provider.auth)))
   );
 }
 
@@ -202,6 +203,13 @@ function isUnusableWritableApiKeyMarker(apiKey: string): boolean {
 
 function isMissingApiKeyProviderAuthAllowed(auth: ProviderConfig["auth"]): boolean {
   return auth === "aws-sdk" || auth === "oauth";
+}
+
+function isProviderApiKeyAbsent(apiKey: ProviderConfig["apiKey"]): boolean {
+  if (apiKey === undefined || apiKey === null) {
+    return true;
+  }
+  return typeof apiKey === "string" && !apiKey.trim();
 }
 
 function filterWritableProviders(

@@ -260,7 +260,11 @@ function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean
     return true;
   }
   const hasApiKey = hasUsableExistingProviderApiKey(entry);
-  return Boolean(entry.baseUrl?.trim()) && (hasApiKey || allowsMissingProviderApiKey(entry.auth));
+  return (
+    Boolean(entry.baseUrl?.trim()) &&
+    (hasApiKey ||
+      (isExistingProviderApiKeyAbsent(entry.apiKey) && allowsMissingProviderApiKey(entry.auth)))
+  );
 }
 
 function hasUsableExistingProviderApiKey(entry: ExistingProviderConfig): boolean {
@@ -286,7 +290,14 @@ function isUnusableExistingApiKeyMarker(apiKey: string): boolean {
 }
 
 function allowsMissingProviderApiKey(auth: ExistingProviderConfig["auth"]): boolean {
-  return auth === "aws-sdk";
+  return auth === "aws-sdk" || auth === "oauth";
+}
+
+function isExistingProviderApiKeyAbsent(apiKey: ExistingProviderConfig["apiKey"]): boolean {
+  if (apiKey === undefined || apiKey === null) {
+    return true;
+  }
+  return typeof apiKey === "string" && !apiKey.trim();
 }
 
 function allowsCurrentProviderMissingApiKey(auth: ProviderConfig["auth"]): boolean {
