@@ -113,6 +113,12 @@ OpenClaw automatically bounds session storage over time. By default, it runs
 in `enforce` mode and applies cleanup during maintenance. Set
 `session.maintenance.mode` to `"warn"` to report what would be cleaned without mutating the store/files:
 
+Session reset defaults are scoped by conversation type. Direct and group
+sessions use a daily reset at 04:00 unless configured otherwise. Thread-scoped
+sessions default to `idle` reset without an inactivity expiry when no
+`session.reset`, `session.resetByType`, or legacy `session.idleMinutes` is
+configured, so topic/thread continuity is preserved across the daily boundary.
+
 ```json5
 {
   session: {
