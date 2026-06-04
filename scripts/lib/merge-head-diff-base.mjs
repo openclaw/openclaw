@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const DEFAULT_GIT_OUTPUT_MAX_BUFFER = 16 * 1024 * 1024;
 
@@ -55,4 +56,40 @@ function resolveCommit({ ref, cwd, maxBuffer }) {
   } catch {
     return "";
   }
+}
+
+function parseArgs(argv) {
+  const args = {
+    base: "",
+    head: "HEAD",
+    preferFirstParent: false,
+  };
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--base") {
+      args.base = argv[index + 1] ?? "";
+      index += 1;
+      continue;
+    }
+    if (arg === "--head") {
+      args.head = argv[index + 1] ?? "HEAD";
+      index += 1;
+      continue;
+    }
+    if (arg === "--prefer-first-parent") {
+      args.preferFirstParent = true;
+    }
+  }
+  return args;
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const args = parseArgs(process.argv.slice(2));
+  process.stdout.write(
+    `${resolveMergeHeadDiffBase({
+      base: args.base,
+      head: args.head,
+      preferFirstParent: args.preferFirstParent,
+    })}\n`,
+  );
 }

@@ -15,6 +15,17 @@ function writeFile(filePath: string, content: string): void {
   fs.writeFileSync(filePath, content);
 }
 
+function copyRunOpengrepFiles(repo: string): void {
+  const scriptSource = path.resolve("scripts/run-opengrep.sh");
+  const helperSource = path.resolve("scripts/lib/merge-head-diff-base.mjs");
+  writeFile(path.join(repo, "scripts/run-opengrep.sh"), fs.readFileSync(scriptSource, "utf8"));
+  writeFile(
+    path.join(repo, "scripts/lib/merge-head-diff-base.mjs"),
+    fs.readFileSync(helperSource, "utf8"),
+  );
+  fs.chmodSync(path.join(repo, "scripts/run-opengrep.sh"), 0o755);
+}
+
 describe("run-opengrep.sh", () => {
   it("validates the rulepack when only OpenGrep rulepack files changed", () => {
     const repo = createTempDir("openclaw-run-opengrep-");
@@ -22,9 +33,7 @@ describe("run-opengrep.sh", () => {
     git(repo, "config", "user.email", "test@example.com");
     git(repo, "config", "user.name", "Test User");
 
-    const scriptSource = path.resolve("scripts/run-opengrep.sh");
-    writeFile(path.join(repo, "scripts/run-opengrep.sh"), fs.readFileSync(scriptSource, "utf8"));
-    fs.chmodSync(path.join(repo, "scripts/run-opengrep.sh"), 0o755);
+    copyRunOpengrepFiles(repo);
     writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
     git(repo, "add", ".");
     git(repo, "commit", "-qm", "initial");
@@ -64,9 +73,7 @@ describe("run-opengrep.sh", () => {
     git(repo, "config", "user.email", "test@example.com");
     git(repo, "config", "user.name", "Test User");
 
-    const scriptSource = path.resolve("scripts/run-opengrep.sh");
-    writeFile(path.join(repo, "scripts/run-opengrep.sh"), fs.readFileSync(scriptSource, "utf8"));
-    fs.chmodSync(path.join(repo, "scripts/run-opengrep.sh"), 0o755);
+    copyRunOpengrepFiles(repo);
     writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
     writeFile(path.join(repo, "README.md"), "base\n");
     git(repo, "add", ".");

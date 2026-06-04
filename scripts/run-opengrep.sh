@@ -110,15 +110,9 @@ if (( CHANGED_ONLY && PATHS_PASSED )); then
 fi
 
 resolve_changed_diff_ref() {
-  # Keep this fallback shell resolver in lockstep with scripts/lib/merge-head-diff-base.mjs.
-  # CI can call it before Node helper wiring is available in the OpenGrep workflow.
   local diff_ref="${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}"
   local base_ref
   local head_ref
-  local commit_and_parents
-  local first_parent
-  local second_parent
-  local resolved_first_parent
   local resolved_base
 
   if [[ "$diff_ref" != *"..."* ]]; then
@@ -132,21 +126,20 @@ resolve_changed_diff_ref() {
 
   base_ref="${diff_ref%%...*}"
   head_ref="${diff_ref#*...}"
-  commit_and_parents="$(git rev-list --parents -n 1 "$head_ref" 2>/dev/null || true)"
-  read -r _commit first_parent second_parent _rest <<<"$commit_and_parents"
-  if [[ -z "${first_parent:-}" || -z "${second_parent:-}" ]]; then
+  # First-parent resolution is shared with the Node CI routers so PR diff
+  # scope cannot drift between changed-lanes, changed-scope, and OpenGrep.
+  resolved_base="$(
+    node "$REPO_ROOT/scripts/lib/merge-head-diff-base.mjs" \
+      --base "$base_ref" \
+      --head "$head_ref" \
+      --prefer-first-parent 2>/dev/null || true
+  )"
+  if [[ -z "$resolved_base" || "$resolved_base" == "$base_ref" ]]; then
     printf '%s\n' "$diff_ref"
     return 0
   fi
 
-  resolved_first_parent="$(git rev-parse --verify "${first_parent}^{commit}" 2>/dev/null || true)"
-  resolved_base="$(git rev-parse --verify "${base_ref}^{commit}" 2>/dev/null || true)"
-  if [[ -z "$resolved_first_parent" || "$resolved_first_parent" == "$resolved_base" ]]; then
-    printf '%s\n' "$diff_ref"
-    return 0
-  fi
-
-  printf '%s...%s\n' "$resolved_first_parent" "$head_ref"
+  printf '%s...%s\n' "$resolved_base" "$head_ref"
 }
 
 # Default scan paths match CI. Override by passing `-- <paths...>`.
