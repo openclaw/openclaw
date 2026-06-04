@@ -1915,6 +1915,84 @@ describe("dispatchReplyFromConfig", () => {
     recoveryOperation?.complete();
   });
 
+  it("does not force-clear an active operation whose session id differs from the terminal snapshot", async () => {
+    setNoAbort();
+    const sessionKey = "agent:main:telegram:group:-1003774691297";
+    // Terminal store snapshot still reports the failed lifecycle's session id.
+    sessionStoreMocks.currentEntry = {
+      sessionId: "failed-session-rotated",
+      updatedAt: Date.now(),
+      status: "failed",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(
+      async () => ({ text: "visible recovery reply" }) satisfies ReplyPayload,
+    );
+
+    // A concurrent reset/rotation admitted a fresh op under the same session key
+    // but with a NEW session id, after this turn already captured the stale
+    // terminal snapshot. Register it inside the fast-abort seam, which runs after
+    // the early short-circuit but before admission, so the visible turn reaches
+    // the terminal force-clear branch with this op active. The op is NOT marked
+    // `terminalRecovery`, so only the session-id guard can stop the force-clear.
+    let freshOperation: ReturnType<typeof createReplyOperation> | undefined;
+    let signalFreshRegistered: () => void = () => {};
+    const freshRegistered = new Promise<void>((resolve) => {
+      signalFreshRegistered = resolve;
+    });
+
+    const turn = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        ChatType: "group",
+        SessionKey: sessionKey,
+        MessageSid: "visible-after-rotation",
+        To: "telegram:-1003774691297",
+        BodyForAgent: "@openclaw recover",
+      }),
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      fastAbortResolver: async () => {
+        freshOperation = createReplyOperation({
+          sessionKey,
+          sessionId: "fresh-rotated-session",
+          resetTriggered: false,
+        });
+        freshOperation.setPhase("running");
+        signalFreshRegistered();
+        return { handled: false, aborted: false };
+      },
+      formatAbortReplyTextResolver: () => "aborted",
+      replyResolver,
+    });
+
+    // Let the visible turn run its admission/force-clear path. With the bug it
+    // would force-fail the rotated op here, mistaking a valid in-flight reply for
+    // the stale terminal leftover and recreating the message loss (#86827).
+    await freshRegistered;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 100);
+    });
+
+    // The session-id guard kept the rotated op untouched: it still owns the
+    // session key and was never force-failed, so the visible turn simply parks
+    // behind it instead of dropping it.
+    expect(freshOperation).toBeDefined();
+    expect(freshOperation?.result).toBeNull();
+    expect(replyRunRegistry.get(sessionKey)).toBe(freshOperation);
+    expect(replyResolver).not.toHaveBeenCalled();
+
+    // Releasing the rotated op lets the parked visible turn admit and deliver,
+    // proving the message survived the rotation rather than being silently lost.
+    freshOperation?.complete();
+    const result = await turn;
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(result).toMatchObject({ queuedFinal: true });
+    expect(replyRunRegistry.isActive(sessionKey)).toBe(false);
+  });
+
   it("routes when OriginatingChannel differs from Provider", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();

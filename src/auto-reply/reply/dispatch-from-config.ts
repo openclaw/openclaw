@@ -1435,6 +1435,12 @@ export async function dispatchReplyFromConfig(
       // through to normal busy/skip handling instead.
       replyTurnKind === "visible" &&
       isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status) &&
+      // Only clear the leftover op that belongs to the SAME terminal session.
+      // A concurrent reset/rotation can admit a fresh op (new sessionId) under
+      // this session key while we still hold the stale terminal snapshot;
+      // force-clearing by the active op's id would drop that valid in-flight
+      // reply and recreate the message loss this fix exists to prevent (#86827).
+      admission.activeOperation?.sessionId === sessionStoreEntry.entry?.sessionId &&
       // Only clear the proven stale leftover from the failed lifecycle. A
       // sibling recovery turn that already cleared the leftover and admitted a
       // fresh operation marks it `terminalRecovery`; force-failing that op would
