@@ -173,8 +173,8 @@ export function collectGatewayConfigFindings(
       title: "Gateway HTTP /tools/invoke exposes host filesystem writes",
       detail:
         `gateway.tools.directInvoke.hostFsWrite is true and gateway.tools.allow includes ${writeToolsInAllow.join(", ")}, ` +
-        "which exposes write-class coding tools over both HTTP `POST /tools/invoke` and SDK RPC `tools.invoke`. " +
-        "Without `tools.fs.workspaceOnly: true`, this grants writes/edits/patch-applies on any file the gateway process can open " +
+        "which exposes the `write` and `edit` coding tools over both HTTP `POST /tools/invoke` and SDK RPC `tools.invoke`. " +
+        "Without `tools.fs.workspaceOnly: true`, this grants writes/edits on any file the gateway process can open " +
         "(outside the configured workspace) — destructive blast radius if the gateway token leaks.",
       remediation:
         "Confine writes to the workspace by setting `tools.fs.workspaceOnly: true` (strongly recommended). " +

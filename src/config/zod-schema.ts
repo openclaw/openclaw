@@ -1078,8 +1078,12 @@ export const OpenClawSchema = z
                 /** Gates the `read` coding tool on the direct-invoke surface. */
                 hostFsRead: z.boolean().optional(),
                 /**
-                 * Gates the write-class coding tools (`write`, `edit`,
-                 * `apply_patch`) on the direct-invoke surface. PR #63919.
+                 * Gates the write-class coding tools (`write`, `edit`) on the
+                 * direct-invoke surface. PR #63919. `apply_patch` is in
+                 * DEFAULT_GATEWAY_HTTP_TOOL_DENY for future-proofing but is
+                 * intentionally NOT materialized by this flag yet (the coding
+                 * tool factory does not produce an apply_patch entry for the
+                 * direct-invoke surface).
                  */
                 hostFsWrite: z.boolean().optional(),
               })
