@@ -225,6 +225,12 @@ describe("memory search config", () => {
     });
   });
 
+  it("keeps explicit local providers optional so local degradation can fall back", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("local"), "main");
+
+    expect(resolved?.providerRequirement).toEqual({ mode: "optional", provider: "local" });
+  });
+
   it("marks explicit provider-none as fts-only", () => {
     const resolved = resolveMemorySearchConfig(configWithDefaultProvider("none"), "main");
 
