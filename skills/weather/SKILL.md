@@ -33,14 +33,15 @@ User-Agent.
 
 ```javascript
 await web_fetch({
-  url: "https://wttr.in/London?format=j1",
+  url: "https://wttr.in/London?format=j2",
   extractMode: "text",
   maxChars: 12000,
 });
 ```
 
 For short answers, summarize `current_condition[0]`, `nearest_area[0]`, and the
-first entries in `weather[]`. Useful JSON fields:
+first entries in `weather[]`. Use `format=j2` for normal summaries because it
+omits bulky hourly data and fits the default `web_fetch` output cap. Useful JSON fields:
 
 - `current_condition[0].weatherDesc[0].value`: condition
 - `current_condition[0].temp_C` / `temp_F`: temperature
@@ -48,7 +49,7 @@ first entries in `weather[]`. Useful JSON fields:
 - `current_condition[0].precipMM`: precipitation
 - `current_condition[0].humidity`: humidity
 - `current_condition[0].windspeedKmph` / `windspeedMiles`: wind speed
-- `weather[].date`, `maxtempC`, `mintempC`, `hourly[]`: forecast
+- `weather[].date`, `maxtempC`, `mintempC`: forecast
 
 ## Fallback: curl
 
