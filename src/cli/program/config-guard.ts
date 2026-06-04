@@ -5,7 +5,7 @@ import path from "node:path";
 import { withSuppressedNotes } from "../../../packages/terminal-core/src/note.js";
 import { readConfigFileSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { resolveLegacyStateDirs, resolveOAuthDir, resolveStateDir } from "../../config/paths.js";
-import { resolveRequiredHomeDir } from "../../infra/home-dir.js";
+import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../../infra/home-dir.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { shouldMigrateStateFromPath } from "../argv.js";
 
@@ -97,6 +97,38 @@ function hasBundledChannelLegacyStateMigrationInputs(stateDir: string, oauthDir:
   return dirHasFile(oauthDir, isLegacyWhatsAppAuthFile);
 }
 
+function resolveDefaultConfigDirForStartupDetection(): string {
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateDir) {
+    return resolveHomeRelativePath(stateDir, { env: process.env, homedir: os.homedir });
+  }
+  const configPath = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (configPath) {
+    return path.dirname(
+      resolveHomeRelativePath(configPath, { env: process.env, homedir: os.homedir }),
+    );
+  }
+  return path.join(resolveRequiredHomeDir(process.env, os.homedir), ".openclaw");
+}
+
+function resolveLegacyCronStatePath(storePath: string): string {
+  if (storePath.endsWith(".json")) {
+    return storePath.replace(/\.json$/, "-state.json");
+  }
+  return `${storePath}-state.json`;
+}
+
+function hasLegacyCronStoreFiles(storePath: string): boolean {
+  const resolved = path.resolve(storePath);
+  return fileOrDirExists(resolved) || fileOrDirExists(resolveLegacyCronStatePath(resolved));
+}
+
+function hasDefaultCronLegacyStateMigrationInputs(): boolean {
+  return hasLegacyCronStoreFiles(
+    path.join(resolveDefaultConfigDirForStartupDetection(), "cron", "jobs.json"),
+  );
+}
+
 function hasLegacyStateMigrationInputs(): boolean {
   // Only run migration prompts when old state actually exists in known legacy locations.
   const stateDir = resolveStateDir(process.env, os.homedir);
@@ -110,6 +142,7 @@ function hasLegacyStateMigrationInputs(): boolean {
     return true;
   }
   return (
+    hasDefaultCronLegacyStateMigrationInputs() ||
     [
       path.join(stateDir, "agent"),
       path.join(stateDir, "agents"),
@@ -118,7 +151,8 @@ function hasLegacyStateMigrationInputs(): boolean {
       path.join(stateDir, "plugins", "installs.json"),
       path.join(stateDir, "sessions"),
       path.join(stateDir, "tasks", "runs.sqlite"),
-    ].some(fileOrDirExists) || hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
+    ].some(fileOrDirExists) ||
+    hasBundledChannelLegacyStateMigrationInputs(stateDir, oauthDir)
   );
 }
 
@@ -139,6 +173,17 @@ function snapshotHasConfiguredSessionStore(
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
   const store = cfg?.session?.store;
   return typeof store === "string" && store.trim().length > 0;
+}
+
+function snapshotHasConfiguredLegacyCronStore(
+  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
+): boolean {
+  const cfg = snapshot.runtimeConfig ?? snapshot.config;
+  const store = cfg?.cron?.store;
+  if (typeof store !== "string" || store.trim().length === 0) {
+    return false;
+  }
+  return hasLegacyCronStoreFiles(resolveHomeRelativePath(store, { env: process.env }));
 }
 
 async function getConfigSnapshot() {
@@ -195,7 +240,7 @@ export async function ensureConfigReady(params: {
     shouldConsiderStateMigration &&
     requiresLegacyStateInput &&
     snapshot.valid &&
-    snapshotHasConfiguredSessionStore(snapshot)
+    (snapshotHasConfiguredSessionStore(snapshot) || snapshotHasConfiguredLegacyCronStore(snapshot))
   ) {
     preflightSnapshot = await runStateMigrationPreflight();
     snapshot = preflightSnapshot;
