@@ -31,7 +31,6 @@ const drainPendingDeliveriesWithResultMock = vi.hoisted(() =>
     skippedEntryIds: [] as string[],
   })),
 );
-const isRecoveryEntryInProgressMock = vi.hoisted(() => vi.fn((_entryId: string) => false));
 
 vi.mock("@grammyjs/runner", () => ({
   run: runMock,
@@ -47,7 +46,6 @@ vi.mock("./network-errors.js", () => ({
 
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
   drainPendingDeliveriesWithResult: drainPendingDeliveriesWithResultMock,
-  isRecoveryEntryInProgress: isRecoveryEntryInProgressMock,
 }));
 
 vi.mock("./api-logging.js", () => ({
@@ -636,7 +634,7 @@ describe("TelegramPollingSession", () => {
     drainPendingDeliveriesWithResultMock
       .mockReset()
       .mockResolvedValue({ matched: 0, drained: 0, skippedInProgress: 0, skippedEntryIds: [] });
-    isRecoveryEntryInProgressMock.mockReset().mockReturnValue(false);
+
     resetTelegramReplyFenceForTests();
     installTelegramIngressQueueRuntime(() =>
       path.join(os.tmpdir(), "openclaw-telegram-test-state"),
@@ -3476,8 +3474,6 @@ describe("TelegramPollingSession", () => {
       skippedInProgress: 1,
       skippedEntryIds: ["entry-1"],
     });
-    // The skipped entry is still in-flight.
-    isRecoveryEntryInProgressMock.mockReturnValue(true);
 
     const session = createPollingSession({
       abortSignal: abort.signal,
@@ -3494,7 +3490,7 @@ describe("TelegramPollingSession", () => {
     );
     await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
 
-    // Second poll-success should NOT trigger a new drain (claim still active).
+    // Second poll-success should NOT trigger a new drain (one-shot suppression active).
     await apiMiddleware(
       vi.fn(async () => []),
       "getUpdates",
@@ -3514,7 +3510,7 @@ describe("TelegramPollingSession", () => {
     await runPromise;
   });
 
-  it("still suppresses drain after one long-poll interval when entries remain in-flight", async () => {
+  it("still suppresses drain after one long-poll interval via one-shot mechanism", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     try {
       const abort = new AbortController();
@@ -3530,8 +3526,6 @@ describe("TelegramPollingSession", () => {
         skippedInProgress: 1,
         skippedEntryIds: ["entry-1"],
       });
-      // The claim is still active.
-      isRecoveryEntryInProgressMock.mockReturnValue(true);
 
       const session = createPollingSession({
         abortSignal: abort.signal,
@@ -3540,7 +3534,7 @@ describe("TelegramPollingSession", () => {
       const runPromise = session.runUntilAbort();
       const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
 
-      // First poll-success triggers drain; claim-based suppression activates.
+      // First poll-success triggers drain; one-shot suppression activates.
       await apiMiddleware(
         vi.fn(async () => []),
         "getUpdates",
@@ -3549,7 +3543,7 @@ describe("TelegramPollingSession", () => {
       await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
 
       // Advance past one normal Telegram long-poll interval (30s).
-      // Claim is still active so drain stays suppressed regardless of time.
+      // One-shot suppression active so drain stays suppressed on this cycle.
       await vi.advanceTimersByTimeAsync(35_000);
 
       // Delayed poll-success arrives after 35s.
@@ -3562,7 +3556,7 @@ describe("TelegramPollingSession", () => {
       // Allow microtasks to settle.
       await vi.advanceTimersByTimeAsync(100);
 
-      // Drain must still be suppressed (claim still held).
+      // Drain must still be suppressed (one-shot active).
       expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1);
 
       abort.abort();
@@ -3573,7 +3567,7 @@ describe("TelegramPollingSession", () => {
     }
   });
 
-  it("resumes drain once the active delivery claim is released", async () => {
+  it("resumes drain after one-shot suppression clears", async () => {
     const abort = new AbortController();
     const botStop = vi.fn(async () => undefined);
     const runnerStop = vi.fn(async () => undefined);
@@ -3588,8 +3582,6 @@ describe("TelegramPollingSession", () => {
         skippedEntryIds: ["entry-1"],
       })
       .mockResolvedValueOnce({ matched: 1, drained: 1, skippedInProgress: 0, skippedEntryIds: [] });
-    // Claim is initially active.
-    isRecoveryEntryInProgressMock.mockReturnValue(true);
 
     const session = createPollingSession({
       abortSignal: abort.signal,
@@ -3598,7 +3590,7 @@ describe("TelegramPollingSession", () => {
     const runPromise = session.runUntilAbort();
     const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
 
-    // First poll-success triggers drain; claim-based suppression activates.
+    // First poll-success triggers drain; one-shot suppression activates.
     await apiMiddleware(
       vi.fn(async () => []),
       "getUpdates",
@@ -3606,7 +3598,7 @@ describe("TelegramPollingSession", () => {
     );
     await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
 
-    // Second poll while claim is still active: drain suppressed.
+    // Second poll: drain suppressed (one-shot active, then cleared).
     await apiMiddleware(
       vi.fn(async () => []),
       "getUpdates",
@@ -3617,10 +3609,7 @@ describe("TelegramPollingSession", () => {
     });
     expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1);
 
-    // Simulate claim release (delivery completed or failed).
-    isRecoveryEntryInProgressMock.mockReturnValue(false);
-
-    // Third poll after claim released: drain fires again.
+    // Third poll: one-shot cleared, drain fires again.
     await apiMiddleware(
       vi.fn(async () => []),
       "getUpdates",

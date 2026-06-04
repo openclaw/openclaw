@@ -1,10 +1,7 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  drainPendingDeliveriesWithResult,
-  isRecoveryEntryInProgress,
-} from "openclaw/plugin-sdk/delivery-queue-runtime";
+import { drainPendingDeliveriesWithResult } from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
@@ -308,8 +305,8 @@ export class TelegramPollingSession {
   #spooledUpdateHandlerTimeoutMs: number;
   #spooledUpdateHandlerAbortGraceMs: number;
   #deliveryDrainInFlight = false;
-  /** Entry IDs that were skipped because a live delivery holds their claim. */
-  #deliveryDrainSkippedEntryIds: string[] = [];
+  /** One-shot suppression: skip the next drain if the previous drain found only in-progress entries. */
+  #deliveryDrainSuppressNext = false;
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -421,17 +418,15 @@ export class TelegramPollingSession {
     if (this.#deliveryDrainInFlight) {
       return;
     }
-    // Suppress drain while every previously-skipped entry still has an
-    // active delivery claim.  This ties suppression to the claim lifecycle
-    // instead of an arbitrary time-based cooldown, preventing the repeated
-    // "already being recovered" log noise reported in openclaw#89953.
-    if (
-      this.#deliveryDrainSkippedEntryIds.length > 0 &&
-      this.#deliveryDrainSkippedEntryIds.every(isRecoveryEntryInProgress)
-    ) {
+    // One-shot suppression: if the previous drain found only in-progress
+    // entries (nothing new to drain), skip this cycle to reduce log noise
+    // from repeated "already being recovered" messages (openclaw#89953).
+    // Clear after one suppression so newly pending entries get recovered
+    // within at most one additional poll interval.
+    if (this.#deliveryDrainSuppressNext) {
+      this.#deliveryDrainSuppressNext = false;
       return;
     }
-    this.#deliveryDrainSkippedEntryIds = [];
     if (!this.opts.config) {
       return;
     }
@@ -456,7 +451,7 @@ export class TelegramPollingSession {
       .then(
         (drainResult) => {
           if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) {
-            this.#deliveryDrainSkippedEntryIds = drainResult.skippedEntryIds;
+            this.#deliveryDrainSuppressNext = true;
           }
         },
         (err: unknown) => {

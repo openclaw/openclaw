@@ -1,11 +1,8 @@
 import {
   drainPendingDeliveries as coreDrainPendingDeliveries,
   type DeliverFn,
-  isRecoveryEntryInProgress,
   type ReconnectDrainResult,
 } from "../infra/outbound/delivery-queue.js";
-
-export { isRecoveryEntryInProgress };
 
 type OutboundDeliverRuntimeModule = typeof import("../infra/outbound/deliver-runtime.js");
 type DrainPendingDeliveriesOptions = Omit<
