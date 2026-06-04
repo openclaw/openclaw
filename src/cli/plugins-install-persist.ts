@@ -184,6 +184,7 @@ export async function persistPluginInstall(params: {
   pluginId: string;
   install: Omit<PluginInstallUpdate, "pluginId">;
   enable?: boolean;
+  invalidateRuntimeCache?: boolean;
   successMessage?: string;
   warningMessage?: string;
   runtime?: RuntimeEnv;
@@ -260,6 +261,7 @@ export async function persistPluginInstall(params: {
     config: next,
     reason: "source-changed",
     installRecords: nextInstallRecords,
+    invalidateRuntimeCache: params.invalidateRuntimeCache,
     traceCommand: "install",
     logger: {
       warn: (message) => runtime.log(theme.warn(message)),

@@ -17,6 +17,7 @@ export type PluginUninstallOptions = {
   keepConfig?: boolean;
   force?: boolean;
   dryRun?: boolean;
+  invalidateRuntimeCache?: boolean;
 };
 
 function isPromptInputClosedError(
@@ -194,6 +195,7 @@ export async function runPluginUninstallCommand(
     config: nextConfig,
     reason: "source-changed",
     installRecords: nextInstallRecords,
+    invalidateRuntimeCache: opts.invalidateRuntimeCache,
     traceCommand: "uninstall",
     logger: {
       warn: (message) => runtime.log(theme.warn(message)),

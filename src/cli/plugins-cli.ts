@@ -134,7 +134,7 @@ export function registerPluginsCli(program: Command) {
     .option("--dry-run", "Show what would be removed without making changes", false)
     .action(async (id: string, opts: PluginUninstallOptions) => {
       const { runPluginUninstallCommand } = await import("./plugins-uninstall-command.js");
-      await runPluginUninstallCommand(id, opts);
+      await runPluginUninstallCommand(id, { ...opts, invalidateRuntimeCache: false });
     });
 
   plugins
