@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { ModelCatalogProvider } from "./index.js";
 import { normalizeModelCatalog, normalizeModelCatalogRows } from "./index.js";
 import { buildModelCatalogMergeKey, buildModelCatalogRef } from "./model-catalog-refs.js";
 
@@ -234,5 +235,92 @@ describe("model catalog normalization", () => {
     ]);
     expect(buildModelCatalogRef("OpenAI", "GPT-5.4")).toBe("openai/GPT-5.4");
     expect(buildModelCatalogMergeKey("OpenAI", "GPT-5.4")).toBe("openai::gpt-5.4");
+  });
+
+  it("omits unreadable provider catalog maps while preserving sibling metadata", () => {
+    const unreadableProviders = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin model catalog providers exploded");
+        },
+      },
+    );
+
+    const catalog = normalizeModelCatalog(
+      {
+        providers: unreadableProviders,
+        aliases: {
+          "OpenAI Alias": {
+            provider: "openai",
+          },
+        },
+        discovery: {
+          openai: "runtime",
+        },
+      },
+      { ownedProviders: new Set(["openai"]) },
+    );
+
+    expect(catalog).toEqual({
+      aliases: {
+        "openai alias": {
+          provider: "openai",
+        },
+      },
+      discovery: {
+        openai: "runtime",
+      },
+    });
+  });
+
+  it("skips unreadable provider catalog rows without dropping healthy siblings", () => {
+    const providers: Record<string, ModelCatalogProvider> = {
+      openai: {
+        models: [{ id: "gpt-5.5" }],
+      },
+    };
+    Object.defineProperty(providers, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin model catalog provider getter exploded");
+      },
+    });
+
+    const catalog = normalizeModelCatalog({ providers }, { ownedProviders: new Set(["openai"]) });
+
+    expect(catalog?.providers).toEqual({
+      openai: {
+        models: [{ id: "gpt-5.5" }],
+      },
+    });
+  });
+
+  it("skips unreadable provider rows while projecting model catalog rows", () => {
+    const providers: Record<string, ModelCatalogProvider> = {
+      openai: {
+        models: [{ id: "gpt-5.5" }],
+      },
+    };
+    Object.defineProperty(providers, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin row provider getter exploded");
+      },
+    });
+
+    expect(normalizeModelCatalogRows({ providers, source: "manifest" })).toEqual([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        ref: "openai/gpt-5.5",
+        mergeKey: "openai::gpt-5.5",
+        name: "gpt-5.5",
+        source: "manifest",
+        input: ["text"],
+        reasoning: false,
+        status: "available",
+      },
+    ]);
   });
 });

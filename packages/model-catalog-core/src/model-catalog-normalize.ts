@@ -41,6 +41,27 @@ function isBlockedObjectKey(key: string): boolean {
   return key === "__proto__" || key === "prototype" || key === "constructor";
 }
 
+function readRecordEntries(value: unknown): Array<[string, unknown]> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return undefined;
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
 function normalizeOptionalString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -81,11 +102,12 @@ function normalizeOwnedProviderSet(providers: ReadonlySet<string>): ReadonlySet<
 }
 
 function normalizeStringMap(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) {
+  const entries = readRecordEntries(value);
+  if (!entries) {
     return undefined;
   }
   const normalized: Record<string, string> = {};
-  for (const [rawKey, rawValue] of Object.entries(value)) {
+  for (const [rawKey, rawValue] of entries) {
     const key = normalizeSafeRecordKey(rawKey);
     const mapValue = normalizeOptionalString(rawValue) ?? "";
     if (key && mapValue) {
@@ -534,11 +556,12 @@ function normalizeModelCatalogProviders(
   value: unknown,
   ownedProviders: ReadonlySet<string>,
 ): Record<string, ModelCatalogProvider> | undefined {
-  if (!isRecord(value)) {
+  const entries = readRecordEntries(value);
+  if (!entries) {
     return undefined;
   }
   const providers: Record<string, ModelCatalogProvider> = {};
-  for (const [rawProviderId, rawProvider] of Object.entries(value)) {
+  for (const [rawProviderId, rawProvider] of entries) {
     const providerId = normalizeModelCatalogProviderId(rawProviderId);
     if (!providerId || !ownedProviders.has(providerId)) {
       continue;
@@ -555,11 +578,12 @@ function normalizeModelCatalogAliases(
   value: unknown,
   ownedProviders: ReadonlySet<string>,
 ): Record<string, ModelCatalogAlias> | undefined {
-  if (!isRecord(value)) {
+  const entries = readRecordEntries(value);
+  if (!entries) {
     return undefined;
   }
   const aliases: Record<string, ModelCatalogAlias> = {};
-  for (const [rawAlias, rawTarget] of Object.entries(value)) {
+  for (const [rawAlias, rawTarget] of entries) {
     const alias = normalizeModelCatalogProviderId(rawAlias);
     if (!alias || !isRecord(rawTarget)) {
       continue;
@@ -624,11 +648,12 @@ function normalizeModelCatalogDiscovery(
   value: unknown,
   ownedProviders: ReadonlySet<string>,
 ): Record<string, ModelCatalogDiscovery> | undefined {
-  if (!isRecord(value)) {
+  const entries = readRecordEntries(value);
+  if (!entries) {
     return undefined;
   }
   const discovery: Record<string, ModelCatalogDiscovery> = {};
-  for (const [rawProviderId, rawMode] of Object.entries(value)) {
+  for (const [rawProviderId, rawMode] of entries) {
     const providerId = normalizeModelCatalogProviderId(rawProviderId);
     const mode = normalizeOptionalString(rawMode) ?? "";
     if (providerId && ownedProviders.has(providerId) && MODEL_CATALOG_DISCOVERY_MODES.has(mode)) {
@@ -726,9 +751,15 @@ export function normalizeModelCatalogRows(params: {
   providers: Record<string, ModelCatalogProvider>;
   source: ModelCatalogSource;
 }): NormalizedModelCatalogRow[] {
-  return Object.entries(params.providers)
+  return (readRecordEntries(params.providers) ?? [])
     .flatMap(([provider, providerCatalog]) =>
-      normalizeModelCatalogProviderRows({ provider, providerCatalog, source: params.source }),
+      isRecord(providerCatalog)
+        ? normalizeModelCatalogProviderRows({
+            provider,
+            providerCatalog: providerCatalog as ModelCatalogProvider,
+            source: params.source,
+          })
+        : [],
     )
     .toSorted((a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id));
 }
