@@ -1543,7 +1543,7 @@ describe("install.sh duplicate OpenClaw install detection", () => {
       "bash",
       [
         "-c",
-        `source "${SCRIPT_PATH}" && GUM="" && run_quiet_step "test-step" bash -c 'if [ -t 0 ]; then echo HAS_STDIN > ${JSON.stringify(marker)}; else echo NO_STDIN > ${JSON.stringify(marker)}; fi'`,
+        `source "${SCRIPT_PATH}" && GUM="" && run_quiet_step "test-step" bash -c 'if read -t 1 line 2>/dev/null && [ -n "$line" ]; then echo "LEAKED:$line" > ${JSON.stringify(marker)}; else echo ISOLATED > ${JSON.stringify(marker)}; fi'`,
       ],
       {
         encoding: "utf8",
@@ -1555,11 +1555,12 @@ describe("install.sh duplicate OpenClaw install detection", () => {
           BASH_ENV: "",
           ENV: "",
         },
-        input: "",
+        input: "SENTINEL_DATA_SHOULD_NOT_LEAK\n",
       },
     );
     expect(result.status).toBe(0);
-    expect(readFileSync(marker, "utf8").trim()).toBe("NO_STDIN");
+    const stdinState = readFileSync(marker, "utf8").trim();
+    expect(stdinState).toBe("ISOLATED");
     rmSync(marker, { force: true });
   });
 });
