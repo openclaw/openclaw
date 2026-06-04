@@ -28,6 +28,24 @@ type NativeCommandEffectiveRoute = {
   agentId: string;
 };
 
+function shouldSendNoVisibleReplyFallback(dispatchResult: {
+  counts: { final?: number; block?: number; tool?: number };
+  noVisibleReplyFallbackEligible?: boolean;
+  queuedFinal?: boolean;
+  sendPolicyDenied?: boolean;
+  sourceReplyDeliveryMode?: string;
+}): boolean {
+  return (
+    dispatchResult.noVisibleReplyFallbackEligible === true &&
+    dispatchResult.queuedFinal !== true &&
+    dispatchResult.sendPolicyDenied !== true &&
+    dispatchResult.sourceReplyDeliveryMode !== "message_tool_only" &&
+    (dispatchResult.counts.final ?? 0) === 0 &&
+    (dispatchResult.counts.block ?? 0) === 0 &&
+    (dispatchResult.counts.tool ?? 0) === 0
+  );
+}
+
 export async function dispatchDiscordNativeAgentReply(params: {
   cfg: OpenClawConfig;
   discordConfig: DiscordConfig;
@@ -106,7 +124,8 @@ export async function dispatchDiscordNativeAgentReply(params: {
     dispatchResult.queuedFinal ||
     dispatchResult.counts.final !== 0 ||
     dispatchResult.counts.block !== 0 ||
-    dispatchResult.counts.tool !== 0
+    dispatchResult.counts.tool !== 0 ||
+    !shouldSendNoVisibleReplyFallback(dispatchResult)
   ) {
     return;
   }
