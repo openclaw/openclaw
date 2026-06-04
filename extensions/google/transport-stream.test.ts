@@ -957,6 +957,108 @@ describe("google transport stream", () => {
     expect(result.content).toEqual([{ type: "text", text: "ok" }]);
   });
 
+  it("uses global host for eu multi-region (regression #89891)", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-eu-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "eu");
+    const tokenFetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ access_token: "ya29.vertex-token", expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const guardedFetchMock = vi.fn().mockResolvedValue(
+      buildSseResponse([{ candidates: [{ content: { parts: [{ text: "ok" }] } }] }]),
+    );
+
+    const model = buildGoogleVertexModel();
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gcp-vertex-credentials",
+          fetch: tokenFetchMock,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
+      "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/eu/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
+    );
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+  });
+
+  it("uses global host for us multi-region (regression #89891)", async () => {
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-us-"));
+    const credentialsPath = path.join(tempDir, "application_default_credentials.json");
+    await writeFile(
+      credentialsPath,
+      JSON.stringify({
+        type: "authorized_user",
+        client_id: "client-id",
+        client_secret: "client-secret",
+        refresh_token: "refresh-token",
+      }),
+      "utf8",
+    );
+    vi.stubEnv("GOOGLE_APPLICATION_CREDENTIALS", credentialsPath);
+    vi.stubEnv("GOOGLE_CLOUD_PROJECT", "vertex-project");
+    vi.stubEnv("GOOGLE_CLOUD_LOCATION", "us");
+    const tokenFetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ access_token: "ya29.vertex-token", expires_in: 3600 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const guardedFetchMock = vi.fn().mockResolvedValue(
+      buildSseResponse([{ candidates: [{ content: { parts: [{ text: "ok" }] } }] }]),
+    );
+
+    const model = buildGoogleVertexModel();
+
+    const streamFn = createGoogleVertexTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        model,
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        {
+          apiKey: "gcp-vertex-credentials",
+          fetch: tokenFetchMock,
+        } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
+      "https://aiplatform.googleapis.com/v1/projects/vertex-project/locations/us/publishers/google/models/gemini-3.1-pro-preview:streamGenerateContent?alt=sse",
+    );
+    expect(result.stopReason).toBe("stop");
+    expect(result.content).toEqual([{ type: "text", text: "ok" }]);
+  });
+
   it("does not reuse authorized_user ADC tokens with unsafe expiry lifetimes", async () => {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-unsafe-adc-"));
     const credentialsPath = path.join(tempDir, "application_default_credentials.json");
