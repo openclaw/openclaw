@@ -84,6 +84,7 @@ const MAIN_AGENT_ID = "main";
 const TEST_MODEL = "openai/gpt-5.4";
 
 type SingleRowCacheContext = {
+  cfg: OpenClawConfig;
   now: number;
   storePath: string;
 };
@@ -115,6 +116,7 @@ async function withSingleRowCacheStore(
     } as OpenClawConfig;
     setRuntimeConfigSnapshot(cfg, cfg);
     await run({
+      cfg,
       now: Math.floor(Date.now() / 1_000) * 1_000 + 100,
       storePath: resolveStorePath(cfg.session?.store, { agentId: MAIN_AGENT_ID }),
     });
@@ -275,6 +277,52 @@ describe("single gateway session row child-session cache", () => {
     );
   });
 
+  test("hydrates one-row async list checkpoint previews with shared metadata context", async () => {
+    await withSingleRowCacheStore(
+      "openclaw-single-row-cache-list-checkpoint-",
+      "/tmp/openclaw-single-row-cache-list-checkpoint",
+      async ({ cfg, now, storePath }) => {
+        const sessionsDir = path.dirname(storePath);
+        fs.mkdirSync(sessionsDir, { recursive: true });
+        const sessionFile = path.join(sessionsDir, "checkpoint-list-row.jsonl");
+        const checkpointId = "66666666-6666-4666-8666-666666666666";
+        const checkpointFile = path.join(
+          sessionsDir,
+          `checkpoint-list-row.checkpoint.${checkpointId}.jsonl`,
+        );
+        fs.writeFileSync(sessionFile, "", "utf8");
+        fs.writeFileSync(checkpointFile, "", "utf8");
+        fs.utimesSync(checkpointFile, 1_700_000_050.123, 1_700_000_051.789);
+        const store: Record<string, SessionEntry> = {
+          "agent:main:main": {
+            sessionId: "checkpoint-list-row",
+            sessionFile: path.basename(sessionFile),
+            updatedAt: now,
+            modelProvider: "openai",
+            model: "gpt-5.4",
+            totalTokens: 1,
+            totalTokensFresh: true,
+            contextTokens: 1,
+            estimatedCostUsd: 0,
+          },
+        };
+        await saveSessionStore(storePath, store);
+
+        const listed = await listSessionsFromStoreAsync({
+          cfg,
+          storePath,
+          store,
+          opts: { limit: 1 },
+        });
+
+        expect(listed.sessions).toHaveLength(1);
+        expect(listed.sessions[0]?.compactionCheckpointCount).toBe(1);
+        expect(listed.sessions[0]?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
+        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(1);
+      },
+    );
+  });
+
   test("refreshes subagent registry state while reusing store child candidates", async () => {
     await withSingleRowCacheStore(
       "openclaw-single-row-cache-fresh-registry-",
@@ -323,9 +371,7 @@ describe("single gateway session row child-session cache", () => {
         });
 
         expect(syncListed.sessions).toHaveLength(1);
-        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(
-          1,
-        );
+        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(1);
         expect(
           subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
         ).not.toHaveBeenCalled();
@@ -340,9 +386,7 @@ describe("single gateway session row child-session cache", () => {
         });
 
         expect(asyncListed.sessions).toHaveLength(1);
-        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(
-          1,
-        );
+        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).toHaveBeenCalledTimes(1);
         expect(
           subagentRegistryReadMock.getSessionDisplaySubagentRunByChildSessionKey,
         ).not.toHaveBeenCalled();
