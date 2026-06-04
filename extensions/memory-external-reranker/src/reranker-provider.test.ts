@@ -93,6 +93,7 @@ describe("ExternalMmrReranker", () => {
           return {
             response: new Response("Service Unavailable", { status: 503 }),
             release: vi.fn(async () => {}),
+            finalUrl: "http://mock-final-url",
           };
         }
         return {
@@ -104,6 +105,7 @@ describe("ExternalMmrReranker", () => {
             },
           ),
           release: vi.fn(async () => {}),
+          finalUrl: "http://mock-final-url",
         };
       });
       setExternalRerankerFetchGuardForTesting(mockFn);
@@ -132,6 +134,7 @@ describe("ExternalMmrReranker", () => {
         return {
           response: new Response(`provider ${callCount} error`, { status: 500 }),
           release: vi.fn(async () => {}),
+          finalUrl: "http://mock-final-url",
         };
       });
       setExternalRerankerFetchGuardForTesting(mockFn);
