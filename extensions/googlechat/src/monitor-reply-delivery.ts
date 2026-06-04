@@ -21,17 +21,34 @@ export async function deliverGoogleChatReply(params: {
   config: OpenClawConfig;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   typingMessageName?: string;
+  typingMessageThreadName?: string;
 }): Promise<void> {
   const { payload, account, spaceId, runtime, core, config, statusSink } = params;
   // Clear this whenever the typing message is deleted or unavailable; otherwise
   // text delivery can keep retrying a dead message and drop content.
   let typingMessageName = params.typingMessageName;
+  const replyThreadName = payload.replyToId?.trim() || undefined;
+  const typingMessageThreadName = params.typingMessageThreadName?.trim() || undefined;
   const reply = resolveSendableOutboundReplyParts(payload);
   const mediaCount = reply.mediaCount;
   const hasMedia = reply.hasMedia;
   const text = reply.text;
   let firstTextChunk = true;
   let suppressCaption = false;
+
+  if (typingMessageName && typingMessageThreadName !== replyThreadName) {
+    // The typing placeholder was created before replyToMode filtered the payload.
+    // Do not edit a stale threaded placeholder into the final assistant reply.
+    try {
+      await deleteGoogleChatMessage({
+        account,
+        messageName: typingMessageName,
+      });
+    } catch (err) {
+      runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
+    }
+    typingMessageName = undefined;
+  }
 
   if (hasMedia && typingMessageName) {
     try {
@@ -70,7 +87,7 @@ export async function deliverGoogleChatReply(params: {
       account,
       space: spaceId,
       text: chunk,
-      thread: payload.replyToId,
+      thread: replyThreadName,
     });
   };
   await deliverTextOrMediaReply({
@@ -125,7 +142,7 @@ export async function deliverGoogleChatReply(params: {
           account,
           space: spaceId,
           text: caption,
-          thread: payload.replyToId,
+          thread: replyThreadName,
           attachments: [
             { attachmentUploadToken: upload.attachmentUploadToken, contentName: loaded.fileName },
           ],

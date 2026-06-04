@@ -159,7 +159,7 @@ describe("googlechat monitor bot loop protection", () => {
 });
 
 describe("googlechat monitor direct messages", () => {
-  it("omits thread metadata from DM reply context and typing messages", async () => {
+  it("preserves DM thread metadata in reply context and typing messages", async () => {
     const runTurn = vi.fn();
     const buildContext = vi.fn((payload: unknown) => payload);
     const core = {
@@ -230,8 +230,8 @@ describe("googlechat monitor direct messages", () => {
         reply: {
           to: "googlechat:spaces/DM",
           originatingTo: "googlechat:spaces/DM",
-          replyToId: undefined,
-          replyToIdFull: undefined,
+          replyToId: "spaces/DM/threads/thread-1",
+          replyToIdFull: "spaces/DM/threads/thread-1",
         },
       }),
     );
@@ -239,7 +239,7 @@ describe("googlechat monitor direct messages", () => {
       account,
       space: "spaces/DM",
       text: "_OpenClaw is typing..._",
-      thread: undefined,
+      thread: "spaces/DM/threads/thread-1",
     });
     expect(runTurn).toHaveBeenCalledOnce();
   });
