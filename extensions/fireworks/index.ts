@@ -7,7 +7,7 @@ import {
   normalizeModelCompat,
   OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { isFireworksKimiModelId } from "./model-id.js";
+import { isFireworksGlmModelId, isFireworksKimiModelId } from "./model-id.js";
 import { applyFireworksConfig, FIREWORKS_DEFAULT_MODEL_REF } from "./onboard.js";
 import {
   buildFireworksProvider,
@@ -15,16 +15,12 @@ import {
   FIREWORKS_DEFAULT_CONTEXT_WINDOW,
   FIREWORKS_DEFAULT_MAX_TOKENS,
   FIREWORKS_DEFAULT_MODEL_ID,
+  FIREWORKS_MANIFEST_PROVIDER,
 } from "./provider-catalog.js";
 import { wrapFireworksProviderStream } from "./stream.js";
 import { resolveFireworksThinkingProfile } from "./thinking-policy.js";
 
 const PROVIDER_ID = "fireworks";
-function isFireworksGlmModelId(modelId: string): boolean {
-  const normalized = modelId.trim().toLowerCase();
-  const lastSegment = normalized.split("/").pop() ?? normalized;
-  return /^glm[-_.]/.test(lastSegment);
-}
 
 function resolveFireworksDynamicInput(modelId: string): Array<"text" | "image"> {
   return isFireworksGlmModelId(modelId) ? ["text"] : ["text", "image"];
@@ -35,6 +31,11 @@ function resolveFireworksDynamicModel(ctx: ProviderResolveDynamicModelContext) {
   if (!modelId) {
     return undefined;
   }
+
+  if (FIREWORKS_MANIFEST_PROVIDER.models.some((entry) => entry.id === modelId)) {
+    return undefined;
+  }
+
   const isKimiModel = isFireworksKimiModelId(modelId);
   const input = resolveFireworksDynamicInput(modelId);
 
