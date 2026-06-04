@@ -1,3 +1,4 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -9,6 +10,45 @@ import {
   resolveStrictExistingPathsWithinRoot,
   resolveWritablePathWithinRoot,
 } from "./paths.js";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fsSync.writeFileSync(tempFile, "temp");
+    fsSync.symlinkSync(tempFile, tempLink, "file");
+    fsSync.unlinkSync(tempLink);
+    fsSync.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+const canCreateDirectorySymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-dir-test-${Math.random().toString(36).substring(2)}`);
+    fsSync.symlinkSync(os.tmpdir(), tempLink, process.platform === "win32" ? "junction" : "dir");
+    fsSync.unlinkSync(tempLink);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+const canCreateHardlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `hardlink-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `hardlink-target-${Math.random().toString(36).substring(2)}`);
+    fsSync.writeFileSync(tempFile, "temp");
+    fsSync.linkSync(tempFile, tempLink);
+    fsSync.unlinkSync(tempLink);
+    fsSync.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 async function createFixtureRoot(): Promise<{ baseDir: string; uploadsDir: string }> {
   const baseDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-browser-paths-"));
@@ -35,7 +75,7 @@ async function createAliasedUploadsRoot(baseDir: string): Promise<{
   const canonicalUploadsDir = path.join(baseDir, "canonical", "uploads");
   const aliasedUploadsDir = path.join(baseDir, "uploads-link");
   await fs.mkdir(canonicalUploadsDir, { recursive: true });
-  await fs.symlink(canonicalUploadsDir, aliasedUploadsDir);
+  await fs.symlink(canonicalUploadsDir, aliasedUploadsDir, process.platform === "win32" ? "junction" : "dir");
   return { canonicalUploadsDir, aliasedUploadsDir };
 }
 
@@ -133,14 +173,14 @@ describe("resolveExistingPathsWithinRoot", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "rejects symlink escapes outside upload root",
     async () => {
       await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
         const outsidePath = path.join(baseDir, "secret.txt");
         await fs.writeFile(outsidePath, "secret", "utf8");
         const symlinkPath = path.join(uploadsDir, "leak.txt");
-        await fs.symlink(outsidePath, symlinkPath);
+        await fs.symlink(outsidePath, symlinkPath, "file");
 
         const result = await resolveWithinUploads({
           uploadsDir,
@@ -152,14 +192,14 @@ describe("resolveExistingPathsWithinRoot", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "returns outside-root message for files reached via escaping symlinked directories",
     async () => {
       await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
         const outsideDir = path.join(baseDir, "outside");
         await fs.mkdir(outsideDir, { recursive: true });
         await fs.writeFile(path.join(outsideDir, "secret.txt"), "secret", "utf8");
-        await fs.symlink(outsideDir, path.join(uploadsDir, "alias"));
+        await fs.symlink(outsideDir, path.join(uploadsDir, "alias"), process.platform === "win32" ? "junction" : "dir");
 
         const result = await resolveWithinUploads({
           uploadsDir,
@@ -174,7 +214,7 @@ describe("resolveExistingPathsWithinRoot", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "accepts canonical absolute paths when upload root is a symlink alias",
     async () => {
       await withFixtureRoot(async ({ baseDir }) => {
@@ -202,7 +242,7 @@ describe("resolveExistingPathsWithinRoot", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "rejects canonical absolute paths outside symlinked upload root",
     async () => {
       await withFixtureRoot(async ({ baseDir }) => {
@@ -288,14 +328,14 @@ describe("resolveWritablePathWithinRoot", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "rejects write paths routed through a symlinked parent directory",
     async () => {
       await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
         const outsideDir = path.join(baseDir, "outside");
         await fs.mkdir(outsideDir, { recursive: true });
         const symlinkDir = path.join(uploadsDir, "escape-link");
-        await fs.symlink(outsideDir, symlinkDir);
+        await fs.symlink(outsideDir, symlinkDir, process.platform === "win32" ? "junction" : "dir");
 
         const result = await resolveWritablePathWithinRoot({
           rootDir: uploadsDir,
@@ -311,7 +351,7 @@ describe("resolveWritablePathWithinRoot", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateHardlinks)(
     "rejects existing hardlinked files under root",
     async () => {
       await withFixtureRoot(async ({ baseDir, uploadsDir }) => {
