@@ -34,7 +34,11 @@ import {
   summarizeCronRunDiagnostics,
 } from "../run-diagnostics.js";
 import { computeNextRunAtMs } from "../schedule.js";
-import { sweepCronRunSessions } from "../session-reaper.js";
+import {
+  buildCronSweepStorePaths,
+  buildKnownCronJobSessionKeys,
+  sweepCronRunSessions,
+} from "../session-reaper.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -1413,37 +1417,48 @@ export async function onTimer(state: CronServiceState) {
     // Piggyback session reaper on timer tick (self-throttled to every 5 min).
     // Placed in `finally` so the reaper runs even when a long-running job keeps
     // `state.running` true across multiple timer ticks — the early return at the
-    // top of onTimer would otherwise skip the reaper indefinitely.
-    const storePaths = new Set<string>();
-    if (state.deps.resolveSessionStorePath) {
-      const defaultAgentId = state.deps.defaultAgentId ?? DEFAULT_AGENT_ID;
-      if (state.store?.jobs?.length) {
-        for (const job of state.store.jobs) {
-          const agentId =
-            typeof job.agentId === "string" && job.agentId.trim() ? job.agentId : defaultAgentId;
-          storePaths.add(state.deps.resolveSessionStorePath(agentId));
-        }
-      } else {
-        storePaths.add(state.deps.resolveSessionStorePath(defaultAgentId));
-      }
-    } else if (state.deps.sessionStorePath) {
-      storePaths.add(state.deps.sessionStorePath);
-    }
+    // top of onTimer would otherwise skip the reaper indefinitely. Wrapped so a
+    // throw here (e.g. a config read) can never skip armTimer and wedge the timer.
+    try {
+      const agentResolution = {
+        defaultAgentId: state.deps.defaultAgentId ?? DEFAULT_AGENT_ID,
+        resolveCronAgentId: state.deps.resolveCronAgentId,
+      };
+      const storePaths = buildCronSweepStorePaths({
+        jobs: state.store?.jobs ?? [],
+        configuredAgentIds: state.deps.listConfiguredAgentIds?.() ?? [],
+        agentResolution,
+        resolveSessionStorePath: state.deps.resolveSessionStorePath,
+        sessionStorePath: state.deps.sessionStorePath,
+      });
 
-    if (storePaths.size > 0) {
-      const nowMs = state.deps.nowMs();
-      for (const storePath of storePaths) {
-        try {
-          await sweepCronRunSessions({
-            cronConfig: state.deps.cronConfig,
-            sessionStorePath: storePath,
-            nowMs,
-            log: state.deps.log,
-          });
-        } catch (err) {
-          state.deps.log.warn({ err: String(err), storePath }, "cron: session reaper sweep failed");
+      if (storePaths.size > 0) {
+        const nowMs = state.deps.nowMs();
+        // Live jobs' base rows carry model/auth/label into their next run, so the
+        // reaper preserves them; only orphans from deleted jobs are swept. A null
+        // store (load failed) is unknown ownership → undefined preserves all base keys.
+        const knownCronJobSessionKeys = state.store
+          ? buildKnownCronJobSessionKeys(state.store.jobs, agentResolution)
+          : undefined;
+        for (const storePath of storePaths) {
+          try {
+            await sweepCronRunSessions({
+              cronConfig: state.deps.cronConfig,
+              sessionStorePath: storePath,
+              nowMs,
+              log: state.deps.log,
+              knownCronJobSessionKeys,
+            });
+          } catch (err) {
+            state.deps.log.warn(
+              { err: String(err), storePath },
+              "cron: session reaper sweep failed",
+            );
+          }
         }
       }
+    } catch (err) {
+      state.deps.log.warn({ err: String(err) }, "cron: session reaper setup failed");
     }
 
     state.running = false;

@@ -71,6 +71,16 @@ export type CronServiceDeps = {
   defaultAgentId?: string;
   /** Resolve session store path for a given agent id. */
   resolveSessionStorePath?: (agentId?: string) => string;
+  /**
+   * Resolve a job's agent id the way the runtime does when writing the cron base
+   * row (a configured agent wins, else the default), so reaper keys match storage.
+   */
+  resolveCronAgentId?: (requested?: string | null) => string;
+  /**
+   * Configured agent ids, so the reaper also sweeps stores of agents that have
+   * no live cron job but may hold a deleted job's orphan base session.
+   */
+  listConfiguredAgentIds?: () => readonly string[];
   /** Path to the session store (sessions.json) for reaper use. */
   sessionStorePath?: string;
   /**

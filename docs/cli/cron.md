@@ -225,7 +225,7 @@ Cron does not classify final-output prose or approval-looking refusal phrases as
 
 Retention and pruning are controlled in config:
 
-- `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions.
+- `cron.sessionRetention` (default `24h`) prunes completed isolated run sessions and orphaned base cron sessions from deleted jobs; active jobs' sessions are kept.
 - `cron.runLog.keepLines` prunes retained SQLite run-history rows per job. `cron.runLog.maxBytes` remains accepted for compatibility with older file-backed run logs.
 
 ## Migrating older jobs
