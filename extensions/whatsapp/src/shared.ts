@@ -10,7 +10,7 @@ import {
   createAllowlistProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { createChannelPluginBase, getChatChannelMeta } from "openclaw/plugin-sdk/core";
+import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
 import {
   createDelegatedSetupWizardProxy,
   type ChannelSetupWizard,
@@ -150,7 +150,13 @@ export function createWhatsAppPluginBase(params: {
   const base = createChannelPluginBase({
     id: WHATSAPP_CHANNEL,
     meta: {
-      ...getChatChannelMeta(WHATSAPP_CHANNEL),
+      label: "WhatsApp",
+      selectionLabel: "WhatsApp (QR link)",
+      detailLabel: "WhatsApp Web",
+      docsPath: "/channels/whatsapp",
+      docsLabel: "whatsapp",
+      blurb: "works with your own number; recommend a separate phone + eSIM.",
+      systemImage: "message",
       showConfigured: false,
       quickstartAllowFrom: true,
       forceAccountBinding: true,

@@ -19,6 +19,7 @@ function normalizePathCandidate(candidate: string | undefined, cwd: string): str
 
   const resolved = path.resolve(cwd, candidate);
   try {
+    // Compare real paths so symlinked package bins and resolved entry files still match.
     return fs.realpathSync.native(resolved);
   } catch {
     return resolved;
@@ -29,10 +30,13 @@ function resolveDefaultCwd(currentFile: string): string {
   try {
     return process.cwd();
   } catch {
+    // `process.cwd()` can throw when the launch directory was removed; entrypoint checks should
+    // still work relative to the current module path.
     return path.dirname(currentFile);
   }
 }
 
+/** Detects whether a module is executing as the process entrypoint, including wrapper launches. */
 export function isMainModule({
   currentFile,
   argv = process.argv,

@@ -1,6 +1,8 @@
 import { Buffer } from "node:buffer";
 import type WebSocket from "ws";
 
+// WebSocket.RawData can arrive as strings, buffers, ArrayBuffers, or buffer
+// fragments depending on ws internals and caller options.
 export function rawDataToString(
   data: WebSocket.RawData,
   encoding: BufferEncoding = "utf8",

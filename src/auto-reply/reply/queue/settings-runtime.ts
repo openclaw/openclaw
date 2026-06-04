@@ -3,6 +3,7 @@ import { getLoadedChannelPlugin } from "../../../channels/plugins/index.js";
 import { resolveQueueSettings as resolveQueueSettingsCore } from "./settings.js";
 import type { QueueSettings, ResolveQueueSettingsParams } from "./types.js";
 
+/** Resolves plugin-provided debounce defaults for a channel queue. */
 function resolvePluginDebounce(channelKey: string | undefined): number | undefined {
   if (!channelKey) {
     return undefined;
@@ -12,6 +13,7 @@ function resolvePluginDebounce(channelKey: string | undefined): number | undefin
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : undefined;
 }
 
+/** Resolves queue settings with channel plugin defaults layered into core config. */
 export function resolveQueueSettings(params: ResolveQueueSettingsParams): QueueSettings {
   const channelKey = normalizeOptionalLowercaseString(params.channel);
   return resolveQueueSettingsCore({

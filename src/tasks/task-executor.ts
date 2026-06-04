@@ -43,6 +43,7 @@ import type {
 
 const log = createSubsystemLogger("tasks/executor");
 
+// One-task flows give detached ACP/subagent runs a flow handle for status and retry surfaces.
 function isOneTaskFlowEligible(task: TaskRecord): boolean {
   if (task.parentFlowId?.trim() || task.scopeKind !== "session") {
     return false;

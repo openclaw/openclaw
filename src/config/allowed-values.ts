@@ -47,12 +47,14 @@ function toAllowedValueDedupKey(value: unknown): string {
     return "null:null";
   }
   const kind = typeof value;
+  // Preserve schema distinctions such as numeric 1 vs string "1" even when labels match.
   if (kind === "string") {
     return `string:${value as string}`;
   }
   return `${kind}:${safeStringify(value)}`;
 }
 
+/** Summarizes enum/allowed-value candidates for compact validation error hints. */
 export function summarizeAllowedValues(
   values: ReadonlyArray<unknown>,
 ): AllowedValuesSummary | null {
@@ -92,6 +94,7 @@ function messageAlreadyIncludesAllowedValues(message: string): boolean {
   return lower.includes("(allowed:") || lower.includes("expected one of");
 }
 
+/** Appends an allowed-values hint unless the validation message already includes one. */
 export function appendAllowedValuesHint(message: string, summary: AllowedValuesSummary): string {
   if (messageAlreadyIncludesAllowedValues(message)) {
     return message;

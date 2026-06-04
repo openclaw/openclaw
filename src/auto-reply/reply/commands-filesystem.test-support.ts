@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+/** Test harness for command tests that need disposable workspace directories. */
 export function createCommandWorkspaceHarness(prefix: string) {
   const tempDirs: string[] = [];
 

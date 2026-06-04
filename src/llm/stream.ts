@@ -1,5 +1,6 @@
 import { registerBuiltInApiProviders } from "./providers/register-builtins.js";
 
+// Register built-ins as a side effect before re-exporting the shared runtime stream API.
 registerBuiltInApiProviders();
 
 export {

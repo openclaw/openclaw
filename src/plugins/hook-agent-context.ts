@@ -36,6 +36,7 @@ function stripConversationPrefix(
   return text;
 }
 
+/** Resolves the channel id exposed to plugin agent hooks. */
 export function resolveAgentHookChannelId(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;
@@ -68,6 +69,7 @@ export function resolveAgentHookChannelId(params: {
   return messageChannel ?? provider;
 }
 
+/** Builds channel/provider fields for plugin agent hook context. */
 export function buildAgentHookContextChannelFields(params: {
   sessionKey?: string | null;
   messageChannel?: string | null;

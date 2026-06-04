@@ -1,3 +1,6 @@
+/**
+ * Node connect reconciliation tests.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_IDS,

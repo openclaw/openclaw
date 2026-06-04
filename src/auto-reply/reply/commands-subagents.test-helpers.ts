@@ -1,5 +1,6 @@
 import type { InlineDirectives } from "./directive-handling.js";
 
+/** Test helper that returns a fully cleared inline-directive object. */
 export function createEmptyInlineDirectives(): InlineDirectives {
   return {
     cleaned: "",

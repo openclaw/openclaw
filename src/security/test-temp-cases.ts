@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
+/** Small async temp directory factory for security tests with numbered cases. */
 export class AsyncTempCaseFactory {
   private caseId = 0;
   private fixtureRoot = "";
@@ -21,6 +22,8 @@ export class AsyncTempCaseFactory {
 
   async makeTmpDir(label: string) {
     const dir = path.join(this.fixtureRoot, `case-${this.caseId++}-${label}`);
+    // Labels are test-authored and become path suffixes; callers keep them
+    // simple so failure output remains readable.
     await fs.mkdir(dir, { recursive: true });
     return dir;
   }

@@ -15,6 +15,7 @@ import { normalizeText } from "./runtime-options.js";
 const ACP_BACKGROUND_TASK_TEXT_MAX_LENGTH = 160;
 const ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH = 240;
 
+/** Context needed to mirror a child ACP turn into the requester task registry. */
 export type BackgroundTaskContext = {
   requesterSessionKey: string;
   requesterOrigin?: DeliveryContext;

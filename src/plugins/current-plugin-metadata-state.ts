@@ -3,6 +3,7 @@ let currentPluginMetadataSnapshotConfigFingerprint: string | undefined;
 let currentPluginMetadataSnapshotCompatiblePolicyHashes: readonly string[] | undefined;
 let currentPluginMetadataSnapshotCompatibleConfigFingerprints: readonly string[] | undefined;
 
+/** Stores the process-current plugin metadata snapshot and compatible config fingerprints. */
 export function setCurrentPluginMetadataSnapshotState(
   snapshot: unknown,
   configFingerprint: string | undefined,
@@ -19,6 +20,7 @@ export function setCurrentPluginMetadataSnapshotState(
     : undefined;
 }
 
+/** Clears the process-current plugin metadata snapshot. */
 export function clearCurrentPluginMetadataSnapshotState(): void {
   currentPluginMetadataSnapshot = undefined;
   currentPluginMetadataSnapshotConfigFingerprint = undefined;
@@ -26,6 +28,7 @@ export function clearCurrentPluginMetadataSnapshotState(): void {
   currentPluginMetadataSnapshotCompatibleConfigFingerprints = undefined;
 }
 
+/** Returns the process-current plugin metadata snapshot state. */
 export function getCurrentPluginMetadataSnapshotState(): {
   snapshot: unknown;
   configFingerprint: string | undefined;

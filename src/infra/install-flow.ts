@@ -6,6 +6,8 @@ import { type ArchiveLogger, extractArchive, resolvePackedRootDir } from "./arch
 import { pathExists } from "./fs-safe.js";
 import { withTempDir } from "./install-source-utils.js";
 
+// Install-flow helpers validate local install paths and unpack archives inside
+// temporary workspaces before handing the resolved package root to callers.
 type ExistingInstallPathResult =
   | {
       ok: true;
@@ -17,6 +19,7 @@ type ExistingInstallPathResult =
       error: string;
     };
 
+/** Resolve and stat a user-provided install path. */
 export async function resolveExistingInstallPath(
   inputPath: string,
 ): Promise<ExistingInstallPathResult> {
@@ -28,6 +31,7 @@ export async function resolveExistingInstallPath(
   return { ok: true, resolvedPath, stat };
 }
 
+/** Extract an archive to a temp dir and run work against the detected package root. */
 export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(params: {
   archivePath: string;
   tempDirPrefix: string;

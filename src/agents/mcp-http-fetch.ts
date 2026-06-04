@@ -2,14 +2,17 @@ import fs from "node:fs";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { loadUndiciRuntimeDeps } from "../infra/net/undici-runtime.js";
 
+/** MCP SDK-compatible fetch function type. */
 export type { FetchLike };
 
+/** Default MCP HTTP fetch backed by lazy-loaded undici runtime deps. */
 export const fetchWithUndici: FetchLike = async (url, init) =>
   (await loadUndiciRuntimeDeps().fetch(
     url,
     init as Parameters<ReturnType<typeof loadUndiciRuntimeDeps>["fetch"]>[1],
   )) as unknown as Response;
 
+/** Builds an MCP fetch function with optional TLS/client-cert dispatcher support. */
 export function buildMcpHttpFetch(params: {
   sslVerify?: boolean;
   clientCert?: string;
@@ -47,6 +50,7 @@ export function buildMcpHttpFetch(params: {
   };
 }
 
+/** Removes Authorization from MCP headers before forwarding to non-authorized paths. */
 export function withoutMcpAuthorizationHeader(
   headers: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
@@ -57,6 +61,7 @@ export function withoutMcpAuthorizationHeader(
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+/** Wraps MCP fetch so configured headers are applied only to the resource origin. */
 export function withSameOriginMcpHttpHeaders(params: {
   fetchFn: FetchLike;
   headers: Record<string, string> | undefined;

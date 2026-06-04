@@ -39,6 +39,7 @@ function formatRetryableApprovalBootstrapStartError(error: unknown): string {
   return message;
 }
 
+/** Starts the native approval handler for a channel runtime context and returns its cleanup hook. */
 export async function startChannelApprovalHandlerBootstrap(params: {
   plugin: Pick<ChannelPlugin, "id" | "meta" | "approvalCapability">;
   cfg: OpenClawConfig;
@@ -98,6 +99,7 @@ export async function startChannelApprovalHandlerBootstrap(params: {
       return;
     }
     if (generation !== activeGeneration) {
+      // Runtime contexts can unregister while the handler factory awaits; stop stale handlers.
       await handler.stop().catch(() => {});
       return;
     }

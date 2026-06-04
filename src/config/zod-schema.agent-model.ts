@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+/** Schema for agent model config accepting a string or fallback object. */
 export const AgentModelSchema = z.union([
   z.string(),
   z

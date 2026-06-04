@@ -11,6 +11,7 @@ import type {
 } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
+/** Applies already detected plugin auto-enable candidates to config. */
 export function materializePluginAutoEnableCandidates(params: {
   config?: OpenClawConfig;
   candidates: readonly PluginAutoEnableCandidate[];
