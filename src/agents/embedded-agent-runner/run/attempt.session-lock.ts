@@ -797,6 +797,15 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        // Inside the active retained-write context: releasing synchronously
+        // would deadlock, and force-releasing would let another attempt
+        // overlap writes and stale the session fence.  Defer release to
+        // when the retained-use counter drains to zero.
+        const pending = heldLock;
+        retainedLockIdleWaiters.add(() => {
+          if (heldLock === pending) heldLock = undefined;
+          pending?.release().catch(() => {});
+        });
         return;
       }
       if (!heldLock) {
@@ -854,6 +863,14 @@ export async function createEmbeddedAttemptSessionLockController(params: {
     const drainOwner = await beginHeldLockDrain();
     try {
       if (!(await waitForRetainedLockIdle())) {
+        // Inside the active retained-write context during teardown.
+        // Defer release to after the in-flight write completes so we
+        // preserve write serialization and release the lock reliably.
+        const pending = heldLock;
+        retainedLockIdleWaiters.add(() => {
+          if (heldLock === pending) heldLock = undefined;
+          pending?.release().catch(() => {});
+        });
         return;
       }
       if (!heldLock) {
