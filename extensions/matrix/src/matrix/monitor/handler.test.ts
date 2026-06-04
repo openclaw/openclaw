@@ -866,6 +866,44 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(recordInboundSession).toHaveBeenCalled();
   });
 
+  it.each(["/status", "/model"])(
+    "allows Matrix owner room text command %s before core command dispatch",
+    async (body) => {
+      const hasControlCommand = vi.fn((text?: string) => text === body);
+      const { handler, finalizeInboundContext, recordInboundSession } =
+        createMatrixHandlerTestHarness({
+          cfg: {
+            commands: {
+              useAccessGroups: true,
+              ownerAllowFrom: ["matrix:@owner:example.org"],
+            },
+          },
+          isDirectMessage: false,
+          shouldHandleTextCommands: () => true,
+          hasControlCommand,
+          getMemberDisplayName: async () => "owner",
+        });
+
+      await handler(
+        "!room:example.org",
+        createMatrixTextMessageEvent({
+          eventId: `$owner-command-${body.slice(1)}`,
+          sender: "@owner:example.org",
+          body,
+        }),
+      );
+
+      expect(callArg(hasControlCommand, 0, 0, "control command")).toBe(body);
+      const context = requireRecord(
+        callArg(finalizeInboundContext, 0, 0, "finalized context"),
+        "finalized context",
+      );
+      expect(context.CommandBody).toBe(body);
+      expect(context.CommandAuthorized).toBe(true);
+      expect(recordInboundSession).toHaveBeenCalled();
+    },
+  );
+
   it("processes room messages mentioned via displayName in formatted_body", async () => {
     const recordInboundSession = vi.fn(async () => {});
     const { handler } = createMatrixHandlerTestHarness({
@@ -1104,6 +1142,7 @@ describe("matrix monitor handler pairing account scope", () => {
       "finalized context",
     );
     expect(context.MessageThreadId).toBe("$root");
+    expect(context.ReplyToId).toBe("$reply1");
     expect(context.ThreadStarterBody).toBe("Matrix thread root $root from Alice:\nRoot topic");
     expectMockCallWithFields(recordInboundSession, { sessionKey: "agent:ops:main:thread:$root" });
   });

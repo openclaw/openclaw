@@ -9,6 +9,7 @@ import { normalizeMatrixAllowList, resolveMatrixAllowListMatch } from "./allowli
 type MatrixMonitorAccessState = {
   effectiveGroupAllowFrom: string[];
   effectiveRoomUsers: string[];
+  effectiveCommandOwnerAllowFrom: string[];
   messageIngress: ResolvedChannelMessageIngress;
   accountId: string;
   senderId: string;
@@ -54,6 +55,7 @@ function resolveMatrixGroupIngress(params: {
 export async function resolveMatrixMonitorAccessState(params: {
   allowFrom: Array<string | number>;
   storeAllowFrom: Array<string | number>;
+  commandOwnerAllowFrom?: Array<string | number>;
   dmPolicy?: "open" | "pairing" | "allowlist" | "disabled";
   groupPolicy?: "open" | "allowlist" | "disabled";
   groupAllowFrom: Array<string | number>;
@@ -67,6 +69,7 @@ export async function resolveMatrixMonitorAccessState(params: {
   const groupPolicy = params.groupPolicy ?? "open";
   const effectiveGroupAllowFrom = normalizeMatrixAllowList(params.groupAllowFrom);
   const effectiveRoomUsers = normalizeMatrixAllowList(params.roomUsers);
+  const effectiveCommandOwnerAllowFrom = normalizeMatrixAllowList(params.commandOwnerAllowFrom);
   const groupIngress = resolveMatrixGroupIngress({
     groupPolicy,
     effectiveGroupAllowFrom,
@@ -101,6 +104,7 @@ export async function resolveMatrixMonitorAccessState(params: {
   return {
     effectiveGroupAllowFrom,
     effectiveRoomUsers,
+    effectiveCommandOwnerAllowFrom,
     messageIngress: resolved,
     accountId,
     senderId: params.senderId,
@@ -117,8 +121,15 @@ export async function resolveMatrixMonitorCommandAccess(
   },
 ) {
   const commandAllowFrom = state.isRoom ? [] : state.messageIngress.senderAccess.effectiveAllowFrom;
+  const commandDirectAllowFrom = state.isRoom
+    ? []
+    : Array.from(new Set([...commandAllowFrom, ...state.effectiveCommandOwnerAllowFrom]));
   const commandGroupAllowFrom =
-    state.effectiveRoomUsers.length > 0 ? state.effectiveRoomUsers : state.effectiveGroupAllowFrom;
+    state.effectiveRoomUsers.length > 0
+      ? Array.from(new Set([...state.effectiveRoomUsers, ...state.effectiveCommandOwnerAllowFrom]))
+      : Array.from(
+          new Set([...state.effectiveGroupAllowFrom, ...state.effectiveCommandOwnerAllowFrom]),
+        );
   const resolved = await createChannelIngressResolver({
     channelId: "matrix",
     accountId: state.accountId,
@@ -132,7 +143,7 @@ export async function resolveMatrixMonitorCommandAccess(
     dmPolicy: "allowlist",
     groupPolicy: "allowlist",
     policy: { groupAllowFromFallbackToAllowFrom: false },
-    allowFrom: commandAllowFrom,
+    allowFrom: commandDirectAllowFrom,
     groupAllowFrom: commandGroupAllowFrom,
     command: {
       useAccessGroups: params.useAccessGroups,
