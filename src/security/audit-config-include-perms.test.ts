@@ -5,16 +5,14 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../config/types.openclaw.js";
 
-type IncludePermissionAudit = NonNullable<
-  Parameters<typeof collectIncludeFilePermFindings>[0]["auditFs"]
->;
+const inspectPathPermissionsMock = vi.hoisted(() => vi.fn());
 
-const inspectPathPermissionsMock = vi.fn<IncludePermissionAudit["inspectPathPermissions"]>();
-const auditFs: IncludePermissionAudit = {
+vi.mock("./audit-fs.js", () => ({
   inspectPathPermissions: inspectPathPermissionsMock,
-  formatPermissionDetail: (targetPath) => `${targetPath} mocked-perms`,
-  formatPermissionRemediation: ({ targetPath }) => `chmod 600 ${targetPath}`,
-};
+  formatPermissionDetail: (targetPath: string) => `${targetPath} mocked-perms`,
+  formatPermissionRemediation: ({ targetPath }: { targetPath: string }) =>
+    `chmod 600 ${targetPath}`,
+}));
 
 describe("security audit config include permissions", () => {
   beforeEach(() => {
@@ -60,7 +58,6 @@ describe("security audit config include permissions", () => {
 
     const findings = await collectIncludeFilePermFindings({
       configSnapshot,
-      auditFs,
     });
 
     expect(inspectPathPermissionsMock).toHaveBeenCalledWith(includePath, {

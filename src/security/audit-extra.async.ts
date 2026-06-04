@@ -45,10 +45,6 @@ type ExecDockerRawFn = (
   args: string[],
   opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
 ) => Promise<import("../agents/sandbox/docker.js").ExecDockerRawResult>;
-type AuditFsModule = Pick<
-  typeof import("./audit-fs.js"),
-  "formatPermissionDetail" | "formatPermissionRemediation" | "inspectPathPermissions"
->;
 
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
 
@@ -573,7 +569,6 @@ export async function collectIncludeFilePermFindings(params: {
   env?: NodeJS.ProcessEnv;
   platform?: NodeJS.Platform;
   execIcacls?: ExecFn;
-  auditFs?: AuditFsModule;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   if (!params.configSnapshot.exists) {
@@ -590,7 +585,7 @@ export async function collectIncludeFilePermFindings(params: {
   }
 
   const { formatPermissionDetail, formatPermissionRemediation, inspectPathPermissions } =
-    params.auditFs ?? (await loadAuditFsModule());
+    await loadAuditFsModule();
 
   for (const p of includePaths) {
     const perms = await inspectPathPermissions(p, {
