@@ -32,7 +32,9 @@ function isUsableTemplate(value: unknown): value is UsageBarTemplate {
   return hasOutput || Array.isArray(obj.segments);
 }
 
-export function loadUsageBarTemplate(configured: UsageTemplateConfig): UsageBarTemplate | undefined {
+export function loadUsageBarTemplate(
+  configured: UsageTemplateConfig,
+): UsageBarTemplate | undefined {
   if (!configured) {
     return undefined;
   }
