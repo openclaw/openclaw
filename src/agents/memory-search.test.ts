@@ -204,6 +204,7 @@ describe("memory search config", () => {
     expect(resolved?.provider).toBe("openai");
     expect(resolved?.model).toBe("text-embedding-3-small");
     expect(resolved?.fallback).toBe("none");
+    expect(resolved?.providerRequirement).toEqual({ mode: "optional", provider: "openai" });
   });
 
   it("normalizes legacy auto provider config to openai", () => {
@@ -211,6 +212,23 @@ describe("memory search config", () => {
 
     expect(resolved?.provider).toBe("openai");
     expect(resolved?.model).toBe("text-embedding-3-small");
+    expect(resolved?.providerRequirement).toEqual({ mode: "optional", provider: "openai" });
+  });
+
+  it("marks explicit concrete providers as required", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("openai"), "main");
+
+    expect(resolved?.providerRequirement).toEqual({
+      mode: "required",
+      provider: "openai",
+      configuredProvider: "openai",
+    });
+  });
+
+  it("marks explicit provider-none as fts-only", () => {
+    const resolved = resolveMemorySearchConfig(configWithDefaultProvider("none"), "main");
+
+    expect(resolved?.providerRequirement).toEqual({ mode: "fts-only", provider: "none" });
   });
 
   it("resolves custom provider ids through their configured api owner", () => {
