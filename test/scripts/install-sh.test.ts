@@ -1478,10 +1478,16 @@ describe("install.sh macOS Homebrew Node behavior", () => {
         '#!/usr/bin/env bash\nwhile [[ "$#" -gt 0 && "$1" != "--" ]]; do shift; done\nshift\n"$@"\n',
         { mode: 0o755 },
       );
-      // Command: records whether /dev/null was supplied as stdin
+      // Command: detects whether stdin is literally /dev/null by comparing
+      // device:inode of fd 0 against /dev/null (reliable across macOS/Linux)
       writeFileSync(
         commandPath,
-        `#!/usr/bin/env bash\nif [ -t 0 ] || [ -p /dev/stdin ] || [ -s /dev/stdin ]; then echo "has-stdin" > "${stdinLog}"; else echo "no-stdin" > "${stdinLog}"; fi\nexit 0\n`,
+        `#!/usr/bin/env bash
+stdin_dev=$(stat -f '%d:%i' /dev/fd/0 2>/dev/null || stat -c '%d:%i' /dev/fd/0 2>/dev/null)
+null_dev=$(stat -f '%d:%i' /dev/null 2>/dev/null || stat -c '%d:%i' /dev/null 2>/dev/null)
+if [ "$stdin_dev" = "$null_dev" ]; then echo "devnull" > "${stdinLog}"; else echo "other" > "${stdinLog}"; fi
+exit 0
+`,
         { mode: 0o755 },
       );
 
@@ -1497,6 +1503,9 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 
       // The gum spin command should NOT have redirected stdin from /dev/null
       expect(result.status).toBe(0);
+      // Assert the child command's stdin was NOT /dev/null
+      const observed = readFileSync(stdinLog, "utf8").trim();
+      expect(observed).toBe("other");
       expect(script).toContain("needs_stdin_isolation; then");
       expect(script).toContain(
         '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
