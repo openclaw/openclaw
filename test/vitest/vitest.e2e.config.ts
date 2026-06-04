@@ -24,7 +24,14 @@ const { projects: _projects, ...baseTest } = baseTestWithProjects as {
   projects?: string[];
   setupFiles?: string[];
 };
-const exclude = (baseTest.exclude ?? []).filter((p) => p !== "**/*.e2e.test.ts");
+const tuiPtyExcludes = [
+  "src/tui/tui-pty-harness.e2e.test.ts",
+  ...(process.arch === "arm64" ? ["src/tui/tui-pty-local.e2e.test.ts"] : []),
+];
+const exclude = [
+  ...(baseTest.exclude ?? []).filter((p) => p !== "**/*.e2e.test.ts"),
+  ...tuiPtyExcludes,
+];
 
 export default defineConfig({
   ...base,

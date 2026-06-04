@@ -1,3 +1,4 @@
+// Skills CLI command tests cover skill command registration and subcommand behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerSkillsCli } from "./skills-cli.js";
@@ -718,6 +719,21 @@ describe("skills cli commands", () => {
       slug: "calendar",
       logger: expect.any(Object),
     });
+  });
+
+  it("exits nonzero when a tracked ClawHub skill update fails", async () => {
+    readTrackedClawHubSkillSlugsMock.mockResolvedValue(["calendar"]);
+    updateSkillsFromClawHubMock.mockResolvedValue([
+      {
+        ok: false,
+        error: "blocked by install policy: calendar is not approved",
+      },
+    ]);
+
+    await expect(runCommand(["skills", "update", "calendar"])).rejects.toThrow("__exit__:1");
+
+    expect(runtimeErrors).toContain("blocked by install policy: calendar is not approved");
+    expect(runtimeLogs).toStrictEqual([]);
   });
 
   it("rejects using --global and --agent together for updates", async () => {

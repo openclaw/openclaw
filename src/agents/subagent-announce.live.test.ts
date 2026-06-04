@@ -1,3 +1,5 @@
+// Live subagent announce E2E tests exercise real gateway, session, and provider
+// flows for subagent completion delivery.
 import { randomBytes, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -67,6 +69,8 @@ function resolveLiveSubagentModelConfig(): LiveSubagentModelConfig {
 }
 
 function requireLiveSubagentAuth(config: LiveSubagentModelConfig): void {
+  // Live E2E runs need the provider credential that matches the selected model
+  // family; fail early before gateway startup.
   expect(process.env[config.requiredEnv]?.trim(), config.requiredEnv).toBeTruthy();
 }
 
@@ -190,6 +194,7 @@ function summarizeSubagentRuns(runs: ReturnType<typeof listSubagentRunsForReques
       endedReason: run.endedReason,
       pauseReason: run.pauseReason,
       outcome: run.outcome?.status,
+      outcomeError: run.outcome?.status === "error" ? run.outcome.error : undefined,
       delivery: run.delivery?.status,
       deliveryError: run.delivery?.lastError,
       suppressAnnounceReason: run.suppressAnnounceReason,
@@ -331,7 +336,6 @@ describeLive("subagent announce live", () => {
               taskName: "issue_82913_child",
               cleanup: "keep",
               context: "isolated",
-              runTimeoutSeconds: 180,
             })}.`,
             'Step 2: after spawn returns status="accepted", immediately call the bash tool with command exactly: sleep 35; printf ISSUE_82913_PARENT_TOOL_DONE.',
             "Do not call sessions_yield at any point in this scenario.",
@@ -523,7 +527,6 @@ describeLive("subagent announce live", () => {
               taskName: "steered_child",
               cleanup: "keep",
               context: "isolated",
-              runTimeoutSeconds: 300,
             })}.`,
             'Step 2: after spawn returns status="accepted", do not call the subagents tool; the test harness will steer the child.',
             `Step 3: reply exactly ${parentStartedToken}.`,
@@ -743,7 +746,6 @@ describeLive("subagent announce live", () => {
                   taskName: `gemini_stress_${childNumber}`,
                   cleanup: "keep",
                   context: "isolated",
-                  runTimeoutSeconds: 300,
                 },
               )}.`;
             }),

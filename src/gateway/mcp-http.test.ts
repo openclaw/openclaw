@@ -1,3 +1,6 @@
+// MCP HTTP tests cover gateway-scoped tool listing and invocation over the
+// JSON-RPC surface, including hook filtering and context propagation.
+import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
 import { buildMcpToolSchema } from "./mcp-http.schema.js";
@@ -25,6 +28,7 @@ type ScopedToolsCall = {
   currentChannelId?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
+  currentInboundAudio?: boolean;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
   senderIsOwner?: boolean;
@@ -120,6 +124,63 @@ async function sendRaw(params: {
       ...params.headers,
     },
     body: params.body,
+  });
+}
+
+async function sendChunkedOversizedBody(params: {
+  port: number;
+  token: string;
+}): Promise<{ status: number | undefined; body: string; closed: boolean }> {
+  return await new Promise((resolve, reject) => {
+    let sawResponse = false;
+    let closed = false;
+    const req = request(
+      {
+        hostname: "127.0.0.1",
+        port: params.port,
+        path: "/mcp",
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${params.token}`,
+          "content-type": "application/json",
+          "transfer-encoding": "chunked",
+        },
+      },
+      (res) => {
+        sawResponse = true;
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          body += chunk;
+        });
+        res.on("end", () => {
+          const waitForClose = new Promise<void>((closeResolve) => {
+            if (closed) {
+              closeResolve();
+              return;
+            }
+            req.once("close", () => closeResolve());
+            setTimeout(closeResolve, 250).unref();
+          });
+          void waitForClose.then(() => {
+            resolve({ status: res.statusCode, body, closed });
+          });
+        });
+      },
+    );
+    req.on("close", () => {
+      closed = true;
+    });
+    req.on("error", (error) => {
+      if (!sawResponse) {
+        reject(error);
+      }
+    });
+    req.write("x".repeat(524_288));
+    req.write("x".repeat(524_288));
+    setTimeout(() => {
+      req.write("x");
+    }, 10).unref();
   });
 }
 
@@ -454,6 +515,7 @@ describe("mcp loopback server", () => {
         "x-openclaw-current-channel-id": "telegram:chat123",
         "x-openclaw-current-thread-ts": "42",
         "x-openclaw-current-message-id": "reply-message-1",
+        "x-openclaw-current-inbound-audio": "true",
         "x-openclaw-inbound-event-kind": "room_event",
         "x-openclaw-source-reply-delivery-mode": "message_tool_only",
       }),
@@ -468,6 +530,7 @@ describe("mcp loopback server", () => {
     expect(call.currentChannelId).toBe("telegram:chat123");
     expect(call.currentThreadTs).toBe("42");
     expect(call.currentMessageId).toBe("reply-message-1");
+    expect(call.currentInboundAudio).toBe(true);
     expect(call.inboundEventKind).toBe("room_event");
     expect(call.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(call.surface).toBe("loopback");
@@ -481,9 +544,13 @@ describe("mcp loopback server", () => {
     ]);
   });
 
-  it("keeps loopback tool cache entries separate by inbound event kind and delivery mode", async () => {
+  it("keeps loopback tool cache entries separate by inbound event kind, delivery mode, and inbound audio", async () => {
     const { runtime } = await startLoopbackServerForTest();
-    const sendToolsList = async (inboundEventKind: string, sourceReplyDeliveryMode?: string) =>
+    const sendToolsList = async (
+      inboundEventKind: string,
+      sourceReplyDeliveryMode?: string,
+      currentInboundAudio?: boolean,
+    ) =>
       await sendLoopbackToolsList({
         token: runtime?.ownerToken,
         headers: {
@@ -493,17 +560,20 @@ describe("mcp loopback server", () => {
           ...(sourceReplyDeliveryMode
             ? { "x-openclaw-source-reply-delivery-mode": sourceReplyDeliveryMode }
             : {}),
+          ...(currentInboundAudio ? { "x-openclaw-current-inbound-audio": "true" } : {}),
         },
       });
 
     expect((await sendToolsList("user_request")).status).toBe(200);
     expect((await sendToolsList("room_event")).status).toBe(200);
     expect((await sendToolsList("room_event", "message_tool_only")).status).toBe(200);
+    expect((await sendToolsList("room_event", "message_tool_only", true)).status).toBe(200);
 
-    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(3);
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(4);
     expect(getScopedToolsCall(0).inboundEventKind).toBe("user_request");
     expect(getScopedToolsCall(1).inboundEventKind).toBe("room_event");
     expect(getScopedToolsCall(2).sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(getScopedToolsCall(3).currentInboundAudio).toBe(true);
   });
 
   it("adds empty properties for object schemas that omit properties", async () => {
@@ -758,6 +828,39 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(415);
   });
 
+  it("returns 413 instead of resetting oversized request bodies", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    const response = await sendRaw({
+      port: server.port,
+      token: runtime?.ownerToken,
+      headers: { "content-type": "application/json" },
+      body: "x".repeat(1_048_577),
+    });
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({ error: "payload_too_large" });
+  });
+
+  it("closes slow oversized request uploads after flushing 413", async () => {
+    server = await startMcpLoopbackServer(0);
+    const runtime = getActiveMcpLoopbackRuntime();
+    if (!runtime) {
+      throw new Error("expected active MCP loopback runtime");
+    }
+
+    const response = await sendChunkedOversizedBody({
+      port: server.port,
+      token: runtime.ownerToken,
+    });
+
+    expect(response).toEqual({
+      status: 413,
+      body: '{"error":"payload_too_large"}',
+      closed: true,
+    });
+  });
+
   it("rejects cross-origin browser requests before auth", async () => {
     await expectBrowserToolsListStatus({
       origin: "https://evil.example",
@@ -825,6 +928,9 @@ describe("createMcpLoopbackServerConfig", () => {
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-message-id"]).toBe(
       "${OPENCLAW_MCP_CURRENT_MESSAGE_ID}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-inbound-audio"]).toBe(
+      "${OPENCLAW_MCP_CURRENT_INBOUND_AUDIO}",
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-source-reply-delivery-mode"]).toBe(
       "${OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE}",

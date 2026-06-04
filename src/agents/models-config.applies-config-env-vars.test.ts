@@ -1,3 +1,4 @@
+// Verifies models.json planning applies config env vars and discovery scope.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,6 +6,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
   planOpenClawModelsJsonWithDeps,
@@ -35,6 +37,8 @@ function createImplicitOpenRouterProvider(): ProviderConfig {
 }
 
 function createImplicitOpenAiProvider(overrides: Partial<ProviderConfig> = {}): ProviderConfig {
+  // Minimal implicit OpenAI provider used to verify write planning without live
+  // discovery or real credentials.
   return {
     baseUrl: "https://api.openai.com/v1",
     api: "openai-responses",
@@ -75,6 +79,8 @@ async function resolveProvidersForConfigEnvTest(params: {
   cfg: OpenClawConfig;
   onResolveImplicitProviders: (env: NodeJS.ProcessEnv) => void;
 }) {
+  // Config env vars are materialized into the discovery env before implicit
+  // provider resolution.
   const env = createConfigRuntimeEnv(params.cfg);
   return await resolveProvidersForModelsJsonWithDeps(
     {
@@ -120,6 +126,8 @@ let unauthenticatedProviderWritePlan: Awaited<ReturnType<typeof planOpenClawMode
 let unauthenticatedProviderParsed: { providers?: Record<string, unknown> };
 
 beforeAll(async () => {
+  // Reused no-auth write plan proves generated providers stay serializable
+  // even when discovery returns auth-only provider shells.
   unauthenticatedProviderWritePlan = await planOpenClawModelsJsonWithDeps(
     {
       cfg: { models: { providers: {} } },
@@ -427,22 +435,19 @@ describe("models-config", () => {
   it("keeps google-vertex static catalog rows when an auth profile supplies the API key", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-google-vertex-models-"));
     try {
-      await fs.writeFile(
-        path.join(agentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            profiles: {
-              "google-vertex:default": {
-                type: "api_key",
-                provider: "google-vertex",
-                keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
-              },
+      saveAuthProfileStore(
+        {
+          version: 1,
+          profiles: {
+            "google-vertex:default": {
+              type: "api_key",
+              provider: "google-vertex",
+              keyRef: { source: "env", provider: "default", id: "GOOGLE_CLOUD_API_KEY" },
             },
           },
-          null,
-          2,
-        )}\n`,
+        },
+        agentDir,
+        { filterExternalAuthProfiles: false, syncExternalCli: false },
       );
 
       const plan = await planOpenClawModelsJsonWithDeps(

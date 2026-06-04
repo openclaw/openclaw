@@ -1,3 +1,4 @@
+// Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
 import fs from "node:fs";
 import { asDateTimestampMs } from "../../shared/number-coercion.js";
 import {
@@ -12,6 +13,7 @@ type SessionLifecycleEntry = Pick<
   "sessionId" | "sessionFile" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
 >;
 
+// Transcript headers are read lazily to recover startedAt without parsing full files.
 function resolveTimestamp(value: number | undefined): number | undefined {
   const timestampMs = asDateTimestampMs(value);
   return timestampMs !== undefined && timestampMs >= 0 ? timestampMs : undefined;
@@ -48,6 +50,7 @@ function readFirstLine(filePath: string): string | undefined {
   }
 }
 
+/** Reads session start time from a transcript header when store metadata is missing. */
 export function readSessionHeaderStartedAtMs(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;

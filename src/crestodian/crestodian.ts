@@ -1,3 +1,4 @@
+// Crestodian CLI runner selects JSON, one-shot, or interactive setup-helper mode.
 import { stdin as defaultStdin, stdout as defaultStdout } from "node:process";
 import { withProgress } from "../cli/progress.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
@@ -14,11 +15,18 @@ import {
   type CrestodianOverview,
 } from "./overview.js";
 
+/**
+ * CLI entry point for Crestodian.
+ *
+ * This module chooses JSON, one-shot, or interactive TUI mode and delegates all
+ * command parsing/execution to dialogue and operation modules.
+ */
 type CrestodianInteractiveRunner = (
   opts: RunCrestodianOptions,
   runtime: RuntimeEnv,
 ) => Promise<void>;
 
+/** Options accepted by the Crestodian command runner. */
 export type RunCrestodianOptions = {
   message?: string;
   yes?: boolean;
@@ -59,6 +67,7 @@ async function runOneShot(
   });
 }
 
+/** Run Crestodian in JSON, one-shot message, or interactive TUI mode. */
 export async function runCrestodian(
   opts: RunCrestodianOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
@@ -70,6 +79,7 @@ export async function runCrestodian(
   }
 
   if (opts.message?.trim()) {
+    // One-shot mode always shows the overview first so planned changes have local context.
     const overview = await withProgress(
       {
         label: "Loading Crestodian overview…",
@@ -91,6 +101,7 @@ export async function runCrestodian(
   const inputIsTty = (input as { isTTY?: boolean }).isTTY === true;
   const outputIsTty = (output as { isTTY?: boolean }).isTTY === true;
   if (!interactive || !inputIsTty || !outputIsTty) {
+    // Without a TTY, Crestodian cannot safely ask for confirmation; require --message instead.
     runtime.error("Crestodian needs an interactive TTY. Use --message for one command.");
     runtime.exit(1);
     return;

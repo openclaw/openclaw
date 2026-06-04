@@ -179,6 +179,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map((lane) => lane.name)).toEqual(["live-plugin-tool"]);
   });
 
+  it("keeps provider-backed install E2E lanes out of non-live package chunks", () => {
+    const plan = planFor({
+      includeOpenWebUI: true,
+      liveMode: "skip",
+      profile: RELEASE_PATH_PROFILE,
+      releaseChunk: "package-update",
+    });
+
+    const laneNames = plan.lanes.map((lane) => lane.name);
+    expect(laneNames).not.toContain("install-e2e-openai");
+    expect(laneNames).not.toContain("openai-chat-tools");
+    expect(laneNames).not.toContain("live-codex-npm-plugin");
+    expect(laneNames).not.toContain("install-e2e-anthropic");
+    expect(laneNames).toContain("codex-on-demand");
+    expect(laneNames).toContain("update-channel-switch");
+  });
+
   it("splits release-path package and plugin chunks across shorter CI jobs", () => {
     const core = planFor({
       includeOpenWebUI: true,
@@ -677,11 +694,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { credentials: ["anthropic", "gemini"], name: "live-gateway" },
       { credentials: ["anthropic"], name: "live-cli-backend-claude" },
       { credentials: ["gemini"], name: "live-cli-backend-gemini" },
-      { credentials: ["codex"], name: "live-codex-harness" },
+      { credentials: ["openai"], name: "live-codex-harness" },
       { credentials: ["openai"], name: "live-codex-media-path" },
       { credentials: ["openai"], name: "live-mcp-code-mode-gateway" },
       { credentials: ["openai"], name: "live-subagent-announce" },
-      { credentials: ["codex"], name: "live-codex-bind" },
+      { credentials: ["openai"], name: "live-codex-bind" },
       { credentials: ["anthropic"], name: "live-acp-bind-claude" },
       { credentials: ["codex", "openai"], name: "live-acp-bind-codex" },
       { credentials: ["factory"], name: "live-acp-bind-droid" },
@@ -691,6 +708,18 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     for (const { credentials, name } of cases) {
       expect(planFor({ selectedLaneNames: [name] }).credentials, name).toEqual(credentials);
+    }
+  });
+
+  it("plans Codex harness Docker-all lanes for API-key Testbox auth", () => {
+    for (const name of ["live-codex-harness", "live-codex-bind"]) {
+      const plan = planFor({ selectedLaneNames: [name] });
+      const lane = requireFirstLane(plan);
+
+      expect(plan.credentials, name).toEqual(["openai"]);
+      expect(lane.command, name).toContain("OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key");
+      expect(lane.resources, name).toContain("live:openai");
+      expect(lane.resources, name).not.toContain("live:codex");
     }
   });
 
@@ -908,9 +937,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
         command:
           "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e",
         imageKind: "bare",
-        live: false,
+        live: true,
         name: "install-e2e-openai",
-        resources: ["docker", "npm", "service"],
+        resources: ["docker", "live", "live:openai", "npm", "service"],
         timeoutMs: 900_000,
         weight: 3,
       },
@@ -918,9 +947,9 @@ describe("scripts/lib/docker-e2e-plan", () => {
         command:
           "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e",
         imageKind: "bare",
-        live: false,
+        live: true,
         name: "install-e2e-anthropic",
-        resources: ["docker", "npm", "service"],
+        resources: ["docker", "live", "live:claude", "npm", "service"],
         weight: 3,
       },
     ]);

@@ -1,3 +1,4 @@
+// QA runtime helpers register and execute plugin QA scenarios from local files.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import { createServer } from "node:net";

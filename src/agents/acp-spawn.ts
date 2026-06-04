@@ -1,3 +1,4 @@
+/** Implements ACP subagent/session spawning, binding, limits, and parent-stream setup. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import {
@@ -99,12 +100,17 @@ import {
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, getSubagentRunByChildSessionKey } from "./subagent-registry.js";
-import { splitModelRef } from "./subagent-spawn-plan.js";
+import {
+  resolveConfiguredSubagentRunTimeoutSeconds,
+  splitModelRef,
+} from "./subagent-spawn-plan.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
+
+const ACP_RUNTIME_TIMEOUT_MAX_SECONDS = 24 * 60 * 60;
 
 export const ACP_SPAWN_MODES = ["run", "session"] as const;
 export type SpawnAcpMode = (typeof ACP_SPAWN_MODES)[number];
@@ -192,6 +198,7 @@ type SpawnAcpResultFields = {
   childSessionKey?: string;
   runId?: string;
   mode?: SpawnAcpMode;
+  runTimeoutSeconds?: number;
   inlineDelivery?: boolean;
   streamLogPath?: string;
   note?: string;
@@ -995,6 +1002,13 @@ type AcpSpawnRuntimeOptions = {
   timeoutSeconds?: number;
 };
 
+function resolveAcpRuntimeTimeoutSeconds(runTimeoutSeconds?: number): number | undefined {
+  if (!runTimeoutSeconds) {
+    return undefined;
+  }
+  return Math.min(runTimeoutSeconds, ACP_RUNTIME_TIMEOUT_MAX_SECONDS);
+}
+
 function resolveAcpSpawnRuntimeOptions(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
@@ -1008,7 +1022,6 @@ function resolveAcpSpawnRuntimeOptions(params: {
     cfg: params.cfg,
     agentId: policyAgentId,
     modelOverride: params.model,
-    includeAgentPrimary: false,
   });
   const targetAgentConfig = resolveAgentConfig(params.cfg, policyAgentId);
   const thinkingPlan = resolveSubagentThinkingOverride({
@@ -1036,12 +1049,13 @@ function resolveAcpSpawnRuntimeOptions(params: {
     }
   }
 
+  const timeoutSeconds = resolveAcpRuntimeTimeoutSeconds(params.runTimeoutSeconds);
   const runtimeOptions =
-    model || thinking || params.runTimeoutSeconds
+    model || thinking || timeoutSeconds
       ? {
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
-          ...(params.runTimeoutSeconds ? { timeoutSeconds: params.runTimeoutSeconds } : {}),
+          ...(timeoutSeconds ? { timeoutSeconds } : {}),
         }
       : undefined;
   return { ok: true, runtimeOptions };
@@ -1253,6 +1267,10 @@ export async function spawnAcpDirect(
   ctx: SpawnAcpContext,
 ): Promise<SpawnAcpResult> {
   const cfg = getRuntimeConfig();
+  const runTimeoutSeconds = resolveConfiguredSubagentRunTimeoutSeconds({
+    cfg,
+    runTimeoutSeconds: params.runTimeoutSeconds,
+  });
   const requesterInternalKey = resolveRequesterInternalSessionKey({
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
@@ -1389,7 +1407,7 @@ export async function spawnAcpDirect(
     configAgentId: targetAgentResult.configAgentId,
     model: params.model,
     thinking: params.thinking,
-    runTimeoutSeconds: params.runTimeoutSeconds,
+    runTimeoutSeconds,
   });
   if (!runtimeOptionsResult.ok) {
     return createAcpSpawnFailure({
@@ -1546,6 +1564,7 @@ export async function spawnAcpDirect(
       logPath: streamLogPath,
       deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
+      cfg,
     });
   }
   const gatewayAttachments = toGatewayImageAttachments(params.attachments);
@@ -1563,7 +1582,7 @@ export async function spawnAcpDirect(
         deliver: deliveryPlan.useInlineDelivery,
         lane: AGENT_LANE_SUBAGENT,
         acpTurnSource: "manual_spawn",
-        ...(params.runTimeoutSeconds != null ? { timeout: params.runTimeoutSeconds } : {}),
+        timeout: runTimeoutSeconds,
         label: params.label || undefined,
         ...(gatewayAttachments ? { attachments: gatewayAttachments } : {}),
       },
@@ -1605,6 +1624,7 @@ export async function spawnAcpDirect(
         logPath: streamLogPath,
         deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,
+        cfg,
       });
     }
     parentRelay?.notifyStarted();
@@ -1641,6 +1661,7 @@ export async function spawnAcpDirect(
       childSessionKey: sessionKey,
       runId: childRunId,
       mode: spawnMode,
+      runTimeoutSeconds,
       ...(streamLogPath ? { streamLogPath } : {}),
       note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
     };
@@ -1680,6 +1701,7 @@ export async function spawnAcpDirect(
     childSessionKey: sessionKey,
     runId: childRunId,
     mode: spawnMode,
+    runTimeoutSeconds,
     ...(deliveryPlan.useInlineDelivery ? { inlineDelivery: true } : {}),
     note: spawnMode === "session" ? ACP_SPAWN_SESSION_ACCEPTED_NOTE : ACP_SPAWN_ACCEPTED_NOTE,
   };

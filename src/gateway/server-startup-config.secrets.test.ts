@@ -1,3 +1,5 @@
+// Startup config secret tests protect gateway token preparation, weak-secret
+// detection, auth profile loading, warning emission, and runtime activation.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -270,6 +272,42 @@ async function activateImportedStartupConfig(config: OpenClawConfig) {
       activate: true,
     },
   );
+}
+
+async function prepareGatewaySecretRefStartupConfig(params: {
+  prepareRuntimeSecretsSnapshot: PrepareRuntimeSecretsSnapshotForTest;
+  activateRuntimeSecretsSnapshot: ActivateRuntimeSecretsSnapshotForTest;
+}) {
+  return await prepareGatewayStartupConfig({
+    configSnapshot: gatewaySecretRefSnapshot(),
+    activateRuntimeSecrets: runtimeSecretsActivatorForTest(params),
+  });
+}
+
+function expectBootstrapAuthResolvedGatewayToken(
+  result: Awaited<ReturnType<typeof prepareGatewayStartupConfig>>,
+): void {
+  expect(result.auth).toMatchObject({
+    mode: "token",
+    token: RESOLVED_GATEWAY_TOKEN,
+  });
+}
+
+async function expectImportedStartupConfigUsesFullSecretsRuntime(
+  harness: ReturnType<typeof createGatewayStartupSecretsRuntimeHarness>,
+  config: OpenClawConfig,
+): Promise<void> {
+  harness.install();
+
+  try {
+    await activateImportedStartupConfig(config);
+
+    expect(harness.runtimeImport).toHaveBeenCalledTimes(1);
+    expect(harness.prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+    expect(harness.activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
+  } finally {
+    harness.cleanup();
+  }
 }
 
 describe("gateway startup config secret preflight", () => {
@@ -545,19 +583,7 @@ describe("gateway startup config secret preflight", () => {
   it.each(KNOWN_WEAK_GATEWAY_TOKEN_PLACEHOLDERS)(
     "rejects known weak gateway tokens resolved during secret activation: %s",
     async (token) => {
-      const sourceConfig = gatewayTokenConfig({
-        secrets: {
-          providers: {
-            default: { source: "env" },
-          },
-        },
-        gateway: {
-          auth: {
-            mode: "token",
-            token: { source: "env", provider: "default", id: "GATEWAY_TOKEN_REF" },
-          },
-        },
-      });
+      const sourceConfig = gatewayTokenConfig(gatewaySecretRefSnapshot().config);
       const prepareRuntimeSecretsSnapshot = vi.fn(async () =>
         preparedSnapshot({
           ...sourceConfig,
@@ -680,16 +706,12 @@ describe("gateway startup config secret preflight", () => {
     );
     const activateRuntimeSecretsSnapshot = vi.fn();
 
-    const result = await prepareGatewayStartupConfig({
-      configSnapshot: gatewaySecretRefSnapshot(),
-      activateRuntimeSecrets: runtimeSecretsActivatorForTest({
-        prepareRuntimeSecretsSnapshot,
-        activateRuntimeSecretsSnapshot,
-      }),
+    const result = await prepareGatewaySecretRefStartupConfig({
+      prepareRuntimeSecretsSnapshot,
+      activateRuntimeSecretsSnapshot,
     });
 
-    expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe(RESOLVED_GATEWAY_TOKEN);
+    expectBootstrapAuthResolvedGatewayToken(result);
     expect(result.cfg.gateway?.auth?.token).toBe(RESOLVED_GATEWAY_TOKEN);
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
     expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
@@ -722,16 +744,12 @@ describe("gateway startup config secret preflight", () => {
     }));
     const activateRuntimeSecretsSnapshot = vi.fn();
 
-    const result = await prepareGatewayStartupConfig({
-      configSnapshot: gatewaySecretRefSnapshot(),
-      activateRuntimeSecrets: runtimeSecretsActivatorForTest({
-        prepareRuntimeSecretsSnapshot,
-        activateRuntimeSecretsSnapshot,
-      }),
+    const result = await prepareGatewaySecretRefStartupConfig({
+      prepareRuntimeSecretsSnapshot,
+      activateRuntimeSecretsSnapshot,
     });
 
-    expect(result.auth.mode).toBe("token");
-    expect(result.auth.token).toBe(RESOLVED_GATEWAY_TOKEN);
+    expectBootstrapAuthResolvedGatewayToken(result);
     expect(prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(2);
     expect(activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
   });
@@ -836,31 +854,22 @@ describe("gateway startup config secret preflight", () => {
 
   it("keeps the full secrets runtime path when startup config has a SecretRef", async () => {
     const harness = createGatewayStartupSecretsRuntimeHarness("openclaw-startup-secret-ref-");
-    harness.install();
-
-    try {
-      await activateImportedStartupConfig(
-        asConfig({
-          agents: {
-            list: [{ id: "default", agentDir: harness.agentDir }],
-          },
-          models: {
-            providers: {
-              openai: {
-                models: [],
-                apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-              },
+    await expectImportedStartupConfigUsesFullSecretsRuntime(
+      harness,
+      asConfig({
+        agents: {
+          list: [{ id: "default", agentDir: harness.agentDir }],
+        },
+        models: {
+          providers: {
+            openai: {
+              models: [],
+              apiKey: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
             },
           },
-        }),
-      );
-
-      expect(harness.runtimeImport).toHaveBeenCalledTimes(1);
-      expect(harness.prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
-      expect(harness.activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
-    } finally {
-      harness.cleanup();
-    }
+        },
+      }),
+    );
   });
 
   it("keeps the full secrets runtime path when auth profile files are present", async () => {
@@ -878,22 +887,13 @@ describe("gateway startup config secret preflight", () => {
         },
       })}\n`,
     );
-    harness.install();
-
-    try {
-      await activateImportedStartupConfig(
-        asConfig({
-          agents: {
-            list: [{ id: "default", agentDir: harness.agentDir }],
-          },
-        }),
-      );
-
-      expect(harness.runtimeImport).toHaveBeenCalledTimes(1);
-      expect(harness.prepareRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
-      expect(harness.activateRuntimeSecretsSnapshot).toHaveBeenCalledTimes(1);
-    } finally {
-      harness.cleanup();
-    }
+    await expectImportedStartupConfigUsesFullSecretsRuntime(
+      harness,
+      asConfig({
+        agents: {
+          list: [{ id: "default", agentDir: harness.agentDir }],
+        },
+      }),
+    );
   });
 });

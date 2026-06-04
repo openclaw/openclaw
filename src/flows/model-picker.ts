@@ -293,6 +293,11 @@ async function resolveLiteralPrefixProviderIds(params: {
   return ids;
 }
 
+function modelCatalogEntryKey(entry: { provider: string; id: string }): string {
+  const normalizedRef = normalizeModelRef(entry.provider, entry.id);
+  return modelKey(normalizedRef.provider, normalizedRef.model);
+}
+
 async function addModelSelectOption(params: {
   entry: {
     provider: string;
@@ -309,7 +314,7 @@ async function addModelSelectOption(params: {
   isVisibleProvider: (provider: string) => boolean;
 }) {
   const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
-  const key = modelKey(normalizedRef.provider, normalizedRef.model);
+  const key = modelCatalogEntryKey(params.entry);
   if (
     params.seen.has(key) ||
     HIDDEN_ROUTER_MODELS.has(key) ||
@@ -917,17 +922,23 @@ export async function promptDefaultModel(
     });
   }
 
+  const firstPreferredModel =
+    preferredProvider && hasPreferredProvider
+      ? filteredModels.find((entry) => matchesPreferredProvider?.(entry.provider))
+      : undefined;
+  const firstPreferredModelKey = firstPreferredModel
+    ? modelCatalogEntryKey(firstPreferredModel)
+    : undefined;
   let initialValue: string | undefined = allowKeep ? KEEP_VALUE : configuredKey || undefined;
-  if (
+  if (!allowKeep && firstPreferredModelKey) {
+    initialValue = firstPreferredModelKey;
+  } else if (
     allowKeep &&
-    hasPreferredProvider &&
+    firstPreferredModelKey &&
     preferredProvider &&
     !matchesPreferredProvider?.(resolved.provider)
   ) {
-    const firstModel = filteredModels[0];
-    if (firstModel) {
-      initialValue = modelKey(firstModel.provider, firstModel.id);
-    }
+    initialValue = firstPreferredModelKey;
   }
 
   const selection = await params.prompter.select({
@@ -1219,11 +1230,24 @@ export async function promptModelAllowlist(params: {
     preferredProvider && allowedCatalog.some((entry) => matchesPreferredProvider?.(entry.provider))
       ? allowedCatalog.filter((entry) => matchesPreferredProvider?.(entry.provider))
       : allowedCatalog;
+  const scopedConfiguredKeys =
+    preferredProvider && !allowedKeySet
+      ? existingKeys.filter((key) => {
+          if (!isVisibleModelRef(key)) {
+            return false;
+          }
+          const entry = splitModelKey(key);
+          return entry ? matchesPreferredProvider?.(entry.provider) === true : false;
+        })
+      : [];
 
   const scopeKeys = allowedKeySet
     ? allowedKeys
     : preferredProvider
-      ? filteredCatalog.map((entry) => modelKey(entry.provider, entry.id))
+      ? normalizeModelKeys([
+          ...filteredCatalog.map((entry) => modelKey(entry.provider, entry.id)),
+          ...scopedConfiguredKeys,
+        ])
       : undefined;
   const scopeKeySet = scopeKeys ? new Set(scopeKeys) : null;
   const selectableInitialSeeds =

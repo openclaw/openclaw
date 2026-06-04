@@ -1,3 +1,4 @@
+// Skills CLI for workspace status, install/update, ClawHub verification, and workshop proposals.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
@@ -72,6 +73,7 @@ function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions): {
   workspaceDir: string;
   agentId: string;
 } {
+  // Prefer explicit --agent, then infer from cwd, then fall back to configured default agent.
   const config = getRuntimeConfig();
   const explicitAgentId = normalizeOptionalString(options?.agentId);
   const inferredAgentId = explicitAgentId
@@ -400,8 +402,10 @@ export function registerSkillsCli(program: Command) {
               info: (message) => defaultRuntime.log(message),
             },
           });
+          let failed = false;
           for (const result of results) {
             if (!result.ok) {
+              failed = true;
               defaultRuntime.error(result.error);
               continue;
             }
@@ -412,6 +416,9 @@ export function registerSkillsCli(program: Command) {
               continue;
             }
             defaultRuntime.log(`${result.slug} already at ${result.version}`);
+          }
+          if (failed) {
+            defaultRuntime.exit(1);
           }
         } catch (err) {
           defaultRuntime.error(String(err));

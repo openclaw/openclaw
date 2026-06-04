@@ -2,11 +2,12 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { testing as promptProbeTesting } from "../../scripts/anthropic-prompt-probe.ts";
 import { testing as claudeUsageTesting } from "../../scripts/debug-claude-usage.ts";
 import { testing as discordSmokeTesting } from "../../scripts/dev/discord-acp-plain-language-smoke.ts";
 import { testing as realtimeSmokeTesting } from "../../scripts/dev/realtime-talk-live-smoke.ts";
+import { testing as tuiPtyWatchTesting } from "../../scripts/dev/tui-pty-test-watch.ts";
 import {
   maskIdentifier,
   parseBooleanEnv,
@@ -15,6 +16,10 @@ import {
   redactHomePath,
   redactJsonValueForDevToolLog,
 } from "../../scripts/lib/dev-tooling-safety.ts";
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("dev tooling safety helpers", () => {
   it("redacts secrets before truncating script log previews", () => {
@@ -192,6 +197,66 @@ describe("script-specific dev tooling hardening", () => {
     ).rejects.toThrow(/exceeded total timeout/u);
     expect(calls).toBe(1);
   });
+
+  it("escalates stalled TUI PTY watch children after interrupt cleanup", async () => {
+    vi.useFakeTimers();
+    const signals: NodeJS.Signals[] = [];
+    const stopper = tuiPtyWatchTesting.createChildStopper(
+      { kill: () => true },
+      {
+        signalChild(_child, signal: NodeJS.Signals): void {
+          signals.push(signal);
+        },
+        sigkillGraceMs: 20,
+        sigtermGraceMs: 10,
+      },
+    );
+
+    stopper.stop();
+    expect(signals).toEqual(["SIGINT"]);
+
+    await vi.advanceTimersByTimeAsync(10);
+    expect(signals).toEqual(["SIGINT", "SIGTERM"]);
+
+    await vi.advanceTimersByTimeAsync(20);
+    expect(signals).toEqual(["SIGINT", "SIGTERM", "SIGKILL"]);
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "signals the TUI PTY watch process group before falling back to the child",
+    () => {
+      const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+      const childKill = vi.fn(() => true);
+
+      try {
+        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
+        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
+        expect(childKill).not.toHaveBeenCalled();
+      } finally {
+        kill.mockRestore();
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "falls back to direct TUI PTY watch child signaling when the process group is gone",
+    () => {
+      const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+        const error = new Error("missing process group") as NodeJS.ErrnoException;
+        error.code = "ESRCH";
+        throw error;
+      });
+      const childKill = vi.fn(() => true);
+
+      try {
+        tuiPtyWatchTesting.signalChildProcessTree({ pid: 123, kill: childKill }, "SIGTERM");
+        expect(kill).toHaveBeenCalledWith(-123, "SIGTERM");
+        expect(childKill).toHaveBeenCalledWith("SIGTERM");
+      } finally {
+        kill.mockRestore();
+      }
+    },
+  );
 
   it("aborts stalled OpenAI realtime smoke fetches at the request timeout", async () => {
     let signal: AbortSignal | undefined;

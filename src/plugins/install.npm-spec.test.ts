@@ -1,3 +1,4 @@
+// Covers npm spec parsing for plugin install inputs.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,6 +49,17 @@ function successfulSpawn(stdout = "") {
     code: 0,
     stdout,
     stderr: "",
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+  };
+}
+
+function failedSpawn(stderr: string, stdout = "") {
+  return {
+    code: 1,
+    stdout,
+    stderr,
     signal: null,
     killed: false,
     termination: "exit" as const,
@@ -707,7 +719,7 @@ describe("installPluginFromNpmSpec", () => {
     expect(runCommandWithTimeoutMock.mock.calls).toHaveLength(1);
   });
 
-  it("rolls back staged npm pack archives when a forced update is blocked", async () => {
+  it("updates staged npm pack archives when dangerous-looking code is present", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
     const packageName = "@openclaw/pack-demo";
@@ -754,22 +766,21 @@ describe("installPluginFromNpmSpec", () => {
       },
     ]);
 
-    const blockedUpdate = await installPluginFromNpmPackArchive({
+    const update = await installPluginFromNpmPackArchive({
       archivePath: archiveV2Path,
       npmDir: npmRoot,
       mode: "update",
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(blockedUpdate.ok).toBe(false);
-    if (blockedUpdate.ok) {
+    expect(update.ok).toBe(true);
+    if (!update.ok) {
       return;
     }
-    expect(blockedUpdate.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-    expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
+    expect(readTextFileTree(npmProjectRoot)).not.toEqual(projectBefore);
   });
 
-  it("cleans staged npm pack archives when a fresh install is blocked", async () => {
+  it("installs staged npm pack archives with dangerous-looking code", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
     const packageName = "@openclaw/pack-demo";
@@ -789,24 +800,22 @@ describe("installPluginFromNpmSpec", () => {
       },
     ]);
 
-    const blockedInstall = await installPluginFromNpmPackArchive({
+    const install = await installPluginFromNpmPackArchive({
       archivePath,
       npmDir: npmRoot,
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(blockedInstall.ok).toBe(false);
-    if (blockedInstall.ok) {
+    expect(install.ok).toBe(true);
+    if (!install.ok) {
       return;
     }
-    expect(blockedInstall.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
     const npmProjectRoot = resolvePluginNpmProjectDir({
       npmDir: npmRoot,
       packageName,
     });
-    expect(fs.existsSync(path.join(npmProjectRoot, "_openclaw-pack-archives"))).toBe(false);
-    expect(fs.existsSync(path.join(npmProjectRoot, "package.json"))).toBe(false);
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
+    expect(fs.existsSync(path.join(npmProjectRoot, "package.json"))).toBe(true);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
   });
 
   it("installs npm plugins into .openclaw/npm", async () => {
@@ -941,7 +950,196 @@ describe("installPluginFromNpmSpec", () => {
     expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "missing-lock-plugin"))).toBe(false);
   });
 
-  it("rejects npm installs with blocked hoisted transitive dependencies", async () => {
+  it("quarantines and rebuilds a corrupt managed npm project after npm from-argument failures", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const packageName = "@openclaw/voice-call";
+    const warnings: string[] = [];
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    const stalePackageDir = path.join(npmProjectRoot, "node_modules", "stale-plugin");
+    fs.mkdirSync(stalePackageDir, { recursive: true });
+    fs.writeFileSync(path.join(stalePackageDir, "stale.txt"), "old tree", "utf8");
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "package-lock.json"),
+      `${JSON.stringify({ lockfileVersion: 3, packages: {} })}\n`,
+      "utf8",
+    );
+
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: "voice-call",
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+    const delegate = runCommandWithTimeoutMock.getMockImplementation();
+    if (!delegate) {
+      throw new Error("expected npm mock implementation");
+    }
+    let managedInstallAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (isManagedNpmInstallCommand(argv) && options?.cwd === npmProjectRoot) {
+          managedInstallAttempts += 1;
+          if (managedInstallAttempts === 1) {
+            return failedSpawn(
+              'npm ERR! code ERR_INVALID_ARG_TYPE\nnpm ERR! The "from" argument must be of type string. Received undefined',
+            );
+          }
+        }
+        return await delegate(argv, options);
+      },
+    );
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(managedInstallAttempts).toBe(2);
+    expect(result.pluginId).toBe("voice-call");
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(true);
+    expect(warnings.some((warning) => warning.includes("managed npm project corruption"))).toBe(
+      true,
+    );
+    const quarantineParent = path.join(npmProjectRoot, "_openclaw-quarantined-npm-projects");
+    const quarantines = fs.readdirSync(quarantineParent);
+    expect(quarantines).toHaveLength(1);
+    const quarantineDir = path.join(quarantineParent, quarantines[0] ?? "");
+    expect(
+      fs.readFileSync(
+        path.join(quarantineDir, "node_modules", "stale-plugin", "stale.txt"),
+        "utf8",
+      ),
+    ).toBe("old tree");
+    expect(fs.existsSync(path.join(quarantineDir, "package-lock.json"))).toBe(true);
+  });
+
+  it("allows rebuilt hoisted dependencies after managed npm project quarantine", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const packageName = "unsafe-rebuild-plugin";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    fs.mkdirSync(path.join(npmProjectRoot, "node_modules", "stale-hoisted-helper"), {
+      recursive: true,
+    });
+
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+      hoistedDependency: { name: "stale-hoisted-helper", version: "1.0.0" },
+    });
+    const delegate = runCommandWithTimeoutMock.getMockImplementation();
+    if (!delegate) {
+      throw new Error("expected npm mock implementation");
+    }
+    let managedInstallAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (isManagedNpmInstallCommand(argv) && options?.cwd === npmProjectRoot) {
+          managedInstallAttempts += 1;
+          if (managedInstallAttempts === 1) {
+            return failedSpawn(
+              'npm ERR! code ERR_INVALID_ARG_TYPE\nnpm ERR! The "from" argument must be of type string. Received undefined',
+            );
+          }
+        }
+        return await delegate(argv, options);
+      },
+    );
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(managedInstallAttempts).toBe(2);
+  });
+
+  it("keeps corrupt managed npm project artifacts quarantined when the rebuild retry fails", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const packageName = "broken-plugin";
+    const npmProjectRoot = resolvePluginNpmProjectDir({ npmDir: npmRoot, packageName });
+    fs.mkdirSync(path.join(npmProjectRoot, "node_modules", "stale-plugin"), { recursive: true });
+    fs.writeFileSync(
+      path.join(npmProjectRoot, "node_modules", "stale-plugin", "stale.txt"),
+      "old tree",
+      "utf8",
+    );
+
+    mockNpmViewAndInstall({
+      spec: `${packageName}@1.0.0`,
+      packageName,
+      version: "1.0.0",
+      pluginId: packageName,
+      npmRoot,
+      expectedDependencySpec: "1.0.0",
+    });
+    const delegate = runCommandWithTimeoutMock.getMockImplementation();
+    if (!delegate) {
+      throw new Error("expected npm mock implementation");
+    }
+    let managedInstallAttempts = 0;
+    runCommandWithTimeoutMock.mockImplementation(
+      async (argv: string[], options?: { cwd?: string }) => {
+        if (isManagedNpmInstallCommand(argv) && options?.cwd === npmProjectRoot) {
+          managedInstallAttempts += 1;
+          if (managedInstallAttempts === 1) {
+            return failedSpawn(
+              'npm ERR! code ERR_INVALID_ARG_TYPE\nnpm ERR! The "from" argument must be of type string. Received undefined',
+            );
+          }
+          return failedSpawn("npm ERR! still broken");
+        }
+        return await delegate(argv, options);
+      },
+    );
+
+    const result = await installPluginFromNpmSpec({
+      spec: `${packageName}@1.0.0`,
+      npmDir: npmRoot,
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(managedInstallAttempts).toBeGreaterThanOrEqual(2);
+    expect(result.error).toContain("npm install failed after managed npm project recovery");
+    expect(result.error).toContain("Original npm error");
+    const quarantineParent = path.join(npmProjectRoot, "_openclaw-quarantined-npm-projects");
+    const quarantines = fs.readdirSync(quarantineParent);
+    expect(quarantines).toHaveLength(1);
+    expect(
+      fs.readFileSync(
+        path.join(
+          quarantineParent,
+          quarantines[0] ?? "",
+          "node_modules",
+          "stale-plugin",
+          "stale.txt",
+        ),
+        "utf8",
+      ),
+    ).toBe("old tree");
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, packageName))).toBe(false);
+  });
+
+  it("blocks npm installs with denied hoisted transitive dependencies", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
 
@@ -962,8 +1160,9 @@ describe("installPluginFromNpmSpec", () => {
 
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error).toContain("plain-crypto-js");
-      expect(result.error).toContain(path.join("node_modules", "plain-crypto-js"));
+      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
+      expect(result.error).toContain('blocked dependencies "plain-crypto-js" as package name');
+      expect(result.error).toContain("node_modules/plain-crypto-js/package.json");
     }
   });
 
@@ -1294,6 +1493,141 @@ describe("installPluginFromNpmSpec", () => {
     ).toBe(true);
   });
 
+  it("resolves incompatible prerelease tags to a compatible prerelease version", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    const warnings: string[] = [];
+    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
+
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/msteams@beta",
+        packageName: "@openclaw/msteams",
+        version: "2026.5.28-beta.4",
+        pluginId: "msteams",
+        npmRoot,
+        versions: ["2026.5.28-beta.3", "2026.5.28-beta.4"],
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          compat: { pluginApi: ">=2026.5.28-beta.4" },
+        },
+      },
+      {
+        spec: "@openclaw/msteams@2026.5.28-beta.3",
+        packageName: "@openclaw/msteams",
+        version: "2026.5.28-beta.3",
+        pluginId: "msteams",
+        npmRoot,
+        expectedDependencySpec: "2026.5.28-beta.3",
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          compat: { pluginApi: ">=2026.5.28-beta.3" },
+        },
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/msteams@beta",
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      return;
+    }
+    expect(result.npmResolution?.resolvedSpec).toBe("@openclaw/msteams@2026.5.28-beta.3");
+    expect(result.npmResolution?.version).toBe("2026.5.28-beta.3");
+    expect(warnings.join("\n")).toContain(
+      "using newest compatible @openclaw/msteams@2026.5.28-beta.3",
+    );
+    const npmProjectRoot = resolvePluginNpmProjectDir({
+      npmDir: npmRoot,
+      packageName: "@openclaw/msteams",
+    });
+    const managedManifest = JSON.parse(
+      fs.readFileSync(path.join(npmProjectRoot, "package.json"), "utf8"),
+    ) as { dependencies?: Record<string, string> };
+    expect(managedManifest.dependencies?.["@openclaw/msteams"]).toBe("2026.5.28-beta.3");
+  });
+
+  it("does not resolve explicit prerelease tags to stable compatible versions", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
+
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/msteams@beta",
+        packageName: "@openclaw/msteams",
+        version: "2026.5.28-beta.4",
+        pluginId: "msteams",
+        npmRoot,
+        versions: ["2026.5.27", "2026.5.28-beta.4"],
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          compat: { pluginApi: ">=2026.5.28-beta.4" },
+        },
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/msteams@beta",
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
+    expect(result.error).toContain("requires plugin API >=2026.5.28-beta.4");
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
+  });
+
+  it("does not resolve explicit prerelease tags to a different prerelease channel", async () => {
+    const stateDir = suiteTempRootTracker.makeTempDir();
+    const npmRoot = path.join(stateDir, "npm");
+    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
+
+    mockNpmViewAndInstallMany([
+      {
+        spec: "@openclaw/msteams@beta",
+        packageName: "@openclaw/msteams",
+        version: "2026.5.28-beta.4",
+        pluginId: "msteams",
+        npmRoot,
+        versions: ["2026.5.28-alpha.10", "2026.5.28-beta.4"],
+        openclaw: {
+          extensions: ["./dist/index.js"],
+          compat: { pluginApi: ">=2026.5.28-beta.4" },
+        },
+      },
+    ]);
+
+    const result = await installPluginFromNpmSpec({
+      spec: "@openclaw/msteams@beta",
+      npmDir: npmRoot,
+      mode: "update",
+      logger: { info: () => {}, warn: () => {} },
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      return;
+    }
+    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
+    expect(result.error).toContain("requires plugin API >=2026.5.28-beta.4");
+    expect(
+      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
+    ).toBe(false);
+  });
+
   it.runIf(process.platform !== "win32")(
     "repairs root openclaw materialized by npm peer handling",
     async () => {
@@ -1522,7 +1856,7 @@ describe("installPluginFromNpmSpec", () => {
     ).toBe(false);
   });
 
-  it("allows npm-spec installs with dangerous code patterns when forced unsafe install is set", async () => {
+  it("treats dangerouslyForceUnsafeInstall as a no-op for npm-spec installs", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     const warnings: string[] = [];
     mockNpmViewAndInstall({
@@ -1545,13 +1879,7 @@ describe("installPluginFromNpmSpec", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(
-      warnings.some((warning) =>
-        warning.includes(
-          "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
-        ),
-      ),
-    ).toBe(true);
+    expect(warnings).toStrictEqual([]);
     expectNpmInstallIntoProject({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
@@ -1795,18 +2123,23 @@ describe("installPluginFromNpmSpec", () => {
       `${JSON.stringify(
         {
           name: "openclaw",
-          overrides: {
-            axios: "1.16.0",
-            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-            nested: {
-              alias: "npm:@scope/alias@1.0.0",
-              semver: "1.2.3",
-            },
-          },
         },
         null,
         2,
       )}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(hostRoot, "pnpm-workspace.yaml"),
+      [
+        "overrides:",
+        "  axios: 1.16.0",
+        '  node-domexception: "npm:@nolyfill/domexception@1.0.28"',
+        "  nested:",
+        '    alias: "npm:@scope/alias@1.0.0"',
+        "    semver: 1.2.3",
+        "",
+      ].join("\n"),
       "utf8",
     );
     resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);
@@ -1874,7 +2207,7 @@ describe("installPluginFromNpmSpec", () => {
     );
   });
 
-  it("rolls back installed npm package debris when security scan blocks the plugin", async () => {
+  it("keeps installed npm package output when dangerous-looking plugin code is present", async () => {
     const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
     mockNpmViewAndInstall({
       spec: "dangerous-plugin@1.0.0",
@@ -1891,18 +2224,18 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "dangerous-plugin"))).toBe(false);
+    expect(result.ok).toBe(true);
+    expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, "dangerous-plugin"))).toBe(true);
     const npmProjectRoot = resolvePluginNpmProjectDir({
       npmDir: npmRoot,
       packageName: "dangerous-plugin",
     });
     await expect(
       fs.promises.access(path.join(npmProjectRoot, "package.json")),
-    ).rejects.toHaveProperty("code", "ENOENT");
+    ).resolves.toBeUndefined();
   });
 
-  it("leaves a stale legacy shared npm root untouched when a per-plugin update is blocked", async () => {
+  it("leaves a stale legacy shared npm root untouched when a per-plugin update succeeds", async () => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
     const legacyNodeModulesRoot = path.join(npmRoot, "node_modules");
@@ -1993,8 +2326,6 @@ describe("installPluginFromNpmSpec", () => {
     const legacyManifestBefore = fs.readFileSync(path.join(npmRoot, "package.json"), "utf8");
     const legacyLockfileBefore = fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8");
     const legacyNodeModulesBefore = readTextFileTree(legacyNodeModulesRoot);
-    const projectBefore = readTextFileTree(npmProjectRoot);
-
     mockNpmViewAndInstall({
       spec: "dangerous-plugin@2.0.0",
       packageName: "dangerous-plugin",
@@ -2012,17 +2343,15 @@ describe("installPluginFromNpmSpec", () => {
       logger: { info: () => {}, warn: () => {} },
     });
 
-    expect(result.ok).toBe(false);
-    if (result.ok) {
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
       return;
     }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
     expectNpmInstallIntoProject({
       calls: runCommandWithTimeoutMock.mock.calls,
       npmRoot,
       packageName: "dangerous-plugin",
     });
-    expect(readTextFileTree(npmProjectRoot)).toEqual(projectBefore);
     expect(fs.readFileSync(path.join(npmRoot, "package.json"), "utf8")).toBe(legacyManifestBefore);
     expect(fs.readFileSync(path.join(npmRoot, "package-lock.json"), "utf8")).toBe(
       legacyLockfileBefore,
@@ -2055,7 +2384,7 @@ describe("installPluginFromNpmSpec", () => {
   ];
 
   it.each(officialLaunchPluginCases)(
-    "blocks direct official npm plugin $spec with launch code without source provenance",
+    "allows direct official npm plugin $spec with launch code without source provenance",
     async ({ spec, pluginId, indexJs }) => {
       const npmRoot = path.join(suiteTempRootTracker.makeTempDir(), "npm");
       const warnings: string[] = [];
@@ -2077,12 +2406,11 @@ describe("installPluginFromNpmSpec", () => {
         },
       });
 
-      expect(result.ok).toBe(false);
-      if (result.ok) {
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
         return;
       }
-      expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
-      expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, spec))).toBe(false);
+      expect(fs.existsSync(resolveTestPluginPackageDir(npmRoot, spec))).toBe(true);
       expect(
         warnings.some((warning) =>
           warning.includes("allowed because it is an official OpenClaw package"),

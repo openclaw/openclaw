@@ -11,6 +11,10 @@ import {
   maybeApprovePendingBridgePairing,
   waitFor,
 } from "./mcp-channels-harness.ts";
+import {
+  connectMcpClientWithPairingReconnect,
+  createMcpClientTempState,
+} from "./mcp-client-temp-state.ts";
 
 function summarizeSessionRows(rows: Array<Record<string, unknown>> | undefined) {
   return (rows ?? []).map((entry) => ({
@@ -92,6 +96,7 @@ async function main() {
 
   const gateway = await connectGateway({ url: gatewayUrl, token: gatewayToken });
   let mcpHandle: Awaited<ReturnType<typeof connectMcpClient>> | undefined;
+  const mcpTempState = createMcpClientTempState({ gatewayToken });
 
   try {
     const gatewayConversation = await waitForGatewaySeededConversation(gateway);
@@ -105,20 +110,17 @@ async function main() {
       "expected seeded gateway deliveryContext target",
     );
 
-    mcpHandle = await connectMcpClient({
-      gatewayUrl,
-      gatewayToken,
+    mcpHandle = await connectMcpClientWithPairingReconnect({
+      tempState: mcpTempState,
+      connect: (tempState) =>
+        connectMcpClient({
+          gatewayUrl,
+          gatewayToken,
+          tempState,
+        }),
+      maybeApprovePairing: () => maybeApprovePendingBridgePairing(gateway),
     });
-    let mcp = mcpHandle.client;
-
-    if (await maybeApprovePendingBridgePairing(gateway)) {
-      await Promise.allSettled([mcp.close(), mcpHandle.transport.close()]);
-      mcpHandle = await connectMcpClient({
-        gatewayUrl,
-        gatewayToken,
-      });
-      mcp = mcpHandle.client;
-    }
+    const mcp = mcpHandle.client;
     const callTool = <T>(params: Parameters<typeof mcp.callTool>[0]) =>
       mcp.callTool(params, undefined, { timeout: 240_000 }) as Promise<T>;
 
@@ -397,10 +399,13 @@ async function main() {
       ) + "\n",
     );
   } finally {
-    await Promise.allSettled([
-      ...(mcpHandle ? [mcpHandle.client.close(), mcpHandle.transport.close()] : []),
-      gateway.close(),
-    ]);
+    const closeTasks: Array<Promise<unknown>> = [gateway.close()];
+    if (mcpHandle) {
+      closeTasks.push(mcpHandle.client.close(), mcpHandle.transport.close());
+    }
+    await Promise.allSettled(closeTasks);
+    mcpHandle?.cleanup();
+    mcpTempState.cleanup();
   }
 }
 

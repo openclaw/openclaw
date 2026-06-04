@@ -1,3 +1,4 @@
+// Model scan tests cover provider scan behavior and discovered model output.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelScanResult } from "../../agents/model-scan.js";
 import type { RuntimeEnv } from "../../runtime.js";

@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
 const GIT_OUTPUT_MAX_BUFFER = 64 * 1024 * 1024;
 const IMPLAUSIBLE_NO_MERGE_BASE_DIFF_PATHS = 200;
@@ -213,13 +214,21 @@ export function detectChangedLanes(changedPaths, options = {}) {
 }
 
 /**
- * @param {{ paths: string[]; base: string; head?: string; staged?: boolean }} params
+ * @param {{ paths: string[]; base: string; head?: string; staged?: boolean; mergeHeadFirstParent?: boolean }} params
  * @returns {ChangedLaneResult}
  */
 export function detectChangedLanesForPaths(params) {
+  const base = params.staged
+    ? params.base
+    : resolveMergeHeadDiffBase({
+        base: params.base,
+        head: params.head ?? "HEAD",
+        maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+        preferFirstParent: params.mergeHeadFirstParent === true,
+      });
   const packageJsonChangeKind = params.paths.includes("package.json")
     ? classifyPackageJsonChangeFromGit({
-        base: params.base,
+        base,
         head: params.head,
         staged: params.staged,
       })
@@ -228,13 +237,19 @@ export function detectChangedLanesForPaths(params) {
 }
 
 /**
- * @param {{ base: string; head?: string; includeWorktree?: boolean; cwd?: string }} params
+ * @param {{ base: string; head?: string; includeWorktree?: boolean; cwd?: string; mergeHeadFirstParent?: boolean }} params
  * @returns {string[]}
  */
 export function listChangedPathsFromGit(params) {
-  const base = params.base;
   const head = params.head ?? "HEAD";
   const cwd = params.cwd ?? process.cwd();
+  const base = resolveMergeHeadDiffBase({
+    base: params.base,
+    head,
+    cwd,
+    maxBuffer: GIT_OUTPUT_MAX_BUFFER,
+    preferFirstParent: params.mergeHeadFirstParent === true,
+  });
   if (!base) {
     return [];
   }
@@ -453,6 +468,7 @@ function parseArgs(argv) {
     base: "origin/main",
     head: "HEAD",
     staged: false,
+    mergeHeadFirstParent: false,
     json: false,
     githubOutput: false,
     help: false,
@@ -465,6 +481,7 @@ function parseArgs(argv) {
       stringFlag("--base", "base"),
       stringFlag("--head", "head"),
       booleanFlag("--staged", "staged"),
+      booleanFlag("--merge-head-first-parent", "mergeHeadFirstParent"),
       booleanFlag("--json", "json"),
       booleanFlag("--github-output", "githubOutput"),
       booleanFlag("--help", "help"),
@@ -538,12 +555,17 @@ if (isDirectRun()) {
       ? args.paths
       : args.staged
         ? listStagedChangedPaths()
-        : listChangedPathsFromGit({ base: args.base, head: args.head });
+        : listChangedPathsFromGit({
+            base: args.base,
+            head: args.head,
+            mergeHeadFirstParent: args.mergeHeadFirstParent,
+          });
   const result = detectChangedLanesForPaths({
     paths,
     base: args.base,
     head: args.head,
     staged: args.staged,
+    mergeHeadFirstParent: args.mergeHeadFirstParent,
   });
   if (args.githubOutput) {
     writeChangedLaneGitHubOutput(result);

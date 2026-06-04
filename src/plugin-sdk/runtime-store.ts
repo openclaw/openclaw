@@ -1,14 +1,19 @@
+// Runtime store exports expose plugin runtime type contracts without loading runtime code.
 export type { PluginRuntime } from "../plugins/runtime/types.js";
 
 const pluginRuntimeStoreRegistryKey = Symbol.for("openclaw.plugin-sdk.runtime-store-registry");
 
 type PluginRuntimeStoreRegistry = Map<string, { runtime: unknown }>;
 type PluginRuntimeStoreKeyOptions = {
+  /** Explicit global registry key for shared runtime slots. */
   key: string;
+  /** Error thrown by getRuntime before setRuntime initializes this slot. */
   errorMessage: string;
 };
 type PluginRuntimeStorePluginOptions = {
+  /** Plugin id used to derive a stable cross-module runtime slot key. */
   pluginId: string;
+  /** Error thrown by getRuntime before setRuntime initializes this slot. */
   errorMessage: string;
 };
 type PluginRuntimeStoreOptions = PluginRuntimeStoreKeyOptions | PluginRuntimeStorePluginOptions;
@@ -68,6 +73,8 @@ export function createPluginRuntimeStore<T>(options: string | PluginRuntimeStore
     typeof options === "string"
       ? { runtime: null }
       : (() => {
+          // Store named slots on globalThis so duplicate SDK module instances
+          // still share one runtime for the same plugin id or explicit key.
           const registry = getPluginRuntimeStoreRegistry();
           let existingSlot = registry.get(resolved.key);
           if (!existingSlot) {
