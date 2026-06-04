@@ -3703,7 +3703,7 @@ export function buildPluginApprovalRequestMessage(
       ? normalizePluginApprovalAllowedDecisions(options.allowedDecisions)
       : resolvePluginApprovalRequestAllowedDecisions(request.request);
   if (replyDecisions.length > 0) {
-    lines.push(`Reply with: /approve <id> ${replyDecisions.join("|")}`);
+    lines.push(`Reply with: /approve ${request.id} ${replyDecisions.join("|")}`);
   }
   return lines.join("\n");
 }

@@ -134,7 +134,7 @@ describe("plugin-sdk/approval-renderers", () => {
         nowMs: 1_000,
       }),
       textExpected: (text: string) =>
-        expect(text).toContain("Reply with: /approve <id> allow-once|deny"),
+        expect(text).toContain("Reply with: /approve plugin-approval-123 allow-once|deny"),
       presentationExpected: {
         blocks: [
           {
@@ -284,7 +284,7 @@ describe("plugin-sdk/approval-renderers", () => {
       language: "simple-technical",
     });
 
-    expect(payload.text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(payload.text).toContain("Reply with: /approve plugin-approval-123 allow-once|deny");
     expect(payload.text).not.toContain("allow-once|allow-always|deny");
     expect(payload.presentation).toEqual({
       blocks: [
