@@ -437,9 +437,15 @@ async function resolveBareSessionResetResult(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     sessionEntry: params.sessionEntry,
-    request: params.request,
+    request: {
+      ...params.request,
+      channel: deliveryPlan.resolvedChannel,
+      to: deliveryPlan.resolvedTo ?? deliveryPlan.baseDelivery.to,
+      accountId: deliveryPlan.resolvedAccountId ?? deliveryPlan.baseDelivery.accountId,
+      threadId: deliveryPlan.resolvedThreadId,
+    },
     bestEffortDeliver,
-    deliveryTargetMode: deliveryPlan.deliveryTargetMode,
+    deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? deliveryPlan.baseDelivery.mode,
     originMessageChannel: params.originMessageChannel ?? deliveryPlan.resolvedChannel,
     runId: params.runId,
   });
@@ -1619,7 +1625,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               sessionKey: resetResult.key,
               agentId: deliverySession?.agentId ?? agentId,
               sessionEntry: deliverySession?.entry,
-              request,
+              request: sessionKeyFromTo ? { ...request, to: undefined } : request,
               runId,
             });
           } catch (err) {
