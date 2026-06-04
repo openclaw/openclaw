@@ -1,5 +1,8 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
-import type { Tool as OpenAIResponsesTool } from "openai/resources/responses/responses.js";
+import type {
+  ResponseInput,
+  Tool as OpenAIResponsesTool,
+} from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
 import type { AssistantMessage, AssistantMessageEvent, Context, Model, Tool } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
@@ -8,6 +11,7 @@ import {
   convertResponsesMessages,
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
+  sanitizeResponsesInput,
 } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
 
@@ -176,6 +180,67 @@ describe("convertResponsesTools", () => {
     expect(
       convertResponsesTools([zeta, alpha]).map((tool) => expectResponsesFunctionTool(tool).name),
     ).toEqual(["alpha", "zeta"]);
+  });
+});
+
+describe("sanitizeResponsesInput", () => {
+  it("replaces null content on assistant messages with empty array", () => {
+    const input = [
+      {
+        type: "message",
+        role: "assistant",
+        content: null,
+        status: "completed",
+      },
+    ] as unknown as ResponseInput;
+    const result = sanitizeResponsesInput(input);
+    expect((result[0] as { content: unknown }).content).toEqual([]);
+  });
+
+  it("replaces null content on user messages with empty string", () => {
+    const input = [{ role: "user", content: null }] as unknown as ResponseInput;
+    const result = sanitizeResponsesInput(input);
+    expect((result[0] as { content: unknown }).content).toBe("");
+  });
+
+  it("replaces null content on system messages with empty string", () => {
+    const input = [{ role: "system", content: null }] as unknown as ResponseInput;
+    const result = sanitizeResponsesInput(input);
+    expect((result[0] as { content: unknown }).content).toBe("");
+  });
+
+  it("replaces null content on developer messages with empty string", () => {
+    const input = [{ role: "developer", content: null }] as unknown as ResponseInput;
+    const result = sanitizeResponsesInput(input);
+    expect((result[0] as { content: unknown }).content).toBe("");
+  });
+
+  it("leaves non-null content untouched", () => {
+    const input = [
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "hi", annotations: [] }],
+        status: "completed",
+      },
+      { role: "user", content: "hello" },
+      { role: "system", content: "sys" },
+    ] as unknown as ResponseInput;
+    const result = sanitizeResponsesInput(input);
+    expect((result[0] as { content: unknown }).content).toEqual([
+      { type: "output_text", text: "hi", annotations: [] },
+    ]);
+    expect((result[1] as { content: unknown }).content).toBe("hello");
+    expect((result[2] as { content: unknown }).content).toBe("sys");
+  });
+
+  it("leaves items without content or role untouched", () => {
+    const input = [
+      { type: "function_call", call_id: "call_1", name: "fn", arguments: "{}" },
+      { type: "function_call_output", call_id: "call_1", output: "ok" },
+    ] as unknown as ResponseInput;
+    const result = sanitizeResponsesInput(input);
+    expect(result).toEqual(input);
   });
 });
 

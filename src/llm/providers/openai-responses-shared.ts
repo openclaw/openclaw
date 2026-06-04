@@ -161,6 +161,29 @@ export interface ConvertResponsesMessagesOptions {
 export { convertResponsesTools };
 export type { ConvertResponsesToolsOptions } from "./openai-responses-tools.js";
 
+/**
+ * Defensive sanitization: strict providers reject `content: null` on message
+ * items. Replace with safe defaults before serialization.
+ */
+export function sanitizeResponsesInput(messages: ResponseInput): ResponseInput {
+  for (const item of messages) {
+    if (!item || typeof item !== "object") {
+      continue;
+    }
+    const record = item as unknown as Record<string, unknown>;
+    if (record.content !== null) {
+      continue;
+    }
+    const role = record.role;
+    if (role === "assistant") {
+      record.content = [];
+    } else if (role === "user" || role === "system" || role === "developer") {
+      record.content = "";
+    }
+  }
+  return messages;
+}
+
 type ResponsesRequestOptions = {
   signal?: AbortSignal;
   timeout?: number;
@@ -408,7 +431,7 @@ export function convertResponsesMessages<TApi extends Api>(
     msgIndex++;
   }
 
-  return messages;
+  return sanitizeResponsesInput(messages);
 }
 
 // =============================================================================
@@ -526,6 +549,9 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     const nextParams = await options?.onPayload?.(requestParams, model);
     if (nextParams !== undefined) {
       requestParams = nextParams as ResponseCreateParamsStreaming;
+    }
+    if (Array.isArray(requestParams.input)) {
+      sanitizeResponsesInput(requestParams.input);
     }
 
     const { data: openaiStream, response } = await client.responses
