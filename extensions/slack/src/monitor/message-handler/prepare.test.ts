@@ -3099,6 +3099,27 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
 
     expect(prepared).not.toBeNull();
   });
+
+  it("drops channel messages that mention a user-group (subteam) when ignoreOtherMentions=true", async () => {
+    const slackCtx = createInboundSlackCtx({
+      cfg: { channels: { slack: { enabled: true } } } as OpenClawConfig,
+      defaultRequireMention: false,
+      channelsConfig: { C123: { ignoreOtherMentions: true } },
+    });
+    slackCtx.resolveUserName = async () => ({ name: "Alice" }) as any;
+
+    const prepared = await prepareMessageWith(
+      slackCtx,
+      createSlackTestAccount(),
+      createSlackMessage({
+        channel: "C123",
+        channel_type: "channel",
+        text: "hey <!subteam^S123|@on-call> please take a look",
+      }),
+    );
+
+    expect(prepared).toBeNull();
+  });
 });
 
 describe("prepareSlackMessage sender prefix", () => {

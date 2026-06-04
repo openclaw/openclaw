@@ -951,7 +951,7 @@ export async function prepareSlackMessage(params: {
   if (
     isRoom &&
     channelConfig?.ignoreOtherMentions &&
-    mentionedUserIds.length > 0 &&
+    (mentionedUserIds.length > 0 || mentionedSubteamIds.length > 0) &&
     !effectiveWasMentioned &&
     !shouldBypassMention
   ) {
