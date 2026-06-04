@@ -1,3 +1,4 @@
+// Tests status command rendering for sessions, agents, and diagnostics.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

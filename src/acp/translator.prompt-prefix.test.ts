@@ -1,3 +1,4 @@
+/** Tests ACP prompt cwd-prefix provenance behavior. */
 import os from "node:os";
 import path from "node:path";
 import type { PromptRequest } from "@agentclientprotocol/sdk";

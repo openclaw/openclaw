@@ -1,3 +1,4 @@
+/** Relays child ACP session stream updates back into the requester parent session. */
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -57,6 +58,7 @@ function resolveAcpStreamLogPathFromSessionFile(sessionFile: string, sessionId: 
   return path.join(baseDir, `${sessionId}.acp-stream.jsonl`);
 }
 
+/** Resolves the JSONL stream log path for an ACP child session when metadata exists. */
 export function resolveAcpSpawnStreamLogPath(params: {
   childSessionKey: string;
 }): string | undefined {
@@ -85,6 +87,7 @@ export function resolveAcpSpawnStreamLogPath(params: {
   }
 }
 
+/** Starts a bounded parent-session relay for child ACP output and progress notices. */
 export function startAcpSpawnParentStreamRelay(params: {
   runId: string;
   parentSessionKey: string;

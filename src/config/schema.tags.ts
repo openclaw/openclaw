@@ -1,3 +1,4 @@
+// Normalizes config tag metadata for schema and docs surfaces.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 

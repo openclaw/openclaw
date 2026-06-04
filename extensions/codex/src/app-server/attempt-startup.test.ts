@@ -1,3 +1,7 @@
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import type {
   CodexBundleMcpThreadConfig,
   EmbeddedRunAttemptParams,
@@ -16,14 +20,35 @@ import { createClientHarness, createCodexTestModel } from "./test-support.js";
 
 type ClientHarness = ReturnType<typeof createClientHarness>;
 
-function createAttemptParams(): EmbeddedRunAttemptParams {
+type AttemptPaths = {
+  agentDir: string;
+  cwd: string;
+  sessionFile: string;
+  workspaceDir: string;
+};
+
+const tempRoots = new Set<string>();
+
+function createAttemptPaths(): AttemptPaths {
+  const root = path.join(os.tmpdir(), `openclaw-codex-attempt-startup-${randomUUID()}`);
+  tempRoots.add(root);
+  return {
+    agentDir: path.join(root, "agent"),
+    cwd: path.join(root, "workspace"),
+    sessionFile: path.join(root, "session.jsonl"),
+    workspaceDir: path.join(root, "workspace"),
+  };
+}
+
+function createAttemptParams(paths: AttemptPaths): EmbeddedRunAttemptParams {
   return {
     prompt: "hello",
     sessionId: "session-1",
     sessionKey: "agent:main:session-1",
-    sessionFile: "/tmp/session.jsonl",
-    effectiveCwd: "/tmp",
-    workspaceDir: "/tmp",
+    agentDir: paths.agentDir,
+    sessionFile: paths.sessionFile,
+    effectiveCwd: paths.cwd,
+    workspaceDir: paths.workspaceDir,
     runId: "run-1",
     provider: "codex",
     modelId: "gpt-5.4-codex",
@@ -63,10 +88,12 @@ function startThreadWithHarness(
       harness: ClientHarness,
     ) => Parameters<typeof startCodexAttemptThread>[0]["attemptClientFactory"];
     harness?: ClientHarness;
+    paths?: AttemptPaths;
     skipStartSpy?: boolean;
   },
 ) {
   const harness = overrides?.harness ?? createClientHarness();
+  const paths = overrides?.paths ?? createAttemptPaths();
   if (!overrides?.skipStartSpy) {
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
   }
@@ -81,12 +108,12 @@ function startThreadWithHarness(
     startupAuthProfileId: undefined,
     startupAuthAccountCacheKey: undefined,
     startupEnvApiKeyCacheKey: undefined,
-    agentDir: "/tmp/agent",
+    agentDir: paths.agentDir,
     config: undefined,
-    buildAttemptParams: createAttemptParams,
+    buildAttemptParams: () => createAttemptParams(paths),
     sessionAgentId: "agent-1",
-    effectiveWorkspace: "/tmp",
-    effectiveCwd: "/tmp",
+    effectiveWorkspace: paths.workspaceDir,
+    effectiveCwd: paths.cwd,
     dynamicTools: [],
     developerInstructions: undefined,
     finalConfigPatch: undefined,
@@ -143,11 +170,15 @@ describe("startCodexAttemptThread", () => {
     clearSharedCodexAppServerClient();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
     clearSharedCodexAppServerClient();
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
+    for (const root of tempRoots) {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+    tempRoots.clear();
   });
 
   it("clears the shared app-server when top-level thread startup fails with an app error", async () => {
@@ -171,16 +202,18 @@ describe("startCodexAttemptThread", () => {
       .mockReturnValueOnce(retained.client)
       .mockReturnValueOnce(replacement.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+    const paths = createAttemptPaths();
 
     const retainedLease = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
-      agentDir: "/tmp/agent",
+      agentDir: paths.agentDir,
     });
     await answerInitialize(retained);
     await expect(retainedLease).resolves.toBe(retained.client);
 
     const { run } = startThreadWithHarness(5_000, new AbortController().signal, {
       harness: retained,
+      paths,
       skipStartSpy: true,
     });
     const threadStart = await waitForThreadStart(retained);
@@ -197,7 +230,7 @@ describe("startCodexAttemptThread", () => {
 
     const replacementLease = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
-      agentDir: "/tmp/agent",
+      agentDir: paths.agentDir,
     });
     await answerInitialize(replacement);
     await expect(replacementLease).resolves.toBe(replacement.client);
@@ -228,16 +261,18 @@ describe("startCodexAttemptThread", () => {
     const retained = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockReturnValue(retained.client);
     const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+    const paths = createAttemptPaths();
 
     const retainedLease = getLeasedSharedCodexAppServerClient({
       startOptions: appServer.start,
-      agentDir: "/tmp/agent",
+      agentDir: paths.agentDir,
     });
     await answerInitialize(retained);
     await expect(retainedLease).resolves.toBe(retained.client);
 
     const { run } = startThreadWithHarness(100, new AbortController().signal, {
       harness: retained,
+      paths,
       skipStartSpy: true,
     });
     const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");

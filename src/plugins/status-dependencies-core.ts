@@ -1,3 +1,4 @@
+// Collects core dependency status for plugin diagnostics.
 import fs from "node:fs";
 import path from "node:path";
 

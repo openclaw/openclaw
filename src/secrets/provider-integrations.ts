@@ -1,3 +1,4 @@
+/** Materializes trusted plugin secret-provider integrations into exec provider configs. */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -320,6 +321,7 @@ export function isPluginIntegrationSecretProviderConfig(
 }
 
 /** Materializes an active trusted plugin secret-provider integration into an exec provider. */
+/** Resolves a trusted plugin secret-provider integration into executable provider config. */
 export function resolveSecretProviderIntegrationConfig(params: {
   manifestRegistry: Pick<PluginManifestRegistry, "plugins">;
   providerAlias: string;

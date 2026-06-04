@@ -1,3 +1,4 @@
+// Provides PTY harness helpers for TUI end-to-end tests.
 import { appendFileSync } from "node:fs";
 import * as nodePty from "@lydell/node-pty";
 import type { PtyExitEvent, PtyHandle } from "@lydell/node-pty";

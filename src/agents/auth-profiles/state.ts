@@ -1,3 +1,8 @@
+/**
+ * Runtime-state normalization and persistence for auth profile selection.
+ * This state tracks order, last-good profile, and cooldown/failure metadata
+ * separately from secret-bearing credentials.
+ */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
@@ -34,6 +39,8 @@ const AUTH_FAILURE_REASONS = new Set<AuthProfileFailureReason>([
 const AUTH_BLOCKED_REASONS = new Set<AuthProfileBlockedReason>(["subscription_limit"]);
 const AUTH_BLOCKED_SOURCES = new Set<AuthProfileBlockedSource>(["codex_rate_limits", "wham"]);
 
+// Runtime auth state is operator-controlled durability. Coerce every persisted
+// field through closed enums/numbers so bad rows do not poison auth selection.
 function normalizeFiniteNumber(value: unknown): number | undefined {
   return asFiniteNumber(value);
 }
@@ -145,6 +152,7 @@ function normalizeUsageStats(raw: unknown): AuthProfileState["usageStats"] {
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+/** Coerces persisted auth profile runtime state into the current shape. */
 export function coerceAuthProfileState(raw: unknown): AuthProfileState {
   if (!isRecord(raw)) {
     return {};
@@ -156,6 +164,7 @@ export function coerceAuthProfileState(raw: unknown): AuthProfileState {
   };
 }
 
+/** Merges auth profile runtime state, with override records winning per key. */
 export function mergeAuthProfileState(
   base: AuthProfileState,
   override: AuthProfileState,
@@ -180,6 +189,7 @@ export function mergeAuthProfileState(
   };
 }
 
+/** Loads persisted auth profile runtime state from SQLite. */
 export function loadPersistedAuthProfileState(
   agentDir?: string,
   database?: OpenClawAgentDatabase,
@@ -187,6 +197,7 @@ export function loadPersistedAuthProfileState(
   return coerceAuthProfileState(readPersistedAuthProfileStateRaw(agentDir, database));
 }
 
+/** Builds the persisted auth profile runtime state payload. */
 export function buildPersistedAuthProfileState(
   store: AuthProfileState,
 ): AuthProfileStateStore | null {
@@ -202,6 +213,7 @@ export function buildPersistedAuthProfileState(
   };
 }
 
+/** Saves auth profile runtime state when it differs from the persisted payload. */
 export function savePersistedAuthProfileState(
   store: AuthProfileState,
   agentDir?: string,

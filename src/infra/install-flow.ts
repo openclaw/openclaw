@@ -1,3 +1,4 @@
+// Coordinates plugin install flow decisions from source detection through target preparation.
 import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";

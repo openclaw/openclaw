@@ -1,3 +1,4 @@
+/** Implements ACP subagent/session spawning, binding, limits, and parent-stream setup. */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import {

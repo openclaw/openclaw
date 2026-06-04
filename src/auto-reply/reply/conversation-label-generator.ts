@@ -1,3 +1,4 @@
+// Generates short labels for sessions from conversation context.
 import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { requireApiKey } from "../../agents/model-auth.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection.js";

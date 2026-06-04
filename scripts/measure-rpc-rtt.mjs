@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import net from "node:net";
@@ -156,6 +157,14 @@ async function defaultOpen(filePath, flags) {
   return await fs.open(filePath, flags);
 }
 
+function resolveOpenClawLaunchArgs(repoRoot, sourceEntryExists = existsSync) {
+  const sourceEntry = path.join(repoRoot, "src", "entry.ts");
+  if (sourceEntryExists(sourceEntry)) {
+    return ["--import", "tsx", sourceEntry];
+  }
+  return [path.join(repoRoot, "openclaw.mjs")];
+}
+
 export function signalGatewayProcess(child, signal, killProcess = defaultKillProcess) {
   if (process.platform !== "win32" && typeof child.pid === "number") {
     try {
@@ -272,6 +281,7 @@ export async function startGateway({
   openImpl = defaultOpen,
   port,
   repoRoot,
+  sourceEntryExists = existsSync,
   spawnImpl = spawn,
   stderrPath,
   stdoutPath,
@@ -290,11 +300,12 @@ export async function startGateway({
   }
 
   let child;
+  const launcherArgs = resolveOpenClawLaunchArgs(repoRoot, sourceEntryExists);
   try {
     child = spawnImpl(
-      "pnpm",
+      process.execPath,
       [
-        "openclaw",
+        ...launcherArgs,
         "gateway",
         "run",
         "--port",
@@ -351,6 +362,25 @@ export async function cleanupTempRoot(tempRoot, { rmImpl = fs.rm } = {}) {
       cause: error,
     });
   }
+}
+
+async function copyLogIfPresent(source, target) {
+  try {
+    await fs.copyFile(source, target);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function copyGatewayLogs({ outputDir, stderrPath, stdoutPath }) {
+  await fs.mkdir(outputDir, { recursive: true });
+  await Promise.all([
+    copyLogIfPresent(stdoutPath, path.join(outputDir, "gateway.stdout.log")),
+    copyLogIfPresent(stderrPath, path.join(outputDir, "gateway.stderr.log")),
+  ]);
 }
 
 function quantile(sorted, q) {
@@ -641,6 +671,14 @@ async function main() {
       }
     } finally {
       removeGatewayParentCleanup();
+    }
+    try {
+      await copyGatewayLogs({ outputDir, stderrPath, stdoutPath });
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      details = details
+        ? `${details}\nwarning: failed to copy gateway logs: ${message}`
+        : `warning: failed to copy gateway logs: ${message}`;
     }
     try {
       await cleanupTempRoot(tempRoot);

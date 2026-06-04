@@ -1,3 +1,4 @@
+// Installs packages from npm pack artifacts for smoke and release checks.
 import {
   type NpmIntegrityDrift,
   type NpmSpecResolution,

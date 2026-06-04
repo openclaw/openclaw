@@ -1,3 +1,4 @@
+/** Detects when secrets runtime preparation can safely use a fast path. */
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -199,6 +200,7 @@ function hasRuntimeWebToolConfigSurface(config: OpenClawConfig): boolean {
 /**
  * Returns whether a snapshot can skip full SecretRef/web-tool resolution.
  */
+/** Returns whether current config/auth/plugin state allows skipping full secret preparation. */
 export function canUseSecretsRuntimeFastPath(params: {
   sourceConfig: OpenClawConfig;
   authStores: Array<{ agentDir: string; store: AuthProfileStore }>;

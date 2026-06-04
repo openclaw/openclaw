@@ -1,3 +1,4 @@
+// Resolves provider authentication modes for plugin setup prompts.
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { SecretInputMode } from "./provider-auth-types.js";
 

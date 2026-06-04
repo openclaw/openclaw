@@ -1,3 +1,4 @@
+// Exposes private temp workspace helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
 
 // Private temp workspaces isolate downloads and generated artifacts under a

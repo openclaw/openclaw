@@ -1,6 +1,9 @@
 import type { HealthSummary } from "../commands/health.js";
 import { createChatRunState } from "./server-chat-state.js";
 
+// Minimal Gateway maintenance state fixture for tests.
+
+/** Create a Gateway maintenance-state stub with configurable health/presence versions. */
 export function createGatewayMaintenanceStateForTest(params?: {
   healthSummary?: HealthSummary;
   healthVersion?: number;

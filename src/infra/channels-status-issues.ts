@@ -1,3 +1,4 @@
+// Collects channel account status issues for diagnostics.
 import { listChannelPlugins } from "../channels/plugins/index.js";
 import type {
   ChannelAccountSnapshot,

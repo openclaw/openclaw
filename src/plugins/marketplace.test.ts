@@ -1,3 +1,4 @@
+// Covers plugin marketplace catalog loading and validation.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

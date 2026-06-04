@@ -1,3 +1,4 @@
+// Resolves filesystem paths for installed plugin index storage.
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";

@@ -1,3 +1,4 @@
+// Validates executable config values before they reach shell-adjacent paths.
 const SHELL_METACHARS = /[;&|`$<>]/;
 const CONTROL_CHARS = /[\r\n]/;
 const QUOTE_CHARS = /["']/;

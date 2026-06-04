@@ -29,6 +29,7 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
         openImpl,
         port: 23456,
         repoRoot: "/repo",
+        sourceEntryExists: () => true,
         spawnImpl,
         stderrPath: "/tmp/stderr.log",
         stdoutPath: "/tmp/stdout.log",
@@ -40,9 +41,11 @@ describe("scripts/measure-rpc-rtt.mjs", () => {
     expect(openImpl).toHaveBeenNthCalledWith(1, "/tmp/stdout.log", "w");
     expect(openImpl).toHaveBeenNthCalledWith(2, "/tmp/stderr.log", "w");
     expect(spawnImpl).toHaveBeenCalledWith(
-      "pnpm",
+      process.execPath,
       [
-        "openclaw",
+        "--import",
+        "tsx",
+        "/repo/src/entry.ts",
         "gateway",
         "run",
         "--port",

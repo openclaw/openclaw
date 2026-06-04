@@ -1,3 +1,4 @@
+// Checks whether an approval reply can route to the initiating turn source.
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveApprovalInitiatingSurfaceState } from "./exec-approval-surface.js";
 

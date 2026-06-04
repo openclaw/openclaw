@@ -1,3 +1,4 @@
+/** Builds embedded-agent run parameters from queued follow-up run state. */
 import { resolveEffectiveModelFallbacks } from "../../agents/agent-scope.js";
 import type { resolveProviderScopedAuthProfile } from "./agent-runner-auth-profile.js";
 import type { FollowupRun } from "./queue.js";

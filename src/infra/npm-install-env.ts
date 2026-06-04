@@ -1,3 +1,4 @@
+// Builds npm environment overrides for safe project-local installs.
 import { execFileSync } from "node:child_process";
 import fsSync from "node:fs";
 import os from "node:os";

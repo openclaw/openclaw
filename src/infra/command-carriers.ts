@@ -1,3 +1,4 @@
+// Identifies wrapper commands that can carry hidden command payloads.
 import { splitShellArgs } from "../utils/shell-argv.js";
 import { normalizeExecutableToken } from "./exec-wrapper-tokens.js";
 import { parseInlineOptionToken } from "./inline-option-token.js";

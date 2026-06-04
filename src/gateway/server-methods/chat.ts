@@ -46,7 +46,6 @@ import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/rep
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
-import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import { resolveSessionFilePath } from "../../config/sessions.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
@@ -76,11 +75,7 @@ import { createChannelMessageReplyPipeline } from "../../plugin-sdk/channel-outb
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import { isPluginOwnedSessionBindingRecord } from "../../plugins/conversation-binding.js";
 import { normalizeAgentId, scopeLegacySessionKeyToAgent } from "../../routing/session-key.js";
-import {
-  INTER_SESSION_PROMPT_PREFIX_BASE,
-  normalizeInputProvenance,
-  type InputProvenance,
-} from "../../sessions/input-provenance.js";
+import { normalizeInputProvenance, type InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
@@ -119,11 +114,13 @@ import {
   UnsupportedAttachmentError,
 } from "../chat-attachments.js";
 import {
-  isToolHistoryBlockType,
+  augmentChatHistoryWithCanvasBlocks,
+  dropPreSessionStartAnnouncePairs,
   projectChatDisplayMessage,
   projectRecentChatDisplayMessages,
   resolveEffectiveChatHistoryMaxChars,
 } from "../chat-display-projection.js";
+import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 import { stripEnvelopeFromMessage } from "../chat-sanitize.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
 import { isSuppressedControlReplyText } from "../control-reply-text.js";
@@ -453,10 +450,13 @@ async function buildWebchatAssistantMediaMessage(
 }
 
 export {
+  augmentChatHistoryWithCanvasBlocks,
   DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+  dropPreSessionStartAnnouncePairs,
   resolveEffectiveChatHistoryMaxChars,
   sanitizeChatHistoryMessages,
 } from "../chat-display-projection.js";
+export { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
 
 export const CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES = 128 * 1024;
 const CHAT_HISTORY_OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
@@ -1075,27 +1075,6 @@ function explicitOriginTargetsPluginBinding(origin: ChatSendExplicitOrigin | und
   return isPluginOwnedSessionBindingRecord(binding);
 }
 
-function stripDisallowedChatControlChars(message: string): string {
-  let output = "";
-  for (const char of message) {
-    const code = char.charCodeAt(0);
-    if (code === 9 || code === 10 || code === 13 || (code >= 32 && code !== 127)) {
-      output += char;
-    }
-  }
-  return output;
-}
-
-export function sanitizeChatSendMessageInput(
-  message: string,
-): { ok: true; message: string } | { ok: false; error: string } {
-  const normalized = message.normalize("NFC");
-  if (normalized.includes("\u0000")) {
-    return { ok: false, error: "message must not contain null bytes" };
-  }
-  return { ok: true, message: stripDisallowedChatControlChars(normalized) };
-}
-
 function normalizeOptionalChatSystemReceipt(
   value: unknown,
 ): { ok: true; receipt?: string } | { ok: false; error: string } {
@@ -1379,178 +1358,6 @@ function buildChatSendUserTurnMedia(savedMedia: SavedMedia[]): NonNullable<UserT
     path: entry.path,
     contentType: entry.contentType,
   }));
-}
-
-function extractChatHistoryBlockText(message: unknown): string | undefined {
-  if (!message || typeof message !== "object") {
-    return undefined;
-  }
-  const entry = message as Record<string, unknown>;
-  if (typeof entry.content === "string") {
-    return entry.content;
-  }
-  if (typeof entry.text === "string") {
-    return entry.text;
-  }
-  if (!Array.isArray(entry.content)) {
-    return undefined;
-  }
-  const textParts = entry.content
-    .map((block) => {
-      if (!block || typeof block !== "object") {
-        return undefined;
-      }
-      const typed = block as { text?: unknown; type?: unknown };
-      return typeof typed.text === "string" ? typed.text : undefined;
-    })
-    .filter((value): value is string => typeof value === "string");
-  return textParts.length > 0 ? textParts.join("\n") : undefined;
-}
-
-function appendCanvasBlockToAssistantHistoryMessage(params: {
-  message: unknown;
-  preview: ReturnType<typeof extractCanvasFromText>;
-  rawText: string | null;
-}): unknown {
-  const preview = params.preview;
-  if (!preview || !params.message || typeof params.message !== "object") {
-    return params.message;
-  }
-  const entry = params.message as Record<string, unknown>;
-  const baseContent = Array.isArray(entry.content)
-    ? [...entry.content]
-    : typeof entry.content === "string"
-      ? [{ type: "text", text: entry.content }]
-      : typeof entry.text === "string"
-        ? [{ type: "text", text: entry.text }]
-        : [];
-  const alreadyPresent = baseContent.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const typed = block as { type?: unknown; preview?: unknown };
-    return (
-      typed.type === "canvas" &&
-      typed.preview &&
-      typeof typed.preview === "object" &&
-      (((typed.preview as { viewId?: unknown }).viewId &&
-        (typed.preview as { viewId?: unknown }).viewId === preview.viewId) ||
-        ((typed.preview as { url?: unknown }).url &&
-          (typed.preview as { url?: unknown }).url === preview.url))
-    );
-  });
-  if (!alreadyPresent) {
-    baseContent.push({
-      type: "canvas",
-      preview,
-      rawText: params.rawText,
-    });
-  }
-  return {
-    ...entry,
-    content: baseContent,
-  };
-}
-
-function messageContainsToolHistoryContent(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const entry = message as Record<string, unknown>;
-  if (
-    typeof entry.toolCallId === "string" ||
-    typeof entry.tool_call_id === "string" ||
-    typeof entry.toolName === "string" ||
-    typeof entry.tool_name === "string"
-  ) {
-    return true;
-  }
-  if (!Array.isArray(entry.content)) {
-    return false;
-  }
-  return entry.content.some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    return isToolHistoryBlockType((block as { type?: unknown }).type);
-  });
-}
-
-export function augmentChatHistoryWithCanvasBlocks(messages: unknown[]): unknown[] {
-  if (messages.length === 0) {
-    return messages;
-  }
-  const next = [...messages];
-  let changed = false;
-  let lastAssistantIndex = -1;
-  let lastRenderableAssistantIndex = -1;
-  const pending: Array<{
-    preview: NonNullable<ReturnType<typeof extractCanvasFromText>>;
-    rawText: string | null;
-  }> = [];
-  for (let index = 0; index < next.length; index++) {
-    const message = next[index];
-    if (!message || typeof message !== "object") {
-      continue;
-    }
-    const entry = message as Record<string, unknown>;
-    const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
-    if (role === "assistant") {
-      lastAssistantIndex = index;
-      if (!messageContainsToolHistoryContent(entry)) {
-        lastRenderableAssistantIndex = index;
-        if (pending.length > 0) {
-          let target = next[index];
-          for (const item of pending) {
-            target = appendCanvasBlockToAssistantHistoryMessage({
-              message: target,
-              preview: item.preview,
-              rawText: item.rawText,
-            });
-          }
-          next[index] = target;
-          pending.length = 0;
-          changed = true;
-        }
-      }
-      continue;
-    }
-    if (!messageContainsToolHistoryContent(entry)) {
-      continue;
-    }
-    const toolName =
-      typeof entry.toolName === "string"
-        ? entry.toolName
-        : typeof entry.tool_name === "string"
-          ? entry.tool_name
-          : undefined;
-    const text = extractChatHistoryBlockText(entry);
-    const preview = extractCanvasFromText(text, toolName);
-    if (!preview) {
-      continue;
-    }
-    pending.push({
-      preview,
-      rawText: text ?? null,
-    });
-  }
-  if (pending.length > 0) {
-    const targetIndex =
-      lastRenderableAssistantIndex >= 0 ? lastRenderableAssistantIndex : lastAssistantIndex;
-    if (targetIndex >= 0) {
-      let target = next[targetIndex];
-      for (const item of pending) {
-        target = appendCanvasBlockToAssistantHistoryMessage({
-          message: target,
-          preview: item.preview,
-          rawText: item.rawText,
-        });
-      }
-      next[targetIndex] = target;
-      changed = true;
-    }
-  }
-  return changed ? next : messages;
 }
 
 export function buildOversizedHistoryPlaceholder(message?: unknown): Record<string, unknown> {
@@ -2469,71 +2276,6 @@ function resolveGlobalAwareNodeChatDeliveryKeys(params: {
 
 function isSourceReplyTranscriptMirrorPayload(payload: ReplyPayload | undefined) {
   return Boolean(payload && getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror);
-}
-
-function readChatHistoryRecordTimestampMs(message: unknown): number | undefined {
-  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
-  const value = meta?.recordTimestampMs;
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  const timestamp = asOptionalRecord(message)?.timestamp;
-  return typeof timestamp === "number" && Number.isFinite(timestamp) ? timestamp : undefined;
-}
-
-function isSubagentAnnounceInterSessionUserChatHistoryMessage(message: unknown): boolean {
-  const record = asOptionalRecord(message);
-  if (!record || record.role !== "user") {
-    return false;
-  }
-  const provenance = normalizeInputProvenance(record.provenance);
-  if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
-    return true;
-  }
-  const text = extractChatHistoryBlockText(record);
-  return (
-    typeof text === "string" &&
-    text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) &&
-    text.includes("sourceTool=subagent_announce")
-  );
-}
-
-function isChatHistoryAssistantMessage(message: unknown): boolean {
-  return asOptionalRecord(message)?.role === "assistant";
-}
-
-export function dropPreSessionStartAnnouncePairs(
-  messages: unknown[],
-  sessionStartedAt: number | undefined,
-): unknown[] {
-  if (sessionStartedAt === undefined || messages.length === 0) {
-    return messages;
-  }
-  let changed = false;
-  const kept: unknown[] = [];
-  for (let i = 0; i < messages.length; i++) {
-    const current = messages[i];
-    if (isSubagentAnnounceInterSessionUserChatHistoryMessage(current)) {
-      const ts = readChatHistoryRecordTimestampMs(current);
-      if (typeof ts === "number" && ts < sessionStartedAt) {
-        const next = messages[i + 1];
-        const nextTs = readChatHistoryRecordTimestampMs(next);
-        if (
-          isChatHistoryAssistantMessage(next) &&
-          typeof nextTs === "number" &&
-          nextTs < sessionStartedAt
-        ) {
-          // Skip only an assistant reply that is also pre-session-start; recent
-          // or timestampless assistants may be real fresh-session context.
-          i++;
-        }
-        changed = true;
-        continue;
-      }
-    }
-    kept.push(current);
-  }
-  return changed ? kept : messages;
 }
 
 function readChatHistoryMessageId(message: unknown): string | undefined {

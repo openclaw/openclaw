@@ -1,3 +1,4 @@
+// Guards config writes that are disallowed in Nix-managed installs.
 import { resolveIsNixMode } from "./paths.js";
 
 /** Agent-first Nix install docs shown when runtime config writes are blocked. */

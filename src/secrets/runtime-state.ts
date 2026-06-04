@@ -1,3 +1,4 @@
+/** Holds active secrets runtime snapshots, refresh context, and cleanup hooks. */
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   getRuntimeAuthProfileStoreSnapshot,
@@ -20,6 +21,7 @@ import {
 } from "./runtime-web-tools-state.js";
 import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
+/** Prepared secrets runtime snapshot activated for fast secret resolution. */
 export type PreparedSecretsRuntimeSnapshot = {
   sourceConfig: OpenClawConfig;
   config: OpenClawConfig;
@@ -28,6 +30,7 @@ export type PreparedSecretsRuntimeSnapshot = {
   webTools: RuntimeWebToolsMetadata;
 };
 
+/** Context needed to refresh active secrets runtime snapshots without losing plugin origin data. */
 export type SecretsRuntimeRefreshContext = {
   env: Record<string, string | undefined>;
   explicitAgentDirs: string[] | null;
