@@ -655,6 +655,81 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("replaces buffered preamble item progress when snapshots change text", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-preamble-item-replacement",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-preamble-item-replacement",
+      agentId: "codex",
+      cfg: progressModeConfig(),
+      deliveryContext: progressCommentaryDeliveryContext,
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    emitAgentEvent({
+      runId: "run-preamble-item-replacement",
+      stream: "item",
+      data: {
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking config",
+      },
+    });
+    emitAgentEvent({
+      runId: "run-preamble-item-replacement",
+      stream: "item",
+      data: {
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Reading files",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    expect(collectedTexts()).toEqual(["codex: Reading files"]);
+    relay.dispose();
+  });
+
+  it("emits full preamble item progress after the previous snapshot flushed", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-preamble-item-after-flush",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-preamble-item-after-flush",
+      agentId: "codex",
+      cfg: progressModeConfig(),
+      deliveryContext: progressCommentaryDeliveryContext,
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    emitAgentEvent({
+      runId: "run-preamble-item-after-flush",
+      stream: "item",
+      data: {
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking",
+      },
+    });
+    vi.advanceTimersByTime(15);
+    emitAgentEvent({
+      runId: "run-preamble-item-after-flush",
+      stream: "item",
+      data: {
+        itemId: "preamble-1",
+        kind: "preamble",
+        progressText: "Checking the app-server stream",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    expect(collectedTexts()).toEqual(["codex: Checking", "codex: Checking the app-server stream"]);
+    relay.dispose();
+  });
+
   it("uses Discord default progress mode for parent commentary", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-discord-default-progress",

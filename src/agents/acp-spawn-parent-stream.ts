@@ -490,12 +490,16 @@ export function startAcpSpawnParentStreamRelay(params: {
     if (params.text === previous) {
       return;
     }
+    const kind = `item:${params.itemId}`;
+    const isPrefixUpdate = Boolean(previous && params.text.startsWith(previous));
+    const hasPendingSnapshot = pendingProgressKind === kind && Boolean(pendingText);
+    if (previous && !isPrefixUpdate && hasPendingSnapshot) {
+      pendingText = "";
+    }
     itemProgressTextById.set(params.itemId, params.text);
     const delta =
-      previous && params.text.startsWith(previous)
-        ? params.text.slice(previous.length)
-        : params.text;
-    appendVisibleProgress(delta, `item:${params.itemId}`);
+      isPrefixUpdate && hasPendingSnapshot ? params.text.slice(previous.length) : params.text;
+    appendVisibleProgress(delta, kind);
   };
 
   const buildNoOutputNotice = () => {
