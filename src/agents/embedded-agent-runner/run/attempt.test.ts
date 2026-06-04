@@ -2836,6 +2836,54 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       },
     ]);
   });
+
+  it("preserves tool call and its result when tool name is not in allowed list but its tool result has errorType 'tool_not_found'", async () => {
+    const messages = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "Please use the non-existent tool" }],
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "call_not_found_1",
+            name: "non_existent_tool",
+            arguments: {},
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_not_found_1",
+        toolName: "non_existent_tool",
+        content: [{ type: "text", text: "Tool non_existent_tool not found" }],
+        isError: true,
+        errorType: "tool_not_found",
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never, new Set(["read"]), {
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+      preserveSignatures: false,
+      dropThinkingBlocks: false,
+    });
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = firstBaseContext(baseFn) as {
+      messages: Array<{ role?: string; content?: unknown[] }>;
+    };
+    expect(seenContext.messages).toEqual(messages);
+  });
 });
 
 describe("wrapStreamFnRepairMalformedToolCallArguments", () => {

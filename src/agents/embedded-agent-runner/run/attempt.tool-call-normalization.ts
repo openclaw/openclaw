@@ -426,6 +426,20 @@ function sanitizeReplayToolCallInputs(
       const rawName = typeof replayBlock.name === "string" ? replayBlock.name : "";
       const resolvedName = resolveReplayToolCallName(rawName, replayBlock.id, allowedToolNames);
       if (!resolvedName) {
+        if (
+          messages
+            .slice(index + 1)
+            .some(
+              (nextMsg) =>
+                nextMsg?.role === "toolResult" &&
+                nextMsg.toolCallId === replayBlock.id &&
+                nextMsg.errorType === "tool_not_found",
+            )
+        ) {
+          nextContent.push(block);
+          continue;
+        }
+
         changed = true;
         messageChanged = true;
         continue;

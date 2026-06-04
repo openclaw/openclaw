@@ -6,6 +6,7 @@ import type {
   Context,
   EventStream,
   ToolResultMessage,
+  ToolResultErrorType,
 } from "../../llm-core/src/index.js";
 import type { EventStream as SourceEventStream } from "../../llm-core/src/index.js";
 import { type AgentCoreStreamRuntimeDeps, resolveAgentCoreStreamFn } from "./runtime-deps.js";
@@ -512,6 +513,7 @@ async function executeToolCallsSequential(
         toolCall,
         result: preparation.result,
         isError: preparation.isError,
+        errorType: preparation.errorType,
       };
     } else {
       const executed = await executePreparedToolCall(preparation, signal, emit);
@@ -572,6 +574,7 @@ async function executeToolCallsParallel(
         toolCall,
         result: preparation.result,
         isError: preparation.isError,
+        errorType: preparation.errorType,
       } satisfies FinalizedToolCallOutcome;
       await emitToolExecutionEnd(finalized, emit);
       finalizedCalls.push(finalized);
@@ -626,17 +629,20 @@ type ImmediateToolCallOutcome = {
   kind: "immediate";
   result: AgentToolResult<unknown>;
   isError: boolean;
+  errorType?: ToolResultErrorType;
 };
 
 type ExecutedToolCallOutcome = {
   result: AgentToolResult<unknown>;
   isError: boolean;
+  errorType?: ToolResultErrorType;
 };
 
 type FinalizedToolCallOutcome = {
   toolCall: AgentToolCall;
   result: AgentToolResult<unknown>;
   isError: boolean;
+  errorType?: ToolResultErrorType;
 };
 
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
@@ -675,6 +681,7 @@ async function prepareToolCall(
       kind: "immediate",
       result: createErrorToolResult(`Tool ${toolCall.name} not found`),
       isError: true,
+      errorType: "tool_not_found",
     };
   }
 
@@ -696,6 +703,7 @@ async function prepareToolCall(
           kind: "immediate",
           result: createErrorToolResult("Operation aborted"),
           isError: true,
+          errorType: "aborted",
         };
       }
       if (beforeResult?.block) {
@@ -703,6 +711,7 @@ async function prepareToolCall(
           kind: "immediate",
           result: createErrorToolResult(beforeResult.reason || "Tool execution was blocked"),
           isError: true,
+          errorType: "blocked",
         };
       }
     }
@@ -711,6 +720,7 @@ async function prepareToolCall(
         kind: "immediate",
         result: createErrorToolResult("Operation aborted"),
         isError: true,
+        errorType: "aborted",
       };
     }
     return {
@@ -724,6 +734,7 @@ async function prepareToolCall(
       kind: "immediate",
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
+      errorType: "errored",
     };
   }
 }
@@ -761,6 +772,7 @@ async function executePreparedToolCall(
     return {
       result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
       isError: true,
+      errorType: "errored",
     };
   }
 }
@@ -775,6 +787,7 @@ async function finalizeExecutedToolCall(
 ): Promise<FinalizedToolCallOutcome> {
   let result = executed.result;
   let isError = executed.isError;
+  let errorType = executed.errorType;
 
   if (config.afterToolCall) {
     try {
@@ -796,10 +809,14 @@ async function finalizeExecutedToolCall(
           terminate: afterResult.terminate ?? result.terminate,
         };
         isError = afterResult.isError ?? isError;
+        if (afterResult.isError !== undefined) {
+          errorType = afterResult.isError ? (errorType ?? "errored") : undefined;
+        }
       }
     } catch (error) {
       result = createErrorToolResult(error instanceof Error ? error.message : String(error));
       isError = true;
+      errorType = "errored";
     }
   }
 
@@ -807,6 +824,7 @@ async function finalizeExecutedToolCall(
     toolCall: prepared.toolCall,
     result,
     isError,
+    errorType,
   };
 }
 
@@ -838,6 +856,7 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
     content: finalized.result.content,
     details: finalized.result.details,
     isError: finalized.isError,
+    errorType: finalized.errorType,
     timestamp: Date.now(),
   };
 }

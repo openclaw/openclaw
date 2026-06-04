@@ -72,3 +72,97 @@ describe("agentLoop EventStream failures", () => {
     expectTerminalFailure(events, result);
   });
 });
+
+describe("agentLoop tool result error types", () => {
+  function createFakeStream(assistantMessage: any) {
+    return {
+      async result() {
+        return assistantMessage;
+      },
+      async *[Symbol.asyncIterator]() {
+        yield { type: "start", partial: assistantMessage };
+        yield { type: "done" };
+      },
+    } as any;
+  }
+
+  it("populates errorType 'tool_not_found' when calling a non-existent tool", async () => {
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_not_found",
+          name: "non_existent_tool",
+          arguments: {},
+        },
+      ],
+      api: "test-api",
+      provider: "test-provider",
+      model: "test-model",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    };
+
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [] },
+      config,
+      undefined,
+      async () => createFakeStream(assistantMessage),
+    );
+
+    const result = await stream.result();
+    const toolResultMsg = result.find((msg) => msg.role === "toolResult") as any;
+
+    expect(toolResultMsg).toBeDefined();
+    expect(toolResultMsg.isError).toBe(true);
+    expect(toolResultMsg.errorType).toBe("tool_not_found");
+  });
+
+  it("populates errorType 'errored' when a tool execution throws an error", async () => {
+    const assistantMessage = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call_explode",
+          name: "explode_tool",
+          arguments: {},
+        },
+      ],
+      api: "test-api",
+      provider: "test-provider",
+      model: "test-model",
+      usage: { inputTokens: 0, outputTokens: 0 },
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    };
+
+    const explodeTool = {
+      name: "explode_tool",
+      description: "A tool that throws an error",
+      parameters: { type: "object", properties: {} },
+      label: "Explode Tool",
+      async execute() {
+        throw new Error("Tool execution failed");
+      },
+    } as any;
+
+    const stream = agentLoop(
+      [{ role: "user", content: "hello", timestamp: 1 }],
+      { systemPrompt: "", messages: [], tools: [explodeTool] },
+      config,
+      undefined,
+      async () => createFakeStream(assistantMessage),
+    );
+
+    const result = await stream.result();
+    const toolResultMsg = result.find((msg) => msg.role === "toolResult") as any;
+
+    expect(toolResultMsg).toBeDefined();
+    expect(toolResultMsg.isError).toBe(true);
+    expect(toolResultMsg.errorType).toBe("errored");
+  });
+});

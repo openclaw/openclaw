@@ -298,6 +298,8 @@ export interface AssistantMessage {
   timestamp: number; // Unix timestamp in milliseconds
 }
 
+export type ToolResultErrorType = "tool_not_found" | "aborted" | "blocked" | "errored";
+
 /** Tool result turn that answers a prior assistant tool call. */
 export interface ToolResultMessage<TDetails = unknown> {
   role: "toolResult";
@@ -306,6 +308,7 @@ export interface ToolResultMessage<TDetails = unknown> {
   content: (TextContent | ImageContent)[]; // Supports text and images
   details?: TDetails;
   isError: boolean;
+  errorType?: ToolResultErrorType;
   timestamp: number; // Unix timestamp in milliseconds
 }
 
