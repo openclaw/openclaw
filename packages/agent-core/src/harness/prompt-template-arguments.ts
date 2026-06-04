@@ -1,5 +1,5 @@
 function isWordCharacter(char: string | undefined): boolean {
-  return char !== undefined && /\w/.test(char);
+  return char !== undefined && /[\p{L}\p{N}_]/u.test(char);
 }
 
 function opensQuotedSpan(chars: string[], index: number): boolean {

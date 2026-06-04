@@ -49,6 +49,13 @@ describe("prompt template argument substitution", () => {
     expect(substituteArgs("[$1][$2]", args)).toBe("[--title=two words][next]");
   });
 
+  it("keeps apostrophes literal after non-ASCII word characters", () => {
+    expect(parseCommandArgs("José's don't fail")).toEqual(["José's", "don't", "fail"]);
+    const args = parseCommandArgs("José's don't fail");
+    expect(substituteArgs("$ARGUMENTS", args)).toBe("José's don't fail");
+    expect(substituteArgs("[$1][$2][$3]", args)).toBe("[José's][don't][fail]");
+  });
+
   it("rejects unsafe positional placeholders", () => {
     expect(substituteArgs("$9007199254740992", ["first", "second"])).toBe("");
   });
