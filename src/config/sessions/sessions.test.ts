@@ -1012,6 +1012,42 @@ describe("session store writer queue", () => {
     expect(entry.model).toBe("gpt-5.4");
   });
 
+  it("canonicalizes legacy Codex runtime fields at merge boundaries", () => {
+    const merged = mergeSessionEntry(
+      {
+        sessionId: "sess-codex-merge",
+        updatedAt: 1,
+      },
+      {
+        modelProvider: "openai-codex",
+        model: "openai-codex/gpt-5.5",
+      },
+    );
+
+    expect(merged.modelProvider).toBe("openai");
+    expect(merged.model).toBe("gpt-5.5");
+  });
+
+  it("canonicalizes legacy Codex runtime fields at store write boundaries", async () => {
+    const key = "agent:main:codex-runtime-write";
+    const { storePath } = await makeTmpStore({
+      [key]: {
+        sessionId: "sess-codex-write",
+        updatedAt: 100,
+      },
+    });
+
+    await updateSessionStore(storePath, async (store) => {
+      const entry = store[key];
+      entry.modelProvider = "openai";
+      entry.model = "openai-codex/gpt-5.5";
+    });
+
+    const store = loadSessionStore(storePath);
+    expect(store[key]?.modelProvider).toBe("openai");
+    expect(store[key]?.model).toBe("gpt-5.5");
+  });
+
   it("normalizes orphan modelProvider fields at store write boundary", async () => {
     const key = "agent:main:orphan-provider";
     const { storePath } = await makeTmpStore({

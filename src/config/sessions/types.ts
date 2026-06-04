@@ -483,11 +483,25 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
     return next;
   }
 
-  if (entry.modelProvider !== normalizedProvider) {
+  const normalizedPair = normalizeSessionRuntimeModelPair({
+    provider: normalizedProvider,
+    model: normalizedModel,
+  });
+  if (!normalizedPair) {
     if (next === entry) {
       next = { ...next };
     }
-    next.modelProvider = normalizedProvider;
+    delete next.model;
+    delete next.modelProvider;
+    return next;
+  }
+
+  if (next.model !== normalizedPair.model || next.modelProvider !== normalizedPair.provider) {
+    if (next === entry) {
+      next = { ...next };
+    }
+    next.model = normalizedPair.model;
+    next.modelProvider = normalizedPair.provider;
   }
   return next;
 }
