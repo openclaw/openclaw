@@ -1524,15 +1524,18 @@ export async function runAgentTurnWithFallback(params: {
   const shouldNotifyUserAboutCompaction =
     runtimeConfig?.agents?.defaults?.compaction?.notifyUser === true;
   const sendCompactionNotice = async (phase: "start" | "end" | "incomplete") => {
-    if (!params.opts?.onBlockReply) {
-      return;
-    }
     const text =
       phase === "start"
         ? "🧹 Compacting context..."
         : phase === "end"
           ? "🧹 Compaction complete"
           : "🧹 Compaction incomplete";
+    if (!params.opts?.onBlockReply) {
+      params.logger?.info?.(
+        `compaction notice (${phase}) skipped: no onBlockReply — ${JSON.stringify(text)}`,
+      );
+      return;
+    }
     const noticePayload = params.applyReplyToMode({
       text,
       replyToId: currentMessageId,
@@ -1544,7 +1547,9 @@ export async function runAgentTurnWithFallback(params: {
     } catch (err) {
       // Non-critical notice delivery failure should not bubble out of the
       // fire-and-forget event handler.
-      logVerbose(`compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`);
+      params.logger?.info?.(
+        `compaction ${phase} notice delivery failed (non-fatal): ${String(err)}`,
+      );
     }
   };
   const readCompactionHookMessages = (value: unknown): string[] => {
