@@ -2253,8 +2253,10 @@ export async function runAgentTurnWithFallback(params: {
             });
             const embeddedRunHarnessOverride =
               sessionRuntimeOverride ??
-              (agentHarnessPolicy.runtime === "openclaw" && embeddedRunProvider !== provider
-                ? "openclaw"
+              (agentHarnessPolicy.runtime !== "auto" &&
+              (agentHarnessPolicy.runtime !== "openclaw" ||
+                agentHarnessPolicy.runtimeSource !== "implicit")
+                ? agentHarnessPolicy.runtime
                 : undefined);
             return (async () => {
               let attemptCompactionCount = 0;
