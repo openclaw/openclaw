@@ -310,11 +310,11 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     const runId = params.event.runId;
     let handlerActive = true;
     const ctx: PluginAgentEventSubscriptionContext = {
-      getRunContext: ((namespace: string) =>
+      getRunContext: (namespace: string) =>
         getPluginRunContext({
           pluginId,
           get: { runId, namespace },
-        })) as PluginAgentEventSubscriptionContext["getRunContext"],
+        }),
       setRunContext: (namespace: string, value: PluginJsonValue) => {
         setPluginRunContext({
           pluginId,
