@@ -1,5 +1,6 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   downloadClawHubSkillArchive,
   fetchClawHubSkillDetail,
