@@ -112,6 +112,7 @@ allowBuilds:
   "@openclaw/proxyline": true
   clawpdf: true
   rastermill: true
+  better-sqlite3: true
 
 packageExtensions:
   baileys:

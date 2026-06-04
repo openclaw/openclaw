@@ -1,4 +1,3 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 type StatusProvider = {
@@ -12,9 +11,11 @@ type StatusAggregateRow = {
   c: number;
 };
 
+type SqliteValue = string | number | bigint | null | Uint8Array;
+
 type StatusAggregateDb = {
-  prepare: (sql: string) => {
-    all: (...args: SQLInputValue[]) => StatusAggregateRow[];
+  prepare(sql: string): {
+    all(...args: SqliteValue[]): StatusAggregateRow[];
   };
 };
 

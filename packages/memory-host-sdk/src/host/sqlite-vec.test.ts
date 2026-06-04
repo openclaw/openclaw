@@ -49,7 +49,6 @@ describe("loadSqliteVecExtension", () => {
     mockMissingSqliteVecPackage();
     const { loadSqliteVecExtension } = await importLoader();
     const db = {
-      enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),
     };
 
@@ -59,7 +58,6 @@ describe("loadSqliteVecExtension", () => {
         extensionPath: "/opt/openclaw/sqlite-vec.so",
       }),
     ).resolves.toEqual({ ok: true, extensionPath: "/opt/openclaw/sqlite-vec.so" });
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).toHaveBeenCalledWith("/opt/openclaw/sqlite-vec.so");
   });
 
@@ -68,7 +66,6 @@ describe("loadSqliteVecExtension", () => {
     mockPlatformVariantResolver(undefined);
     const { loadSqliteVecExtension } = await importLoader();
     const db = {
-      enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),
     };
 
@@ -81,7 +78,6 @@ describe("loadSqliteVecExtension", () => {
       ),
     });
     expect(result.error).not.toContain("memory.store.vector.extensionPath");
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).not.toHaveBeenCalled();
   });
 
@@ -93,7 +89,6 @@ describe("loadSqliteVecExtension", () => {
     });
     const { loadSqliteVecExtension } = await importLoader();
     const db = {
-      enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),
     };
 
@@ -103,7 +98,6 @@ describe("loadSqliteVecExtension", () => {
       ok: true,
       extensionPath: "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
     });
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).toHaveBeenCalledWith(
       "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
     );
@@ -143,7 +137,6 @@ describe("loadSqliteVecExtension", () => {
     });
     const { loadSqliteVecExtension } = await importLoader();
     const db = {
-      enableLoadExtension: vi.fn(),
       loadExtension: vi.fn().mockImplementation(() => {
         throw new Error("dlopen failed: file not found");
       }),

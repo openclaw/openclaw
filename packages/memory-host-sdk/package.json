@@ -3,6 +3,9 @@
   "version": "0.0.0-private",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "better-sqlite3": "^12.10.0"
+  },
   "exports": {
     "./runtime": "./src/runtime.ts",
     "./runtime-core": "./src/runtime-core.ts",

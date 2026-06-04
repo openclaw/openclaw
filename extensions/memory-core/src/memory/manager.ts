@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -10,6 +9,7 @@ import {
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import type { MemoryDb } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   readMemoryFile,
   type MemoryEmbeddingProbeResult,
@@ -162,7 +162,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   protected batchFailureLastError?: string;
   protected batchFailureLastProvider?: string;
   protected batchFailureLock: Promise<void> = Promise.resolve();
-  protected db: DatabaseSync;
+  protected db: MemoryDb;
   protected override readonly sources: Set<MemorySource>;
   protected override providerKey: string;
   protected readonly cache: { enabled: boolean; maxEntries?: number };
@@ -854,7 +854,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }): Promise<void> {
     const getClosed = () => this.closed;
     const getDb = () => this.db;
-    const setDb = (value: DatabaseSync) => {
+    const setDb = (value: MemoryDb) => {
       this.db = value;
     };
     const getReadonlyRecoveryAttempts = () => this.readonlyRecoveryAttempts;

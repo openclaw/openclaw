@@ -1,8 +1,8 @@
-import type { SQLInputValue } from "node:sqlite";
+type SqliteValue = string | number | bigint | null | Uint8Array;
 
 type VectorWriteDb = {
-  prepare: (sql: string) => {
-    run: (...params: SQLInputValue[]) => unknown;
+  prepare(sql: string): {
+    run(...params: SqliteValue[]): unknown;
   };
 };
 

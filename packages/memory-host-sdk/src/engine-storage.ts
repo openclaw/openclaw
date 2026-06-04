@@ -44,6 +44,9 @@ export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
 export {
   closeMemorySqliteWalMaintenance,
   configureMemorySqliteWalMaintenance,
+  requireBetterSqlite3,
   requireNodeSqlite,
+  type MemoryDb,
+  type MemoryStatement,
 } from "./host/sqlite.js";
 export { isFileMissingError, statRegularFile } from "./host/fs-utils.js";
