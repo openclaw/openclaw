@@ -67,6 +67,9 @@ export class IMessageRpcClient {
   private closedResolve: (() => void) | null = null;
   private child: ChildProcessWithoutNullStreams | null = null;
   private stdoutBuffer = "";
+  // Removable so stop() can detach it before retries; a stale imsg child must
+  // not keep feeding handleLine()/onNotification after stop() (#89830).
+  private stdoutDataHandler: ((chunk: string) => void) | null = null;
   private nextId = 1;
   private publicProcessError: string | null = null;
 
@@ -96,7 +99,7 @@ export class IMessageRpcClient {
     });
     this.child = child;
     child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
+    const stdoutDataHandler = (chunk: string) => {
       this.stdoutBuffer += chunk;
       let newlineIndex = this.stdoutBuffer.indexOf("\n");
       while (newlineIndex >= 0) {
@@ -108,7 +111,9 @@ export class IMessageRpcClient {
         }
         newlineIndex = this.stdoutBuffer.indexOf("\n");
       }
-    });
+    };
+    this.stdoutDataHandler = stdoutDataHandler;
+    child.stdout.on("data", stdoutDataHandler);
 
     child.stderr?.on("data", (chunk) => {
       const lines = chunk.toString().split(/\r?\n/);
@@ -144,6 +149,12 @@ export class IMessageRpcClient {
       return;
     }
     this.stdoutBuffer = "";
+    // Detach the stdout reader before the kill race so a not-yet-exited imsg
+    // child cannot feed late notifications into the next retry window (#89830).
+    if (this.stdoutDataHandler) {
+      this.child.stdout?.off("data", this.stdoutDataHandler);
+      this.stdoutDataHandler = null;
+    }
     this.child.stdin?.end();
     const child = this.child;
     this.child = null;

@@ -91,4 +91,21 @@ describe("IMessageRpcClient stdout framing", () => {
     await expect(firstResponse).resolves.toEqual({ ok: "first" });
     await expect(secondResponse).resolves.toEqual({ ok: "second" });
   });
+
+  it("detaches the stdout reader on stop so a stale child cannot emit late notifications (#89830)", async () => {
+    const child = createMockChildProcess();
+    spawnMock.mockReturnValue(child);
+    const onNotification = vi.fn();
+    const { IMessageRpcClient } = await import("./client.js");
+    const client = new IMessageRpcClient({ onNotification });
+
+    await client.start();
+    await client.stop();
+
+    // Simulate a not-yet-exited imsg child emitting a complete notification
+    // after stop(); the detached reader must ignore it.
+    child.stdout.write('{"jsonrpc":"2.0","method":"messages.changed","params":{}}\n');
+
+    expect(onNotification).not.toHaveBeenCalled();
+  });
 });
