@@ -778,6 +778,106 @@ describe("codex conversation binding", () => {
     expect(savedBinding).not.toHaveProperty("modelProvider");
   });
 
+  it("omits collaborationMode when the bound binding has no stored model", async () => {
+    // Regression: previously buildBoundConversationCollaborationMode
+    // emitted settings.model: null whenever the binding had no stored
+    // model. The Codex app-server contract requires Settings.model to
+    // be a string, so turn/start would fail before the turn started.
+    // Skip the collaboration mode object in that case.
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-old",
+        cwd: tempDir,
+        authProfileId: "work",
+        // model intentionally omitted
+        collaborationMode: "plan",
+      }),
+    );
+    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+    const notificationHandlers: Array<(notification: Record<string, unknown>) => void> = [];
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
+        requests.push({ method, params: requestParams });
+        if (method === "turn/start" && requestParams.threadId === "thread-old") {
+          throw new Error("thread not found: thread-old");
+        }
+        if (method === "thread/start") {
+          return {
+            thread: { id: "thread-new", sessionId: "session-1", cwd: tempDir },
+          };
+        }
+        if (method === "turn/start" && requestParams.threadId === "thread-new") {
+          setImmediate(() => {
+            for (const handler of notificationHandlers) {
+              handler({
+                method: "turn/completed",
+                params: {
+                  threadId: "thread-new",
+                  turn: {
+                    id: "turn-new",
+                    status: "completed",
+                    items: [
+                      {
+                        id: "assistant-1",
+                        type: "agentMessage",
+                        text: "Recovered",
+                      },
+                    ],
+                  },
+                },
+              });
+            }
+          });
+          return { turn: { id: "turn-new" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn((handler) => {
+        notificationHandlers.push(handler);
+        return () => undefined;
+      }),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    await handleCodexConversationInboundClaim(
+      {
+        content: "hi again",
+        bodyForAgent: "hi again",
+        channel: "telegram",
+        isGroup: false,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "telegram",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "telegram",
+          accountId: "default",
+          conversationId: "5185575566",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 500 },
+    );
+
+    const turnStart = requests.find(
+      (request) => request.method === "turn/start" && request.params.threadId === "thread-new",
+    );
+    expect(turnStart).toBeDefined();
+    expect(turnStart?.params.collaborationMode).toBeUndefined();
+  });
+
   it("does not silently decline auto-mode approvals during missing thread recovery", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(

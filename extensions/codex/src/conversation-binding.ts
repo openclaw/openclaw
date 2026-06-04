@@ -1000,10 +1000,18 @@ function buildBoundConversationCollaborationMode(
   if (!binding.collaborationMode && !reasoningEffort) {
     return undefined;
   }
+  // The Codex app-server contract requires Settings.model to be a
+  // string. Older session bindings may not have a stored model
+  // (model was optional in early versions of CodexAppServerThreadBinding).
+  // Skip the collaboration mode object in that case so the turn
+  // request stays valid; the user can re-bind to pick a model.
+  if (!binding.model) {
+    return undefined;
+  }
   return {
     mode: binding.collaborationMode ?? "default",
     settings: {
-      model: binding.model ?? null,
+      model: binding.model,
       reasoning_effort: reasoningEffort,
       developer_instructions: null,
     },
