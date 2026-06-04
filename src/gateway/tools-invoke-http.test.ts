@@ -121,6 +121,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
       },
     },
     {
+      name: "cron",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "cron" }),
+    },
+    {
       name: "exec",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "exec" }),
@@ -726,6 +731,47 @@ describe("POST /tools/invoke", () => {
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.error?.type).toBe("tool_error");
+  });
+
+  it("keeps owner-only tools unavailable to non-owner HTTP callers despite gateway.tools.allow", async () => {
+    setMainAllowedTools({
+      allow: ["cron", "gateway", "nodes"],
+      gatewayAllow: ["cron", "gateway", "nodes"],
+    });
+
+    for (const tool of ["cron", "gateway", "nodes"]) {
+      const res = await invokeToolAuthed({
+        tool,
+        sessionKey: "main",
+      });
+
+      expect(res.status, tool).toBe(404);
+      const body = await res.json();
+      expect(body.ok, tool).toBe(false);
+      expect(body.error?.type, tool).toBe("not_found");
+    }
+  });
+
+  it("keeps shared-secret bearer auth as owner for explicitly allowed owner-only tools", async () => {
+    setMainAllowedTools({ allow: ["nodes"], gatewayAllow: ["nodes"] });
+    vi.mocked(authorizeHttpGatewayConnect).mockResolvedValueOnce({
+      ok: true,
+      method: "token",
+    });
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: {
+        authorization: "Bearer secret",
+        "x-openclaw-scopes": "operator.write",
+      },
+      tool: "nodes",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result).toEqual({ ok: true, result: "nodes" });
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
   });
 
   it("treats gateway.tools.deny as higher priority than gateway.tools.allow", async () => {
