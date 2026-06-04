@@ -121,6 +121,20 @@ export type MessagesConfig = {
    */
   visibleReplies?: "automatic" | "message_tool";
   /**
+   * Opt-in recovery for a stranded message_tool_only final reply (a substantive
+   * final the model produced without calling message(action=send)).
+   *
+   * Default (undefined/false) preserves the documented message_tool_only
+   * contract: no message call means no source reply, and the final text stays
+   * private. Nothing is auto-published and no retry is enqueued.
+   *
+   * When true, a single recovery retry is enqueued asking the model to deliver
+   * the reply via message(action=send). The retry replays the private final
+   * text into a synthetic prompt with user-message persistence suppressed, so
+   * the private text never leaks into durable session context.
+   */
+  strandedReplyRecovery?: boolean;
+  /**
    * Prefix auto-added to all outbound replies.
    *
    * - string: explicit prefix (may include template variables)

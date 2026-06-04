@@ -2608,7 +2608,12 @@ export async function runReplyAgent(params: {
         // retry — that would loop forever and re-attempt channel delivery each
         // turn. Fall back to the existing message_tool_only suppression.
         const isRetryRun = followupRun.summaryLine === STRANDED_REPLY_RETRY_MARKER;
-        if (!isRetryRun) {
+        // #85714: Recovery is opt-in. Default-off preserves the documented
+        // message_tool_only contract (no message call = no source reply; the
+        // private final text is never auto-published). The diagnostic WARN above
+        // still fires unconditionally; only the retry enqueue is gated.
+        const strandedReplyRecoveryEnabled = cfg.messages?.strandedReplyRecovery === true;
+        if (!isRetryRun && strandedReplyRecoveryEnabled) {
           // #85714: Enqueue a retry turn so the agent can deliver via message(action=send),
           // preserving the message_tool_only privacy contract instead of bypassing suppression.
           const retryPrompt =
