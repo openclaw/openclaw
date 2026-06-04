@@ -24,6 +24,8 @@ type AuthProfileDatabase = Pick<
   "auth_profile_store" | "auth_profile_state"
 >;
 
+// Auth profiles store one JSON blob for secrets and one JSON blob for runtime
+// state. SQLite owns durability/transactions; JSON shape owns compatibility.
 const PRIMARY_ROW_KEY = "primary";
 
 function resolveAgentDir(agentDir?: string): string {
@@ -42,6 +44,8 @@ function inferAgentIdFromDir(agentDir: string): string {
   return `custom-${hash}`;
 }
 
+// The auth database lives in the agent dir and shares the openclaw-agent schema
+// so auth store/state can move with the rest of agent-local durable state.
 function resolveAuthProfileDatabaseOptions(agentDir?: string) {
   const dir = resolveAgentDir(agentDir);
   return {
@@ -50,15 +54,19 @@ function resolveAuthProfileDatabaseOptions(agentDir?: string) {
   };
 }
 
+/** Resolves the SQLite database path that stores auth profiles for an agent dir. */
 export function resolveAuthProfileDatabasePath(agentDir?: string): string {
   return resolveAuthProfileDatabaseOptions(agentDir).path;
 }
 
+/** Resolves the SQLite database and sidecar paths used by auth profiles. */
 export function resolveAuthProfileDatabaseFilePaths(agentDir?: string): string[] {
   const databasePath = resolveAuthProfileDatabasePath(agentDir);
   return [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
 }
 
+// Read-only probes must tolerate old/corrupt/missing rows. Coercion happens
+// above this layer; this layer only returns raw JSON-ish payloads.
 function parseJsonCell(raw: string | null | undefined): unknown {
   if (!raw) {
     return null;
@@ -74,6 +82,7 @@ function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
 }
 
+/** Opens the auth profile SQLite database for an agent dir. */
 export function openAuthProfileDatabase(agentDir?: string): OpenClawAgentDatabase {
   return openOpenClawAgentDatabase(resolveAuthProfileDatabaseOptions(agentDir));
 }
@@ -109,6 +118,7 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
   }
 }
 
+/** Reads the raw persisted auth profile store payload. */
 export function readPersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: OpenClawAgentDatabase,
@@ -131,6 +141,7 @@ export function readPersistedAuthProfileStoreRaw(
   return readAuthProfileJsonCellReadOnly(databasePath, "store");
 }
 
+/** Reads the raw persisted auth profile runtime state payload. */
 export function readPersistedAuthProfileStateRaw(
   agentDir?: string,
   database?: OpenClawAgentDatabase,
@@ -153,6 +164,7 @@ export function readPersistedAuthProfileStateRaw(
   return readAuthProfileJsonCellReadOnly(databasePath, "state");
 }
 
+/** Writes the raw persisted auth profile store payload. */
 export function writePersistedAuthProfileStoreRaw(
   payload: unknown,
   agentDir?: string,
@@ -184,6 +196,7 @@ export function writePersistedAuthProfileStoreRaw(
   runOpenClawAgentWriteTransaction(write, resolveAuthProfileDatabaseOptions(agentDir));
 }
 
+/** Deletes the raw persisted auth profile store payload. */
 export function deletePersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: OpenClawAgentDatabase,
@@ -202,6 +215,7 @@ export function deletePersistedAuthProfileStoreRaw(
   runOpenClawAgentWriteTransaction(remove, resolveAuthProfileDatabaseOptions(agentDir));
 }
 
+/** Writes or deletes the raw persisted auth profile runtime state payload. */
 export function writePersistedAuthProfileStateRaw(
   payload: unknown,
   agentDir?: string,
@@ -240,6 +254,7 @@ export function writePersistedAuthProfileStateRaw(
   runOpenClawAgentWriteTransaction(write, resolveAuthProfileDatabaseOptions(agentDir));
 }
 
+/** Runs an auth-profile database write transaction. */
 export function runAuthProfileWriteTransaction<T>(
   agentDir: string | undefined,
   operation: (database: OpenClawAgentDatabase) => T,

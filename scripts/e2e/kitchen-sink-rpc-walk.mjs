@@ -583,6 +583,7 @@ export async function fetchJson(url, options = {}) {
   const attempts = Math.max(1, options.attempts ?? 3);
   const timeoutMs = Math.max(1, options.timeoutMs ?? FETCH_TIMEOUT_MS);
   const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? FETCH_BODY_MAX_BYTES);
+  const externalSignal = options.signal;
   let lastError;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     const controller = new AbortController();
@@ -590,6 +591,26 @@ export async function fetchJson(url, options = {}) {
       code: "ETIMEDOUT",
     });
     let timeout;
+    let removeExternalAbort = () => {};
+    const abortPromise = externalSignal
+      ? new Promise((_, reject) => {
+          const abortError = () =>
+            externalSignal.reason instanceof Error
+              ? externalSignal.reason
+              : new Error("fetch aborted");
+          const onAbort = () => {
+            const error = abortError();
+            controller.abort(error);
+            reject(new Error(error.message, { cause: error }));
+          };
+          if (externalSignal.aborted) {
+            onAbort();
+            return;
+          }
+          externalSignal.addEventListener("abort", onAbort, { once: true });
+          removeExternalAbort = () => externalSignal.removeEventListener("abort", onAbort);
+        })
+      : null;
     const timeoutPromise = new Promise((_, reject) => {
       timeout = setTimeout(() => {
         controller.abort(timeoutError);
@@ -601,10 +622,12 @@ export async function fetchJson(url, options = {}) {
       const response = await Promise.race([
         (options.fetchImpl ?? fetch)(url, { signal: controller.signal }),
         timeoutPromise,
+        ...(abortPromise ? [abortPromise] : []),
       ]);
       const text = await Promise.race([
         readBoundedResponseText(response, maxBodyBytes),
         timeoutPromise,
+        ...(abortPromise ? [abortPromise] : []),
       ]);
       let body = null;
       try {
@@ -620,6 +643,7 @@ export async function fetchJson(url, options = {}) {
       }
       await delay(options.retryDelayMs ?? 250);
     } finally {
+      removeExternalAbort();
       if (timeout) {
         clearTimeout(timeout);
       }
@@ -780,6 +804,15 @@ export function hasChildExited(child) {
   return child.exitCode !== null || child.signalCode !== null;
 }
 
+function createChildExitPromise(child) {
+  if (!child || typeof child.once !== "function") {
+    return null;
+  }
+  return new Promise((resolve) => {
+    child.once("exit", () => resolve());
+  });
+}
+
 function releaseUnsettledGatewayChild(child) {
   child.stdin?.destroy?.();
   child.stdout?.destroy?.();
@@ -865,6 +898,7 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
   const timeoutMs = Math.max(1, options.timeoutMs ?? READY_TIMEOUT_MS);
   const pollDelayMs = Math.max(1, options.pollDelayMs ?? 250);
   const logReportedReady = createGatewayReadyLogScanner(logPath);
+  const childExit = createChildExitPromise(child);
   const exitedBeforeReadyError = () =>
     new Error(`gateway exited before ready\n${tailFile(logPath)}`);
   if (hasChildExited(child)) {
@@ -875,12 +909,33 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
     if (hasChildExited(child)) {
       throw exitedBeforeReadyError();
     }
+    const probeAbort = new AbortController();
+    const readyzProbe = (async () => {
+      try {
+        const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
+          attempts: 1,
+          fetchImpl: options.fetchImpl,
+          signal: probeAbort.signal,
+          timeoutMs: Math.min(FETCH_TIMEOUT_MS, remainingMs),
+        });
+        return { kind: "readyz", readyz };
+      } catch (error) {
+        return { kind: "error", error };
+      }
+    })();
+    const outcome = await Promise.race([
+      readyzProbe,
+      ...(childExit ? [childExit.then(() => ({ kind: "child-exit" }))] : []),
+    ]);
+    if (outcome.kind === "child-exit") {
+      probeAbort.abort(exitedBeforeReadyError());
+      throw exitedBeforeReadyError();
+    }
     try {
-      const readyz = await fetchJson(`http://127.0.0.1:${port}/readyz`, {
-        attempts: 1,
-        fetchImpl: options.fetchImpl,
-        timeoutMs: Math.min(FETCH_TIMEOUT_MS, remainingMs),
-      });
+      if (outcome.kind === "error") {
+        throw outcome.error;
+      }
+      const readyz = outcome.readyz;
       if (readyz.ok) {
         return;
       }
@@ -976,9 +1031,7 @@ export function assertExpectedKitchenSinkToolEntries(
         source: entry?.source,
       }));
     if (wrongProvenance.length > 0) {
-      throw new Error(
-        `${label} plugin provenance mismatch: ${JSON.stringify(wrongProvenance)}`,
-      );
+      throw new Error(`${label} plugin provenance mismatch: ${JSON.stringify(wrongProvenance)}`);
     }
   }
   return ids;
