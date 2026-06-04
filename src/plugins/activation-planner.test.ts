@@ -307,6 +307,93 @@ describe("activation planner", () => {
     ]);
   });
 
+  it("skips unreadable manifest activation rows before healthy command owners", () => {
+    const poisonedPlugin = {
+      id: "poisoned-plugin",
+      origin: "workspace" as const,
+      providers: [],
+      channels: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      commandAliases: [{ name: "poisoned-command" }],
+      get activation(): { onCommands: string[] } {
+        throw new Error("manifest activation metadata exploded");
+      },
+    };
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        poisonedPlugin,
+        {
+          id: "healthy-plugin",
+          providers: [],
+          channels: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          activation: {
+            onCommands: ["healthy-command"],
+          },
+          origin: "workspace",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "command",
+          command: "healthy-command",
+        },
+      }),
+    ).toEqual(["healthy-plugin"]);
+  });
+
+  it("skips unreadable manifest id rows before healthy tool owners", () => {
+    const poisonedPlugin = {
+      get id(): string {
+        throw new Error("manifest activation plugin id exploded");
+      },
+      origin: "workspace" as const,
+      providers: [],
+      channels: [],
+      cliBackends: [],
+      skills: [],
+      hooks: [],
+      contracts: {
+        tools: ["poisoned-tool"],
+      },
+    };
+    mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
+      plugins: [
+        poisonedPlugin,
+        {
+          id: "healthy-tool-owner",
+          providers: [],
+          channels: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          contracts: {
+            tools: ["healthy-tool"],
+          },
+          origin: "workspace",
+        },
+      ],
+      diagnostics: [],
+    });
+
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "capability",
+          capability: "tool",
+        },
+      }),
+    ).toEqual(["healthy-tool-owner"]);
+  });
+
   it("returns capability reasons from explicit hints and manifest ownership", () => {
     mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins: [

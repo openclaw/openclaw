@@ -1,5 +1,9 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.js";
 import { normalizePluginsConfig } from "./config-state.js";
@@ -63,6 +67,32 @@ type ResolveManifestActivationPlanParams = {
   allowRestrictiveAllowlistBypass?: boolean;
 };
 
+type ActivationPlannerManifestRecord = Pick<PluginManifestRecord, "id" | "origin"> & {
+  activation?: {
+    onAgentHarnesses?: readonly string[];
+    onCapabilities?: readonly PluginManifestActivationCapability[];
+    onChannels?: readonly string[];
+    onCommands?: readonly string[];
+    onProviders?: readonly string[];
+    onRoutes?: readonly string[];
+  };
+  channels: readonly string[];
+  commandAliases?: readonly {
+    cliCommand?: string;
+    name?: string;
+  }[];
+  contracts?: {
+    tools?: readonly string[];
+  };
+  hooks: readonly string[];
+  providers: readonly string[];
+  setup?: {
+    providers?: readonly {
+      id: string;
+    }[];
+  };
+};
+
 export function resolveManifestActivationPlan(
   params: ResolveManifestActivationPlanParams,
 ): PluginActivationPlan {
@@ -77,7 +107,11 @@ export function resolveManifestActivationPlan(
         includeDisabled: true,
       });
   const entries = registry.plugins
-    .flatMap((plugin) => {
+    .flatMap((manifestRecord) => {
+      const plugin = createActivationPlannerManifestRecord(manifestRecord);
+      if (!plugin) {
+        return [];
+      }
       if (params.origin && plugin.origin !== params.origin) {
         return [];
       }
@@ -122,7 +156,7 @@ export function resolveManifestActivationPluginIds(
 }
 
 function listManifestActivationTriggerReasons(
-  plugin: PluginManifestRecord,
+  plugin: ActivationPlannerManifestRecord,
   trigger: PluginActivationPlannerTrigger,
 ): PluginActivationPlannerReason[] {
   switch (trigger.kind) {
@@ -144,7 +178,7 @@ function listManifestActivationTriggerReasons(
 }
 
 function listAgentHarnessTriggerReasons(
-  plugin: PluginManifestRecord,
+  plugin: ActivationPlannerManifestRecord,
   runtime: string,
 ): PluginActivationPlannerReason[] {
   return listHasNormalizedValue(plugin.activation?.onAgentHarnesses, runtime, normalizeCommandId)
@@ -153,25 +187,21 @@ function listAgentHarnessTriggerReasons(
 }
 
 function listCommandTriggerReasons(
-  plugin: PluginManifestRecord,
+  plugin: ActivationPlannerManifestRecord,
   command: string,
 ): PluginActivationPlannerReason[] {
   return dedupeReasons([
     listHasNormalizedValue(plugin.activation?.onCommands, command, normalizeCommandId)
       ? "activation-command-hint"
       : null,
-    listHasNormalizedValue(
-      (plugin.commandAliases ?? []).flatMap((alias) => alias.cliCommand ?? alias.name),
-      command,
-      normalizeCommandId,
-    )
+    listHasNormalizedValue(listCommandAliasIds(plugin.commandAliases), command, normalizeCommandId)
       ? "manifest-command-alias"
       : null,
   ]);
 }
 
 function listProviderTriggerReasons(
-  plugin: PluginManifestRecord,
+  plugin: ActivationPlannerManifestRecord,
   provider: string,
 ): PluginActivationPlannerReason[] {
   return dedupeReasons([
@@ -191,8 +221,16 @@ function listProviderTriggerReasons(
   ]);
 }
 
+function listCommandAliasIds(
+  commandAliases: ActivationPlannerManifestRecord["commandAliases"],
+): string[] {
+  return (commandAliases ?? [])
+    .map((alias) => alias.cliCommand ?? alias.name)
+    .filter((value): value is string => Boolean(value));
+}
+
 function listChannelTriggerReasons(
-  plugin: PluginManifestRecord,
+  plugin: ActivationPlannerManifestRecord,
   channel: string,
 ): PluginActivationPlannerReason[] {
   return dedupeReasons([
@@ -206,7 +244,7 @@ function listChannelTriggerReasons(
 }
 
 function listRouteTriggerReasons(
-  plugin: PluginManifestRecord,
+  plugin: ActivationPlannerManifestRecord,
   route: string,
 ): PluginActivationPlannerReason[] {
   return listHasNormalizedValue(plugin.activation?.onRoutes, route, normalizeCommandId)
@@ -215,7 +253,7 @@ function listRouteTriggerReasons(
 }
 
 function listCapabilityTriggerReasons(
-  plugin: PluginManifestRecord,
+  plugin: ActivationPlannerManifestRecord,
   capability: PluginManifestActivationCapability,
 ): PluginActivationPlannerReason[] {
   switch (capability) {
@@ -279,4 +317,140 @@ function dedupeReasons(
 
 function normalizeCommandId(value: string | undefined): string {
   return normalizeOptionalLowercaseString(value) ?? "";
+}
+
+function createActivationPlannerManifestRecord(
+  plugin: PluginManifestRecord,
+): ActivationPlannerManifestRecord | null {
+  const id = normalizeOptionalString(readRecordValue(plugin, "id"));
+  const origin = normalizePluginOrigin(readRecordValue(plugin, "origin"));
+  if (!id || !origin) {
+    return null;
+  }
+
+  const activation = readActivationMetadata(readRecordValue(plugin, "activation"));
+  return {
+    id,
+    origin,
+    activation,
+    channels: readStringArray(readRecordValue(plugin, "channels")),
+    commandAliases: readCommandAliases(readRecordValue(plugin, "commandAliases")),
+    contracts: readContracts(readRecordValue(plugin, "contracts")),
+    hooks: readStringArray(readRecordValue(plugin, "hooks")),
+    providers: readStringArray(readRecordValue(plugin, "providers")),
+    setup: readSetup(readRecordValue(plugin, "setup")),
+  };
+}
+
+function readActivationMetadata(
+  value: unknown,
+): ActivationPlannerManifestRecord["activation"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  return {
+    onAgentHarnesses: readStringArray(readRecordValue(value, "onAgentHarnesses")),
+    onCapabilities: readCapabilityArray(readRecordValue(value, "onCapabilities")),
+    onChannels: readStringArray(readRecordValue(value, "onChannels")),
+    onCommands: readStringArray(readRecordValue(value, "onCommands")),
+    onProviders: readStringArray(readRecordValue(value, "onProviders")),
+    onRoutes: readStringArray(readRecordValue(value, "onRoutes")),
+  };
+}
+
+function readCommandAliases(value: unknown): ActivationPlannerManifestRecord["commandAliases"] {
+  return readArrayEntries(value)
+    .map((entry) => {
+      if (!isRecord(entry)) {
+        return null;
+      }
+      const name = normalizeOptionalString(readRecordValue(entry, "name"));
+      const cliCommand = normalizeOptionalString(readRecordValue(entry, "cliCommand"));
+      return name || cliCommand ? { name, cliCommand } : null;
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+}
+
+function readContracts(value: unknown): ActivationPlannerManifestRecord["contracts"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  return {
+    tools: readStringArray(readRecordValue(value, "tools")),
+  };
+}
+
+function readSetup(value: unknown): ActivationPlannerManifestRecord["setup"] | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const providers = readArrayEntries(readRecordValue(value, "providers"))
+    .map((entry) => {
+      if (!isRecord(entry)) {
+        return null;
+      }
+      const id = normalizeOptionalString(readRecordValue(entry, "id"));
+      return id ? { id } : null;
+    })
+    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry));
+
+  return { providers };
+}
+
+function readStringArray(value: unknown): string[] {
+  return readArrayEntries(value)
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
+function readCapabilityArray(value: unknown): PluginManifestActivationCapability[] {
+  return readStringArray(value).filter(isPluginManifestActivationCapability);
+}
+
+function readArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      // A poisoned manifest entry should not prevent later healthy owners from planning.
+    }
+  }
+  return entries;
+}
+
+function readRecordValue(value: unknown, key: string): unknown {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  try {
+    return value[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizePluginOrigin(value: unknown): PluginOrigin | undefined {
+  return value === "bundled" || value === "global" || value === "workspace" || value === "config"
+    ? value
+    : undefined;
+}
+
+function isPluginManifestActivationCapability(
+  value: string,
+): value is PluginManifestActivationCapability {
+  return value === "provider" || value === "channel" || value === "tool" || value === "hook";
 }
