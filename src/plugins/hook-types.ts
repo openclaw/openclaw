@@ -462,6 +462,7 @@ export type PluginHookReplyDispatchContext = {
   dispatcher: ReplyDispatcher;
   abortSignal?: AbortSignal;
   onReplyStart?: () => Promise<void> | void;
+  onVisibleDeliveryStart?: () => Promise<void> | void;
   recordProcessed: (
     outcome: "completed" | "skipped" | "error",
     opts?: {

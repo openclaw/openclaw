@@ -54,6 +54,7 @@ vi.mock("../../channels/plugins/index.js", () => ({
 const createTypingController = (): TypingController => ({
   onReplyStart: async () => {},
   startTypingLoop: async () => {},
+  startTypingForVisibleDelivery: async () => {},
   startTypingOnText: async () => {},
   refreshTypingTtl: () => {},
   isActive: () => false,

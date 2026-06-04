@@ -1448,6 +1448,11 @@ export async function dispatchReplyFromConfig(
     const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
     return await normalizeReplyMediaPayloadPaths(payload);
   };
+  const routedVisibleDeliveryStart =
+    params.replyOptions?.typingStartPolicy === "visible_delivery" &&
+    params.replyOptions?.suppressTyping !== true
+      ? params.replyOptions?.onVisibleDeliveryStart
+      : undefined;
 
   const routeReplyToOriginating = async (
     payload: ReplyPayload,
@@ -1484,6 +1489,7 @@ export async function dispatchReplyFromConfig(
       groupId,
       replyKind: options?.kind ?? "final",
       runId: params.replyOptions?.runId,
+      onVisibleDeliveryStart: routedVisibleDeliveryStart,
     });
   };
 
@@ -1710,6 +1716,13 @@ export async function dispatchReplyFromConfig(
     suppressHookUserDelivery,
     suppressHookReplyLifecycle,
   } = sourceReplyPolicy;
+  const startReplyDispatchLifecycleAtVisibleDelivery =
+    params.replyOptions?.typingStartPolicy === "visible_delivery";
+  const suppressReplyDispatchLifecycle =
+    suppressHookReplyLifecycle || startReplyDispatchLifecycleAtVisibleDelivery;
+  const replyDispatchVisibleDeliveryStart = startReplyDispatchLifecycleAtVisibleDelivery
+    ? params.replyOptions?.onVisibleDeliveryStart
+    : undefined;
   const attachSourceReplyDeliveryMode = (
     result: DispatchFromConfigResult,
   ): DispatchFromConfigResult =>
@@ -2143,7 +2156,7 @@ export async function dispatchReplyFromConfig(
               sessionTtsAuto,
               ttsChannel: deliveryChannel,
               suppressUserDelivery: suppressHookUserDelivery,
-              suppressReplyLifecycle: suppressHookReplyLifecycle,
+              suppressReplyLifecycle: suppressReplyDispatchLifecycle,
               sourceReplyDeliveryMode,
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
@@ -2158,6 +2171,7 @@ export async function dispatchReplyFromConfig(
               dispatcher: dispatchHookDispatcher,
               abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
+              onVisibleDeliveryStart: replyDispatchVisibleDeliveryStart,
               recordProcessed,
               markIdle,
             },
@@ -2782,7 +2796,7 @@ export async function dispatchReplyFromConfig(
               sessionTtsAuto,
               ttsChannel: deliveryChannel,
               suppressUserDelivery: suppressHookUserDelivery,
-              suppressReplyLifecycle: suppressHookReplyLifecycle,
+              suppressReplyLifecycle: suppressReplyDispatchLifecycle,
               sourceReplyDeliveryMode,
               shouldRouteToOriginating,
               originatingChannel: routeReplyChannel,
@@ -2798,6 +2812,7 @@ export async function dispatchReplyFromConfig(
               dispatcher: dispatchHookDispatcher,
               abortSignal: getPreDispatchAbortSignal() ?? params.replyOptions?.abortSignal,
               onReplyStart: params.replyOptions?.onReplyStart,
+              onVisibleDeliveryStart: replyDispatchVisibleDeliveryStart,
               recordProcessed,
               markIdle,
             },

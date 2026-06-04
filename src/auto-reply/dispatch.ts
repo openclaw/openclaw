@@ -567,6 +567,8 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
       ...params.dispatcherOptions,
       deliver,
       beforeDeliver,
+      suppressTyping: params.replyOptions?.suppressTyping === true,
+      typingStartPolicy: params.replyOptions?.typingStartPolicy,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
   markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);

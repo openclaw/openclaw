@@ -378,6 +378,7 @@ export async function tryDispatchAcpReply(params: {
   shouldSendToolSummariesNow?: () => boolean;
   bypassForCommand: boolean;
   onReplyStart?: () => Promise<void> | void;
+  onVisibleDeliveryStart?: () => Promise<void> | void;
   recordProcessed: DispatchProcessedRecorder;
   markIdle: (reason: string) => void;
 }): Promise<AcpDispatchAttemptResult | null> {
@@ -433,6 +434,7 @@ export async function tryDispatchAcpReply(params: {
     originatingAccountId: params.originatingAccountId,
     originatingThreadId: params.originatingThreadId,
     onReplyStart: params.onReplyStart,
+    onVisibleDeliveryStart: params.onVisibleDeliveryStart,
     abortSignal: params.abortSignal,
     runId: params.runId,
   });

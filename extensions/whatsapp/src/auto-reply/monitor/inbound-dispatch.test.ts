@@ -17,7 +17,10 @@ type CapturedDispatchParams = {
   dispatcherOptions?: {
     deliver?: (
       payload: CapturedReplyPayload,
-      info: { kind: "tool" | "block" | "final" },
+      info: {
+        kind: "tool" | "block" | "final";
+        startVisibleDeliveryTyping?: () => Promise<void>;
+      },
     ) => Promise<unknown>;
     onError?: (err: unknown, info: { kind: "tool" | "block" | "final" }) => void;
     onSettled?: () => Promise<unknown>;
@@ -26,6 +29,7 @@ type CapturedDispatchParams = {
     disableBlockStreaming?: boolean;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     suppressTyping?: boolean;
+    typingStartPolicy?: "visible_delivery";
   };
 };
 
@@ -179,6 +183,12 @@ function makeMsg(overrides: Partial<TestMsg> = {}): TestMsg {
     sendMedia: async () => acceptedSendResult("media", "m1"),
     ...overrides,
   };
+}
+
+const whatsappGroupJid = "120363000000000000@g.us";
+
+function makeWhatsAppGroupMsg(overrides: Partial<TestMsg> = {}): TestMsg {
+  return makeMsg({ from: whatsappGroupJid, chatType: "group", ...overrides });
 }
 
 function getCapturedDeliver() {
@@ -697,6 +707,50 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
+  it("passes visible-delivery typing into durable final WhatsApp sends", async () => {
+    const startVisibleDeliveryTyping = vi.fn();
+    deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
+      status: "handled_visible",
+      delivery: {
+        messageIds: ["wa-1"],
+        visibleReplySent: true,
+      },
+    });
+
+    await dispatchBufferedReply({
+      cfg: {
+        channels: { whatsapp: { blockStreaming: true } },
+        messages: { groupChat: { visibleReplies: "automatic" } },
+      } as never,
+      context: { Body: "incoming", ChatType: "group" },
+      msg: makeWhatsAppGroupMsg(),
+    });
+
+    const deliver = getCapturedDeliver();
+    await deliver?.(
+      { text: "final payload" },
+      {
+        kind: "final",
+        startVisibleDeliveryTyping,
+      },
+    );
+
+    const durableParams = requireMockArg(
+      deliverInboundReplyWithMessageSendContextMock,
+      0,
+      0,
+      "durable delivery params",
+    );
+    const start = durableParams.onVisibleDeliveryStart;
+    if (typeof start !== "function") {
+      throw new Error("expected durable visible delivery start hook");
+    }
+    expect(startVisibleDeliveryTyping).not.toHaveBeenCalled();
+    await start();
+
+    expect(startVisibleDeliveryTyping).toHaveBeenCalledTimes(1);
+  });
+
   it("does not fall back when durable WhatsApp delivery suppresses a send", async () => {
     deliverInboundReplyWithMessageSendContextMock.mockResolvedValueOnce({
       status: "handled_no_send",
@@ -1038,7 +1092,7 @@ describe("whatsapp inbound dispatch", () => {
   it("defaults WhatsApp group replies to message-tool-only and disables source streaming", async () => {
     await dispatchBufferedReply({
       context: { Body: "hi", ChatType: "group" },
-      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
+      msg: makeWhatsAppGroupMsg(),
     });
 
     expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
@@ -1047,8 +1101,70 @@ describe("whatsapp inbound dispatch", () => {
     });
   });
 
-  it("delivers authorized WhatsApp group text slash command replies visibly", async () => {
-    await dispatchBufferedReply({
+  it.each([
+    {
+      name: "automatic unmentioned group",
+      cfg: {
+        channels: { whatsapp: { blockStreaming: true } },
+        messages: { groupChat: { visibleReplies: "automatic" } },
+      } as never,
+      context: { Body: "hi", ChatType: "group" },
+      msg: makeWhatsAppGroupMsg(),
+      expected: {
+        sourceReplyDeliveryMode: "automatic",
+        disableBlockStreaming: false,
+        suppressTyping: false,
+        typingStartPolicy: "visible_delivery",
+      },
+    },
+    {
+      name: "passive message-tool-only group",
+      context: { Body: "hi", ChatType: "group" },
+      msg: makeWhatsAppGroupMsg({ wasMentioned: false }),
+      expected: {
+        suppressTyping: true,
+        typingStartPolicy: undefined,
+      },
+    },
+    {
+      name: "mentioned group",
+      context: { Body: "@bot hi", ChatType: "group" },
+      msg: makeWhatsAppGroupMsg({ wasMentioned: true }),
+      expected: {
+        suppressTyping: false,
+        typingStartPolicy: undefined,
+      },
+    },
+    {
+      name: "direct chat",
+      context: { Body: "hi", ChatType: "direct" },
+      msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
+      expected: {
+        suppressTyping: false,
+        typingStartPolicy: undefined,
+      },
+    },
+    {
+      name: "native",
+      context: {
+        Body: "/status",
+        ChatType: "group",
+        CommandSource: "native" as const,
+      },
+      msg: makeWhatsAppGroupMsg({ body: "/status", wasMentioned: false }),
+      expected: {
+        suppressTyping: false,
+        typingStartPolicy: undefined,
+      },
+      commandTurn: {
+        kind: "native" as const,
+        source: "native" as const,
+        authorized: true,
+        body: "/status",
+      },
+    },
+    {
+      name: "authorized text slash",
       cfg: {
         channels: { whatsapp: { blockStreaming: true } },
         messages: { groupChat: { visibleReplies: "message_tool" } },
@@ -1057,64 +1173,37 @@ describe("whatsapp inbound dispatch", () => {
         Body: "/status",
         ChatType: "group",
         CommandAuthorized: true,
-        CommandSource: "text",
+        CommandSource: "text" as const,
       },
-      msg: makeMsg({
+      msg: makeWhatsAppGroupMsg({ body: "/status", wasMentioned: false }),
+      expected: {
+        sourceReplyDeliveryMode: "automatic",
+        disableBlockStreaming: false,
+        suppressTyping: false,
+        typingStartPolicy: undefined,
+      },
+      commandTurn: {
+        kind: "text-slash" as const,
+        source: "text" as const,
+        authorized: true,
         body: "/status",
-        from: "120363000000000000@g.us",
-        chatType: "group",
-      }),
-    });
-
-    expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
-      sourceReplyDeliveryMode: "automatic",
-      disableBlockStreaming: false,
-      suppressTyping: false,
-    });
-  });
-
-  it("honors automatic visible replies for WhatsApp groups", async () => {
+      },
+    },
+  ])("resolves visible reply and typing policy for $name", async (testCase) => {
     await dispatchBufferedReply({
-      cfg: {
-        channels: { whatsapp: { blockStreaming: true } },
-        messages: { groupChat: { visibleReplies: "automatic" } },
-      } as never,
-      context: { Body: "hi", ChatType: "group" },
-      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group" }),
+      ...("cfg" in testCase ? { cfg: testCase.cfg } : {}),
+      context: {
+        ...testCase.context,
+        ...("commandTurn" in testCase ? { CommandTurn: testCase.commandTurn } : {}),
+      },
+      msg: testCase.msg,
     });
 
-    expectRecordFields(requireRecord(getCapturedReplyOptions(), "reply options"), {
-      sourceReplyDeliveryMode: "automatic",
-      disableBlockStreaming: false,
-      suppressTyping: false,
-    });
-  });
-
-  it("suppresses typing for message-tool-only group chat without mention", async () => {
-    await dispatchBufferedReply({
-      context: { Body: "hi", ChatType: "group" },
-      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: false }),
-    });
-
-    expect(getCapturedReplyOptions()?.suppressTyping).toBe(true);
-  });
-
-  it("does not suppress typing for group chat when mentioned", async () => {
-    await dispatchBufferedReply({
-      context: { Body: "@bot hi", ChatType: "group" },
-      msg: makeMsg({ from: "120363000000000000@g.us", chatType: "group", wasMentioned: true }),
-    });
-
-    expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
-  });
-
-  it("does not suppress typing for direct chat", async () => {
-    await dispatchBufferedReply({
-      context: { Body: "hi", ChatType: "direct" },
-      msg: makeMsg({ from: "+15550001000", chatType: "direct" }),
-    });
-
-    expect(getCapturedReplyOptions()?.suppressTyping).toBe(false);
+    const replyOptions = requireRecord(getCapturedReplyOptions(), "reply options");
+    expectRecordFields(replyOptions, testCase.expected);
+    if (testCase.expected.typingStartPolicy === undefined) {
+      expect(getCapturedReplyOptions()?.typingStartPolicy).toBeUndefined();
+    }
   });
 
   it("treats block-only turns as visible replies instead of silent turns", async () => {

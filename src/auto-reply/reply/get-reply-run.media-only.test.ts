@@ -217,6 +217,7 @@ function baseParams(
     model: "claude-opus-4-1",
     typing: {
       onReplyStart: vi.fn().mockResolvedValue(undefined),
+      markRunComplete: vi.fn(),
       cleanup: vi.fn(),
     } as never,
     defaultModel: "claude-opus-4-1",
@@ -774,7 +775,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
   });
 
-  it("returns the empty-body reply when there is no text and no media", async () => {
+  it("returns the empty-body reply without starting visible-delivery typing", async () => {
     const result = await runPreparedReply(
       baseParams({
         ctx: {
@@ -793,6 +794,40 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({
       text: "I didn't receive any text in your message. Please resend or add a caption.",
     });
+    expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
+
+    const onReplyStart = vi.fn().mockResolvedValue(undefined);
+    const markRunComplete = vi.fn();
+    const cleanup = vi.fn();
+    const visiblePolicyResult = await runPreparedReply(
+      baseParams({
+        ctx: {
+          Body: "",
+          RawBody: "",
+          CommandBody: "",
+        },
+        sessionCtx: {
+          Body: "",
+          BodyStripped: "",
+          Provider: "slack",
+        },
+        opts: {
+          typingStartPolicy: "visible_delivery",
+        },
+        typing: {
+          onReplyStart,
+          markRunComplete,
+          cleanup,
+        } as never,
+      }),
+    );
+
+    expect(visiblePolicyResult).toEqual({
+      text: "I didn't receive any text in your message. Please resend or add a caption.",
+    });
+    expect(onReplyStart).not.toHaveBeenCalled();
+    expect(markRunComplete).toHaveBeenCalledTimes(1);
+    expect(cleanup).not.toHaveBeenCalled();
     expect(vi.mocked(runReplyAgent)).not.toHaveBeenCalled();
   });
 

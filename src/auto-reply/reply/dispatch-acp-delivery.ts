@@ -197,6 +197,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   originatingAccountId?: string;
   originatingThreadId?: string | number;
   onReplyStart?: () => Promise<void> | void;
+  onVisibleDeliveryStart?: () => Promise<void> | void;
   abortSignal?: AbortSignal;
   runId?: string;
 }): AcpDispatchDeliveryCoordinator {
@@ -270,20 +271,30 @@ export function createAcpDispatchDeliveryCoordinator(params: {
   };
 
   const startReplyLifecycleOnce = async () => {
+    // Suppressed generic lifecycle must not consume the visible-delivery start
+    // slot; routed delivery may still start typing at the exact send point.
+    if (params.suppressReplyLifecycle) {
+      return;
+    }
     if (state.startedReplyLifecycle) {
       return;
     }
     state.startedReplyLifecycle = true;
-    // Delivery and lifecycle suppression are separate: message-tool-only turns
-    // suppress automatic user delivery but still need typing/lifecycle signals.
-    if (params.suppressReplyLifecycle) {
-      return;
-    }
     void Promise.resolve(params.onReplyStart?.()).catch((error: unknown) => {
       logVerbose(
         `dispatch-acp: reply lifecycle start failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     });
+  };
+  const startVisibleDeliveryOnce = async () => {
+    if (!params.onVisibleDeliveryStart) {
+      return;
+    }
+    if (state.startedReplyLifecycle) {
+      return;
+    }
+    state.startedReplyLifecycle = true;
+    await params.onVisibleDeliveryStart();
   };
 
   const tryEditToolMessage = async (
@@ -304,6 +315,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
 
     try {
       const { runMessageAction } = await loadMessageActionRuntime();
+      await startVisibleDeliveryOnce();
       await runMessageAction({
         cfg: params.cfg,
         action: "edit",
@@ -434,6 +446,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
         mirror: false,
         replyKind: kind,
         runId: params.runId,
+        onVisibleDeliveryStart: startVisibleDeliveryOnce,
       });
       if (!result.ok) {
         if (tracksVisibleText) {

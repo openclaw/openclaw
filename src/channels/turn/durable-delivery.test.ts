@@ -34,6 +34,7 @@ type SendDurableMessageBatchRequest = {
   threadId?: string | number | null;
   durability?: string;
   gatewayClientScopes?: readonly string[];
+  onPlatformSendStart?: () => Promise<void> | void;
 };
 
 type DeliverySupportRequest = {
@@ -146,12 +147,15 @@ describe("durable inbound reply delivery", () => {
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {
+    const onVisibleDeliveryStart = vi.fn();
+
     await deliverInboundReplyWithMessageSendContext({
       cfg: {},
       channel: "telegram",
       agentId: "main",
       info: { kind: "final" },
       payload: { text: "final" },
+      onVisibleDeliveryStart,
       ctxPayload: ctxPayload({
         OriginatingTo: "chat-1",
       }),
@@ -164,6 +168,8 @@ describe("durable inbound reply delivery", () => {
     });
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
     expect(latestSendDurableMessageBatchRequest().durability).toBe("best_effort");
+    await latestSendDurableMessageBatchRequest().onPlatformSendStart?.();
+    expect(onVisibleDeliveryStart).toHaveBeenCalledTimes(1);
   });
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {

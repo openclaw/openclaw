@@ -24,6 +24,7 @@ export type DurableInboundReplyDeliveryOptions = Pick<
 > & {
   to?: string | null;
   replyToId?: string | null;
+  onVisibleDeliveryStart?: () => Promise<void> | void;
   requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
@@ -207,6 +208,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     mediaAccess: params.mediaAccess,
     silent: params.silent,
     durability,
+    onPlatformSendStart: params.onVisibleDeliveryStart,
     session,
     gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });

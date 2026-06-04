@@ -658,6 +658,40 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(onReplyStart).not.toHaveBeenCalled();
   });
 
+  it("threads visible delivery lifecycle through routed sends when generic lifecycle is suppressed", async () => {
+    const onReplyStart = vi.fn(async () => {});
+    const onVisibleDeliveryStart = vi.fn(async () => {});
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "visiblechat",
+        Surface: "visiblechat",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      suppressReplyLifecycle: true,
+      shouldRouteToOriginating: true,
+      originatingChannel: "visiblechat",
+      originatingTo: "channel:thread-1",
+      onReplyStart,
+      onVisibleDeliveryStart,
+    });
+
+    const delivered = await coordinator.deliver("block", { text: "hello" });
+
+    expect(delivered).toBe(true);
+    expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+    const [[routeParams]] = deliveryMocks.routeReply.mock.calls as unknown as Array<
+      [{ onVisibleDeliveryStart?: () => Promise<void> }]
+    >;
+    expect(routeParams.onVisibleDeliveryStart).toEqual(expect.any(Function));
+    expect(onVisibleDeliveryStart).not.toHaveBeenCalled();
+    await routeParams.onVisibleDeliveryStart?.();
+    expect(onVisibleDeliveryStart).toHaveBeenCalledTimes(1);
+    expect(onReplyStart).not.toHaveBeenCalled();
+  });
+
   it("can start reply lifecycle while user delivery is suppressed", async () => {
     const onReplyStart = vi.fn(async () => {});
     const dispatcher = createDispatcher();

@@ -69,6 +69,8 @@ export type GetReplyOptions = {
   /** Shared lifecycle owner for the current user-turn transcript append. */
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
   onReplyStart?: () => Promise<void> | void;
+  /** Starts typing at the first accepted visible delivery attempt. */
+  onVisibleDeliveryStart?: () => Promise<void>;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
@@ -77,6 +79,8 @@ export type GetReplyOptions = {
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */
   suppressTyping?: boolean;
+  /** Start typing only when the channel is about to send a visible reply. */
+  typingStartPolicy?: "visible_delivery";
   /** Resolved heartbeat model override (provider/model string from merged per-agent config). */
   heartbeatModelOverride?: string;
   /** One-shot thinking level override for this run; does not persist to the session. */

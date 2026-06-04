@@ -37,9 +37,13 @@ function firstReplyDispatchCall() {
           sessionKey?: string;
           sendPolicy?: string;
           inboundAudio?: boolean;
+          suppressReplyLifecycle?: boolean;
+          shouldRouteToOriginating?: boolean;
         },
         {
           cfg?: unknown;
+          onReplyStart?: unknown;
+          onVisibleDeliveryStart?: unknown;
         },
       ]
     | undefined;
@@ -148,6 +152,56 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       counts: { tool: 1, block: 2, final: 3 },
     });
   });
+
+  it.each([
+    {
+      name: "local",
+      ctx: createHookCtx(),
+      shouldRouteToOriginating: false,
+    },
+    {
+      name: "routed",
+      ctx: {
+        ...createHookCtx(),
+        Provider: "slack",
+        OriginatingChannel: "discord",
+        OriginatingTo: "discord:123",
+      },
+      shouldRouteToOriginating: true,
+    },
+  ])(
+    "suppresses $name reply_dispatch lifecycle when typing starts at visible delivery",
+    async ({ ctx, shouldRouteToOriginating }) => {
+      hookMocks.runner.runReplyDispatch.mockResolvedValue({
+        handled: true,
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      });
+      const onReplyStart = vi.fn();
+      const onVisibleDeliveryStart = vi.fn();
+
+      await dispatchReplyFromConfig({
+        ctx,
+        cfg: emptyConfig,
+        dispatcher: createDispatcher(),
+        replyOptions: {
+          typingStartPolicy: "visible_delivery",
+          onReplyStart,
+          onVisibleDeliveryStart,
+        },
+        replyResolver: async () => ({ text: "model reply" }),
+      });
+
+      const [replyDispatchEvent, replyDispatchRuntime] = firstReplyDispatchCall() ?? [];
+      if (shouldRouteToOriginating) {
+        expect(replyDispatchEvent?.shouldRouteToOriginating).toBe(true);
+      }
+      expect(replyDispatchEvent?.suppressReplyLifecycle).toBe(true);
+      expect(replyDispatchRuntime?.onReplyStart).toBe(onReplyStart);
+      expect(replyDispatchRuntime?.onVisibleDeliveryStart).toBe(onVisibleDeliveryStart);
+    },
+  );
+
   it("still applies send-policy deny after an unhandled plugin dispatch", async () => {
     hookMocks.runner.runReplyDispatch.mockResolvedValue({
       handled: false,

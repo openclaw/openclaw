@@ -76,6 +76,8 @@ export type RouteReplyParams = {
   replyKind: ReplyDispatchKind;
   /** Agent run id for hook context. */
   runId?: string;
+  /** Called when routed delivery reaches an actual platform send attempt. */
+  onVisibleDeliveryStart?: () => Promise<void> | void;
 };
 
 export type RouteReplyResult = {
@@ -244,6 +246,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
       },
       replyToId: resolvedReplyToId ?? null,
       threadId: resolvedThreadId,
+      onPlatformSendStart: params.onVisibleDeliveryStart,
       session: outboundSession,
       signal: abortSignal,
       mirror:

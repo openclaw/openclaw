@@ -24,6 +24,7 @@ function makeTypingController() {
   return {
     onReplyStart: async () => {},
     startTypingLoop: async () => {},
+    startTypingForVisibleDelivery: async () => {},
     startTypingOnText: async () => {},
     refreshTypingTtl: () => {},
     isActive: () => false,
@@ -374,6 +375,7 @@ describe("resolveReplyDirectives", () => {
       typing: {
         onReplyStart: async () => {},
         startTypingLoop: async () => {},
+        startTypingForVisibleDelivery: async () => {},
         startTypingOnText: async () => {},
         refreshTypingTtl: () => {},
         isActive: () => false,

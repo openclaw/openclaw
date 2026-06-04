@@ -20,6 +20,7 @@ import type { DurableMessageSendIntent } from "./types.js";
 
 type DeliveryIntentCallbackParams = {
   onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
+  onPlatformSendStart?: () => Promise<void> | void;
   onPayloadDeliveryOutcome?: (outcome: OutboundPayloadDeliveryOutcome) => void;
 };
 
@@ -66,6 +67,7 @@ function expectBatchStatus<TStatus extends DurableMessageBatchSendResult["status
 describe("withDurableMessageSendContext", () => {
   it("renders and sends through a durable send context", async () => {
     deliverOutboundPayloads.mockImplementationOnce(async (params: DeliveryIntentCallbackParams) => {
+      await params.onPlatformSendStart?.();
       params.onDeliveryIntent?.({
         id: "intent-1",
         channel: "telegram",
@@ -74,6 +76,7 @@ describe("withDurableMessageSendContext", () => {
       });
       return [{ channel: "telegram", messageId: "msg-1" }];
     });
+    const onPlatformSendStart = vi.fn();
 
     const result = await withDurableMessageSendContext(
       {
@@ -83,6 +86,7 @@ describe("withDurableMessageSendContext", () => {
         payloads: [{ text: "hello" }],
         threadId: 42,
         replyToId: "reply-1",
+        onPlatformSendStart,
       },
       async (ctx) => {
         expect(ctx.id).toBe("telegram:chat-1");
@@ -124,6 +128,7 @@ describe("withDurableMessageSendContext", () => {
     expect(request.payloads).toEqual([{ text: "hello" }]);
     expect(request.threadId).toBe(42);
     expect(request.replyToId).toBe("reply-1");
+    expect(onPlatformSendStart).toHaveBeenCalledTimes(1);
   });
 
   it("records a replayable rendered batch plan on the durable intent", async () => {

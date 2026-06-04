@@ -10,6 +10,45 @@ import { isSilentReplyPrefixText, isSilentReplyText, SILENT_REPLY_TOKEN } from "
 
 const DEFAULT_TYPING_INTERVAL_SECONDS = 6;
 const DEFAULT_TYPING_TTL_MS = 2 * 60_000;
+export const VISIBLE_DELIVERY_TYPING_START_TIMEOUT_MS = 1000;
+
+export async function runVisibleDeliveryTypingStart(params: {
+  start: () => Promise<void> | void;
+  timeoutMs?: number;
+  log?: (message: string) => void;
+}): Promise<void> {
+  const timeoutMs = resolveTimerTimeoutMs(
+    params.timeoutMs,
+    VISIBLE_DELIVERY_TYPING_START_TIMEOUT_MS,
+    0,
+  );
+  const start = Promise.resolve()
+    .then(() => params.start())
+    .catch((error: unknown) => {
+      params.log?.(`visible-delivery typing start failed: ${String(error)}`);
+    });
+  if (timeoutMs <= 0) {
+    await start;
+    return;
+  }
+
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<"timeout">((resolve) => {
+    timer = setTimeout(() => resolve("timeout"), timeoutMs);
+    timer.unref?.();
+  });
+  // Typing feedback is UX-only. Wait briefly for the first platform presence
+  // update, but never make message delivery depend on a stalled channel API.
+  const result = await Promise.race([start.then(() => "done" as const), timeout]);
+  if (timer) {
+    clearTimeout(timer);
+  }
+  if (result === "timeout") {
+    params.log?.(
+      `visible-delivery typing start timed out after ${timeoutMs}ms; continuing delivery`,
+    );
+  }
+}
 
 function resolveTypingIntervalMs(seconds: number | undefined): number {
   if (Number.isFinite(seconds) && (seconds ?? 0) <= 0) {
@@ -25,6 +64,7 @@ function resolveTypingIntervalMs(seconds: number | undefined): number {
 export type TypingController = {
   onReplyStart: () => Promise<void>;
   startTypingLoop: () => Promise<void>;
+  startTypingForVisibleDelivery: () => Promise<void>;
   startTypingOnText: (text?: string) => Promise<void>;
   refreshTypingTtl: () => void;
   isActive: () => boolean;
@@ -47,6 +87,7 @@ export function createTypingController(params: {
     return {
       onReplyStart: async () => {},
       startTypingLoop: async () => {},
+      startTypingForVisibleDelivery: async () => {},
       startTypingOnText: async () => {},
       refreshTypingTtl: () => {},
       isActive: () => false,
@@ -134,16 +175,23 @@ export function createTypingController(params: {
     rethrowOnError: true,
   });
 
-  const triggerTyping = async () => {
+  const triggerTyping = async (options?: { allowAfterRunComplete?: boolean }) => {
     if (triggerInFlight) {
       return;
     }
     triggerInFlight = true;
     try {
-      await startGuard.run(async () => {
+      const run = async () => {
         await onReplyStart?.();
         refreshTypingTtl();
-      });
+      };
+      if (options?.allowAfterRunComplete === true) {
+        if (!sealed) {
+          await run();
+        }
+      } else {
+        await startGuard.run(run);
+      }
     } catch (err) {
       log?.(`typing start failed: ${String(err)}`);
     } finally {
@@ -151,8 +199,12 @@ export function createTypingController(params: {
     }
   };
 
-  const scheduleTyping = async () => {
-    void triggerTyping();
+  const scheduleTyping = async (options?: { allowAfterRunComplete?: boolean }) => {
+    if (options?.allowAfterRunComplete === true) {
+      await triggerTyping(options);
+      return;
+    }
+    void triggerTyping(options);
     await Promise.resolve();
   };
 
@@ -161,12 +213,12 @@ export function createTypingController(params: {
     onTick: triggerTyping,
   });
 
-  const ensureStart = async () => {
+  const ensureStart = async (options?: { allowAfterRunComplete?: boolean }) => {
     if (sealed) {
       return;
     }
     // Late callbacks after a run completed should never restart typing.
-    if (runComplete) {
+    if (runComplete && options?.allowAfterRunComplete !== true) {
       return;
     }
     if (!active) {
@@ -176,7 +228,7 @@ export function createTypingController(params: {
       return;
     }
     started = true;
-    await scheduleTyping();
+    await scheduleTyping(options);
   };
 
   const maybeStopOnIdle = () => {
@@ -206,6 +258,28 @@ export function createTypingController(params: {
       return;
     }
     await ensureStart();
+    typingLoop.start();
+  };
+
+  const startTypingForVisibleDelivery = async () => {
+    if (sealed) {
+      return;
+    }
+    if (!onReplyStart || typingLoop.isRunning()) {
+      return;
+    }
+    if (runComplete && dispatchIdle) {
+      if (started) {
+        return;
+      }
+      started = true;
+      await triggerTyping({ allowAfterRunComplete: true });
+      return;
+    }
+    refreshTypingTtl();
+    // Visible delivery is owned by the dispatcher and may happen after the
+    // model run is complete; keep the stream-event late-start guard separate.
+    await ensureStart({ allowAfterRunComplete: true });
     typingLoop.start();
   };
 
@@ -257,6 +331,7 @@ export function createTypingController(params: {
   return {
     onReplyStart: ensureStart,
     startTypingLoop,
+    startTypingForVisibleDelivery,
     startTypingOnText,
     refreshTypingTtl,
     isActive,

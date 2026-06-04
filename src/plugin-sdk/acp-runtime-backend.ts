@@ -96,6 +96,7 @@ export async function tryDispatchAcpReplyHook(
     shouldSendToolSummariesNow: () => event.shouldSendToolSummaries,
     bypassForCommand,
     onReplyStart: ctx.onReplyStart,
+    onVisibleDeliveryStart: ctx.onVisibleDeliveryStart,
     recordProcessed: ctx.recordProcessed,
     markIdle: ctx.markIdle,
   });

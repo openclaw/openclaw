@@ -14,6 +14,7 @@ export type TypingModeContext = {
   isHeartbeat: boolean;
   typingPolicy?: TypingPolicy;
   suppressTyping?: boolean;
+  typingStartPolicy?: "visible_delivery";
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
@@ -28,6 +29,7 @@ export function resolveTypingMode({
   isHeartbeat,
   typingPolicy,
   suppressTyping,
+  typingStartPolicy,
   sourceReplyDeliveryMode,
 }: TypingModeContext): TypingMode {
   if (
@@ -35,7 +37,8 @@ export function resolveTypingMode({
     typingPolicy === "heartbeat" ||
     typingPolicy === "system_event" ||
     typingPolicy === "internal_webchat" ||
-    suppressTyping
+    suppressTyping ||
+    typingStartPolicy === "visible_delivery"
   ) {
     return "never";
   }

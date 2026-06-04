@@ -1278,6 +1278,8 @@ describe("dispatchReplyFromConfig", () => {
   it("routes when OriginatingChannel differs from Provider", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
+    const onReplyStart = vi.fn();
+    const onVisibleDeliveryStart = vi.fn();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -1294,7 +1296,17 @@ describe("dispatchReplyFromConfig", () => {
       _opts?: GetReplyOptions,
       _cfg?: OpenClawConfig,
     ) => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyOptions: {
+        typingStartPolicy: "visible_delivery",
+        onReplyStart,
+        onVisibleDeliveryStart,
+      },
+      replyResolver,
+    });
 
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     const routeCall = firstRouteReplyCall() as
@@ -1303,6 +1315,7 @@ describe("dispatchReplyFromConfig", () => {
           channel?: unknown;
           groupId?: unknown;
           isGroup?: unknown;
+          onVisibleDeliveryStart?: () => Promise<void>;
           threadId?: unknown;
           to?: unknown;
         }
@@ -1313,6 +1326,13 @@ describe("dispatchReplyFromConfig", () => {
     expect(routeCall?.threadId).toBe(123);
     expect(routeCall?.isGroup).toBe(true);
     expect(routeCall?.groupId).toBe("telegram:999");
+    expect(routeCall?.onVisibleDeliveryStart).toEqual(expect.any(Function));
+    expect(onReplyStart).not.toHaveBeenCalled();
+
+    await routeCall?.onVisibleDeliveryStart?.();
+
+    expect(onVisibleDeliveryStart).toHaveBeenCalledTimes(1);
+    expect(onReplyStart).not.toHaveBeenCalled();
   });
 
   it("routes exec-event replies using persisted session delivery context when current turn has no originating route", async () => {

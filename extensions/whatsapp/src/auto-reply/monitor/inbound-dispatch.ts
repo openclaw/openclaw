@@ -71,7 +71,10 @@ type SenderContext = {
   e164?: string;
 };
 
-type ReplyDeliveryInfo = { kind: ReplyLifecycleKind };
+type ReplyDeliveryInfo = {
+  kind: ReplyLifecycleKind;
+  startVisibleDeliveryTyping?: () => Promise<void>;
+};
 
 type PendingWhatsAppMediaOnlyPayload = {
   info: ReplyDeliveryInfo;
@@ -435,6 +438,39 @@ function normalizeCommandTurnFromContext(value: unknown): CommandTurnContext | u
   return undefined;
 }
 
+function isExplicitWhatsAppCommandTurn(params: {
+  commandTurn?: CommandTurnContext;
+  commandSource?: "native" | "text";
+  commandAuthorized?: boolean;
+}): boolean {
+  const isNativeCommandTurn = params.commandTurn?.kind === "native";
+  const isNativeCommandSource = params.commandSource === "native";
+  const isAuthorizedTextCommandTurn =
+    params.commandTurn?.kind === "text-slash" ? params.commandTurn.authorized : false;
+  const isAuthorizedTextCommandSource =
+    params.commandSource === "text" ? Boolean(params.commandAuthorized) : false;
+
+  return (
+    isNativeCommandTurn ||
+    isNativeCommandSource ||
+    isAuthorizedTextCommandTurn ||
+    isAuthorizedTextCommandSource
+  );
+}
+
+function resolveWhatsAppTypingStartPolicy(params: {
+  chatType?: string;
+  commandTurn?: CommandTurnContext;
+  commandSource?: "native" | "text";
+  commandAuthorized?: boolean;
+  wasMentioned?: boolean;
+}): "visible_delivery" | undefined {
+  if (params.chatType !== "group" || params.wasMentioned === true) {
+    return undefined;
+  }
+  return isExplicitWhatsAppCommandTurn(params) ? undefined : "visible_delivery";
+}
+
 export function resolveWhatsAppDmRouteTarget(params: {
   msg: WebInboundMsg;
   senderE164?: string;
@@ -586,6 +622,15 @@ export async function dispatchWhatsAppBufferedReply(params: {
         })
       : undefined;
   const sourceRepliesAreToolOnly = sourceReplyDeliveryMode === "message_tool_only";
+  const suppressPassiveSourceReplyTyping =
+    sourceRepliesAreToolOnly && sourceReplyChatType === "group" && !params.msg.wasMentioned;
+  const typingStartPolicy = resolveWhatsAppTypingStartPolicy({
+    chatType: sourceReplyChatType,
+    commandTurn: sourceReplyCommandTurn,
+    commandSource: sourceReplyCommandSource,
+    commandAuthorized: sourceReplyCommandAuthorized,
+    wasMentioned: params.msg.wasMentioned,
+  });
   const disableBlockStreaming = sourceRepliesAreToolOnly
     ? true
     : resolveWhatsAppDisableBlockStreaming(params.cfg);
@@ -600,6 +645,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
     if (!reply.hasMedia && !reply.text.trim()) {
       return whatsAppReplyDeliveryVisibility(false);
     }
+    await info.startVisibleDeliveryTyping?.();
     const delivery = await params.deliverReply({
       replyResult: normalizedDeliveryPayload,
       normalizedReplyResult: normalizedDeliveryPayload,
@@ -666,7 +712,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
           logVerbose("Stripped stray HEARTBEAT_OK token from web reply");
         }
       },
-      deliver: async (payload: ReplyPayload, info: { kind: ReplyLifecycleKind }) => {
+      deliver: async (payload: ReplyPayload, info: ReplyDeliveryInfo) => {
         const deliveryPayload = resolveWhatsAppDeliverablePayload(payload, info);
         if (!deliveryPayload) {
           return whatsAppReplyDeliveryVisibility(false);
@@ -700,6 +746,7 @@ export async function dispatchWhatsAppBufferedReply(params: {
                 tableMode,
                 chunkMode,
               },
+              onVisibleDeliveryStart: info.startVisibleDeliveryTyping,
             });
             if (durable.status === "failed") {
               if (durable.sentBeforeError === true) {
@@ -779,10 +826,8 @@ export async function dispatchWhatsAppBufferedReply(params: {
       },
     },
     replyOptions: {
-      // Message-tool-only unmentioned group turns have no automatic visible reply.
-      // Suppress composing there so silent background runs do not leak presence.
-      suppressTyping:
-        sourceRepliesAreToolOnly && params.msg.chatType === "group" && !params.msg.wasMentioned,
+      suppressTyping: suppressPassiveSourceReplyTyping,
+      ...(typingStartPolicy && !suppressPassiveSourceReplyTyping ? { typingStartPolicy } : {}),
       disableBlockStreaming,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       onModelSelected: params.onModelSelected,

@@ -210,7 +210,7 @@ type ChannelHandlerParams = {
   silent?: boolean;
   mediaAccess?: OutboundMediaAccess;
   gatewayClientScopes?: readonly string[];
-  onPlatformSendStart?: () => Promise<void>;
+  onPlatformSendStart?: () => Promise<void> | void;
 };
 
 // Channel docking: outbound delivery delegates to plugin.outbound adapters.
@@ -661,7 +661,7 @@ type DeliverOutboundPayloadsCoreParams = {
 };
 
 type DeliverOutboundPayloadsCoreRuntimeParams = DeliverOutboundPayloadsCoreParams & {
-  onPlatformSendStart?: () => Promise<void>;
+  onPlatformSendStart?: () => Promise<void> | void;
 };
 
 /**
@@ -679,6 +679,8 @@ export type DeliverOutboundPayloadsParams = DeliverOutboundPayloadsCoreParams & 
   queuePolicy?: OutboundDeliveryQueuePolicy;
   renderedBatchPlan?: QueuedRenderedMessageBatchPlan;
   onDeliveryIntent?: (intent: OutboundDeliveryIntent) => void;
+  /** @internal Runs immediately before an adapter platform send starts. */
+  onPlatformSendStart?: () => Promise<void> | void;
 };
 
 type MessageSentEvent = {
@@ -1331,19 +1333,15 @@ async function deliverOutboundPayloadsWithQueueCleanup(
     let platformSendStarted = false;
     const results = await deliverOutboundPayloadsCore({
       ...wrappedParams,
-      ...(queueId
-        ? {
-            onPlatformSendStart: async () => {
-              if (platformSendStarted) {
-                return;
-              }
-              platformSendStarted = await markQueuedPlatformSendAttemptStarted({
-                queueId,
-                queuePolicy,
-              });
-            },
-          }
-        : {}),
+      onPlatformSendStart: async () => {
+        if (queueId && !platformSendStarted) {
+          platformSendStarted = await markQueuedPlatformSendAttemptStarted({
+            queueId,
+            queuePolicy,
+          });
+        }
+        await params.onPlatformSendStart?.();
+      },
     });
     platformResultsReturned = true;
     if (!queueId) {

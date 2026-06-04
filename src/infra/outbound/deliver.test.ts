@@ -666,6 +666,9 @@ describe("deliverOutboundPayloads", () => {
     const afterCommit = vi.fn((ctx: { attemptToken?: unknown; result: { messageId?: string } }) => {
       order.push(`commit:${String(ctx.attemptToken)}:${ctx.result.messageId ?? ""}`);
     });
+    const onPlatformSendStart = vi.fn(async () => {
+      order.push("visible-start");
+    });
     setActivePluginRegistry(
       createTestRegistry([
         {
@@ -702,12 +705,14 @@ describe("deliverOutboundPayloads", () => {
       to: "!room:example",
       payloads: [{ text: "hello" }],
       queuePolicy: "required",
+      onPlatformSendStart,
     });
 
     expect(order).toEqual([
       "queue",
       "before",
       "mark-started",
+      "visible-start",
       "send",
       "after:pending-1:message-adapter-1",
       "mark-unknown",
@@ -732,6 +737,7 @@ describe("deliverOutboundPayloads", () => {
     expect(commitParams?.kind).toBe("text");
     expect(commitParams?.attemptToken).toBe("pending-1");
     expect(commitParams?.result?.messageId).toBe("message-adapter-1");
+    expect(onPlatformSendStart).toHaveBeenCalledTimes(1);
     expect(results[0]?.channel).toBe("matrix");
     expect(results[0]?.messageId).toBe("message-adapter-1");
   });
