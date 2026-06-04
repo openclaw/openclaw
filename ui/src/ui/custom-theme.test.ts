@@ -82,6 +82,16 @@ describe("custom theme import helpers", () => {
       fetchUrl: "https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
       themeId: "cmlhfpjhw000004l4f4ax3m7z",
     });
+    expect(normalizeTweakcnThemeUrl("https://tweakcn.com/r/themes/claude")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/claude",
+      fetchUrl: "https://tweakcn.com/r/themes/claude",
+      themeId: "claude",
+    });
+    expect(normalizeTweakcnThemeUrl("zinc")).toEqual({
+      sourceUrl: "https://tweakcn.com/themes/zinc",
+      fetchUrl: "https://tweakcn.com/r/themes/zinc",
+      themeId: "zinc",
+    });
   });
 
   it("extracts theme ids from copied tweakcn editor URLs and pasted text", () => {
