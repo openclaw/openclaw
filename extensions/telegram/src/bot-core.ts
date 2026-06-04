@@ -219,6 +219,20 @@ export function createTelegramBotCore(
     }
   });
 
+  // Answer callback queries immediately before sequentialize so they don't
+  // time out while an agent turn is queued behind the same sequential lane.
+  // https://github.com/openclaw/openclaw/issues/42156
+  bot.use(async (ctx, next) => {
+    if (ctx.callbackQuery) {
+      const answer =
+        typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
+          ? () => ctx.answerCallbackQuery()
+          : () => bot.api.answerCallbackQuery(ctx.callbackQuery.id);
+      await answer().catch(() => {});
+    }
+    return next();
+  });
+
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
