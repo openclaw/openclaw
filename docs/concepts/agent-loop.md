@@ -131,6 +131,20 @@ surfaces, while Codex native hooks remain a separate lower-level Codex mechanism
 - Tool results are sanitized for size and image payloads before logging/emitting.
 - Messaging tool sends are tracked to suppress duplicate assistant confirmations.
 
+### Message-tool-only turn termination
+
+When a session uses `messages.visibleReplies: "message_tool"` or
+`messages.groupChat.visibleReplies: "message_tool"`, OpenClaw converts the
+turn to `sourceReplyDeliveryMode: "message_tool_only"`. In this mode, a
+successful implicit current-source `message(action="send")` is treated as the
+visible reply and terminates the agent turn immediately.
+
+This matters for skills, prompts, and orchestration patterns that use the
+`message` tool for progress updates before doing more work. If the send should
+not end the turn, include an explicit route such as `channel`, `target`, `to`,
+`channelId`, or `provider`. Reserve the implicit current-source send for the
+final visible reply that should end the turn.
+
 ## Reply shaping + suppression
 
 - Final payloads are assembled from:

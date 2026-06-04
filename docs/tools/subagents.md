@@ -82,6 +82,12 @@ whether a user-facing update is needed.
     - If an active requester cannot be woken, OpenClaw falls back to a requester-agent handoff with the same completion context instead of dropping the announce.
     - A successful parent handoff completes sub-agent delivery even when the parent decides no visible user update is needed.
     - Native sub-agents do not get the message tool. They return plain assistant text to the parent/requester agent; human-visible replies are owned by the parent/requester agent's normal delivery policy.
+    - When the requester session uses `visibleReplies: "message_tool"`,
+      the requester agent is in message-tool-only delivery. An implicit
+      current-source `message(action="send")` ends that requester turn
+      immediately, so skills or orchestration prompts that send progress updates
+      must include an explicit route (`channel`, `target`, `to`, `channelId`, or
+      `provider`) and reserve the implicit send for the final visible update.
     - If direct handoff cannot be used, it falls back to queue routing.
     - If queue routing is still not available, the announce is retried with a short exponential backoff before final give-up.
     - Completion delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available; if the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
