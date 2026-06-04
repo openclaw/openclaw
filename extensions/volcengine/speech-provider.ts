@@ -5,7 +5,12 @@ import type {
   SpeechProviderOverrides,
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
-import { asFiniteNumber, asObject, trimToUndefined } from "openclaw/plugin-sdk/speech-core";
+import {
+  asObject,
+  parseSpeechDirectiveNumberOverride,
+  trimToUndefined,
+} from "openclaw/plugin-sdk/speech-core";
+import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { volcengineTTS, type VolcengineTtsEncoding } from "./tts.js";
 
 const DEFAULT_VOICE = "en_female_anna_mars_bigtts";
@@ -45,6 +50,10 @@ type VolcengineTtsProviderOverrides = {
   emotion?: string;
 };
 
+function normalizeSpeedRatio(value: unknown): number | undefined {
+  return asFiniteNumberInRange(value, { min: 0.2, max: 3 });
+}
+
 function normalizeVolcengineProviderConfig(
   rawConfig: Record<string, unknown>,
 ): VolcengineTtsProviderConfig {
@@ -77,7 +86,7 @@ function normalizeVolcengineProviderConfig(
       trimToUndefined(process.env.VOLCENGINE_TTS_APP_KEY) ??
       DEFAULT_APP_KEY,
     baseUrl: trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.VOLCENGINE_TTS_BASE_URL),
-    speedRatio: asFiniteNumber(raw?.speedRatio),
+    speedRatio: normalizeSpeedRatio(raw?.speedRatio),
     emotion: trimToUndefined(raw?.emotion),
   };
 }
@@ -105,7 +114,7 @@ function readProviderConfig(config: SpeechProviderConfig): VolcengineTtsProvider
     resourceId: trimToUndefined(config.resourceId) ?? normalized.resourceId,
     appKey: trimToUndefined(config.appKey) ?? normalized.appKey,
     baseUrl: trimToUndefined(config.baseUrl) ?? normalized.baseUrl,
-    speedRatio: asFiniteNumber(config.speedRatio) ?? normalized.speedRatio,
+    speedRatio: normalizeSpeedRatio(config.speedRatio) ?? normalized.speedRatio,
     emotion: trimToUndefined(config.emotion) ?? normalized.emotion,
   };
 }
@@ -118,7 +127,7 @@ function readVolcengineOverrides(
   }
   return {
     voice: trimToUndefined(overrides.voice),
-    speedRatio: asFiniteNumber(overrides.speedRatio),
+    speedRatio: normalizeSpeedRatio(overrides.speedRatio),
     emotion: trimToUndefined(overrides.emotion),
   };
 }
@@ -139,14 +148,13 @@ function parseDirectiveToken(ctx: SpeechDirectiveTokenParseContext): {
     case "speed":
     case "speedratio":
     case "speed_ratio": {
-      if (!ctx.policy.allowVoiceSettings) {
-        return { handled: true };
-      }
-      const speedRatio = Number(ctx.value);
-      if (!Number.isFinite(speedRatio) || speedRatio < 0.2 || speedRatio > 3.0) {
-        return { handled: true, warnings: [`invalid Volcengine speedRatio "${ctx.value}"`] };
-      }
-      return { handled: true, overrides: { ...ctx.currentOverrides, speedRatio } };
+      return parseSpeechDirectiveNumberOverride({
+        ctx,
+        overrideKey: "speedRatio",
+        range: { min: 0.2, max: 3 },
+        warning: (value) => `invalid Volcengine speedRatio "${value}"`,
+        mergeCurrentOverrides: true,
+      });
     }
     case "emotion":
       if (!ctx.policy.allowVoiceSettings) {

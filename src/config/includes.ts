@@ -12,15 +12,18 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import JSON5 from "json5";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
+import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
 export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
+
+/** Maximum length for $include path and resolved path (CWE-22 hardening). */
+export const MAX_INCLUDE_PATH_LENGTH = 4096;
 
 // ============================================================================
 // Types
@@ -212,11 +215,28 @@ class IncludeProcessor {
   }
 
   private resolvePath(includePath: string): { resolvedPath: string; root: IncludeRoot } {
+    if (includePath.includes("\0")) {
+      throw new ConfigIncludeError("Include path must not contain null bytes", includePath);
+    }
+    if (includePath.length >= MAX_INCLUDE_PATH_LENGTH) {
+      throw new ConfigIncludeError(
+        `Include path exceeds maximum length (${MAX_INCLUDE_PATH_LENGTH} characters)`,
+        includePath,
+      );
+    }
+
     const configDir = path.dirname(this.basePath);
     const resolved = path.isAbsolute(includePath)
       ? includePath
       : path.resolve(configDir, includePath);
     const normalized = path.normalize(resolved);
+
+    if (normalized.length >= MAX_INCLUDE_PATH_LENGTH) {
+      throw new ConfigIncludeError(
+        `Resolved include path exceeds maximum length (${MAX_INCLUDE_PATH_LENGTH} characters)`,
+        includePath,
+      );
+    }
 
     // SECURITY: Reject paths outside the config directory and any caller-allowed
     // roots (CWE-22: Path Traversal). Allowed roots come from
@@ -401,7 +421,7 @@ const defaultResolver: IncludeResolver = {
   readFile: (p) => fs.readFileSync(p, "utf-8"),
   readFileWithGuards: ({ includePath, resolvedPath, rootRealDir }) =>
     readConfigIncludeFileWithGuards({ includePath, resolvedPath, rootRealDir }),
-  parseJson: (raw) => JSON5.parse(raw),
+  parseJson: parseJsonWithJson5Fallback,
 };
 
 /**

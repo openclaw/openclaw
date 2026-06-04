@@ -15,7 +15,8 @@ sidebarTitle: "Adding capabilities"
   load pipeline, runtime helpers), see [Plugin internals](/plugins/architecture).
 </Info>
 
-Use this when OpenClaw needs a new shared domain such as image generation, video generation, or some future vendor-backed feature area.
+Use this when OpenClaw needs a new shared domain such as embeddings, image
+generation, video generation, or some future vendor-backed feature area.
 
 The rule:
 
@@ -112,6 +113,18 @@ The config key is intentionally separate from vision-analysis routing:
 - `agents.defaults.imageGenerationModel` generates images.
 
 Keep those separate so fallback and policy remain explicit.
+
+## Embedding providers
+
+Use `embeddingProviders` for reusable vector embedding providers. This contract
+is intentionally broader than memory: tools, search, retrieval, importers, or
+future feature plugins can consume embeddings without depending on the memory
+engine.
+
+Memory search can consume generic `embeddingProviders`. The older
+`memoryEmbeddingProviders` contract is deprecated compatibility while existing
+memory-specific providers migrate; new reusable embedding providers should use
+`embeddingProviders`.
 
 ## Review checklist
 

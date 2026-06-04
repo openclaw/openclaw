@@ -1,3 +1,5 @@
+// `openclaw plugins update` command implementation for tracked npm plugins and hook packs.
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import {
   assertConfigWriteAllowedInCurrentMode,
   getRuntimeConfig,
@@ -12,7 +14,6 @@ import {
 } from "../plugins/installed-plugin-index-records.js";
 import { updateNpmInstalledPlugins } from "../plugins/update.js";
 import { defaultRuntime } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
 import { commitPluginInstallRecordsWithConfig } from "./plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "./plugins-registry-refresh.js";
 import { logPluginUpdateOutcomes } from "./plugins-update-outcomes.js";
@@ -22,6 +23,10 @@ import {
 } from "./plugins-update-selection.js";
 import { promptYesNo } from "./prompt.js";
 
+const DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING =
+  "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
+
+/** Run plugin/hook-pack updates, persist changed install records, and refresh runtime registry. */
 export async function runPluginUpdateCommand(params: {
   id?: string;
   opts: { all?: boolean; dryRun?: boolean; dangerouslyForceUnsafeInstall?: boolean };
@@ -36,6 +41,9 @@ export async function runPluginUpdateCommand(params: {
     info: (msg: string) => defaultRuntime.log(msg),
     warn: (msg: string) => defaultRuntime.log(theme.warn(msg)),
   };
+  if (params.opts.dangerouslyForceUnsafeInstall) {
+    defaultRuntime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING));
+  }
   const pluginSelection = resolvePluginUpdateSelection({
     installs: pluginInstallRecords,
     rawId: params.id,
@@ -109,6 +117,7 @@ export async function runPluginUpdateCommand(params: {
     const nextPluginInstallRecords = pluginResult.config.plugins?.installs ?? {};
     const shouldPersistPluginInstallIndex =
       pluginResult.changed || Object.keys(pluginInstallRecords).length > 0;
+    // Plugin install records live in the persisted index; config only carries hook-pack changes.
     const nextConfig = shouldPersistPluginInstallIndex
       ? withoutPluginInstallRecords(hookResult.config)
       : hookResult.config;
@@ -133,6 +142,7 @@ export async function runPluginUpdateCommand(params: {
         config: nextConfig,
         reason: "source-changed",
         installRecords: nextPluginInstallRecords,
+        invalidateRuntimeCache: false,
         logger,
       });
     }

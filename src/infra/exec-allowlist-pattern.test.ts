@@ -1,3 +1,4 @@
+// Verifies exec approval allowlist pattern parsing and matching.
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
@@ -81,6 +82,21 @@ describe("matchesExecAllowlistPattern", () => {
   it.runIf(process.platform !== "win32")("preserves case sensitivity on POSIX", () => {
     expect(matchesExecAllowlistPattern("/tmp/Allowed-Tool", "/tmp/allowed-tool")).toBe(false);
     expect(matchesExecAllowlistPattern("/tmp/Allowed-Tool", "/tmp/Allowed-Tool")).toBe(true);
+  });
+
+  it.runIf(process.platform === "darwin")("matches macOS /private/var temp aliases", () => {
+    expect(
+      matchesExecAllowlistPattern(
+        "/var/folders/example/bin/tool",
+        "/private/var/folders/example/bin/tool",
+      ),
+    ).toBe(true);
+    expect(
+      matchesExecAllowlistPattern(
+        "/private/var/folders/example/bin/tool",
+        "/var/folders/example/bin/tool",
+      ),
+    ).toBe(true);
   });
 
   it.runIf(process.platform === "win32")("preserves case-insensitive matching on Windows", () => {

@@ -14,6 +14,7 @@ import {
   resolveWhatsAppAccount,
   resolveWhatsAppMediaMaxBytes,
 } from "./accounts.js";
+import { registerWhatsAppApprovalReactionTargetForOutboundMessage } from "./approval-reactions.js";
 import { getRegisteredWhatsAppConnectionController } from "./connection-controller-registry.js";
 import { resolveWhatsAppDocumentFileName } from "./document-filename.js";
 import type { ActiveWebListener, ActiveWebSendOptions } from "./inbound/types.js";
@@ -30,6 +31,49 @@ const outboundLog = createSubsystemLogger("gateway/channels/whatsapp").child("ou
 
 function supportsForcedDocumentDelivery(kind: "image" | "audio" | "video" | "document"): boolean {
   return kind === "image" || kind === "video";
+}
+
+type PreparedWhatsAppOutboundMedia = Awaited<ReturnType<typeof prepareWhatsAppOutboundMedia>>;
+
+type WhatsAppMediaSendState = {
+  mediaBuffer: Buffer;
+  mediaType: string;
+  text: string;
+  forceDocumentDelivery: boolean;
+  documentFileName?: string;
+  visibleTextAfterVoice?: string;
+};
+
+function buildWhatsAppMediaSendState(params: {
+  media: PreparedWhatsAppOutboundMedia;
+  caption?: string;
+  forceDocument?: boolean;
+}): WhatsAppMediaSendState {
+  const { media, caption } = params;
+  const forceDocumentDelivery = Boolean(
+    params.forceDocument && supportsForcedDocumentDelivery(media.kind),
+  );
+  let text = caption ?? "";
+  let documentFileName = media.kind === "document" ? media.fileName : undefined;
+  let visibleTextAfterVoice: string | undefined;
+  if (media.kind === "audio" && caption) {
+    visibleTextAfterVoice = caption;
+    text = "";
+  }
+  if (forceDocumentDelivery) {
+    documentFileName ??= resolveWhatsAppDocumentFileName({
+      fileName: media.fileName,
+      mimetype: media.mimetype,
+    });
+  }
+  return {
+    mediaBuffer: media.buffer,
+    mediaType: media.mimetype,
+    text,
+    forceDocumentDelivery,
+    ...(documentFileName ? { documentFileName } : {}),
+    ...(visibleTextAfterVoice ? { visibleTextAfterVoice } : {}),
+  };
 }
 
 function resolveOutboundWhatsAppAccountId(params: {
@@ -57,6 +101,20 @@ function requireOutboundActiveWebListener(params: { cfg: OpenClawConfig; account
     );
   }
   return { accountId: resolvedAccountId, listener };
+}
+
+function resolveActualSentRemoteJid(result: unknown, fallbackJid: string): string {
+  if (!result || typeof result !== "object") {
+    return fallbackJid;
+  }
+  const rawKeys = (result as { keys?: unknown }).keys;
+  const keys: Array<{ remoteJid?: unknown }> = Array.isArray(rawKeys) ? rawKeys : [];
+  for (const key of keys) {
+    if (typeof key?.remoteJid === "string" && key.remoteJid.trim()) {
+      return key.remoteJid.trim();
+    }
+  }
+  return fallbackJid;
 }
 
 export async function sendMessageWhatsApp(
@@ -133,31 +191,11 @@ export async function sendMessageWhatsApp(
     let documentFileName: string | undefined;
     let visibleTextAfterVoice: string | undefined;
     let forceDocumentDelivery = false;
+    let media: PreparedWhatsAppOutboundMedia | undefined;
     if (mediaPayload) {
-      const media = await prepareWhatsAppOutboundMedia(mediaPayload, primaryMediaUrl);
-      const caption = text || undefined;
-      mediaBuffer = media.buffer;
-      mediaType = media.mimetype;
-      forceDocumentDelivery = Boolean(
-        options.forceDocument && supportsForcedDocumentDelivery(media.kind),
-      );
-      if (media.kind === "audio" && caption) {
-        visibleTextAfterVoice = caption;
-        text = "";
-      } else if (media.kind === "document") {
-        text = caption ?? "";
-        documentFileName = media.fileName;
-      } else {
-        text = caption ?? "";
-      }
-      if (forceDocumentDelivery) {
-        documentFileName ??= resolveWhatsAppDocumentFileName({
-          fileName: media.fileName,
-          mimetype: media.mimetype,
-        });
-      }
+      media = await prepareWhatsAppOutboundMedia(mediaPayload, primaryMediaUrl);
     } else if (primaryMediaUrl) {
-      const media = await prepareWhatsAppOutboundMedia(
+      media = await prepareWhatsAppOutboundMedia(
         await loadOutboundMediaFromUrl(primaryMediaUrl, {
           maxBytes: resolveWhatsAppMediaMaxBytes(account),
           optimizeImages: options.forceDocument ? false : undefined,
@@ -167,27 +205,19 @@ export async function sendMessageWhatsApp(
         }),
         primaryMediaUrl,
       );
-      const caption = text || undefined;
-      mediaBuffer = media.buffer;
-      mediaType = media.mimetype;
-      forceDocumentDelivery = Boolean(
-        options.forceDocument && supportsForcedDocumentDelivery(media.kind),
-      );
-      if (media.kind === "audio" && caption) {
-        visibleTextAfterVoice = caption;
-        text = "";
-      } else if (media.kind === "document") {
-        text = caption ?? "";
-        documentFileName = media.fileName;
-      } else {
-        text = caption ?? "";
-      }
-      if (forceDocumentDelivery) {
-        documentFileName ??= resolveWhatsAppDocumentFileName({
-          fileName: media.fileName,
-          mimetype: media.mimetype,
-        });
-      }
+    }
+    if (media) {
+      const mediaSendState = buildWhatsAppMediaSendState({
+        media,
+        caption: text || undefined,
+        forceDocument: options.forceDocument,
+      });
+      mediaBuffer = mediaSendState.mediaBuffer;
+      mediaType = mediaSendState.mediaType;
+      documentFileName = mediaSendState.documentFileName;
+      visibleTextAfterVoice = mediaSendState.visibleTextAfterVoice;
+      forceDocumentDelivery = mediaSendState.forceDocumentDelivery;
+      text = mediaSendState.text;
     }
     outboundLog.info(`Sending message -> ${redactedJid}${hasMedia ? " (media)" : ""}`);
     logger.info({ jid: redactedJid, hasMedia }, "sending message");
@@ -221,12 +251,21 @@ export async function sendMessageWhatsApp(
       }
     }
     const messageId = (result as { messageId?: string })?.messageId ?? "unknown";
+    const sentRemoteJid = resolveActualSentRemoteJid(result, jid);
+    if (messageId && messageId !== "unknown" && text) {
+      registerWhatsAppApprovalReactionTargetForOutboundMessage({
+        accountId: resolvedAccountId,
+        remoteJid: sentRemoteJid,
+        messageId,
+        text,
+      });
+    }
     const durationMs = Date.now() - startedAt;
     outboundLog.info(
       `Sent message ${messageId} -> ${redactedJid}${hasMedia ? " (media)" : ""} (${durationMs}ms)`,
     );
     logger.info({ jid: redactedJid, messageId }, "sent message");
-    return { messageId, toJid: jid };
+    return { messageId, toJid: sentRemoteJid };
   } catch (err) {
     logger.error({ err: String(err), to: redactedTo, hasMedia }, "failed to send via web session");
     throw err;

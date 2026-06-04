@@ -1,3 +1,4 @@
+// Normalizes error objects for codes, names, messages, and redacted logs.
 import { redactSensitiveText } from "../logging/redact.js";
 
 export function extractErrorCode(err: unknown): string | undefined {
@@ -72,15 +73,22 @@ export function formatErrorMessage(err: unknown): string {
     // Traverse .cause chain to include nested error messages (e.g. grammY HttpError wraps network errors in .cause)
     let cause: unknown = err.cause;
     const seen = new Set<unknown>([err]);
+    // Skip causes that repeat a message already emitted (e.g. coerceToFailoverError).
+    const seenMessages = new Set<string>([formatted]);
+    const appendCauseMessage = (message: string): void => {
+      if (!message || seenMessages.has(message)) {
+        return;
+      }
+      formatted += ` | ${message}`;
+      seenMessages.add(message);
+    };
     while (cause && !seen.has(cause)) {
       seen.add(cause);
       if (cause instanceof Error) {
-        if (cause.message) {
-          formatted += ` | ${cause.message}`;
-        }
+        appendCauseMessage(cause.message);
         cause = cause.cause;
       } else if (typeof cause === "string") {
-        formatted += ` | ${cause}`;
+        appendCauseMessage(cause);
         break;
       } else {
         break;
@@ -120,6 +128,20 @@ export function stringifyNonErrorCause(value: unknown): string {
   } catch {
     return Object.prototype.toString.call(value);
   }
+}
+
+export function toErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }
 
 export function formatUncaughtError(err: unknown): string {

@@ -1,3 +1,4 @@
+/** Tests subagent info command output. */
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -106,6 +107,39 @@ describe("subagents info", () => {
     expect(text).toContain("Status: done");
     expect(text).toContain("TaskStatus: succeeded");
     expect(text).toContain("Task summary: Completed the requested task");
+  });
+
+  it("omits Date-invalid subagent timestamps", () => {
+    const runId = "commands-subagents-info-invalid-date-run";
+    const childSessionKey = "agent:main:subagent:commands-info-invalid-date";
+    const run = {
+      runId,
+      childSessionKey,
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "inspect invalid timestamps",
+      cleanup: "keep",
+      createdAt: 8_640_000_000_000_001,
+      startedAt: 8_640_000_000_000_001,
+      endedAt: 8_640_000_000_000_001,
+      archiveAtMs: 8_640_000_000_000_001,
+      outcome: { status: "ok" },
+    } satisfies SubagentRunRecord;
+    addSubagentRunForTests(run);
+    const cfg = buildCommandTestConfig();
+
+    const result = handleSubagentsInfoAction(
+      buildInfoContext({ cfg, runs: [run], restTokens: ["1"] }),
+    );
+
+    const text = requireReplyText(result.reply);
+    expect(result.shouldContinue).toBe(false);
+    expect(text).toContain(`Run: ${runId}`);
+    expect(text).toContain("Created: n/a");
+    expect(text).toContain("Started: n/a");
+    expect(text).toContain("Ended: n/a");
+    expect(text).toContain("Archive: n/a");
+    expect(text).not.toContain("Invalid Date");
   });
 
   it("sanitizes leaked task details in /subagents info", () => {

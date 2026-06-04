@@ -5,8 +5,10 @@ import {
   resetFileLockManagerForTest,
 } from "@openclaw/fs-safe/file-lock";
 import { shouldRemoveDeadOwnerOrExpiredLock } from "../infra/stale-lock-file.js";
+import { getProcessStartTime } from "../shared/pid-alive.js";
 
 export type FileLockOptions = {
+  /** Retry policy used while waiting for another process or re-entrant holder to release. */
   retries: {
     retries: number;
     factor: number;
@@ -14,11 +16,14 @@ export type FileLockOptions = {
     maxTimeout: number;
     randomize?: boolean;
   };
+  /** Milliseconds after which a dead-owner or expired sidecar lock may be reclaimed. */
   stale: number;
 };
 
 export type FileLockHandle = {
+  /** Absolute path to the `.lock` sidecar held for this file path. */
   lockPath: string;
+  /** Releases one held reference; callers must await it before assuming peers can proceed. */
   release: () => Promise<void>;
 };
 
@@ -26,12 +31,16 @@ export const FILE_LOCK_TIMEOUT_ERROR_CODE = "file_lock_timeout";
 export const FILE_LOCK_STALE_ERROR_CODE = "file_lock_stale";
 
 export type FileLockTimeoutError = Error & {
+  /** Stable error discriminator for lock acquisition timeout handling. */
   code: typeof FILE_LOCK_TIMEOUT_ERROR_CODE;
+  /** Lock sidecar path that could not be acquired before retries were exhausted. */
   lockPath: string;
 };
 
 export type FileLockStaleError = Error & {
+  /** Stable error discriminator for stale-lock reclaim failures. */
   code: typeof FILE_LOCK_STALE_ERROR_CODE;
+  /** Lock sidecar path that could not be safely reclaimed. */
   lockPath: string;
 };
 
@@ -86,7 +95,17 @@ export async function acquireFileLock(
       retry: options.retries,
       staleRecovery: "remove-if-unchanged",
       allowReentrant: true,
-      payload: () => ({ pid: process.pid, createdAt: new Date().toISOString() }),
+      payload: () => {
+        const payload: Record<string, unknown> = {
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+        };
+        const starttime = getProcessStartTime(process.pid);
+        if (starttime !== null) {
+          payload.starttime = starttime;
+        }
+        return payload;
+      },
       shouldReclaim: shouldReclaimPluginLock,
       shouldRemoveStaleLock: (snapshot) =>
         shouldRemoveDeadOwnerOrExpiredLock({

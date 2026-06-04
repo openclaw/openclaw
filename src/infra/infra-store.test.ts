@@ -1,3 +1,4 @@
+// Tests infra store file persistence and recovery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -283,6 +284,14 @@ describe("infra store", () => {
       expect(cache.check("a", 120)).toBe(false);
       expect(cache.check("c", 200)).toBe(false);
       expect(cache.size()).toBe(2);
+    });
+
+    it("bounds non-finite ttl and max size options", () => {
+      const cache = createDedupeCache({ ttlMs: Number.NaN, maxSize: Number.NaN });
+
+      expect(cache.check("a", 100)).toBe(false);
+      expect(cache.peek("a", 100)).toBe(false);
+      expect(cache.size()).toBe(0);
     });
 
     it("supports non-mutating existence checks via peek()", () => {

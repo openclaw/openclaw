@@ -36,6 +36,11 @@ function createScrollHost(
     overflowY,
   } as unknown as CSSStyleDeclaration);
 
+  const settings: { chatAutoScroll?: ChatAutoScrollMode } = {};
+  if (chatAutoScroll) {
+    settings.chatAutoScroll = chatAutoScroll;
+  }
+
   const host = {
     updateComplete: Promise.resolve(),
     querySelector: vi.fn().mockReturnValue(container),
@@ -49,7 +54,7 @@ function createScrollHost(
     chatNewMessagesBelow: false,
     chatIsProgrammaticScroll: false,
     chatProgrammaticScrollTarget: 0,
-    settings: chatAutoScroll ? { chatAutoScroll } : undefined,
+    settings,
     logsScrollFrame: null as number | null,
     logsAtBottom: true,
     topbarObserver: null as ResizeObserver | null,

@@ -92,8 +92,16 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
     insertBeforeSeparator(nextArgs, "--report-unused-disable-directives-severity", "error");
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources) && !hasFlag(nextArgs, "--threads")) {
-    insertBeforeSeparator(nextArgs, "--threads=1");
+  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
+    if (!hasFlag(nextArgs, "--threads")) {
+      insertBeforeSeparator(nextArgs, "--threads=1");
+    }
+    if (!nextEnv.GOGC) {
+      nextEnv.GOGC = DEFAULT_LOCAL_GO_GC;
+    }
+    if (!nextEnv.GOMEMLIMIT) {
+      nextEnv.GOMEMLIMIT = DEFAULT_LOCAL_GO_MEMORY_LIMIT;
+    }
   }
 
   return { env: nextEnv, args: nextArgs };
@@ -193,19 +201,34 @@ export function acquireLocalHeavyCheckLockSync(params) {
   const timeoutMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS,
     DEFAULT_LOCK_TIMEOUT_MS,
+    "OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS",
   );
-  const pollMs = readPositiveInt(env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS, DEFAULT_LOCK_POLL_MS);
+  const pollMs = readPositiveInt(
+    env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS,
+    DEFAULT_LOCK_POLL_MS,
+    "OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS",
+  );
   const progressMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_LOCK_PROGRESS_MS,
     DEFAULT_LOCK_PROGRESS_MS,
+    "OPENCLAW_HEAVY_CHECK_LOCK_PROGRESS_MS",
   );
   const staleLockMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_STALE_LOCK_MS,
     DEFAULT_STALE_LOCK_MS,
+    "OPENCLAW_HEAVY_CHECK_STALE_LOCK_MS",
   );
   const startedAt = Date.now();
-  let waitingLogged = false;
-  let lastProgressAt = 0;
+  let waitLogBudget = 1;
+  let lastProgressAt = startedAt;
+  const consumeInitialWaitLog = () => waitLogBudget-- > 0;
+  const consumeProgressLog = (now) => {
+    if (now - lastProgressAt < progressMs) {
+      return false;
+    }
+    lastProgressAt = now;
+    return true;
+  };
 
   fs.mkdirSync(locksDir, { recursive: true });
   if (!params.lockName) {
@@ -247,23 +270,20 @@ export function acquireLocalHeavyCheckLockSync(params) {
         );
       }
 
-      if (!waitingLogged) {
+      if (consumeInitialWaitLog()) {
         const ownerLabel = describeOwner(owner);
         console.error(
           `[${params.toolName}] queued behind the local heavy-check lock${
             ownerLabel ? ` held by ${ownerLabel}` : ""
           }...`,
         );
-        waitingLogged = true;
-        lastProgressAt = Date.now();
-      } else if (Date.now() - lastProgressAt >= progressMs) {
+      } else if (consumeProgressLog(Date.now())) {
         const ownerLabel = describeOwner(owner);
         console.error(
           `[${params.toolName}] still waiting ${formatElapsedMs(elapsedMs)} for the local heavy-check lock${
             ownerLabel ? ` held by ${ownerLabel}` : ""
           }...`,
         );
-        lastProgressAt = Date.now();
       }
 
       sleepSync(pollMs);
@@ -361,9 +381,19 @@ function resolveHostResources(hostResources) {
   };
 }
 
-function readPositiveInt(rawValue, fallback) {
-  const parsed = Number.parseInt(rawValue ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function readPositiveInt(rawValue, fallback, label) {
+  const text = rawValue?.trim();
+  if (!text) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer; got: ${rawValue}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer; got: ${rawValue}`);
+  }
+  return parsed;
 }
 
 function writeOwnerFile(ownerPath, owner) {

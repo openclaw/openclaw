@@ -1,4 +1,7 @@
-import { Mock, vi } from "vitest";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
+import { vi } from "vitest";
+import type { Mock } from "vitest";
+import { clearSlackInboundDeliveryStateForTest } from "./monitor/inbound-delivery-state.js";
 
 type SlackHandler = (args: unknown) => Promise<void>;
 type SlackMiddleware = (args: { next: () => Promise<void> } & Record<string, unknown>) => unknown;
@@ -7,6 +10,7 @@ type SlackProviderMonitor = (params: {
   appToken: string;
   abortSignal: AbortSignal;
   config?: Record<string, unknown>;
+  channelRuntime?: ChannelRuntimeSurface;
 }) => Promise<unknown>;
 
 type SlackTestState = {
@@ -113,7 +117,10 @@ function ensureSlackTestRuntime(): {
   };
 }
 
-export const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
+export const flush = () =>
+  new Promise((resolve) => {
+    setTimeout(resolve, 0);
+  });
 
 async function waitForSlackEvent(name: string) {
   for (let i = 0; i < 10; i += 1) {
@@ -126,7 +133,7 @@ async function waitForSlackEvent(name: string) {
 
 export function startSlackMonitor(
   monitorSlackProvider: SlackProviderMonitor,
-  opts?: { botToken?: string; appToken?: string },
+  opts?: { botToken?: string; appToken?: string; channelRuntime?: ChannelRuntimeSurface },
 ) {
   const controller = new AbortController();
   const run = monitorSlackProvider({
@@ -134,6 +141,7 @@ export function startSlackMonitor(
     appToken: opts?.appToken ?? "app-token",
     abortSignal: controller.signal,
     config: slackTestState.config,
+    channelRuntime: opts?.channelRuntime,
   });
   return { controller, run };
 }
@@ -191,6 +199,7 @@ export const defaultSlackTestConfig = () => ({
 });
 
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
+  clearSlackInboundDeliveryStateForTest();
   slackTestState.config = config;
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
@@ -208,6 +217,17 @@ export function resetSlackTestState(config: Record<string, unknown> = defaultSla
     .mockImplementation(async ({ entries }) =>
       entries.map((input) => ({ input, resolved: false })),
     );
+  const client = getSlackClient();
+  client.auth.test.mockReset().mockResolvedValue({ user_id: "bot-user" });
+  client.conversations.info.mockReset().mockResolvedValue({
+    channel: { name: "dm", is_im: true },
+  });
+  client.conversations.replies.mockReset().mockResolvedValue({ messages: [] });
+  client.conversations.history.mockReset().mockResolvedValue({ messages: [] });
+  client.users.info.mockReset().mockResolvedValue({
+    user: { profile: { display_name: "Ada" } },
+  });
+  client.assistant.threads.setStatus.mockReset().mockResolvedValue({ ok: true });
   getSlackHandlers()?.clear();
 }
 
@@ -230,6 +250,9 @@ vi.mock("./monitor/reply.runtime.js", async () => {
     "./monitor/reply.runtime.js",
   );
   type DispatchParams = Parameters<typeof actual.dispatchInboundMessage>[0];
+  type BufferedDispatchParams = Parameters<
+    typeof actual.dispatchReplyWithBufferedBlockDispatcher
+  >[0];
   type ReplyResolver = NonNullable<DispatchParams["replyResolver"]>;
   const replyResolver: ReplyResolver = (...args) =>
     slackTestState.replyMock(...args) as ReturnType<ReplyResolver>;
@@ -237,6 +260,11 @@ vi.mock("./monitor/reply.runtime.js", async () => {
     ...actual,
     dispatchInboundMessage: (params: Parameters<typeof actual.dispatchInboundMessage>[0]) =>
       actual.dispatchInboundMessage({
+        ...params,
+        replyResolver,
+      }),
+    dispatchReplyWithBufferedBlockDispatcher: (params: BufferedDispatchParams) =>
+      actual.dispatchReplyWithBufferedBlockDispatcher({
         ...params,
         replyResolver,
       }),

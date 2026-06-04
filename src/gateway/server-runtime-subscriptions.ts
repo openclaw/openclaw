@@ -1,3 +1,4 @@
+// Gateway event subscription wiring for agent, heartbeat, transcript, and lifecycle broadcasts.
 import { clearAgentRunContext, onAgentEvent } from "../infra/agent-events.js";
 import { onHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { onSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
@@ -10,6 +11,7 @@ import type {
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
 
+/** Register gateway runtime event subscriptions and return unsubscribe handles. */
 export function startGatewayEventSubscriptions(params: {
   broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
   broadcastToConnIds: (
@@ -30,6 +32,7 @@ export function startGatewayEventSubscriptions(params: {
     ReturnType<typeof import("./server-chat.js").createAgentEventHandler>
   > | null = null;
   const getAgentEventHandler = () => {
+    // Lazy-load heavy chat modules only after the first agent event reaches the gateway.
     agentEventHandlerPromise ??= Promise.all([
       import("./server-chat.js"),
       import("./server-session-key.js"),
@@ -44,6 +47,18 @@ export function startGatewayEventSubscriptions(params: {
         clearAgentRunContext,
         toolEventRecipients: params.toolEventRecipients,
         sessionEventSubscribers: params.sessionEventSubscribers,
+        sessionMessageSubscribers: params.sessionMessageSubscribers,
+        clearTrackedActiveRun: ({ runId, clientRunId }) => {
+          const candidateRunIds = runId === clientRunId ? [runId] : [runId, clientRunId];
+          for (const candidateRunId of candidateRunIds) {
+            const entry = params.chatAbortControllers.get(candidateRunId);
+            // Chat abort entries can hold the requested key while chat run
+            // state holds the canonical key; the run ids are the scoped match.
+            if (entry) {
+              entry.projectSessionActive = false;
+            }
+          }
+        },
         isChatSendRunActive: (runId) => {
           const entry = params.chatAbortControllers.get(runId);
           return entry !== undefined && entry.kind !== "agent";
@@ -53,11 +68,18 @@ export function startGatewayEventSubscriptions(params: {
     return agentEventHandlerPromise;
   };
 
+  let sessionEventsModulePromise: Promise<typeof import("./server-session-events.js")> | null =
+    null;
+  const getSessionEventsModule = () => {
+    sessionEventsModulePromise ??= import("./server-session-events.js");
+    return sessionEventsModulePromise;
+  };
+
   let transcriptUpdateHandlerPromise: Promise<
     ReturnType<typeof import("./server-session-events.js").createTranscriptUpdateBroadcastHandler>
   > | null = null;
   const getTranscriptUpdateHandler = () => {
-    transcriptUpdateHandlerPromise ??= import("./server-session-events.js").then(
+    transcriptUpdateHandlerPromise ??= getSessionEventsModule().then(
       ({ createTranscriptUpdateBroadcastHandler }) =>
         createTranscriptUpdateBroadcastHandler({
           broadcastToConnIds: params.broadcastToConnIds,
@@ -72,7 +94,7 @@ export function startGatewayEventSubscriptions(params: {
     ReturnType<typeof import("./server-session-events.js").createLifecycleEventBroadcastHandler>
   > | null = null;
   const getLifecycleEventHandler = () => {
-    lifecycleEventHandlerPromise ??= import("./server-session-events.js").then(
+    lifecycleEventHandlerPromise ??= getSessionEventsModule().then(
       ({ createLifecycleEventBroadcastHandler }) =>
         createLifecycleEventBroadcastHandler({
           broadcastToConnIds: params.broadcastToConnIds,

@@ -64,6 +64,7 @@ describe("native PDF provider API calls", () => {
 
   afterEach(() => {
     global.fetch = priorFetch;
+    vi.unstubAllEnvs();
   });
 
   it("anthropicAnalyzePdf sends correct request shape", async () => {
@@ -99,6 +100,21 @@ describe("native PDF provider API calls", () => {
     expect(body.messages[0].content[1].type).toBe("text");
   });
 
+  it("anthropicAnalyzePdf honors ANTHROPIC_BASE_URL when no base URL is configured", async () => {
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://anthropic-pdf-proxy.example/v1");
+    const fetchMock = mockFetchResponse({
+      ok: true,
+      json: async () => ({
+        content: [{ type: "text", text: "Analysis of PDF" }],
+      }),
+    });
+
+    await pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams());
+
+    const [url] = firstFetchCall(fetchMock) as [string];
+    expect(url).toBe("https://anthropic-pdf-proxy.example/v1/messages");
+  });
+
   it("anthropicAnalyzePdf throws on API error", async () => {
     mockFetchResponse({
       ok: false,
@@ -110,6 +126,69 @@ describe("native PDF provider API calls", () => {
     await expect(
       pdfNativeProviders.anthropicAnalyzePdf(makeAnthropicAnalyzeParams()),
     ).rejects.toThrow("Anthropic PDF request failed");
+  });
+
+  it("bounds large Anthropic API error bodies", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(`${"x".repeat(9_000)}tail-marker`));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    mockFetchResponse(
+      new Response(body, {
+        status: 400,
+        statusText: "Bad Request",
+      }),
+    );
+
+    const error = await pdfNativeProviders
+      .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
+      .catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected Anthropic PDF request to throw an Error");
+    }
+    expect(error.message).toContain("Anthropic PDF request failed");
+    expect(error.message).not.toContain("tail-marker");
+    expect(error.message.length).toBeLessThan(500);
+    expect(canceled).toBe(true);
+  });
+
+  it("cancels Anthropic API error bodies that exactly fill the byte cap", async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("x".repeat(8 * 1024)));
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    mockFetchResponse(
+      new Response(body, {
+        status: 400,
+        statusText: "Bad Request",
+      }),
+    );
+
+    const error = await Promise.race([
+      pdfNativeProviders
+        .anthropicAnalyzePdf(makeAnthropicAnalyzeParams())
+        .catch((caught: unknown) => caught),
+      new Promise<Error>((_resolve, reject) => {
+        setTimeout(() => reject(new Error("timed out waiting for bounded error body")), 500);
+      }),
+    ]);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected Anthropic PDF request to throw an Error");
+    }
+    expect(error.message).toContain("Anthropic PDF request failed");
+    expect(canceled).toBe(true);
   });
 
   it("anthropicAnalyzePdf throws when response has no text", async () => {

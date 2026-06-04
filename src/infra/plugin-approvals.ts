@@ -1,5 +1,18 @@
+// Defines plugin approval request/resolution payloads and actions.
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
+// Plugin approval types and renderers mirror exec approval decisions while
+// keeping plugin-facing request text and action metadata separate.
+/** Button/action metadata shown with a plugin approval request. */
+export type PluginApprovalActionView = {
+  kind?: "command" | "decision";
+  label: string;
+  command: string;
+  decision?: ExecApprovalDecision;
+  style?: "primary" | "secondary" | "success" | "danger";
+};
+
+/** Request payload supplied by plugin approval callers. */
 export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
   title: string;
@@ -8,6 +21,7 @@ export type PluginApprovalRequestPayload = {
   toolName?: string | null;
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
+  actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
   turnSourceChannel?: string | null;
@@ -16,6 +30,7 @@ export type PluginApprovalRequestPayload = {
   turnSourceThreadId?: string | number | null;
 };
 
+/** Timed plugin approval request persisted while awaiting a decision. */
 export type PluginApprovalRequest = {
   id: string;
   request: PluginApprovalRequestPayload;
@@ -23,6 +38,7 @@ export type PluginApprovalRequest = {
   expiresAtMs: number;
 };
 
+/** Resolved plugin approval decision plus optional request snapshot. */
 export type PluginApprovalResolved = {
   id: string;
   decision: ExecApprovalDecision;
@@ -50,6 +66,16 @@ export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
 
+/** Clamp a plugin approval timeout to the supported runtime bounds. */
+export function resolvePluginApprovalTimeoutMs(value: unknown): number {
+  const candidate =
+    typeof value === "number" && Number.isFinite(value)
+      ? value
+      : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+  return Math.min(MAX_PLUGIN_APPROVAL_TIMEOUT_MS, Math.max(1, Math.floor(candidate)));
+}
+
+/** Format an approval decision for user-facing messages. */
 export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
   if (decision === "allow-once") {
     return "allowed once";
@@ -60,6 +86,7 @@ export function approvalDecisionLabel(decision: ExecApprovalDecision): string {
   return "denied";
 }
 
+/** Resolve explicit plugin approval decisions or fall back to defaults. */
 export function resolvePluginApprovalRequestAllowedDecisions(params?: {
   allowedDecisions?: readonly ExecApprovalDecision[] | readonly string[] | null;
 }): readonly ExecApprovalDecision[] {
@@ -3656,6 +3683,7 @@ function isSystemPath(path: string): boolean {
   return SYSTEM_PATH_RE.test(path);
 }
 
+/** Build the pending plugin approval message. */
 export function buildPluginApprovalRequestMessage(
   request: PluginApprovalRequest,
   nowMsValue: number,
@@ -3708,12 +3736,14 @@ export function buildPluginApprovalRequestMessage(
   return lines.join("\n");
 }
 
+/** Build the plugin approval resolution message. */
 export function buildPluginApprovalResolvedMessage(resolved: PluginApprovalResolved): string {
   const base = `✅ Plugin approval ${approvalDecisionLabel(resolved.decision)}.`;
   const by = resolved.resolvedBy ? ` Resolved by ${resolved.resolvedBy}.` : "";
   return `${base}${by} ID: ${resolved.id}`;
 }
 
+/** Build the plugin approval expiration message. */
 export function buildPluginApprovalExpiredMessage(request: PluginApprovalRequest): string {
   return `⏱️ Plugin approval expired. ID: ${request.id}`;
 }

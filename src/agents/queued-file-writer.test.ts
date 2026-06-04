@@ -1,3 +1,4 @@
+// Verifies queued file writes keep append logs bounded and symlink-safe.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -7,6 +8,7 @@ import { getQueuedFileWriter, resolveQueuedFileAppendFlags } from "./queued-file
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
+  // Real temp dirs let symlink and permission checks exercise filesystem behavior.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-queued-writer-"));
   tempDirs.push(dir);
   return dir;
@@ -56,6 +58,7 @@ describe("getQueuedFileWriter", () => {
   });
 
   it("refuses to append through a symlinked parent directory", async () => {
+    // Parent directory symlinks are as dangerous as leaf-file symlinks.
     const tmpDir = makeTempDir();
     const targetDir = path.join(tmpDir, "target");
     const linkDir = path.join(tmpDir, "link");
@@ -91,5 +94,35 @@ describe("getQueuedFileWriter", () => {
     await writer.flush();
 
     expect(fs.readFileSync(filePath, "utf8")).toBe("12345\n");
+  });
+
+  it("reports pending queue diagnostics before flush drains writes", async () => {
+    const tmpDir = makeTempDir();
+    const filePath = path.join(tmpDir, "trace.jsonl");
+    const writer = getQueuedFileWriter(new Map(), filePath, {
+      maxFileBytes: 1024,
+      maxQueuedBytes: 1024,
+      yieldBeforeWrite: true,
+    });
+
+    writer.write("line\n");
+
+    expect(writer.describeQueue?.()).toEqual({
+      pendingWrites: 1,
+      queuedBytes: 5,
+      activeOperation: "idle",
+      activeWriteBytes: undefined,
+      maxFileBytes: 1024,
+      maxQueuedBytes: 1024,
+      yieldBeforeWrite: true,
+    });
+
+    await writer.flush();
+
+    expect(writer.describeQueue?.()).toMatchObject({
+      pendingWrites: 0,
+      queuedBytes: 0,
+      activeOperation: "idle",
+    });
   });
 });

@@ -1,7 +1,7 @@
 import { CURRENT_MESSAGE_MARKER } from "openclaw/plugin-sdk/channel-mention-gating";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
-import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-dedupe";
 import { HISTORY_CONTEXT_MARKER } from "openclaw/plugin-sdk/reply-history";
+import { resetInboundDedupe } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   defaultSlackTestConfig,
@@ -518,11 +518,12 @@ describe("monitorSlackProvider tool results", () => {
     expect(sendMock).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps always-on channel messages private by default", async () => {
+  it("keeps always-on channel messages private when group visible replies use message_tool", async () => {
     slackTestState.config = {
       messages: {
         ackReaction: "👀",
         ackReactionScope: "all",
+        groupChat: { visibleReplies: "message_tool" },
         statusReactions: {
           enabled: true,
           timing: { debounceMs: 0, doneHoldMs: 0, errorHoldMs: 0 },

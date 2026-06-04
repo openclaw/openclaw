@@ -1,3 +1,4 @@
+/** Verifies provider runtime discovery includes synthetic-auth provider hooks. */
 import { describe, expect, it, vi } from "vitest";
 
 const resolveProviderRuntimePlugin = vi.hoisted(() => vi.fn(() => undefined));
@@ -52,17 +53,22 @@ vi.mock("./provider-discovery.runtime.js", () => ({
   resolvePluginDiscoveryProvidersRuntime,
 }));
 
-vi.mock("./providers.js", () => ({
-  resolveCatalogHookProviderPluginIds: vi.fn(() => []),
-  resolveExternalAuthProfileCompatFallbackPluginIds: vi.fn(() => []),
-  resolveExternalAuthProfileProviderPluginIds: vi.fn(() => []),
-  resolveOwningPluginIdsForProvider: vi.fn(({ provider }: { provider: string }) =>
+const resolveProviderOwnerIds = vi.hoisted(() =>
+  vi.fn(({ provider }: { provider: string }) =>
     provider === "ollama"
       ? ["ollama"]
       : provider === "anthropic-vertex"
         ? ["anthropic-vertex"]
         : [],
   ),
+);
+
+vi.mock("./providers.js", () => ({
+  resolveCatalogHookProviderPluginIds: vi.fn(() => []),
+  resolveExternalAuthProfileCompatFallbackPluginIds: vi.fn(() => []),
+  resolveExternalAuthProfileProviderPluginIds: vi.fn(() => []),
+  resolveOwningPluginIdsForProvider: resolveProviderOwnerIds,
+  resolveOwningPluginIdsForProviderRef: resolveProviderOwnerIds,
 }));
 
 import { resolveProviderSyntheticAuthWithPlugin } from "./provider-runtime.js";

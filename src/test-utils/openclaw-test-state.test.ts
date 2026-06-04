@@ -1,6 +1,8 @@
+// Tests isolated OpenClaw test-state setup and cleanup behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { createOpenClawTestState, withOpenClawTestState } from "./openclaw-test-state.js";
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -68,9 +70,7 @@ describe("openclaw test state", () => {
 
   it("clears inherited agent-dir overrides by default", async () => {
     const previousAgentDir = process.env.OPENCLAW_AGENT_DIR;
-    const previousPiAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.OPENCLAW_AGENT_DIR = "/tmp/outside-openclaw-agent";
-    process.env.PI_CODING_AGENT_DIR = "/tmp/outside-pi-agent";
 
     try {
       const state = await createOpenClawTestState({
@@ -79,26 +79,18 @@ describe("openclaw test state", () => {
 
       try {
         expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
-        expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
         expect(state.env.OPENCLAW_AGENT_DIR).toBeUndefined();
-        expect(state.env.PI_CODING_AGENT_DIR).toBeUndefined();
         expect(state.agentDir()).toBe(path.join(state.stateDir, "agents", "main", "agent"));
       } finally {
         await state.cleanup();
       }
 
       expect(process.env.OPENCLAW_AGENT_DIR).toBe("/tmp/outside-openclaw-agent");
-      expect(process.env.PI_CODING_AGENT_DIR).toBe("/tmp/outside-pi-agent");
     } finally {
       if (previousAgentDir === undefined) {
         delete process.env.OPENCLAW_AGENT_DIR;
       } else {
         process.env.OPENCLAW_AGENT_DIR = previousAgentDir;
-      }
-      if (previousPiAgentDir === undefined) {
-        delete process.env.PI_CODING_AGENT_DIR;
-      } else {
-        process.env.PI_CODING_AGENT_DIR = previousPiAgentDir;
       }
     }
   });
@@ -108,14 +100,11 @@ describe("openclaw test state", () => {
       {
         env: {
           OPENCLAW_AGENT_DIR: "/tmp/explicit-openclaw-agent",
-          PI_CODING_AGENT_DIR: "/tmp/explicit-pi-agent",
         },
       },
       async (state) => {
         expect(process.env.OPENCLAW_AGENT_DIR).toBe("/tmp/explicit-openclaw-agent");
-        expect(process.env.PI_CODING_AGENT_DIR).toBe("/tmp/explicit-pi-agent");
         expect(state.env.OPENCLAW_AGENT_DIR).toBe("/tmp/explicit-openclaw-agent");
-        expect(state.env.PI_CODING_AGENT_DIR).toBe("/tmp/explicit-pi-agent");
       },
     );
   });
@@ -127,9 +116,7 @@ describe("openclaw test state", () => {
       },
       async (state) => {
         expect(process.env.OPENCLAW_AGENT_DIR).toBe(state.agentDir());
-        expect(process.env.PI_CODING_AGENT_DIR).toBe(state.agentDir());
         expect(state.env.OPENCLAW_AGENT_DIR).toBe(state.agentDir());
-        expect(state.env.PI_CODING_AGENT_DIR).toBe(state.agentDir());
       },
     );
   });
@@ -158,13 +145,10 @@ describe("openclaw test state", () => {
           },
         });
 
-        expect(profilePath).toBe(path.join(state.agentDir(), "auth-profiles.json"));
-        const profiles = JSON.parse(await fs.readFile(profilePath, "utf8")) as {
-          version?: unknown;
-          profiles?: Record<string, { provider?: unknown }>;
-        };
-        expect(profiles.version).toBe(1);
-        expect(profiles.profiles?.["openai:test"]?.provider).toBe("openai");
+        expect(profilePath).toBe(path.join(state.agentDir(), "openclaw-agent.sqlite"));
+        const profiles = loadPersistedAuthProfileStore(state.agentDir());
+        expect(profiles?.version).toBe(1);
+        expect(profiles?.profiles["openai:test"]?.provider).toBe("openai");
       },
     );
   });

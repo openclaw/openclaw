@@ -71,6 +71,15 @@ describe("parseOcPath", () => {
     expectOcPathError(() => parseOcPath("oc://SOUL.md/a/b/c/d/e"), "OC_PATH_TOO_DEEP");
   });
 
+  it("normalizes deep JSON paths into dotted subsegments", () => {
+    expect(parseOcPath("oc://openclaw.json/agents/list/8/tools/exec/security")).toEqual({
+      file: "openclaw.json",
+      section: "agents.list.8.tools",
+      item: "exec",
+      field: "security",
+    });
+  });
+
   it("rejects non-string input", () => {
     expectOcPathError(() => parseOcPath(123 as unknown as string), "OC_PATH_NOT_STRING");
   });

@@ -15,8 +15,11 @@ describe("nvidia onboard", () => {
     expect(provider.baseUrl).toBe("https://integrate.api.nvidia.com/v1");
     expect(provider.api).toBe("openai-completions");
     expect(provider.models.map((model) => model.id)).toEqual([
+      "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
+      "minimaxai/minimax-m2.7",
+      "z-ai/glm-5.1",
       "minimaxai/minimax-m2.5",
       "z-ai/glm5",
     ]);
@@ -24,7 +27,7 @@ describe("nvidia onboard", () => {
     // form via preserveLiteralProviderPrefix.
     expectProviderOnboardPrimaryModel({
       applyConfig: applyNvidiaConfig,
-      modelRef: "nvidia/nemotron-3-super-120b-a12b",
+      modelRef: "nvidia/nemotron-3-ultra-550b-a55b",
     });
   });
 
@@ -40,8 +43,11 @@ describe("nvidia onboard", () => {
     });
     expect(provider?.models.map((model) => model.id)).toEqual([
       "nvidia/custom-model",
+      "nvidia/nemotron-3-ultra-550b-a55b",
       "nvidia/nemotron-3-super-120b-a12b",
       "moonshotai/kimi-k2.5",
+      "minimaxai/minimax-m2.7",
+      "z-ai/glm-5.1",
       "minimaxai/minimax-m2.5",
       "z-ai/glm5",
     ]);

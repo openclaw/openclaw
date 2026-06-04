@@ -1,10 +1,17 @@
-import type { AgentMessage } from "@earendil-works/pi-agent-core";
+/**
+ * Agent harness tool/message hook helpers.
+ *
+ * Harnesses use this to dispatch after-tool-call and before-message-write hooks
+ * while isolating hook failures from the runtime path.
+ */
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
-import { consumeAdjustedParamsForToolCall } from "../pi-tools.before-tool-call.js";
+import { consumeAdjustedParamsForToolCall } from "../agent-tools.before-tool-call.js";
+import type { AgentMessage } from "../runtime/index.js";
 
 const log = createSubsystemLogger("agents/harness");
 
+/** Runs best-effort after-tool-call hooks for a completed tool invocation. */
 export async function runAgentHarnessAfterToolCallHook(params: {
   toolName: string;
   toolCallId: string;
@@ -23,6 +30,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
     return;
   }
   const adjustedArgs = consumeAdjustedParamsForToolCall(params.toolCallId, params.runId);
+  // Hooks should see adjusted tool params when before_tool_call rewrote them.
   const eventArgs =
     adjustedArgs && typeof adjustedArgs === "object"
       ? (adjustedArgs as Record<string, unknown>)
@@ -53,6 +61,7 @@ export async function runAgentHarnessAfterToolCallHook(params: {
   }
 }
 
+/** Runs before-message-write hooks and returns the possibly rewritten message. */
 export function runAgentHarnessBeforeMessageWriteHook(params: {
   message: AgentMessage;
   agentId?: string;

@@ -54,16 +54,16 @@ Legend:
 
 ### Media delivery with block streaming
 
-`MEDIA:` directives are normal delivery metadata. When block streaming sends a
-media block early, OpenClaw remembers that delivery for the turn. If the final
-assistant payload repeats the same media URL, the final delivery strips the
-duplicate media instead of sending the attachment again.
+Streaming media must use structured payload fields such as `mediaUrl` or
+`mediaUrls`; streamed text is not parsed as an attachment command. When block
+streaming sends media early, OpenClaw remembers that delivery for the turn. If
+the final assistant payload repeats the same media URL, the final delivery
+strips the duplicate media instead of sending the attachment again.
 
 Exact duplicate final payloads are suppressed. If the final payload adds
 distinct text around media that was already streamed, OpenClaw still sends the
 new text while keeping the media single-delivery. This prevents duplicate voice
-notes or files on channels such as Telegram when an agent emits `MEDIA:` during
-streaming and the provider also includes it in the completed reply.
+notes or files on channels such as Telegram.
 
 ## Chunking algorithm (low/high bounds)
 
@@ -196,6 +196,12 @@ Matrix:
 ### Tool-progress preview updates
 
 Preview streaming can also include **tool-progress** updates - short status lines like "searching the web", "reading file", or "calling tool" - that appear in the same preview message while tools are running, ahead of the final reply. In Codex app-server mode, Codex preamble/commentary messages use this same preview path, so short "I am checking..." progress notes can stream into the editable draft without becoming part of the final answer. This keeps multi-step tool turns visually alive rather than silent between the first thinking preview and the final answer.
+
+Long-running tools may emit typed progress before they return. For example,
+`web_fetch` arms a five-second timer when it starts: if the fetch is still
+pending, the preview can show `Fetching page content...`; if the fetch finishes
+or is canceled before then, no progress line is emitted. The later final tool
+result is still delivered normally to the model.
 
 Supported surfaces:
 

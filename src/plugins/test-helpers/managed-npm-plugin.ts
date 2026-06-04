@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
+import { resolvePluginNpmProjectDir } from "../install-paths.js";
 
+/** Writes a managed npm plugin fixture and returns its package directory. */
 export function writeManagedNpmPlugin(params: {
   stateDir: string;
   packageName: string;
@@ -8,8 +10,16 @@ export function writeManagedNpmPlugin(params: {
   version: string;
   name?: string;
   dependencySpec?: string;
+  layout?: "project" | "legacy";
 }): string {
-  const npmRoot = path.join(params.stateDir, "npm");
+  const npmBaseDir = path.join(params.stateDir, "npm");
+  const npmRoot =
+    params.layout === "legacy"
+      ? npmBaseDir
+      : resolvePluginNpmProjectDir({
+          npmDir: npmBaseDir,
+          packageName: params.packageName,
+        });
   const rootManifestPath = path.join(npmRoot, "package.json");
   fs.mkdirSync(npmRoot, { recursive: true });
   const rootManifest = fs.existsSync(rootManifestPath)
@@ -34,7 +44,7 @@ export function writeManagedNpmPlugin(params: {
     "utf8",
   );
 
-  const packageDir = path.join(npmRoot, "node_modules", params.packageName);
+  const packageDir = path.join(npmRoot, "node_modules", ...params.packageName.split("/"));
   fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
   fs.writeFileSync(
     path.join(packageDir, "package.json"),

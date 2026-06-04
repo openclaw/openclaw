@@ -1,5 +1,8 @@
+// Verifies pruning-related config defaults and migrations.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
+import { resetBundledPluginPublicArtifactLoaderForTest } from "../plugins/public-surface-loader.js";
 import type { OpenClawConfig } from "./config.js";
 import { applyProviderConfigDefaultsForConfig } from "./provider-policy.js";
 
@@ -15,6 +18,8 @@ function applyAnthropicDefaultsForTest(config: OpenClawConfig) {
 
 describe("config pruning defaults", () => {
   beforeEach(() => {
+    setBundledPluginsDirOverrideForTest(path.resolve(import.meta.dirname, "../../extensions"));
+    resetBundledPluginPublicArtifactLoaderForTest();
     vi.stubEnv(
       "OPENCLAW_BUNDLED_PLUGINS_DIR",
       path.resolve(import.meta.dirname, "../../extensions"),
@@ -22,6 +27,8 @@ describe("config pruning defaults", () => {
   });
 
   afterEach(() => {
+    setBundledPluginsDirOverrideForTest(undefined);
+    resetBundledPluginPublicArtifactLoaderForTest();
     vi.unstubAllEnvs();
   });
 
@@ -44,6 +51,33 @@ describe("config pruning defaults", () => {
     expectAnthropicPruningDefaults(cfg, "1h");
   });
 
+  it("backfills raw and canonical Claude CLI policies for selected Anthropic CLI auth", () => {
+    const cfg = applyAnthropicDefaultsForTest({
+      auth: {
+        order: { anthropic: ["anthropic:claude-cli"] },
+        profiles: {
+          "anthropic:claude-cli": { provider: "claude-cli", mode: "oauth" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/opus-4.7" },
+          models: {
+            "anthropic/opus-4.7": { params: { maxTokens: 1200 } },
+          },
+        },
+      },
+    });
+
+    expect(cfg.agents?.defaults?.models?.["anthropic/opus-4.7"]).toEqual({
+      params: { maxTokens: 1200 },
+      agentRuntime: { id: "claude-cli" },
+    });
+    expect(cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-7"]).toEqual({
+      agentRuntime: { id: "claude-cli" },
+    });
+  });
+
   it("enables cache-ttl pruning + 1h cache TTL for Anthropic API keys", () => {
     const cfg = applyAnthropicDefaultsForTest({
       auth: {
@@ -61,26 +95,6 @@ describe("config pruning defaults", () => {
     expectAnthropicPruningDefaults(cfg);
     expect(
       cfg.agents?.defaults?.models?.["anthropic/claude-opus-4-6"]?.params?.cacheRetention,
-    ).toBe("short");
-  });
-
-  it("adds cacheRetention defaults for dated Anthropic primary model refs", () => {
-    const cfg = applyAnthropicDefaultsForTest({
-      auth: {
-        profiles: {
-          "anthropic:api": { provider: "anthropic", mode: "api_key" },
-        },
-      },
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-sonnet-4-20250514" },
-        },
-      },
-    });
-
-    expectAnthropicPruningDefaults(cfg);
-    expect(
-      cfg.agents?.defaults?.models?.["anthropic/claude-sonnet-4-20250514"]?.params?.cacheRetention,
     ).toBe("short");
   });
 

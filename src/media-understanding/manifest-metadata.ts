@@ -3,6 +3,7 @@ import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligi
 import { normalizeMediaProviderId } from "./provider-id.js";
 import type { MediaUnderstandingProvider } from "./types.js";
 
+/** Builds a media provider registry from trusted manifest metadata without loading plugin code. */
 export function buildMediaUnderstandingManifestMetadataRegistry(
   cfg?: OpenClawConfig,
   workspaceDir?: string,
@@ -14,6 +15,7 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
     ...(workspaceDir ? { workspaceDir } : {}),
   });
   for (const plugin of snapshot.plugins) {
+    // Metadata only counts when the manifest also declares the provider contract.
     const declaredProviders = new Set(
       (plugin.contracts?.mediaUnderstandingProviders ?? []).map((providerId) =>
         normalizeMediaProviderId(providerId),
@@ -32,6 +34,7 @@ export function buildMediaUnderstandingManifestMetadataRegistry(
         defaultModels: metadata.defaultModels,
         autoPriority: metadata.autoPriority,
         nativeDocumentInputs: metadata.nativeDocumentInputs,
+        documentModels: metadata.documentModels,
       });
     }
   }

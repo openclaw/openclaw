@@ -1,3 +1,4 @@
+// Verifies provider request transport config normalization and sanitization.
 import { describe, expect, it } from "vitest";
 import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
 import type { SecretRef } from "../config/types.secrets.js";
@@ -15,6 +16,7 @@ import {
 
 describe("provider request config", () => {
   it("merges discovered, provider, and model headers in precedence order", () => {
+    // Later scopes override earlier scopes: discovery < provider < model.
     const resolved = resolveProviderRequestConfig({
       provider: "custom-openai",
       api: "openai-responses",
@@ -143,6 +145,7 @@ describe("provider request config", () => {
   });
 
   it("drops legacy Authorization when a custom auth header override is configured", () => {
+    // Custom auth headers replace stale Authorization to avoid double auth.
     const resolved = resolveProviderRequestConfig({
       provider: "custom-openai",
       api: "openai-responses",
@@ -458,6 +461,44 @@ describe("provider request config", () => {
       "X-OpenRouter-Categories":
         "cli-agent,cloud-agent,programming-app,creative-writing,writing-assistant,general-chat,personal-agent",
       "X-Custom": "1",
+    });
+  });
+
+  it("protects NVIDIA billing invoke origin on official NIM routes", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "custom-nim",
+      api: "openai-completions",
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: {
+        "X-BILLING-INVOKE-ORIGIN": "spoofed",
+        "X-Custom": "1",
+      },
+      precedence: "caller-wins",
+    });
+
+    expect(resolved).toEqual({
+      "X-BILLING-INVOKE-ORIGIN": "OpenClaw",
+      "X-Custom": "1",
+    });
+  });
+
+  it("does not attach NVIDIA billing invoke origin to custom proxy routes", () => {
+    const resolved = resolveProviderRequestHeaders({
+      provider: "nvidia",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com/v1",
+      capability: "llm",
+      transport: "stream",
+      callerHeaders: {
+        "X-BILLING-INVOKE-ORIGIN": "operator-value",
+      },
+      precedence: "caller-wins",
+    });
+
+    expect(resolved).toEqual({
+      "X-BILLING-INVOKE-ORIGIN": "operator-value",
     });
   });
 

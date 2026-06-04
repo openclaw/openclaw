@@ -88,7 +88,9 @@ function logCliBackendLiveStep(step: string, details?: Record<string, unknown>):
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function openAiProviderConfigForCodexCli(
@@ -375,7 +377,6 @@ describeLive("gateway live (cli backend)", () => {
                 ? { [modelSwitchTarget]: { agentRuntime: modelSelection.agentRuntime } }
                 : {}),
             },
-            agentRuntime: modelSelection.agentRuntime,
             cliBackends: {
               ...existingBackends,
               [providerId]: {
@@ -592,14 +593,12 @@ describeLive("gateway live (cli backend)", () => {
         if (enableCliMcpProbe) {
           logCliBackendLiveStep("cron-mcp-loopback-preflight:start", {
             sessionKey,
-            senderIsOwner: true,
           });
           await verifyCliCronMcpLoopbackPreflight({
             sessionKey,
             port,
             token,
             env: process.env,
-            senderIsOwner: true,
             expectedSchemaProbeToolName: schemaProbePluginPath
               ? MCP_SCHEMA_PROBE_TOOL_NAME
               : undefined,

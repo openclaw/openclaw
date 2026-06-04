@@ -1,3 +1,4 @@
+// Covers heartbeat commitment checks and runner scheduling behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -30,6 +31,7 @@ describe("runHeartbeatOnce commitments", () => {
     id: string;
     sessionKey: string;
     to: string;
+    dueWindow?: CommitmentRecord["dueWindow"];
     sourceUserText?: string;
     sourceAssistantText?: string;
   }): CommitmentRecord {
@@ -48,7 +50,7 @@ describe("runHeartbeatOnce commitments", () => {
       suggestedText: "How did the interview go?",
       dedupeKey: "interview:2026-04-28",
       confidence: 0.92,
-      dueWindow: {
+      dueWindow: params.dueWindow ?? {
         earliestMs: nowMs - 60_000,
         latestMs: nowMs + 60 * 60_000,
         timezone: "America/Los_Angeles",
@@ -76,6 +78,7 @@ describe("runHeartbeatOnce commitments", () => {
   async function setupCommitmentCase(params?: {
     replyText?: string;
     target?: "last" | "none";
+    dueWindow?: CommitmentRecord["dueWindow"];
     sourceUserText?: string;
     sourceAssistantText?: string;
     legacyRawSourceText?: boolean;
@@ -111,6 +114,7 @@ describe("runHeartbeatOnce commitments", () => {
             id: "cm_interview",
             sessionKey,
             to: "155462274",
+            dueWindow: params?.dueWindow,
             sourceUserText: params?.sourceUserText,
             sourceAssistantText: params?.sourceAssistantText,
           }),
@@ -207,7 +211,7 @@ describe("runHeartbeatOnce commitments", () => {
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });
 
-        const sendTelegram = vi.fn().mockResolvedValue({
+        const sendTelegramResult = vi.fn().mockResolvedValue({
           messageId: "m1",
           chatId: "stale-target",
         });
@@ -227,21 +231,21 @@ describe("runHeartbeatOnce commitments", () => {
           },
         );
 
-        const result = await runHeartbeatOnce({
+        const resultResult = await runHeartbeatOnce({
           cfg,
           agentId: "main",
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
+            telegram: sendTelegramResult,
             getQueueSize: () => 0,
             nowMs: () => nowMs,
           },
         });
 
         return {
-          result,
-          sendTelegram,
+          result: resultResult,
+          sendTelegram: sendTelegramResult,
           store: await loadCommitmentStore(),
         };
       },
@@ -285,7 +289,7 @@ describe("runHeartbeatOnce commitments", () => {
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });
 
-        const sendTelegram = vi.fn().mockResolvedValue({
+        const sendTelegramValue = vi.fn().mockResolvedValue({
           messageId: "m1",
           chatId: "155462274",
         });
@@ -304,21 +308,21 @@ describe("runHeartbeatOnce commitments", () => {
           },
         );
 
-        const result = await runHeartbeatOnce({
+        const resultValue = await runHeartbeatOnce({
           cfg,
           agentId: "main",
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
+            telegram: sendTelegramValue,
             getQueueSize: () => 0,
             nowMs: () => nowMs,
           },
         });
 
         return {
-          result,
-          sendTelegram,
+          result: resultValue,
+          sendTelegram: sendTelegramValue,
           store: await loadCommitmentStore(),
         };
       },
@@ -380,6 +384,25 @@ describe("runHeartbeatOnce commitments", () => {
 
   it("delivers due commitments to the original scope when heartbeat target is last", async () => {
     const { result, sendTelegram, store } = await setupCommitmentCase();
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalled();
+    expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("tolerates Date-invalid commitment due timestamps in heartbeat prompts", async () => {
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      dueWindow: {
+        earliestMs: nowMs - 60_000,
+        latestMs: 8_700_000_000_000_000,
+        timezone: "UTC",
+      },
+    });
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
@@ -493,7 +516,7 @@ tasks:
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });
 
-        const sendTelegram = vi.fn().mockResolvedValue({
+        const sendTelegramLocal = vi.fn().mockResolvedValue({
           messageId: "m1",
           chatId: "155462274",
         });
@@ -510,21 +533,21 @@ tasks:
           },
         );
 
-        const result = await runHeartbeatOnce({
+        const resultLocal = await runHeartbeatOnce({
           cfg,
           agentId: "main",
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
+            telegram: sendTelegramLocal,
             getQueueSize: () => 0,
             nowMs: () => nowMs,
           },
         });
 
         return {
-          result,
-          sendTelegram,
+          result: resultLocal,
+          sendTelegram: sendTelegramLocal,
           store: await loadCommitmentStore(),
         };
       },

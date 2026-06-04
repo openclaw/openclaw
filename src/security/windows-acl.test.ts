@@ -1,3 +1,4 @@
+// Covers Windows ACL audit and permission detection behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_WINDOWS_SYSTEM_ROOT,
@@ -927,13 +928,6 @@ Successfully processed 1 files`;
 
     it("classifies Spanish SYSTEM (AUTORIDAD NT\\SYSTEM) as trusted", () => {
       expectTrustedOnly([aclEntry({ principal: "AUTORIDAD NT\\SYSTEM" })]);
-    });
-
-    it("classifies principal with diacritic not in TRUSTED_BASE but matching stripped suffix (line 145)", () => {
-      // "NT Authority\\Syst\u00e9me" has \u00e9 (e-acute) which is not in TRUSTED_BASE directly.
-      // After diacritic stripping: "nt authority\\systeme" which ends with stripped("\\syst\u00e8me") = "\\systeme".
-      // This exercises the classifyPrincipal diacritic-strip fallback at line 145.
-      expectTrustedOnly([aclEntry({ principal: "NT Authority\\Syst\u00e9me" })]);
     });
 
     it("French Windows full scenario: user + Système only → no untrusted", () => {

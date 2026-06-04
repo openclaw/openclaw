@@ -1,3 +1,4 @@
+// Covers script-free npm install args and environment.
 import { describe, expect, it } from "vitest";
 import { createSafeNpmInstallArgs, createSafeNpmInstallEnv } from "./safe-package-install.js";
 
@@ -76,8 +77,9 @@ describe("safe npm install helpers", () => {
     expect(env.npm_config_yes).toBe("true");
     expect(env.npm_config_include_workspace_root).toBeUndefined();
     expect(env.npm_config_workspace).toBeUndefined();
-    expect(env["npm_config_min-release-age"]).toBe("0");
-    expect(env.npm_config_min_release_age).toBe("");
+    expect(env["npm_config_min-release-age"]).toBe("");
+    expect(env.npm_config_min_release_age).toBe("0");
+    expect(env.npm_config_before).toBe("");
   });
 
   it("does not inherit host legacy peer dependency mode by default", () => {

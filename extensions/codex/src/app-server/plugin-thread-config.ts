@@ -1,6 +1,13 @@
+/**
+ * Builds Codex thread config patches that expose only policy-approved
+ * plugin-owned apps for native Codex turns.
+ */
 import crypto from "node:crypto";
+import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   defaultCodexAppInventoryCache,
+  serializeCodexAppInventoryError,
+  type CodexAppInventorySnapshot,
   type CodexAppInventoryCache,
   type CodexAppInventoryRequest,
 } from "./app-inventory-cache.js";
@@ -17,10 +24,13 @@ import {
   readCodexPluginInventory,
   type CodexPluginInventory,
   type CodexPluginInventoryDiagnostic,
+  type CodexPluginInventoryRecord,
+  type CodexPluginOwnedApp,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
 import type { JsonObject, JsonValue } from "./protocol.js";
 
+/** Policy context for one app id exposed by a configured Codex plugin. */
 export type PluginAppPolicyContextEntry = {
   configKey: string;
   marketplaceName: ResolvedCodexPluginPolicy["marketplaceName"];
@@ -29,12 +39,14 @@ export type PluginAppPolicyContextEntry = {
   mcpServerNames: string[];
 };
 
+/** Stable app-to-plugin ownership context persisted with Codex thread bindings. */
 export type PluginAppPolicyContext = {
   fingerprint: string;
   apps: Record<string, PluginAppPolicyContextEntry>;
   pluginAppIds: Record<string, string[]>;
 };
 
+/** Diagnostic emitted while building app config for a native Codex thread. */
 export type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
   | {
@@ -43,6 +55,7 @@ export type CodexPluginThreadConfigDiagnostic =
       message: string;
     };
 
+/** Complete Codex thread config patch plus inventory and policy fingerprints. */
 export type CodexPluginThreadConfig = {
   enabled: boolean;
   configPatch?: JsonObject;
@@ -53,6 +66,7 @@ export type CodexPluginThreadConfig = {
   diagnostics: CodexPluginThreadConfigDiagnostic[];
 };
 
+/** Inputs for building a Codex thread app/plugin config patch. */
 export type BuildCodexPluginThreadConfigParams = {
   pluginConfig?: unknown;
   request: CodexPluginRuntimeRequest;
@@ -64,10 +78,12 @@ export type BuildCodexPluginThreadConfigParams = {
 const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 1;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 1;
 
+/** Returns true when plugin config exists and thread config may need app patches. */
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
   return resolveCodexPluginsPolicy(pluginConfig).configured;
 }
 
+/** Fingerprints policy and app-cache identity before runtime inventory is read. */
 export function buildCodexPluginThreadConfigInputFingerprint(params: {
   pluginConfig?: unknown;
   appCacheKey?: string;
@@ -80,6 +96,7 @@ export function buildCodexPluginThreadConfigInputFingerprint(params: {
   });
 }
 
+/** Builds the Codex apps config patch and policy context for a native thread. */
 export async function buildCodexPluginThreadConfig(
   params: BuildCodexPluginThreadConfigParams,
 ): Promise<CodexPluginThreadConfig> {
@@ -104,9 +121,13 @@ export async function buildCodexPluginThreadConfig(
     appCache,
     appCacheKey: params.appCacheKey,
     nowMs: params.nowMs,
+    suppressAppInventoryRefresh: true,
   });
   if (shouldWaitForInitialAppInventory(params, policy, inventory)) {
-    await refreshAppInventoryNow(params, appCache);
+    await refreshAppInventoryNow(params, appCache, {
+      forceRefetch: true,
+      reason: "initial_missing",
+    });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
@@ -142,7 +163,28 @@ export async function buildCodexPluginThreadConfig(
     }
   }
   if (activationResults.some((activation) => activation.ok && activation.installAttempted)) {
-    await refreshAppInventoryNow(params, appCache, { forceRefetch: true });
+    await refreshAppInventoryNow(params, appCache, {
+      forceRefetch: true,
+      reason: "post_install",
+    });
+    inventory = await readCodexPluginInventory({
+      pluginConfig: params.pluginConfig,
+      policy,
+      request: params.request,
+      appCache,
+      appCacheKey: params.appCacheKey,
+      nowMs: params.nowMs,
+    });
+    inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
+      pluginConfig: params.pluginConfig,
+      appCacheKey: params.appCacheKey,
+    });
+  }
+  if (shouldForceRefreshForNotReadyPluginApps(params, policy, inventory)) {
+    await refreshAppInventoryNow(params, appCache, {
+      forceRefetch: true,
+      reason: "not_ready_plugin_apps",
+    });
     inventory = await readCodexPluginInventory({
       pluginConfig: params.pluginConfig,
       policy,
@@ -183,7 +225,7 @@ export async function buildCodexPluginThreadConfig(
       continue;
     }
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
-    for (const app of record.apps) {
+    for (const app of resolveThreadConfigAppsForRecord({ record, inventory })) {
       if (!app.accessible || !app.enabled) {
         diagnostics.push({
           code: "app_not_ready",
@@ -227,6 +269,7 @@ export async function buildCodexPluginThreadConfig(
   };
 }
 
+/** Deep-merges optional Codex thread config patches, returning undefined when empty. */
 export function mergeCodexThreadConfigs(
   ...configs: Array<JsonObject | undefined>
 ): JsonObject | undefined {
@@ -240,6 +283,7 @@ export function mergeCodexThreadConfigs(
   return merged && Object.keys(merged).length > 0 ? merged : undefined;
 }
 
+/** Detects when a stored thread binding no longer matches current plugin policy inputs. */
 export function isCodexPluginThreadBindingStale(params: {
   codexPluginsEnabled: boolean;
   bindingFingerprint?: string;
@@ -321,24 +365,60 @@ function shouldWaitForInitialAppInventory(
 async function refreshAppInventoryNow(
   params: BuildCodexPluginThreadConfigParams,
   appCache: CodexAppInventoryCache,
-  options: { forceRefetch?: boolean } = {},
-): Promise<void> {
+  options: { forceRefetch?: boolean; reason?: string } = {},
+): Promise<CodexAppInventorySnapshot | undefined> {
   const appCacheKey = params.appCacheKey;
   if (!appCacheKey) {
-    return;
+    return undefined;
   }
   const request: CodexAppInventoryRequest = async (method, requestParams) =>
     (await params.request(method, requestParams)) as Awaited<ReturnType<CodexAppInventoryRequest>>;
   try {
-    await appCache.refreshNow({
+    const snapshot = await appCache.refreshNow({
       key: appCacheKey,
       request,
       nowMs: params.nowMs,
       forceRefetch: options.forceRefetch,
     });
-  } catch {
-    // Keep the thread fail-closed if app/list refresh is unavailable.
+    return snapshot;
+  } catch (error) {
+    embeddedAgentLog.warn("codex plugin thread config app inventory refresh failed", {
+      reason: options.reason,
+      forceRefetch: options.forceRefetch === true,
+      error: serializeCodexAppInventoryError(error),
+    });
+    // Keep building from the diagnostic inventory state; app exposure remains scoped below.
+    return undefined;
   }
+}
+
+function resolveThreadConfigAppsForRecord(params: {
+  record: CodexPluginInventoryRecord;
+  inventory: CodexPluginInventory;
+}): CodexPluginOwnedApp[] {
+  if (params.inventory.appInventory?.state === "missing") {
+    return [];
+  }
+  return params.record.apps;
+}
+
+function shouldForceRefreshForNotReadyPluginApps(
+  params: BuildCodexPluginThreadConfigParams,
+  policy: ResolvedCodexPluginsPolicy,
+  inventory: CodexPluginInventory,
+): boolean {
+  if (!params.appCacheKey || !policy.pluginPolicies.some((plugin) => plugin.enabled)) {
+    return false;
+  }
+  if (inventory.appInventory?.state === "missing") {
+    return false;
+  }
+  return inventory.records.some(
+    (record) =>
+      record.appOwnership === "proven" &&
+      record.ownedAppIds.length > 0 &&
+      (record.apps.length === 0 || record.apps.some((app) => !app.accessible || !app.enabled)),
+  );
 }
 
 function policyFingerprint(policy: ResolvedCodexPluginsPolicy): JsonValue {
@@ -376,6 +456,8 @@ function fingerprintJson(value: JsonValue): string {
 }
 
 function stableStringify(value: JsonValue | undefined): string {
+  // Fingerprints must be process-stable across object insertion order so prompt
+  // cache and thread-binding comparisons do not churn between runs.
   if (Array.isArray(value)) {
     return `[${value.map((item) => stableStringify(item)).join(",")}]`;
   }

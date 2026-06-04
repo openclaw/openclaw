@@ -1,3 +1,5 @@
+/** Helpers for selecting image-generation providers and models in live tests. */
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   parseLiveCsvFilter,
@@ -6,10 +8,11 @@ import {
   resolveConfiguredLiveProviderModels,
   resolveLiveAuthStore,
 } from "../media-generation/live-test-helpers.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export { parseProviderModelMap, redactLiveApiKey };
 
+// Default provider/model matrix for image live tests. Provider env filters can
+// override these without changing test source.
 export const DEFAULT_LIVE_IMAGE_MODELS: Record<string, string> = {
   deepinfra: "deepinfra/black-forest-labs/FLUX-1-schnell",
   fal: "fal/fal-ai/flux/dev",
@@ -21,6 +24,8 @@ export const DEFAULT_LIVE_IMAGE_MODELS: Record<string, string> = {
   xai: "xai/grok-imagine-image",
 };
 
+// Case filters are intentionally lowercased because test case names are local
+// labels, unlike provider ids/models that may be case-sensitive.
 export function parseCaseFilter(raw?: string): Set<string> | null {
   const trimmed = raw?.trim();
   if (!trimmed || trimmed === "all") {

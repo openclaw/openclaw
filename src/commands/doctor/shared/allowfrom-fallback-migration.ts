@@ -1,8 +1,9 @@
+// Doctor migration from legacy DM allowFrom fallback to explicit groupAllowFrom lists.
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveChannelDmAllowFrom } from "../../../channels/plugins/dm-access.js";
 import { normalizeAnyChannelId } from "../../../channels/registry.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../../../config/bundled-channel-config-metadata.generated.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeStringEntries } from "../../../shared/string-normalization.js";
 import { getDoctorChannelCapabilities } from "../channel-capabilities.js";
 import { asObjectRecord } from "./object.js";
 
@@ -23,7 +24,7 @@ function isDisabled(record: ChannelRecord): boolean {
 }
 
 function normalizeAllowFrom(raw: unknown): string[] {
-  return Array.from(new Set(normalizeStringEntries(Array.isArray(raw) ? raw : [])));
+  return normalizeUniqueStringEntries(Array.isArray(raw) ? raw : []);
 }
 
 function readGroupAllowFrom(record: ChannelRecord): string[] {
@@ -53,7 +54,9 @@ function readOwnDmAllowFrom(params: { channelName: string; account: ChannelRecor
   );
 }
 
-function findGeneratedChannelConfigSchema(channelName: string): Record<string, unknown> | undefined {
+function findGeneratedChannelConfigSchema(
+  channelName: string,
+): Record<string, unknown> | undefined {
   const normalizedChannelId = normalizeAnyChannelId(channelName);
   return GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.find(
     (entry) => entry.channelId === channelName || entry.channelId === normalizedChannelId,
@@ -71,6 +74,7 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
 
   const anyOf = Array.isArray(node.anyOf) ? node.anyOf : undefined;
   if (anyOf) {
+    // Union schemas allow writes when at least one branch accepts the target config path.
     return anyOf.some((branch) => schemaAllowsConfigPath(branch, path));
   }
   const oneOf = Array.isArray(node.oneOf) ? node.oneOf : undefined;
@@ -79,16 +83,13 @@ function schemaAllowsConfigPath(schema: unknown, path: SchemaPath): boolean {
   }
   const allOf = Array.isArray(node.allOf) ? node.allOf : undefined;
   if (allOf) {
+    // Intersections must keep every branch valid before doctor writes a migrated key.
     return allOf.every((branch) => schemaAllowsConfigPath(branch, path));
   }
 
   const [segment, ...rest] = path;
   const properties = asObjectRecord(node.properties);
-  if (
-    segment !== ACCOUNT_SCHEMA_WILDCARD &&
-    properties &&
-    Object.prototype.hasOwnProperty.call(properties, segment)
-  ) {
+  if (segment !== ACCOUNT_SCHEMA_WILDCARD && properties && Object.hasOwn(properties, segment)) {
     return schemaAllowsConfigPath(properties[segment], rest);
   }
 
@@ -141,6 +142,7 @@ function migrateRecord(params: {
   return true;
 }
 
+/** Copy legacy allowFrom entries into groupAllowFrom where channel metadata permits fallback. */
 export function maybeRepairGroupAllowFromFallback(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];

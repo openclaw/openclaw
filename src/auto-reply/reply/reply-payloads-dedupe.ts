@@ -1,5 +1,10 @@
-import { isMessagingToolDuplicate } from "../../agents/pi-embedded-helpers.js";
-import type { MessagingToolSend } from "../../agents/pi-embedded-messaging.types.js";
+/** De-duplicates assistant reply payloads against message-tool sends on the same route. */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { isMessagingToolDuplicate } from "../../agents/embedded-agent-helpers.js";
+import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded-read.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
@@ -9,12 +14,9 @@ import {
   type ChannelRouteTargetInput,
 } from "../../plugin-sdk/channel-route.js";
 import { normalizeOptionalAccountId } from "../../routing/account-id.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import type { ReplyPayload } from "../types.js";
 
+/** Removes text payloads already sent by message tools. */
 export function filterMessagingToolDuplicates(params: {
   payloads: ReplyPayload[];
   sentTexts: string[];
@@ -31,6 +33,7 @@ export function filterMessagingToolDuplicates(params: {
   });
 }
 
+/** Removes media payload URLs already sent by message tools. */
 export function filterMessagingToolMediaDuplicates(params: {
   payloads: ReplyPayload[];
   sentMediaUrls: string[];
@@ -194,6 +197,7 @@ function targetsMatchForDedupe(params: {
   return params.targetKey === params.originTarget;
 }
 
+/** Returns true when message-tool route evidence says source replies should be deduped. */
 export function shouldDedupeMessagingToolRepliesForRoute(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
@@ -203,6 +207,7 @@ export function shouldDedupeMessagingToolRepliesForRoute(params: {
   return getMatchingMessagingToolReplyTargets(params).length > 0;
 }
 
+/** Finds message-tool sends that target the same channel/account/thread as the source reply. */
 export function getMatchingMessagingToolReplyTargets(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];
@@ -262,6 +267,7 @@ export function getMatchingMessagingToolReplyTargets(params: {
   });
 }
 
+/** Dedupe decision plus route-specific evidence used by final payload filtering. */
 export type MessagingToolPayloadDedupeDecision = {
   shouldDedupePayloads: boolean;
   matchingRoute: boolean;
@@ -271,6 +277,7 @@ export type MessagingToolPayloadDedupeDecision = {
   useGlobalSentMediaUrlEvidenceFallback: boolean;
 };
 
+/** Resolves whether and how to dedupe final payloads against message-tool sends. */
 export function resolveMessagingToolPayloadDedupe(params: {
   messageProvider?: string;
   messagingToolSentTargets?: MessagingToolSend[];

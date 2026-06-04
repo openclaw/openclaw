@@ -1,7 +1,8 @@
+/** Tests Gateway final/error states to ACP prompt stopReason mapping. */
 import type { PromptRequest } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import {
   createChatEvent,
@@ -473,7 +474,6 @@ describe("acp translator stop reason mapping", () => {
   it("finishes terminal prompts while rejecting stale pre-ack prompts", async () => {
     vi.useFakeTimers();
     try {
-      let acceptedRunId: string | undefined;
       let acceptedWaitCount = 0;
       const requestMock = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "chat.send") {
@@ -520,7 +520,7 @@ describe("acp translator stop reason mapping", () => {
       void preAckPrompt.catch(() => {});
 
       await Promise.resolve();
-      acceptedRunId = requestMock.mock.calls.find((call) => {
+      const acceptedRunId: string | undefined = requestMock.mock.calls.find((call) => {
         const [method, requestParams] = call;
         return method === "chat.send" && requestParams?.sessionKey === "agent:main:first";
       })?.[1]?.idempotencyKey as string | undefined;

@@ -1,6 +1,8 @@
+// Loads startup context snippets injected into the first reply turn.
 import fs from "node:fs";
 import path from "node:path";
-import { resolveUserTimezone } from "../../agents/date-time.js";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
 
@@ -61,22 +63,6 @@ function resolveStartupContextLimits(cfg?: OpenClawConfig) {
       STARTUP_MEMORY_TOTAL_MAX_CHARS_CAP,
     ),
   };
-}
-
-function formatDateStamp(nowMs: number, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(nowMs));
-  const year = parts.find((part) => part.type === "year")?.value;
-  const month = parts.find((part) => part.type === "month")?.value;
-  const day = parts.find((part) => part.type === "day")?.value;
-  if (year && month && day) {
-    return `${year}-${month}-${day}`;
-  }
-  return new Date(nowMs).toISOString().slice(0, 10);
 }
 
 function shiftDateStampByCalendarDays(stamp: string, offsetDays: number): string {
@@ -226,7 +212,7 @@ async function listStartupMemoryPathsByDate(params: {
   stamps: string[];
 }): Promise<Map<string, string[]>> {
   const memoryDir = path.join(params.workspaceDir, "memory");
-  const uniqueStamps = Array.from(new Set(params.stamps));
+  const uniqueStamps = uniqueStrings(params.stamps);
   const fallback = new Map(uniqueStamps.map((stamp) => [stamp, [`${stamp}.md`]]));
   const stampSet = new Set(uniqueStamps);
 

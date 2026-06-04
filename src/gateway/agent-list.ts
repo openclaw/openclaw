@@ -1,12 +1,15 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { SessionScope } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId, normalizeMainKey } from "../routing/session-key.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 
+// Basic agent list data is used by lightweight gateway/control surfaces that do
+// not need full session rows. Configured agents stay authoritative, while disk
+// state contributes existing agent ids when config does not explicitly narrow.
 type GatewayAgentListRow = {
   id: string;
   name?: string;
@@ -26,6 +29,8 @@ function listExistingAgentIdsFromDisk(): string[] {
   }
 }
 
+// Keep the default agent first for UI selection while preserving deterministic
+// ordering for the remaining configured/on-disk ids.
 function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
   const ids = new Set<string>();
   const defaultId = normalizeAgentId(resolveDefaultAgentId(cfg));
@@ -48,6 +53,7 @@ function listConfiguredAgentIds(cfg: OpenClawConfig): string[] {
     : sorted;
 }
 
+/** Lists gateway-visible agent ids with default/main session metadata. */
 export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
   defaultId: string;
   mainKey: string;
@@ -62,8 +68,10 @@ export function listGatewayAgentsBasic(cfg: OpenClawConfig): {
     if (!entry?.id) {
       continue;
     }
+    const configuredName = normalizeOptionalString(entry.name);
+    const identityName = normalizeOptionalString(entry.identity?.name);
     configuredById.set(normalizeAgentId(entry.id), {
-      name: normalizeOptionalString(entry.name),
+      name: configuredName ?? identityName,
     });
   }
   const explicitIds = new Set(

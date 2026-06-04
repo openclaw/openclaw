@@ -4,6 +4,7 @@ import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const loadOutboundMediaFromUrlMock = vi.fn();
+const ZALO_OUTBOUND_MEDIA_DIR_NAME = "openclaw-zalo-outbound-media";
 
 vi.mock("openclaw/plugin-sdk/outbound-media", () => ({
   loadOutboundMediaFromUrl: (...args: unknown[]) => loadOutboundMediaFromUrlMock(...args),
@@ -15,6 +16,11 @@ import {
   resolveHostedZaloMediaRoutePrefix,
   tryHandleHostedZaloMediaRequest,
 } from "./outbound-media.js";
+
+function resolveHostedZaloMediaDirName(): string {
+  const workerId = process.env.VITEST_WORKER_ID ?? process.env.VITEST_POOL_ID;
+  return workerId ? `${ZALO_OUTBOUND_MEDIA_DIR_NAME}-${workerId}` : ZALO_OUTBOUND_MEDIA_DIR_NAME;
+}
 
 function createMockResponse() {
   const headers = new Map<string, string>();
@@ -90,7 +96,7 @@ describe("zalo outbound hosted media", () => {
     expect(id).toHaveLength(24);
     expect(/^[0-9a-f]+$/.test(id)).toBe(true);
 
-    const storageDir = join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-outbound-media");
+    const storageDir = join(resolvePreferredOpenClawTmpDir(), resolveHostedZaloMediaDirName());
     const [dirStats, metadataStats, bufferStats] = await Promise.all([
       stat(storageDir),
       stat(join(storageDir, `${id}.json`)),
@@ -143,6 +149,50 @@ describe("zalo outbound hosted media", () => {
 
     expect(handledAgain).toBe(true);
     expect(secondResponse.res.statusCode).toBe(404);
+  });
+
+  it("rejects hosted media preparation when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      await expect(
+        prepareHostedZaloMediaUrl({
+          mediaUrl: "https://example.com/photo.png",
+          webhookUrl: "https://gateway.example.com/zalo-webhook",
+          maxBytes: 1024,
+        }),
+      ).rejects.toThrow(/expiry/);
+
+      expect(loadOutboundMediaFromUrlMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not serve hosted media when the current clock is invalid", async () => {
+    const hostedUrl = await prepareHostedZaloMediaUrl({
+      mediaUrl: "https://example.com/photo.png",
+      webhookUrl: "https://gateway.example.com/zalo-webhook",
+      maxBytes: 1024,
+    });
+    const { pathname, search } = new URL(hostedUrl);
+    const response = createMockResponse();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      const handled = await tryHandleHostedZaloMediaRequest(
+        {
+          method: "GET",
+          url: `${pathname}${search}`,
+        } as never,
+        response.res as never,
+      );
+
+      expect(handled).toBe(true);
+      expect(response.res.statusCode).toBe(410);
+      expect(response.res.end).toHaveBeenCalledWith("Expired");
+    } finally {
+      dateNow.mockRestore();
+    }
   });
 
   it("rejects hosted media requests with the wrong token", async () => {

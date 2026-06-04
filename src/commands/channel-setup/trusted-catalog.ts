@@ -1,6 +1,7 @@
+// Trusted channel catalog helpers that hide unenabled workspace-shadowed entries.
 import {
   getChannelPluginCatalogEntry,
-  listChannelPluginCatalogEntries,
+  listRawChannelPluginCatalogEntries,
   type ChannelPluginCatalogEntry,
 } from "../../channels/plugins/catalog.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
@@ -33,6 +34,7 @@ function isTrustedWorkspaceChannelCatalogEntry(
   ).enabled;
 }
 
+/** Resolve a catalog entry, falling back to non-workspace metadata when workspace entry is untrusted. */
 export function getTrustedChannelPluginCatalogEntry(
   channelId: string,
   params: {
@@ -61,11 +63,11 @@ function listChannelPluginCatalogEntriesWithTrustedFallback(
   },
   onMissingFallback: (entry: ChannelPluginCatalogEntry) => ChannelPluginCatalogEntry[],
 ): ChannelPluginCatalogEntry[] {
-  const unfiltered = listChannelPluginCatalogEntries({
+  const unfiltered = listRawChannelPluginCatalogEntries({
     workspaceDir: params.workspaceDir,
   });
   const fallbackById = new Map(
-    listChannelPluginCatalogEntries({
+    listRawChannelPluginCatalogEntries({
       workspaceDir: params.workspaceDir,
       excludeWorkspace: true,
     }).map((entry) => [entry.id, entry]),
@@ -79,6 +81,7 @@ function listChannelPluginCatalogEntriesWithTrustedFallback(
   });
 }
 
+/** List trusted catalog entries, dropping untrusted workspace-only shadows. */
 export function listTrustedChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
@@ -87,6 +90,7 @@ export function listTrustedChannelPluginCatalogEntries(params: {
   return listChannelPluginCatalogEntriesWithTrustedFallback(params, () => []);
 }
 
+/** List setup discovery entries, preserving untrusted workspace-only entries for install prompts. */
 export function listSetupDiscoveryChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
