@@ -7,6 +7,7 @@ import type { AgentMessage } from "../runtime/index.js";
 import {
   installSessionFamilyCarryoverContextTransform,
   resolveSessionFamilyCarryoverSummary,
+  shouldInstallSessionFamilyCarryoverContextTransform,
 } from "./session-family-carryover.js";
 
 const tempDirs: string[] = [];
@@ -103,5 +104,14 @@ describe("session family carryover", () => {
       "compactionSummary",
       "user",
     ]);
+  });
+
+  it("keeps reset-family carryover out of raw model runs", () => {
+    expect(shouldInstallSessionFamilyCarryoverContextTransform({ isRawModelRun: true })).toBe(
+      false,
+    );
+    expect(shouldInstallSessionFamilyCarryoverContextTransform({ isRawModelRun: false })).toBe(
+      true,
+    );
   });
 });

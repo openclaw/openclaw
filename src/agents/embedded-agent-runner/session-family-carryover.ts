@@ -135,3 +135,9 @@ export function installSessionFamilyCarryoverContextTransform(params: {
     return [carryover, ...transformed];
   });
 }
+
+export function shouldInstallSessionFamilyCarryoverContextTransform(params: {
+  isRawModelRun: boolean;
+}): boolean {
+  return !params.isRawModelRun;
+}

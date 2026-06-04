@@ -332,6 +332,7 @@ import {
 import {
   installSessionFamilyCarryoverContextTransform,
   resolveSessionFamilyCarryoverSummary,
+  shouldInstallSessionFamilyCarryoverContextTransform,
 } from "../session-family-carryover.js";
 import { releaseEmbeddedAttemptSessionLockForAbort } from "./attempt-abort.js";
 import { resolveAttemptWorkspaceBootstrapRouting } from "./attempt-bootstrap-routing.js";
@@ -2350,21 +2351,23 @@ export async function runEmbeddedAttempt(
         activeSession.agent.convertToLlm = async (messages) =>
           await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages, buildBoundaryOptions()));
       }
-      installSessionFamilyCarryoverContextTransform({
-        messages: activeSession.messages,
-        getTransformContext: () => activeSession.agent.transformContext,
-        setTransformContext: (transform) => {
-          activeSession.agent.transformContext = transform;
-        },
-        resolveCarryover: async () =>
-          await resolveSessionFamilyCarryoverSummary({
-            sessionId: params.sessionId,
-            sessionFile: params.sessionFile,
-            storePath: params.sessionStorePath,
-            agentId: sessionAgentId,
-            entry: params.sessionStoreEntry,
-          }),
-      });
+      if (shouldInstallSessionFamilyCarryoverContextTransform({ isRawModelRun })) {
+        installSessionFamilyCarryoverContextTransform({
+          messages: activeSession.messages,
+          getTransformContext: () => activeSession.agent.transformContext,
+          setTransformContext: (transform) => {
+            activeSession.agent.transformContext = transform;
+          },
+          resolveCarryover: async () =>
+            await resolveSessionFamilyCarryoverSummary({
+              sessionId: params.sessionId,
+              sessionFile: params.sessionFile,
+              storePath: params.sessionStorePath,
+              agentId: sessionAgentId,
+              entry: params.sessionStoreEntry,
+            }),
+        });
+      }
       let prePromptMessageCount = activeSession.messages.length;
       let contextEngineAfterTurnCheckpoint: number | null = null;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
