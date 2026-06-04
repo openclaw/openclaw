@@ -7,6 +7,7 @@ import type { ToolLoopDetectionConfig } from "../config/types.tools.js";
 import type { SessionState, ToolCallRecord } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPlainObject } from "../utils.js";
+import { isCronSessionKey } from "../sessions/session-key-utils.js";
 import { stableStringify } from "./stable-stringify.js";
 
 const log = createSubsystemLogger("agents/loop-detection");
@@ -461,6 +462,8 @@ export function detectToolCallLoop(
   params: unknown,
   config?: ToolLoopDetectionConfig,
   scope?: ToolLoopDetectionScope,
+  trigger?: string,
+  sessionKey?: string,
 ): LoopDetectionResult {
   const resolvedConfig = resolveLoopDetectionConfig(config);
   if (!resolvedConfig.enabled) {
@@ -520,7 +523,11 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.knownPollNoProgress &&
     noProgressStreak >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    if (isCronSessionKey(sessionKey)) {
+      log.info(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    } else {
+      log.warn(`Polling loop warning: ${toolName} repeated ${noProgressStreak} times`);
+    }
     return {
       stuck: true,
       level: "warning",
@@ -555,9 +562,15 @@ export function detectToolCallLoop(
   }
 
   if (resolvedConfig.detectors.pingPong && pingPong.count >= resolvedConfig.warningThreshold) {
-    log.warn(
-      `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
-    );
+    if (isCronSessionKey(sessionKey)) {
+      log.info(
+        `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+      );
+    } else {
+      log.warn(
+        `Ping-pong loop warning: alternating calls count=${pingPong.count} currentTool=${toolName}`,
+      );
+    }
     return {
       stuck: true,
       level: "warning",
@@ -596,7 +609,11 @@ export function detectToolCallLoop(
     resolvedConfig.detectors.genericRepeat &&
     recentCount >= resolvedConfig.warningThreshold
   ) {
-    log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    if (isCronSessionKey(sessionKey)) {
+      log.info(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    } else {
+      log.warn(`Loop warning: ${toolName} called ${recentCount} times with identical arguments`);
+    }
     return {
       stuck: true,
       level: "warning",

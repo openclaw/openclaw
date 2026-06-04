@@ -107,6 +107,8 @@ export type HookContext = {
     root: string;
     bridge: SandboxFsBridge;
   };
+  /** What initiated this run (for trigger-specific loop warning level decisions). */
+  trigger?: string;
 };
 
 type HookBlockedKind = "veto" | "failure";
@@ -802,6 +804,8 @@ export async function runBeforeToolCallHook(args: {
       params,
       args.ctx.loopDetection,
       loopScope,
+      args.ctx.trigger,
+      args.ctx.sessionKey,
     );
 
     if (loopResult.stuck) {
@@ -829,7 +833,11 @@ export async function runBeforeToolCallHook(args: {
       const baseWarningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
       const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
       if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
-        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+        if (isCronSessionKey(args.ctx.sessionKey)) {
+          log.info(`Loop warning for ${toolName}: ${loopResult.message}`);
+        } else {
+          log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+        }
         logToolLoopAction({
           sessionKey: args.ctx.sessionKey,
           sessionId: args.ctx.sessionId,

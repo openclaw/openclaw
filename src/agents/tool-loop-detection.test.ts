@@ -909,6 +909,30 @@ describe("tool-loop-detection", () => {
       const result = detectToolCallLoop(state, "tool", { arg: 1 }, enabledLoopDetectionConfig);
       expect(result.stuck).toBe(false);
     });
+
+    it("downgrades loop warning to info for cron trigger", () => {
+      const state = createState();
+      const config = { enabled: true, warningThreshold: 3, criticalThreshold: 5, detectors: { genericRepeat: true } };
+      const params = { cmd: "echo hello" };
+      const result = { stdout: "hello" };
+      // 3 identical successful calls → hits warning threshold
+      recordRepeatedSuccessfulCalls({ state, toolName: "exec", toolParams: params, result, count: 3 });
+      const loop = detectToolCallLoop(state, "exec", params, config, undefined, "cron", "agent:main:cron:my-job");
+      expect(loop.stuck).toBe(true);
+      expect(loop.level).toBe("warning");
+      // The log level is info for cron, but the detection result is still warning
+      // so downstream blocking logic is unchanged.
+    });
+    it("does not downgrade loop warning for non-isolated cron session", () => {
+      const state = createState();
+      const config = { enabled: true, warningThreshold: 3, criticalThreshold: 5, detectors: { genericRepeat: true } };
+      const params = { cmd: "echo hello" };
+      const result = { stdout: "hello" };
+      recordRepeatedSuccessfulCalls({ state, toolName: "exec", toolParams: params, result, count: 3 });
+      const loop = detectToolCallLoop(state, "exec", params, config, undefined, "cron", "main");
+      expect(loop.stuck).toBe(true);
+      expect(loop.level).toBe("warning");
+    });
   });
 
   describe("getToolCallStats", () => {
