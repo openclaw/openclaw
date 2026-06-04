@@ -1421,7 +1421,7 @@ describe("install.sh macOS Homebrew Node behavior", () => {
       'ui_warn "Spinner unavailable in this terminal; continuing without spinner"',
     );
     expect(script).toContain(
-      'if is_non_interactive_shell; then\n                    "$@" < /dev/null\n                else\n                    "$@"\n                fi\n                return $?',
+      'if needs_stdin_isolation; then\n                    "$@" < /dev/null\n                else\n                    "$@"\n                fi\n                return $?',
     );
   });
 

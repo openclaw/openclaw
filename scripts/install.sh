@@ -107,6 +107,14 @@ is_non_interactive_shell() {
     return 1
 }
 
+# Returns true when stdin should be isolated from the script stream.
+# Checks stdin directly (not stdout) and respects NO_PROMPT so that
+# stdout redirection (e.g. install.sh > log.txt) does not suppress
+# interactive prompts.
+needs_stdin_isolation() {
+    [[ ! -t 0 ]] || [[ "${NO_PROMPT:-0}" == "1" ]]
+}
+
 has_controlling_tty() {
     if [[ ! -r /dev/tty || ! -w /dev/tty ]]; then
         return 1
@@ -456,7 +464,7 @@ run_with_spinner() {
                 GUM_STATUS="skipped"
                 GUM_REASON="gum raw mode unavailable"
                 ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-                if is_non_interactive_shell; then
+                if needs_stdin_isolation; then
                     "$@" < /dev/null
                 else
                     "$@"
@@ -474,7 +482,7 @@ run_with_spinner() {
             GUM_STATUS="skipped"
             GUM_REASON="gum raw mode unavailable"
             ui_warn "Spinner unavailable in this terminal; continuing without spinner"
-            if is_non_interactive_shell; then
+            if needs_stdin_isolation; then
                 "$@" < /dev/null
             else
                 "$@"
@@ -490,7 +498,7 @@ run_with_spinner() {
     # Redirect stdin from /dev/null so subprocesses cannot consume the script
     # stream when the installer is piped via curl | bash.  When running
     # interactively, preserve terminal stdin for commands that need it.
-    if is_non_interactive_shell; then
+    if needs_stdin_isolation; then
         "$@" < /dev/null
     else
         "$@"
@@ -523,7 +531,7 @@ run_quiet_step() {
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
         showed_progress=true
-        if is_non_interactive_shell; then
+        if needs_stdin_isolation; then
             if "$@" < /dev/null >"$log" 2>&1; then
                 return 0
             fi
