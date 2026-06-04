@@ -891,13 +891,6 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     }
 
     const text = reply.trimmedText;
-    // Remember the final reply text streamed to Slack so the `message_sent`
-    // hook can fire after the stream is finalized. The SDK may buffer this
-    // locally until stopSlackStream flushes it, so we capture regardless of the
-    // current `streamSession.delivered` state.
-    if (params.kind === "final" && text) {
-      streamedFinalContent = text;
-    }
     let plannedThreadTs: string | undefined;
     try {
       if (!streamSession && nativeProgressStreamStartPromise) {
@@ -965,6 +958,14 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             observedFinalReplyDelivery = true;
           }
         }
+        // Remember the final reply text delivered through the text stream so
+        // the `message_sent` hook can fire after stopSlackStream flushes it.
+        // Only the text-stream path captures this; every deliverNormally branch
+        // already emits via deliverReplies, so capturing there would
+        // double-emit for the same final answer.
+        if (params.kind === "final" && text) {
+          streamedFinalContent = text;
+        }
         rememberDeliveredThreadTs(params.kind, streamThreadTs);
         replyPlan.markSent();
         deliveryTracker.markDelivered({
@@ -1031,6 +1032,12 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         if (params.kind === "final") {
           observedFinalReplyDelivery = true;
         }
+      }
+      // Remember the final reply text appended to the text stream so the
+      // `message_sent` hook can fire after stopSlackStream flushes it (see the
+      // matching capture on the stream-start path above).
+      if (params.kind === "final" && text) {
+        streamedFinalContent = text;
       }
       deliveryTracker.markDelivered({
         kind: params.kind,
@@ -1856,7 +1863,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
           accountId: account.accountId,
           content: streamedFinalContent,
           success: true,
-          ...(stopResult.messageId ? { messageId: stopResult.messageId } : {}),
+          ...(stopResult?.messageId ? { messageId: stopResult.messageId } : {}),
         });
       }
     } catch (err) {

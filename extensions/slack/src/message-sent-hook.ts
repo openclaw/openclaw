@@ -44,6 +44,12 @@ function buildSlackSentHookContext(params: EmitSlackMessageSentHookParams) {
     channelId: "slack",
     accountId: params.accountId ?? undefined,
     conversationId: params.to,
+    // Mirror the canonical session key into the `message_sent` hook context so
+    // plugins observing both `message_sending` and `message_sent` see the same
+    // `sessionKey` (and it matches the value the internal `message:sent` hook
+    // fires with). This matches the shared outbound emitter in
+    // `src/infra/outbound/deliver.ts`.
+    sessionKey: params.sessionKeyForInternalHooks,
     messageId: params.messageId,
     isGroup: params.isGroup,
     groupId: params.groupId,

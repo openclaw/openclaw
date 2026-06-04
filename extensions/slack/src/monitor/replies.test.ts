@@ -442,6 +442,26 @@ describe("deliverReplies message_sent hook", () => {
     expect(context).toMatchObject({ channelId: "slack" });
   });
 
+  it("threads the session key into the message_sent plugin context for correlation", async () => {
+    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    sendMock.mockResolvedValue({ messageId: "1700000000.000200", channelId: "C123" });
+
+    await deliverReplies(
+      baseParams({
+        replies: [{ text: "correlated" }],
+        sessionKeyForInternalHooks: "slack:C123:U1",
+      }),
+    );
+
+    expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
+    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const context = messageHookRunner.runMessageSent.mock.calls[0]?.[1] as Record<string, unknown>;
+    // Plugins observing both `message_sending` and `message_sent` must see the
+    // same `sessionKey` (mirrors the shared outbound emitter contract).
+    expect(event).toMatchObject({ sessionKey: "slack:C123:U1" });
+    expect(context).toMatchObject({ sessionKey: "slack:C123:U1" });
+  });
+
   it("emits message_sent with success=false when delivery throws", async () => {
     messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
     sendMock.mockRejectedValue(new Error("channel_not_found"));

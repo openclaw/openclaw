@@ -20,7 +20,8 @@ const startSlackStreamMock = vi.fn(async () => ({
   delivered: true,
   pendingText: "",
 }));
-const stopSlackStreamMock = vi.fn(async () => {});
+const stopSlackStreamMock = vi.fn(async () => ({}) as { messageId?: string });
+const emitSlackMessageSentHooksMock = vi.fn(() => {});
 const reactSlackMessageMock = vi.fn(async () => {});
 const removeSlackReactionMock = vi.fn(async () => {});
 class TestSlackStreamNotDeliveredError extends Error {
@@ -807,6 +808,10 @@ vi.mock("../../streaming.js", () => ({
   stopSlackStream: stopSlackStreamMock,
 }));
 
+vi.mock("../../message-sent-hook.js", () => ({
+  emitSlackMessageSentHooks: emitSlackMessageSentHooksMock,
+}));
+
 vi.mock("../../threading.js", () => ({
   resolveSlackThreadTargets: () => ({
     statusThreadTs: THREAD_TS,
@@ -1173,7 +1178,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       pendingText: "",
     });
     appendSlackStreamMock.mockResolvedValue(undefined);
-    stopSlackStreamMock.mockResolvedValue(undefined);
+    stopSlackStreamMock.mockResolvedValue({});
+    emitSlackMessageSentHooksMock.mockClear();
   });
 
   it("falls back to normal delivery when preview finalize fails", async () => {
@@ -1958,6 +1964,114 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("emits message_sent only once for native progress final replies (no double emit)", async () => {
+    // In native-progress mode the final answer is delivered through
+    // deliverNormally -> deliverReplies, which owns the message_sent emit. The
+    // dispatch-level stream finalizer must NOT also emit for the same final
+    // answer (regression for the streamedFinalContent double-emit bug).
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [{ kind: "item", progressText: "slow tool" }],
+    });
+
+    // Final routed through deliverReplies (the owner of the emit here)...
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    // ...and the stream WAS finalized, so the old code would have double-emitted.
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    // The dispatch-level finalizer must not emit (deliverReplies already does).
+    expect(emitSlackMessageSentHooksMock).not.toHaveBeenCalled();
+  });
+
+  it("emits message_sent exactly once via the finalizer for a plain text-stream final reply", async () => {
+    // Plain text-stream mode (no native progress card): the final answer is
+    // flushed through the text stream and never goes through deliverReplies, so
+    // the dispatch finalizer owns the single message_sent emit. This is the
+    // positive counterpart to the native-progress no-double-emit regression.
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    startSlackStreamMock.mockResolvedValueOnce({
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: true,
+      pendingText: "",
+    });
+    stopSlackStreamMock.mockResolvedValueOnce({ messageId: "171234.567" });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    // The final was flushed through the stream, not deliverReplies.
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    // The finalizer emits exactly once, with success and the delivered Slack ts,
+    // and threads the canonical session key (mirrors the P2 fix in replies.ts:
+    // the dispatch finalizer emit must also carry session correlation).
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "finalizer message_sent", {
+      content: FINAL_REPLY_TEXT,
+      success: true,
+      messageId: "171234.567",
+      sessionKeyForInternalHooks: "agent:agent-1:slack:C123",
+    });
+  });
+
+  it("emits message_sent exactly once when stopSlackStream throws and the pending stream falls back", async () => {
+    // On a SlackStreamNotDeliveredError the dispatch finalizer must NOT emit;
+    // the pending-stream fallback re-enters deliverReplies, which owns the emit.
+    // Guards against the finalizer double-emitting alongside the fallback.
+    mockedNativeStreaming = true;
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: FINAL_REPLY_TEXT,
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError(FINAL_REPLY_TEXT, "user_not_found"),
+    );
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    // Fallback delivered the final exactly once (deliverReplies owns the emit).
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    // The finalizer itself must not emit on the fallback branch (no double).
+    expect(emitSlackMessageSentHooksMock).not.toHaveBeenCalled();
+  });
+
+  it("emits message_sent exactly once when an append flush fails and the buffered stream falls back", async () => {
+    // appendSlackStream throwing SlackStreamNotDeliveredError mid-stream routes
+    // all buffered text through deliverReplies; the finalizer must not also emit.
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "first buffered" } },
+      { kind: "final", payload: { text: "second flushes" } },
+    ];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: "first buffered",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    appendSlackStreamMock.mockImplementationOnce(async () => {
+      session.pendingText += "\nsecond flushes";
+      throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
+    });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, "first buffered\nsecond flushes");
+    expect(stopSlackStreamMock).not.toHaveBeenCalled();
+    // The finalizer must not emit on the buffered-fallback branch (no double).
+    expect(emitSlackMessageSentHooksMock).not.toHaveBeenCalled();
   });
 
   it("does not start a text stream for native progress mode when no progress card exists", async () => {
