@@ -13,7 +13,10 @@ describe("security audit config include permissions", () => {
     fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
 
     const includePath = path.join(stateDir, "extra.json5");
-    fs.writeFileSync(includePath, "{ logging: { redactSensitive: 'off' } }\n", "utf-8");
+    fs.writeFileSync(includePath, "{ logging: { redactSensitive: 'off' } }\n", {
+      encoding: "utf-8",
+      mode: 0o644,
+    });
     fs.chmodSync(includePath, 0o644);
 
     const configSnapshot: ConfigFileSnapshot = {
