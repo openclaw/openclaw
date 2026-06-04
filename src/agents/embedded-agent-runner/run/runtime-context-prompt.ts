@@ -1,3 +1,8 @@
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import {
+  appendRuntimeSelfContextToPrompt,
+  RUNTIME_SELF_CONTEXT_TOOL_NAME,
+} from "../../../runtime-self-context/render.js";
 /**
  * Builds runtime context prompt fragments and custom session messages.
  */
@@ -9,10 +14,7 @@ import {
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
 import type { CurrentInboundPromptContext } from "./params.js";
-export {
-  RUNTIME_SELF_CONTEXT_TOOL_NAME,
-  appendRuntimeSelfContextToPrompt,
-} from "../../../runtime-self-context/render.js";
+export { RUNTIME_SELF_CONTEXT_TOOL_NAME, appendRuntimeSelfContextToPrompt };
 export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
@@ -36,6 +38,27 @@ export type RuntimeContextCustomMessage = {
 };
 
 type EmptyTranscriptMode = "model-prompt" | "runtime-event";
+
+export function appendRuntimeSelfContextForPromptSplit(params: {
+  prompt: string;
+  transcriptPrompt?: string;
+  config?: OpenClawConfig;
+  runtimeToolAvailable?: boolean;
+}): { prompt: string; transcriptPrompt?: string } {
+  const promptBeforeRuntimeSelfContext = params.prompt;
+  const prompt = appendRuntimeSelfContextToPrompt({
+    prompt: params.prompt,
+    config: params.config,
+    runtimeToolAvailable: params.runtimeToolAvailable,
+  });
+  if (params.transcriptPrompt !== undefined) {
+    return { prompt, transcriptPrompt: params.transcriptPrompt };
+  }
+  if (prompt === promptBeforeRuntimeSelfContext) {
+    return { prompt };
+  }
+  return { prompt, transcriptPrompt: promptBeforeRuntimeSelfContext };
+}
 
 /** Returns the visible or resumable inbound prompt prefix used before the user prompt. */
 export function buildCurrentInboundPromptContextPrefix(
