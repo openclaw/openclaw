@@ -1502,4 +1502,64 @@ describe("install.sh duplicate OpenClaw install detection", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).not.toContain("Multiple OpenClaw global installs detected");
   });
+
+  it("needs_stdin_isolation returns true when stdin is piped", () => {
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `source "${SCRIPT_PATH}" && needs_stdin_isolation && echo "ISOLATED" || echo "INTERACTIVE"`,
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          HOME: tmpdir(),
+          OPENCLAW_INSTALL_SH_NO_RUN: "1",
+          BASH_ENV: "",
+          ENV: "",
+        },
+        input: "",
+      },
+    );
+    expect(result.stdout.trim()).toBe("ISOLATED");
+  });
+
+  it("needs_stdin_isolation returns true when NO_PROMPT is set", () => {
+    const result = runInstallShell(`
+      set -euo pipefail
+      source "${SCRIPT_PATH}"
+      NO_PROMPT=1
+      needs_stdin_isolation && echo "ISOLATED" || echo "INTERACTIVE"
+    `);
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe("ISOLATED");
+  });
+
+  it("run_quiet_step redirects stdin to /dev/null in piped context", () => {
+    const marker = join(mkdtempSync(join(tmpdir(), "openclaw-stdin-test-")), "stdin-state");
+    const result = spawnSync(
+      "bash",
+      [
+        "-c",
+        `source "${SCRIPT_PATH}" && GUM="" && run_quiet_step "test-step" bash -c 'if [ -t 0 ]; then echo HAS_STDIN > ${JSON.stringify(marker)}; else echo NO_STDIN > ${JSON.stringify(marker)}; fi'`,
+      ],
+      {
+        encoding: "utf8",
+        stdio: ["pipe", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          HOME: tmpdir(),
+          OPENCLAW_INSTALL_SH_NO_RUN: "1",
+          BASH_ENV: "",
+          ENV: "",
+        },
+        input: "",
+      },
+    );
+    expect(result.status).toBe(0);
+    expect(readFileSync(marker, "utf8").trim()).toBe("NO_STDIN");
+    rmSync(marker, { force: true });
+  });
 });
