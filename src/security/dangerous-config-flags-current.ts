@@ -44,6 +44,10 @@ function resolveCurrentPluginConfigContractsById(params: {
   return contractsById;
 }
 
+/**
+ * Collect dangerous flags using the gateway's current plugin metadata snapshot when it is complete.
+ * Returns undefined when any configured plugin is missing so callers can use manifest discovery.
+ */
 export function collectEnabledInsecureOrDangerousFlagsFromCurrentSnapshot(
   cfg: OpenClawConfig,
 ): string[] | undefined {

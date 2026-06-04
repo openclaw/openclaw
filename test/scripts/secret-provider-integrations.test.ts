@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const tempDirs: string[] = [];
 const harnessPath = path.resolve("test/scripts/fixtures/secret-provider-integrations-harness.mjs");
@@ -199,47 +199,63 @@ describe("secret provider integration proof harness", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")(
-    "kills timed-out command process groups",
-    async () => {
-      const root = makeTempDir();
-      const markerPath = path.join(root, "command-descendant-marker.txt");
-      const scriptPath = path.join(root, "spawn-descendant.mjs");
-      const descendantScript = [
-        "import fs from 'node:fs';",
-        `fs.appendFileSync(${JSON.stringify(markerPath)}, "x");`,
-        "process.on('SIGTERM', () => {});",
-        `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
-      ].join("\n");
-      fs.writeFileSync(
-        scriptPath,
-        [
-          "import childProcess from 'node:child_process';",
-          "import { setTimeout as delay } from 'node:timers/promises';",
-          `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
-            descendantScript,
-          )}], { stdio: "ignore" });`,
-          "process.on('SIGTERM', () => process.exit(0));",
-          "await delay(60_000);",
-          "",
-        ].join("\n"),
-      );
-      const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=timeout-${Date.now()}`);
+  it("fails when proof temp cleanup cannot remove the root", async () => {
+    const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=cleanup-${Date.now()}`);
+    const rmSync = vi.spyOn(fs, "rmSync").mockImplementation(() => {
+      throw new Error("device busy");
+    });
 
+    try {
       await expect(
-        proof.runCommand(process.execPath, [scriptPath], {
-          timeoutMs: 150,
+        proof.cleanupEnv("/tmp/openclaw-secret-provider-proof-stuck", {
+          attempts: 3,
+          retryDelayMs: 1,
         }),
-      ).rejects.toThrow(/command timed out/u);
+      ).rejects.toThrow("failed to remove secret proof temp root");
+      expect(rmSync).toHaveBeenCalledTimes(3);
+    } finally {
+      rmSync.mockRestore();
+    }
+  });
 
-      const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 250);
-      });
-      const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
-      expect(sizeAfterWait).toBe(sizeAfterReturn);
-    },
-  );
+  it.runIf(process.platform !== "win32")("kills timed-out command process groups", async () => {
+    const root = makeTempDir();
+    const markerPath = path.join(root, "command-descendant-marker.txt");
+    const scriptPath = path.join(root, "spawn-descendant.mjs");
+    const descendantScript = [
+      "import fs from 'node:fs';",
+      `fs.appendFileSync(${JSON.stringify(markerPath)}, "x");`,
+      "process.on('SIGTERM', () => {});",
+      `setInterval(() => fs.appendFileSync(${JSON.stringify(markerPath)}, "x"), 20);`,
+    ].join("\n");
+    fs.writeFileSync(
+      scriptPath,
+      [
+        "import childProcess from 'node:child_process';",
+        "import { setTimeout as delay } from 'node:timers/promises';",
+        `childProcess.spawn(process.execPath, ["--input-type=module", "--eval", ${JSON.stringify(
+          descendantScript,
+        )}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "await delay(60_000);",
+        "",
+      ].join("\n"),
+    );
+    const proof = await import(`${pathToFileURL(proofScriptPath).href}?case=timeout-${Date.now()}`);
+
+    await expect(
+      proof.runCommand(process.execPath, [scriptPath], {
+        timeoutMs: 150,
+      }),
+    ).rejects.toThrow(/command timed out/u);
+
+    const sizeAfterReturn = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+    await new Promise((resolve) => {
+      setTimeout(resolve, 250);
+    });
+    const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
+    expect(sizeAfterWait).toBe(sizeAfterReturn);
+  });
 
   it("detects startup secret leaks after the retained output cap", () => {
     const root = makeTempDir();

@@ -10,6 +10,7 @@ type AcpSessionMeta = {
   prefixCwd?: boolean;
 };
 
+/** Parses ACP request metadata into OpenClaw session routing hints. */
 export function parseSessionMeta(meta: unknown): AcpSessionMeta {
   if (!meta || typeof meta !== "object") {
     return {};

@@ -7,6 +7,7 @@ type ManifestBackedRecord = Pick<
   "bundleFormat" | "format" | "manifestPath"
 >;
 
+/** True when a Claude bundle record omits its optional manifest file. */
 export function hasOptionalMissingPluginManifestFile(record: ManifestBackedRecord): boolean {
   return (
     record.format === "bundle" &&

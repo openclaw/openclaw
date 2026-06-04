@@ -22,6 +22,7 @@ function formatActiveSubagentDetail(params: {
   return `  • ${label} · ${duration}${descendantText}`;
 }
 
+/** Builds the compact status line for active and completed subagents. */
 export function buildSubagentsStatusLine(params: {
   runs: SubagentRunRecord[];
   verboseEnabled: boolean;

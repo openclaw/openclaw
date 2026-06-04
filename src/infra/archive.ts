@@ -1,4 +1,6 @@
 import "./fs-safe-defaults.js";
+
+// Archive extraction facade for size limits, staged writes, and traversal checks.
 export {
   ARCHIVE_LIMIT_ERROR_CODE,
   ArchiveLimitError,

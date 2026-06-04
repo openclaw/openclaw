@@ -1,10 +1,12 @@
 import { drainSystemEventEntries } from "../../infra/system-events.js";
 import { clearSessionQueues, type ClearSessionQueueResult } from "./queue/cleanup.js";
 
+/** Runtime cleanup result for reset-related queues and system events. */
 export type ClearSessionResetRuntimeStateResult = ClearSessionQueueResult & {
   systemEventsCleared: number;
 };
 
+/** Clears queued follow-ups and pending system events for reset session keys. */
 export function clearSessionResetRuntimeState(
   keys: Array<string | undefined>,
 ): ClearSessionResetRuntimeStateResult {

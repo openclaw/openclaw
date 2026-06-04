@@ -3,6 +3,7 @@ import { listPluginCompatRecords } from "./compat/registry.js";
 import { normalizePluginsConfig } from "./config-state.js";
 import { hashJson } from "./installed-plugin-index-hash.js";
 
+/** Hashes plugin compat registry state that can affect installed index validity. */
 export function resolveCompatRegistryVersion(): string {
   return hashJson(
     listPluginCompatRecords().map((record) => ({
@@ -16,6 +17,7 @@ export function resolveCompatRegistryVersion(): string {
   );
 }
 
+/** Hashes config policy inputs that can change installed plugin activation. */
 export function resolveInstalledPluginIndexPolicyHash(config: OpenClawConfig | undefined): string {
   const normalized = normalizePluginsConfig(config?.plugins);
   const channelPolicy: Record<string, boolean> = {};

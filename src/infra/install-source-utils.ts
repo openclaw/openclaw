@@ -9,6 +9,7 @@ import { pathExists } from "./fs-safe.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
 
+/** Metadata npm reports when resolving a registry spec or packed archive. */
 export type NpmSpecResolution = {
   name?: string;
   version?: string;
@@ -19,6 +20,7 @@ export type NpmSpecResolution = {
   packageOpenClaw?: Record<string, unknown>;
 };
 
+/** Flattened npm resolution fields stored on install results and diagnostics. */
 export type NpmResolutionFields = {
   resolvedName?: string;
   resolvedVersion?: string;
@@ -28,6 +30,7 @@ export type NpmResolutionFields = {
   resolvedAt?: string;
 };
 
+/** Converts npm resolution metadata into stable result field names. */
 export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmResolutionFields {
   return {
     resolvedName: resolution?.name,
@@ -39,6 +42,7 @@ export function buildNpmResolutionFields(resolution?: NpmSpecResolution): NpmRes
   };
 }
 
+/** Creates a script-free npm environment for metadata and pack commands. */
 export function createNpmMetadataEnv(
   scope: Pick<NpmProjectInstallEnvOptions, "npmConfigCwd"> = {},
 ): NodeJS.ProcessEnv {
@@ -70,6 +74,7 @@ function normalizeNpmViewMetadata(value: unknown): NpmSpecResolution | null {
   };
 }
 
+/** Reads npm registry metadata for a package spec without running package scripts. */
 export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?: number }): Promise<
   | {
       ok: true;
@@ -120,11 +125,13 @@ export async function resolveNpmSpecMetadata(params: { spec: string; timeoutMs?:
   }
 }
 
+/** Captures expected and actual npm integrity values when an install source drifts. */
 export type NpmIntegrityDrift = {
   expectedIntegrity: string;
   actualIntegrity: string;
 };
 
+/** Runs a callback in a private temp directory and removes it afterward. */
 export async function withTempDir<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
@@ -132,6 +139,7 @@ export async function withTempDir<T>(
   return await withTempWorkspace({ rootDir: os.tmpdir(), prefix }, async (tmp) => fn(tmp.dir));
 }
 
+/** Resolves and validates a user-supplied archive path before extraction. */
 export async function resolveArchiveSourcePath(archivePath: string): Promise<
   | {
       ok: true;
@@ -282,6 +290,7 @@ async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> 
   return sortedByMtime[0]?.name;
 }
 
+/** Packs an npm spec into a tarball in `cwd` and returns archive metadata. */
 export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
@@ -342,6 +351,10 @@ export async function packNpmSpecToArchive(params: {
   };
 }
 
+/**
+ * Reads package metadata from an existing npm archive using `npm pack --dry-run`.
+ * The archive path is validated first so callers get path errors before npm errors.
+ */
 export async function resolveNpmPackArchiveMetadata(params: {
   archivePath: string;
   timeoutMs?: number;

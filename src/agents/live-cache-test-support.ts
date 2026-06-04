@@ -7,7 +7,12 @@ import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js"
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { collectProviderApiKeys } from "./live-auth-keys.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
-import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
+import {
+  getApiKeyForModel,
+  isMissingProviderAuthError,
+  isProviderAuthError,
+  requireApiKey,
+} from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
 import { buildAssistantMessageWithZeroUsage } from "./stream-message-shared.js";
@@ -27,6 +32,30 @@ export type LiveResolvedModelPool = {
   apiKeys: string[];
   fixture: LiveResolvedModel;
 };
+
+export class LiveCachePrerequisiteSkip extends Error {
+  constructor(
+    readonly provider: "anthropic" | "openai",
+    reason: string,
+  ) {
+    super(reason);
+    this.name = "LiveCachePrerequisiteSkip";
+  }
+}
+
+export function isLiveCachePrerequisiteSkip(error: unknown): error is LiveCachePrerequisiteSkip {
+  return error instanceof LiveCachePrerequisiteSkip;
+}
+
+export function toLiveCachePrerequisiteSkip(
+  provider: "anthropic" | "openai",
+  error: unknown,
+): LiveCachePrerequisiteSkip | undefined {
+  if (isMissingProviderAuthError(error) || isProviderAuthError(error, "missing-provider-auth")) {
+    return new LiveCachePrerequisiteSkip(provider, error.message);
+  }
+  return undefined;
+}
 
 function toInt(value: string | undefined, fallback: number): number {
   const trimmed = value?.trim();
@@ -197,11 +226,13 @@ export async function resolveLiveDirectModelPool(params: {
   if (liveKeys.length > 0) {
     const selectedModel = selectModel();
     if (!selectedModel || selectedModel.api !== params.api) {
-      throw new Error(
-        requestedModelId
-          ? `Model not found for ${params.provider}: ${requestedModelId}`
-          : `No built-in ${params.provider} ${params.api} model available.`,
-      );
+      const message = requestedModelId
+        ? `Model not found for ${params.provider}: ${requestedModelId}`
+        : `No built-in ${params.provider} ${params.api} model available.`;
+      if (requestedModelId) {
+        throw new Error(message);
+      }
+      throw new LiveCachePrerequisiteSkip(params.provider, message);
     }
     logLiveCache(`resolved ${params.provider} model ${selectedModel.id} from live env key`);
     return {
@@ -216,21 +247,32 @@ export async function resolveLiveDirectModelPool(params: {
   logLiveCache(`resolving ${params.provider} model from configured auth storage`);
   const resolvedModel = selectModel();
   if (!resolvedModel) {
-    throw new Error(
-      rawModel
-        ? `Model not found for ${params.provider}: ${rawModel}`
-        : `No ${params.provider} ${params.api} model available in registry.`,
-    );
+    const message = rawModel
+      ? `Model not found for ${params.provider}: ${rawModel}`
+      : `No ${params.provider} ${params.api} model available in registry.`;
+    if (rawModel) {
+      throw new Error(message);
+    }
+    throw new LiveCachePrerequisiteSkip(params.provider, message);
   }
 
-  const apiKey = requireApiKey(
-    await getApiKeyForModel({
-      model: resolvedModel,
-      cfg,
-      agentDir,
-    }),
-    resolvedModel.provider,
-  );
+  let apiKey: string;
+  try {
+    apiKey = requireApiKey(
+      await getApiKeyForModel({
+        model: resolvedModel,
+        cfg,
+        agentDir,
+      }),
+      resolvedModel.provider,
+    );
+  } catch (error) {
+    const skip = toLiveCachePrerequisiteSkip(params.provider, error);
+    if (skip) {
+      throw skip;
+    }
+    throw error;
+  }
   logLiveCache(
     `resolved ${params.provider} model ${resolvedModel.id} from configured auth storage`,
   );

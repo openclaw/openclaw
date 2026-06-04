@@ -8,6 +8,7 @@ import {
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
+/** Model override loaded from the current session or its parent session. */
 export type StoredModelOverride = {
   provider?: string;
   model: string;
@@ -35,6 +36,7 @@ function isSubagentSessionEntry(entry?: SessionEntry): boolean {
   );
 }
 
+/** Resolves the persisted model override visible to the current session. */
 export function resolveStoredModelOverride(params: {
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -92,6 +94,7 @@ function resolveModelRefKey(params: {
   return modelKey(normalized.provider, normalized.model);
 }
 
+/** Detects heartbeat auto-fallback overrides that no longer match the primary model. */
 export function isStaleHeartbeatAutoFallbackOverride(params: {
   isHeartbeat?: boolean;
   hasResolvedHeartbeatModelOverride?: boolean;
@@ -113,6 +116,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
     entry !== undefined &&
     entry.modelOverrideSource === undefined &&
     hasSessionAutoModelFallbackProvenance(entry);
+  // Older sessions may lack modelOverrideSource; provenance recovers the auto-fallback state.
   if (entry?.modelOverrideSource !== "auto" && !recoveredAutoFallbackOverride) {
     return false;
   }

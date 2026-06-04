@@ -4,6 +4,12 @@ import { listKnownProviderAuthEnvVarNames } from "../secrets/provider-env-vars.j
 
 const CORE_SHELL_ENV_EXPECTED_KEYS = ["OPENCLAW_GATEWAY_TOKEN", "OPENCLAW_GATEWAY_PASSWORD"];
 
+/**
+ * Lists env vars worth importing from login-shell fallback for this config load.
+ *
+ * Provider/channel helpers inspect the current environment so optional plugin
+ * and auth aliases only trigger shell probing when their configured keys matter.
+ */
 export function resolveShellEnvExpectedKeys(env: NodeJS.ProcessEnv): string[] {
   return uniqueStrings([
     ...listKnownProviderAuthEnvVarNames({ env }),

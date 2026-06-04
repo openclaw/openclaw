@@ -92,6 +92,7 @@ export type SkillWorkshopState = {
   skillWorkshopFilePreviewQuery: string;
   skillWorkshopQueueWidth: number;
   skillWorkshopMode: SkillWorkshopMode;
+  skillWorkshopUseCurrentChatForRevisions: boolean;
 };
 
 function getErrorMessage(err: unknown): string {

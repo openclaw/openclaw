@@ -8,6 +8,7 @@ import {
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
+/** Detects installed plugins that should become enabled from existing config usage. */
 export function detectPluginAutoEnableCandidates(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;

@@ -9,6 +9,7 @@ type NodeFsScanResult<T> = {
   result: T;
 };
 
+/** Asserts a synchronous block did not enumerate directories. */
 export function expectNoReaddirSyncDuring<T>(run: () => T): T {
   return expectNoFsSyncDuring(run, ["readdirSync"]);
 }
