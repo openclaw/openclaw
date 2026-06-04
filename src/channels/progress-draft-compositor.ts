@@ -1,5 +1,9 @@
+// Stateful progress-draft compositor for channel streaming previews.
+// It merges tool, reasoning, and commentary updates until the final reply replaces them.
 import { formatReasoningMessage } from "../agents/embedded-agent-utils.js";
+import { findCodeRegions, isInsideCode } from "../shared/text/code-regions.js";
 import { stripInlineDirectiveTagsForDelivery } from "../utils/directive-tags.js";
+import { removeChannelProgressDraftLine } from "./progress-draft-lines.js";
 import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
@@ -16,6 +20,8 @@ import {
   type StreamingMode,
 } from "./streaming.js";
 
+// Composes transient channel progress drafts from tool, reasoning, and
+// commentary updates. It owns draft lifecycle state before the final reply wins.
 export type ChannelProgressDraftMode = StreamingMode;
 
 export type ChannelProgressDraftCompositor = ReturnType<
@@ -23,6 +29,7 @@ export type ChannelProgressDraftCompositor = ReturnType<
 >;
 type ProgressDraftLine = string | ChannelProgressDraftLine;
 
+/** Creates a stateful compositor for one streaming channel reply. */
 export function createChannelProgressDraftCompositor(params: {
   entry: StreamingCompatEntry | null | undefined;
   mode: ChannelProgressDraftMode;
@@ -89,10 +96,8 @@ export function createChannelProgressDraftCompositor(params: {
   });
 
   const clearLine = async (lineId: string) => {
-    const nextLines = lines.filter(
-      (line) => typeof line !== "object" || line.id?.trim() !== lineId,
-    );
-    if (nextLines.length === lines.length) {
+    const nextLines = removeChannelProgressDraftLine(lines, lineId);
+    if (nextLines === lines) {
       return;
     }
     lines = nextLines;
@@ -139,6 +144,8 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     if (shouldStoreLine && params.tryNativeUpdate) {
+      // Native draft updates get unformatted text; if the channel accepts it,
+      // keep local state aligned without sending a generic draft message.
       const text = formatDraftText(nextLines, { formatted: false });
       if (text && (await params.tryNativeUpdate(text))) {
         lines = nextLines;
@@ -228,6 +235,8 @@ export function createChannelProgressDraftCompositor(params: {
         return false;
       }
       if (previewToolProgressEnabled) {
+        // Reasoning streams usually arrive as deltas. Replace the previous
+        // reasoning line so the draft stays compact instead of appending noise.
         const priorIndex =
           lastReasoningLine === undefined ? -1 : lines.lastIndexOf(lastReasoningLine);
         if (priorIndex >= 0) {
@@ -258,6 +267,8 @@ export function createChannelProgressDraftCompositor(params: {
       const normalized = normalizeCommentaryProgressText(text ?? "");
       const lineId = itemId ? `commentary:${itemId}` : normalized ? `commentary:${normalized}` : "";
       if (!normalized) {
+        // Empty commentary with an item id means the producer retracted that
+        // item; remove its draft line if it was already rendered.
         if (lineId) {
           await clearLine(lineId);
         }
@@ -280,7 +291,11 @@ export function createChannelProgressDraftCompositor(params: {
 }
 
 function normalizeReasoningProgressLine(text: string): string {
-  return stripReasoningProgressTags(text)
+  const reasoningText = readReasoningProgressTextOutsideCode(text);
+  if (reasoningText === undefined) {
+    return "";
+  }
+  return stripReasoningProgressTagsOutsideCode(reasoningText)
     .replace(
       /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i,
       "",
@@ -289,10 +304,79 @@ function normalizeReasoningProgressLine(text: string): string {
     .trim();
 }
 
-function stripReasoningProgressTags(text: string): string {
-  return text.replace(
-    /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu,
-    "",
+const REASONING_PROGRESS_TAG_RE =
+  /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
+const REASONING_PROGRESS_TAG_NAMES = [
+  "think",
+  "thinking",
+  "thought",
+  "antthinking",
+  "antml:think",
+  "antml:thinking",
+  "antml:thought",
+] as const;
+const REASONING_PROGRESS_TAG_PREFIXES = REASONING_PROGRESS_TAG_NAMES.flatMap((name) => [
+  `<${name}`,
+  `</${name}`,
+]);
+
+function readReasoningProgressTextOutsideCode(text: string): string | undefined {
+  if (isPartialReasoningProgressTagPrefix(text)) {
+    // Hold partial tags until more bytes arrive; otherwise a streaming "<thi"
+    // fragment can flash as user-visible progress.
+    return undefined;
+  }
+  const codeRegions = findCodeRegions(text);
+  let hasTags = false;
+  let inReasoning = false;
+  let cursor = 0;
+  const chunks: string[] = [];
+  for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
+    const offset = match.index ?? 0;
+    if (isInsideCode(offset, codeRegions)) {
+      // Preserve code examples that mention reasoning tags; only actual model
+      // wrapper tags outside code delimit private reasoning progress.
+      continue;
+    }
+    hasTags = true;
+    if (match[1]) {
+      if (inReasoning) {
+        chunks.push(text.slice(cursor, offset));
+      }
+      inReasoning = false;
+      cursor = offset + match[0].length;
+      continue;
+    }
+    if (inReasoning) {
+      chunks.push(text.slice(cursor, offset));
+    }
+    inReasoning = true;
+    cursor = offset + match[0].length;
+  }
+  if (!hasTags) {
+    return text;
+  }
+  if (inReasoning) {
+    chunks.push(text.slice(cursor));
+  }
+  return chunks.join("").trim();
+}
+
+function isPartialReasoningProgressTagPrefix(text: string): boolean {
+  const normalized = text.trimStart().toLowerCase();
+  return (
+    normalized.startsWith("<") &&
+    !normalized.includes(">") &&
+    REASONING_PROGRESS_TAG_PREFIXES.some(
+      (prefix) => prefix.startsWith(normalized) || normalized.startsWith(prefix),
+    )
+  );
+}
+
+function stripReasoningProgressTagsOutsideCode(text: string): string {
+  const codeRegions = findCodeRegions(text);
+  return text.replace(REASONING_PROGRESS_TAG_RE, (match, _closing: string, offset: number) =>
+    isInsideCode(offset, codeRegions) ? match : "",
   );
 }
 
@@ -367,14 +451,21 @@ function mergeReasoningProgressText(
   }
   const normalizedCurrent = normalizeReasoningProgressInput(current);
   const normalizedIncoming = normalizeReasoningProgressInput(incoming);
-  if (!normalizedIncoming || normalizedIncoming === normalizedCurrent) {
+  if (!normalizedIncoming) {
+    return shouldAppendEmptyReasoningProgressDelta(current, incoming)
+      ? `${current}${incoming}`
+      : current;
+  }
+  if (normalizedIncoming === normalizedCurrent) {
     return current;
   }
   if (
     options?.snapshot === true ||
     isReasoningSnapshotText(incoming) ||
-    normalizedIncoming.startsWith(normalizedCurrent)
+    (normalizedCurrent && normalizedIncoming.startsWith(normalizedCurrent))
   ) {
+    // Snapshot-style providers resend the full reasoning text. Replace the
+    // buffer instead of duplicating the already-seen prefix.
     return incoming;
   }
   return `${current}${incoming}`;
@@ -384,4 +475,22 @@ function isReasoningSnapshotText(text: string): boolean {
   return /^\s*(?:>\s*)?(?:Reasoning:\s*(?:\r?\n|\r)\s*|Thinking\.{0,3}\s*(?:\r?\n|\r)\s*(?:\r?\n|\r)\s*)/i.test(
     text,
   );
+}
+
+function shouldAppendEmptyReasoningProgressDelta(current: string, incoming: string): boolean {
+  return (
+    isPartialReasoningProgressTagPrefix(current) ||
+    isPartialReasoningProgressTagPrefix(incoming) ||
+    hasReasoningProgressTagOutsideCode(incoming)
+  );
+}
+
+function hasReasoningProgressTagOutsideCode(text: string): boolean {
+  const codeRegions = findCodeRegions(text);
+  for (const match of text.matchAll(REASONING_PROGRESS_TAG_RE)) {
+    if (!isInsideCode(match.index ?? 0, codeRegions)) {
+      return true;
+    }
+  }
+  return false;
 }

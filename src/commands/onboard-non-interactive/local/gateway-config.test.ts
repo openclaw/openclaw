@@ -1,3 +1,4 @@
+// Non-interactive gateway config tests cover port, bind, auth token, and SecretRef preservation behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { OnboardOptions } from "../../onboard-types.js";

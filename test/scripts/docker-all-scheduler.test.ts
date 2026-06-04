@@ -281,6 +281,10 @@ describe("scripts/test-docker-all scheduler", () => {
     expect(DEFAULT_RESOURCE_LIMITS["live:openai"]).toBe(1);
   });
 
+  it("caps npm-heavy Docker lanes below full parallelism by default", () => {
+    expect(DEFAULT_RESOURCE_LIMITS.npm).toBe(5);
+  });
+
   it("cleans stale stopped containers from all named Docker E2E lanes", () => {
     expect(
       dockerPreflightContainerNames(`

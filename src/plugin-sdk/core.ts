@@ -1,3 +1,4 @@
+// Core SDK contracts expose stable identifiers, manifests, and shared plugin metadata types.
 import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
 import type { ResolvedConfiguredAcpBinding } from "../acp/persistent-bindings.types.js";
 import { buildChatChannelMetaById } from "../channels/chat-meta-shared.js";
@@ -826,6 +827,7 @@ export function createChannelPluginBase<TResolvedAccount>(
     meta: {
       ...resolveSdkChatChannelMeta(params.id),
       ...params.meta,
+      id: params.id,
     },
     ...(params.setupWizard ? { setupWizard: params.setupWizard } : {}),
     ...(params.capabilities ? { capabilities: params.capabilities } : {}),

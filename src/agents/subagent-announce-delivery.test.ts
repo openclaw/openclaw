@@ -1,3 +1,5 @@
+// Subagent announce delivery tests cover the last-mile routing used when child
+// runs report progress or completion back to the requester session.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import {
@@ -86,6 +88,8 @@ function createQueueOutcomeMock(
 function createQueueOutcomeSequenceMock(
   queuedOutcomes: (boolean | EmbeddedAgentQueueFailureReason)[],
 ): ReturnType<typeof vi.fn<QueueEmbeddedAgentMessageWithOutcome>> {
+  // Sequence mocks model retry paths where the embedded run can become
+  // unavailable between announce attempts.
   let index = 0;
   return vi.fn((sessionId: string) => {
     const outcome = queuedOutcomes[Math.min(index, queuedOutcomes.length - 1)] ?? false;
@@ -187,6 +191,8 @@ async function deliverSlackThreadAnnouncement(params: {
   sourceTool?: string;
   requesterAbandoned?: boolean;
 }) {
+  // Slack thread delivery exercises all origins because direct, session, and
+  // completion routing can differ after a child run outlives its requester.
   testing.setDepsForTest({
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({

@@ -1,3 +1,4 @@
+// QA channel protocol helpers validate synthetic channel messages used by QA plugins.
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 
 export type QaBusConversationKind = "direct" | "channel" | "group";

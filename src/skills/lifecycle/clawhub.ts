@@ -1,11 +1,13 @@
 import fsSync from "node:fs";
 import path from "node:path";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   downloadClawHubGitHubSkillArchive,
   downloadClawHubSkillArchive,
   downloadClawHubSkillArchiveUrl,
   fetchClawHubSkillDetail,
   fetchClawHubSkillInstallResolution,
+  isDefaultClawHubBaseUrl,
   reportClawHubSkillInstallTelemetry,
   resolveClawHubBaseUrl,
   searchClawHubSkills,
@@ -135,6 +137,7 @@ type ClawHubInstallParams = {
   baseUrl?: string;
   force?: boolean;
   logger?: Logger;
+  config?: OpenClawConfig;
 };
 
 type TrackedUpdateTarget =
@@ -775,8 +778,11 @@ async function installArchiveResolution(params: {
   slug: string;
   version: string;
   archivePath: string;
+  registry: string;
+  authority: "openclaw" | "third-party";
   force?: boolean;
   logger?: Logger;
+  config?: OpenClawConfig;
 }) {
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -790,7 +796,23 @@ async function installArchiveResolution(params: {
         extractedRoot: rootDir,
         mode: params.force ? "update" : "install",
         logger: params.logger,
-        scan: false,
+        policy: {
+          config: params.config,
+          installId: "clawhub",
+          origin: {
+            type: "clawhub",
+            registry: params.registry,
+            slug: params.slug,
+            version: params.version,
+          },
+          source: {
+            kind: "clawhub",
+            authority: params.authority,
+            mutable: false,
+            network: true,
+          },
+          requestedSpecifier: `clawhub:${params.slug}@${params.version}`,
+        },
         rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
       }),
   });
@@ -801,8 +823,12 @@ async function installGitHubResolution(params: {
   slug: string;
   sourcePath: string;
   archivePath: string;
+  registry: string;
+  repo: string;
+  commit: string;
   force?: boolean;
   logger?: Logger;
+  config?: OpenClawConfig;
 }) {
   return await withExtractedArchiveRoot({
     archivePath: params.archivePath,
@@ -815,7 +841,26 @@ async function installGitHubResolution(params: {
         extractedRoot: resolveGitHubSkillSourceDir(repoRoot, params.sourcePath),
         mode: params.force ? "update" : "install",
         logger: params.logger,
-        scan: false,
+        policy: {
+          config: params.config,
+          installId: "clawhub",
+          origin: {
+            type: "clawhub",
+            registry: params.registry,
+            slug: params.slug,
+            version: params.commit,
+            repo: params.repo,
+            path: params.sourcePath,
+            commit: params.commit,
+          },
+          source: {
+            kind: "git",
+            authority: "third-party",
+            mutable: false,
+            network: true,
+          },
+          requestedSpecifier: `clawhub:${params.slug}@${params.commit}`,
+        },
         rootMarkers: CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS,
       }),
   });
@@ -835,6 +880,8 @@ async function performClawHubSkillInstall(
 ): Promise<InstallClawHubSkillResult> {
   try {
     const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
+    const registry = resolveClawHubBaseUrl(params.baseUrl);
+    const clawhubAuthority = isDefaultClawHubBaseUrl(params.baseUrl) ? "openclaw" : "third-party";
     if (!params.force && (await pathExists(targetDir))) {
       return {
         ok: false,
@@ -899,16 +946,23 @@ async function performClawHubSkillInstall(
                 slug: params.slug,
                 sourcePath: latestResolution.github.path,
                 archivePath: archive.archivePath,
+                registry,
+                repo: latestResolution.github.repo,
+                commit: latestResolution.github.commit,
                 force: params.force,
                 logger: params.logger,
+                config: params.config,
               })
             : await installArchiveResolution({
                 workspaceDir: params.workspaceDir,
                 slug: params.slug,
                 version,
                 archivePath: archive.archivePath,
+                registry,
+                authority: clawhubAuthority,
                 force: params.force,
                 logger: params.logger,
+                config: params.config,
               });
       } else {
         install = await installArchiveResolution({
@@ -916,8 +970,11 @@ async function performClawHubSkillInstall(
           slug: params.slug,
           version,
           archivePath: archive.archivePath,
+          registry,
+          authority: clawhubAuthority,
           force: params.force,
           logger: params.logger,
+          config: params.config,
         });
       }
       if (!install.ok) {
@@ -1025,6 +1082,7 @@ export async function installSkillFromClawHub(params: {
   baseUrl?: string;
   force?: boolean;
   logger?: Logger;
+  config?: OpenClawConfig;
 }): Promise<InstallClawHubSkillResult> {
   return await installRequestedSkillFromClawHub(params);
 }
@@ -1034,6 +1092,7 @@ export async function updateSkillsFromClawHub(params: {
   slug?: string;
   baseUrl?: string;
   logger?: Logger;
+  config?: OpenClawConfig;
 }): Promise<UpdateClawHubSkillResult[]> {
   const lock = await readClawHubSkillsLockfile(params.workspaceDir);
   const slugs = params.slug
@@ -1066,6 +1125,7 @@ export async function updateSkillsFromClawHub(params: {
       baseUrl: tracked.baseUrl,
       force: true,
       logger: params.logger,
+      config: params.config,
     });
     if (!install.ok) {
       results.push(install);

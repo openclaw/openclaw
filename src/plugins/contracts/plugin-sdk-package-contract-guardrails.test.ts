@@ -515,8 +515,10 @@ function collectDeprecatedTestBarrelImports(): string[] {
 function collectDeprecatedPackageTestingBridgeDrift(): string[] {
   const source = fs
     .readFileSync(resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"), "utf8")
-    .trim();
-  return source === 'export * from "../../../src/plugin-sdk/testing.js";'
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("//"));
+  return source.length === 1 && source[0] === 'export * from "../../../src/plugin-sdk/testing.js";'
     ? []
     : ["packages/plugin-sdk/src/testing.ts"];
 }

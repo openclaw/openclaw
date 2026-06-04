@@ -1,15 +1,21 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import net from "node:net";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
-const READY_TIMEOUT_MS = 120_000;
+export const READY_TIMEOUT_MS = 120_000;
+export const READY_PROBE_TIMEOUT_MS = 1_000;
+const PARENT_TERMINATION_SIGNALS = ["SIGHUP", "SIGINT", "SIGTERM"];
+const IS_DIRECT_RUN =
+  typeof process.argv[1] === "string" &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 
 function usage() {
   return [
@@ -84,22 +90,48 @@ async function sleep(ms) {
   });
 }
 
-async function waitForGatewayReady({ child, port, stderrPath }) {
+function formatErrorMessage(error) {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return String(error);
+}
+
+export async function waitForGatewayReady({
+  child,
+  fetchImpl = fetch,
+  port,
+  probeTimeoutMs = READY_PROBE_TIMEOUT_MS,
+  readyTimeoutMs = READY_TIMEOUT_MS,
+  sleepMs = 250,
+  stderrPath,
+}) {
   const startedAt = Date.now();
   let childExit = null;
   child.once("exit", (code, signal) => {
     childExit = { code, signal };
   });
-  while (Date.now() - startedAt < READY_TIMEOUT_MS) {
-    if (childExit) {
+  const getChildExit = () =>
+    childExit ??
+    (child.exitCode != null || child.signalCode != null
+      ? { code: child.exitCode, signal: child.signalCode }
+      : null);
+  while (Date.now() - startedAt < readyTimeoutMs) {
+    const observedExit = getChildExit();
+    if (observedExit) {
       const stderr = await fs.readFile(stderrPath, "utf8").catch(() => "");
       throw new Error(
-        `gateway exited before readiness code=${childExit.code ?? "null"} signal=${childExit.signal ?? "null"}\n${stderr.slice(-4000)}`,
+        `gateway exited before readiness code=${observedExit.code ?? "null"} signal=${observedExit.signal ?? "null"}\n${stderr.slice(-4000)}`,
       );
     }
     for (const endpoint of ["/readyz", "/healthz"]) {
       try {
-        const response = await fetch(`http://127.0.0.1:${port}${endpoint}`);
+        const response = await fetchImpl(`http://127.0.0.1:${port}${endpoint}`, {
+          signal: AbortSignal.timeout(probeTimeoutMs),
+        });
         if (response.ok) {
           return;
         }
@@ -107,29 +139,248 @@ async function waitForGatewayReady({ child, port, stderrPath }) {
         // The gateway may not have bound the port yet.
       }
     }
-    await sleep(250);
+    await sleep(sleepMs);
   }
   const stderr = await fs.readFile(stderrPath, "utf8").catch(() => "");
-  throw new Error(
-    `gateway did not become ready after ${READY_TIMEOUT_MS}ms\n${stderr.slice(-4000)}`,
-  );
+  throw new Error(`gateway did not become ready after ${readyTimeoutMs}ms\n${stderr.slice(-4000)}`);
 }
 
-async function stopGateway(child) {
-  if (child.exitCode !== null || child.signalCode !== null) {
+function isProcessAlreadyExitedError(error) {
+  return error && typeof error === "object" && error.code === "ESRCH";
+}
+
+function defaultKillProcess(pid, signal) {
+  return process.kill(pid, signal);
+}
+
+async function defaultOpen(filePath, flags) {
+  return await fs.open(filePath, flags);
+}
+
+function resolveOpenClawLaunchArgs(repoRoot, sourceEntryExists = existsSync) {
+  const sourceEntry = path.join(repoRoot, "src", "entry.ts");
+  if (sourceEntryExists(sourceEntry)) {
+    return ["--import", "tsx", sourceEntry];
+  }
+  return [path.join(repoRoot, "openclaw.mjs")];
+}
+
+export function signalGatewayProcess(child, signal, killProcess = defaultKillProcess) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      killProcess(-child.pid, signal);
+      return true;
+    } catch (error) {
+      if (isProcessAlreadyExitedError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+  try {
+    return child.kill(signal);
+  } catch (error) {
+    if (isProcessAlreadyExitedError(error)) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export function isGatewayProcessAlive(child, killProcess = defaultKillProcess) {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      killProcess(-child.pid, 0);
+      return true;
+    } catch (error) {
+      if (isProcessAlreadyExitedError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  }
+  return child.exitCode === null && child.signalCode === null;
+}
+
+function signalGatewayProcessForParentExit(child, signal, killProcess) {
+  try {
+    signalGatewayProcess(child, signal, killProcess);
+  } catch {
+    // Parent shutdown cleanup is best effort; the original signal should win.
+  }
+}
+
+export function installGatewayParentCleanup(
+  child,
+  { killProcess = defaultKillProcess, processLike = process } = {},
+) {
+  const signalHandlers = new Map();
+  const cleanup = (signal) => {
+    signalGatewayProcessForParentExit(child, signal, killProcess);
+    if (process.platform !== "win32") {
+      signalGatewayProcessForParentExit(child, "SIGKILL", killProcess);
+    }
+  };
+  const exitHandler = () => {
+    cleanup("SIGTERM");
+  };
+  const removeHandlers = () => {
+    processLike.off?.("exit", exitHandler);
+    for (const [signal, handler] of signalHandlers) {
+      processLike.off?.(signal, handler);
+    }
+    signalHandlers.clear();
+  };
+  processLike.once("exit", exitHandler);
+  for (const signal of PARENT_TERMINATION_SIGNALS) {
+    const handler = () => {
+      cleanup(signal);
+      removeHandlers();
+      processLike.kill?.(processLike.pid, signal);
+    };
+    signalHandlers.set(signal, handler);
+    processLike.once(signal, handler);
+  }
+  return removeHandlers;
+}
+
+async function waitForGatewayExit(child, timeoutMs, killProcess = defaultKillProcess) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() <= deadline) {
+    if (!isGatewayProcessAlive(child, killProcess)) {
+      return true;
+    }
+    await sleep(Math.min(25, Math.max(0, deadline - Date.now())));
+  }
+  return !isGatewayProcessAlive(child, killProcess);
+}
+
+export async function stopGateway(child, options = {}) {
+  if (!isGatewayProcessAlive(child, options.killProcess)) {
     return;
   }
-  child.kill("SIGTERM");
-  const exited = await new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(false), 1_500);
-    child.once("exit", () => {
-      clearTimeout(timer);
-      resolve(true);
-    });
-  });
-  if (!exited && child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGKILL");
+  const killGraceMs = Math.max(0, options.killGraceMs ?? 1_500);
+  signalGatewayProcess(child, "SIGTERM", options.killProcess);
+  const exited = await waitForGatewayExit(child, killGraceMs, options.killProcess);
+  if (!exited) {
+    signalGatewayProcess(child, "SIGKILL", options.killProcess);
   }
+}
+
+async function closeFileHandles(handles) {
+  const results = await Promise.allSettled(handles.filter(Boolean).map((handle) => handle.close()));
+  const failedClose = results.find((result) => result.status === "rejected");
+  if (failedClose) {
+    throw failedClose.reason;
+  }
+}
+
+export async function startGateway({
+  configPath,
+  env = process.env,
+  openImpl = defaultOpen,
+  port,
+  repoRoot,
+  sourceEntryExists = existsSync,
+  spawnImpl = spawn,
+  stderrPath,
+  stdoutPath,
+  tempRoot,
+  token,
+}) {
+  const stdout = await openImpl(stdoutPath, "w");
+  let stderr;
+  try {
+    stderr = await openImpl(stderrPath, "w");
+  } catch (error) {
+    try {
+      await closeFileHandles([stdout]);
+    } catch {}
+    throw error;
+  }
+
+  let child;
+  const launcherArgs = resolveOpenClawLaunchArgs(repoRoot, sourceEntryExists);
+  try {
+    child = spawnImpl(
+      process.execPath,
+      [
+        ...launcherArgs,
+        "gateway",
+        "run",
+        "--port",
+        String(port),
+        "--bind",
+        "loopback",
+        "--allow-unconfigured",
+      ],
+      {
+        cwd: repoRoot,
+        detached: process.platform !== "win32",
+        env: {
+          ...env,
+          HOME: path.join(tempRoot, "home"),
+          XDG_CONFIG_HOME: path.join(tempRoot, "xdg-config"),
+          XDG_DATA_HOME: path.join(tempRoot, "xdg-data"),
+          XDG_CACHE_HOME: path.join(tempRoot, "xdg-cache"),
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
+          OPENCLAW_GATEWAY_TOKEN: token,
+          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
+          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
+          OPENCLAW_SKIP_CANVAS_HOST: "1",
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_TEST_FAST: "1",
+        },
+        stdio: ["ignore", stdout.fd, stderr.fd],
+      },
+    );
+  } catch (error) {
+    try {
+      await closeFileHandles([stdout, stderr]);
+    } catch {}
+    throw error;
+  }
+
+  try {
+    await closeFileHandles([stdout, stderr]);
+  } catch (error) {
+    try {
+      await stopGateway(child);
+    } catch {}
+    throw error;
+  }
+
+  return child;
+}
+
+export async function cleanupTempRoot(tempRoot, { rmImpl = fs.rm } = {}) {
+  try {
+    await rmImpl(tempRoot, { force: true, recursive: true });
+  } catch (error) {
+    throw new Error(`failed to remove RPC RTT temp root: ${formatErrorMessage(error)}`, {
+      cause: error,
+    });
+  }
+}
+
+async function copyLogIfPresent(source, target) {
+  try {
+    await fs.copyFile(source, target);
+  } catch (error) {
+    if (error && typeof error === "object" && error.code === "ENOENT") {
+      return;
+    }
+    throw error;
+  }
+}
+
+async function copyGatewayLogs({ outputDir, stderrPath, stdoutPath }) {
+  await fs.mkdir(outputDir, { recursive: true });
+  await Promise.all([
+    copyLogIfPresent(stdoutPath, path.join(outputDir, "gateway.stdout.log")),
+    copyLogIfPresent(stderrPath, path.join(outputDir, "gateway.stderr.log")),
+  ]);
 }
 
 function quantile(sorted, q) {
@@ -295,9 +546,11 @@ async function main() {
   const stdoutPath = path.join(tempRoot, "gateway.stdout.log");
   const stderrPath = path.join(tempRoot, "gateway.stderr.log");
   let gatewayChild;
+  let removeGatewayParentCleanup = () => {};
   let status = "fail";
   let details = "";
   let measurement;
+  let cleanupError;
   const events = [];
   try {
     await fs.writeFile(
@@ -317,40 +570,16 @@ async function main() {
         2,
       )}\n`,
     );
-    const stdout = await fs.open(stdoutPath, "w");
-    const stderr = await fs.open(stderrPath, "w");
-    gatewayChild = spawn(
-      "pnpm",
-      [
-        "openclaw",
-        "gateway",
-        "run",
-        "--port",
-        String(port),
-        "--bind",
-        "loopback",
-        "--allow-unconfigured",
-      ],
-      {
-        cwd: repoRoot,
-        env: {
-          ...process.env,
-          HOME: path.join(tempRoot, "home"),
-          XDG_CONFIG_HOME: path.join(tempRoot, "xdg-config"),
-          XDG_DATA_HOME: path.join(tempRoot, "xdg-data"),
-          XDG_CACHE_HOME: path.join(tempRoot, "xdg-cache"),
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_STATE_DIR: path.join(tempRoot, "state"),
-          OPENCLAW_GATEWAY_TOKEN: token,
-          OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-          OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-          OPENCLAW_SKIP_CANVAS_HOST: "1",
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_TEST_FAST: "1",
-        },
-        stdio: ["ignore", stdout.fd, stderr.fd],
-      },
-    );
+    gatewayChild = await startGateway({
+      configPath,
+      port,
+      repoRoot,
+      stderrPath,
+      stdoutPath,
+      tempRoot,
+      token,
+    });
+    removeGatewayParentCleanup = installGatewayParentCleanup(gatewayChild);
     await waitForGatewayReady({ child: gatewayChild, port, stderrPath });
 
     const requireFromOpenClaw = createRequire(path.join(repoRoot, "package.json"));
@@ -436,10 +665,31 @@ async function main() {
   } catch (error) {
     details = error instanceof Error ? (error.stack ?? error.message) : String(error);
   } finally {
-    if (gatewayChild) {
-      await stopGateway(gatewayChild).catch(() => {});
+    try {
+      if (gatewayChild) {
+        await stopGateway(gatewayChild).catch(() => {});
+      }
+    } finally {
+      removeGatewayParentCleanup();
     }
-    await fs.rm(tempRoot, { force: true, recursive: true }).catch(() => {});
+    try {
+      await copyGatewayLogs({ outputDir, stderrPath, stdoutPath });
+    } catch (error) {
+      const message = formatErrorMessage(error);
+      details = details
+        ? `${details}\nwarning: failed to copy gateway logs: ${message}`
+        : `warning: failed to copy gateway logs: ${message}`;
+    }
+    try {
+      await cleanupTempRoot(tempRoot);
+    } catch (error) {
+      cleanupError = error;
+    }
+  }
+  if (cleanupError) {
+    const cleanupDetails = formatErrorMessage(cleanupError);
+    details = details ? `${details}\n${cleanupDetails}` : cleanupDetails;
+    status = "fail";
   }
   const finishedAt = new Date();
   await writeSummary({ details, events, finishedAt, outputDir, measurement, startedAt, status });
@@ -448,9 +698,11 @@ async function main() {
   }
 }
 
-main().catch(
-  /** @param {unknown} error */ (error) => {
-    process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    process.exitCode = 1;
-  },
-);
+if (IS_DIRECT_RUN) {
+  main().catch(
+    /** @param {unknown} error */ (error) => {
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      process.exitCode = 1;
+    },
+  );
+}

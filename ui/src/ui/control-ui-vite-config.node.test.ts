@@ -68,13 +68,15 @@ describe("Control UI Vite config", () => {
       throw new Error("Expected browser-only shared module alias plugin to expose resolveId");
     }
 
-    const resolved = await resolveIdHandler.call(
-      {} as never,
-      "../logging/redact.js",
-      path.join(repoRoot, "src/agents/tool-display-common.ts"),
-      { custom: {}, isEntry: false, ssr: false },
-    );
+    for (const importerSuffix of ["", "?browserv=123"]) {
+      const resolved = await resolveIdHandler.call(
+        {} as never,
+        "../logging/redact.js",
+        `${path.join(repoRoot, "src/agents/tool-display-common.ts")}${importerSuffix}`,
+        { custom: {}, isEntry: false, ssr: false },
+      );
 
-    expect(resolved).toBe(path.join(repoRoot, "ui/src/ui/browser-redact.ts"));
+      expect(resolved).toBe(path.join(repoRoot, "ui/src/ui/browser-redact.ts"));
+    }
   });
 });

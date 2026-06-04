@@ -1,3 +1,8 @@
+/**
+ * Agent transcript redaction helpers.
+ *
+ * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
 import {
@@ -79,9 +84,13 @@ function redactTranscriptStructuredValue(
     return value;
   }
   if (seen.has(value)) {
+    // Avoid recursive transcript payloads from escaping redaction or crashing
+    // persistence; circular refs serialize as a stable marker.
     return "[Circular]";
   }
   if (!isPlainTranscriptObject(value)) {
+    // Non-plain instances can carry runtime state; leave them untouched instead
+    // of cloning unexpected prototypes into transcripts.
     return value;
   }
 
@@ -100,6 +109,7 @@ function redactTranscriptStructuredValue(
   return next ?? value;
 }
 
+/** Return a redacted transcript message according to logging config. */
 export function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): AgentMessage {
   if (cfg?.logging?.redactSensitive === "off") {
     return message;

@@ -1,3 +1,4 @@
+// Durable final-reply delivery for inbound channel turns.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
@@ -207,7 +208,7 @@ export async function deliverInboundReplyWithMessageSendContext(
     silent: params.silent,
     durability,
     session,
-    gatewayClientScopes: params.ctxPayload.GatewayClientScopes,
+    gatewayClientScopes: params.ctxPayload.GatewayClientScopes ?? [],
   });
   if (send.status === "failed") {
     return { status: "failed" as const, error: send.error };
