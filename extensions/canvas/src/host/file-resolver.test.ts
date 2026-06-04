@@ -1,8 +1,24 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { resolvePreferredOpenClawTmpDir, withTempWorkspace } from "openclaw/plugin-sdk/temp-path";
 import { describe, expect, it } from "vitest";
 import { normalizeUrlPath, resolveFileWithinRoot } from "./file-resolver.js";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fsSync.writeFileSync(tempFile, "temp");
+    fsSync.symlinkSync(tempFile, tempLink, "file");
+    fsSync.unlinkSync(tempLink);
+    fsSync.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 
 type ResolvedFile = NonNullable<Awaited<ReturnType<typeof resolveFileWithinRoot>>>;
 
@@ -59,13 +75,13 @@ describe("resolveFileWithinRoot", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlink entries", async () => {
+  it.skipIf(!canCreateFileSymlinks)("rejects symlink entries", async () => {
     await withCanvasTemp("openclaw-canvas-resolver-", async (root) => {
       await withCanvasTemp("openclaw-canvas-resolver-outside-", async (outside) => {
         const target = path.join(outside, "outside.html");
         const link = path.join(root, "link.html");
         await fs.writeFile(target, "outside");
-        await fs.symlink(target, link);
+        await fs.symlink(target, link, "file");
 
         await expect(resolveFileWithinRoot(root, "/link.html")).resolves.toBeNull();
       });
