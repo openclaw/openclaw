@@ -1,9 +1,38 @@
 import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fsSync.writeFileSync(tempFile, "temp");
+    fsSync.symlinkSync(tempFile, tempLink, "file");
+    fsSync.unlinkSync(tempLink);
+    fsSync.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+const canCreateDirectorySymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-dir-test-${Math.random().toString(36).substring(2)}`);
+    const tempDir = path.join(os.tmpdir(), `symlink-dir-target-${Math.random().toString(36).substring(2)}`);
+    fsSync.mkdirSync(tempDir);
+    fsSync.symlinkSync(tempDir, tempLink, process.platform === "win32" ? "junction" : "dir");
+    fsSync.unlinkSync(tempLink);
+    fsSync.rmdirSync(tempDir);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 import { enqueueCredsSave } from "./creds-persistence.js";
 import { baileys, getLastSocket, resetBaileysMocks, resetLoadConfigMock } from "./test-helpers.js";
 
@@ -267,7 +296,7 @@ describe("web session", () => {
     openMock.restore();
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "rejects symlinked creds before Baileys auth state reads",
     async () => {
       const authDir = createTempAuthDir("openclaw-wa-creds-symlink-runtime");
@@ -278,7 +307,7 @@ describe("web session", () => {
         JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
         "utf-8",
       );
-      fsSync.symlinkSync(targetPath, credsPath);
+      fsSync.symlinkSync(targetPath, credsPath, "file");
 
       await expect(createWaSocket(false, false, { authDir })).rejects.toThrow(
         "creds.json must be a regular file or missing",
@@ -290,7 +319,7 @@ describe("web session", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "rejects symlinked auth directories before Baileys auth state reads",
     async () => {
       const rootDir = createTempAuthDir("openclaw-wa-authdir-symlink-runtime");
@@ -302,7 +331,7 @@ describe("web session", () => {
         JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
         "utf-8",
       );
-      fsSync.symlinkSync(targetAuthDir, authDir, "dir");
+      fsSync.symlinkSync(targetAuthDir, authDir, process.platform === "win32" ? "junction" : "dir");
 
       await expect(createWaSocket(false, false, { authDir })).rejects.toThrow(
         "creds.json must be a regular file or missing",
@@ -313,7 +342,7 @@ describe("web session", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "rejects symlinked auth directory parents before creating the auth directory",
     async () => {
       const rootDir = createTempAuthDir("openclaw-wa-auth-parent-symlink-runtime");
@@ -321,7 +350,7 @@ describe("web session", () => {
       const linkedBaseDir = path.join(rootDir, "linked-base");
       const authDir = path.join(linkedBaseDir, "default");
       fsSync.mkdirSync(targetBaseDir);
-      fsSync.symlinkSync(targetBaseDir, linkedBaseDir, "dir");
+      fsSync.symlinkSync(targetBaseDir, linkedBaseDir, process.platform === "win32" ? "junction" : "dir");
 
       await expect(createWaSocket(false, false, { authDir })).rejects.toThrow(
         "creds.json must be a regular file or missing",
@@ -332,14 +361,14 @@ describe("web session", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "rejects symlinked creds before atomic credential saves",
     async () => {
       const authDir = createTempAuthDir("openclaw-wa-creds-symlink-save");
       const targetPath = path.join(authDir, "target-creds.json");
       const credsPath = path.join(authDir, "creds.json");
       fsSync.writeFileSync(targetPath, "keep", "utf-8");
-      fsSync.symlinkSync(targetPath, credsPath);
+      fsSync.symlinkSync(targetPath, credsPath, "file");
 
       await expect(
         writeCredsJsonAtomically(authDir, { me: { id: "15551234567@s.whatsapp.net" } }),
@@ -350,7 +379,7 @@ describe("web session", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "rejects symlinked credential parents before atomic credential saves",
     async () => {
       const rootDir = createTempAuthDir("openclaw-wa-creds-parent-symlink-save");
@@ -358,7 +387,7 @@ describe("web session", () => {
       const linkedBaseDir = path.join(rootDir, "linked-base");
       const authDir = path.join(linkedBaseDir, "default");
       fsSync.mkdirSync(targetBaseDir);
-      fsSync.symlinkSync(targetBaseDir, linkedBaseDir, "dir");
+      fsSync.symlinkSync(targetBaseDir, linkedBaseDir, process.platform === "win32" ? "junction" : "dir");
 
       await expect(
         writeCredsJsonAtomically(authDir, { me: { id: "15551234567@s.whatsapp.net" } }),
@@ -688,7 +717,7 @@ describe("web session", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "does not rotate creds backup through a symlinked backup path",
     async () => {
       const authDir = createTempAuthDir("openclaw-wa-rotate-backup-symlink");
@@ -697,7 +726,7 @@ describe("web session", () => {
       const targetPath = path.join(authDir, "backup-target.json");
       fsSync.writeFileSync(credsPath, "{}", "utf-8");
       fsSync.writeFileSync(targetPath, "keep", "utf-8");
-      fsSync.symlinkSync(targetPath, backupPath);
+      fsSync.symlinkSync(targetPath, backupPath, "file");
 
       await createWaSocket(false, false, { authDir });
       await emitCredsUpdate(authDir);
