@@ -113,6 +113,7 @@ type SessionWithAgentPrompt = {
 
 type PromptReleaseStreamFn = ((...args: unknown[]) => unknown) & {
   __openclawSessionLockPromptReleaseInstalled?: boolean;
+  __openclawEmbeddedPromptRetryDefaultInstalled?: boolean;
 };
 
 type SessionFileFingerprint =
@@ -2104,6 +2105,12 @@ export function installPromptSubmissionLockRelease(params: {
     }
   };
   wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
+  // Both installers wrap agent.streamFn and each is idempotent via its own marker.
+  // The outermost wrapper hides inner markers, so carry the retry-default marker
+  // forward; otherwise a later install pass would re-wrap an already-wrapped fn.
+  if (currentStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] === true) {
+    wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
+  }
   agent.streamFn = wrappedStreamFn;
 }
 
@@ -2116,10 +2123,21 @@ export function installEmbeddedPromptRetryDefault(session: unknown): void {
   if (typeof agent?.streamFn !== "function") {
     return;
   }
-  const innerStreamFn = agent.streamFn;
-  agent.streamFn = (...args: unknown[]) => {
+  const currentStreamFn = agent.streamFn;
+  if (currentStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] === true) {
+    return;
+  }
+  const innerStreamFn = currentStreamFn;
+  const wrappedStreamFn: PromptReleaseStreamFn = (...args: unknown[]) => {
     const [model, context, options] = args;
     const requestOptions = options as { maxRetries?: number } | undefined;
     return innerStreamFn(model, context, { maxRetries: 0, ...requestOptions });
   };
+  wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
+  // The outermost wrapper hides inner markers, so carry the lock-release marker
+  // forward; otherwise a later install pass would re-wrap an already-wrapped fn.
+  if (currentStreamFn["__openclawSessionLockPromptReleaseInstalled"] === true) {
+    wrappedStreamFn["__openclawSessionLockPromptReleaseInstalled"] = true;
+  }
+  agent.streamFn = wrappedStreamFn;
 }
