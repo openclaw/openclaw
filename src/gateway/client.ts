@@ -345,6 +345,14 @@ export class GatewayClient {
     const wsOptions: FingerprintCheckingClientOptions = {
       maxPayload: 25 * 1024 * 1024,
     };
+    const explicitOrigin =
+      this.opts.env?.OPENCLAW_GATEWAY_CLIENT_ORIGIN ?? process.env.OPENCLAW_GATEWAY_CLIENT_ORIGIN;
+    if (explicitOrigin?.trim()) {
+      wsOptions.headers = {
+        ...(wsOptions.headers ?? {}),
+        Origin: explicitOrigin.trim(),
+      };
+    }
     if (url.startsWith("wss://") && this.opts.tlsFingerprint) {
       wsOptions.rejectUnauthorized = false;
       wsOptions.checkServerIdentity = (_hostValue: string, cert: CertMeta) => {

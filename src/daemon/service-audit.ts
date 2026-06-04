@@ -75,8 +75,18 @@ export function needsNodeRuntimeMigration(issues: ServiceConfigIssue[]): boolean
   );
 }
 
+function commandTextContainsGatewaySubcommand(commandText: string): boolean {
+  return /(?:^|[\s"'`])gateway(?:$|[\s"'`]|--|\r?\n)/i.test(commandText);
+}
+
 function hasGatewaySubcommand(programArguments?: string[]): boolean {
-  return Boolean(programArguments?.some((arg) => arg === "gateway"));
+  if (!programArguments || programArguments.length === 0) {
+    return false;
+  }
+  if (programArguments.some((arg) => arg === "gateway")) {
+    return true;
+  }
+  return commandTextContainsGatewaySubcommand(programArguments.join(" "));
 }
 
 function parseSystemdUnit(content: string): {
@@ -254,6 +264,11 @@ export function readGatewayServiceCommandPort(programArguments?: string[]): numb
     if (arg.startsWith("--port=")) {
       return parseGatewayPortArg(arg.slice("--port=".length));
     }
+  }
+  const commandText = programArguments.join(" ");
+  const inlinePort = commandText.match(/(?:^|[\s"'`])--port(?:=|\s+)(\d{1,5})(?:$|[\s"'`]|\r?\n)/i);
+  if (inlinePort?.[1]) {
+    return parseGatewayPortArg(inlinePort[1]);
   }
   return undefined;
 }

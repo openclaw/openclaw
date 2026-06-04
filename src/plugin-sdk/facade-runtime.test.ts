@@ -147,7 +147,7 @@ describe("plugin-sdk facade runtime", () => {
     });
 
     expect(resolved?.boundaryRoot).not.toBe(overrideDir);
-    expect(resolved?.modulePath).toMatch(
+    expect(resolved?.modulePath.replaceAll("\\", "/")).toMatch(
       /(?:^|\/)(?:extensions|dist-runtime\/extensions)\/browser\/browser-maintenance\.(?:ts|js)$/u,
     );
   });
@@ -505,7 +505,12 @@ describe("plugin-sdk facade runtime", () => {
   it("keeps shared runtime-core facades available without plugin activation", () => {
     setRuntimeConfigSnapshot({});
 
-    for (const dirName of ["speech-core", "image-generation-core", "media-understanding-core"]) {
+    for (const dirName of [
+      "speech-core",
+      "image-generation-core",
+      "media-understanding-core",
+      "memory-core",
+    ]) {
       expect(
         resolveActivationCheckBundledPluginPublicSurfaceAccess({
           dirName,

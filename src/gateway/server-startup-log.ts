@@ -40,7 +40,11 @@ export async function logGatewayStartup(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const modelRef = `${agentProvider}/${agentModel}`;
+  const modelRef = formatStartupModelRef({
+    cfg: params.cfg,
+    provider: agentProvider,
+    model: agentModel,
+  });
   const modelDetails = formatAgentModelStartupDetails({
     cfg: params.cfg,
     provider: agentProvider,
@@ -72,6 +76,34 @@ export async function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+}
+
+function formatStartupModelRef(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): string {
+  const configuredRef = `${params.provider}/${params.model}`;
+  if (params.provider !== "openai") {
+    return configuredRef;
+  }
+
+  const models = params.cfg.agents?.defaults?.models;
+  const canonicalKey = modelKey(params.provider, params.model);
+  const legacyKey = legacyModelKey(params.provider, params.model);
+  const runtimeId =
+    models?.[canonicalKey]?.agentRuntime?.id ??
+    (legacyKey ? models?.[legacyKey]?.agentRuntime?.id : undefined);
+  const openAIOrder = params.cfg.auth?.order?.openai;
+  const codexAuthPreferred =
+    Array.isArray(openAIOrder) &&
+    openAIOrder.some(
+      (profileId) => typeof profileId === "string" && profileId.trim().startsWith("openai-codex:"),
+    );
+
+  return runtimeId === "codex" || codexAuthPreferred
+    ? `openai-codex/${params.model}`
+    : configuredRef;
 }
 
 function normalizeStartupThinkLevel(value: unknown): StartupThinkLevel | undefined {

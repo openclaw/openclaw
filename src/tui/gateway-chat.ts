@@ -188,13 +188,13 @@ export class GatewayChatClient implements TuiBackend {
 
   async sendChat(opts: ChatSendOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? randomUUID();
-    await this.client.request("chat.send", {
+    await this.client.request("agent", {
       sessionKey: opts.sessionKey,
       ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
       message: opts.message,
       thinking: opts.thinking,
       deliver: opts.deliver,
-      timeoutMs: opts.timeoutMs,
+      timeout: opts.timeoutMs ? Math.ceil(opts.timeoutMs / 1000) : undefined,
       idempotencyKey: runId,
     });
     return { runId };

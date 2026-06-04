@@ -92,22 +92,44 @@ describe("canSubmitTuiChatMessage", () => {
     expect(canSubmitTuiChatMessage({})).toBe(true);
   });
 
-  it("allows local submit while a run is active", () => {
+  it("blocks local submit while a non-finishing run is active", () => {
     expect(
       canSubmitTuiChatMessage({
         local: true,
         activeChatRunId: "run-active",
+        activityStatus: "streaming",
+      }),
+    ).toBe(false);
+  });
+
+  it("allows local submit while the active run is finishing", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
+        activeChatRunId: "run-active",
+        activityStatus: "finishing context",
       }),
     ).toBe(true);
   });
 
-  it("blocks gateway submit while a run is active", () => {
+  it("allows gateway submit while a run is active so gateway queue mode can handle it", () => {
     expect(
       canSubmitTuiChatMessage({
         local: false,
         activeChatRunId: "run-active",
       }),
-    ).toBe(false);
+    ).toBe(true);
+  });
+
+  it("allows gateway submit while an active run has pending local queue state", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        activeChatRunId: "run-active",
+        pendingChatRunId: "run-queued",
+        pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(true);
   });
 
   it("allows gateway stop text while a run is active", () => {
@@ -131,17 +153,37 @@ describe("canSubmitTuiChatMessage", () => {
     ).toBe(true);
   });
 
-  it("blocks submits with pending optimistic state", () => {
+  it("allows gateway submits with pending optimistic state so gateway queue mode can handle it", () => {
     expect(
       canSubmitTuiChatMessage({
+        local: false,
+        pendingOptimisticUserMessage: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("allows gateway submits with a pending chat run id so gateway queue mode can handle it", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: false,
+        pendingChatRunId: "run-pending",
+      }),
+    ).toBe(true);
+  });
+
+  it("blocks local submits with pending optimistic state", () => {
+    expect(
+      canSubmitTuiChatMessage({
+        local: true,
         pendingOptimisticUserMessage: true,
       }),
     ).toBe(false);
   });
 
-  it("blocks submits with a pending chat run id", () => {
+  it("blocks local submits with a pending chat run id", () => {
     expect(
       canSubmitTuiChatMessage({
+        local: true,
         pendingChatRunId: "run-pending",
       }),
     ).toBe(false);

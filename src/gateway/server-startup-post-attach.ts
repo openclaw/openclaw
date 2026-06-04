@@ -33,6 +33,7 @@ const PROVIDER_AUTH_PREWARM_START_DELAY_MS = 1_000;
 const PROVIDER_AUTH_REWARM_DELAY_MS = 1_000;
 const DEFERRED_SIDECAR_START_DELAY_MS = 100;
 const SKIP_STARTUP_MODEL_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_MODEL_PREWARM";
+const SKIP_STARTUP_PROVIDER_AUTH_PREWARM_ENV = "OPENCLAW_SKIP_STARTUP_PROVIDER_AUTH_PREWARM";
 const QMD_STARTUP_IDLE_DELAY_MS = 120_000;
 const RESTART_SENTINEL_FILENAME = "restart-sentinel.json";
 
@@ -104,6 +105,11 @@ function shouldCheckRestartSentinel(env: NodeJS.ProcessEnv = process.env): boole
 
 function shouldSkipStartupModelPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
   const raw = env[SKIP_STARTUP_MODEL_PREWARM_ENV]?.trim().toLowerCase();
+  return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
+}
+
+function shouldSkipStartupProviderAuthPrewarm(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env[SKIP_STARTUP_PROVIDER_AUTH_PREWARM_ENV]?.trim().toLowerCase();
   return raw === "1" || raw === "true" || raw === "yes" || raw === "on";
 }
 
@@ -183,6 +189,13 @@ function scheduleProviderAuthStatePrewarm(params: {
   };
   delayMs?: number;
 }): GatewayPostReadySidecarHandle {
+  if (shouldSkipStartupProviderAuthPrewarm()) {
+    params.log.info(
+      `provider auth state pre-warm skipped by ${SKIP_STARTUP_PROVIDER_AUTH_PREWARM_ENV}`,
+    );
+    return { stop: () => {} };
+  }
+
   let stopped = false;
   let startupTimer: ReturnType<typeof setTimeout> | undefined;
   let rewarmTimer: ReturnType<typeof setTimeout> | undefined;
@@ -1282,6 +1295,7 @@ export const testing = {
   scheduleProviderAuthStatePrewarm,
   schedulePrimaryModelPrewarm,
   shouldSkipStartupModelPrewarm,
+  shouldSkipStartupProviderAuthPrewarm,
   stopPostReadySidecarsAfterCloseStarted,
 };
 export { testing as __testing };

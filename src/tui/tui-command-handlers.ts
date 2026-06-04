@@ -658,11 +658,21 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       await abortActive({ preferActive: true });
       return;
     }
+    const queueingBehindGatewayRun =
+      !isBtw &&
+      opts.local !== true &&
+      Boolean(
+        state.activeChatRunId || state.pendingChatRunId || state.pendingOptimisticUserMessage,
+      );
+    const hasPendingSubmission =
+      Boolean(state.pendingChatRunId) || state.pendingOptimisticUserMessage === true;
+    const canQueueBehindLocalFinishingTurn =
+      opts.local === true && state.activityStatus === "finishing context" && !hasPendingSubmission;
     if (
       !isBtw &&
-      (state.pendingChatRunId ||
-        state.pendingOptimisticUserMessage ||
-        (opts.local !== true && state.activeChatRunId))
+      opts.local === true &&
+      !canQueueBehindLocalFinishingTurn &&
+      (state.activeChatRunId || hasPendingSubmission)
     ) {
       chatLog.addSystem("agent is busy — press Esc to abort before sending a new message");
       tui.requestRender();
@@ -680,8 +690,10 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           chatLog.reserveAssistantSlot(state.activeChatRunId);
         }
         chatLog.addUser(text);
-        state.pendingOptimisticUserMessage = true;
-        setActivityStatus("sending");
+        if (!queueingBehindGatewayRun) {
+          state.pendingOptimisticUserMessage = true;
+          setActivityStatus("sending");
+        }
       } else {
         noteLocalBtwRunId?.(runId);
       }
@@ -696,18 +708,20 @@ export function createCommandHandlers(context: CommandHandlerContext) {
         runId,
       });
       if (!isBtw) {
-        state.pendingChatRunId = runId;
-        setActivityStatus("waiting");
+        if (!queueingBehindGatewayRun) {
+          state.pendingChatRunId = runId;
+          setActivityStatus("waiting");
+        }
         tui.requestRender();
       }
     } catch (err) {
       if (isBtw) {
         forgetLocalBtwRunId?.(runId);
       }
-      if (!isBtw && state.activeChatRunId) {
+      if (!isBtw && !queueingBehindGatewayRun && state.activeChatRunId) {
         forgetLocalRunId?.(state.activeChatRunId);
       }
-      if (!isBtw) {
+      if (!isBtw && !queueingBehindGatewayRun) {
         state.pendingOptimisticUserMessage = false;
         state.pendingChatRunId = null;
         state.activeChatRunId = null;
