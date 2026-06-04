@@ -23,6 +23,23 @@ For Polytropos-specific documentation, treat **this file** as the canonical read
 - **Core fork:** `openclaw-polytropos` (this repo)
 - **Plugins monorepo:** [`polytropos-plugins`](https://github.com/JoshuaCWebDeveloper/polytropos-plugins)
 
+## Branch Architecture
+
+A development clone should define two remotes:
+- `origin` (pointing to this repo)
+- `upstream` (pointing to https://github.com/openclaw/openclaw)
+
+The following `upstream` branches and tags are used:
+- `upstream/main` - the default branch for the OpenClaw repo. Contains a trunk of the latest work, but may or may not include actual releases.
+- `upstream/release/YYYY.MM.DD` - a branch for a specific OpenClaw release that will not be merged into `upstream/main`.
+- `upstream/vYYYY.MM.DD` - a tag for an OpenClaw release.
+
+The following `origin` branches and tags are used:
+- `origin/master` - the default branch for the Polytropos repo. Intentionally kept behind `upstream/main` by at least several releases.
+- `origin/release/YYYY.MM.DD` - a branch for a specific Polytropos release. Will have `origin/master` merged into it as a part of the release. Will often be based off the corresponding `upstream/release/YYYY.MM.DD` branch, but there is no hard rule on this.
+- `origin/vYYYY.MM.DD+poly.N*` - a tag for a Polytropos release
+- `origin/main` - A legacy branch that had releases incorrectly merged into it. Will be force reset to `upstream/main` at some point.
+
 ---
 
 ## Non-negotiable invariants
