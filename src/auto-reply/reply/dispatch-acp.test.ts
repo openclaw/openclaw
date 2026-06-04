@@ -50,7 +50,12 @@ const policyMocks = vi.hoisted(() => ({
 
 const routeMocks = vi.hoisted(() => ({
   routeReply: vi.fn<
-    (_params: unknown) => Promise<{ ok: true; messageId: string } | { ok: false; error: string }>
+    (
+      _params: unknown,
+    ) => Promise<
+      | { ok: true; messageId?: string; suppressed?: boolean; reason?: string }
+      | { ok: false; error: string }
+    >
   >(async () => ({ ok: true, messageId: "mock" })),
 }));
 
@@ -2761,6 +2766,64 @@ describe("tryDispatchAcpReply", () => {
     );
     expect(dispatcherCall(dispatcher.sendFinalReply, 1).text).toBe("Captioned fallback.");
     expect(dispatcherCall(dispatcher.sendFinalReply, 1).mediaUrl).toBeUndefined();
+  });
+
+  it("delivers text fallback when routed captioned-voice final is hook-suppressed on telegram", async () => {
+    setReadyAcpResolution();
+    ttsMocks.resolveTtsConfig.mockReturnValue({ mode: "final" });
+    ttsMocks.maybeApplyTtsToPayload
+      .mockResolvedValueOnce({
+        text: "Suppressed caption.",
+        mediaUrl: "/tmp/openclaw-media/tts-suppressed.ogg",
+        audioAsVoice: true,
+      })
+      .mockImplementation(async (paramsUnknown: unknown) => {
+        return (paramsUnknown as { payload: unknown }).payload;
+      });
+    mockVisibleTextTurn("Suppressed caption.");
+    // The route-reply hook cancels the captioned media send (nothing reaches the
+    // user), but accepts the plain text-only final fallback.
+    routeMocks.routeReply.mockImplementation(async (paramsUnknown: unknown) => {
+      const payload = (paramsUnknown as { payload?: { mediaUrl?: string } }).payload;
+      if (payload?.mediaUrl) {
+        return {
+          ok: true,
+          suppressed: true,
+          reason: "cancelled_by_reply_payload_sending_hook",
+        };
+      }
+      return { ok: true, messageId: "fallback" };
+    });
+    const cfg = createAcpTestConfig({
+      acp: {
+        enabled: true,
+        stream: { deliveryMode: "live", coalesceIdleMs: 0, maxChunkChars: 64 },
+      },
+    });
+
+    const { dispatcher } = createDispatcher();
+    const result = await runDispatch({
+      bodyForAgent: "reply",
+      cfg,
+      dispatcher,
+      ttsChannel: "telegram",
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    // The reply must not be silently dropped: the accumulated block text is
+    // delivered as a text-only final after the suppressed media route.
+    expect(result?.queuedFinal).toBe(true);
+    const routedPayloads = routeMocks.routeReply.mock.calls.map(
+      ([params]) => (params as { payload?: { text?: string; mediaUrl?: string } }).payload,
+    );
+    expect(routedPayloads.some((payload) => payload?.mediaUrl)).toBe(true);
+    const textFallback = routedPayloads.find(
+      (payload) => payload?.text === "Suppressed caption." && !payload?.mediaUrl,
+    );
+    expect(textFallback).toBeDefined();
   });
 
   it("does not send redundant text fallback when block delivery failed but captioned voice succeeded", async () => {

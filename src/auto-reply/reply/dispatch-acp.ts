@@ -373,7 +373,10 @@ async function finalizeAcpTurnOutput(params: {
           ),
         );
         queuedFinal = queuedFinal || delivered;
-        finalMediaDelivered = delivered;
+        // Read the coordinator's media-delivery signal rather than the raw deliver()
+        // return: a hook-suppressed routed final returns true (handled) but leaves
+        // media undelivered, so the text fallback must still fire below.
+        finalMediaDelivered = params.delivery.hasDeliveredFinalTtsMedia();
       }
     } catch (err) {
       logVerbose(`dispatch-acp: accumulated ACP block TTS failed: ${formatErrorMessage(err)}`);
@@ -404,9 +407,19 @@ async function finalizeAcpTurnOutput(params: {
     ttsMode !== "all" &&
     fallbackText.trim().length > 0 &&
     !finalMediaDelivered &&
-    (!params.delivery.hasDeliveredFinalReply() ||
-      (shouldDeferTextForTts && params.delivery.hasFailedVisibleTextDelivery())) &&
-    (!params.delivery.hasDeliveredVisibleText() || params.delivery.hasFailedVisibleTextDelivery());
+    (shouldDeferTextForTts
+      ? // Captioned-final (deferred) path: key "already reached the user" off the
+        // delivered-to-user signal, not the handled flag. A hook-suppressed final is
+        // handled (deliveredFinalReply true) but never reached the user, so the text
+        // fallback must still fire; the failed-visible check keeps the async direct
+        // captioned-voice failure recoverable.
+        !params.delivery.hasDeliveredFinalReplyToUser() ||
+        params.delivery.hasFailedVisibleTextDelivery()
+      : // Non-deferred path is unchanged: block the fallback once the final reply or
+        // any visible text has been handled, unless that visible delivery failed.
+        !params.delivery.hasDeliveredFinalReply() &&
+        (!params.delivery.hasDeliveredVisibleText() ||
+          params.delivery.hasFailedVisibleTextDelivery()));
   if (shouldDeliverTextFallback) {
     const delivered = await params.delivery.deliver(
       "final",

@@ -1134,6 +1134,42 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     expect(delivered).toBe(true);
     expect(coordinator.hasDeliveredFinalReply()).toBe(true);
     expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(false);
+    // Suppression is handled but NOT delivered-to-user, so the text fallback gate
+    // (which keys off this predicate) must still be allowed to fire.
+    expect(coordinator.hasDeliveredFinalReplyToUser()).toBe(false);
+  });
+
+  it("marks final reply as delivered to user when a routed final media reply genuinely succeeds", async () => {
+    deliveryMocks.routeReply.mockResolvedValueOnce({ ok: true, messageId: "final-1" });
+    const coordinator = createAcpDispatchDeliveryCoordinator({
+      cfg: createAcpTestConfig(),
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        SessionKey: "agent:codex-acp:session-1",
+      }),
+      dispatcher: createDispatcher(),
+      inboundAudio: false,
+      shouldRouteToOriginating: true,
+      originatingChannel: "telegram",
+      originatingTo: "telegram:chat-1",
+    });
+
+    const delivered = await coordinator.deliver(
+      "final",
+      {
+        text: "spoken caption",
+        mediaUrls: ["https://example.com/audio.ogg"],
+      },
+      { skipTts: true },
+    );
+
+    // A genuine (non-suppressed) routed final reached the user: handled, media
+    // delivered, and delivered-to-user are all true so the fallback stays blocked.
+    expect(delivered).toBe(true);
+    expect(coordinator.hasDeliveredFinalReply()).toBe(true);
+    expect(coordinator.hasDeliveredFinalTtsMedia()).toBe(true);
+    expect(coordinator.hasDeliveredFinalReplyToUser()).toBe(true);
   });
 
   it("delivers media blocks with text stripped when suppressBlockUserDelivery is set", async () => {

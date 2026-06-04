@@ -2288,5 +2288,55 @@ describe("dispatchReplyFromConfig", () => {
     expect(textFallback).toBeDefined();
   });
 
+
+  it("delivers accumulated block text when captioned final TTS media route is hook-suppressed", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    channelTtsMocks.resolveChannelTtsVoiceDelivery.mockReturnValue({ captionedFinalText: true });
+    // The route-reply hook cancels the captioned voice send (suppressed: nothing
+    // reaches the user) but accepts the text-only fallback, mirroring a
+    // reply-payload-sending hook that swallowed the media final.
+    mocks.routeReply.mockReset();
+    mocks.routeReply.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as { payload?: ReplyPayload };
+      return params.payload?.mediaUrl
+        ? {
+            ok: true as boolean,
+            suppressed: true as boolean,
+            reason: "cancelled_by_reply_payload_sending_hook",
+          }
+        : { ok: true as boolean, messageId: "mock" };
+    });
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "telegram",
+      OriginatingTo: "telegram:999",
+      SessionKey: "agent:main:slack:channel:route-media-suppressed",
+    });
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+    ): Promise<ReplyPayload> => {
+      await opts?.onBlockReply?.({ text: "Routed block speech." });
+      return { text: "Routed caption." };
+    };
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    const routedPayloads = mocks.routeReply.mock.calls.map(
+      ([params]) => (params as { payload?: ReplyPayload }).payload,
+    );
+    // Captioned voice note was routed with media (but suppressed by the hook)...
+    expect(routedPayloads.some((payload) => payload?.mediaUrl)).toBe(true);
+    // ...and the accumulated block text was still routed as a text-only fallback,
+    // so the reply is not silently dropped on suppression.
+    const textFallback = routedPayloads.find(
+      (payload) => payload?.text === "Routed block speech." && !payload?.mediaUrl,
+    );
+    expect(textFallback).toBeDefined();
+  });
+
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
