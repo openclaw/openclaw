@@ -246,6 +246,7 @@ export const zh_TW = {
       localGatewayMissing: "未偵測到 Gateway（{url}）",
       localGatewayReachable: "Gateway 可存取（{url}）",
       modifyCurrent: "檢視並更新",
+      modifyCurrentAuthChoiceHint: "選擇此項即可輸入或更新所選 provider 的 key。",
       pluginCompatibilityTitle: "插件相容性",
       quickstartOnlyLocal: "QuickStart 僅支援本機 Gateway。將切換到手動模式。",
       quickstartTitle: "QuickStart",

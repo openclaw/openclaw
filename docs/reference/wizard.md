@@ -16,6 +16,7 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
 <Steps>
   <Step title="Existing config detection">
     - If `~/.openclaw/openclaw.json` exists, choose **Keep current values**, **Review and update**, or **Reset before setup**.
+    - When rerunning with `--auth-choice <provider>` to switch or refresh provider credentials, choose **Review and update**. **Keep current values** preserves the existing provider keys.
     - Re-running onboarding does **not** wipe anything unless you explicitly choose **Reset**
       (or pass `--reset`).
     - CLI `--reset` defaults to `config+creds+sessions`; use `--reset-scope full`
