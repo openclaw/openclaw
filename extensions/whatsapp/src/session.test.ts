@@ -509,18 +509,20 @@ describe("web session", () => {
 
   it("waits for connection open", async () => {
     const ev = new EventEmitter();
-    const promise = waitForWaConnection({ ev } as unknown as ReturnType<
-      typeof baileys.makeWASocket
-    >);
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      { timeout: "none" },
+    );
     ev.emit("connection.update", { connection: "open" });
     await expect(promise).resolves.toBeUndefined();
   });
 
   it("rejects when connection closes", async () => {
     const ev = new EventEmitter();
-    const promise = waitForWaConnection({ ev } as unknown as ReturnType<
-      typeof baileys.makeWASocket
-    >);
+    const promise = waitForWaConnection(
+      { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
+      { timeout: "none" },
+    );
     ev.emit("connection.update", {
       connection: "close",
       lastDisconnect: new Error("bye"),
@@ -533,10 +535,13 @@ describe("web session", () => {
     const ev = new EventEmitter();
     const promise = waitForWaConnection(
       { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
-      100,
+      { timeoutMs: 100 },
     );
     vi.advanceTimersByTime(100);
-    await expect(promise).rejects.toThrow("timed out after 100ms");
+    const error = await promise.catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain("timed out after 100ms");
+    expect(error).toMatchObject({ output: { statusCode: 408 } });
     expect(ev.listenerCount("connection.update")).toBe(0);
     vi.useRealTimers();
   });
@@ -546,7 +551,7 @@ describe("web session", () => {
     const ev = new EventEmitter();
     const promise = waitForWaConnection(
       { ev } as unknown as ReturnType<typeof baileys.makeWASocket>,
-      5000,
+      { timeoutMs: 5000 },
     );
     ev.emit("connection.update", { connection: "open" });
     await expect(promise).resolves.toBeUndefined();
