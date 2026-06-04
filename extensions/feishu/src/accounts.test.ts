@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   FeishuSecretRefUnavailableError,
   inspectFeishuCredentials,
@@ -7,9 +7,26 @@ import {
   resolveDefaultFeishuAccountSelection,
   resolveFeishuAccount,
   resolveFeishuCredentials,
+  resolveFeishuOutboundCredentialsConfig,
   resolveFeishuRuntimeAccount,
 } from "./accounts.js";
 import type { FeishuConfig } from "./types.js";
+
+// Emulate the gateway secret runtime: the async SDK resolver turns any SecretRef
+// (env/file/exec/keychain) into a string. The sync feishu resolver cannot do this
+// for exec/keychain sources, which is the #89338 failure the helper repairs.
+const resolveConfiguredSecretInputStringMock = vi.hoisted(() =>
+  vi.fn(async (params: { value: unknown }): Promise<{ value?: string }> => {
+    const { value } = params;
+    if (value && typeof value === "object" && "id" in value) {
+      return { value: `resolved:${(value as { id?: string }).id ?? ""}` };
+    }
+    return { value: typeof value === "string" ? value : undefined };
+  }),
+);
+vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
+  resolveConfiguredSecretInputString: resolveConfiguredSecretInputStringMock,
+}));
 
 function makeDefaultAndRouterAccounts() {
   return {
@@ -476,5 +493,91 @@ describe("resolveFeishuAccount", () => {
     expect(account.appId).toBe("cli_123");
     expect(account.appSecret).toBe("secret_456");
     expect(account.name).toBeUndefined();
+  });
+});
+
+describe("resolveFeishuOutboundCredentialsConfig (#89338)", () => {
+  const execAppSecret = { source: "exec", provider: "keychain_feishu_main-bot", id: "value" };
+
+  it("inlines an exec/keychain appSecret SecretRef so the runtime account resolves (no throw)", async () => {
+    const cfg = {
+      channels: {
+        feishu: { accounts: { "main-bot": { appId: "cli_x", appSecret: execAppSecret } } },
+      },
+    } as never;
+
+    // Before: the strict runtime resolver (media-upload path) throws on the unresolved ref.
+    expect(() => resolveFeishuRuntimeAccount({ cfg, accountId: "main-bot" })).toThrow(
+      FeishuSecretRefUnavailableError,
+    );
+
+    // After: the outbound helper inlines the resolved secret, so the same path succeeds.
+    resolveConfiguredSecretInputStringMock.mockClear();
+    const resolved = await resolveFeishuOutboundCredentialsConfig({ cfg, accountId: "main-bot" });
+    const account = resolveFeishuRuntimeAccount({ cfg: resolved, accountId: "main-bot" });
+    expect(account.configured).toBe(true);
+    expect(account.appSecret).toBe("resolved:value");
+    // Diagnostic path mirrors the matched account-map key, not the normalized id.
+    expect(resolveConfiguredSecretInputStringMock).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "channels.feishu.accounts.main-bot.appSecret" }),
+    );
+
+    // Original config object is not mutated (the SecretRef stays on disk shape).
+    expect(
+      (
+        cfg as unknown as {
+          channels: { feishu: { accounts: Record<string, { appSecret: unknown }> } };
+        }
+      ).channels.feishu.accounts["main-bot"].appSecret,
+    ).toEqual(execAppSecret);
+  });
+
+  it("resolves an inherited top-level appSecret SecretRef without inventing an accounts map", async () => {
+    const cfg = {
+      channels: { feishu: { appId: "cli_top", appSecret: execAppSecret } },
+    } as never;
+    resolveConfiguredSecretInputStringMock.mockClear();
+    const resolved = (await resolveFeishuOutboundCredentialsConfig({ cfg })) as unknown as {
+      channels: { feishu: { appSecret: unknown; accounts?: unknown } };
+    };
+    expect(resolved.channels.feishu.appSecret).toBe("resolved:value");
+    expect(resolved.channels.feishu.accounts).toBeUndefined();
+    // Inherited top-level secret: diagnostic path stays top-level, not account-shaped.
+    expect(resolveConfiguredSecretInputStringMock).toHaveBeenCalledWith(
+      expect.objectContaining({ path: "channels.feishu.appSecret" }),
+    );
+  });
+
+  it("returns the same config (no clone) when credentials are plaintext", async () => {
+    const cfg = {
+      channels: { feishu: { accounts: { "main-bot": { appId: "cli_x", appSecret: "plain" } } } },
+    } as never;
+    const out = await resolveFeishuOutboundCredentialsConfig({ cfg, accountId: "main-bot" });
+    expect(out).toBe(cfg);
+  });
+
+  it("preserves the matched noncanonical account-map key and its other per-account settings", async () => {
+    const cfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            "Main-Bot": { appId: "cli_x", appSecret: execAppSecret, renderMode: "card" },
+          },
+        },
+      },
+    } as never;
+    const resolved = (await resolveFeishuOutboundCredentialsConfig({
+      cfg,
+      accountId: "main-bot",
+    })) as unknown as {
+      channels: {
+        feishu: { accounts: Record<string, { appSecret: unknown; renderMode?: string }> };
+      };
+    };
+    // The original mixed-case key is patched in place — no spurious normalized entry
+    // that would shadow the original and drop its per-account settings.
+    expect(Object.keys(resolved.channels.feishu.accounts)).toEqual(["Main-Bot"]);
+    expect(resolved.channels.feishu.accounts["Main-Bot"].renderMode).toBe("card");
+    expect(resolved.channels.feishu.accounts["Main-Bot"].appSecret).toBe("resolved:value");
   });
 });

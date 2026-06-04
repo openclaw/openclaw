@@ -21,6 +21,21 @@ const getFeishuMemberInfoMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryPeersLiveMock = vi.hoisted(() => vi.fn());
 const listFeishuDirectoryGroupsLiveMock = vi.hoisted(() => vi.fn());
 const feishuOutboundSendMediaMock = vi.hoisted(() => vi.fn());
+// Gateway secret runtime: the async SDK resolver turns any SecretRef (incl.
+// exec/keychain) into a string; the sync feishu resolver cannot, which is #89338.
+const resolveConfiguredSecretInputStringMock = vi.hoisted(() =>
+  vi.fn(async (params: { value: unknown }): Promise<{ value?: string }> => {
+    const { value } = params;
+    if (value && typeof value === "object" && "id" in value) {
+      return { value: `resolved:${(value as { id?: string }).id ?? ""}` };
+    }
+    return { value: typeof value === "string" ? value : undefined };
+  }),
+);
+
+vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
+  resolveConfiguredSecretInputString: resolveConfiguredSecretInputStringMock,
+}));
 
 vi.mock("./probe.js", () => ({
   probeFeishu: probeFeishuMock,
@@ -353,6 +368,37 @@ describe("feishuPlugin actions", () => {
     expect(details.ok).toBe(true);
     expect(details.messageId).toBe("om_sent");
     expect(details.chatId).toBe("oc_group_1");
+  });
+
+  it("resolves an exec/keychain appSecret SecretRef before a text send (issue #89338)", async () => {
+    sendMessageFeishuMock.mockResolvedValueOnce({ messageId: "om_sent", chatId: "oc_group_1" });
+    const secretRefCfg = {
+      channels: {
+        feishu: {
+          accounts: {
+            main: {
+              appId: "cli_x",
+              appSecret: { source: "exec", provider: "keychain_feishu_main", id: "value" },
+            },
+          },
+        },
+      },
+    };
+    await feishuPlugin.actions?.handleAction?.({
+      action: "send",
+      params: { to: "chat:oc_group_1", message: "hello" },
+      cfg: secretRefCfg,
+      accountId: "main",
+      toolContext: {},
+    } as never);
+
+    // The text branch must receive a cfg whose appSecret was resolved by the async
+    // SDK resolver and inlined, not the raw SecretRef the sync resolver would throw on.
+    expect(resolveConfiguredSecretInputStringMock).toHaveBeenCalled();
+    const passedCfg = sendMessageFeishuMock.mock.calls.at(-1)?.[0]?.cfg as {
+      channels?: { feishu?: { accounts?: Record<string, { appSecret?: unknown }> } };
+    };
+    expect(passedCfg?.channels?.feishu?.accounts?.main?.appSecret).toBe("resolved:value");
   });
 
   it("renders presentation messages as cards", async () => {

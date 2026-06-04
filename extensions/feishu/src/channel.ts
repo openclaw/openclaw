@@ -38,6 +38,7 @@ import {
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
+  resolveFeishuOutboundCredentialsConfig,
   resolveFeishuRuntimeAccount,
 } from "./accounts.js";
 import { feishuApprovalAuth } from "./approval-auth.js";
@@ -795,6 +796,13 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               throw new Error("Feishu media sending is not available.");
             }
             const sendMedia = maybeSendMedia;
+            // Inline unresolved exec/keychain app-credential SecretRefs once for all
+            // three send branches (card/media/text); the outbound bridge resolves
+            // media, but the card/text helpers would otherwise throw (issue #89338).
+            const resolvedCfg = await resolveFeishuOutboundCredentialsConfig({
+              cfg: ctx.cfg,
+              accountId: ctx.accountId ?? undefined,
+            });
             let result;
             if (card) {
               if (containsLegacyFeishuCardCommandValue(card)) {
@@ -803,7 +811,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
                 );
               }
               result = await runtime.sendCardFeishu({
-                cfg: ctx.cfg,
+                cfg: resolvedCfg,
                 to,
                 card,
                 accountId: ctx.accountId ?? undefined,
@@ -812,7 +820,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               });
             } else if (mediaUrl) {
               result = await sendMedia!({
-                cfg: ctx.cfg,
+                cfg: resolvedCfg,
                 to,
                 text: text ?? "",
                 mediaUrl,
@@ -825,7 +833,7 @@ export const feishuPlugin: ChannelPlugin<ResolvedFeishuAccount, FeishuProbeResul
               });
             } else {
               result = await runtime.sendMessageFeishu({
-                cfg: ctx.cfg,
+                cfg: resolvedCfg,
                 to,
                 text: text!,
                 accountId: ctx.accountId ?? undefined,
