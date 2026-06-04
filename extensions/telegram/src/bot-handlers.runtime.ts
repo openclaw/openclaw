@@ -2258,6 +2258,10 @@ export const registerTelegramHandlers = ({
       const callbackThreadId = resolvedThreadId ?? dmThreadId;
       const callbackConversationId =
         callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
+      const callbackInlineKeyboard = callbackMessage.reply_markup?.inline_keyboard;
+      const hasCallbackInlineKeyboard =
+        Array.isArray(callbackInlineKeyboard) &&
+        callbackInlineKeyboard.some((row) => Array.isArray(row) && row.length > 0);
       const pluginBindingApproval = parsePluginBindingApprovalCustomId(data);
       if (pluginBindingApproval) {
         let resolved: Awaited<ReturnType<typeof resolvePluginConversationBindingApproval>>;
@@ -2759,6 +2763,19 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      if (hasCallbackInlineKeyboard) {
+        try {
+          await clearCallbackButtons();
+        } catch (editErr) {
+          const errStr = String(editErr);
+          if (
+            !errStr.includes("message is not modified") &&
+            !errStr.includes("there is no text in the message to edit")
+          ) {
+            throw new TelegramRetryableCallbackError(editErr);
+          }
+        }
+      }
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,

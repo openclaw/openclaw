@@ -1311,6 +1311,49 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-slash-1");
   });
 
+  it("clears generic callback_query buttons before routing payloads as messages", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = requireValue(
+      onSpy.mock.calls.find((call) => call[0] === "callback_query")?.[1] as
+        | ((ctx: Record<string, unknown>) => Promise<void>)
+        | undefined,
+      "callback_query handler",
+    );
+
+    await callbackHandler({
+      callbackQuery: {
+        id: "cbq-generic-clear-1",
+        data: "skip nightly build tonight",
+        from: { id: 9, first_name: "Ada", username: "ada_bot" },
+        message: {
+          chat: { id: 1234, type: "private" },
+          date: 1736380800,
+          message_id: 10,
+          reply_markup: {
+            inline_keyboard: [
+              [
+                {
+                  text: "Skip tonight",
+                  callback_data: "skip nightly build tonight",
+                },
+              ],
+            ],
+          },
+        },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ download: async () => new Uint8Array() }),
+    });
+
+    expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
+      reply_markup: { inline_keyboard: [] },
+    });
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const payload = requireValue(replySpy.mock.calls.at(0), "replySpy call")[0];
+    expect(payload.Body).toContain("skip nightly build tonight");
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-generic-clear-1");
+  });
+
   it("does not route opaque callback_query payloads as synthetic commands", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = requireValue(
