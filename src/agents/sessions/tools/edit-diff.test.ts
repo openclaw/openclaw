@@ -95,6 +95,38 @@ describe("applyEditsToNormalizedContent", () => {
     expect(lines[3]).toBe("footer   ");
   });
 
+  it("fuzzy match preserves NFKC ligature when it appears before the match on the same line", () => {
+    // U+FB03 (ﬃ) expands to "ffi" under NFKC (1 char -> 3 chars).
+    // A smart-quote fuzzy match AFTER the ligature must not shift the
+    // replacement position by the 2-char NFKC expansion delta.
+    const content = "const \uFB03ce = \u2018val\u2019;";
+    //                      ^ ﬃ ligature    ^ smart quotes trigger fuzzy match
+
+    const result = applyEditsToNormalizedContent(
+      normalizeToLF(content),
+      [{ oldText: "const \uFB03ce = 'val';", newText: "const \uFB03ce = 'new';" }],
+      "test.ts",
+    );
+
+    // The ﬃ ligature must survive intact; only the smart quotes change.
+    expect(result.newContent).toBe("const \uFB03ce = 'new';");
+  });
+
+  it("fuzzy match with NFKC-expanding character and multi-char expansion", () => {
+    // U+FB01 (ﬁ) expands to "fi" under NFKC (1 char -> 2 chars).
+    // Two expansions on the same line compound the offset shift.
+    const content = "\uFB01nd \uFB03x = \u201Chello\u201D;";
+    //               ^ ﬁ      ^ ﬃ        ^ smart double quotes
+
+    const result = applyEditsToNormalizedContent(
+      normalizeToLF(content),
+      [{ oldText: '\uFB01nd \uFB03x = "hello";', newText: '\uFB01nd \uFB03x = "world";' }],
+      "test.ts",
+    );
+
+    expect(result.newContent).toBe('\uFB01nd \uFB03x = "world";');
+  });
+
   it("baseContent is always the original content", () => {
     const content = "line with smart\u2019s\nline with trailing   ";
 

@@ -198,11 +198,44 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
 }
 
 /**
+ * Map a character offset within a single line from its position in the
+ * fuzzy-normalized form back to the corresponding position in the original
+ * line. NFKC normalization can expand compatibility characters (e.g.,
+ * U+FB03 "ﬃ" becomes "ffi"), shifting all subsequent positions on that
+ * line. The other fuzzy normalizations (trimEnd, smart quotes, dashes,
+ * special spaces) are same-length replacements that do not shift positions.
+ */
+function mapLineOffsetThroughNfkc(origLine: string, normOffset: number): number {
+  const nfkcLine = origLine.normalize("NFKC");
+  // Fast path: NFKC did not change the line length, so positions map 1:1.
+  if (nfkcLine.length === origLine.length) {
+    return Math.min(normOffset, origLine.length);
+  }
+
+  // Walk through original code points, tracking how many NFKC code units
+  // each one produces, until we reach or pass the target offset.
+  let origCodeUnitPos = 0;
+  let normCodeUnitPos = 0;
+
+  for (const codePoint of origLine) {
+    if (normCodeUnitPos >= normOffset) {
+      return origCodeUnitPos;
+    }
+    const nfkc = codePoint.normalize("NFKC");
+    origCodeUnitPos += codePoint.length;
+    normCodeUnitPos += nfkc.length;
+  }
+
+  return origCodeUnitPos;
+}
+
+/**
  * Map a character offset in fuzzy-normalized content back to the corresponding
  * offset in the original (LF-normalized only) content. Both contents have the
  * same number of lines because normalizeForFuzzyMatch only performs per-line
- * trimEnd and single-character replacements (smart quotes, dashes, special
- * spaces, NFKC). Within each line, character positions map 1:1.
+ * trimEnd and same-length character replacements. Within each line, NFKC
+ * normalization may change character counts for compatibility characters, so
+ * the per-line mapping delegates to mapLineOffsetThroughNfkc.
  */
 function mapNormalizedOffsetToOriginal(
   origLines: string[],
@@ -217,7 +250,8 @@ function mapNormalizedOffsetToOriginal(
     const origLineLen = origLines[i].length;
 
     if (normalizedOffset <= normPos + normLineLen) {
-      return origPos + (normalizedOffset - normPos);
+      const offsetInNormLine = normalizedOffset - normPos;
+      return origPos + mapLineOffsetThroughNfkc(origLines[i], offsetInNormLine);
     }
 
     normPos += normLineLen + 1;
