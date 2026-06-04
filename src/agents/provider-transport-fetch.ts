@@ -228,6 +228,34 @@ function isOpenAISdkStreamContentType(contentType: string): boolean {
   return /\btext\/event-stream\b/i.test(contentType) || isJsonContentType(contentType);
 }
 
+function isChatGptCodexResponsesApi(api: unknown): boolean {
+  return api === "openai-chatgpt-responses" || api === "openclaw-openai-responses-transport";
+}
+
+function isChatGptCodexResponsesMissingContentType(params: {
+  contentType: string;
+  model: Model;
+}): boolean {
+  if (
+    params.contentType !== "" ||
+    params.model.provider !== "openai" ||
+    !isChatGptCodexResponsesApi(params.model.api) ||
+    typeof params.model.baseUrl !== "string"
+  ) {
+    return false;
+  }
+  try {
+    const baseUrl = new URL(params.model.baseUrl);
+    const pathname = baseUrl.pathname.toLowerCase().replace(/\/+$/, "");
+    return (
+      baseUrl.hostname.toLowerCase() === "chatgpt.com" &&
+      (pathname === "/backend-api/codex" || pathname.startsWith("/backend-api/codex/"))
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function assertOpenAISdkStreamContentType(params: {
   response: Response;
   model: Model;
@@ -235,7 +263,12 @@ async function assertOpenAISdkStreamContentType(params: {
   localServiceLease?: ProviderLocalServiceLease;
 }): Promise<void> {
   const contentType = params.response.headers.get("content-type") ?? "";
-  if (!params.response.ok || !params.response.body || isOpenAISdkStreamContentType(contentType)) {
+  if (
+    !params.response.ok ||
+    !params.response.body ||
+    isOpenAISdkStreamContentType(contentType) ||
+    isChatGptCodexResponsesMissingContentType({ contentType, model: params.model })
+  ) {
     return;
   }
   const body = await readResponseTextLimited(params.response).catch(() => "");
