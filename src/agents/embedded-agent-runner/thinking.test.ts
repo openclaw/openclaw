@@ -229,6 +229,31 @@ describe("dropThinkingBlocks", () => {
     ]);
   });
 
+  it("filters empty text regardless of block order (empty before thinking)", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "text", text: "" },
+          { type: "thinking", thinking: "old" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "latest text" }],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const oldAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(oldAssistant.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
+  });
+
   it("preserves meaningful text when an older assistant turn has thinking and whitespace-only text alongside real text", () => {
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "first" }),

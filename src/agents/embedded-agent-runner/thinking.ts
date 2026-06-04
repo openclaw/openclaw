@@ -334,18 +334,17 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
       out.push(msg);
       continue;
     }
+    const hadThinking = msg.content.some((block) => isThinkingBlock(block));
     const nextContent: AssistantContentBlock[] = [];
     let changed = false;
-    let hadThinkingRemoved = false;
     for (const block of msg.content) {
       if (isThinkingBlock(block)) {
         touched = true;
         changed = true;
-        hadThinkingRemoved = true;
         continue;
       }
       if (
-        hadThinkingRemoved &&
+        hadThinking &&
         (block as { type?: unknown }).type === "text" &&
         !hasMeaningfulText(block)
       ) {

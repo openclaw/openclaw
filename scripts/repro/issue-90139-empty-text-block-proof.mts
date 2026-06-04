@@ -1,34 +1,39 @@
 import { dropReasoningFromHistory, dropThinkingBlocks } from "../../src/agents/embedded-agent-runner/thinking.js";
+import type { AgentMessage } from "../../src/agents/runtime/index.js";
 
 const OMITTED = "[assistant reasoning omitted]";
 
-function makeMessages() {
+function toAgentMessages(msgs: Array<{ role: string; content: unknown }>): AgentMessage[] {
+  return msgs as unknown as AgentMessage[];
+}
+
+function makeMessages(): Record<string, AgentMessage[]> {
   return {
-    thinkingOnly: [
+    thinkingOnly: toAgentMessages([
       { role: "user", content: "first" },
       { role: "assistant", content: [{ type: "thinking", thinking: "old" }] },
       { role: "user", content: "second" },
       { role: "assistant", content: [{ type: "text", text: "latest" }] },
-    ],
-    thinkingAndEmptyText: [
+    ]),
+    thinkingAndEmptyText: toAgentMessages([
       { role: "user", content: "first" },
       { role: "assistant", content: [{ type: "thinking", thinking: "old" }, { type: "text", text: "" }] },
       { role: "user", content: "second" },
       { role: "assistant", content: [{ type: "text", text: "latest" }] },
-    ],
-    thinkingAndWhitespaceText: [
+    ]),
+    thinkingAndWhitespaceText: toAgentMessages([
       { role: "user", content: "first" },
       { role: "assistant", content: [{ type: "thinking", thinking: "old" }, { type: "text", text: "   " }] },
       { role: "user", content: "second" },
       { role: "assistant", content: [{ type: "text", text: "latest" }] },
-    ],
-    thinkingAndRealText: [
+    ]),
+    thinkingAndRealText: toAgentMessages([
       { role: "user", content: "first" },
       { role: "assistant", content: [{ type: "thinking", thinking: "old" }, { type: "text", text: "" }, { type: "text", text: "real answer" }] },
       { role: "user", content: "second" },
       { role: "assistant", content: [{ type: "text", text: "latest" }] },
-    ],
-  } as Record<string, Array<{ role: string; content: unknown }>>;
+    ]),
+  };
 }
 
 function textOf(msg: { content: unknown }) {
@@ -56,38 +61,38 @@ const cases = makeMessages();
 // --- dropThinkingBlocks ---
 console.log("-- dropThinkingBlocks --");
 {
-  const result = dropThinkingBlocks(cases.thinkingOnly as any);
+  const result = dropThinkingBlocks(cases.thinkingOnly);
   check("thinking-only -> omitted", textOf(result[1]), OMITTED);
 }
 {
-  const result = dropThinkingBlocks(cases.thinkingAndEmptyText as any);
+  const result = dropThinkingBlocks(cases.thinkingAndEmptyText);
   check("thinking + empty text -> omitted", textOf(result[1]), OMITTED);
 }
 {
-  const result = dropThinkingBlocks(cases.thinkingAndWhitespaceText as any);
+  const result = dropThinkingBlocks(cases.thinkingAndWhitespaceText);
   check("thinking + whitespace text -> omitted", textOf(result[1]), OMITTED);
 }
 {
-  const result = dropThinkingBlocks(cases.thinkingAndRealText as any);
+  const result = dropThinkingBlocks(cases.thinkingAndRealText);
   check("thinking + empty + real text -> real answer", textOf(result[1]), "real answer");
 }
 
 // --- dropReasoningFromHistory ---
 console.log("\n-- dropReasoningFromHistory --");
 {
-  const result = dropReasoningFromHistory(cases.thinkingOnly as any);
+  const result = dropReasoningFromHistory(cases.thinkingOnly);
   check("thinking-only -> omitted", textOf(result[1]), OMITTED);
 }
 {
-  const result = dropReasoningFromHistory(cases.thinkingAndEmptyText as any);
+  const result = dropReasoningFromHistory(cases.thinkingAndEmptyText);
   check("thinking + empty text -> omitted", textOf(result[1]), OMITTED);
 }
 {
-  const result = dropReasoningFromHistory(cases.thinkingAndWhitespaceText as any);
+  const result = dropReasoningFromHistory(cases.thinkingAndWhitespaceText);
   check("thinking + whitespace text -> omitted", textOf(result[1]), OMITTED);
 }
 {
-  const result = dropReasoningFromHistory(cases.thinkingAndRealText as any);
+  const result = dropReasoningFromHistory(cases.thinkingAndRealText);
   check("thinking + empty + real text -> real answer", textOf(result[1]), "real answer");
 }
 
