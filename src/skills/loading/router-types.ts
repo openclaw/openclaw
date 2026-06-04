@@ -8,6 +8,15 @@
 
 import type { SkillForPrompt } from "./skill-contract.js";
 
+export type SkillRouteContextMessage = {
+  role: "user" | "assistant";
+  text: string;
+};
+
+export type SkillRouteContext = {
+  recentMessages: SkillRouteContextMessage[];
+};
+
 /**
  * Discriminated union for routing outcomes.
  *
@@ -23,5 +32,9 @@ export type SkillRouteResult =
 /** Router interface that plugins implement. */
 export interface SkillRouter {
   readonly name: string;
-  route(query: string, candidates: SkillForPrompt[]): Promise<SkillRouteResult>;
+  route(
+    query: string,
+    candidates: SkillForPrompt[],
+    ctx?: SkillRouteContext,
+  ): Promise<SkillRouteResult>;
 }

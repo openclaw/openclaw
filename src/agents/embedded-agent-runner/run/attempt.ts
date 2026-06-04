@@ -355,6 +355,7 @@ import {
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
+  loadSkillRouteRecentMessages,
   prependSystemPromptAddition,
   resolveAttemptFsWorkspaceOnly,
   resolveAttemptMediaTaskSystemPromptAddition,
@@ -1070,6 +1071,13 @@ export async function runEmbeddedAttempt(
           routerConfig: skillRouterConfig?.config,
           resolvedSkills: skillsPromptState.resolvedSkills,
           query: params.prompt,
+          recentMessages: () => {
+            return loadSkillRouteRecentMessages({
+              config: params.config,
+              sessionFile: params.sessionFile,
+              sessionKey: params.sessionKey,
+            })
+          },
         });
 
     prepStages.mark("skills");

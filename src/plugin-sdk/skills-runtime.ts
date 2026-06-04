@@ -15,5 +15,10 @@ export {
   listRegisteredSkillRouters,
 } from "../skills/loading/router-registry.js";
 
-export type { SkillRouteResult, SkillRouter } from "../skills/loading/router-types.js";
+export type {
+  SkillRouteContext,
+  SkillRouteContextMessage,
+  SkillRouteResult,
+  SkillRouter,
+} from "../skills/loading/router-types.js";
 export type { SkillForPrompt } from "../skills/loading/skill-contract.js";
