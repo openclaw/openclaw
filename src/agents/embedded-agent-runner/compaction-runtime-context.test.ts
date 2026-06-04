@@ -393,4 +393,41 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     });
     expect(result.provider).toBe("anthropic");
   });
+
+  it("resolves a configured compaction model alias to its canonical provider/model (#90340)", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.4-mini": { alias: "gpt54mini" } },
+            compaction: { model: "gpt54mini" },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      authProfileId: "openai:default",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    // Before #90340: the bare alias "gpt54mini" was forwarded unchanged and
+    // rejected downstream as "Unknown model: openai/gpt54mini". After the fix
+    // it resolves to the canonical configured provider/model.
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+  });
+
+  it("leaves an already provider-qualified compaction model override unchanged (#90340)", () => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: {
+        agents: { defaults: { compaction: { model: "openai/gpt-5.4-mini" } } },
+      } as unknown as OpenClawConfig,
+      provider: "openai",
+      modelId: "gpt-5.5",
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+    });
+    expect(result.provider).toBe("openai");
+    expect(result.model).toBe("gpt-5.4-mini");
+  });
 });

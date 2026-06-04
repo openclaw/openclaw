@@ -4,6 +4,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
+  buildModelAliasIndex,
+  resolveModelRefFromString,
+} from "../model-selection-shared.js";
+import {
   listActiveProcessSessionReferences,
   type ActiveProcessSessionReference,
 } from "../bash-process-references.js";
@@ -47,6 +51,40 @@ export type EmbeddedCompactionRuntimeContext = {
  * Resolve the effective compaction target from config, falling back to the
  * caller-supplied provider/model and optionally applying runtime defaults.
  */
+/**
+ * Expand a configured model alias (no provider prefix) in
+ * `agents.defaults.compaction.model` to its canonical `provider/model` ref,
+ * reusing the same alias index/resolver as normal agent model selection.
+ *
+ * Idempotent: values that are empty, already provider-qualified (contain "/"),
+ * or do not match any configured alias are returned unchanged, so normal
+ * compaction targets keep their existing behavior.
+ */
+function resolveCompactionModelAlias(
+  rawOverride: string | undefined,
+  config: OpenClawConfig | undefined,
+  defaultProvider: string | undefined,
+): string | undefined {
+  if (!rawOverride || rawOverride.includes("/") || !config) {
+    return rawOverride;
+  }
+  const fallbackProvider = defaultProvider?.trim();
+  if (!fallbackProvider) {
+    return rawOverride;
+  }
+  const aliasIndex = buildModelAliasIndex({
+    cfg: config,
+    defaultProvider: fallbackProvider,
+  });
+  const resolved = resolveModelRefFromString({
+    cfg: config,
+    raw: rawOverride,
+    defaultProvider: fallbackProvider,
+    aliasIndex,
+  });
+  return resolved ? `${resolved.ref.provider}/${resolved.ref.model}` : rawOverride;
+}
+
 export function resolveEmbeddedCompactionTarget(params: {
   config?: OpenClawConfig;
   provider?: string | null;
@@ -64,7 +102,12 @@ export function resolveEmbeddedCompactionTarget(params: {
 } {
   const provider = params.provider?.trim() || params.defaultProvider;
   const model = params.modelId?.trim() || params.defaultModel;
-  const override = params.config?.agents?.defaults?.compaction?.model?.trim();
+  const rawOverride = params.config?.agents?.defaults?.compaction?.model?.trim();
+  // Resolve a configured model alias (e.g. "gpt54mini") in
+  // agents.defaults.compaction.model through the same alias resolver used by
+  // normal agent model selection, so compaction dispatches to the canonical
+  // provider/model instead of forwarding the bare alias (Fixes #90340).
+  const override = resolveCompactionModelAlias(rawOverride, params.config, provider);
   const resolveTargetProviders = (
     targetProvider: string | undefined,
     authProfileId: string | undefined,
