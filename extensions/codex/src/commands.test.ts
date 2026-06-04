@@ -623,6 +623,18 @@ describe("codex command", () => {
         deps: createDeps(),
       }),
     ).resolves.toEqual({ text: "Codex permissions: full access." });
+    // plan status / think status are local preference writes; they
+    // must not be blocked by the native execution guard.
+    await expect(
+      handleCodexCommand(createSandboxedContext("plan status", sessionFile), {
+        deps: createDeps(),
+      }),
+    ).resolves.toMatchObject({ text: expect.stringMatching(/^Codex plan mode:/) });
+    await expect(
+      handleCodexCommand(createSandboxedContext("think status", sessionFile), {
+        deps: createDeps(),
+      }),
+    ).resolves.toMatchObject({ text: expect.stringMatching(/^Codex think:/) });
   });
 
   it("lists Codex CLI sessions from a requested node", async () => {
@@ -4017,6 +4029,48 @@ describe("codex command", () => {
     expect(prompt).not.toContain("<proposed_plan>");
   });
 
+  it("reports the active think effort from the new per-mode defaults on the binding status", async () => {
+    // Regression: /codex binding used to format threadBinding.reasoningEffort
+    // directly, but /codex think now stores into reasoningEffortDefaults
+    // and clears the legacy reasoningEffort field. The status output
+    // should resolve the active effort the same way the turn start path
+    // does, so the new control appears to work.
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-think",
+        cwd: tempDir,
+        model: "gpt-5.5",
+        collaborationMode: "plan",
+        reasoningEffortDefaults: { execute: "medium", plan: "xhigh" },
+        // legacy reasoningEffort intentionally absent
+      }),
+    );
+    const result = await handleCodexCommand(
+      createContext("binding", sessionFile, {
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        }),
+      }),
+      { deps: createDeps() },
+    );
+    expect(result.text).toContain("- Think: xhigh");
+  });
+
   it("notifies plan callback consumption before clean-context execution starts", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const reply = buildCodexPlanDecisionReply({
@@ -4126,23 +4180,26 @@ describe("codex command", () => {
     }));
 
     await expect(
-      handleCodexCommand(createContext(`plan approve-clean ${token}`, sessionFile, {
-        to: "user-1:dm",
-        threadParentId: "conv-xyz",
-        sessionId: "msg-1234",
-        getCurrentConversationBinding: async () => pluginBinding,
-      }), {
-        deps: createDeps({
-          readCodexAppServerBinding,
-          runCodexBoundConversationPrompt,
-          startCodexConversationThread: vi.fn(async () => ({
-            kind: "codex-app-server-session" as const,
-            version: 1 as const,
-            sessionFile,
-            workspaceDir: "/repo",
-          })),
+      handleCodexCommand(
+        createContext(`plan approve-clean ${token}`, sessionFile, {
+          to: "user-1:dm",
+          threadParentId: "conv-xyz",
+          sessionId: "msg-1234",
+          getCurrentConversationBinding: async () => pluginBinding,
         }),
-      }),
+        {
+          deps: createDeps({
+            readCodexAppServerBinding,
+            runCodexBoundConversationPrompt,
+            startCodexConversationThread: vi.fn(async () => ({
+              kind: "codex-app-server-session" as const,
+              version: 1 as const,
+              sessionFile,
+              workspaceDir: "/repo",
+            })),
+          }),
+        },
+      ),
     ).resolves.toEqual({ text: "implemented" });
 
     expect(runCodexBoundConversationPrompt).toHaveBeenCalledWith(

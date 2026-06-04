@@ -1,7 +1,11 @@
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import type { PluginCommandContext, PluginCommandResult, PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
+import type {
+  PluginCommandContext,
+  PluginCommandResult,
+  PluginConversationBinding,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import {
@@ -13,6 +17,15 @@ import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-serve
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
+import {
+  readCodexAppServerConversationReasoningDefaults,
+  resolveCodexAppServerConversationReasoningEffort,
+} from "./app-server/reasoning-defaults.js";
+import type {
+  CodexAppServerCollaborationMode,
+  CodexAppServerReasoningEffort,
+  CodexAppServerConversationReasoningDefaults,
+} from "./app-server/reasoning-defaults.js";
 import {
   resolveCodexNativeExecutionBlock,
   resolveCodexNativeSandboxBlock,
@@ -460,7 +473,7 @@ export async function handleCodexSubcommand(
     if (rest.length > 0) {
       return { text: "Usage: /codex binding" };
     }
-    return { text: await describeConversationBinding(deps, ctx) };
+    return { text: await describeConversationBinding(deps, ctx, options.pluginConfig) };
   }
   if (normalized === "stop") {
     if (rest.length > 0) {
@@ -643,6 +656,20 @@ function returnsBeforeNativeCodexExecution(subcommand: string, args: readonly st
     case "review":
     case "stop":
       return args.length > 0;
+    case "plan":
+      // plan with [on|off|status|empty|stay <token>] is local: status
+      // shows the bound binding, on/off writes the preference, stay
+      // consumes the decision token without starting a Codex turn.
+      // plan with [approve|approve-clean] <token> triggers a Codex
+      // turn via the app-server turn/start RPC, so those must stay
+      // behind the native execution guard.
+      return args[0] !== "approve" && args[0] !== "approve-clean";
+    case "think":
+      // think [plan|execute|default|minimal|low|medium|high|xhigh|status]
+      // is a fully local preference write against the bound binding.
+      // Always return before native execution so sandbox policy
+      // does not block status or preference updates.
+      return true;
     default:
       return false;
   }
@@ -781,6 +808,7 @@ async function detachConversation(
 async function describeConversationBinding(
   deps: CodexCommandDeps,
   ctx: PluginCommandContext,
+  pluginConfig: unknown,
 ): Promise<string> {
   const current = await ctx.getCurrentConversationBinding();
   const data = readCodexConversationBindingData(current);
@@ -808,7 +836,20 @@ async function describeConversationBinding(
     `- Workspace: ${formatCodexDisplayText(data.workspaceDir)}`,
     `- Model: ${formatCodexDisplayText(threadBinding?.model ?? "default")}`,
     `- Plan: ${formatPlanMode(threadBinding?.collaborationMode)}`,
-    `- Think: ${formatReasoningEffort(threadBinding?.reasoningEffort)}`,
+    `- Think: ${formatActiveReasoningEffort(
+      {
+        ...(threadBinding?.collaborationMode
+          ? { collaborationMode: threadBinding.collaborationMode }
+          : {}),
+        ...(threadBinding?.reasoningEffort
+          ? { reasoningEffort: threadBinding.reasoningEffort }
+          : {}),
+        ...(threadBinding?.reasoningEffortDefaults
+          ? { reasoningEffortDefaults: threadBinding.reasoningEffortDefaults }
+          : {}),
+      },
+      pluginConfig,
+    )}`,
     `- Fast: ${isCodexFastServiceTier(threadBinding?.serviceTier) ? "on" : "off"}`,
     `- Live progress: ${threadBinding?.liveProgress === true ? "on" : "off"}`,
     `- Permissions: ${threadBinding ? formatPermissionsMode(threadBinding) : "default"}`,
@@ -2608,4 +2649,24 @@ function normalizeComputerUseStringOverrides(
     normalized.mcpServerName = mcpServerName;
   }
   return normalized;
+}
+
+function formatActiveReasoningEffort(
+  binding: {
+    collaborationMode?: CodexAppServerCollaborationMode;
+    reasoningEffort?: CodexAppServerReasoningEffort;
+    reasoningEffortDefaults?: CodexAppServerConversationReasoningDefaults;
+  },
+  pluginConfig: unknown,
+): string {
+  // Use the same resolution rule as the turn/start path so /codex
+  // binding and /codex think agree on the active effort, including
+  // the new per-mode defaults written by /codex think.
+  const current = resolveCodexAppServerConversationReasoningEffort({
+    mode: binding.collaborationMode,
+    bindingDefaults: binding.reasoningEffortDefaults,
+    legacyReasoningEffort: binding.reasoningEffort,
+    configDefaults: readCodexAppServerConversationReasoningDefaults(pluginConfig),
+  });
+  return formatReasoningEffort(current);
 }
