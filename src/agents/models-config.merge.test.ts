@@ -365,6 +365,28 @@ describe("models-config merge helpers", () => {
     expect(merged["responses-local"]?.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
   });
 
+  it("uses refreshed real apiKey over existing local marker auth", () => {
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: {
+        "responses-local": createConfigProvider({
+          baseUrl: "http://localhost:8080/v1",
+          api: "openai-responses",
+          apiKey: "LOCAL_PROXY_KEY", // pragma: allowlist secret
+        }),
+      },
+      existingProviders: {
+        "responses-local": createExistingProvider({
+          baseUrl: "http://localhost:8080/v1",
+          api: "openai-responses",
+          apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+        }),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(merged["responses-local"]?.apiKey).toBe("LOCAL_PROXY_KEY"); // pragma: allowlist secret
+  });
+
   it("does not preserve existing local marker auth when refreshed provider is remote", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {

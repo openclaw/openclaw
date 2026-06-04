@@ -218,6 +218,9 @@ function shouldPreserveExistingApiKey(params: {
     return undefined;
   }
   if (isLocalApiKeyMarker(existingApiKey)) {
+    if (nextApiKey) {
+      return undefined;
+    }
     const preservedBaseUrl = shouldPreserveExistingBaseUrl({ existing, nextEntry });
     const mergedEntry = {
       ...nextEntry,
