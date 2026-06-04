@@ -3326,6 +3326,7 @@ describe("runAgentTurnWithFallback", () => {
       payload: {
         isError: true,
         text: "⚠️ Selected model is at capacity. Try a different model, or wait and retry.",
+        isError: true,
       },
     });
   });
