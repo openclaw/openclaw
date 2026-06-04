@@ -149,6 +149,25 @@ describe("applyEditsToNormalizedContent", () => {
     expect(result.newContent).toBe("const caf\u0065\u0301 = 'mocha';");
   });
 
+  it("fuzzy match replaces NFKC ligature when oldText matches part of its expansion", () => {
+    // U+FB03 (ﬃ) expands to "ffi" under NFKC. oldText "ff" matches the first
+    // two chars of the expansion. The mapper must produce a nonzero original
+    // range covering the whole ligature, not a zero-length splice that inserts
+    // text before the original character without removing it.
+    const content = "const x = \uFB03;";
+
+    const result = applyEditsToNormalizedContent(
+      normalizeToLF(content),
+      [{ oldText: "const x = ff", newText: "const x = ZZ" }],
+      "test.ts",
+    );
+
+    // The ﬃ ligature must be consumed (replaced), not left behind.
+    // The whole ligature is replaced because you cannot partially edit a
+    // single character; the trailing "i" from the NFKC expansion is lost.
+    expect(result.newContent).toBe("const x = ZZ;");
+  });
+
   it("baseContent is always the original content", () => {
     const content = "line with smart\u2019s\nline with trailing   ";
 
