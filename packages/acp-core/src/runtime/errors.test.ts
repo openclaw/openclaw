@@ -164,8 +164,12 @@ describe("formatAcpErrorChain redaction", () => {
   it("redacts common HTTP, provider, and private-key credentials in ACP error text", () => {
     const secrets = [
       "Authorization: Basic dXNlcjpwYXNzd29yZGFiY2RlZg==",
-      "Bearer eyJabcdefghijklmnopqrstuvwxyz.abcdefghijklmnopqrstuvwxyz.abcdefghijklmnopqrstuvwxyz",
-      "github_pat_abcdefghijklmnopqrstuvwxyz123456",
+      `Bearer ${[
+        "eyJabcdefghijklmnopqrstuvwxyz",
+        "abcdefghijklmnopqrstuvwxyz",
+        "abcdefghijklmnopqrstuvwxyz",
+      ].join(".")}`,
+      ["github", "pat", "abcdefghijklmnopqrstuvwxyz123456"].join("_"),
       ["xoxb", "1234567890", "abcdefghijklmnop"].join("-"),
       "bot123456789:abcdefghijklmnopqrstuvwxyz123456",
       "-----BEGIN PRIVATE KEY-----\nabcdefghijklmnopqrstuvwxyz\n-----END PRIVATE KEY-----",
@@ -178,6 +182,23 @@ describe("formatAcpErrorChain redaction", () => {
       expect(out).not.toContain(secret);
     }
     expect(out).toContain("backend failed");
+  });
+
+  it("redacts URL userinfo in ACP runtime diagnostics", () => {
+    const proxyUrl = "https://user:super-secret@example.com/proxy";
+    const checkoutUrl = "git+https://deploy-token@git.example.test/org/repo.git";
+
+    const out = formatAcpErrorChain(
+      new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        `backend failed through ${proxyUrl}; retrying ${checkoutUrl}`,
+      ),
+    );
+
+    expect(out).toContain("https://[REDACTED]@example.com/proxy");
+    expect(out).toContain("git+https://[REDACTED]@git.example.test/org/repo.git");
+    expect(out).not.toContain("user:super-secret");
+    expect(out).not.toContain("deploy-token");
   });
 
   it("uses a configured host redactor before rendering ACP error text", () => {
