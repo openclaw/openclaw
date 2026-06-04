@@ -210,6 +210,10 @@ These flags log through normal OpenClaw logging, so `openclaw logs --follow`
 and the Control UI Logs tab show them. Without the flags, the same diagnostics
 remain available at `debug` level.
 
+`[model-fetch]` response metadata (provider, API, model, status, latency) is
+always emitted at `info` level regardless of `OPENCLAW_DEBUG_MODEL_TRANSPORT`,
+so basic model transport hygiene is visible without debug flags.
+
 ### Trace correlation
 
 File logs are JSONL. When a log call carries a valid diagnostic trace context,
