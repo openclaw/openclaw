@@ -488,7 +488,7 @@ describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
         bm25RankToScore,
       });
 
-      expect(results.map((row) => row.id).sort()).toEqual(["clyde-new", "clyde-old"]);
+      expect(results.map((row) => row.id).toSorted()).toEqual(["clyde-new", "clyde-old"]);
     } finally {
       db.close();
     }
