@@ -2153,6 +2153,46 @@ describe("updateNpmInstalledPlugins", () => {
     });
   });
 
+  it("keeps integrity checks when official sync repairs missing exact npm pins", async () => {
+    const extensionsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-missing-plugin-"));
+    tempDirs.push(extensionsDir);
+    const installPath = path.join(extensionsDir, "codex");
+    mockNpmViewMetadata({
+      name: "@openclaw/codex",
+      version: "2026.5.28",
+      integrity: "sha512-old",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue(
+      createSuccessfulNpmUpdateResult({
+        pluginId: "codex",
+        targetDir: installPath,
+        version: "2026.5.28",
+        npmResolution: {
+          name: "@openclaw/codex",
+          version: "2026.5.28",
+          resolvedSpec: "@openclaw/codex@2026.5.28",
+        },
+      }),
+    );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "codex",
+        spec: "@openclaw/codex@2026.5.28",
+        installPath,
+        resolvedName: "@openclaw/codex",
+        resolvedSpec: "@openclaw/codex@2026.5.28",
+        resolvedVersion: "2026.5.28",
+        integrity: "sha512-old",
+      }),
+      pluginIds: ["codex"],
+      syncOfficialPluginInstalls: true,
+    });
+
+    expect(npmInstallCall()?.spec).toBe("@openclaw/codex");
+    expect(npmInstallCall()?.expectedIntegrity).toBe("sha512-old");
+  });
+
   it("keeps third-party exact pinned npm specs pinned during official install sync", async () => {
     const installPath = createInstalledPackageDir({
       name: "@acme/demo",

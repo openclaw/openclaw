@@ -1448,7 +1448,11 @@ export async function updateNpmInstalledPlugins(params: {
       installPath,
     });
 
-    if (!params.dryRun && record.source === "npm" && currentVersion) {
+    if (
+      !params.dryRun &&
+      record.source === "npm" &&
+      (currentVersion || (params.syncOfficialPluginInstalls && trustedSourceLinkedOfficialInstall))
+    ) {
       const metadataResult = await resolveNpmSpecMetadata({
         spec: effectiveSpec!,
         timeoutMs: params.timeoutMs,
@@ -1483,6 +1487,7 @@ export async function updateNpmInstalledPlugins(params: {
           expectedIntegrity = undefined;
         }
         if (
+          currentVersion &&
           !bypassTrustedOfficialUnchangedNpmCheck &&
           isNpmMetadataCompatibleWithCurrentHost(metadataResult.metadata) &&
           !installedPackageNeedsOpenClawPeerLinkRepair(installPath) &&
