@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectManifestModelIdNormalizationPolicies,
+  type ManifestModelIdNormalizationProvider,
   normalizeConfiguredProviderCatalogModelId,
   normalizeStaticProviderModelIdWithPolicies,
   stripSelfProviderModelPrefix,
@@ -24,6 +25,80 @@ describe("provider model id policy normalization", () => {
 
     expect(normalizeStaticProviderModelIdWithPolicies("google-vertex", "pro", policies)).toBe(
       "gemini-3.1-pro-preview",
+    );
+  });
+
+  it("skips unreadable manifest policy maps while preserving healthy plugins", () => {
+    const unreadableProviders = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error("fuzzplugin modelIdNormalization providers exploded");
+        },
+      },
+    );
+    const policies = collectManifestModelIdNormalizationPolicies([
+      {
+        modelIdNormalization: {
+          providers: unreadableProviders,
+        },
+      },
+      {
+        modelIdNormalization: {
+          providers: {
+            openai: {
+              aliases: {
+                pro: "gpt-5.5",
+              },
+            },
+          },
+        },
+      },
+    ]);
+
+    expect(normalizeStaticProviderModelIdWithPolicies("openai", "pro", policies)).toBe("gpt-5.5");
+  });
+
+  it("skips unreadable manifest policy rows while preserving healthy providers", () => {
+    const providers: Record<string, ManifestModelIdNormalizationProvider> = {
+      openai: {
+        aliases: {
+          pro: "gpt-5.5",
+        },
+      },
+    };
+    Object.defineProperty(providers, "fuzzplugin", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin modelIdNormalization provider getter exploded");
+      },
+    });
+
+    const policies = collectManifestModelIdNormalizationPolicies([
+      {
+        modelIdNormalization: {
+          providers,
+        },
+      },
+    ]);
+
+    expect(normalizeStaticProviderModelIdWithPolicies("openai", "pro", policies)).toBe("gpt-5.5");
+  });
+
+  it("ignores unreadable manifest policy fields while applying readable fallbacks", () => {
+    const policy: ManifestModelIdNormalizationProvider = {
+      prefixWhenBare: "openrouter",
+    };
+    Object.defineProperty(policy, "aliases", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin modelIdNormalization aliases exploded");
+      },
+    });
+    const policies = new Map([["openai", policy]]);
+
+    expect(normalizeStaticProviderModelIdWithPolicies("openai", "pro", policies)).toBe(
+      "openrouter/pro",
     );
   });
 

@@ -24,13 +24,107 @@ let currentManifestModelIdNormalizationPolicies:
   | ReadonlyMap<string, ManifestModelIdNormalizationProvider>
   | undefined;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function readModelIdNormalizationProviders(plugin: ManifestModelIdNormalizationRecord): unknown {
+  try {
+    return plugin.modelIdNormalization?.providers;
+  } catch {
+    return undefined;
+  }
+}
+
+function readRecordEntries(value: unknown): Array<[string, unknown]> {
+  if (!isRecord(value)) {
+    return [];
+  }
+  let keys: string[];
+  try {
+    keys = Object.keys(value);
+  } catch {
+    return [];
+  }
+  const entries: Array<[string, unknown]> = [];
+  for (const key of keys) {
+    try {
+      entries.push([key, value[key]]);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
+function readPolicyField<K extends keyof ManifestModelIdNormalizationProvider>(
+  policy: ManifestModelIdNormalizationProvider,
+  field: K,
+): ManifestModelIdNormalizationProvider[K] | undefined {
+  try {
+    return policy[field];
+  } catch {
+    return undefined;
+  }
+}
+
+function readArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      if (!(index in value)) {
+        continue;
+      }
+    } catch {
+      continue;
+    }
+    try {
+      entries.push(value[index]);
+    } catch {
+      continue;
+    }
+  }
+  return entries;
+}
+
+function readStringMapValue(value: unknown, key: string): string | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  let raw: unknown;
+  try {
+    raw = value[key];
+  } catch {
+    return undefined;
+  }
+  return typeof raw === "string" ? raw : undefined;
+}
+
+function readRecordStringField(value: unknown, field: string): string | undefined {
+  return readStringMapValue(value, field);
+}
+
 export function collectManifestModelIdNormalizationPolicies(
   plugins: readonly ManifestModelIdNormalizationRecord[],
 ): Map<string, ManifestModelIdNormalizationProvider> {
   const policies = new Map<string, ManifestModelIdNormalizationProvider>();
   for (const plugin of plugins) {
-    for (const [provider, policy] of Object.entries(plugin.modelIdNormalization?.providers ?? {})) {
-      policies.set(normalizeLowercaseStringOrEmpty(provider), policy);
+    for (const [provider, policy] of readRecordEntries(readModelIdNormalizationProviders(plugin))) {
+      if (isRecord(policy)) {
+        policies.set(
+          normalizeLowercaseStringOrEmpty(provider),
+          policy as ManifestModelIdNormalizationProvider,
+        );
+      }
     }
   }
   return policies;
@@ -83,24 +177,41 @@ export function normalizeProviderModelIdWithPolicies(params: {
     return modelId;
   }
 
-  for (const prefix of policy.stripPrefixes ?? []) {
+  for (const prefix of readArrayEntries(readPolicyField(policy, "stripPrefixes"))) {
     const normalizedPrefix = normalizeLowercaseStringOrEmpty(prefix);
-    if (normalizedPrefix && normalizeLowercaseStringOrEmpty(modelId).startsWith(normalizedPrefix)) {
+    if (
+      typeof prefix === "string" &&
+      normalizedPrefix &&
+      normalizeLowercaseStringOrEmpty(modelId).startsWith(normalizedPrefix)
+    ) {
       modelId = modelId.slice(prefix.length);
       break;
     }
   }
 
-  modelId = policy.aliases?.[normalizeLowercaseStringOrEmpty(modelId)] ?? modelId;
+  modelId =
+    readStringMapValue(
+      readPolicyField(policy, "aliases"),
+      normalizeLowercaseStringOrEmpty(modelId),
+    ) ?? modelId;
 
   if (!hasProviderPrefix(modelId)) {
-    for (const rule of policy.prefixWhenBareAfterAliasStartsWith ?? []) {
-      if (normalizeLowercaseStringOrEmpty(modelId).startsWith(rule.modelPrefix.toLowerCase())) {
-        return formatPrefixedModelId(rule.prefix, modelId);
+    for (const rule of readArrayEntries(
+      readPolicyField(policy, "prefixWhenBareAfterAliasStartsWith"),
+    )) {
+      const modelPrefix = readRecordStringField(rule, "modelPrefix");
+      const prefix = readRecordStringField(rule, "prefix");
+      if (
+        modelPrefix &&
+        prefix &&
+        normalizeLowercaseStringOrEmpty(modelId).startsWith(modelPrefix.toLowerCase())
+      ) {
+        return formatPrefixedModelId(prefix, modelId);
       }
     }
-    if (policy.prefixWhenBare) {
-      return formatPrefixedModelId(policy.prefixWhenBare, modelId);
+    const prefixWhenBare = readPolicyField(policy, "prefixWhenBare");
+    if (typeof prefixWhenBare === "string" && prefixWhenBare) {
+      return formatPrefixedModelId(prefixWhenBare, modelId);
     }
   }
 
