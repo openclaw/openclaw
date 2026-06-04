@@ -504,6 +504,70 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
   return result;
 }
 
+export async function markCrashedMainSessionsFromRemainingLocks(params: {
+  sessionsDir: string;
+  remainingLocks: SessionLockInspection[];
+  gatewayStartedAt: number;
+}): Promise<{ marked: number; skipped: number }> {
+  const result = { marked: 0, skipped: 0 };
+  const sessionsDir = path.resolve(params.sessionsDir);
+
+  const preStartLockPaths = await Promise.all(
+    params.remainingLocks.map(async (lock) => {
+      if (lock.pidAlive) {
+        return null;
+      }
+      try {
+        const stat = await fs.promises.stat(lock.lockPath);
+        if (stat.mtimeMs >= params.gatewayStartedAt) {
+          return null;
+        }
+        return normalizeTranscriptLockPath(lock.lockPath);
+      } catch {
+        return null;
+      }
+    }),
+  );
+
+  const remainingLockPaths = new Set(
+    preStartLockPaths.filter((lockPath): lockPath is string => Boolean(lockPath)),
+  );
+  if (remainingLockPaths.size === 0) {
+    return result;
+  }
+
+  const storePath = path.join(sessionsDir, "sessions.json");
+  await updateSessionStore(
+    storePath,
+    (store) => {
+      for (const [sessionKey, entry] of Object.entries(store)) {
+        if (!entry || entry.status !== "running") {
+          continue;
+        }
+        if (shouldSkipMainRecovery(entry, sessionKey)) {
+          result.skipped++;
+          continue;
+        }
+        const entryLockPaths = resolveEntryTranscriptLockPaths({ entry, sessionsDir });
+        if (!entryLockPaths.some((lockPath) => remainingLockPaths.has(lockPath))) {
+          continue;
+        }
+        entry.abortedLastRun = true;
+        store[sessionKey] = entry;
+        result.marked++;
+      }
+    },
+    { skipMaintenance: true },
+  );
+
+  if (result.marked > 0) {
+    log.warn(
+      `marked ${result.marked} crashed main session(s) from non-stale lock files (post-crash startup)`,
+    );
+  }
+  return result;
+}
+
 async function recoverStore(params: {
   cfg?: OpenClawConfig;
   storePath: string;

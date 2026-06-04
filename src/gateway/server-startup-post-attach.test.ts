@@ -826,6 +826,7 @@ describe("startGatewayPostAttachRuntime", () => {
       isStopped: () => false,
       cleanStaleLockFiles: cleanStaleLockFiles as never,
       markRestartAbortedMainSessionsFromLocks: markRestartAbortedMainSessionsFromLocks as never,
+      gatewayStartedAt: Date.now(),
       concurrency: 2,
     });
 
@@ -879,6 +880,7 @@ describe("startGatewayPostAttachRuntime", () => {
       isStopped: () => stopped,
       cleanStaleLockFiles: cleanStaleLockFiles as never,
       markRestartAbortedMainSessionsFromLocks: markRestartAbortedMainSessionsFromLocks as never,
+      gatewayStartedAt: Date.now(),
     });
 
     expect(markRestartAbortedMainSessionsFromLocks).toHaveBeenCalledWith({

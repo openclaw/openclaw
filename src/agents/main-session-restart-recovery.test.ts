@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
@@ -9,6 +10,7 @@ import {
   INTERNAL_RUNTIME_CONTEXT_END,
 } from "./internal-runtime-context.js";
 import {
+  markCrashedMainSessionsFromRemainingLocks,
   markRestartAbortedMainSessions,
   markRestartAbortedMainSessionsFromLocks,
   recoverRestartAbortedMainSessions,
@@ -738,5 +740,238 @@ describe("main-session-restart-recovery", () => {
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
     expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
+  });
+
+  it("marks running sessions from non-stale locks at post-crash startup", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: 999_999, createdAt: new Date().toISOString() }),
+    );
+    await delay(10);
+    const gatewayStartedAt = Date.now();
+
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+      "agent:main:other": {
+        sessionId: "other-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const result = await markCrashedMainSessionsFromRemainingLocks({
+      sessionsDir,
+      remainingLocks: [cleanedLock(sessionsDir, "main-session")],
+      gatewayStartedAt,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 1, skipped: 0 });
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+    expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("skips sessions whose lock path does not match remaining locks", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const unrelatedLockPath = path.join(sessionsDir, "unrelated-session.jsonl.lock");
+    await fs.writeFile(unrelatedLockPath, JSON.stringify({ pid: 999_999 }));
+    await delay(10);
+    const gatewayStartedAt = Date.now();
+
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const result = await markCrashedMainSessionsFromRemainingLocks({
+      sessionsDir,
+      remainingLocks: [cleanedLock(sessionsDir, "unrelated-session")],
+      gatewayStartedAt,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result).toEqual({ marked: 0, skipped: 0 });
+    expect(store["agent:main:main"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("skips locks with mtime after gatewayStartedAt (live lock race)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const gatewayStartedAt = Date.now();
+
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    await delay(20);
+    const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({ pid: 999_999, createdAt: new Date().toISOString() }),
+    );
+
+    const result = await markCrashedMainSessionsFromRemainingLocks({
+      sessionsDir,
+      remainingLocks: [cleanedLock(sessionsDir, "main-session")],
+      gatewayStartedAt,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result.marked).toBe(0);
+    expect(store["agent:main:main"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("marks sessions from locks with mtime before gatewayStartedAt", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        pid: 999_999,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    );
+    await delay(10);
+    const gatewayStartedAt = Date.now();
+
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const result = await markCrashedMainSessionsFromRemainingLocks({
+      sessionsDir,
+      remainingLocks: [cleanedLock(sessionsDir, "main-session")],
+      gatewayStartedAt,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result.marked).toBe(1);
+    expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
+  });
+
+  it("skips locks whose owner PID is still alive (live lock)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    );
+    await delay(10);
+    const gatewayStartedAt = Date.now();
+
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const liveLock: SessionLockInspection = {
+      lockPath,
+      pid: process.pid,
+      pidAlive: true,
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+      ageMs: 60_000,
+      stale: false,
+      staleReasons: [],
+      removed: false,
+    };
+
+    const result = await markCrashedMainSessionsFromRemainingLocks({
+      sessionsDir,
+      remainingLocks: [liveLock],
+      gatewayStartedAt,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result.marked).toBe(0);
+    expect(store["agent:main:main"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("only marks crash-residue sessions when live and dead locks coexist", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const crashedLockPath = path.join(sessionsDir, "crashed-session.jsonl.lock");
+    const liveLockPath = path.join(sessionsDir, "live-session.jsonl.lock");
+    await fs.writeFile(
+      crashedLockPath,
+      JSON.stringify({
+        pid: 999_999,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    );
+    await fs.writeFile(
+      liveLockPath,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    );
+    await delay(10);
+    const gatewayStartedAt = Date.now();
+
+    await writeStore(sessionsDir, {
+      "agent:main:crashed": {
+        sessionId: "crashed-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+      "agent:main:live": {
+        sessionId: "live-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    const deadLock: SessionLockInspection = {
+      lockPath: crashedLockPath,
+      pid: 999_999,
+      pidAlive: false,
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+      ageMs: 60_000,
+      stale: false,
+      staleReasons: [],
+      removed: false,
+    };
+    const liveLock: SessionLockInspection = {
+      lockPath: liveLockPath,
+      pid: process.pid,
+      pidAlive: true,
+      createdAt: new Date(Date.now() - 60_000).toISOString(),
+      ageMs: 60_000,
+      stale: false,
+      staleReasons: [],
+      removed: false,
+    };
+
+    const result = await markCrashedMainSessionsFromRemainingLocks({
+      sessionsDir,
+      remainingLocks: [deadLock, liveLock],
+      gatewayStartedAt,
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result.marked).toBe(1);
+    expect(store["agent:main:crashed"]?.abortedLastRun).toBe(true);
+    expect(store["agent:main:live"]?.abortedLastRun).toBeUndefined();
   });
 });
