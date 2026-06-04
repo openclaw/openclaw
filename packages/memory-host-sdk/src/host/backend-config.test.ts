@@ -374,7 +374,14 @@ describe("resolveMemoryBackendConfig", () => {
     const workspaceDir = path.join(tmpRoot, "workspace");
     const workspaceAliasDir = path.join(tmpRoot, "workspace-alias");
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.symlink(workspaceDir, workspaceAliasDir);
+    try {
+      await fs.symlink(workspaceDir, workspaceAliasDir);
+    } catch (err: any) {
+      if (err.code === "EPERM") {
+        return;
+      }
+      throw err;
+    }
     const cfg = {
       agents: {
         defaults: { workspace: workspaceDir },
@@ -400,7 +407,14 @@ describe("resolveMemoryBackendConfig", () => {
     const workspaceDir = path.join(realRootDir, "workspace");
     const workspaceAliasDir = path.join(aliasRootDir, "workspace");
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.symlink(realRootDir, aliasRootDir);
+    try {
+      await fs.symlink(realRootDir, aliasRootDir);
+    } catch (err: any) {
+      if (err.code === "EPERM") {
+        return;
+      }
+      throw err;
+    }
     const cfg = {
       agents: {
         defaults: { workspace: workspaceDir },

@@ -45,7 +45,7 @@ describe("trajectory runtime", () => {
         sessionFile: "/tmp/session.jsonl",
         sessionId: "session-1",
       }),
-    ).toBe("/tmp/session.trajectory.jsonl");
+    ).toBe(path.resolve("/tmp/session.trajectory.jsonl"));
   });
 
   it("sanitizes session ids when resolving an override directory", () => {

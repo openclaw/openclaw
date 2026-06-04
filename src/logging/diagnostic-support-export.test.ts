@@ -680,17 +680,17 @@ describe("diagnostic support export", () => {
     };
 
     expect(redactSupportString(`${stateDir}\\logs\\gateway.log`, redaction)).toBe(
-      "$OPENCLAW_STATE_DIR\\logs\\gateway.log",
+      "$OPENCLAW_STATE_DIR/logs/gateway.log",
     );
     expect(
       redactSupportString(`failed at ${userProfile}\\Documents\\snapshot-error.txt`, redaction),
-    ).toBe("failed at ~\\Documents\\snapshot-error.txt");
+    ).toBe("failed at ~/Documents/snapshot-error.txt");
     expect(
       redactSupportString(
         "failed at c:\\users\\support-user\\Documents\\snapshot-error.txt",
         redaction,
       ),
-    ).toBe("failed at ~\\Documents\\snapshot-error.txt");
+    ).toBe("failed at ~/Documents/snapshot-error.txt");
 
     const status = sanitizeSupportSnapshotValue(
       {
@@ -710,9 +710,9 @@ describe("diagnostic support export", () => {
     );
     const serialized = JSON.stringify(status);
     expect(serialized).not.toContain("support-user");
-    expect(serialized).toContain("~\\\\openclaw\\\\dist\\\\index.js");
-    expect(serialized).toContain("$OPENCLAW_STATE_DIR\\\\openclaw.json");
-    expect(serialized).toContain("~\\\\AppData\\\\Local\\\\openclaw\\\\gateway-service.json");
+    expect(serialized).toContain("~/openclaw/dist/index.js");
+    expect(serialized).toContain("$OPENCLAW_STATE_DIR/openclaw.json");
+    expect(serialized).toContain("~/AppData/Local/openclaw/gateway-service.json");
   });
 
   it("keeps writing when status and health snapshots fail", async () => {

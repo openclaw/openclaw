@@ -457,7 +457,13 @@ describe("canvas host", () => {
     );
     await fs.writeFile(path.join(a2uiRoot, "a2ui.bundle.js"), "window.openclawA2UI = {};", "utf8");
     await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
-    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+    try {
+      await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+    } catch (err: any) {
+      if (err.code !== "EPERM") {
+        throw err;
+      }
+    }
 
     try {
       const res = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`);

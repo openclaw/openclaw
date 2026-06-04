@@ -589,6 +589,9 @@ function redactWorkspacePathString(value: string, redaction: TrajectoryExportRed
     const escaped = candidate.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
     next = next.replace(new RegExp(`${escaped}(?=$|[\\\\/])`, "gu"), "$WORKSPACE_DIR");
   }
+  if (next.includes("$WORKSPACE_DIR")) {
+    next = next.replaceAll("\\", "/");
+  }
   return next;
 }
 

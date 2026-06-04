@@ -160,12 +160,30 @@ function supportArrayResult(items: unknown[], count: number): unknown[] | Record
   };
 }
 
+function cleanWindowsPath(value: string): string {
+  if (/^\/[A-Za-z]:/u.test(value)) {
+    return value.slice(1);
+  }
+  return value;
+}
+
+function normalizeToPosix(value: string): string {
+  let cleaned = value.replaceAll("\\", "/");
+  cleaned = cleaned.replace(/^[A-Za-z]:/u, "");
+  if (cleaned.startsWith("//")) {
+    cleaned = cleaned.slice(1);
+  }
+  return cleaned;
+}
+
 function isWindowsAbsolutePath(value: string): boolean {
-  return /^(?:[A-Za-z]:[\\/]|\\\\)/u.test(value);
+  const clean = cleanWindowsPath(value);
+  return /^(?:[A-Za-z]:[\\/]|\\\\)/u.test(clean);
 }
 
 function normalizePathPrefix(value: string): string {
-  return isWindowsAbsolutePath(value) ? path.win32.resolve(value) : path.resolve(value);
+  const clean = cleanWindowsPath(value);
+  return isWindowsAbsolutePath(clean) ? path.win32.resolve(clean) : path.resolve(clean);
 }
 
 function addPathPrefix(
@@ -192,6 +210,8 @@ function addPathPrefixVariants(
   addPathPrefix(prefixes, normalized, label, caseInsensitive);
   if (isWindowsAbsolutePath(normalized)) {
     addPathPrefix(prefixes, normalized.replaceAll("\\", "/"), label, caseInsensitive);
+    addPathPrefix(prefixes, "/" + normalized.replaceAll("\\", "/"), label, caseInsensitive);
+    addPathPrefix(prefixes, "/" + normalized, label, caseInsensitive);
   }
 }
 
@@ -204,11 +224,17 @@ function pathRedactionPrefixes(options: SupportRedactionContext): PathRedactionP
 }
 
 function pathCandidates(file: string): string[] {
-  if (!isWindowsAbsolutePath(file)) {
+  const clean = cleanWindowsPath(file);
+  if (!isWindowsAbsolutePath(clean)) {
     return [path.resolve(file)];
   }
-  const resolved = path.win32.resolve(file);
-  return [resolved, resolved.replaceAll("\\", "/")];
+  const resolved = path.win32.resolve(clean);
+  return [
+    resolved,
+    resolved.replaceAll("\\", "/"),
+    "/" + resolved.replaceAll("\\", "/"),
+    "/" + resolved
+  ];
 }
 
 function hasPathPrefix(value: string, prefix: PathRedactionPrefix): boolean {
@@ -240,18 +266,18 @@ export function redactPathForSupport(
     return "";
   }
   if (file.startsWith("$")) {
-    return file;
+    return normalizeToPosix(file);
   }
   const candidates = pathCandidates(file);
   for (const next of candidates) {
     for (const prefix of pathRedactionPrefixes(options)) {
       const suffix = matchPathPrefix(next, prefix);
       if (suffix !== undefined) {
-        return `${prefix.label}${suffix}`;
+        return normalizeToPosix(`${prefix.label}${suffix}`);
       }
     }
   }
-  return redactSensitiveTextForSupport(candidates[0] ?? file);
+  return normalizeToPosix(redactSensitiveTextForSupport(candidates[0] ?? file));
 }
 
 function replaceKnownPathPrefix(value: string, prefix: PathRedactionPrefix): string {
@@ -340,10 +366,11 @@ export function redactSupportString(
   const pathRedacted = isSupportAbsolutePath(redacted)
     ? redactPathForSupport(redacted, redaction)
     : redactKnownPathPrefixesForSupport(redacted, redaction);
-  if (pathRedacted.length <= maxLength) {
-    return pathRedacted;
+  const normalizedPathRedacted = normalizeToPosix(pathRedacted);
+  if (normalizedPathRedacted.length <= maxLength) {
+    return normalizedPathRedacted;
   }
-  return `${pathRedacted.slice(0, maxLength)}${truncationSuffix}`;
+  return `${normalizedPathRedacted.slice(0, maxLength)}${truncationSuffix}`;
 }
 
 function sanitizeCommandArguments(args: unknown[], redaction: SupportRedactionContext): unknown[] {
