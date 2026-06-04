@@ -184,18 +184,21 @@ describe("scanPolicyExecApprovals", () => {
         kind: "agent",
         agentId: "main",
         security: "allowlist",
+        source: "oc://exec-approvals.json/agents/default",
       }),
       expect.objectContaining({
         id: "agent:main:allowlist:0",
         kind: "allowlist",
         agentId: "main",
         pattern: "legacy",
+        source: "oc://exec-approvals.json/agents/default/allowlist/#0",
       }),
       expect.objectContaining({
         id: "agent:main:allowlist:1",
         kind: "allowlist",
         agentId: "main",
         pattern: "doctor",
+        source: "oc://exec-approvals.json/agents/default/allowlist/#1",
       }),
     ]);
   });

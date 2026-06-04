@@ -4474,6 +4474,7 @@ function execApprovalsFileFindings(
         message: "exec-approvals.json is required by policy but was not found.",
         source: "policy",
         path: params.displayName,
+        target: "oc://exec-approvals.json",
         requirement: `oc://${params.policyDocName}/${
           requireFile ? `${params.requirementBase}/requireFile` : params.requirementBase
         }`,
@@ -4608,13 +4609,16 @@ function execApprovalsRuleFindings(
     const actualSet = new Set(actual);
     for (const entry of expected.toSorted((a, b) => a.key.localeCompare(b.key))) {
       if (!actualSet.has(entry.key)) {
+        const requirement = `oc://${params.policyDocName}/${params.requirementBase}/agents/allowlist/expected`;
+        const target = execApprovalAllowlistMissingTarget(params.targetAgentId);
         findings.push({
           checkId: CHECK_IDS.policyExecApprovalsAllowlistMissing,
           severity: "error",
           message: `exec approvals allowlist is missing expected pattern '${formatExecApprovalAllowlistRequirement(entry)}'.`,
           source: "policy",
           path: params.fileDisplayName ?? params.displayName,
-          requirement: `oc://${params.policyDocName}/${params.requirementBase}/agents/allowlist/expected`,
+          target,
+          requirement,
           fixHint: "Add the expected approval pattern or update policy after review.",
         });
       }
@@ -4704,6 +4708,9 @@ function execApprovalAllowlistRequirement(
   if (!isRecord(value)) {
     return undefined;
   }
+  if (unsupportedPolicyKey(value, ["argPattern", "pattern"]) !== undefined) {
+    return undefined;
+  }
   const pattern = typeof value.pattern === "string" ? value.pattern.trim() : "";
   if (pattern === "") {
     return undefined;
@@ -4734,6 +4741,12 @@ function execApprovalAllowlistRequirementKey(
   argPattern: string | undefined,
 ): string {
   return `${pattern}\0${argPattern ?? ""}`;
+}
+
+function execApprovalAllowlistMissingTarget(agentId: string | undefined): string {
+  return agentId === undefined
+    ? "oc://exec-approvals.json"
+    : `oc://exec-approvals.json/agents/${ocPathSegment(agentId)}/allowlist`;
 }
 
 function formatExecApprovalAllowlistRequirement(entry: ExecApprovalAllowlistRequirement): string {

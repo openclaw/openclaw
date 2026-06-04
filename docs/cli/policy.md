@@ -150,7 +150,7 @@ file posture, and tool metadata looks like this:
     "requireFile": true,
     "defaults": { "allowSecurity": ["deny"] },
     "agents": {
-      "allowSecurity": ["allowlist"],
+      "allowSecurity": ["deny", "allowlist"],
       "allowAutoAllowSkills": false,
       "allowlist": { "expected": ["deploy", "status"] },
     },

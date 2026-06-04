@@ -7895,6 +7895,7 @@ describe("registerPolicyDoctorChecks", () => {
         }),
         expect.objectContaining({
           checkId: "policy/exec-approvals-allowlist-missing",
+          target: "oc://exec-approvals.json",
           requirement: "oc://policy.jsonc/execApprovals/agents/allowlist/expected",
         }),
         expect.objectContaining({
@@ -7939,6 +7940,7 @@ describe("registerPolicyDoctorChecks", () => {
         checkId: "policy/exec-approvals-allowlist-missing",
         message:
           "exec approvals allowlist is missing expected pattern 'deploy argPattern=^--prod$'.",
+        target: "oc://exec-approvals.json",
       }),
       expect.objectContaining({
         checkId: "policy/exec-approvals-allowlist-unexpected",
@@ -8439,7 +8441,8 @@ describe("registerPolicyDoctorChecks", () => {
     expect(result.findings).toEqual([
       expect.objectContaining({
         checkId: "policy/exec-approvals-agent-security-unapproved",
-        ocPath: "oc://exec-approvals.json/agents/main",
+        ocPath: "oc://exec-approvals.json/agents/default",
+        target: "oc://exec-approvals.json/agents/default",
         requirement: "oc://policy.jsonc/scopes/restricted/execApprovals/agents/allowSecurity",
       }),
     ]);
@@ -8481,6 +8484,57 @@ describe("registerPolicyDoctorChecks", () => {
         process.env.OPENCLAW_HOME = previousOpenClawHome;
       }
     }
+  });
+
+  it("rejects unsupported exec approval allowlist requirement keys", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          agents: {
+            allowlist: {
+              expected: [{ pattern: "deploy", argpattern: "^--prod$" }],
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/execApprovals/agents/allowlist/expected/#0",
+        }),
+      ]),
+    );
+  });
+
+  it("targets the missing exec approvals artifact when required", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ execApprovals: { requireFile: true } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/exec-approvals-missing",
+        target: "oc://exec-approvals.json",
+        requirement: "oc://policy.jsonc/execApprovals/requireFile",
+      }),
+    ]);
   });
 
   it("rejects required versionless exec approvals artifacts", async () => {

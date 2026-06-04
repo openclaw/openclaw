@@ -542,6 +542,53 @@ describe("policy commands", () => {
     });
   });
 
+  it("rejects unsupported exec approval allowlist requirement keys in policy compare", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "baseline.policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          agents: {
+            allowlist: {
+              expected: [{ pattern: "deploy", argpattern: "^--prod$" }],
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        execApprovals: {
+          agents: {
+            allowlist: {
+              expected: [{ pattern: "deploy", argPattern: "^--prod$" }],
+            },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+    });
+
+    expect(exitCode).toBe(1);
+    expect(parsed).toMatchObject({
+      ok: false,
+      rulesChecked: 0,
+    });
+    expect(parsed.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          checkId: "policy/policy-conformance-invalid",
+          target: "oc://baseline.policy.jsonc/execApprovals/agents/allowlist/expected/#0",
+        }),
+      ]),
+    );
+  });
+
   it("reports missing and weaker policy file conformance rules", async () => {
     await fs.writeFile(
       join(workspaceDir, "baseline.policy.jsonc"),
@@ -966,6 +1013,44 @@ describe("policy commands", () => {
         target: "oc://policy.jsonc/scopes/release/tools/exec/allowHosts",
       }),
     ]);
+  });
+
+  it("accepts stricter later scoped candidate overlays during policy compare", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "baseline.policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          release: {
+            agentIds: ["main"],
+            tools: { exec: { allowHosts: ["sandbox"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({
+        scopes: {
+          team: {
+            agentIds: ["main"],
+            tools: { exec: { allowHosts: ["sandbox", "node"] } },
+          },
+          lockdown: {
+            agentIds: ["main"],
+            tools: { exec: { allowHosts: ["sandbox"] } },
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    const { exitCode, parsed } = await runPolicyCompareJson({
+      baseline: "baseline.policy.jsonc",
+    });
+
+    expect(exitCode).toBe(0);
+    expect(parsed.findings).toEqual([]);
   });
 
   it("rejects duplicate scoped candidates when any matching scoped value is weaker", async () => {
