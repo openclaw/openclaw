@@ -63,8 +63,9 @@ async function resolveFeishuSequentialBaseKey(params: {
 }): Promise<string> {
   const { accountId, cfg, fetchMessage, parsed, runtime } = params;
   const chatId = parsed.chatId?.trim() || "unknown";
+  const chatKey = `feishu:${accountId}:${chatId}`;
   if (!isFeishuGroupChatType(parsed.chatType)) {
-    return `feishu:${accountId}:${chatId}`;
+    return chatKey;
   }
 
   try {
@@ -72,6 +73,10 @@ async function resolveFeishuSequentialBaseKey(params: {
     const feishuCfg = account.config;
     const groupConfig = resolveFeishuGroupConfig({ cfg: feishuCfg, groupId: chatId });
     const groupSessionScope = resolveConfiguredFeishuGroupSessionScope({ groupConfig, feishuCfg });
+    if (groupSessionScope === "group") {
+      return chatKey;
+    }
+
     let effectiveThreadId = parsed.threadId;
     if (
       parsed.chatType === "topic_group" &&
@@ -108,6 +113,6 @@ async function resolveFeishuSequentialBaseKey(params: {
     (runtime?.log ?? console.log)(
       `feishu[${accountId}]: failed to resolve scoped sequential key for chat=${chatId}: ${String(err)}`,
     );
-    return `feishu:${accountId}:${chatId}`;
+    return chatKey;
   }
 }

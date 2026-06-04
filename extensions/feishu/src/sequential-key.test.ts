@@ -8,7 +8,11 @@ const cfg = {
     feishu: {
       appId: "cli_test",
       appSecret: "secret_test",
+      groupSessionScope: "group_topic",
       groups: {
+        oc_group_chat: {
+          groupSessionScope: "group",
+        },
         oc_topic_chat: {
           groupSessionScope: "group_topic",
         },
@@ -97,7 +101,7 @@ describe("getFeishuSequentialKey", () => {
     ).resolves.toBe("feishu:default:oc_dm_chat:btw");
   });
 
-  it("uses the configured topic session scope for group queue keys", async () => {
+  it("uses configured topic thread_id scope for group queue keys", async () => {
     const first = createTextEvent({
       text: "topic one",
       chatId: "oc_topic_chat",
@@ -117,6 +121,55 @@ describe("getFeishuSequentialKey", () => {
     await expect(
       getFeishuSequentialKey({ cfg, accountId: "default", event: second }),
     ).resolves.toBe("feishu:default:oc_topic_chat:topic:omt_topic_2");
+  });
+
+  it("keeps group queues chat-scoped when groupSessionScope is group", async () => {
+    const event = createTextEvent({
+      text: "plain group",
+      chatId: "oc_group_chat",
+      chatType: "topic_group",
+      threadId: "omt_topic_1",
+    });
+
+    await expect(getFeishuSequentialKey({ cfg, accountId: "default", event })).resolves.toBe(
+      "feishu:default:oc_group_chat",
+    );
+  });
+
+  it("uses the top-level groupSessionScope thread_id when a group has no override", async () => {
+    const event = createTextEvent({
+      text: "global topic scope",
+      chatId: "oc_global_topic_chat",
+      chatType: "topic_group",
+      threadId: "omt_global_topic_1",
+    });
+
+    await expect(getFeishuSequentialKey({ cfg, accountId: "default", event })).resolves.toBe(
+      "feishu:default:oc_global_topic_chat:topic:omt_global_topic_1",
+    );
+  });
+
+  it("does not hydrate thread_id when groupSessionScope keeps the chat queue", async () => {
+    const event = createTextEvent({
+      text: "plain group without thread id",
+      chatId: "oc_group_chat",
+      chatType: "topic_group",
+      messageId: "om_group_scope_message",
+    });
+    let fetched = false;
+
+    await expect(
+      getFeishuSequentialKey({
+        cfg,
+        accountId: "default",
+        event,
+        fetchMessage: async () => {
+          fetched = true;
+          throw new Error("should not fetch for chat-scoped queues");
+        },
+      }),
+    ).resolves.toBe("feishu:default:oc_group_chat");
+    expect(fetched).toBe(false);
   });
 
   it("keeps control lanes scoped within the topic queue", async () => {
