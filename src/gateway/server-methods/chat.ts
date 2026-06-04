@@ -3075,8 +3075,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
+      suppressCommandInterpretation?: boolean;
       idempotencyKey: string;
     };
+    const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
     const explicitOriginResult = normalizeExplicitChatSendOrigin({
       originatingChannel: p.originatingChannel,
       originatingTo: p.originatingTo,
@@ -3088,7 +3090,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      (p.systemInputProvenance || p.systemProvenanceReceipt || explicitOriginResult.value) &&
+      (p.systemInputProvenance ||
+        p.systemProvenanceReceipt ||
+        suppressCommandInterpretation ||
+        explicitOriginResult.value) &&
       !canInjectSystemProvenance(client)
     ) {
       respond(
@@ -3096,7 +3101,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          p.systemInputProvenance || p.systemProvenanceReceipt
+          p.systemInputProvenance || p.systemProvenanceReceipt || suppressCommandInterpretation
             ? "system provenance fields require admin scope"
             : "originating route fields require admin scope",
         ),
@@ -3124,7 +3129,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       systemInputProvenance || systemProvenanceReceipt
         ? JSON.stringify([systemProvenanceReceipt ?? null, systemInputProvenance ?? null])
         : undefined;
-    const stopCommand = isChatStopCommandText(inboundMessage);
+    const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
     const rawMessage = inboundMessage.trim();
     if (!rawMessage && normalizedAttachments.length === 0) {
@@ -3493,7 +3498,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
-      const commandSource = trimmedMessage.startsWith("/") ? "text" : undefined;
+      const commandSource =
+        !suppressCommandInterpretation && trimmedMessage.startsWith("/") ? "text" : undefined;
       const messageForAgent = systemProvenanceReceipt
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
         : parsedMessage;
@@ -3527,7 +3533,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         MessageThreadId: messageThreadId,
         ChatType: "direct",
         ...(commandSource ? { CommandSource: commandSource } : {}),
-        CommandAuthorized: true,
+        CommandAuthorized: !suppressCommandInterpretation,
         CommandTurn: commandSource
           ? {
               kind: "text-slash",

@@ -122,6 +122,17 @@ describe("lazy protocol validators", () => {
     expect(validateChatMetadataParams({ agentId: "work", view: "configured" })).toBe(false);
   });
 
+  it("validates chat sends that suppress command interpretation", () => {
+    expect(
+      validateChatSendParams({
+        sessionKey: "agent:main",
+        message: "/reset examples",
+        suppressCommandInterpretation: true,
+        idempotencyKey: "chat-run-1",
+      }),
+    ).toBe(true);
+  });
+
   it("validates Skill Workshop revision request params", () => {
     expect(
       protocol.validateSkillsProposalRequestRevisionParams({

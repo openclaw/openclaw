@@ -237,6 +237,7 @@ describe("skills proposal gateway handlers", () => {
       idempotencyKey: "revision-run-1",
       message: "Make the support files 5",
       sessionKey: "agent:main:session:skill-workshop",
+      suppressCommandInterpretation: true,
     });
     expect(String(forwarded.params?.systemProvenanceReceipt)).toContain(
       `Revise Skill Workshop proposal \`${created.record.id}\` (support-file-sampler).`,

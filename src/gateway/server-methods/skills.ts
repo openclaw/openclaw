@@ -186,6 +186,7 @@ async function forwardSkillWorkshopRevisionToChatSend(
     message: params.instructions,
     deliver: false,
     systemProvenanceReceipt: buildRevisionAgentInstruction(params.proposal),
+    suppressCommandInterpretation: true,
     idempotencyKey: params.idempotencyKey,
   };
   await chatSend({

@@ -970,6 +970,121 @@ describe("gateway server chat", () => {
     }
   });
 
+  test("chat.send can suppress command interpretation for slash-prefixed system turns", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const responses: Array<{ id: string; ok: boolean; payload?: unknown; error?: unknown }> = [];
+      const context = {
+        loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+        logGateway: {
+          info: vi.fn(),
+          warn: vi.fn(),
+          error: vi.fn(),
+          debug: vi.fn(),
+        },
+        agentRunSeq: new Map<string, number>(),
+        chatAbortControllers: new Map(),
+        chatAbortedRuns: new Map(),
+        chatRunBuffers: new Map(),
+        chatDeltaSentAt: new Map(),
+        chatDeltaLastBroadcastLen: new Map(),
+        chatDeltaLastBroadcastText: new Map(),
+        agentDeltaSentAt: new Map(),
+        bufferedAgentEvents: new Map(),
+        clearChatRunState: vi.fn(),
+        addChatRun: vi.fn(),
+        removeChatRun: vi.fn(),
+        broadcast: vi.fn(),
+        nodeSendToSession: vi.fn(),
+        registerToolEventRecipient: vi.fn(),
+        dedupe: new Map(),
+      } as unknown as GatewayRequestContext;
+      dispatchInboundMessageMock.mockResolvedValue({});
+
+      const { chatHandlers } = await import("./server-methods/chat.js");
+      await chatHandlers["chat.send"]({
+        req: {
+          type: "req",
+          id: "suppressed-command",
+          method: "chat.send",
+          params: {
+            sessionKey: "main",
+            message: "/reset examples",
+            suppressCommandInterpretation: true,
+            idempotencyKey: "idem-suppressed-command",
+          },
+        },
+        params: {
+          sessionKey: "main",
+          message: "/reset examples",
+          suppressCommandInterpretation: true,
+          idempotencyKey: "idem-suppressed-command",
+        },
+        client: {
+          connect: {
+            client: {
+              id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+              mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+            },
+            scopes: ["operator.write", "operator.admin"],
+          },
+        } as never,
+        isWebchatConnect: () => true,
+        respond: ((ok, payload, error) => {
+          responses.push({ id: "suppressed-command", ok, payload, error });
+        }) as RespondFn,
+        context,
+      });
+
+      expect(responses).toEqual([
+        {
+          id: "suppressed-command",
+          ok: true,
+          payload: expect.objectContaining({
+            runId: "idem-suppressed-command",
+            status: "started",
+          }),
+          error: undefined,
+        },
+      ]);
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      const dispatchContext = (
+        dispatchInboundMessageMock.mock.calls[0]?.[0] as { ctx?: Record<string, unknown> }
+      )?.ctx;
+      expect(dispatchContext).toMatchObject({
+        Body: "/reset examples",
+        BodyForCommands: "/reset examples",
+        CommandAuthorized: false,
+        CommandTurn: {
+          kind: "normal",
+          source: "message",
+          authorized: false,
+          body: "/reset examples",
+        },
+        RawBody: "/reset examples",
+      });
+      expect(dispatchContext).not.toHaveProperty("CommandSource");
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
   test("chat.send starts the next WebChat turn after the prior internal run finishes", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     try {
