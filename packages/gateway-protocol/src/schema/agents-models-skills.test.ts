@@ -2,6 +2,7 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentsListResultSchema,
+  SkillsSecurityVerdictsResultSchema,
   SkillsProposalInspectResultSchema,
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
@@ -146,5 +147,28 @@ describe("SkillsProposalInspectResultSchema", () => {
     };
 
     expect(Value.Check(SkillsProposalInspectResultSchema, result)).toBe(true);
+  });
+});
+
+describe("SkillsSecurityVerdictsResultSchema", () => {
+  it("accepts exact ClawHub revocation metadata on verdict items", () => {
+    const result = {
+      schema: "openclaw.skills.security-verdicts.v1",
+      items: [
+        {
+          registry: "https://clawhub.ai",
+          ok: false,
+          decision: "fail",
+          reasons: ["version.revoked"],
+          requestedSlug: "agentreceipt",
+          requestedVersion: "1.2.3",
+          slug: "agentreceipt",
+          version: "1.2.3",
+          revocation: { revoked: true, revokedAt: 20 },
+        },
+      ],
+    };
+
+    expect(Value.Check(SkillsSecurityVerdictsResultSchema, result)).toBe(true);
   });
 });

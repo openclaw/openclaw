@@ -506,6 +506,18 @@ export const SkillsSecurityVerdictsResultSchema = Type.Object(
           securityAuditUrl: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           securityStatus: Type.Optional(Type.Union([Type.String(), Type.Null()])),
           securityPassed: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+          revocation: Type.Optional(
+            Type.Union([
+              Type.Object(
+                {
+                  revoked: Type.Boolean(),
+                  revokedAt: Type.Optional(Type.Union([Type.Integer(), Type.Null()])),
+                },
+                { additionalProperties: false },
+              ),
+              Type.Null(),
+            ]),
+          ),
           error: Type.Optional(
             Type.Object(
               {
