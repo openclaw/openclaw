@@ -1,3 +1,5 @@
+// Gateway model-pricing refresh and normalization.
+// Fetches, normalizes, and schedules cached pricing for model usage estimates.
 import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
 import {
   normalizeOptionalString,
@@ -183,6 +185,8 @@ function isTimeoutError(error: unknown): boolean {
 }
 
 function createPricingFetchSignal(signal: AbortSignal | undefined): AbortSignal {
+  // Pricing fetches are background refreshes; bound them so startup/reload
+  // cannot leave an unbounded network request alive.
   const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }

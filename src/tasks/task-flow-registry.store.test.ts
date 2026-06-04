@@ -6,6 +6,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
@@ -68,25 +69,14 @@ async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
     },
     async (state) => {
       const root = state.stateDir;
-      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
       try {
-        return await run(root);
+        return await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => await run(root));
       } finally {
         resetTaskFlowRegistryForTests();
       }
     },
   );
-}
-
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-
-function restoreOriginalStateDir(): void {
-  if (ORIGINAL_STATE_DIR === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-  }
 }
 
 describe("task-flow-registry store runtime", () => {
@@ -96,7 +86,6 @@ describe("task-flow-registry store runtime", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    restoreOriginalStateDir();
     resetTaskFlowRegistryForTests();
   });
 
@@ -162,7 +151,6 @@ describe("task-flow-registry store runtime", () => {
 
   it("rejects corrupt persisted flow rows during sqlite restore", async () => {
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -187,7 +175,6 @@ describe("task-flow-registry store runtime", () => {
 
   it("drops invalid requester origins during sqlite restore", async () => {
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -217,7 +204,6 @@ describe("task-flow-registry store runtime", () => {
 
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -263,7 +249,6 @@ describe("task-flow-registry store runtime", () => {
 
   it("round-trips explicit json null through sqlite", async () => {
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -285,7 +270,6 @@ describe("task-flow-registry store runtime", () => {
 
   it("prunes large sqlite snapshots without binding every flow id at once", async () => {
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       const flows = new Map<string, TaskFlowRecord>();
@@ -316,7 +300,6 @@ describe("task-flow-registry store runtime", () => {
       return;
     }
     await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
 
       createManagedTaskFlow({

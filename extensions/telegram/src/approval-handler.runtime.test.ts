@@ -104,7 +104,7 @@ describe("telegramApprovalNativeRuntime", () => {
       } as never,
     })) as TelegramPayload;
 
-    expect(payload.text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(payload.text).toContain("Reply with: /approve plugin:req-1 allow-once|deny");
     expect(payload.text).not.toContain("allow-once|allow-always|deny");
     expect(payload.buttons?.[0]?.map((button) => button.text)).toEqual(["Allow Once", "Deny"]);
   });

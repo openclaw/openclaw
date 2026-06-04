@@ -354,7 +354,7 @@ describe("matrixApprovalNativeRuntime", () => {
       },
     } as never);
 
-    expect(pendingPayload.text).toContain("Reply with: /approve <id> allow-once|deny");
+    expect(pendingPayload.text).toContain("Reply with: /approve plugin:req-1 allow-once|deny");
     expect(pendingPayload.text).not.toContain("allow-once|allow-always|deny");
     expect(pendingPayload.allowedDecisions).toEqual(["allow-once", "deny"]);
   });

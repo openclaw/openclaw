@@ -1,3 +1,5 @@
+// Restart sentinel tests protect queued post-restart delivery recovery and the
+// session/channel context used when the gateway resumes an interrupted run.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 
