@@ -2144,9 +2144,7 @@ export function buildGatewaySessionRow(params: {
     | SessionRunStatus
     | undefined;
   const resolvedResumable =
-    resolvedStatus != null && resolvedStatus !== "running" && resolvedStatus !== "killed"
-      ? true
-      : undefined;
+    resolvedStatus != null && resolvedStatus !== "running" ? true : undefined;
 
   return {
     key,

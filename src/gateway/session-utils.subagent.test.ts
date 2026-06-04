@@ -125,6 +125,11 @@ describe("listSessionsFromStore subagent metadata", () => {
         updatedAt: now - 500,
         spawnedBy: "agent:main:main",
       } as SessionEntry,
+      "agent:main:subagent:killed": {
+        sessionId: "sess-killed",
+        updatedAt: now,
+        spawnedBy: "agent:main:main",
+      } as SessionEntry,
     };
 
     addSubagentRunForTests({
@@ -170,6 +175,20 @@ describe("listSessionsFromStore subagent metadata", () => {
       outcome: { status: "error", error: "boom" },
       model: "openai/gpt-5.4",
     });
+    addSubagentRunForTests({
+      runId: "run-killed",
+      childSessionKey: "agent:main:subagent:killed",
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "killed task",
+      cleanup: "keep",
+      createdAt: now - 10_000,
+      startedAt: now - 6_000,
+      endedAt: now - 1_000,
+      endedReason: "subagent-killed",
+      model: "openai/gpt-5.4",
+    });
 
     const result = listSessionsFromStore({
       cfg,
@@ -182,6 +201,7 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(main?.childSessions).toEqual([
       "agent:main:subagent:parent",
       "agent:main:subagent:failed",
+      "agent:main:subagent:killed",
     ]);
     expect(main?.status).toBeUndefined();
 
@@ -211,6 +231,11 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(failed?.status).toBe("failed");
     expect(failed?.resumable).toBe(true);
     expect(failed?.runtimeMs).toBe(5_000);
+
+    const killed = result.sessions.find((session) => session.key === "agent:main:subagent:killed");
+    expect(killed?.status).toBe("killed");
+    expect(killed?.resumable).toBe(true);
+    expect(killed?.runtimeMs).toBe(5_000);
   });
 
   test("does not show stale registry-only subagent runs as actively running", () => {
@@ -1218,44 +1243,6 @@ describe("listSessionsFromStore subagent metadata", () => {
     expect(timeout?.status).toBe("timeout");
     expect(timeout?.resumable).toBe(true);
     expect(timeout?.runtimeMs).toBe(0);
-  });
-
-  test("killed sessions are not resumable", () => {
-    const now = Date.now();
-    const store: Record<string, SessionEntry> = {
-      "agent:main:subagent:killed": {
-        sessionId: "sess-killed",
-        updatedAt: now,
-        spawnedBy: "agent:main:main",
-      } as SessionEntry,
-    };
-
-    addSubagentRunForTests({
-      runId: "run-killed",
-      childSessionKey: "agent:main:subagent:killed",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "killed task",
-      cleanup: "keep",
-      createdAt: now - 10_000,
-      startedAt: now - 6_000,
-      endedAt: now - 1_000,
-      endedReason: "subagent-killed",
-      model: "openai/gpt-5.4",
-    });
-
-    const result = listSessionsFromStore({
-      cfg,
-      storePath: "/tmp/sessions.json",
-      store,
-      opts: {},
-    });
-
-    const killed = result.sessions.find((session) => session.key === "agent:main:subagent:killed");
-    expect(killed?.status).toBe("killed");
-    expect(killed?.resumable).toBeUndefined();
-    expect(killed?.runtimeMs).toBe(5_000);
   });
 
   test("fails closed when model lookup misses", async () => {
