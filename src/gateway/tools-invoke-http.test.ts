@@ -1068,6 +1068,47 @@ describe("tools.invoke Gateway RPC", () => {
     expect(hookCtx.sessionKey).toBe("agent:main:main");
   });
 
+  it("keeps owner-only tools unavailable to non-owner RPC callers despite gateway.tools.allow", async () => {
+    setMainAllowedTools({
+      allow: ["cron", "gateway", "nodes"],
+      gatewayAllow: ["cron", "gateway", "nodes"],
+    });
+
+    for (const tool of ["cron", "gateway", "nodes"]) {
+      const call = await invokeToolsRpc({
+        name: tool,
+        args: {},
+        sessionKey: "main",
+      });
+
+      expect(call?.[0], tool).toBe(true);
+      expect(call?.[1]?.ok, tool).toBe(false);
+      expect(call?.[1]?.toolName, tool).toBe(tool);
+      const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
+      expect(error?.code, tool).toBe("not_found");
+    }
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+  });
+
+  it("keeps operator.admin RPC callers as owner for explicitly allowed owner-only tools", async () => {
+    setMainAllowedTools({ allow: ["nodes"], gatewayAllow: ["nodes"] });
+
+    const call = await invokeToolsRpc(
+      {
+        name: "nodes",
+        args: {},
+        sessionKey: "main",
+      },
+      ["operator.admin"],
+    );
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(true);
+    expect(call?.[1]?.toolName).toBe("nodes");
+    expect(call?.[1]?.output).toEqual({ ok: true, result: "nodes" });
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+  });
+
   it("returns typed approval-needed refusal when the policy hook blocks", async () => {
     setMainAllowedTools({ allow: ["tools_invoke_test"] });
     hookMocks.runBeforeToolCallHook.mockResolvedValueOnce({
