@@ -214,11 +214,10 @@ export function setPluginRunContext(params: {
 }
 
 /** Reads previously stored plugin run context for one run/plugin/namespace tuple. */
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
-export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>(params: {
+export function getPluginRunContext(params: {
   pluginId: string;
   get: PluginRunContextGetParams;
-}): T | undefined {
+}): PluginJsonValue | undefined {
   const runId = normalizeOptionalString(params.get.runId);
   const namespace = normalizeNamespace(params.get.namespace);
   if (!runId || !namespace) {
@@ -228,7 +227,7 @@ export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>
     runId,
     pluginId: params.pluginId,
   })?.get(namespace);
-  return value === undefined ? undefined : (copyJsonValue(value) as T);
+  return value === undefined ? undefined : copyJsonValue(value);
 }
 
 export function clearPluginRunContext(params: {
