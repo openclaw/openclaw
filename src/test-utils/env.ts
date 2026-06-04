@@ -1,3 +1,4 @@
+// Test helpers for environment variable setup and restoration.
 import path from "node:path";
 
 /** Captures selected process.env keys so tests can restore exact prior state. */

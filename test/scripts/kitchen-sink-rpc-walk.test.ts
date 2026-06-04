@@ -368,6 +368,23 @@ describe("kitchen-sink RPC gateway readiness logs", () => {
     }
   });
 
+  it("does not allowlist dirty error lines that mention zero errors", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-zero-error-smuggle-"));
+    try {
+      const logPath = path.join(root, "gateway.log");
+      writeFileSync(logPath, "[ERROR] 0 errors reported but fatal state remained\n");
+
+      expect(findErrorLogFindings(logPath)).toEqual([
+        {
+          line: "[ERROR] 0 errors reported but fatal state remained",
+          lineNumber: 1,
+        },
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("bounds scanner memory for very long log lines", () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-kitchen-rpc-log-long-line-"));
     try {

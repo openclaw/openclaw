@@ -1,3 +1,4 @@
+// Defines process supervisor marker labels for gateway diagnostics.
 import { GATEWAY_LAUNCH_AGENT_LABEL, resolveGatewayLaunchAgentLabel } from "../daemon/constants.js";
 
 const SUPERVISOR_HINTS = {

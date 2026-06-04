@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// Package executable entrypoint that forwards to the CLI bootstrap.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { formatCliFailureLines } from "./cli/failure-output.js";

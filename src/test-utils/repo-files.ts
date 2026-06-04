@@ -1,3 +1,4 @@
+// Test helpers for reading repository files through git-aware paths.
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 

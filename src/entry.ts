@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// CLI process entrypoint for OpenClaw command execution.
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { getCommandPathWithRootOptions, hasFlag, isRootHelpInvocation } from "./cli/argv.js";

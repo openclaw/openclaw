@@ -1,3 +1,4 @@
+// Creates temporary OpenClaw directories for runtime scratch work.
 import fs from "node:fs";
 import { tmpdir as getOsTmpDir } from "node:os";
 import path from "node:path";

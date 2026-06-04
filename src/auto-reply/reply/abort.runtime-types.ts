@@ -1,3 +1,4 @@
+// Shared abort runtime types for cancellation and cutoff persistence.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { FinalizedMsgContext } from "../templating.js";
 

@@ -57,9 +57,9 @@ const ERROR_LOG_DENY_PATTERNS = [
   /\[(?:error|ERROR)\]/u,
 ];
 const ERROR_LOG_ALLOW_PATTERNS = [
-  /0 errors?/iu,
-  /expected no diagnostics errors?/iu,
-  /diagnostics errors?:\s*$/iu,
+  /^\s*0 errors?\s*$/iu,
+  /^\s*expected no diagnostics errors?\s*$/iu,
+  /^\s*diagnostics errors?:\s*$/iu,
 ];
 
 let callGatewayModulePromise;
