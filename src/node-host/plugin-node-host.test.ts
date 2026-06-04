@@ -51,6 +51,72 @@ describe("plugin node-host registry", () => {
     expect(listRegisteredNodeHostCapsAndCommands()).toEqual({
       caps: ["browser", "photos"],
       commands: ["browser.inspect", "browser.proxy", "photos.proxy"],
+      nodePluginTools: [],
+    });
+  });
+
+  it("lists plugin-declared agent tool descriptors", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "browser",
+        pluginName: "Browser",
+        command: {
+          command: "browser.proxy",
+          cap: "browser",
+          agentTool: {
+            name: "browser_inspect",
+            description: "Inspect browser state",
+            parameters: {
+              type: "object",
+              properties: { url: { type: "string" } },
+            },
+          },
+          handle: vi.fn(async () => "{}"),
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(listRegisteredNodeHostCapsAndCommands().nodePluginTools).toEqual([
+      {
+        pluginId: "browser",
+        name: "browser_inspect",
+        description: "Inspect browser state",
+        parameters: {
+          type: "object",
+          properties: { url: { type: "string" } },
+        },
+        command: "browser.proxy",
+      },
+    ]);
+  });
+
+  it("skips agent tool descriptors with provider-unsafe names", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.nodeHostCommands = [
+      {
+        pluginId: "browser",
+        pluginName: "Browser",
+        command: {
+          command: "browser.proxy",
+          cap: "browser",
+          agentTool: {
+            name: "browser.inspect",
+            description: "Inspect browser state",
+          },
+          handle: vi.fn(async () => "{}"),
+        },
+        source: "test",
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(listRegisteredNodeHostCapsAndCommands()).toEqual({
+      caps: ["browser"],
+      commands: ["browser.proxy"],
+      nodePluginTools: [],
     });
   });
 

@@ -229,6 +229,8 @@ import {
   NodePairRejectParamsSchema,
   NodePairRequestParamsSchema,
   NodePairVerifyParamsSchema,
+  NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParamsSchema,
   NodeRenameParamsSchema,
 } from "./nodes.js";
 import {
@@ -341,6 +343,8 @@ export const ProtocolSchemas = {
   NodePairVerifyParams: NodePairVerifyParamsSchema,
   NodeRenameParams: NodeRenameParamsSchema,
   NodeListParams: NodeListParamsSchema,
+  NodePluginToolDescriptor: NodePluginToolDescriptorSchema,
+  NodePluginToolsUpdateParams: NodePluginToolsUpdateParamsSchema,
   NodePendingAckParams: NodePendingAckParamsSchema,
   NodeDescribeParams: NodeDescribeParamsSchema,
   NodeInvokeParams: NodeInvokeParamsSchema,

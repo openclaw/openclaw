@@ -241,14 +241,23 @@ function listDefaultPluginNodeCommands(platformId: PlatformId): string[] {
   if (!registry) {
     return [];
   }
-  const commands = (registry.nodeInvokePolicies ?? []).flatMap((entry) => {
+  const policyCommands = (registry.nodeInvokePolicies ?? []).flatMap((entry) => {
     if (entry.policy.dangerous === true) {
       return [];
     }
     const defaults = entry.policy.defaultPlatforms ?? [];
     return defaults.includes(platformId) ? entry.policy.commands : [];
   });
-  return normalizeUniqueStringEntries(commands);
+  const nodeHostCommands = (registry.nodeHostCommands ?? [])
+    .filter((entry) => {
+      if (entry.command.dangerous === true) {
+        return false;
+      }
+      const defaults = entry.command.agentTool?.defaultPlatforms ?? [];
+      return defaults.includes(platformId);
+    })
+    .map((entry) => entry.command.command);
+  return normalizeUniqueStringEntries([...policyCommands, ...nodeHostCommands]);
 }
 
 export function isForegroundRestrictedPluginNodeCommand(command: string): boolean {

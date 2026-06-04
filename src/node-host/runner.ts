@@ -7,7 +7,11 @@ import {
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { startGatewayClientWhenEventLoopReady } from "../gateway/client-start-readiness.js";
-import { GatewayClient, type GatewayReconnectPausedInfo } from "../gateway/client.js";
+import {
+  GatewayClient,
+  GatewayClientRequestError,
+  type GatewayReconnectPausedInfo,
+} from "../gateway/client.js";
 import { resolveGatewayConnectionAuth } from "../gateway/connection-auth.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
@@ -112,6 +116,28 @@ export function handleNodeHostReconnectPaused(
   }
   const exit = deps.exit ?? ((code: number): never => process.exit(code));
   exit(1);
+}
+
+function isUnsupportedNodePluginToolsUpdateError(error: unknown): boolean {
+  return (
+    error instanceof GatewayClientRequestError &&
+    error.gatewayCode === "INVALID_REQUEST" &&
+    error.message.includes("unknown method: node.pluginTools.update")
+  );
+}
+
+async function publishNodePluginTools(client: GatewayClient, tools: unknown[]): Promise<void> {
+  if (tools.length === 0) {
+    return;
+  }
+  try {
+    await client.request("node.pluginTools.update", { tools });
+  } catch (error) {
+    if (isUnsupportedNodePluginToolsUpdateError(error)) {
+      return;
+    }
+    writeStderrLine(`node host plugin tool publish failed: ${String(error)}`);
+  }
 }
 
 function resolveExecutablePathFromEnv(bin: string, pathEnv: string): string | null {
@@ -297,6 +323,9 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
         return;
       }
       void handleInvoke(payload, client, skillBins);
+    },
+    onHelloOk: () => {
+      void publishNodePluginTools(client, pluginNodeHost.nodePluginTools);
     },
     onConnectError: (err) => {
       // keep retrying (handled by GatewayClient)

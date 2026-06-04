@@ -377,6 +377,7 @@ describe("core gateway method classification", () => {
     expect(isGatewayMethodClassified("node.pending.drain")).toBe(true);
     expect(isGatewayMethodClassified("node.pending.pull")).toBe(true);
     expect(isGatewayMethodClassified("node.pluginSurface.refresh")).toBe(true);
+    expect(isGatewayMethodClassified("node.pluginTools.update")).toBe(true);
   });
 
   it("classifies every exposed core gateway handler method", () => {

@@ -1,6 +1,12 @@
 import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
+const NodePluginToolNameSchema = Type.String({
+  minLength: 1,
+  maxLength: 64,
+  pattern: "^[A-Za-z][A-Za-z0-9_-]{0,63}$",
+});
+
 /** Pending node work classes that the gateway may queue for paired devices. */
 const NodePendingWorkTypeSchema = Type.String({
   enum: ["status.request", "location.request"],
@@ -104,6 +110,35 @@ export const NodeRenameParamsSchema = Type.Object(
 
 /** Lists paired nodes known to the gateway. */
 export const NodeListParamsSchema = Type.Object({}, { additionalProperties: false });
+
+/** Agent-visible tool descriptor advertised by a connected node. */
+export const NodePluginToolDescriptorSchema = Type.Object(
+  {
+    pluginId: NonEmptyString,
+    name: NodePluginToolNameSchema,
+    description: NonEmptyString,
+    parameters: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+    command: Type.Optional(NonEmptyString),
+    mcp: Type.Optional(
+      Type.Object(
+        {
+          server: NonEmptyString,
+          tool: NonEmptyString,
+        },
+        { additionalProperties: false },
+      ),
+    ),
+  },
+  { additionalProperties: false },
+);
+
+/** Replaces the connected node's dynamic agent-visible plugin/MCP tool catalog. */
+export const NodePluginToolsUpdateParamsSchema = Type.Object(
+  {
+    tools: Type.Array(NodePluginToolDescriptorSchema),
+  },
+  { additionalProperties: false },
+);
 
 /** Acknowledges queued node work that the node has consumed. */
 export const NodePendingAckParamsSchema = Type.Object(

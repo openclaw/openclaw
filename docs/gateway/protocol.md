@@ -270,6 +270,13 @@ Nodes declare capability claims at connect time:
 - `permissions`: granular toggles (e.g. `screen.record`, `camera.capture`).
 
 The Gateway treats these as **claims** and enforces server-side allowlists.
+Connected nodes can publish optional agent-visible plugin or MCP tool
+descriptors with `node.pluginTools.update` after a successful connect, after
+reconnect, or after a local plugin/MCP inventory change. Each descriptor must
+use a provider-safe tool `name` and name a `command` in the node's current
+command allowlist. The Gateway filters descriptors outside the approved command
+surface, removes them when the node disconnects, and rejects operator attempts
+to mutate another node's catalog.
 
 ## Presence
 
@@ -461,6 +468,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `node.invoke` forwards a command to a connected node.
     - `node.invoke.result` returns the result for an invoke request.
     - `node.event` carries node-originated events back into the gateway.
+    - `node.pluginTools.update` replaces the connected node's agent-visible plugin/MCP tool descriptors.
     - `node.pending.pull` and `node.pending.ack` are the connected-node queue APIs.
     - `node.pending.enqueue` and `node.pending.drain` manage durable pending work for offline/disconnected nodes.
 

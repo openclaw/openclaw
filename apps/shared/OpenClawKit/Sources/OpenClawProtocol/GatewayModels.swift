@@ -52,6 +52,7 @@ public struct ConnectParams: Codable, Sendable {
     public let client: [String: AnyCodable]
     public let caps: [String]?
     public let commands: [String]?
+    public let nodeplugintools: [NodePluginToolDescriptor]?
     public let permissions: [String: AnyCodable]?
     public let pathenv: String?
     public let role: String?
@@ -67,6 +68,7 @@ public struct ConnectParams: Codable, Sendable {
         client: [String: AnyCodable],
         caps: [String]?,
         commands: [String]?,
+        nodeplugintools: [NodePluginToolDescriptor]?,
         permissions: [String: AnyCodable]?,
         pathenv: String?,
         role: String?,
@@ -81,6 +83,7 @@ public struct ConnectParams: Codable, Sendable {
         self.client = client
         self.caps = caps
         self.commands = commands
+        self.nodeplugintools = nodeplugintools
         self.permissions = permissions
         self.pathenv = pathenv
         self.role = role
@@ -97,6 +100,7 @@ public struct ConnectParams: Codable, Sendable {
         case client
         case caps
         case commands
+        case nodeplugintools = "nodePluginTools"
         case permissions
         case pathenv = "pathEnv"
         case role
@@ -1127,6 +1131,54 @@ public struct NodeRenameParams: Codable, Sendable {
 }
 
 public struct NodeListParams: Codable, Sendable {}
+
+public struct NodePluginToolDescriptor: Codable, Sendable {
+    public let pluginid: String
+    public let name: String
+    public let description: String
+    public let parameters: [String: AnyCodable]?
+    public let command: String?
+    public let mcp: [String: AnyCodable]?
+
+    public init(
+        pluginid: String,
+        name: String,
+        description: String,
+        parameters: [String: AnyCodable]?,
+        command: String?,
+        mcp: [String: AnyCodable]?)
+    {
+        self.pluginid = pluginid
+        self.name = name
+        self.description = description
+        self.parameters = parameters
+        self.command = command
+        self.mcp = mcp
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case pluginid = "pluginId"
+        case name
+        case description
+        case parameters
+        case command
+        case mcp
+    }
+}
+
+public struct NodePluginToolsUpdateParams: Codable, Sendable {
+    public let tools: [NodePluginToolDescriptor]
+
+    public init(
+        tools: [NodePluginToolDescriptor])
+    {
+        self.tools = tools
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tools
+    }
+}
 
 public struct NodePendingAckParams: Codable, Sendable {
     public let ids: [String]

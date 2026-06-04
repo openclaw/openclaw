@@ -13,6 +13,7 @@ import {
   validateModelsListParams,
   validateNodeEventResult,
   validateNodePairRequestParams,
+  validateNodePluginToolsUpdateParams,
   validateNodePresenceAlivePayload,
   validateTasksCancelParams,
   validateTasksListParams,
@@ -82,6 +83,34 @@ describe("lazy protocol validators", () => {
       }),
     ).toBe(true);
     expect(validateConnectParams.errors).toBeNull();
+  });
+
+  it("rejects provider-unsafe node plugin tool names", () => {
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo_echo",
+            description: "Echo through a node",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(true);
+
+    expect(
+      validateNodePluginToolsUpdateParams({
+        tools: [
+          {
+            pluginId: "demo",
+            name: "demo.echo",
+            description: "Invalid tool name",
+            command: "demo.echo",
+          },
+        ],
+      }),
+    ).toBe(false);
   });
 
   it("accepts selected-agent scope on chat send, history, and abort params", () => {

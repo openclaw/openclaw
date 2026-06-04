@@ -515,6 +515,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
       "node.list",
       "node.describe",
       "node.pluginSurface.refresh",
+      "node.pluginTools.update",
       "node.pending.pull",
       "node.pending.ack",
       "node.invoke",

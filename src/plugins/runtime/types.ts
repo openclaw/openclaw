@@ -1,3 +1,4 @@
+import type { NodePluginToolDescriptor } from "../../../packages/gateway-protocol/src/index.js";
 import type { PluginRuntimeChannel } from "./types-channel.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
 
@@ -63,6 +64,7 @@ export type RuntimeNodeListResult = {
     connected?: boolean;
     caps?: string[];
     commands?: string[];
+    nodePluginTools?: NodePluginToolDescriptor[];
   }>;
 };
 

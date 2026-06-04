@@ -12,7 +12,11 @@ import type {
   GatewayClientMode,
   GatewayClientName,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import type { EventFrame, HelloOk } from "../../packages/gateway-protocol/src/index.js";
+import type {
+  EventFrame,
+  HelloOk,
+  NodePluginToolDescriptor,
+} from "../../packages/gateway-protocol/src/index.js";
 import {
   clearDeviceAuthToken,
   loadDeviceAuthToken,
@@ -135,6 +139,7 @@ export type GatewayClientOptions = {
   scopes?: string[];
   caps?: string[];
   commands?: string[];
+  nodePluginTools?: NodePluginToolDescriptor[];
   permissions?: Record<string, boolean>;
   pathEnv?: string;
   env?: NodeJS.ProcessEnv;

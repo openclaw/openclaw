@@ -2187,6 +2187,20 @@ export type OpenClawPluginNodeHostCommand = {
   command: string;
   cap?: string;
   dangerous?: boolean;
+  agentTool?: {
+    name: string;
+    description: string;
+    parameters?: Record<string, unknown>;
+    /**
+     * Platforms where this node-hosted agent tool should be allowlisted by
+     * default. Omit to require explicit `gateway.nodes.allowCommands`.
+     */
+    defaultPlatforms?: Array<"ios" | "android" | "macos" | "windows" | "linux" | "unknown">;
+    mcp?: {
+      server: string;
+      tool: string;
+    };
+  };
   handle: (paramsJSON?: string | null) => Promise<string>;
 };
 

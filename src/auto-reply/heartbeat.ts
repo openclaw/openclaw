@@ -31,6 +31,7 @@ export const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
  * A file is considered effectively empty if it contains only:
  * - Whitespace / empty lines
  * - Markdown ATX headers (`#`, `##`, ...)
+ * - One-line HTML comments (`<!-- ... -->`)
  * - Markdown fence markers such as ``` or ```markdown
  * - Empty list item stubs (`- `, `- [ ]`, `* `, `+ `)
  *
@@ -56,6 +57,9 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
     // This intentionally does NOT skip lines like "#TODO" or "#hashtag" which might be content
     // (Those aren't valid markdown headers - ATX headers require space after #)
     if (/^#+(\s|$)/.test(trimmed)) {
+      continue;
+    }
+    if (/^<!--.*-->$/.test(trimmed)) {
       continue;
     }
     // Skip empty markdown list items like "- [ ]" or "* [ ]" or just "- "

@@ -1,5 +1,5 @@
 /** Tests node-host runner command parsing, timeout, and plugin dispatch behavior. */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
   resolveNodeHostGatewayDeviceFamily,
@@ -9,6 +9,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   capturedGatewayClientOptions: [] as GatewayClientOptions[],
+  capturedGatewayClients: [] as Array<{ request: ReturnType<typeof vi.fn> }>,
   ensureNodeHostConfig: vi.fn(async () => ({
     version: 1,
     nodeId: "node-test",
@@ -36,7 +37,12 @@ vi.mock("../gateway/client-start-readiness.js", () => ({
 
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: function GatewayClient(opts: GatewayClientOptions) {
+    const client = {
+      request: vi.fn(async () => ({})),
+    };
     mocks.capturedGatewayClientOptions.push(opts);
+    mocks.capturedGatewayClients.push(client);
+    return client;
   },
 }));
 
@@ -70,10 +76,25 @@ vi.mock("./plugin-node-host.js", () => ({
   listRegisteredNodeHostCapsAndCommands: vi.fn(() => ({
     caps: [],
     commands: [],
+    nodePluginTools: [
+      {
+        pluginId: "test-plugin",
+        name: "remote_echo",
+        description: "Echo from node host",
+        command: "test.echo",
+        parameters: { type: "object", properties: {} },
+      },
+    ],
   })),
 }));
 
 describe("runNodeHost", () => {
+  beforeEach(() => {
+    mocks.capturedGatewayClientOptions.length = 0;
+    mocks.capturedGatewayClients.length = 0;
+    vi.clearAllMocks();
+  });
+
   it("maps runtime platforms to gateway platform ids", () => {
     expect(resolveNodeHostGatewayPlatform("darwin")).toBe("macos");
     expect(resolveNodeHostGatewayPlatform("win32")).toBe("windows");
@@ -101,5 +122,36 @@ describe("runNodeHost", () => {
     expect(mocks.capturedGatewayClientOptions[0]?.deviceFamily).toBe(
       resolveNodeHostGatewayDeviceFamily(process.platform),
     );
+    expect(mocks.capturedGatewayClients[0]?.request).not.toHaveBeenCalled();
+  });
+
+  it("publishes node plugin tools only after gateway hello succeeds", async () => {
+    await expect(
+      runNodeHost({
+        gatewayHost: "127.0.0.1",
+        gatewayPort: 18789,
+      }),
+    ).rejects.toThrow("event loop readiness timeout");
+
+    const options = mocks.capturedGatewayClientOptions[0];
+    const client = mocks.capturedGatewayClients[0];
+    expect(client?.request).not.toHaveBeenCalled();
+
+    options?.onHelloOk?.({
+      protocol: 1,
+      features: { methods: [], events: [] },
+    } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
+
+    expect(client?.request).toHaveBeenCalledWith("node.pluginTools.update", {
+      tools: [
+        {
+          pluginId: "test-plugin",
+          name: "remote_echo",
+          description: "Echo from node host",
+          command: "test.echo",
+          parameters: { type: "object", properties: {} },
+        },
+      ],
+    });
   });
 });

@@ -7,7 +7,15 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
 import { logRejectedLargePayload } from "../logging/diagnostic-payload.js";
+import {
+  createRegisteredNodePluginToolDescriptorMap,
+  normalizeNodePluginToolDescriptors,
+  removeConnectedNodePluginTools,
+  replaceConnectedNodePluginTools,
+  type RegisteredNodePluginToolCommand,
+} from "./node-plugin-tool-snapshot.js";
 import { MAX_BUFFERED_BYTES } from "./server-constants.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
@@ -30,6 +38,8 @@ export type NodeSession = {
   caps: string[];
   declaredCommands: string[];
   commands: string[];
+  declaredNodePluginTools: NodePluginToolDescriptor[];
+  nodePluginTools: NodePluginToolDescriptor[];
   declaredPermissions?: Record<string, boolean>;
   permissions?: Record<string, boolean>;
   pathEnv?: string;
@@ -94,6 +104,12 @@ const SLOW_CONSUMER_CLOSE_CODE = 1008;
 export type SerializedEventPayload = {
   readonly json: string;
   readonly [SERIALIZED_EVENT_PAYLOAD]: true;
+};
+
+export type NodeRegistryOptions = {
+  listRegisteredNodePluginToolCommands?:
+    | (() => readonly RegisteredNodePluginToolCommand[] | undefined)
+    | undefined;
 };
 
 /** Serialize an event payload once so fanout can reuse the same JSON string. */
@@ -178,6 +194,42 @@ export class NodeRegistry {
   private pendingInvokes = new Map<string, PendingInvoke>();
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
 
+  constructor(private readonly options: NodeRegistryOptions = {}) {}
+
+  private normalizePluginToolDescriptors(params: {
+    tools?: readonly NodePluginToolDescriptor[];
+    allowedCommands?: readonly string[];
+  }): NodePluginToolDescriptor[] {
+    return normalizeNodePluginToolDescriptors({
+      ...params,
+      registeredDescriptors: createRegisteredNodePluginToolDescriptorMap(
+        this.options.listRegisteredNodePluginToolCommands?.(),
+      ),
+    });
+  }
+
+  private replaceEffectiveNodePluginTools(node: NodeSession): void {
+    const nodePluginTools = this.normalizePluginToolDescriptors({
+      tools: node.declaredNodePluginTools,
+      allowedCommands: node.commands,
+    });
+    node.nodePluginTools = nodePluginTools;
+    node.client.connect.nodePluginTools = nodePluginTools;
+    replaceConnectedNodePluginTools({
+      nodeId: node.nodeId,
+      displayName: node.displayName,
+      platform: node.platform,
+      remoteIp: node.remoteIp,
+      tools: nodePluginTools,
+    });
+  }
+
+  refreshNodePluginTools(): void {
+    for (const node of this.nodesById.values()) {
+      this.replaceEffectiveNodePluginTools(node);
+    }
+  }
+
   /** Register a websocket client as the current connection for its node id. */
   register(client: GatewayWsClient, opts: { remoteIp?: string | undefined }) {
     const connect = client.connect;
@@ -208,6 +260,13 @@ export class NodeRegistry {
       typeof (connect as { pathEnv?: string }).pathEnv === "string"
         ? (connect as { pathEnv?: string }).pathEnv
         : undefined;
+    const declaredNodePluginTools = Array.isArray(connect.nodePluginTools)
+      ? [...connect.nodePluginTools]
+      : [];
+    const nodePluginTools = this.normalizePluginToolDescriptors({
+      tools: declaredNodePluginTools,
+      allowedCommands: commands,
+    });
     const session: NodeSession = {
       nodeId,
       connId: client.connId,
@@ -226,6 +285,8 @@ export class NodeRegistry {
       caps,
       declaredCommands,
       commands,
+      declaredNodePluginTools,
+      nodePluginTools,
       declaredPermissions,
       permissions,
       pathEnv,
@@ -233,6 +294,13 @@ export class NodeRegistry {
     };
     this.nodesById.set(nodeId, session);
     this.nodesByConn.set(client.connId, nodeId);
+    replaceConnectedNodePluginTools({
+      nodeId,
+      displayName: session.displayName,
+      platform: session.platform,
+      remoteIp: session.remoteIp,
+      tools: nodePluginTools,
+    });
     return session;
   }
 
@@ -246,6 +314,7 @@ export class NodeRegistry {
     const unregistersCurrentNode = this.nodesById.get(nodeId)?.connId === connId;
     if (unregistersCurrentNode) {
       this.nodesById.delete(nodeId);
+      removeConnectedNodePluginTools(nodeId);
     }
     for (const [id, pending] of this.pendingInvokes.entries()) {
       if (pending.connId !== connId) {
@@ -366,6 +435,20 @@ export class NodeRegistry {
     return this.updateSurface(nodeId, { commands });
   }
 
+  updateNodePluginTools(
+    nodeId: string,
+    connId: string | undefined,
+    tools: readonly NodePluginToolDescriptor[],
+  ): NodeSession | null {
+    const node = this.nodesById.get(nodeId);
+    if (!node || node.connId !== connId) {
+      return null;
+    }
+    node.declaredNodePluginTools = [...tools];
+    this.replaceEffectiveNodePluginTools(node);
+    return node;
+  }
+
   updateSurface(
     nodeId: string,
     surface: {
@@ -384,6 +467,7 @@ export class NodeRegistry {
     const nextCommands = surface.commands.filter((command) => declaredCommands.has(command));
     node.commands = nextCommands;
     (node.client.connect as { commands?: string[] }).commands = nextCommands;
+    this.replaceEffectiveNodePluginTools(node);
 
     if ("caps" in surface) {
       const declaredCaps = new Set(node.declaredCaps);

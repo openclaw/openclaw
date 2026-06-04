@@ -1,3 +1,5 @@
+import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/index.js";
+
 /** Node record returned by gateway node-list endpoints. */
 export type NodeListNode = {
   nodeId: string;
@@ -14,6 +16,7 @@ export type NodeListNode = {
   pathEnv?: string;
   caps?: string[];
   commands?: string[];
+  nodePluginTools?: NodePluginToolDescriptor[];
   permissions?: Record<string, boolean>;
   paired?: boolean;
   connected?: boolean;

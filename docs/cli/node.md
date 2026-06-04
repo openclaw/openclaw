@@ -25,6 +25,13 @@ Common use cases:
 Execution is still guarded by **exec approvals** and per-agent allowlists on the
 node host, so you can keep command access scoped and explicit.
 
+Gateway-loaded plugins can also register node-host commands. When a registered
+command includes `agentTool` metadata, `openclaw node run` advertises that
+plugin or MCP-backed tool to the Gateway while the node is connected. The agent
+sees it as a normal plugin tool, but execution still goes through `node.invoke`
+and the node command allowlist, so disconnecting the node removes the tool from
+new agent runs.
+
 ## Browser proxy (zero-config)
 
 Node hosts automatically advertise a browser proxy if `browser.enabled` is not
