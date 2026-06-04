@@ -9,6 +9,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { hasVisibleAgentPayload } from "../../agents/embedded-agent-runner/delivery-evidence.js";
 import {
   formatEmbeddedAgentQueueFailureSummary,
   queueEmbeddedAgentMessageWithOutcomeAsync,
@@ -1818,6 +1819,15 @@ export async function runReplyAgent(params: {
       messagingToolSentMediaUrls: runResult.messagingToolSentMediaUrls,
       messagingToolSentTargets: runResult.messagingToolSentTargets,
     });
+    const committedMessagingToolSourceReplyDelivery =
+      runResult.didDeliverSourceReplyViaMessageTool === true ||
+      hasVisibleAgentPayload({ payloads: runResult.messagingToolSourceReplyPayloads });
+    if (
+      opts?.sourceReplyDeliveryMode === "message_tool_only" &&
+      committedMessagingToolSourceReplyDelivery
+    ) {
+      await opts.onObservedReplyDelivery?.();
+    }
     const returnSilentFallbackFailureIfNeeded = async (): Promise<ReplyPayload | undefined> => {
       const silentFallbackFailurePayload = buildSilentFallbackFailurePayload({
         fallbackTransition,

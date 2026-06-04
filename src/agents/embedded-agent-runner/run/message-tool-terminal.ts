@@ -192,6 +192,7 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {
 export function installMessageToolOnlyTerminalHook(params: {
   agent: Agent;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  onDeliveredSourceReply?: () => void;
 }): void {
   if (params.sourceReplyDeliveryMode !== "message_tool_only") {
     return;
@@ -206,6 +207,7 @@ export function installMessageToolOnlyTerminalHook(params: {
         hookResult,
       })
     ) {
+      params.onDeliveredSourceReply?.();
       return { ...hookResult, terminate: true };
     }
     return hookResult;
