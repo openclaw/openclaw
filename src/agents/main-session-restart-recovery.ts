@@ -506,33 +506,23 @@ export async function markRestartAbortedMainSessionsFromLocks(params: {
 
 export async function markCrashedMainSessionsFromRemainingLocks(params: {
   sessionsDir: string;
-  remainingLocks: SessionLockInspection[];
-  gatewayStartedAt: number;
+  safeToRecoverLocks: SessionLockInspection[];
 }): Promise<{ marked: number; skipped: number }> {
   const result = { marked: 0, skipped: 0 };
   const sessionsDir = path.resolve(params.sessionsDir);
 
-  const preStartLockPaths = await Promise.all(
-    params.remainingLocks.map(async (lock) => {
-      if (lock.pidAlive) {
-        return null;
-      }
-      try {
-        const stat = await fs.promises.stat(lock.lockPath);
-        if (stat.mtimeMs >= params.gatewayStartedAt) {
-          return null;
-        }
-        return normalizeTranscriptLockPath(lock.lockPath);
-      } catch {
-        return null;
-      }
-    }),
+  // safeToRecoverLocks are pre-classified by cleanStaleLockFiles: they have
+  // a dead/absent owner (pidAlive === false), no report-only stale reasons
+  // (too-old, hold-exceeded), and were preserved by cleanup only due to the
+  // orphan-payload grace window.  This contract eliminates the need for
+  // mtime-based heuristics and avoids falsely marking young unknown-owner
+  // locks that cleanup intentionally preserved.
+  const recoverableLockPaths = new Set(
+    params.safeToRecoverLocks
+      .map((lock) => normalizeTranscriptLockPath(lock.lockPath))
+      .filter((lockPath): lockPath is string => Boolean(lockPath)),
   );
-
-  const remainingLockPaths = new Set(
-    preStartLockPaths.filter((lockPath): lockPath is string => Boolean(lockPath)),
-  );
-  if (remainingLockPaths.size === 0) {
+  if (recoverableLockPaths.size === 0) {
     return result;
   }
 
@@ -549,7 +539,7 @@ export async function markCrashedMainSessionsFromRemainingLocks(params: {
           continue;
         }
         const entryLockPaths = resolveEntryTranscriptLockPaths({ entry, sessionsDir });
-        if (!entryLockPaths.some((lockPath) => remainingLockPaths.has(lockPath))) {
+        if (!entryLockPaths.some((lockPath) => recoverableLockPaths.has(lockPath))) {
           continue;
         }
         entry.abortedLastRun = true;

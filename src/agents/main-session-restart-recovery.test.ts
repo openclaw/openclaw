@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
 import { callGateway } from "../gateway/call.js";
@@ -66,6 +65,20 @@ function cleanedLockForPath(lockPath: string): SessionLockInspection {
 
 function cleanedLock(sessionsDir: string, sessionId: string): SessionLockInspection {
   return cleanedLockForPath(path.join(sessionsDir, `${sessionId}.jsonl.lock`));
+}
+
+function safeToRecoverLock(sessionsDir: string, sessionId: string): SessionLockInspection {
+  const lockPath = path.join(sessionsDir, `${sessionId}.jsonl.lock`);
+  return {
+    lockPath,
+    pid: 999_999,
+    pidAlive: false,
+    createdAt: new Date(Date.now() - 1_000).toISOString(),
+    ageMs: 1_000,
+    stale: true,
+    staleReasons: ["missing-pid"],
+    removed: false,
+  };
 }
 
 function firstGatewayParams(): Record<string, unknown> {
@@ -742,15 +755,13 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
   });
 
-  it("marks running sessions from non-stale locks at post-crash startup", async () => {
+  it("marks running sessions from safe-to-recover locks at post-crash startup", async () => {
     const sessionsDir = await makeSessionsDir();
     const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
     await fs.writeFile(
       lockPath,
       JSON.stringify({ pid: 999_999, createdAt: new Date().toISOString() }),
     );
-    await delay(10);
-    const gatewayStartedAt = Date.now();
 
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -767,8 +778,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await markCrashedMainSessionsFromRemainingLocks({
       sessionsDir,
-      remainingLocks: [cleanedLock(sessionsDir, "main-session")],
-      gatewayStartedAt,
+      safeToRecoverLocks: [safeToRecoverLock(sessionsDir, "main-session")],
     });
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
@@ -777,12 +787,10 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:other"]?.abortedLastRun).toBeUndefined();
   });
 
-  it("skips sessions whose lock path does not match remaining locks", async () => {
+  it("skips sessions whose lock path does not match safe-to-recover locks", async () => {
     const sessionsDir = await makeSessionsDir();
     const unrelatedLockPath = path.join(sessionsDir, "unrelated-session.jsonl.lock");
     await fs.writeFile(unrelatedLockPath, JSON.stringify({ pid: 999_999 }));
-    await delay(10);
-    const gatewayStartedAt = Date.now();
 
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -794,8 +802,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await markCrashedMainSessionsFromRemainingLocks({
       sessionsDir,
-      remainingLocks: [cleanedLock(sessionsDir, "unrelated-session")],
-      gatewayStartedAt,
+      safeToRecoverLocks: [safeToRecoverLock(sessionsDir, "unrelated-session")],
     });
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
@@ -803,9 +810,16 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBeUndefined();
   });
 
-  it("skips locks with mtime after gatewayStartedAt (live lock race)", async () => {
+  it("trusts cleanup classification: live-owner locks never appear in safeToRecoverLocks", async () => {
     const sessionsDir = await makeSessionsDir();
-    const gatewayStartedAt = Date.now();
+    const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
+    await fs.writeFile(
+      lockPath,
+      JSON.stringify({
+        pid: process.pid,
+        createdAt: new Date(Date.now() - 60_000).toISOString(),
+      }),
+    );
 
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -815,17 +829,11 @@ describe("main-session-restart-recovery", () => {
       },
     });
 
-    await delay(20);
-    const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
-    await fs.writeFile(
-      lockPath,
-      JSON.stringify({ pid: 999_999, createdAt: new Date().toISOString() }),
-    );
-
+    // cleanStaleLockFiles never classifies a live-PID lock as safeToRecover,
+    // so safeToRecoverLocks is empty for this session.
     const result = await markCrashedMainSessionsFromRemainingLocks({
       sessionsDir,
-      remainingLocks: [cleanedLock(sessionsDir, "main-session")],
-      gatewayStartedAt,
+      safeToRecoverLocks: [],
     });
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
@@ -833,7 +841,7 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBeUndefined();
   });
 
-  it("marks sessions from locks with mtime before gatewayStartedAt", async () => {
+  it("marks sessions from safe-to-recover dead-PID locks", async () => {
     const sessionsDir = await makeSessionsDir();
     const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
     await fs.writeFile(
@@ -843,8 +851,6 @@ describe("main-session-restart-recovery", () => {
         createdAt: new Date(Date.now() - 60_000).toISOString(),
       }),
     );
-    await delay(10);
-    const gatewayStartedAt = Date.now();
 
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -856,8 +862,7 @@ describe("main-session-restart-recovery", () => {
 
     const result = await markCrashedMainSessionsFromRemainingLocks({
       sessionsDir,
-      remainingLocks: [cleanedLock(sessionsDir, "main-session")],
-      gatewayStartedAt,
+      safeToRecoverLocks: [safeToRecoverLock(sessionsDir, "main-session")],
     });
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
@@ -865,18 +870,16 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBe(true);
   });
 
-  it("skips locks whose owner PID is still alive (live lock)", async () => {
+  it("skips locks with report-only stale reasons (too-old) not classified as safe-to-recover", async () => {
     const sessionsDir = await makeSessionsDir();
     const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
     await fs.writeFile(
       lockPath,
       JSON.stringify({
-        pid: process.pid,
+        pid: 999_999,
         createdAt: new Date(Date.now() - 60_000).toISOString(),
       }),
     );
-    await delay(10);
-    const gatewayStartedAt = Date.now();
 
     await writeStore(sessionsDir, {
       "agent:main:main": {
@@ -886,21 +889,12 @@ describe("main-session-restart-recovery", () => {
       },
     });
 
-    const liveLock: SessionLockInspection = {
-      lockPath,
-      pid: process.pid,
-      pidAlive: true,
-      createdAt: new Date(Date.now() - 60_000).toISOString(),
-      ageMs: 60_000,
-      stale: false,
-      staleReasons: [],
-      removed: false,
-    };
-
+    // A lock with only "too-old" is never included in safeToRecoverLocks
+    // because cleanStaleLockFiles excludes report-only stale reasons.
+    // Passing an empty safeToRecoverLocks simulates that scenario.
     const result = await markCrashedMainSessionsFromRemainingLocks({
       sessionsDir,
-      remainingLocks: [liveLock],
-      gatewayStartedAt,
+      safeToRecoverLocks: [],
     });
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
@@ -908,10 +902,9 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:main"]?.abortedLastRun).toBeUndefined();
   });
 
-  it("only marks crash-residue sessions when live and dead locks coexist", async () => {
+  it("only marks crash-residue sessions when safe-to-recover excludes live-owner locks", async () => {
     const sessionsDir = await makeSessionsDir();
     const crashedLockPath = path.join(sessionsDir, "crashed-session.jsonl.lock");
-    const liveLockPath = path.join(sessionsDir, "live-session.jsonl.lock");
     await fs.writeFile(
       crashedLockPath,
       JSON.stringify({
@@ -919,15 +912,6 @@ describe("main-session-restart-recovery", () => {
         createdAt: new Date(Date.now() - 60_000).toISOString(),
       }),
     );
-    await fs.writeFile(
-      liveLockPath,
-      JSON.stringify({
-        pid: process.pid,
-        createdAt: new Date(Date.now() - 60_000).toISOString(),
-      }),
-    );
-    await delay(10);
-    const gatewayStartedAt = Date.now();
 
     await writeStore(sessionsDir, {
       "agent:main:crashed": {
@@ -942,36 +926,44 @@ describe("main-session-restart-recovery", () => {
       },
     });
 
-    const deadLock: SessionLockInspection = {
-      lockPath: crashedLockPath,
-      pid: 999_999,
-      pidAlive: false,
-      createdAt: new Date(Date.now() - 60_000).toISOString(),
-      ageMs: 60_000,
-      stale: false,
-      staleReasons: [],
-      removed: false,
-    };
-    const liveLock: SessionLockInspection = {
-      lockPath: liveLockPath,
-      pid: process.pid,
-      pidAlive: true,
-      createdAt: new Date(Date.now() - 60_000).toISOString(),
-      ageMs: 60_000,
-      stale: false,
-      staleReasons: [],
-      removed: false,
-    };
-
+    // cleanStaleLockFiles only classifies dead-owner locks as safeToRecover;
+    // live-owner locks never enter this list.
     const result = await markCrashedMainSessionsFromRemainingLocks({
       sessionsDir,
-      remainingLocks: [deadLock, liveLock],
-      gatewayStartedAt,
+      safeToRecoverLocks: [safeToRecoverLock(sessionsDir, "crashed-session")],
     });
 
     const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
     expect(result.marked).toBe(1);
     expect(store["agent:main:crashed"]?.abortedLastRun).toBe(true);
     expect(store["agent:main:live"]?.abortedLastRun).toBeUndefined();
+  });
+
+  it("does not mark sessions when young unknown-owner lock is preserved by grace window", async () => {
+    const sessionsDir = await makeSessionsDir();
+    const lockPath = path.join(sessionsDir, "main-session.jsonl.lock");
+    // Simulate a young lock with missing PID — cleanup preserves this because
+    // the orphan-payload grace window has not elapsed.  Such a lock is NOT
+    // included in safeToRecoverLocks by cleanStaleLockFiles.
+    await fs.writeFile(lockPath, JSON.stringify({ pid: null }));
+
+    await writeStore(sessionsDir, {
+      "agent:main:main": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+      },
+    });
+
+    // safeToRecoverLocks is empty because cleanup preserved the young
+    // unknown-owner lock rather than classifying it as safe to recover.
+    const result = await markCrashedMainSessionsFromRemainingLocks({
+      sessionsDir,
+      safeToRecoverLocks: [],
+    });
+
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(result.marked).toBe(0);
+    expect(store["agent:main:main"]?.abortedLastRun).toBeUndefined();
   });
 });

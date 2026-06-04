@@ -797,7 +797,11 @@ export async function cleanStaleLockFiles(params: {
     warn?: (message: string) => void;
     info?: (message: string) => void;
   };
-}): Promise<{ locks: SessionLockInspection[]; cleaned: SessionLockInspection[] }> {
+}): Promise<{
+  locks: SessionLockInspection[];
+  cleaned: SessionLockInspection[];
+  safeToRecover: SessionLockInspection[];
+}> {
   const sessionsDir = path.resolve(params.sessionsDir);
   const staleMs = resolvePositiveMs(
     params.staleMs,
@@ -826,13 +830,14 @@ export async function cleanStaleLockFiles(params: {
   } catch (err) {
     const code = (err as { code?: string }).code;
     if (code === "ENOENT") {
-      return { locks: [], cleaned: [] };
+      return { locks: [], cleaned: [], safeToRecover: [] };
     }
     throw err;
   }
 
   const locks: SessionLockInspection[] = [];
   const cleaned: SessionLockInspection[] = [];
+  const safeToRecover: SessionLockInspection[] = [];
   const lockEntries = entries
     .filter((entry) => entry.name.endsWith(".jsonl.lock"))
     .toSorted((a, b) => a.name.localeCompare(b.name));
@@ -866,12 +871,24 @@ export async function cleanStaleLockFiles(params: {
       params.log?.warn?.(
         `removed stale session lock: ${lockPath} (${lockInfo.staleReasons.join(", ") || "unknown"})`,
       );
+    } else if (
+      !lockInfo.removed &&
+      !lockInfo.pidAlive &&
+      lockInfo.stale &&
+      !lockInfo.staleReasons.some((reason) => REPORT_ONLY_STALE_LOCK_REASONS.has(reason)) &&
+      !lockInspectionNeedsMtimeStaleFallback(lockInfo)
+    ) {
+      // Stale lock with dead owner and no report-only or orphan-grace reasons:
+      // cleanup chose not to remove it (removeStale=false or edge case).
+      // Safe to mark for recovery since owner is provably dead and the lock
+      // is not protected by the orphan-payload grace window.
+      safeToRecover.push(lockInfo);
     }
 
     locks.push(lockInfo);
   }
 
-  return { locks, cleaned };
+  return { locks, cleaned, safeToRecover };
 }
 
 export async function acquireSessionWriteLock(params: {

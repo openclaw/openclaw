@@ -435,7 +435,6 @@ async function cleanupStaleSessionLocks(params: {
   log: { warn: (msg: string) => void };
   isStopped: () => boolean;
   cleanStaleLockFiles: CleanStaleLockFiles;
-  gatewayStartedAt: number;
   markRestartAbortedMainSessionsFromLocks?: MarkRestartAbortedMainSessionsFromLocks;
   markCrashedMainSessionsFromRemainingLocks?: MarkCrashedMainSessionsFromRemainingLocks;
   concurrency?: number;
@@ -479,15 +478,11 @@ async function cleanupStaleSessionLocks(params: {
         const marker = await getRestartMarker();
         await marker({ sessionsDir, cleanedLocks: result.cleaned });
       }
-      const remainingLocks = result.locks.filter(
-        (lock) => !result.cleaned.some((c) => c.lockPath === lock.lockPath),
-      );
-      if (remainingLocks.length > 0) {
+      if (result.safeToRecover.length > 0) {
         const marker = await getCrashMarker();
         await marker({
           sessionsDir,
-          remainingLocks,
-          gatewayStartedAt: params.gatewayStartedAt,
+          safeToRecoverLocks: result.safeToRecover,
         });
       }
     }
@@ -772,7 +767,6 @@ export async function startGatewaySidecars(params: {
   startupTrace?: GatewayStartupTrace;
 }) {
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
-  const gatewayStartedAt = Date.now();
 
   const internalHooksConfigured = hasConfiguredInternalHooks(params.cfg);
   await measureStartup(params.startupTrace, "sidecars.internal-hooks", async () => {
@@ -924,7 +918,6 @@ export async function startGatewaySidecars(params: {
           log: params.log,
           isStopped,
           cleanStaleLockFiles,
-          gatewayStartedAt,
         });
       } catch (err) {
         params.log.warn(`session lock cleanup failed on startup: ${String(err)}`);
