@@ -142,15 +142,18 @@ export default definePluginEntry({
         config: resolveCurrentConfig(),
         resumeCodexCliSessionOnNode: (params) =>
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
-        sendProgressReply: buildCodexConversationProgressReply("telegram", {
-          loadAdapter: (channel) =>
-            api.runtime.channel.outbound.loadAdapter(channel as never),
-          resolveConfig: () =>
-            api.runtime.config?.current
-              ? (api.runtime.config.current() as OpenClawConfig)
-              : (api.config ?? ({} as OpenClawConfig)),
-          logWarn: (message, details) => console.warn(message, details),
-        }),
+        sendProgressReply: buildCodexConversationProgressReply(
+          typeof event.channel === "string" ? event.channel : "telegram",
+          {
+            loadAdapter: (channel) =>
+              api.runtime.channel.outbound.loadAdapter(channel as never),
+            resolveConfig: () =>
+              api.runtime.config?.current
+                ? (api.runtime.config.current() as OpenClawConfig)
+                : (api.config ?? ({} as OpenClawConfig)),
+            logWarn: (message, details) => console.warn(message, details),
+          },
+        ),
       }),
     );
     api.on("before_dispatch", (event, ctx) => {

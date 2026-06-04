@@ -1,5 +1,10 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  adaptMessagePresentationForChannel,
+  normalizeMessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import type { SendCodexConversationProgressReply } from "./conversation-binding.js";
 
 type CodexProgressReplyContext = {
@@ -35,11 +40,21 @@ export function buildCodexConversationProgressReply(
     };
     if (adapter.sendPayload) {
       try {
-        const results = await adapter.sendPayload({
+        const payloadContext = {
           cfg,
           ...ctx,
           text: payload.text ?? "",
           payload,
+        };
+        const renderedPayload = await renderCodexProgressReplyPayload({
+          adapter,
+          payload,
+          payloadContext,
+        });
+        const results = await adapter.sendPayload({
+          ...payloadContext,
+          text: renderedPayload.text ?? "",
+          payload: renderedPayload,
         });
         if (results && adapter.afterDeliverPayload) {
           try {
@@ -96,4 +111,33 @@ function formatErrorMessage(err: unknown): string {
     return err.message;
   }
   return String(err);
+}
+
+type CodexProgressReplyPayloadContext = Parameters<
+  NonNullable<ChannelOutboundAdapter["sendPayload"]>
+>[0];
+
+async function renderCodexProgressReplyPayload(params: {
+  adapter: Pick<ChannelOutboundAdapter, "presentationCapabilities" | "renderPresentation">;
+  payload: ReplyPayload;
+  payloadContext: CodexProgressReplyPayloadContext;
+}): Promise<ReplyPayload> {
+  const presentation = normalizeMessagePresentation(params.payload.presentation);
+  if (!presentation) {
+    return params.payload;
+  }
+  const adaptedPresentation = adaptMessagePresentationForChannel({
+    presentation,
+    capabilities: params.adapter.presentationCapabilities,
+  });
+  const adaptedPayload = { ...params.payload, presentation: adaptedPresentation };
+  return (
+    (params.adapter.renderPresentation
+      ? await params.adapter.renderPresentation({
+          payload: adaptedPayload,
+          presentation: adaptedPresentation,
+          ctx: params.payloadContext,
+        })
+      : null) ?? adaptedPayload
+  );
 }
