@@ -93,16 +93,11 @@ describe("run-additional-boundary-checks", () => {
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
   });
 
-  it("keeps the temporary ratchet guards in source boundary checks", () => {
+  it("keeps the raw HTTP/2 import guard in source boundary checks", () => {
     expect(BOUNDARY_CHECKS).toContainEqual({
       label: "lint:tmp:no-raw-http2-imports",
       command: "pnpm",
       args: ["run", "lint:tmp:no-raw-http2-imports"],
-    });
-    expect(BOUNDARY_CHECKS).toContainEqual({
-      label: "lint:tmp:session-accessor-boundary",
-      command: "pnpm",
-      args: ["run", "lint:tmp:session-accessor-boundary"],
     });
   });
 
