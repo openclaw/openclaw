@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { isExplicitOpenClawHomeStateDir } from "./config/paths.js";
+import { isExplicitOpenClawHomeStateDir } from "./config/state-dir-names.js";
 import { pathExists as fsSafePathExists } from "./infra/fs-safe.js";
 import {
   resolveEffectiveHomeDir,
