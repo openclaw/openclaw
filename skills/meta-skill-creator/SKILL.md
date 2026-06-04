@@ -16,12 +16,13 @@ composition:
           "id": "proposal",
           "kind": "tool_call",
           "depends_on": ["collect"],
-          "tool": "meta_skill_creator",
+          "tool": "skill_workshop",
           "args":
             {
+              "action": "create",
               "name": "{{collect.name}}",
               "description": "{{collect.description}}",
-              "content": "{{collect.content}}",
+              "proposal_content": "{{collect.content}}",
               "goal": "Created by meta-skill-creator",
               "evidence": "creator workflow collected: {{collect.workflow}}",
             },

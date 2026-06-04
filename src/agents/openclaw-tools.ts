@@ -50,7 +50,6 @@ import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
 import { createMessageTool } from "./tools/message-tool.js";
 import { createMetaInvokeTool, type MetaInvokeRunPlan } from "./tools/meta-invoke-tool.js";
-import { createMetaSkillCreatorTool } from "./tools/meta-skill-creator-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
@@ -467,17 +466,6 @@ export function createOpenClawTools(
       ? []
       : [
           createSkillWorkshopTool({
-            workspaceDir,
-            config: resolvedConfig,
-            agentId: sessionAgentId,
-            origin: {
-              agentId: sessionAgentId,
-              ...(skillWorkshopSessionKey ? { sessionKey: skillWorkshopSessionKey } : {}),
-              ...(skillWorkshopRunId ? { runId: skillWorkshopRunId } : {}),
-              ...(skillWorkshopMessageId ? { messageId: skillWorkshopMessageId } : {}),
-            },
-          }),
-          createMetaSkillCreatorTool({
             workspaceDir,
             config: resolvedConfig,
             agentId: sessionAgentId,
