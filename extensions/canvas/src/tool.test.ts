@@ -1,8 +1,24 @@
+import fs from "node:fs";
 import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCanvasTool } from "./tool.js";
+
+const canCreateFileSymlinks = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-canvas-symlink-probe-"));
+  const targetFile = path.join(probeDir, "target.txt");
+  const linkFile = path.join(probeDir, "link.txt");
+  try {
+    fs.writeFileSync(targetFile, "content");
+    fs.symlinkSync(targetFile, linkFile);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
 
 const mocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(),
@@ -41,7 +57,7 @@ describe("Canvas tool", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "rejects jsonlPath symlinks that resolve outside the workspace",
     async () => {
       tempRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-tool-"));
