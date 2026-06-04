@@ -375,13 +375,30 @@ describe("handshake auth helpers", () => {
     ).toBe("shared_secret_loopback_local");
   });
 
-  it("skips backend self-pairing only for direct-local backend clients", () => {
-    expect(skipBackendSelfPairing()).toBe(true);
+  it("requires pairing for backend clients using shared token or password auth", () => {
+    expect(
+      skipBackendSelfPairing({
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "token",
+      }),
+    ).toBe(false);
+    expect(
+      skipBackendSelfPairing({
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "password",
+      }),
+    ).toBe(false);
     expect(
       skipBackendSelfPairing({
         locality: "shared_secret_loopback_local",
+        sharedAuthOk: true,
+        authMethod: "token",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       skipBackendSelfPairing({
         locality: "remote",
@@ -409,6 +426,25 @@ describe("handshake auth helpers", () => {
     expect(
       skipBackendSelfPairing({
         locality: "cli_container_local",
+      }),
+    ).toBe(false);
+  });
+
+  it("does not let bootstrap tokens skip backend self-pairing", () => {
+    expect(
+      skipBackendSelfPairing({
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: true,
+        authMethod: "bootstrap-token",
+      }),
+    ).toBe(false);
+    expect(
+      skipBackendSelfPairing({
+        locality: "direct_local",
+        hasBrowserOriginHeader: false,
+        sharedAuthOk: false,
+        authMethod: "bootstrap-token",
       }),
     ).toBe(false);
   });
@@ -441,7 +477,7 @@ describe("handshake auth helpers", () => {
         locality: "shared_secret_loopback_local",
         authMethod: "none",
       }),
-    ).toBe(true);
+    ).toBe(false);
     // sharedAuthOk=false is fine for auth:none on local backend
     expect(
       skipBackendSelfPairing({

@@ -266,9 +266,7 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   if (!isBackendClient) {
     return false;
   }
-  const isLocal =
-    params.locality === "direct_local" || params.locality === "shared_secret_loopback_local";
-  if (!isLocal || params.hasBrowserOriginHeader) {
+  if (params.locality !== "direct_local" || params.hasBrowserOriginHeader) {
     return false;
   }
   // No-auth local backend: scoped bypass — not shared secret, but local-only
@@ -276,9 +274,7 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   if (params.authMethod === "none") {
     return true;
   }
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
-  const usesDeviceTokenAuth = params.authMethod === "device-token";
-  return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
+  return params.authMethod === "device-token";
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {

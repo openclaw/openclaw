@@ -66,7 +66,7 @@ async function expectSharedOperatorScopesCleared(
   }
 }
 
-async function expectLocalBackendGatewayClientScopesPreserved(
+async function expectLocalBackendGatewayClientScopesCleared(
   port: number,
   auth: { token?: string; password?: string; skipDefaultAuth?: boolean },
 ) {
@@ -87,10 +87,11 @@ async function expectLocalBackendGatewayClientScopesPreserved(
           };
         }
       | undefined;
-    expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
+    expect(helloOk?.auth?.scopes).toEqual([]);
 
     const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
-    expect(adminRes.ok).toBe(true);
+    expect(adminRes.ok).toBe(false);
+    expect(adminRes.error?.message ?? "").toContain("missing scope");
   } finally {
     ws.close();
   }
@@ -129,8 +130,8 @@ describe("gateway auth compatibility baseline", () => {
       await expectSharedOperatorScopesCleared(port, { token: "secret" });
     });
 
-    test("preserves scopes for direct-local backend shared-token connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { token: "secret" });
+    test("clears scopes for direct-local backend shared-token connects without device identity", async () => {
+      await expectLocalBackendGatewayClientScopesCleared(port, { token: "secret" });
     });
 
     test("returns stable token-missing details for control ui without token", async () => {
@@ -303,8 +304,8 @@ describe("gateway auth compatibility baseline", () => {
       await expectSharedOperatorScopesCleared(port, { password: "secret" });
     });
 
-    test("preserves scopes for direct-local backend shared-password connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { password: "secret" });
+    test("clears scopes for direct-local backend shared-password connects without device identity", async () => {
+      await expectLocalBackendGatewayClientScopesCleared(port, { password: "secret" });
     });
   });
 
@@ -337,7 +338,30 @@ describe("gateway auth compatibility baseline", () => {
     });
 
     test("allows auth-none local backend connects without device identity", async () => {
-      await expectLocalBackendGatewayClientScopesPreserved(port, { skipDefaultAuth: true });
+      const ws = await openWs(port);
+      try {
+        const res = await connectReq(ws, {
+          skipDefaultAuth: true,
+          client: { ...BACKEND_GATEWAY_CLIENT },
+          scopes: ["operator.admin"],
+          device: null,
+        });
+        expect(res.ok, JSON.stringify(res)).toBe(true);
+
+        const helloOk = res.payload as
+          | {
+              auth?: {
+                scopes?: unknown;
+              };
+            }
+          | undefined;
+        expect(helloOk?.auth?.scopes).toEqual(["operator.admin"]);
+
+        const adminRes = await rpcReq(ws, "set-heartbeats", { enabled: false });
+        expect(adminRes.ok).toBe(true);
+      } finally {
+        ws.close();
+      }
     });
 
     test("rejects auth-none browser-origin backend connects without device identity", async () => {

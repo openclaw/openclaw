@@ -116,11 +116,13 @@ Treat Gateway and node as one operator trust domain, with different roles:
 - A caller authenticated to the Gateway is trusted at Gateway scope. After pairing, node actions are trusted operator actions on that node.
 - Operator scope levels and approval-time checks are summarized in
   [Operator scopes](/gateway/operator-scopes).
-- Direct loopback backend clients authenticated with the shared gateway
-  token/password can make internal control-plane RPCs without presenting a user
-  device identity. This is not a remote or browser pairing bypass: network
-  clients, node clients, device-token clients, and explicit device identities
-  still go through pairing and scope-upgrade enforcement.
+- Direct loopback backend clients authenticated with a dedicated device token
+  can make internal control-plane RPCs without presenting a separate user
+  device identity. Shared gateway token/password auth and bootstrap-token auth
+  stay on the normal pairing path because backend identity is client-declared.
+  This is not a remote or browser pairing bypass: network clients, node
+  clients, and explicit device identities still go through pairing and
+  scope-upgrade enforcement.
 - `sessionKey` is routing/context selection, not per-user auth.
 - Exec approvals (allowlist + ask) are guardrails for operator intent, not hostile multi-tenant isolation.
 - OpenClaw's product default for trusted single-operator setups is that host exec on `gateway`/`node` is allowed without approval prompts (`security="full"`, `ask="off"` unless you tighten it). That default is intentional UX, not a vulnerability by itself.
@@ -907,8 +909,9 @@ Local device pairing:
 
 - Device pairing is auto-approved for direct local loopback connects to keep
   same-host clients smooth.
-- OpenClaw also has a narrow backend/container-local self-connect path for
-  trusted shared-secret helper flows.
+- OpenClaw also has a narrow direct-local backend self-connect path for trusted
+  device-token helper flows. Shared token/password and bootstrap-token
+  handshakes stay on the normal pairing path.
 - Tailnet and LAN connects, including same-host tailnet binds, are treated as
   remote for pairing and still need approval.
 - Forwarded-header evidence on a loopback request disqualifies loopback
