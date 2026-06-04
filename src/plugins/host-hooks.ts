@@ -152,7 +152,10 @@ export type PluginAgentEventSubscriptionRegistration = {
   handle: (
     event: AgentEventPayload,
     ctx: {
-      getRunContext: (namespace: string) => PluginJsonValue | undefined;
+      // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
+      getRunContext: <T extends PluginJsonValue = PluginJsonValue>(
+        namespace: string,
+      ) => T | undefined;
       setRunContext: (namespace: string, value: PluginJsonValue) => void;
       clearRunContext: (namespace?: string) => void;
     },
