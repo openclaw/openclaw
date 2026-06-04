@@ -324,7 +324,13 @@ export function answerCodexUserInputFreeform(params: {
   }
   pruneExpiredControls(params.now);
   const matches = [...pendingUserInputs.values()].filter((pending) => {
-    if (!pending.questions.some((question) => question.isOther)) {
+    // Sequential entries that show a numbered/label button row are
+    // accepted even when no question has isOther. The option-match
+    // check below is sufficient to validate the reply.
+    const isSequentialWithButtons = Boolean(
+      pending.emitNextPrompt && pending.questions.length > 1,
+    );
+    if (!isSequentialWithButtons && !pending.questions.some((question) => question.isOther)) {
       return false;
     }
     // Sequential pending entries answer only the currently-shown
@@ -336,7 +342,7 @@ export function answerCodexUserInputFreeform(params: {
     // answer). Match on the currently-shown question's isOther
     // instead and let the sequential branch do the per-question
     // bookkeeping below.
-    if (pending.emitNextPrompt && pending.questions.length > 1) {
+    if (isSequentialWithButtons) {
       const current = pending.questions[pending.currentQuestionIndex];
       if (!current) {
         return false;
@@ -348,8 +354,8 @@ export function answerCodexUserInputFreeform(params: {
       // currently-shown question to be isOther. Reject replies that
       // do not normalize to one of the rendered options so a stray
       // message does not consume the request.
-      const normalized = resolveFreeformOptionAnswer(current, answerText);
-      if (normalized === answerText && !current.isOther) {
+      const resolved = resolveFreeformOptionAnswer(current, answerText);
+      if (!resolved.matched && !current.isOther) {
         return false;
       }
       return !readControlScopeMismatch(pending, params.ctx, params.sessionFile);
@@ -389,8 +395,8 @@ export function answerCodexUserInputFreeform(params: {
     // options. Users who reply '1' or paste the option label instead
     // of pressing the button should still resolve the active turn
     // (the channel may not be able to render or keep the buttons).
-    const normalized = resolveFreeformOptionAnswer(currentQuestion, answerText);
-    pending.selectedAnswers[currentQuestion.id] = normalized;
+    const resolved = resolveFreeformOptionAnswer(currentQuestion, answerText);
+    pending.selectedAnswers[currentQuestion.id] = resolved.answer;
     const complete = pending.questions.every((entry) => pending.selectedAnswers[entry.id]);
     if (!complete) {
       const nextIndex = pending.currentQuestionIndex + 1;
@@ -815,33 +821,38 @@ function parseCodexFreeformAnswersForUnselectedQuestions(
  * Normalize a typed freeform reply against a single question's rendered
  * options. Accepts: the numeric prefix the prompt renders (e.g. "1"),
  * the exact option label (case-insensitive), or the raw text. Returns
- * the raw answer when no match, so the question's isOther / typed-text
- * path still works for genuinely freeform answers.
+ * the canonical option label when one matched, or the raw answer
+ * with matched: false so callers can decide whether to consume the
+ * freeform fallback.
  */
 function resolveFreeformOptionAnswer(
   question: UserInputQuestion,
   answerText: string,
-): string {
+): { matched: boolean; answer: string } {
   const options = question.options ?? [];
   if (options.length === 0) {
-    return answerText;
+    return { matched: false, answer: answerText };
   }
   const trimmed = answerText.trim();
+  if (!trimmed) {
+    return { matched: false, answer: answerText };
+  }
   // Numeric prefix: the prompt renders "1. label", "2. label" etc.
   if (/^\d+$/.test(trimmed)) {
     const index = Number(trimmed) - 1;
     const option = options[index];
     if (option) {
-      return option.label;
+      return { matched: true, answer: option.label };
     }
+    return { matched: false, answer: answerText };
   }
   // Exact label match (case-insensitive).
   const lowered = trimmed.toLowerCase();
   const exact = options.find((option) => option.label.toLowerCase() === lowered);
   if (exact) {
-    return exact.label;
+    return { matched: true, answer: exact.label };
   }
-  return answerText;
+  return { matched: false, answer: answerText };
 }
 
 function canFreeformAnswerAllQuestions(

@@ -939,6 +939,133 @@ describe("codex conversation chat controls", () => {
     );
   });
 
+  it("accepts numeric freeform fallback on all-option sequential prompts without an isOther question", async () => {
+    // Regression: the legacy 'some question is isOther' gate rejected
+    // every pending request whose questions were all option-only
+    // before the sequential numeric/label normalization could run.
+    // Sequential prompts with multiple option-only questions are
+    // valid Codex request_user_input payloads; replies like "2"
+    // should still resolve the active turn.
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const emittedPayloads: Array<{ labels: string[] }> = [];
+    const { token, payload } = createCodexUserInputSequentialControl({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Small Patch", description: "Narrow" },
+            { label: "Feature Slice", description: "Broad" },
+          ],
+        },
+        {
+          id: "rollout",
+          header: "Rollout",
+          question: "Rollout?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Immediate", description: "Ship now" },
+            { label: "Staged", description: "Staged" },
+          ],
+        },
+      ],
+      emitNextPrompt: async (nextIndex) => {
+        const next = buildCodexUserInputSequentialPrompt({
+          token,
+          questions: [
+            {
+              id: "shape",
+              header: "Plan",
+              question: "Which plan shape?",
+              isOther: false,
+              isSecret: false,
+              options: [
+                { label: "Small Patch", description: "Narrow" },
+                { label: "Feature Slice", description: "Broad" },
+              ],
+            },
+            {
+              id: "rollout",
+              header: "Rollout",
+              question: "Rollout?",
+              isOther: false,
+              isSecret: false,
+              options: [
+                { label: "Immediate", description: "Ship now" },
+                { label: "Staged", description: "Staged" },
+              ],
+            },
+          ],
+          questionIndex: nextIndex,
+        });
+        emittedPayloads.push({ labels: readButtons(next).map((b) => b.label) });
+      },
+    });
+    emittedPayloads.push({ labels: readButtons(payload).map((b) => b.label) });
+
+    // Type "2" for the first question (no question is isOther).
+    const r1 = answerCodexUserInputFreeform({
+      answerText: "2",
+      ctx,
+      sessionFile: scope.sessionFile,
+    });
+    expect(r1).toEqual({ matched: true, consumed: true, message: "" });
+    expect(emittedPayloads).toHaveLength(2);
+    expect(emittedPayloads[1]?.labels).toEqual(["Immediate", "Staged"]);
+
+    // Type the option label exactly (case-insensitive).
+    const q2Callback = readButtons(
+      buildCodexUserInputSequentialPrompt({
+        token,
+        questions: [
+          {
+            id: "shape",
+            header: "Plan",
+            question: "Which plan shape?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Small Patch", description: "Narrow" },
+              { label: "Feature Slice", description: "Broad" },
+            ],
+          },
+          {
+            id: "rollout",
+            header: "Rollout",
+            question: "Rollout?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Immediate", description: "Ship now" },
+              { label: "Staged", description: "Staged" },
+            ],
+          },
+        ],
+        questionIndex: 1,
+      }),
+    )[0]?.value?.slice(6) ?? "";
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "STAGED",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: true, consumed: true, message: "Sent answer to Codex." });
+    await expect(answered).resolves.toBe(
+      "shape: Feature Slice\nrollout: Staged",
+    );
+    expect(q2Callback).toBeTypeOf("string");
+  });
+
   it("answers the first question of a sequential prompt via freeform text when Other is allowed", async () => {
     let resolveText: (text: string) => void = () => undefined;
     const answered = new Promise<string>((resolve) => {
