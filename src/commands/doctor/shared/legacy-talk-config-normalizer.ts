@@ -41,6 +41,24 @@ function buildLegacyRealtimeTalkCompat(
   return normalizeTalkSection({ realtime: compat } as OpenClawConfig["talk"])?.realtime;
 }
 
+function preserveExistingRealtimeVoiceAlias(
+  talk: Record<string, unknown>,
+  normalizedTalk: NonNullable<OpenClawConfig["talk"]>,
+): void {
+  if (!isRecord(talk.realtime) || !normalizedTalk.realtime) {
+    return;
+  }
+  if ("speakerVoice" in talk.realtime) {
+    return;
+  }
+  if (
+    normalizedTalk.realtime.voice &&
+    normalizedTalk.realtime.speakerVoice === normalizedTalk.realtime.voice
+  ) {
+    delete normalizedTalk.realtime.speakerVoice;
+  }
+}
+
 /** Normalize legacy Talk provider/realtime fields into current talk.providers and talk.realtime. */
 export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
   const rawTalk = cfg.talk;
@@ -66,6 +84,7 @@ export function normalizeLegacyTalkConfig(cfg: OpenClawConfig, changes: string[]
       ...normalizedTalk.realtime,
     };
   }
+  preserveExistingRealtimeVoiceAlias(rawTalk, normalizedTalk);
   if (Object.keys(normalizedTalk).length === 0 || isDeepStrictEqual(normalizedTalk, rawTalk)) {
     return cfg;
   }

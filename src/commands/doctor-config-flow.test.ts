@@ -2915,6 +2915,23 @@ describe("doctor config flow", () => {
                     modelId: "eleven_v3",
                   },
                 },
+                realtime: {
+                  mode: "realtime",
+                  transport: "provider-websocket",
+                  brain: "agent-consult",
+                  provider: "openai",
+                  model: "gpt-realtime-2",
+                  voice: "cedar",
+                  providers: {
+                    openai: {
+                      apiKey: {
+                        source: "env",
+                        provider: "openai",
+                        id: "OPENAI_API_KEY",
+                      },
+                    },
+                  },
+                },
               },
             },
             null,

@@ -1250,6 +1250,36 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
+  it("does not report talk provider normalization for canonical realtime provider shape", () => {
+    const input: OpenClawConfig = {
+      talk: {
+        provider: "openai",
+        realtime: {
+          mode: "realtime",
+          transport: "provider-websocket",
+          brain: "agent-consult",
+          provider: "openai",
+          model: "gpt-realtime-2",
+          voice: "cedar",
+          providers: {
+            openai: {
+              apiKey: {
+                source: "env",
+                provider: "openai",
+                id: "OPENAI_API_KEY",
+              },
+            },
+          },
+        },
+      },
+    };
+
+    const res = normalizeCompatibilityConfigValues(input);
+
+    expect(res.config).toEqual(input);
+    expect(res.changes).toStrictEqual([]);
+  });
+
   it("migrates tools.message.allowCrossContextSend to canonical crossContext settings", () => {
     const res = normalizeCompatibilityConfigValues({
       tools: {
