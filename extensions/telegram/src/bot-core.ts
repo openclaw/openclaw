@@ -219,6 +219,16 @@ export function createTelegramBotCore(
     }
   });
 
+  bot.use(async (ctx, next) => {
+    if (ctx.callbackQuery) {
+      const answer = typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
+        ? () => ctx.answerCallbackQuery()
+        : () => bot.api.answerCallbackQuery(ctx.callbackQuery.id);
+      await answer().catch(() => {});
+    }
+    return next();
+  });
+
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");

@@ -381,6 +381,20 @@ describe("createTelegramBot", () => {
     expect(harness.sequentializeKey).toBe(getTelegramSequentialKey);
   });
 
+  it("answers callback query before sequentialize blocks", async () => {
+    installPerKeySequentializer();
+    createTelegramBot({ token: "tok" });
+    const middlewares = getRegisteredTelegramMiddlewares();
+    expect(middlewares.length).toBeGreaterThanOrEqual(2);
+    const callbackQueryMiddleware = middlewares[1];
+    expect(callbackQueryMiddleware).toBeDefined();
+    const ctx = { callbackQuery: { id: "cbq-1", data: "test", from: { id: 1 } } };
+    let nextCalled = false;
+    await callbackQueryMiddleware(ctx, async () => { nextCalled = true; });
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
+    expect(nextCalled).toBe(true);
+  });
+
   it("lets /status bypass a busy Telegram topic lane", async () => {
     installPerKeySequentializer();
     loadConfig.mockReturnValue({
