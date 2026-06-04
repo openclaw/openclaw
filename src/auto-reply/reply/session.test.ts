@@ -2489,6 +2489,40 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).toBe(existingSessionId);
   });
 
+  it("keeps thread sessions fresh across the daily reset boundary by default", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-thread-default-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:group:-100123:topic:456";
+    const existingSessionId = "thread-default-session";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+      },
+    });
+
+    const cfg = {
+      session: {
+        store: storePath,
+      },
+    } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: {
+        Body: "same thread follow-up",
+        SessionKey: sessionKey,
+        MessageThreadId: 456,
+        Provider: "telegram",
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(false);
+    expect(result.sessionId).toBe(existingSessionId);
+  });
+
   it("defaults to daily resets when only resetByType is configured", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-type-default-");

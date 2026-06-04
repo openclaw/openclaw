@@ -161,6 +161,16 @@ describe("resolveSessionResetPolicy", () => {
     expect(policy.atHour).toBe(4);
   });
 
+  it("defaults thread sessions to idle resets so long-running threads can compact instead of rotating daily", () => {
+    const policy = resolveSessionResetPolicy({
+      resetType: "thread",
+    });
+
+    expect(policy.mode).toBe("idle");
+    expect(policy.idleMinutes).toBe(0);
+    expect(policy.configured).toBe(false);
+  });
+
   it("treats idleMinutes=0 as never expiring by inactivity", () => {
     const freshness = evaluateSessionFreshness({
       updatedAt: 1_000,
