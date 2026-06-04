@@ -132,8 +132,9 @@ function applyVerb(name: string, args: string[], value: unknown, vocab: Vocab): 
     case "inv":
       return inv(value);
     case "alias": {
-      const aliases = isObject(vocab._aliases) ? vocab._aliases : {};
-      const table = args[0] && isObject(aliases[args[0]]) ? (aliases[args[0]] as Record<string, unknown>) : {};
+      const aliases = isObject(vocab["_aliases"]) ? vocab["_aliases"] : {};
+      const table =
+        args[0] && isObject(aliases[args[0]]) ? (aliases[args[0]] as Record<string, unknown>) : {};
       const key = String(value);
       if (key in table) {
         return table[key];
@@ -206,7 +207,7 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
     const v = getPath(ctx, String(seg.map));
     const key = typeof v === "boolean" ? String(v) : String(v);
     const cases = isObject(seg.cases) ? seg.cases : {};
-    const hit = key in cases ? cases[key] : cases._default;
+    const hit = key in cases ? cases[key] : cases["_default"];
     return hit ? String(hit) : null;
   }
   if ("each" in seg) {
@@ -239,7 +240,10 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
   return null;
 }
 
-function resolveLayout(template: UsageBarTemplate, surface: unknown): { sep: string; pieces: Segment[] } {
+function resolveLayout(
+  template: UsageBarTemplate,
+  surface: unknown,
+): { sep: string; pieces: Segment[] } {
   const output = template.output;
   if (isObject(output)) {
     const surfaces = isObject(output.surfaces) ? output.surfaces : {};
@@ -252,7 +256,9 @@ function resolveLayout(template: UsageBarTemplate, surface: unknown): { sep: str
   }
   // legacy: top-level surfaces.<surface>.{sep,segments} over top-level sep/segments
   const ov =
-    typeof surface === "string" && isObject(template.surfaces) && isObject(template.surfaces[surface])
+    typeof surface === "string" &&
+    isObject(template.surfaces) &&
+    isObject(template.surfaces[surface])
       ? (template.surfaces[surface] as Record<string, unknown>)
       : {};
   const sep =
@@ -278,7 +284,7 @@ export function renderUsageBar(template: UsageBarTemplate, contract: UsageContra
       ...(isObject(template.series) ? template.series : {}),
       ...(isObject(template.scales) ? template.scales : {}),
     };
-    vocab._aliases = isObject(template.aliases) ? template.aliases : {};
+    vocab["_aliases"] = isObject(template.aliases) ? template.aliases : {};
     const out: string[] = [];
     for (const piece of pieces) {
       if (isObject(piece)) {
