@@ -739,4 +739,40 @@ describe("main-session-restart-recovery", () => {
     expect(store["agent:main:demo-channel:room-1"]?.status).toBe("failed");
     expect(store["agent:main:demo-channel:room-1"]?.abortedLastRun).toBe(true);
   });
+
+  it("persists the recovery notice to the WebChat transcript instead of an outbound action (#87808)", async () => {
+    const sessionsDir = await makeSessionsDir();
+    await writeStore(sessionsDir, {
+      "agent:main:webchat:room-1": {
+        sessionId: "main-session",
+        updatedAt: Date.now() - 10_000,
+        status: "running",
+        abortedLastRun: true,
+        sessionFile: "main-session.jsonl",
+        lastChannel: "webchat",
+        lastTo: "webchat:room-1",
+        lastAccountId: "default",
+      },
+    });
+    await writeTranscript(sessionsDir, "main-session", [
+      { role: "user", content: "do the thing" },
+      { role: "assistant", content: "partial answer" },
+    ]);
+
+    const result = await recoverRestartAbortedMainSessions({ stateDir: tmpDir });
+
+    expect(result).toEqual({ recovered: 0, failed: 1, skipped: 0 });
+    // WebChat is an internal-only channel that rejects outbound message.action,
+    // so no gateway send is issued for the recovery notice.
+    const issuedMessageAction = vi
+      .mocked(callGateway)
+      .mock.calls.some((c) => (c[0] as { method?: string })?.method === "message.action");
+    expect(issuedMessageAction).toBe(false);
+    // The notice is persisted to the session transcript (disk), so a reconnecting
+    // WebChat client renders the terminal notice instead of a silently vanished turn.
+    const transcript = await fs.readFile(path.join(sessionsDir, "main-session.jsonl"), "utf8");
+    expect(transcript).toContain("couldn't safely resume");
+    const store = loadSessionStore(path.join(sessionsDir, "sessions.json"));
+    expect(store["agent:main:webchat:room-1"]?.status).toBe("failed");
+  });
 });

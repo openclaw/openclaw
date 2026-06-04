@@ -18,6 +18,7 @@ import {
 } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
+import { appendInjectedAssistantMessageToTranscript } from "../gateway/server-methods/chat-transcript-inject.js";
 import { readSessionMessagesAsync } from "../gateway/session-utils.fs.js";
 import { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -29,6 +30,7 @@ import {
   normalizeDeliveryContext,
   type DeliveryContext,
 } from "../utils/delivery-context.shared.js";
+import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentSessionDirs } from "./session-dirs.js";
 import type { SessionLockInspection } from "./session-write-lock.js";
@@ -292,7 +294,44 @@ async function sendUnresumableSessionNotice(params: {
   entry: SessionEntry;
   reason: string;
   sessionKey: string;
+  transcriptPath?: string;
 }): Promise<boolean> {
+  // WebChat is an internal-only channel: isDeliverableMessageChannel rejects it,
+  // so resolveRestartRecoveryDeliveryContext returns undefined and the notice
+  // would never reach the user (the interrupted turn just vanishes on reconnect).
+  // Detect it from the raw delivery channel up front and persist the notice to the
+  // session transcript instead, so a reconnecting WebChat client sees it (#87808).
+  const rawChannel = normalizeOptionalString(
+    (
+      normalizeDeliveryContext(params.entry.pendingFinalDeliveryContext) ??
+      normalizeDeliveryContext(params.entry.restartRecoveryDeliveryContext) ??
+      deliveryContextFromSession(params.entry)
+    )?.channel,
+  );
+  if (rawChannel === INTERNAL_MESSAGE_CHANNEL) {
+    if (!params.transcriptPath) {
+      return false;
+    }
+    try {
+      await appendInjectedAssistantMessageToTranscript({
+        transcriptPath: params.transcriptPath,
+        message: UNRESUMABLE_SESSION_NOTICE,
+        sessionKey: params.sessionKey,
+        idempotencyKey: `main-session-restart-recovery:${params.entry.sessionId}:failed-notice`,
+        ...(params.cfg ? { config: params.cfg } : {}),
+      });
+      log.info(
+        `persisted interrupted main session recovery notice to transcript: ${params.sessionKey} (${params.reason})`,
+      );
+      return true;
+    } catch (err) {
+      log.warn(
+        `failed to persist interrupted main session recovery notice ${params.sessionKey}: ${String(err)}`,
+      );
+      return false;
+    }
+  }
+
   const deliveryContext = resolveRestartRecoveryDeliveryContext({
     cfg: params.cfg,
     entry: params.entry,
@@ -559,6 +598,9 @@ async function recoverStore(params: {
         entry,
         sessionKey,
         reason: resumeBlockReason,
+        ...(entry.sessionFile
+          ? { transcriptPath: path.resolve(path.dirname(params.storePath), entry.sessionFile) }
+          : {}),
       });
       await markSessionFailed({
         storePath: params.storePath,
