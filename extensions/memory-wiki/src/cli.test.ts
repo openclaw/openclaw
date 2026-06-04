@@ -550,6 +550,33 @@ cli note
     expect(callGatewayFromCliMock).not.toHaveBeenCalled();
   });
 
+  it("registers local-import import and syncs configured local files locally", async () => {
+    const sourcePath = path.join(suiteRoot, `local-import-${caseIndex}.md`);
+    await fs.writeFile(sourcePath, "# local import\n", "utf8");
+    const { rootDir, config } = await createCliVault({
+      config: {
+        localImports: {
+          enabled: true,
+          paths: [sourcePath],
+        },
+      },
+    });
+    const program = new Command();
+    program.name("test");
+    registerWikiCli(program, config);
+
+    await program.parseAsync(["wiki", "local-import", "import", "--json"], { from: "user" });
+
+    const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
+      (entry) => entry !== "index.md",
+    );
+    expect(sourceFiles).toHaveLength(1);
+    await expect(
+      fs.readFile(path.join(rootDir, "sources", sourceFiles[0] ?? ""), "utf8"),
+    ).resolves.toContain("sourceType: local-import");
+    expect(callGatewayFromCliMock).not.toHaveBeenCalled();
+  });
+
   it("imports ChatGPT exports with dry-run, apply, and rollback", async () => {
     const { rootDir, config } = await createCliVault({ initialize: true });
     const exportDir = await createChatGptExport(rootDir);

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { readJsonFileWithFallback, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
 
-export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
+export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local" | "local-import";
 
 type MemoryWikiImportedSourceStateEntry = {
   group: MemoryWikiImportedSourceGroup;

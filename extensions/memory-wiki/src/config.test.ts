@@ -37,6 +37,10 @@ describe("resolveMemoryWikiConfig", () => {
     expect(config.search.backend).toBe(DEFAULT_WIKI_SEARCH_BACKEND);
     expect(config.search.corpus).toBe(DEFAULT_WIKI_SEARCH_CORPUS);
     expect(config.context.includeCompiledDigestPrompt).toBe(false);
+    expect(config.localImports).toEqual({
+      enabled: false,
+      paths: [],
+    });
   });
 
   it("expands ~/ paths and preserves explicit modes", () => {
@@ -88,6 +92,10 @@ describe("memory-wiki manifest config schema", () => {
       unsafeLocal: {
         allowPrivateMemoryCoreAccess: true,
         paths: ["extensions/memory-core/src"],
+      },
+      localImports: {
+        enabled: true,
+        paths: ["~/notes", "./docs"],
       },
       search: {
         backend: "shared",

@@ -37,6 +37,10 @@ export type MemoryWikiPluginConfig = {
     allowPrivateMemoryCoreAccess?: boolean;
     paths?: string[];
   };
+  localImports?: {
+    enabled?: boolean;
+    paths?: string[];
+  };
   ingest?: {
     autoCompile?: boolean;
     maxConcurrentJobs?: number;
@@ -78,6 +82,10 @@ export type ResolvedMemoryWikiConfig = {
   };
   unsafeLocal: {
     allowPrivateMemoryCoreAccess: boolean;
+    paths: string[];
+  };
+  localImports: {
+    enabled: boolean;
     paths: string[];
   };
   ingest: {
@@ -133,6 +141,12 @@ const MemoryWikiConfigSource = z.strictObject({
   unsafeLocal: z
     .strictObject({
       allowPrivateMemoryCoreAccess: z.boolean().optional(),
+      paths: z.array(z.string()).optional(),
+    })
+    .optional(),
+  localImports: z
+    .strictObject({
+      enabled: z.boolean().optional(),
       paths: z.array(z.string()).optional(),
     })
     .optional(),
@@ -231,6 +245,10 @@ export function resolveMemoryWikiConfig(
     unsafeLocal: {
       allowPrivateMemoryCoreAccess: safeConfig.unsafeLocal?.allowPrivateMemoryCoreAccess ?? false,
       paths: safeConfig.unsafeLocal?.paths ?? [],
+    },
+    localImports: {
+      enabled: safeConfig.localImports?.enabled ?? false,
+      paths: safeConfig.localImports?.paths ?? [],
     },
     ingest: {
       autoCompile: safeConfig.ingest?.autoCompile ?? true,
