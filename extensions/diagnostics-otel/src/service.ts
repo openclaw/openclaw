@@ -303,8 +303,8 @@ function lowCardinalityQueueLaneAttr(value: string | undefined, fallback = "unkn
   return LOW_CARDINALITY_VALUE_RE.test(lane) ? lane : fallback;
 }
 
-function shouldCaptureOtelLogBody(policy: DiagnosticModelContentCapturePolicy): boolean {
-  return policy.logBodies;
+function shouldCaptureOtelLogBody(captureContent: unknown): boolean {
+  return captureContent === true;
 }
 
 function hasOtelSemconvOptIn(value: string | undefined, optIn: string): boolean {
@@ -1087,6 +1087,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         otel.serviceName?.trim() || process.env.OTEL_SERVICE_NAME || DEFAULT_SERVICE_NAME;
       const sampleRate = resolveSampleRate(otel.sampleRate);
       const contentCapturePolicy = resolveDiagnosticCaptureContentValue(otel.captureContent);
+      const captureOtelLogBody = shouldCaptureOtelLogBody(otel.captureContent);
       const sdkPreloaded = hasPreloadedOtelSdk();
 
       const resource = resourceFromAttributes({
@@ -1544,7 +1545,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
           try {
             const logLevelName = evt.level || "INFO";
             const severityNumber = logSeverityMap[logLevelName] ?? (9 as SeverityNumber);
-            const body = shouldCaptureOtelLogBody(contentCapturePolicy)
+            const body = captureOtelLogBody
               ? normalizeOtelLogString(evt.message || "log", MAX_OTEL_LOG_BODY_CHARS)
               : "log";
             const attributes = Object.create(null) as Record<string, string | number | boolean>;

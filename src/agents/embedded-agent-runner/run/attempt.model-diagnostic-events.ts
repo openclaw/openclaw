@@ -643,16 +643,20 @@ function withDiagnosticTraceparentHeader(
       return;
     }
     const messages = extractInputMessages(payload);
+    const existingContent = state.modelContent ?? {};
     if (messages.length > 0) {
       state.modelContent = {
-        ...state.modelContent,
+        ...existingContent,
         inputMessages: messages,
       };
+      return;
     }
+    const { inputMessages: _inputMessages, ...remainingContent } = existingContent;
+    state.modelContent = Object.keys(remainingContent).length > 0 ? remainingContent : undefined;
   };
   const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
-    observeInputMessages(payload);
     if (!originalOnPayload) {
+      observeInputMessages(payload);
       assignRequestPayloadBytes(state, payload);
       return undefined;
     }

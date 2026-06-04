@@ -12,8 +12,6 @@ export type DiagnosticModelContentCapturePolicy = {
   systemPrompt: boolean;
   /** Capture tool schemas/definitions presented to a model. */
   toolDefinitions: boolean;
-  /** Capture OTEL log body payloads when the legacy shorthand is enabled. */
-  logBodies: boolean;
   /** Whether any model-visible prompt/response/schema content is enabled. */
   anyModelContent: boolean;
 };
@@ -32,7 +30,6 @@ const NO_MODEL_CONTENT_CAPTURE: DiagnosticModelContentCapturePolicy = Object.fre
   toolOutputs: false,
   systemPrompt: false,
   toolDefinitions: false,
-  logBodies: false,
   anyModelContent: false,
 });
 
@@ -64,7 +61,6 @@ export function resolveDiagnosticCaptureContentValue(
       toolOutputs: true,
       systemPrompt: false,
       toolDefinitions: true,
-      logBodies: true,
     });
   }
   if (!isRecord(captureContent) || captureContent.enabled !== true) {
@@ -77,7 +73,6 @@ export function resolveDiagnosticCaptureContentValue(
     toolOutputs: captureContent.toolOutputs === true,
     systemPrompt: captureContent.systemPrompt === true,
     toolDefinitions: captureContent.toolDefinitions === true,
-    logBodies: false,
   });
 }
 

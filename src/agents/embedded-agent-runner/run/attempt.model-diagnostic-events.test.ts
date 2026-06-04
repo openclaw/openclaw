@@ -123,7 +123,6 @@ function contentCapturePolicy(
     toolOutputs: false,
     systemPrompt: false,
     toolDefinitions: false,
-    logBodies: false,
     ...overrides,
   };
   return {
@@ -381,6 +380,80 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expectNumberField(completedEvent, "responseStreamBytes");
     expectNumberField(completedEvent, "timeToFirstByteMs");
     expect(JSON.stringify(events)).not.toContain("sk-original-secret");
+  });
+
+  it("captures input only from a synchronous final payload replacement", async () => {
+    async function* stream() {
+      yield { type: "text_delta", delta: "safe" };
+    }
+    const originalPayload = { input: "raw sync original prompt" };
+    const replacementPayload = { model: "gpt-5.4" };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (async (
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        await options?.onPayload?.(originalPayload, model);
+        return stream();
+      }) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-sync-replacement",
+        contentCapture: contentCapturePolicy({ inputMessages: true, outputMessages: true }),
+      },
+    );
+
+    const events = await collectTrustedModelCallEvents(async () => {
+      const streamResult = await wrapped({} as never, {} as never, {
+        onPayload: () => replacementPayload,
+      });
+      await drain(streamResult as unknown as AsyncIterable<unknown>);
+    });
+
+    const completed = events.find(({ event }) => event.type === "model.call.completed");
+    expect(completed?.privateData.modelContent?.inputMessages).toBeUndefined();
+    expect(JSON.stringify(events)).not.toContain("raw sync original prompt");
+  });
+
+  it("captures input only from an asynchronous final payload replacement", async () => {
+    async function* stream() {
+      yield { type: "text_delta", delta: "safe" };
+    }
+    const originalPayload = { input: "raw async original prompt" };
+    const replacementPayload = { messages: [] };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      (async (
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        await options?.onPayload?.(originalPayload, model);
+        return stream();
+      }) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-async-replacement",
+        contentCapture: contentCapturePolicy({ inputMessages: true, outputMessages: true }),
+      },
+    );
+
+    const events = await collectTrustedModelCallEvents(async () => {
+      const streamResult = await wrapped({} as never, {} as never, {
+        onPayload: async () => replacementPayload,
+      });
+      await drain(streamResult as unknown as AsyncIterable<unknown>);
+    });
+
+    const completed = events.find(({ event }) => event.type === "model.call.completed");
+    expect(completed?.privateData.modelContent?.inputMessages).toBeUndefined();
+    expect(JSON.stringify(events)).not.toContain("raw async original prompt");
   });
 
   it("counts text deltas without serializing full partial snapshots", async () => {
