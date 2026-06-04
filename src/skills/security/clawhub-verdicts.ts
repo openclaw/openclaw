@@ -75,6 +75,9 @@ export function projectClawHubVerdictItem(
   if (item.securityAuditUrl !== undefined) {
     projected.securityAuditUrl = item.securityAuditUrl;
   }
+  if (item.revocation !== undefined) {
+    projected.revocation = item.revocation;
+  }
   const securityStatus = readSecurityStatus(item.security);
   if (securityStatus !== undefined) {
     projected.securityStatus = securityStatus;
