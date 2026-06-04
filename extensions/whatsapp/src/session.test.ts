@@ -517,6 +517,15 @@ describe("web session", () => {
     await expect(promise).resolves.toBeUndefined();
   });
 
+  it("keeps one-argument callers on the old no-timeout wait policy", async () => {
+    const ev = new EventEmitter();
+    const promise = waitForWaConnection({ ev } as unknown as ReturnType<
+      typeof baileys.makeWASocket
+    >);
+    ev.emit("connection.update", { connection: "open" });
+    await expect(promise).resolves.toBeUndefined();
+  });
+
   it("rejects when connection closes", async () => {
     const ev = new EventEmitter();
     const promise = waitForWaConnection(
