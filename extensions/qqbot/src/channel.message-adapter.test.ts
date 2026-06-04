@@ -42,6 +42,32 @@ const cfg = {
 } as OpenClawConfig;
 
 describe("qqbot message adapter", () => {
+  it("sanitizes hidden reasoning from outbound text before delivery", () => {
+    const raw = [
+      "<think>private reasoning</think>",
+      '<invoke name="exec">payload</invoke></minimax:tool_call>',
+      '<tool_result>{"output":"hidden"}</tool_result>',
+      "Visible <b>answer</b>",
+    ].join("\n");
+
+    expect(qqbotPlugin.outbound?.sanitizeText?.({ text: raw, payload: { text: raw } })).toBe(
+      "Visible *answer*",
+    );
+  });
+
+  it("preserves QQBot media tags while sanitizing surrounding text", () => {
+    const raw = [
+      "<think>private reasoning</think>",
+      "Visible <b>answer</b>",
+      '<qqmedia file="https://example.com/a.png" />',
+      "Done <i>now</i>",
+    ].join("\n");
+
+    expect(qqbotPlugin.outbound?.sanitizeText?.({ text: raw, payload: { text: raw } })).toBe(
+      ["Visible *answer*", "<qqmedia>https://example.com/a.png</qqmedia>", "Done _now_"].join("\n"),
+    );
+  });
+
   it("declares durable text, media, and reply target capabilities with receipt proofs", async () => {
     sendTextMock.mockResolvedValue({ messageId: "qq-text-1" });
     sendMediaMock.mockResolvedValue({ messageId: "qq-media-1" });

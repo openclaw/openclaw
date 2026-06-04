@@ -2,11 +2,13 @@ import { getExecApprovalReplyMetadata } from "openclaw/plugin-sdk/approval-runti
 import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
+  sanitizeForPlainText,
   type ChannelMessageSendResult,
   type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 // Register the PlatformAdapter before any core/ module is used.
 import "./bridge/bootstrap.js";
 import { getQQBotApprovalCapability } from "./bridge/approval/capability.js";
@@ -27,6 +29,7 @@ import {
   normalizeTarget as coreNormalizeTarget,
   looksLikeQQBotTarget,
 } from "./engine/messaging/target-parser.js";
+import { normalizeMediaTags } from "./engine/utils/media-tags.js";
 import type { ResolvedQQBotAccount } from "./types.js";
 
 // Shared promise so concurrent multi-account startups serialize the dynamic
@@ -134,6 +137,24 @@ function toQQBotMessageSendResult(result: Awaited<ReturnType<typeof sendQQBotTex
     messageId: result.messageId,
     receipt: result.receipt,
   } satisfies ChannelMessageSendResult;
+}
+
+const QQBOT_MEDIA_TAG_RE =
+  /<(?:qqimg|qqvoice|qqvideo|qqfile|qqmedia)>[^<>]+<\/(?:qqimg|qqvoice|qqvideo|qqfile|qqmedia|img)>/gi;
+
+function sanitizeQQBotOutboundText(text: string): string {
+  const visibleText = normalizeMediaTags(sanitizeAssistantVisibleText(text));
+  let cursor = 0;
+  let sanitized = "";
+
+  for (const match of visibleText.matchAll(QQBOT_MEDIA_TAG_RE)) {
+    const tag = match[0];
+    sanitized += sanitizeForPlainText(visibleText.slice(cursor, match.index));
+    sanitized += tag;
+    cursor = match.index + tag.length;
+  }
+
+  return sanitized + sanitizeForPlainText(visibleText.slice(cursor));
 }
 
 const qqbotMessageAdapter = defineChannelMessageAdapter({
@@ -253,6 +274,7 @@ export const qqbotPlugin: ChannelPlugin<ResolvedQQBotAccount> = {
     chunker: (text, limit) => getQQBotRuntime().channel.text.chunkMarkdownText(text, limit),
     chunkerMode: "markdown",
     textChunkLimit: 5000,
+    sanitizeText: ({ text }) => sanitizeQQBotOutboundText(text),
     shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
       shouldSuppressLocalQQBotApprovalPrompt({
         cfg,
