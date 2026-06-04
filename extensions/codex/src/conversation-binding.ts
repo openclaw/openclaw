@@ -77,6 +77,7 @@ import {
   CODEX_PENDING_CONTROL_TTL_MS,
   createCodexUserInputPromptControl,
   hasCodexProposedPlan,
+  hasPendingCodexUserInput,
 } from "./conversation-chat-controls.js";
 import { trackCodexConversationActiveTurn } from "./conversation-control.js";
 import { createCodexConversationTurnCollector } from "./conversation-turn-collector.js";
@@ -273,6 +274,7 @@ export async function handleCodexConversationInboundClaim(
   if (!prompt) {
     return { handled: true };
   }
+  let freeformMatched = false;
   if (data.kind === "codex-app-server-session") {
     const inputResult = answerCodexUserInputFreeform({
       answerText: prompt,
@@ -285,35 +287,61 @@ export async function handleCodexConversationInboundClaim(
       },
       sessionFile: data.sessionFile,
     });
+    freeformMatched = inputResult.matched;
     if (inputResult.matched) {
       return { handled: true, reply: { text: inputResult.message } };
     }
-  }
-  if (event.commandAuthorized !== true) {
-    // Diagnostic: only log when the inbound_claim is about to silently
-    // drop a typed freeform reply to a pending Codex request_user_input
-    // control. The most likely cause is a scope mismatch (channel /
-    // senderId / sessionKey / messageThreadId differ between the
-    // pending that was queued by sendProgressReply and the inbound
-    // ctx for the typed reply). Gated to the silent-fallthrough case
-    // to avoid logging the content of authorized conversation
-    // prompts (which can include secrets or private data).
-    embeddedAgentLog.warn("codex bound conversation typed freeform reply did not match a pending input", {
+    // The freeform matcher returned matched: false. The most likely
+    // cause is either no pending user_input at all (a normal fresh
+    // user prompt) or a scope mismatch on the pending (the rare
+    // case). Only emit a debug-level log so the rare case leaves a
+    // breadcrumb without spamming logs on every normal prompt.
+    embeddedAgentLog.debug("codex bound conversation freeform reply did not match a pending input", {
       inbound: {
         channel: event.channel,
         senderId: event.senderId ?? ctx.senderId,
-        accountId: event.accountId ?? ctx.accountId,
         sessionKey: event.sessionKey ?? ctx.sessionKey,
         messageThreadId: event.threadId,
-        commandAuthorized: event.commandAuthorized,
       },
       binding: {
         kind: data.kind,
-        sessionFile: data.kind === "codex-app-server-session" ? data.sessionFile : undefined,
+        sessionFile: data.sessionFile,
       },
     });
+  }
+  if (event.commandAuthorized !== true && prompt.startsWith("/")) {
     return { handled: true };
   }
+  // If the freeform matcher returned matched: false AND a pending
+  // Codex request_user_input control is still queued, the user's
+  // typed reply did not match a valid option. Do NOT fall through
+  // to a new turn here — bound turns are serialized by sessionFile,
+  // so the new turn would queue behind the unresolved pending
+  // input and hang until the 10-minute pending-input TTL. Consume
+  // the event with a short reply that points the user back to the
+  // pending button row / Other input.
+  if (
+    data.kind === "codex-app-server-session" &&
+    !freeformMatched &&
+    hasPendingCodexUserInput({ sessionFile: data.sessionFile })
+  ) {
+    return {
+      handled: true,
+      reply: {
+        text:
+          "I couldn't match your reply to a pending Codex question. Pick a button above, or type a different answer.",
+      },
+    };
+  }
+  // For bound Codex conversations (app-server or CLI node), a typed
+  // message from the bound user needs to reach Codex as a fresh
+  // turn prompt so the user sees a response.
+  // For bound Codex conversations (app-server or CLI node), a non-
+  // command-authorized typed message still needs to reach Codex as a
+  // fresh turn prompt. Slash commands are protected upstream by
+  // answerCodexUserInputFreeform's "/" check, so they do not enter
+  // the new-turn path. The codex plugin's own /codex command router
+  // handles explicit /codex <verb> before this inbound_claim hook.
   const nativeExecutionBlock =
     data.kind === "codex-cli-node-session"
       ? resolveCodexNativeSandboxBlock({

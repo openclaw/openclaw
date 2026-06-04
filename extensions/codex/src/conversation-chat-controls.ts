@@ -434,6 +434,36 @@ export function cancelCodexUserInput(params: { token: string; now?: number }): b
   return deleted;
 }
 
+/**
+ * Returns true if any pending Codex request_user_input control is
+ * still queued for the supplied sessionFile. The
+ * bound-conversation inbound_claim hook uses this to distinguish
+ * "no pending input for this binding" (a normal fresh prompt —
+ * safe to start a new Codex turn) from "a pending input is queued
+ * on the same sessionFile, regardless of scope" (which must NOT
+ * queue a fresh turn behind the unresolved one — that would hang
+ * on the sessionFile lock until the 10-minute pending-input
+ * TTL). The check is keyed on sessionFile only, not on the
+ * matcher's per-channel scope, because the underlying
+ * `enqueueBoundTurn(sessionFile, ...)` serializes by sessionFile
+ * and a scope-mismatched pending would still block the queue
+ * even though the matcher returned matched: false. Cross-session
+ * pendings are not affected because they have a different
+ * sessionFile.
+ */
+export function hasPendingCodexUserInput(params: {
+  sessionFile: string;
+  now?: number;
+}): boolean {
+  pruneExpiredControls(params.now);
+  for (const pending of pendingUserInputs.values()) {
+    if (pending.sessionFile === params.sessionFile) {
+      return true;
+    }
+  }
+  return false;
+}
+
 export function resolveCodexUserInputControlDelivery(params: {
   token: string;
   now?: number;

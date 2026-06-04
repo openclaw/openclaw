@@ -404,7 +404,36 @@ describe("codex conversation binding", () => {
     await expect(fs.stat(sidecar)).rejects.toHaveProperty("code", "ENOENT");
   });
 
-  it("consumes inbound bound messages when command authorization is absent", async () => {
+  it("starts a new bound Codex turn for non-authorized typed text on a bound conversation", async () => {
+    // Regression: previously, a non-command-authorized typed message on a
+    // bound app-server conversation was silently swallowed by
+    // `return { handled: true }` after the freeform matcher. A bound
+    // chat session should always reach Codex as a fresh turn prompt
+    // so the user sees a response, even if the typed text is plain
+    // prose rather than a /codex command. Slash commands are still
+    // protected upstream by answerCodexUserInputFreeform's "/" check.
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+      }),
+    );
+    let turnStarted = false;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method === "turn/start") {
+          turnStarted = true;
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
     const result = await handleCodexConversationInboundClaim(
       {
         content: "run this",
@@ -424,14 +453,403 @@ describe("codex conversation binding", () => {
           data: {
             kind: "codex-app-server-session",
             version: 1,
-            sessionFile: path.join(tempDir, "session.jsonl"),
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(turnStarted).toBe(true);
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toMatch(/Codex (app-server )?turn/);
+  });
+
+  it("does not start a bound turn for unauthorized slash-prefixed text", async () => {
+    // Unauthorized slash commands (e.g. /help, /codex detach when
+    // the user is not authorized for /codex) are routed to the
+    // bound plugin rather than bypassed by core's
+    // `shouldBypassPluginOwnedBindingForCommand` and must NOT
+    // start a Codex turn. The freeform matcher above rejects "/"
+    // as a control-command prefix, and this guard consumes the
+    // event so it does not become a fresh Codex turn prompt.
+    let turnStarted = false;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method === "turn/start") {
+          turnStarted = true;
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+      }),
+    );
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "/help",
+        bodyForAgent: "/help",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        threadId: "chat-1",
+        sessionKey: "session-key",
+        isGroup: true,
+        commandAuthorized: false,
+      },
+      {
+        channelId: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        sessionKey: "session-key",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
             workspaceDir: tempDir,
           },
         },
       },
     );
 
+    expect(turnStarted).toBe(false);
+    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
     expect(result).toEqual({ handled: true });
+  });
+
+  it("consumes a typed reply that did not match a pending Codex input control", async () => {
+    // Regression: when a pending Codex request_user_input control is
+    // queued and the user's typed text does not match a valid
+    // option, the freeform matcher returns matched: false. The
+    // fall-through to a new Codex turn is wrong here — bound turns
+    // are serialized by sessionFile, so the new turn would queue
+    // behind the unresolved pending input and hang until the
+    // 10-minute pending-input TTL. Instead, consume the event
+    // with a short reply that points the user back to the pending
+    // button row / Other input.
+    //
+    // Use a question with isOther: false so the matcher genuinely
+    // rejects the typed answer (instead of accepting it as a free
+    // Other reply).
+    const { createCodexUserInputPromptControl, resetCodexConversationChatControlsForTests } =
+      await import("./conversation-chat-controls.js");
+    resetCodexConversationChatControlsForTests();
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+      }),
+    );
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    createCodexUserInputPromptControl({
+      scope: {
+        sessionFile,
+        threadId: "thread-1",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        sessionKey: "session-key",
+        messageThreadId: "chat-1",
+      },
+      resolveText,
+      questions: [
+        {
+          id: "shape",
+          header: "Plan",
+          question: "Which plan shape?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Small Patch", description: "" },
+            { label: "Feature Slice", description: "" },
+          ],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Approve", description: "" },
+            { label: "Hold", description: "" },
+          ],
+        },
+      ],
+    });
+
+    let turnStarted = false;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method === "turn/start") {
+          turnStarted = true;
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    try {
+      const result = await handleCodexConversationInboundClaim(
+        {
+          content: "totally not a valid answer",
+          bodyForAgent: "totally not a valid answer",
+          channel: "discord",
+          senderId: "user-1",
+          accountId: "default",
+          threadId: "chat-1",
+          sessionKey: "session-key",
+          isGroup: true,
+          commandAuthorized: false,
+        },
+        {
+          channelId: "discord",
+          senderId: "user-1",
+          accountId: "default",
+          sessionKey: "session-key",
+          pluginBinding: {
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: tempDir,
+            channel: "discord",
+            accountId: "default",
+            conversationId: "channel-1",
+            boundAt: Date.now(),
+            data: {
+              kind: "codex-app-server-session",
+              version: 1,
+              sessionFile,
+              workspaceDir: tempDir,
+            },
+          },
+        },
+      );
+
+      expect(turnStarted).toBe(false);
+      expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        handled: true,
+        reply: expect.objectContaining({
+          text: expect.stringMatching(/couldn't match your reply/i),
+        }),
+      });
+      // The pending control must NOT have been consumed — the
+      // user can still click a button or type a different answer.
+      let stillPendingSettled = false;
+      answered.then(
+        () => {
+          stillPendingSettled = true;
+        },
+        () => {
+          stillPendingSettled = true;
+        },
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(stillPendingSettled).toBe(false);
+    } finally {
+      resetCodexConversationChatControlsForTests();
+    }
+  });
+
+  it("does not consume a fresh prompt when a pending Codex input is on a different session", async () => {
+    // A pending Codex request_user_input control on a different
+    // sessionFile must NOT consume a normal fresh prompt in this
+    // bound conversation. The new turn must start, fall through
+    // to runCodexBoundConversationPrompt, and time out (as the
+    // test mock does not deliver a turn/completed notification).
+    const { createCodexUserInputPromptControl, resetCodexConversationChatControlsForTests } =
+      await import("./conversation-chat-controls.js");
+    resetCodexConversationChatControlsForTests();
+    // Pend on a different sessionFile.
+    const otherSessionFile = path.join(tempDir, "other-session.jsonl");
+    createCodexUserInputPromptControl({
+      scope: {
+        sessionFile: otherSessionFile,
+        threadId: "thread-other",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        sessionKey: "session-key",
+        messageThreadId: "chat-1",
+      },
+      resolveText: () => undefined,
+      questions: [
+        {
+          id: "mode",
+          header: "Mode",
+          question: "Pick a mode",
+          isOther: false,
+          isSecret: false,
+          options: [{ label: "Quick", description: "" }],
+        },
+      ],
+    });
+
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+      }),
+    );
+    let turnStarted = false;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method === "turn/start") {
+          turnStarted = true;
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    try {
+      const result = await handleCodexConversationInboundClaim(
+        {
+          content: "fresh prompt with no pending input here",
+          bodyForAgent: "fresh prompt with no pending input here",
+          channel: "discord",
+          senderId: "user-1",
+          accountId: "default",
+          threadId: "chat-1",
+          sessionKey: "session-key",
+          isGroup: true,
+          commandAuthorized: false,
+        },
+        {
+          channelId: "discord",
+          senderId: "user-1",
+          accountId: "default",
+          sessionKey: "session-key",
+          pluginBinding: {
+            bindingId: "binding-1",
+            pluginId: "codex",
+            pluginRoot: tempDir,
+            channel: "discord",
+            accountId: "default",
+            conversationId: "channel-1",
+            boundAt: Date.now(),
+            data: {
+              kind: "codex-app-server-session",
+              version: 1,
+              sessionFile,
+              workspaceDir: tempDir,
+            },
+          },
+        },
+        { timeoutMs: 50 },
+      );
+
+      // The fresh prompt must start a turn (the pending on the
+      // other sessionFile does not block this conversation).
+      expect(turnStarted).toBe(true);
+      expect(result?.handled).toBe(true);
+    } finally {
+      resetCodexConversationChatControlsForTests();
+    }
+  });
+
+  it("starts a new bound Codex turn for slash-leading prose when the core router marks it authorized non-command text", async () => {
+    // Slash-prefixed plain text (e.g. "/tmp/foo is failing" typed
+    // as a normal Codex prompt) is treated as non-command prose
+    // by the core router and routed here as commandAuthorized: true.
+    // The slash must not cause the inbound_claim to silently drop
+    // the message. The freeform matcher above rejects "/" as a
+    // control-command prefix, but commandAuthorized: true means
+    // the dispatch layer did not classify this as a command, so
+    // the fall-through to a new turn is correct.
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+      }),
+    );
+    let turnStarted = false;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method === "turn/start") {
+          turnStarted = true;
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
+    const result = await handleCodexConversationInboundClaim(
+      {
+        content: "/tmp/foo is failing on read",
+        bodyForAgent: "/tmp/foo is failing on read",
+        channel: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        threadId: "chat-1",
+        sessionKey: "session-key",
+        isGroup: true,
+        commandAuthorized: true,
+      },
+      {
+        channelId: "discord",
+        senderId: "user-1",
+        accountId: "default",
+        sessionKey: "session-key",
+        pluginBinding: {
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: tempDir,
+          channel: "discord",
+          accountId: "default",
+          conversationId: "channel-1",
+          boundAt: Date.now(),
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        },
+      },
+      { timeoutMs: 50 },
+    );
+
+    expect(turnStarted).toBe(true);
+    expect(result?.handled).toBe(true);
   });
 
   it("routes bound Codex CLI node sessions through node resume", async () => {
@@ -2216,8 +2634,36 @@ describe("codex conversation binding", () => {
     await expect(answered).resolves.toBe("openclaw only");
   });
 
-  it("keeps unauthorized unmatched text from starting a Codex turn", async () => {
+  it("starts a new bound Codex turn for non-authorized plain text on a bound conversation", async () => {
+    // Previously this test asserted the silent-drop behavior that
+    // swallowed non-command-authorized typed text on a bound
+    // conversation. A bound chat session should always reach Codex as
+    // a fresh turn prompt so the user sees a response. Slash
+    // commands are still protected upstream by
+    // answerCodexUserInputFreeform's "/" check, so they do not
+    // enter the new-turn path.
     const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-1",
+        cwd: tempDir,
+      }),
+    );
+    let turnStarted = false;
+    sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
+      request: vi.fn(async (method: string) => {
+        if (method === "turn/start") {
+          turnStarted = true;
+          return { turn: { id: "turn-1" } };
+        }
+        throw new Error(`unexpected method: ${method}`);
+      }),
+      addNotificationHandler: vi.fn(() => () => undefined),
+      addRequestHandler: vi.fn(() => () => undefined),
+    });
+
     const result = await handleCodexConversationInboundClaim(
       {
         content: "openclaw only",
@@ -2254,8 +2700,9 @@ describe("codex conversation binding", () => {
       { timeoutMs: 50 },
     );
 
-    expect(result).toEqual({ handled: true });
-    expect(sharedClientMocks.getSharedCodexAppServerClient).not.toHaveBeenCalled();
+    expect(turnStarted).toBe(true);
+    expect(result?.handled).toBe(true);
+    expect(result?.reply?.text).toMatch(/Codex (app-server )?turn/);
   });
 
   it("returns a clean failure reply when app-server turn start rejects", async () => {
