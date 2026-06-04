@@ -1029,7 +1029,9 @@ describe("startAcpSpawnParentStreamRelay", () => {
       cfg: {
         channels: {
           discord: {
-            streaming: false,
+            streaming: {
+              mode: "off",
+            },
             accounts: {
               carey: {
                 streaming: {
