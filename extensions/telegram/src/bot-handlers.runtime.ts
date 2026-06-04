@@ -1957,16 +1957,37 @@ export const registerTelegramHandlers = ({
     if (shouldSkipUpdate(ctx)) {
       return;
     }
+    const resolveFinalButtonAckText = (data?: string | null) => {
+      const value = data?.trim();
+      if (value === "Proceed" || value === "action:proceed") {
+        return "Proceeding...";
+      }
+      if (value === "Status, including recommended next steps?" || value === "action:status") {
+        return "Checking status...";
+      }
+      if (
+        value === "Provide recommendation" ||
+        value === "action:recommend" ||
+        value === "action:recommendation"
+      ) {
+        return "Preparing recommendation...";
+      }
+      return null;
+    };
+    const fastCallbackAcked =
+      (ctx as { openclawFastCallbackAcked?: boolean }).openclawFastCallbackAcked === true;
     const answerCallbackQuery =
       typeof (ctx as { answerCallbackQuery?: unknown }).answerCallbackQuery === "function"
         ? () => ctx.answerCallbackQuery()
         : () => bot.api.answerCallbackQuery(callback.id);
     // Answer immediately to prevent Telegram from retrying while we process
-    await withTelegramApiErrorLogging({
-      operation: "answerCallbackQuery",
-      runtime,
-      fn: answerCallbackQuery,
-    }).catch(() => {});
+    if (!fastCallbackAcked) {
+      await withTelegramApiErrorLogging({
+        operation: "answerCallbackQuery",
+        runtime,
+        fn: answerCallbackQuery,
+      }).catch(() => {});
+    }
     try {
       const data = (callback.data ?? "").trim();
       const callbackMessage = callback.message;
@@ -2047,7 +2068,6 @@ export const registerTelegramHandlers = ({
         }
         return await bot.api.sendMessage(callbackMessage.chat.id, text, params);
       };
-
       const chatId = callbackMessage.chat.id;
       const isGroup =
         callbackMessage.chat.type === "group" || callbackMessage.chat.type === "supergroup";
@@ -2200,6 +2220,22 @@ export const registerTelegramHandlers = ({
       });
       if (pluginCallback.handled) {
         return;
+      }
+
+      const finalButtonAckText = resolveFinalButtonAckText(data);
+      if (finalButtonAckText != null) {
+        try {
+          await replyToCallbackChat(
+            finalButtonAckText,
+            callbackMessage.message_thread_id != null
+              ? { message_thread_id: callbackMessage.message_thread_id }
+              : undefined,
+          );
+        } catch (ackErr) {
+          logVerbose(
+            "telegram: failed to send visible final-button acknowledgment: " + String(ackErr),
+          );
+        }
       }
 
       const managedSelectCallback = parseTelegramManagedSelectCallback(data);

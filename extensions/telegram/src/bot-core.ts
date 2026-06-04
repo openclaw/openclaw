@@ -219,6 +219,26 @@ export function createTelegramBotCore(
     }
   });
 
+  const isFastFinalButtonAckCandidate = (data?: string | null) => {
+    const value = data?.trim();
+    return (
+      value === "Proceed" ||
+      value === "Status, including recommended next steps?" ||
+      value === "Provide recommendation"
+    );
+  };
+
+  bot.use(async (ctx, next) => {
+    const callback = ctx.update?.callback_query;
+    if (callback?.id && isFastFinalButtonAckCandidate(callback.data)) {
+      const [result] = await Promise.allSettled([bot.api.answerCallbackQuery(callback.id)]);
+      if (result?.status === "fulfilled") {
+        (ctx as { openclawFastCallbackAcked?: boolean }).openclawFastCallbackAcked = true;
+      }
+    }
+    await next();
+  });
+
   bot.use(botRuntime.sequentialize(getTelegramSequentialKey));
 
   const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");

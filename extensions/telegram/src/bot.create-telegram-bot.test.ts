@@ -1045,6 +1045,223 @@ describe("createTelegramBot", () => {
     expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-1");
   });
 
+  it("acknowledges final-button callbacks before sequentialized processing", async () => {
+    let releaseSequentializer: (() => void) | undefined;
+    const sequentializerBlocked = new Promise<void>((resolve) => {
+      releaseSequentializer = resolve;
+    });
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next?: () => Promise<void>) => {
+        await sequentializerBlocked;
+        if (typeof next === "function") {
+          await next();
+        }
+      },
+    );
+
+    createTelegramBot({ token: "tok" });
+    const runPromise = runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 106,
+          callback_query: {
+            id: "cbq-final-fastlane-1",
+            data: "Proceed",
+            message: {
+              chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+              date: 1736380800,
+              message_id: 106,
+              message_thread_id: 5531,
+            },
+          },
+        },
+      },
+      finalHandler: async () => undefined,
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-fastlane-1");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+
+    requireValue(releaseSequentializer, "sequentializer release")();
+    await runPromise;
+  });
+
+  it("does not fast-lane plugin namespace-style final-button callbacks", async () => {
+    let releaseSequentializer: (() => void) | undefined;
+    const sequentializerBlocked = new Promise<void>((resolve) => {
+      releaseSequentializer = resolve;
+    });
+    sequentializeSpy.mockImplementationOnce(
+      () => async (_ctx: unknown, next?: () => Promise<void>) => {
+        await sequentializerBlocked;
+        if (typeof next === "function") {
+          await next();
+        }
+      },
+    );
+
+    createTelegramBot({ token: "tok" });
+    const runPromise = runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 109,
+          callback_query: {
+            id: "cbq-plugin-namespace-1",
+            data: "action:status",
+            message: {
+              chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+              date: 1736380800,
+              message_id: 109,
+              message_thread_id: 5531,
+            },
+          },
+        },
+      },
+      finalHandler: async () => undefined,
+    });
+
+    await flushTelegramTestMicrotasks();
+    expect(answerCallbackQuerySpy).not.toHaveBeenCalledWith("cbq-plugin-namespace-1");
+
+    requireValue(releaseSequentializer, "sequentializer release")();
+    await runPromise;
+  });
+
+  it("sends one visible final-button acknowledgment after authorization passes", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 107,
+          callback_query: {
+            id: "cbq-final-fastlane-2",
+            data: "Status, including recommended next steps?",
+            from: { id: 9, first_name: "Ada", username: "ada_bot" },
+            message: {
+              chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+              date: 1736380800,
+              message_id: 107,
+              message_thread_id: 5531,
+            },
+          },
+        },
+        callbackQuery: {
+          id: "cbq-final-fastlane-2",
+          data: "Status, including recommended next steps?",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+            date: 1736380800,
+            message_id: 107,
+            message_thread_id: 5531,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      },
+      finalHandler: callbackHandler,
+    });
+
+    const visibleAckCalls = sendMessageSpy.mock.calls.filter(
+      (call) => call[0] === -1007 && call[1] === "Checking status...",
+    );
+    expect(visibleAckCalls).toHaveLength(1);
+    expect(
+      answerCallbackQuerySpy.mock.calls.filter((call) => call[0] === "cbq-final-fastlane-2"),
+    ).toHaveLength(1);
+  });
+
+  it("does not send a visible final-button acknowledgment for unauthorized callbacks", async () => {
+    createTelegramBot({
+      token: "tok",
+      config: {
+        channels: {
+          telegram: {
+            dmPolicy: "pairing",
+            capabilities: { inlineButtons: "allowlist" },
+            allowFrom: [],
+          },
+        },
+      },
+    });
+    const callbackHandler = getOnHandler("callback_query");
+
+    await runTelegramMiddlewareChain({
+      ctx: {
+        update: {
+          update_id: 108,
+          callback_query: {
+            id: "cbq-final-unauthorized-1",
+            data: "Proceed",
+            from: { id: 9, first_name: "Ada", username: "ada_bot" },
+            message: {
+              chat: { id: 1234, type: "private" },
+              date: 1736380800,
+              message_id: 108,
+            },
+          },
+        },
+        callbackQuery: {
+          id: "cbq-final-unauthorized-1",
+          data: "Proceed",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: 1234, type: "private" },
+            date: 1736380800,
+            message_id: 108,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      },
+      finalHandler: callbackHandler,
+    });
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-unauthorized-1");
+    expect(sendMessageSpy).not.toHaveBeenCalled();
+  });
+
+  it("falls back to a visible final-button acknowledgment when callback toasts are stale", async () => {
+    createTelegramBot({ token: "tok" });
+    const callbackHandler = getOnHandler("callback_query");
+    answerCallbackQuerySpy.mockRejectedValueOnce(
+      new Error(
+        "400: Bad Request: query is too old and response timeout expired or query ID is invalid",
+      ),
+    );
+
+    await expect(
+      callbackHandler({
+        callbackQuery: {
+          id: "cbq-final-stale-1",
+          data: "action:recommendation",
+          from: { id: 9, first_name: "Ada", username: "ada_bot" },
+          message: {
+            chat: { id: -1007, type: "supergroup", title: "OpenClaw Ops" },
+            date: 1736380800,
+            message_id: 108,
+            message_thread_id: 5531,
+          },
+        },
+        me: { username: "openclaw_bot" },
+        getFile: async () => ({ download: async () => new Uint8Array() }),
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(answerCallbackQuerySpy).toHaveBeenCalledWith("cbq-final-stale-1");
+    expect(
+      sendMessageSpy.mock.calls.some(
+        (call) =>
+          call[0] === -1007 &&
+          call[1] === "Preparing recommendation..." &&
+          JSON.stringify(call[2]) === JSON.stringify({ message_thread_id: 5531 }),
+      ),
+    ).toBe(true);
+  });
+
   it("does not route opaque callback_query payloads as synthetic commands", async () => {
     createTelegramBot({ token: "tok" });
     const callbackHandler = requireValue(
