@@ -1,0 +1,20 @@
+{
+  "name": "@openclaw/governance",
+  "version": "0.1.0",
+  "description": "Optional governance plugin: signed AIBOM audit log, DLP scanner, and per-session/skill/channel cost ledger.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  }
+}
