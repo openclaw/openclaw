@@ -2970,12 +2970,17 @@ export function listSessionsFromStore(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
-  if (sharedRowContext) {
+    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+  const checkpointPreviewsByDir =
+    sharedRowContext?.checkpointPreviewsByDir ??
+    (entries.length > 0
+      ? new Map<string, DiskCompactionCheckpointPreviewIndex | null>()
+      : undefined);
+  if (checkpointPreviewsByDir) {
     hydrateDiskCompactionCheckpointPreviewIndexesSync({
       storePath,
       entries,
-      checkpointPreviewsByDir: sharedRowContext.checkpointPreviewsByDir,
+      checkpointPreviewsByDir,
     });
   }
 
@@ -3002,6 +3007,7 @@ export function listSessionsFromStore(params: {
       transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
       storeChildSessionsByKey,
       rowContext: sharedRowContext,
+      checkpointPreviewsByDir,
     });
   });
 
@@ -3067,12 +3073,17 @@ export async function listSessionsFromStoreAsync(params: {
       : undefined;
   const sharedRowContext =
     fullRowContext ??
-    (entries.length > 0 ? buildSessionListRowMetadataContext({ now }) : undefined);
-  if (sharedRowContext) {
+    (entries.length > 1 ? buildSessionListRowMetadataContext({ now }) : undefined);
+  const checkpointPreviewsByDir =
+    sharedRowContext?.checkpointPreviewsByDir ??
+    (entries.length > 0
+      ? new Map<string, DiskCompactionCheckpointPreviewIndex | null>()
+      : undefined);
+  if (checkpointPreviewsByDir) {
     await hydrateDiskCompactionCheckpointPreviewIndexesAsync({
       storePath,
       entries,
-      checkpointPreviewsByDir: sharedRowContext.checkpointPreviewsByDir,
+      checkpointPreviewsByDir,
     });
   }
 
@@ -3101,6 +3112,7 @@ export async function listSessionsFromStoreAsync(params: {
       transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
       storeChildSessionsByKey,
       rowContext: sharedRowContext,
+      checkpointPreviewsByDir,
       skipTranscriptUsageFallback: true,
       lightweightListRow: true,
     });
