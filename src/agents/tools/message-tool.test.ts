@@ -504,6 +504,32 @@ describe("message tool secret scoping", () => {
     );
   });
 
+  it("preserves non-deliverable source providers through createOpenClawTools", async () => {
+    mockSendResult({ channel: "discord", to: "channel:voice-control" });
+    const tool = createOpenClawTools({
+      config: {} as never,
+      agentChannel: "discord",
+      agentSourceProvider: "discord-voice",
+      currentChannelId: "channel:voice-control",
+      requesterSenderId: "voice-speaker-id",
+    }).find((candidate) => candidate.name === "message");
+
+    if (!tool) {
+      throw new Error("message tool not found");
+    }
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "discord",
+      message: "voice reply",
+    });
+
+    const call = firstRunMessageActionInput();
+    expect(call?.requesterSenderId).toBe("voice-speaker-id");
+    expect(call?.toolContext?.currentChannelProvider).toBe("discord-voice");
+    expect(call?.toolContext?.currentChannelId).toBe("channel:voice-control");
+  });
+
   it("passes source reply delivery mode to the outbound runner", async () => {
     mockSendResult();
 

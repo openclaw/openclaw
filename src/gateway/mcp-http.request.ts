@@ -10,6 +10,10 @@ import { isTruthyEnvValue } from "../infra/env.js";
 import { safeEqualSecret } from "../security/secret-equal.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import { getHeader } from "./http-utils.js";
+import {
+  resolveMcpLoopbackScopedTokenAuth,
+  type McpLoopbackAuthContext,
+} from "./mcp-http.loopback-runtime.js";
 import { isLoopbackAddress } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 
@@ -38,6 +42,7 @@ type McpRequestContext = {
   currentMessageId: string | undefined;
   currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
+  senderId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   senderIsOwner: boolean | undefined;
@@ -93,7 +98,8 @@ export function validateMcpLoopbackRequest(params: {
   res: ServerResponse;
   ownerToken: string;
   nonOwnerToken: string;
-}): { senderIsOwner: boolean } | null {
+  scopedTokenSecret: string;
+}): McpLoopbackAuthContext | null {
   let url: URL;
   try {
     url = new URL(params.req.url ?? "/", `http://${params.req.headers.host ?? "localhost"}`);
@@ -146,8 +152,17 @@ export function validateMcpLoopbackRequest(params: {
   const authHeader = getHeader(params.req, "authorization") ?? "";
   const ownerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.ownerToken}`);
   const nonOwnerTokenMatched = safeEqualSecret(authHeader, `Bearer ${params.nonOwnerToken}`);
-  const senderIsOwner = ownerTokenMatched ? true : nonOwnerTokenMatched ? false : null;
-  if (senderIsOwner === null) {
+  const rawBearerToken = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : "";
+  const scopedAuth = resolveMcpLoopbackScopedTokenAuth({
+    token: rawBearerToken,
+    scopedTokenSecret: params.scopedTokenSecret,
+  });
+  const auth = ownerTokenMatched
+    ? { senderIsOwner: true, senderId: undefined }
+    : nonOwnerTokenMatched
+      ? { senderIsOwner: false, senderId: undefined }
+      : scopedAuth;
+  if (!auth) {
     logMcpLoopbackHttp("reject", {
       reason: "unauthorized",
       method: params.req.method ?? "",
@@ -170,7 +185,7 @@ export function validateMcpLoopbackRequest(params: {
     return null;
   }
 
-  return { senderIsOwner };
+  return auth;
 }
 
 export async function readMcpHttpBody(req: IncomingMessage): Promise<string> {
@@ -238,7 +253,7 @@ export function isMcpHttpBodyTooLargeError(error: unknown): error is Error & { c
 export function resolveMcpRequestContext(
   req: IncomingMessage,
   cfg: OpenClawConfig,
-  auth: { senderIsOwner: boolean },
+  auth: McpLoopbackAuthContext,
 ): McpRequestContext {
   return {
     sessionKey: resolveScopedSessionKey(cfg, getHeader(req, "x-session-key")),
@@ -251,6 +266,7 @@ export function resolveMcpRequestContext(
       getHeader(req, "x-openclaw-current-inbound-audio"),
     ),
     accountId: normalizeOptionalString(getHeader(req, "x-openclaw-account-id")),
+    senderId: auth.senderId,
     inboundEventKind: normalizeMcpInboundEventKind(getHeader(req, "x-openclaw-inbound-event-kind")),
     sourceReplyDeliveryMode: normalizeMcpSourceReplyDeliveryMode(
       getHeader(req, "x-openclaw-source-reply-delivery-mode"),

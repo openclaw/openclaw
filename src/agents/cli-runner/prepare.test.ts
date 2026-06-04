@@ -236,8 +236,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       getActiveMcpLoopbackRuntime: vi.fn(() => undefined),
       ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
       createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      resolveMcpLoopbackBearerToken: vi.fn((runtime, senderIsOwner) =>
-        senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken,
+      resolveMcpLoopbackBearerToken: vi.fn(
+        (runtime, senderIsOwner, context) =>
+          `${senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken}${
+            context?.senderId ? `:sender:${context.senderId}` : ""
+          }`,
       ),
       resolveMcpLoopbackScopedTools: vi.fn(() => ({ agentId: "main", tools: [] })),
       resolveOpenClawReferencePaths: vi.fn(async () => ({ docsPath: null, sourcePath: null })),
@@ -1241,8 +1244,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         currentMessageId: undefined,
         currentInboundAudio: undefined,
         accountId: undefined,
+        senderId: undefined,
         inboundEventKind: undefined,
         sourceReplyDeliveryMode: undefined,
+        senderIsOwner: undefined,
       });
       expect(context.systemPrompt).toContain("## Memory Recall");
       expect(context.systemPrompt).toContain("tools=memory_search");
@@ -1346,10 +1351,21 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       }));
       const ensureMcpLoopbackServer = vi.fn(createTestMcpLoopbackServer);
       const createMcpLoopbackServerConfig = vi.fn(createTestMcpLoopbackServerConfig);
+      const resolveMcpLoopbackBearerToken = vi.fn(
+        (
+          runtime: { ownerToken: string; nonOwnerToken: string },
+          senderIsOwner: boolean,
+          context?: { senderId?: string | null },
+        ) =>
+          `${senderIsOwner ? runtime.ownerToken : runtime.nonOwnerToken}${
+            context?.senderId ? `:sender:${context.senderId}` : ""
+          }`,
+      );
       setCliRunnerPrepareTestDeps({
         getActiveMcpLoopbackRuntime,
         ensureMcpLoopbackServer,
         createMcpLoopbackServerConfig,
+        resolveMcpLoopbackBearerToken,
       });
       cliBackendsTesting.setDepsForTest({
         resolvePluginSetupCliBackend: () => undefined,
@@ -1386,10 +1402,12 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         currentThreadTs: "42",
         currentMessageId: "reply-message-1",
         currentInboundAudio: true,
+        senderId: "user-123",
         sourceReplyDeliveryMode: "message_tool_only",
       });
 
       expect(context.preparedBackend.env).toMatchObject({
+        OPENCLAW_MCP_TOKEN: "loopback-non-owner-token:sender:user-123",
         OPENCLAW_MCP_MESSAGE_CHANNEL: "telegram",
         OPENCLAW_MCP_CURRENT_CHANNEL_ID: "telegram:-100123:topic:42",
         OPENCLAW_MCP_CURRENT_THREAD_TS: "42",
@@ -1398,6 +1416,16 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         OPENCLAW_MCP_INBOUND_EVENT_KIND: "room_event",
         OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: "message_tool_only",
       });
+      expect(context.preparedBackend.env).not.toHaveProperty("OPENCLAW_MCP_SENDER_ID");
+      expect(resolveMcpLoopbackBearerToken).toHaveBeenCalledWith(
+        {
+          port: 31783,
+          ownerToken: "loopback-owner-token",
+          nonOwnerToken: "loopback-non-owner-token",
+        },
+        false,
+        { senderId: "user-123" },
+      );
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

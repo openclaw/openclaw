@@ -80,6 +80,93 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
+  it("uses Discord voice requesterSenderId for moderation sender checks", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await handleDiscordMessageAction({
+      action: "kick",
+      params: {
+        guildId: "guild-1",
+        userId: "user-2",
+        senderUserId: "spoofed-admin-id",
+      },
+      cfg,
+      requesterSenderId: "voice-speaker-id",
+      toolContext: { currentChannelProvider: "discord-voice" },
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "kick",
+        accountId: undefined,
+        guildId: "guild-1",
+        userId: "user-2",
+        reason: undefined,
+        deleteMessageDays: undefined,
+        senderUserId: "voice-speaker-id",
+      },
+      cfg,
+    });
+  });
+
+  it("rejects requesterSenderId for moderation when no trusted context is present", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "ban",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+        },
+        cfg,
+        requesterSenderId: "client-supplied-sender-id",
+      }),
+    ).rejects.toThrow("requires a trusted Discord requester sender");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("allows trusted local owner moderation when no tool context is present", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await handleDiscordMessageAction({
+      action: "ban",
+      params: {
+        guildId: "guild-1",
+        userId: "user-2",
+      },
+      cfg,
+      senderIsOwner: true,
+    });
+
+    expectDiscordActionCall({
+      payload: {
+        action: "ban",
+        accountId: undefined,
+        guildId: "guild-1",
+        userId: "user-2",
+        durationMinutes: undefined,
+        until: undefined,
+        reason: undefined,
+        deleteMessageDays: undefined,
+        senderUserId: undefined,
+      },
+      cfg,
+    });
+  });
+
+  it("rejects privileged moderation when no tool context or requester sender is present", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "ban",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+        },
+        cfg,
+      }),
+    ).rejects.toThrow("requires a trusted Discord requester sender");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
   it("rejects fractional moderation durations before invoking Discord runtime", async () => {
     const cfg = discordConfig({ moderation: true });
     await expect(
@@ -122,26 +209,37 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("does not treat non-Discord requester ids as Discord guild admin sender ids", async () => {
+  it("rejects non-Discord requester context for privileged guild admin actions", async () => {
     const cfg = discordConfig({ channels: true });
-    await handleDiscordMessageAction({
-      action: "channel-delete",
-      params: {
-        channelId: "channel-1",
-      },
-      cfg,
-      requesterSenderId: "telegram-user-id",
-      toolContext: { currentChannelProvider: "telegram" },
-    });
+    await expect(
+      handleDiscordMessageAction({
+        action: "channel-delete",
+        params: {
+          channelId: "channel-1",
+        },
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).rejects.toThrow("requires a Discord requester context");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
 
-    expectDiscordActionCall({
-      payload: {
-        action: "channelDelete",
-        accountId: undefined,
-        channelId: "channel-1",
-      },
-      cfg,
-    });
+  it("rejects non-Discord requester context for moderation actions", async () => {
+    const cfg = discordConfig({ moderation: true });
+    await expect(
+      handleDiscordMessageAction({
+        action: "ban",
+        params: {
+          guildId: "guild-1",
+          userId: "user-2",
+        },
+        cfg,
+        requesterSenderId: "telegram-user-id",
+        toolContext: { currentChannelProvider: "telegram" },
+      }),
+    ).rejects.toThrow("requires a Discord requester context");
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
 
   it("falls back to toolContext.currentMessageId for reactions", async () => {

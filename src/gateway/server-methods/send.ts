@@ -47,6 +47,10 @@ import {
 } from "../../sessions/session-key-utils.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
+import {
+  verifyTrustedMessageActionOwnerToken,
+  verifyTrustedMessageActionRequesterToken,
+} from "../trusted-message-action-requester.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 
@@ -464,6 +468,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       inboundTurnKind?: "user_request" | "room_event";
       agentId?: string;
+      trustedRequesterToken?: string;
       toolContext?: {
         currentChannelId?: string;
         currentChannelProvider?: string;
@@ -508,16 +513,27 @@ export const sendHandlers: GatewayRequestHandlers = {
 
       try {
         const gatewayClientScopes = client?.connect?.scopes ?? [];
+        const gatewayClientIsAdmin = gatewayClientScopes.includes(ADMIN_SCOPE);
+        const requesterSenderId = normalizeOptionalString(request.requesterSenderId) ?? undefined;
+        const trustedRequester = verifyTrustedMessageActionRequesterToken({
+          token: request.trustedRequesterToken,
+          requesterSenderId,
+          currentChannelProvider: request.toolContext?.currentChannelProvider,
+        });
+        const trustedOwner = verifyTrustedMessageActionOwnerToken({
+          token: request.trustedRequesterToken,
+          senderIsOwner: request.senderIsOwner,
+        });
+        const gatewayClientCanSupplyRequester = gatewayClientIsAdmin || trustedRequester;
         const handled = await dispatchChannelMessageAction({
           channel,
           action: request.action as never,
           cfg,
           params: request.params,
           accountId: normalizeOptionalString(request.accountId) ?? undefined,
-          requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
-          senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
-            ? request.senderIsOwner === true
-            : false,
+          requesterSenderId: gatewayClientCanSupplyRequester ? requesterSenderId : undefined,
+          senderIsOwner:
+            gatewayClientIsAdmin || trustedOwner ? request.senderIsOwner === true : false,
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           inboundEventKind: request.inboundTurnKind,

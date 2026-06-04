@@ -523,6 +523,7 @@ describe("runMessageAction plugin dispatch", () => {
         },
         "gateway call params",
       );
+      expect(typeof gatewayParams.trustedRequesterToken).toBe("string");
       expectRecordFields(
         readRecordField(gatewayParams, "toolContext", "gateway tool context"),
         {

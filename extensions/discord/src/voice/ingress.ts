@@ -139,6 +139,7 @@ export async function runDiscordVoiceAgentTurn(params: {
       agentId: params.entry.route.agentId,
       messageChannel: "discord",
       messageProvider: DISCORD_VOICE_MESSAGE_PROVIDER,
+      senderId: params.userId,
       extraSystemPrompt: context.extraSystemPrompt,
       allowModelOverride: Boolean(voiceModel),
       model: voiceModel,

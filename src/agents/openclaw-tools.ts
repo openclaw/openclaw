@@ -94,6 +94,8 @@ export function createOpenClawTools(
      */
     runSessionKey?: string;
     agentChannel?: GatewayMessageChannel;
+    /** Source provider for channel-local action auth; may be non-deliverable. */
+    agentSourceProvider?: string;
     runId?: string;
     agentAccountId?: string;
     /** Delivery target for topic/thread routing. */
@@ -338,7 +340,7 @@ export function createOpenClawTools(
         sessionId: options?.sessionId,
         config: options?.config,
         currentChannelId: options?.currentChannelId,
-        currentChannelProvider: options?.agentChannel,
+        currentChannelProvider: options?.agentSourceProvider ?? options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
         currentInboundAudio: options?.currentInboundAudio,
         agentThreadId: options?.agentThreadId,

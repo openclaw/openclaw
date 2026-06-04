@@ -1123,6 +1123,7 @@ describe("CLI attempt execution", () => {
       runId: "run-cli-channel-context",
       opts: {
         messageProvider: "discord-voice",
+        senderId: "voice-speaker-1",
       } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
@@ -1142,6 +1143,7 @@ describe("CLI attempt execution", () => {
       trigger: "user",
       messageChannel: "discord",
       messageProvider: "discord-voice",
+      senderId: "voice-speaker-1",
     });
   });
 
@@ -1481,6 +1483,7 @@ describe("CLI attempt execution", () => {
         modelRun: true,
         promptMode: "none",
         messageProvider: "discord-voice",
+        senderId: "voice-speaker-2",
         inputProvenance: {
           kind: "inter_session",
           sourceSessionKey: "agent:main:discord:source",
@@ -1508,6 +1511,7 @@ describe("CLI attempt execution", () => {
       prompt: "raw prompt",
       messageChannel: "discord",
       messageProvider: "discord-voice",
+      senderId: "voice-speaker-2",
       modelRun: true,
       promptMode: "none",
       disableTools: true,

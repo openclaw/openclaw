@@ -899,6 +899,7 @@ export function buildRunClaudeCliAgentParams(params: RunClaudeCliAgentParams): R
     currentThreadTs: params.currentThreadTs,
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,
+    senderId: params.senderId,
   };
 }
 

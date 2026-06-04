@@ -140,11 +140,21 @@ describe("discordMessageActions", () => {
     ]);
   });
 
-  it("requires trusted requester sender for privileged guild admin actions only from Discord turns", () => {
+  it("requires trusted requester sender for privileged guild admin actions only from Discord-owned turns", () => {
+    for (const currentChannelProvider of ["discord", "discord-voice"] as const) {
+      for (const action of ["timeout", "kick", "ban"] as const) {
+        expect(
+          discordMessageActions.requiresTrustedRequesterSender?.({
+            action,
+            toolContext: { currentChannelProvider },
+          }),
+        ).toBe(true);
+      }
+    }
     expect(
       discordMessageActions.requiresTrustedRequesterSender?.({
         action: "channel-delete",
-        toolContext: { currentChannelProvider: "discord" },
+        toolContext: { currentChannelProvider: "discord-voice" },
       }),
     ).toBe(true);
     expect(
@@ -511,6 +521,7 @@ describe("discordMessageActions", () => {
       cfg,
       accountId: "ops",
       requesterSenderId: "user-1",
+      senderIsOwner: true,
       toolContext,
       mediaAccess,
       mediaLocalRoots,
@@ -523,6 +534,7 @@ describe("discordMessageActions", () => {
       cfg,
       accountId: "ops",
       requesterSenderId: "user-1",
+      senderIsOwner: true,
       toolContext,
       mediaAccess,
       mediaLocalRoots,

@@ -10,6 +10,10 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import {
+  isDiscordTrustedRequesterSource,
+  requiresDiscordTrustedRequesterForAction,
+} from "../trusted-requester-source.js";
+import {
   isDiscordModerationAction,
   readDiscordModerationCommand,
 } from "./runtime.moderation-shared.js";
@@ -26,13 +30,14 @@ type Ctx = Pick<
   | "cfg"
   | "accountId"
   | "requesterSenderId"
+  | "senderIsOwner"
   | "toolContext"
   | "mediaLocalRoots"
   | "mediaReadFile"
 >;
 
 function readDiscordRequesterSenderId(ctx: Ctx): string | undefined {
-  return ctx.toolContext?.currentChannelProvider?.trim().toLowerCase() === "discord"
+  return isDiscordTrustedRequesterSource(ctx.toolContext)
     ? normalizeOptionalString(ctx.requesterSenderId)
     : undefined;
 }
@@ -41,12 +46,34 @@ function senderParam(senderUserId: string | undefined) {
   return senderUserId ? { senderUserId } : {};
 }
 
+function assertTrustedDiscordRequesterContext(ctx: Ctx): void {
+  if (!requiresDiscordTrustedRequesterForAction(ctx.action)) {
+    return;
+  }
+  const requesterSenderId = normalizeOptionalString(ctx.requesterSenderId);
+  if (!ctx.toolContext) {
+    if (ctx.senderIsOwner !== true) {
+      throw new Error(`Discord ${ctx.action} requires a trusted Discord requester sender.`);
+    }
+    return;
+  }
+  if (!isDiscordTrustedRequesterSource(ctx.toolContext)) {
+    throw new Error(
+      `Discord ${ctx.action} requires a Discord requester context in tool-driven contexts.`,
+    );
+  }
+  if (!requesterSenderId) {
+    throw new Error(`Discord ${ctx.action} requires a trusted Discord requester sender.`);
+  }
+}
+
 export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
 }): Promise<AgentToolResult<unknown> | undefined> {
   const { ctx, resolveChannelId } = params;
   const { action, params: actionParams, cfg } = ctx;
+  assertTrustedDiscordRequesterContext(ctx);
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
   const senderUserId = readDiscordRequesterSenderId(ctx);
 
@@ -356,7 +383,7 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         message: "deleteDays must be an integer from 0 to 7",
       }),
     });
-    const senderUserIdLocal = normalizeOptionalString(ctx.requesterSenderId);
+    const senderUserIdLocal = readDiscordRequesterSenderId(ctx);
     return await handleDiscordAction(
       {
         action: moderation.action,

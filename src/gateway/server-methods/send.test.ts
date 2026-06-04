@@ -5,6 +5,7 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createTrustedMessageActionRequesterToken } from "../trusted-message-action-requester.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -195,7 +196,9 @@ function createDeferred<T>() {
 
 async function runMessageActionRequest(
   params: Record<string, unknown>,
-  client?: { connect?: { scopes?: string[] } } | null,
+  client?: {
+    connect?: { scopes?: string[]; client?: { id?: string; mode?: string } };
+  } | null,
 ) {
   const respond = vi.fn();
   await sendHandlers["message.action"]({
@@ -1563,6 +1566,80 @@ describe("gateway send mirroring", () => {
     expect(mocks.dispatchChannelMessageAction).toHaveBeenCalledWith(
       expect.objectContaining({ inboundEventKind: "room_event" }),
     );
+    expect(lastDispatchChannelMessageActionCall()?.requesterSenderId).toBeUndefined();
+    expect(lastDispatchChannelMessageActionCall()?.toolContext?.currentMessageId).toBe("wamid.1");
+
+    mocks.dispatchChannelMessageAction.mockClear();
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({
+        ok: true,
+        messageId: "wamid.2",
+        requesterSenderId: "trusted-user",
+      }),
+    );
+
+    await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: {
+          chatJid: "+15551234567",
+          messageId: "wamid.2",
+          emoji: "✅",
+        },
+        requesterSenderId: "trusted-user",
+        senderIsOwner: true,
+        trustedRequesterToken: createTrustedMessageActionRequesterToken({
+          requesterSenderId: "trusted-user",
+          currentChannelProvider: "whatsapp",
+        }),
+        toolContext: {
+          currentChannelProvider: "whatsapp",
+        },
+        idempotencyKey: "idem-message-action-backend",
+      },
+      {
+        connect: {
+          scopes: ["operator.write"],
+        },
+      },
+    );
+
+    expect(lastDispatchChannelMessageActionCall()?.requesterSenderId).toBe("trusted-user");
+    expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(false);
+
+    mocks.dispatchChannelMessageAction.mockClear();
+    mocks.dispatchChannelMessageAction.mockResolvedValueOnce(
+      jsonResult({
+        ok: true,
+        messageId: "wamid.3",
+      }),
+    );
+
+    await runMessageActionRequest(
+      {
+        channel: "whatsapp",
+        action: "react",
+        params: {
+          chatJid: "+15551234567",
+          messageId: "wamid.3",
+          emoji: "✅",
+        },
+        senderIsOwner: true,
+        trustedRequesterToken: createTrustedMessageActionRequesterToken({
+          senderIsOwner: true,
+        }),
+        idempotencyKey: "idem-message-action-owner",
+      },
+      {
+        connect: {
+          scopes: ["operator.write"],
+        },
+      },
+    );
+
+    expect(lastDispatchChannelMessageActionCall()?.requesterSenderId).toBeUndefined();
+    expect(lastDispatchChannelMessageActionCall()?.senderIsOwner).toBe(true);
   });
 
   it("mirrors successful source-conversation message.action sends into the assistant transcript", async () => {

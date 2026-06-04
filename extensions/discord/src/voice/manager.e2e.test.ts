@@ -5419,6 +5419,7 @@ describe("DiscordVoiceManager", () => {
 
     expect(commandArgs?.messageChannel).toBe("discord");
     expect(commandArgs?.messageProvider).toBe("discord-voice");
+    expect(commandArgs?.senderId).toBe("u-guest");
     expect(commandArgs?.message).toContain("Do not call the tts tool");
     expect(commandArgs?.message).toContain("repair obvious transcription artifacts");
     expect(lastTtsArgs().channel).toBe("discord");

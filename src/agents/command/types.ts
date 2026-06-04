@@ -93,6 +93,8 @@ export type AgentCommandOpts = {
   bashElevated?: ExecElevatedDefaults;
   /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
   senderIsOwner?: boolean;
+  /** Trusted sender id from inbound context. */
+  senderId?: string | null;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */

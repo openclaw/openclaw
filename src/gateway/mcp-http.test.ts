@@ -1,5 +1,6 @@
 // MCP HTTP tests cover gateway-scoped tool listing and invocation over the
 // JSON-RPC surface, including hook filtering and context propagation.
+import crypto from "node:crypto";
 import { request } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getFreePortBlockWithPermissionFallback } from "../test-utils/ports.js";
@@ -29,6 +30,7 @@ type ScopedToolsCall = {
   currentThreadTs?: string;
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
+  senderId?: string;
   inboundEventKind?: string;
   sourceReplyDeliveryMode?: string;
   senderIsOwner?: boolean;
@@ -103,6 +105,7 @@ import {
   closeMcpLoopbackServer,
   getActiveMcpLoopbackRuntime,
   ensureMcpLoopbackServer,
+  resolveMcpLoopbackBearerToken,
   startMcpLoopbackServer,
 } from "./mcp-http.js";
 
@@ -390,6 +393,26 @@ function buildMockMcpToolSchema(tools: MockGatewayTool[]) {
   return buildMcpToolSchema(tools as unknown as Parameters<typeof buildMcpToolSchema>[0]);
 }
 
+function forgeScopedTokenWithBearerToken(params: {
+  bearerToken: string;
+  senderId: string;
+  senderIsOwner: boolean;
+}): string {
+  const encodedPayload = Buffer.from(
+    JSON.stringify({
+      v: 1,
+      senderIsOwner: params.senderIsOwner,
+      senderId: params.senderId,
+    }),
+    "utf8",
+  ).toString("base64url");
+  const signature = crypto
+    .createHmac("sha256", params.bearerToken)
+    .update(encodedPayload)
+    .digest("base64url");
+  return ["ctx1", encodedPayload, signature].join(".");
+}
+
 beforeEach(() => {
   resolveGatewayScopedToolsMock.mockClear();
   runBeforeToolCallHookMock.mockClear();
@@ -505,9 +528,12 @@ describe("mcp loopback server", () => {
     });
     const { runtime, port: serverPort } = await startLoopbackServerForTest(port);
 
+    const token = runtime
+      ? resolveMcpLoopbackBearerToken(runtime, false, { senderId: "user-123" })
+      : undefined;
     const response = await sendRaw({
       port: serverPort,
-      token: runtime?.nonOwnerToken,
+      token,
       headers: jsonHeaders({
         "x-session-key": "agent:main:telegram:group:chat123",
         "x-openclaw-account-id": "work",
@@ -526,6 +552,7 @@ describe("mcp loopback server", () => {
     const call = getScopedToolsCall(0);
     expect(call.sessionKey).toBe("agent:main:telegram:group:chat123");
     expect(call.accountId).toBe("work");
+    expect(call.senderId).toBe("user-123");
     expect(call.messageProvider).toBe("telegram");
     expect(call.currentChannelId).toBe("telegram:chat123");
     expect(call.currentThreadTs).toBe("42");
@@ -542,6 +569,49 @@ describe("mcp loopback server", () => {
       "exec",
       "process",
     ]);
+  });
+
+  it("derives sender identity from scoped bearer token and ignores spoofed sender headers", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const token = runtime
+      ? resolveMcpLoopbackBearerToken(runtime, false, { senderId: "real-user" })
+      : undefined;
+
+    const response = await sendLoopbackToolsList({
+      token,
+      headers: {
+        "x-session-key": "agent:main:discord:group:g1",
+        "x-openclaw-message-channel": "discord",
+        "x-openclaw-sender-id": "spoofed-user",
+      },
+    });
+
+    expect(response.status).toBe(200);
+    const call = getScopedToolsCall(0);
+    expect(call.sessionKey).toBe("agent:main:discord:group:g1");
+    expect(call.messageProvider).toBe("discord");
+    expect(call.senderIsOwner).toBe(false);
+    expect(call.senderId).toBe("real-user");
+  });
+
+  it("rejects sender-scoped tokens forged with the exposed non-owner bearer token", async () => {
+    const { runtime } = await startLoopbackServerForTest();
+    const forgedToken = forgeScopedTokenWithBearerToken({
+      bearerToken: runtime.nonOwnerToken,
+      senderIsOwner: false,
+      senderId: "forged-user",
+    });
+
+    const response = await sendLoopbackToolsList({
+      token: forgedToken,
+      headers: {
+        "x-session-key": "agent:main:discord:group:g1",
+        "x-openclaw-message-channel": "discord",
+      },
+    });
+
+    expect(response.status).toBe(401);
+    expect(resolveGatewayScopedToolsMock).not.toHaveBeenCalled();
   });
 
   it("keeps loopback tool cache entries separate by inbound event kind, delivery mode, and inbound audio", async () => {
@@ -787,6 +857,7 @@ describe("mcp loopback server", () => {
     expect(active?.ownerToken).toMatch(/^[0-9a-f]{64}$/);
     expect(active?.nonOwnerToken).toMatch(/^[0-9a-f]{64}$/);
     expect(active?.nonOwnerToken).not.toBe(active?.ownerToken);
+    expect(active).not.toHaveProperty("scopedTokenSecret");
 
     await server.close();
     server = undefined;
@@ -920,6 +991,7 @@ describe("createMcpLoopbackServerConfig", () => {
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",
     );
+    expect(config.mcpServers?.openclaw?.headers).not.toHaveProperty("x-openclaw-sender-id");
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-current-channel-id"]).toBe(
       "${OPENCLAW_MCP_CURRENT_CHANNEL_ID}",
     );

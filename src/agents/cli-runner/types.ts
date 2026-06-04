@@ -86,6 +86,8 @@ export type RunCliAgentParams = {
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   agentAccountId?: string;
+  /** Trusted sender id from inbound context. */
+  senderId?: string | null;
   /** Trusted sender identity bit for channel action auth. */
   senderIsOwner?: boolean;
   /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */

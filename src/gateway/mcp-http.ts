@@ -96,10 +96,17 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
 }> {
   const ownerToken = crypto.randomBytes(32).toString("hex");
   const nonOwnerToken = crypto.randomBytes(32).toString("hex");
+  const scopedTokenSecret = crypto.randomBytes(32).toString("hex");
   const toolCache = new McpLoopbackToolCache();
 
   const httpServer = createHttpServer((req, res) => {
-    const auth = validateMcpLoopbackRequest({ req, res, ownerToken, nonOwnerToken });
+    const auth = validateMcpLoopbackRequest({
+      req,
+      res,
+      ownerToken,
+      nonOwnerToken,
+      scopedTokenSecret,
+    });
     if (!auth) {
       return;
     }
@@ -120,6 +127,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
           currentMessageId: requestContext.currentMessageId,
           currentInboundAudio: requestContext.currentInboundAudio,
           accountId: requestContext.accountId,
+          senderId: requestContext.senderId,
           inboundEventKind: requestContext.inboundEventKind,
           sourceReplyDeliveryMode: requestContext.sourceReplyDeliveryMode,
           senderIsOwner: requestContext.senderIsOwner,
@@ -211,7 +219,7 @@ export async function startMcpLoopbackServer(port = 0): Promise<{
   }
   // Register tokens only after the TCP listener is live so clients never learn
   // a bearer token for a server that failed to bind.
-  setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken });
+  setActiveMcpLoopbackRuntime({ port: address.port, ownerToken, nonOwnerToken, scopedTokenSecret });
   logDebug(`mcp loopback listening on 127.0.0.1:${address.port}`);
 
   const server: McpLoopbackServer = {

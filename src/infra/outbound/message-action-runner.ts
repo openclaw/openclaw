@@ -25,6 +25,7 @@ import type {
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createTrustedMessageActionRequesterToken } from "../../gateway/trusted-message-action-requester.js";
 import {
   hasInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
@@ -707,6 +708,11 @@ async function runGatewayPluginMessageActionOrNull(params: {
       params: params.params,
       accountId: params.accountId ?? undefined,
       requesterSenderId: params.input.requesterSenderId ?? undefined,
+      trustedRequesterToken: createTrustedMessageActionRequesterToken({
+        requesterSenderId: params.input.requesterSenderId,
+        currentChannelProvider: params.input.toolContext?.currentChannelProvider,
+        senderIsOwner: params.input.senderIsOwner,
+      }),
       senderIsOwner: params.input.senderIsOwner,
       sessionKey: params.input.sessionKey,
       sessionId: params.input.sessionId,

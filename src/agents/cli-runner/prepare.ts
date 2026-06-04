@@ -285,6 +285,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_TOKEN: prepareDeps.resolveMcpLoopbackBearerToken(
             mcpLoopbackRuntime,
             params.senderIsOwner === true,
+            { senderId: params.senderId },
           ),
           OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
@@ -374,6 +375,7 @@ export async function prepareCliRunContext(
           currentMessageId: params.currentMessageId,
           currentInboundAudio: params.currentInboundAudio,
           accountId: params.agentAccountId,
+          senderId: params.senderId,
           inboundEventKind: params.currentInboundEventKind,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
           senderIsOwner: params.senderIsOwner,

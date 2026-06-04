@@ -43,6 +43,7 @@ export function resolveGatewayScopedTools(params: {
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   accountId?: string;
+  senderId?: string | null;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   agentTo?: string;
@@ -91,6 +92,7 @@ export function resolveGatewayScopedTools(params: {
     sessionKey: params.sessionKey,
     messageProvider: params.messageProvider,
     accountId: params.accountId ?? null,
+    senderId: params.senderId,
   });
   const subagentStore = resolveSubagentCapabilityStore(params.sessionKey, {
     cfg: params.cfg,
@@ -160,6 +162,7 @@ export function resolveGatewayScopedTools(params: {
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,
+    requesterSenderId: params.senderId,
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
