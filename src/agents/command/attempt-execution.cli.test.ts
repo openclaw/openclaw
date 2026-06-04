@@ -1306,6 +1306,7 @@ describe("CLI attempt execution", () => {
     expectMockArgFields(runEmbeddedAgentMock, {
       provider: "openai",
       model: "gpt-5.4",
+      agentHarnessId: "codex",
     });
   });
 

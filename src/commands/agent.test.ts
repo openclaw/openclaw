@@ -122,6 +122,8 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         clientTools: opts.clientTools,
         provider: providerOverride,
         model: params.modelOverride,
+        agentHarnessId: params.agentHarnessRuntimeOverride,
+        agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
         authProfileId,
         authProfileIdSource: authProfileId ? sessionEntry?.authProfileOverrideSource : undefined,
         thinkLevel: params.resolvedThinkLevel,
@@ -389,7 +391,7 @@ describe("agentCommand", () => {
         runtime,
       );
 
-      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledTimes(1);
+      expect(pluginRegistryMocks.ensurePluginRegistryLoaded).toHaveBeenCalledTimes(2);
       for (const [registryLoad] of pluginRegistryMocks.ensurePluginRegistryLoaded.mock.calls) {
         expect(registryLoad?.scope).toBe("all");
         expect(registryLoad?.config).toBeTypeOf("object");
@@ -618,6 +620,44 @@ describe("agentCommand", () => {
       expect(callArgs?.provider).toBe("openai");
       expect(callArgs?.model).toBe("gpt-5.5");
       expect(callArgs?.fastMode).toBe(true);
+    });
+  });
+
+  it("passes configured plugin harness runtime policy to ingress embedded runs", async () => {
+    await withTempHome(async (home) => {
+      const { clearAgentHarnesses, registerAgentHarness } =
+        await import("../agents/harness/registry.js");
+      clearAgentHarnesses();
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports: () => ({ supported: true }),
+        runAttempt: vi.fn(),
+      });
+      const store = path.join(home, "sessions.json");
+      mockConfig(home, store, {
+        model: { primary: "openai/gpt-5.5" },
+        models: {
+          "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "ping",
+          agentId: "main",
+          sessionKey: "agent:main:smoke-runtime-policy",
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      const callArgs = getLastEmbeddedCall();
+      expect(callArgs?.provider).toBe("openai");
+      expect(callArgs?.model).toBe("gpt-5.5");
+      expect(callArgs?.agentHarnessId).toBe("codex");
+      expect(callArgs?.agentHarnessRuntimeOverride).toBe("codex");
+      clearAgentHarnesses();
     });
   });
 

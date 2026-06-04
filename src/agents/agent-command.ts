@@ -167,6 +167,29 @@ function allowPluginModelNormalizationForRef(params: {
   return !hasExactConfiguredProviderModel(params);
 }
 
+function resolveExplicitAgentHarnessRuntimeOverride(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentId?: string;
+  sessionKey?: string;
+}): string | undefined {
+  const policy = resolveAvailableAgentHarnessPolicy({
+    provider: params.provider,
+    modelId: params.model,
+    config: params.cfg,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+  });
+  if (policy.runtime === "auto" || policy.runtime === "openclaw") {
+    return undefined;
+  }
+  if (policy.runtime === "codex" && policy.runtimeSource === "implicit") {
+    return undefined;
+  }
+  return policy.runtime;
+}
+
 function normalizeAgentCommandModelRef(
   cfg: OpenClawConfig,
   provider: string,
@@ -1751,10 +1774,19 @@ async function agentCommandInternal(
               provider: providerOverride,
               model: modelOverride,
             });
+            const agentHarnessRuntimeOverride =
+              runOptions?.agentHarnessRuntimeOverride ??
+              resolveExplicitAgentHarnessRuntimeOverride({
+                cfg,
+                provider: providerOverride,
+                model: modelOverride,
+                agentId: sessionAgentId,
+                sessionKey,
+              });
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
-              agentHarnessRuntimeOverride: runOptions?.agentHarnessRuntimeOverride,
+              agentHarnessRuntimeOverride,
               modelFallbacksOverride: effectiveFallbacksOverride,
               originalProvider: provider,
               cfg,
