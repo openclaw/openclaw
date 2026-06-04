@@ -2835,6 +2835,9 @@ run_doctor() {
     if (( doctor_exit == 130 )); then
         abort_install_int
     fi
+    if (( doctor_exit != 0 )); then
+        return "$doctor_exit"
+    fi
     ui_success "Doctor complete"
 }
 
@@ -3205,8 +3208,9 @@ main() {
         run_doctor_after=true
     fi
     if [[ "$run_doctor_after" == "true" ]]; then
-        run_doctor
-        should_open_dashboard=true
+        if run_doctor; then
+            should_open_dashboard=true
+        fi
     fi
 
     # Step 7: If BOOTSTRAP.md is still present in the workspace, resume onboarding
@@ -3298,6 +3302,11 @@ main() {
             fi
             if (( doctor_exit == 130 )); then
                 abort_install_int
+            fi
+            # Clear dashboard flag if the doctor was cancelled or failed,
+            # since the upgrade did not complete successfully.
+            if (( doctor_exit != 0 )); then
+                should_open_dashboard=false
             fi
             if (( doctor_exit == 0 )); then
                 doctor_ok=1
