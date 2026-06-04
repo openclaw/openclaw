@@ -1,6 +1,8 @@
+type SqliteValue = string | number | bigint | null | Uint8Array;
+
 type VectorWriteDb = {
-  prepare: (sql: string) => {
-    run: (...params: unknown[]) => unknown;
+  prepare(sql: string): {
+    run(...params: SqliteValue[]): unknown;
   };
 };
 

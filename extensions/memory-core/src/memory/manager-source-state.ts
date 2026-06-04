@@ -7,10 +7,12 @@ export type MemorySourceFileStateRow = {
   size?: number;
 };
 
+type SqliteValue = string | number | bigint | null | Uint8Array;
+
 type MemorySourceStateDb = {
-  prepare: (sql: string) => {
-    all: (...args: unknown[]) => unknown;
-    get: (...args: unknown[]) => unknown;
+  prepare(sql: string): {
+    all(...args: SqliteValue[]): unknown;
+    get(...args: SqliteValue[]): unknown;
   };
 };
 

@@ -89,7 +89,6 @@ describe("loadSqliteVecExtension", () => {
     });
     const { loadSqliteVecExtension } = await importLoader();
     const db = {
-      enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),
     };
 
@@ -99,7 +98,6 @@ describe("loadSqliteVecExtension", () => {
       ok: true,
       extensionPath: "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
     });
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).toHaveBeenCalledWith(
       "/install/node_modules/sqlite-vec-linux-x64/vec0.so",
     );
@@ -139,7 +137,6 @@ describe("loadSqliteVecExtension", () => {
     });
     const { loadSqliteVecExtension } = await importLoader();
     const db = {
-      enableLoadExtension: vi.fn(),
       loadExtension: vi.fn().mockImplementation(() => {
         throw new Error("dlopen failed: file not found");
       }),

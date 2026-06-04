@@ -11,9 +11,11 @@ type StatusAggregateRow = {
   c: number;
 };
 
+type SqliteValue = string | number | bigint | null | Uint8Array;
+
 type StatusAggregateDb = {
-  prepare: (sql: string) => {
-    all: (...args: unknown[]) => StatusAggregateRow[];
+  prepare(sql: string): {
+    all(...args: SqliteValue[]): StatusAggregateRow[];
   };
 };
 
