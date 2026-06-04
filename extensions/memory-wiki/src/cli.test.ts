@@ -564,12 +564,14 @@ cli note
     expect(dryRun.createdCount).toBe(1);
     await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toStrictEqual([]);
 
+    const mathRandom = vi.spyOn(Math, "random");
     const applied = await runWikiChatGptImport({
       config,
       exportPath: exportDir,
       json: true,
     });
     expect(applied.runId).toMatch(/^chatgpt-[a-f0-9]{12}$/u);
+    expect(mathRandom).not.toHaveBeenCalled();
     expect(applied.createdCount).toBe(1);
     const sourceFiles = (await fs.readdir(path.join(rootDir, "sources"))).filter(
       (entry) => entry !== "index.md",

@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
@@ -649,7 +649,7 @@ function preserveExistingPageBlocks(rendered: string, existing: string): string 
 }
 
 function buildRunId(exportPath: string, nowIso: string): string {
-  const seed = `${exportPath}:${nowIso}:${Math.random()}`;
+  const seed = `${exportPath}:${nowIso}:${randomBytes(16).toString("hex")}`;
   return `chatgpt-${createHash("sha1").update(seed).digest("hex").slice(0, 12)}`;
 }
 
