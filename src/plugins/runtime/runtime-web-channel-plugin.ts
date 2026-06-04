@@ -25,6 +25,14 @@ type WebChannelPluginRecord = {
   source: string;
 };
 
+type WebChannelConnectionWaitOptions =
+  | {
+      timeout: "none";
+    }
+  | {
+      timeoutMs: number;
+    };
+
 type WebChannelLightRuntimeModule = {
   getActiveWebListener: (accountId?: string | null) => unknown;
   getWebAuthAgeMs: (authDir?: string) => number | null;
@@ -100,7 +108,7 @@ type WebChannelHeavyRuntimeModule = {
   monitorWebChannel: (...args: unknown[]) => Promise<unknown>;
   monitorWebInbox: (...args: unknown[]) => Promise<unknown>;
   startWebLoginWithQr: (...args: unknown[]) => Promise<unknown>;
-  waitForWaConnection: (sock: unknown) => Promise<void>;
+  waitForWaConnection: (sock: unknown, options: WebChannelConnectionWaitOptions) => Promise<void>;
   waitForWebLogin: (...args: unknown[]) => Promise<unknown>;
   extractMediaPlaceholder: (...args: unknown[]) => unknown;
   extractText: (...args: unknown[]) => unknown;
