@@ -153,7 +153,7 @@ export function isAcpTagVisible(settings: AcpProjectionSettings, tag: string | u
     return override;
   }
   if (Object.hasOwn(ACP_TAG_VISIBILITY_DEFAULTS, tag)) {
-    return ACP_TAG_VISIBILITY_DEFAULTS[tag];
+    return ACP_TAG_VISIBILITY_DEFAULTS[tag as AcpSessionUpdateTag];
   }
   return true;
 }

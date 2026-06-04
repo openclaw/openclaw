@@ -548,10 +548,9 @@ Two ways to start an ACP session:
   requester session as system events. Accepted responses include
   `streamLogPath` pointing to a session-scoped JSONL log
   (`<sessionId>.acp-stream.jsonl`) you can tail for full relay history.
-  Assistant commentary and ACP status progress text are hidden by default; set
-  `acp.stream.assistantCommentary: true` to include commentary in parent stream
-  updates while keeping final-answer delivery unchanged. Status progress still
-  honors `acp.stream.tagVisibility`, so tags such as `plan` remain hidden
+  Assistant commentary and ACP status progress text are shown for progress-mode
+  parent channels unless `streaming.progress.commentary=false`. Status progress
+  still honors `acp.stream.tagVisibility`, so tags such as `plan` remain hidden
   unless explicitly enabled.
 </ParamField>
 

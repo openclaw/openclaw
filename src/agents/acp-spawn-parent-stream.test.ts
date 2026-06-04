@@ -1,5 +1,6 @@
 /** Tests ACP child-to-parent stream relay notices, routing, and log path resolution. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 
 const enqueueSystemEventMock = vi.fn();
@@ -48,9 +49,28 @@ vi.mock("../config/sessions/paths.js", async () => {
 });
 
 let emitAgentEvent: typeof import("../infra/agent-events.js").emitAgentEvent;
-let resolveAcpProjectionSettings: typeof import("../auto-reply/reply/acp-stream-settings.js").resolveAcpProjectionSettings;
 let resolveAcpSpawnStreamLogPath: typeof import("./acp-spawn-parent-stream.js").resolveAcpSpawnStreamLogPath;
 let startAcpSpawnParentStreamRelay: typeof import("./acp-spawn-parent-stream.js").startAcpSpawnParentStreamRelay;
+
+const progressCommentaryDeliveryContext = {
+  channel: "forum",
+  to: "-1001234567890",
+  accountId: "default",
+  threadId: 1122,
+};
+
+function progressModeConfig(acp?: OpenClawConfig["acp"]): OpenClawConfig {
+  return {
+    ...(acp ? { acp } : {}),
+    channels: {
+      forum: {
+        streaming: {
+          mode: "progress",
+        },
+      },
+    },
+  };
+}
 
 function collectedTexts() {
   return enqueueSystemEventMock.mock.calls.map((call) =>
@@ -80,7 +100,6 @@ function firstMockCall(
 describe("startAcpSpawnParentStreamRelay", () => {
   beforeAll(async () => {
     ({ emitAgentEvent } = await import("../infra/agent-events.js"));
-    ({ resolveAcpProjectionSettings } = await import("../auto-reply/reply/acp-stream-settings.js"));
     ({ resolveAcpSpawnStreamLogPath, startAcpSpawnParentStreamRelay } =
       await import("./acp-spawn-parent-stream.js"));
   });
@@ -487,19 +506,20 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("relays commentary-phase assistant text when enabled", () => {
+  it("relays commentary-phase assistant text in parent progress mode by default", () => {
     const relay = startAcpSpawnParentStreamRelay({
-      runId: "run-commentary-enabled",
+      runId: "run-commentary-default",
       parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:codex:acp:child-commentary-enabled",
+      childSessionKey: "agent:codex:acp:child-commentary-default",
       agentId: "codex",
+      cfg: progressModeConfig(),
+      deliveryContext: progressCommentaryDeliveryContext,
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
-      assistantCommentary: true,
     });
 
     emitAgentEvent({
-      runId: "run-commentary-enabled",
+      runId: "run-commentary-default",
       stream: "assistant",
       data: {
         delta: "checking thread context; then post a tight progress reply here.",
@@ -516,24 +536,149 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("relays ACP status progress when assistant commentary and tag visibility are enabled", () => {
+  it("suppresses commentary-phase assistant text when parent progress commentary is disabled", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-commentary-disabled",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-commentary-disabled",
+      agentId: "codex",
+      cfg: {
+        channels: {
+          forum: {
+            streaming: {
+              mode: "progress",
+              progress: {
+                commentary: false,
+              },
+            },
+          },
+        },
+      },
+      deliveryContext: progressCommentaryDeliveryContext,
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-commentary-disabled",
+      stream: "assistant",
+      data: {
+        delta: "checking thread context; then post a tight progress reply here.",
+        phase: "commentary",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    expectNoTextWithFragment(collectedTexts(), "checking thread context");
+    relay.dispose();
+  });
+
+  it("inherits parent channel progress mode for account commentary overrides", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-account-commentary-enabled",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-account-commentary-enabled",
+      agentId: "codex",
+      cfg: {
+        channels: {
+          forum: {
+            streaming: {
+              mode: "progress",
+            },
+            accounts: {
+              work: {
+                streaming: {
+                  progress: {
+                    commentary: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      deliveryContext: {
+        ...progressCommentaryDeliveryContext,
+        accountId: "work",
+      },
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-account-commentary-enabled",
+      stream: "assistant",
+      data: {
+        delta: "checking account-scoped progress config.",
+        phase: "commentary",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    expectTextWithFragment(collectedTexts(), "codex: checking account-scoped progress config.");
+    relay.dispose();
+  });
+
+  it("inherits legacy parent channel progress mode for account commentary overrides", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-account-legacy-commentary-enabled",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-account-legacy-commentary-enabled",
+      agentId: "codex",
+      cfg: {
+        channels: {
+          forum: {
+            streaming: "progress",
+            accounts: {
+              work: {
+                streaming: {
+                  progress: {
+                    commentary: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      deliveryContext: {
+        ...progressCommentaryDeliveryContext,
+        accountId: "work",
+      },
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+    });
+
+    emitAgentEvent({
+      runId: "run-account-legacy-commentary-enabled",
+      stream: "assistant",
+      data: {
+        delta: "checking legacy progress config.",
+        phase: "commentary",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    expectTextWithFragment(collectedTexts(), "codex: checking legacy progress config.");
+    relay.dispose();
+  });
+
+  it("relays ACP status progress when progress commentary and tag visibility are enabled", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-status-commentary-enabled",
       parentSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:child-status-commentary-enabled",
       agentId: "codex",
-      streamFlushMs: 10,
-      noOutputNoticeMs: 120_000,
-      assistantCommentary: true,
-      acpProjectionSettings: resolveAcpProjectionSettings({
-        acp: {
-          stream: {
-            tagVisibility: {
-              plan: true,
-            },
+      cfg: progressModeConfig({
+        stream: {
+          tagVisibility: {
+            plan: true,
           },
         },
       }),
+      deliveryContext: progressCommentaryDeliveryContext,
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
     });
 
     emitAgentEvent({
@@ -552,15 +697,16 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("does not relay hidden ACP status tags when assistant commentary is enabled", () => {
+  it("does not relay hidden ACP status tags when progress commentary is enabled", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-status-commentary-hidden",
       parentSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:child-status-commentary-hidden",
       agentId: "codex",
+      cfg: progressModeConfig(),
+      deliveryContext: progressCommentaryDeliveryContext,
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
-      assistantCommentary: true,
     });
 
     emitAgentEvent({
@@ -591,15 +737,16 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("does not relay ACP status tags hidden by default when assistant commentary is enabled", () => {
+  it("does not relay ACP status tags hidden by default when progress commentary is enabled", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-status-commentary-default-hidden",
       parentSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:child-status-commentary-default-hidden",
       agentId: "codex",
+      cfg: progressModeConfig(),
+      deliveryContext: progressCommentaryDeliveryContext,
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
-      assistantCommentary: true,
     });
 
     emitAgentEvent({
@@ -624,10 +771,11 @@ describe("startAcpSpawnParentStreamRelay", () => {
       parentSessionKey: "agent:main:main",
       childSessionKey: "agent:codex:acp:child-commentary-visible-stall",
       agentId: "codex",
+      cfg: progressModeConfig(),
+      deliveryContext: progressCommentaryDeliveryContext,
       streamFlushMs: 1,
       noOutputNoticeMs: 1_000,
       noOutputPollMs: 250,
-      assistantCommentary: true,
     });
 
     emitAgentEvent({

@@ -9,7 +9,12 @@ import {
   resolveAcpProjectionSettings,
   type AcpProjectionSettings,
 } from "../auto-reply/reply/acp-stream-settings.js";
+import {
+  resolveChannelStreamingProgressCommentary,
+  type StreamingCompatEntry,
+} from "../channels/streaming.js";
 import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import {
   type EventSessionRoutingPolicy,
@@ -19,6 +24,8 @@ import {
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { appendRegularFile } from "../infra/regular-file.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
+import { resolveAccountEntry } from "../routing/account-lookup.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeAssistantPhase } from "../shared/chat-message-content.js";
 import { recordTaskRunProgressByRunId } from "../tasks/detached-task-runtime.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -29,6 +36,10 @@ const DEFAULT_NO_OUTPUT_POLL_MS = 15_000;
 const DEFAULT_MAX_RELAY_LIFETIME_MS = 6 * 60 * 60 * 1000;
 const STREAM_BUFFER_MAX_CHARS = 4_000;
 const STREAM_SNIPPET_MAX_CHARS = 220;
+
+type AcpParentProgressStreamingConfig = StreamingCompatEntry & {
+  accounts?: Record<string, StreamingCompatEntry | undefined>;
+};
 
 function compactWhitespace(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -56,6 +67,75 @@ function formatProxyEnvSummary(keys: string[]): string {
     return "proxy env: none";
   }
   return `proxy env: ${keys.join(", ")}`;
+}
+
+function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function mergeStreamingConfig(base: unknown, override: unknown): unknown {
+  const baseRecord =
+    asObjectRecord(base) ?? (typeof base === "string" ? { mode: base } : undefined);
+  const overrideRecord = asObjectRecord(override);
+  if (!baseRecord || !overrideRecord) {
+    return override ?? base;
+  }
+  return {
+    ...baseRecord,
+    ...overrideRecord,
+    progress: {
+      ...(asObjectRecord(baseRecord.progress) ?? {}),
+      ...(asObjectRecord(overrideRecord.progress) ?? {}),
+    },
+  };
+}
+
+function mergeStreamingEntry(
+  base: AcpParentProgressStreamingConfig,
+  override: StreamingCompatEntry | undefined,
+): StreamingCompatEntry {
+  if (!override) {
+    return base;
+  }
+  return {
+    ...base,
+    ...override,
+    streaming: mergeStreamingConfig(base.streaming, override.streaming),
+  };
+}
+
+function resolveParentProgressStreamingEntry(params: {
+  cfg: OpenClawConfig | undefined;
+  deliveryContext: DeliveryContext | undefined;
+}): StreamingCompatEntry | undefined {
+  const channelId = normalizeOptionalString(params.deliveryContext?.channel);
+  if (!params.cfg || !channelId) {
+    return undefined;
+  }
+  const channels = params.cfg.channels as
+    | Record<string, AcpParentProgressStreamingConfig | undefined>
+    | undefined;
+  const channelCfg = channels?.[channelId];
+  if (!channelCfg) {
+    return undefined;
+  }
+  const accountCfg = resolveAccountEntry(
+    channelCfg.accounts,
+    normalizeAccountId(params.deliveryContext?.accountId),
+  );
+  return mergeStreamingEntry(channelCfg, accountCfg);
+}
+
+function resolveParentProgressCommentary(params: {
+  cfg: OpenClawConfig | undefined;
+  deliveryContext: DeliveryContext | undefined;
+}): boolean {
+  return resolveChannelStreamingProgressCommentary(
+    resolveParentProgressStreamingEntry(params),
+    true,
+  );
 }
 
 function shouldRelayAcpStatusProgress(params: {
@@ -134,8 +214,7 @@ export function startAcpSpawnParentStreamRelay(params: {
   noOutputPollMs?: number;
   maxRelayLifetimeMs?: number;
   emitStartNotice?: boolean;
-  assistantCommentary?: boolean;
-  acpProjectionSettings?: AcpProjectionSettings;
+  cfg?: OpenClawConfig;
 }): AcpSpawnParentRelayHandle {
   const runId = normalizeOptionalString(params.runId) ?? "";
   const parentSessionKey = normalizeOptionalString(params.parentSessionKey) ?? "";
@@ -228,8 +307,11 @@ export function startAcpSpawnParentStreamRelay(params: {
     });
   };
   const shouldSurfaceUpdates = params.surfaceUpdates !== false;
-  const shouldRelayAssistantCommentary = params.assistantCommentary === true;
-  const acpProjectionSettings = params.acpProjectionSettings ?? resolveAcpProjectionSettings({});
+  const shouldRelayProgressCommentary = resolveParentProgressCommentary({
+    cfg: params.cfg,
+    deliveryContext: params.deliveryContext,
+  });
+  const acpProjectionSettings = resolveAcpProjectionSettings(params.cfg ?? {});
   const eventRouting = params.eventRouting ?? {
     mainKey: params.mainKey,
     sessionScope: params.sessionScope,
@@ -445,7 +527,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         ...(assistantPhase ? { phase: assistantPhase } : {}),
       });
 
-      if (assistantPhase === "commentary" && !shouldRelayAssistantCommentary) {
+      if (assistantPhase === "commentary" && !shouldRelayProgressCommentary) {
         lastProgressAt = Date.now();
         return;
       }
@@ -481,7 +563,7 @@ export function startAcpSpawnParentStreamRelay(params: {
         firstRuntimeEventAt ??= Date.now();
         lastRuntimeEventType = eventType;
         if (
-          shouldRelayAssistantCommentary &&
+          shouldRelayProgressCommentary &&
           shouldRelayAcpStatusProgress({
             eventType,
             tag,
