@@ -1308,9 +1308,8 @@ export async function runEmbeddedAttempt(
         })();
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
-    const runtimeSelfContextToolAvailable = toolsRaw.some(
-      (tool) => tool.name === RUNTIME_SELF_CONTEXT_TOOL_NAME,
-    );
+    const runtimeSelfContextToolAvailable =
+      toolsEnabled && toolsRaw.some((tool) => tool.name === RUNTIME_SELF_CONTEXT_TOOL_NAME);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapWarn = makeBootstrapWarn({
       sessionLabel,
