@@ -12,6 +12,10 @@ type PnpmWorkspaceConfig = {
   overrides?: Record<string, string>;
 };
 
+type PnpmLockfileConfig = {
+  overrides?: Record<string, string>;
+};
+
 function readRootManifest(): RootPackageManifest {
   const manifestPath = path.resolve(process.cwd(), "package.json");
   return JSON.parse(fs.readFileSync(manifestPath, "utf8")) as RootPackageManifest;
@@ -20,6 +24,11 @@ function readRootManifest(): RootPackageManifest {
 function readPnpmWorkspaceConfig(): PnpmWorkspaceConfig {
   const workspacePath = path.resolve(process.cwd(), "pnpm-workspace.yaml");
   return YAML.parse(fs.readFileSync(workspacePath, "utf8")) as PnpmWorkspaceConfig;
+}
+
+function readPnpmLockfileConfig(): PnpmLockfileConfig {
+  const lockfilePath = path.resolve(process.cwd(), "pnpm-lock.yaml");
+  return YAML.parse(fs.readFileSync(lockfilePath, "utf8")) as PnpmLockfileConfig;
 }
 
 function readPackageManifest(packagePath: string): RootPackageManifest {
@@ -51,5 +60,14 @@ describe("root package override guardrails", () => {
 
     expect(pnpmOverride).toBe("npm:@nolyfill/domexception@1.0.28");
     expect(npmOverride).toBe(pnpmOverride);
+  });
+
+  it("keeps npm, pnpm, and lockfile override metadata aligned", () => {
+    const manifest = readRootManifest();
+    const pnpmWorkspace = readPnpmWorkspaceConfig();
+    const pnpmLockfile = readPnpmLockfileConfig();
+
+    expect(manifest.overrides).toEqual(pnpmWorkspace.overrides);
+    expect(pnpmLockfile.overrides).toEqual(pnpmWorkspace.overrides);
   });
 });
