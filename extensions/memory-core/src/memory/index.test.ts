@@ -29,6 +29,7 @@ afterAll(() => {
 });
 
 let embedBatchCalls = 0;
+let onEmbedBatchDuringTest: (() => void) | null = null;
 let embedBatchInputCalls = 0;
 let providerCloseCalls = 0;
 let providerCloseFailuresRemaining = 0;
@@ -108,6 +109,7 @@ vi.mock("./embeddings.js", () => {
           embedQuery: async (text: string) => embedText(text),
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
+            onEmbedBatchDuringTest?.();
             return texts.map(embedText);
           },
           ...(providerId === "gemini" || providerId === "fallback-provider"
@@ -1681,6 +1683,43 @@ describe("memory index", () => {
       expect(results[0]?.snippet).toContain("ORBIT-10");
     } finally {
       vi.unstubAllEnvs();
+    }
+  });
+
+  it("keeps the durable identity visible to concurrent status() during a safe reindex (#90361)", async () => {
+    // Force the atomic safe-reindex path (beforeEach stubs the unsafe shortcut).
+    // The race only exists when the live db is briefly swapped to a temp db.
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-reindex-race.sqlite") });
+    const manager = await getFreshManager(cfg);
+    try {
+      await manager.sync({ reason: "test", force: true });
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+
+      // A status() read that lands while runSafeReindex has swapped this.db to
+      // the temp db must keep returning the last valid identity, not a transient
+      // "missing". embedBatch runs from inside the reindex build, after
+      // this.db = tempDb and reindexInProgress = true.
+      let identityDuringReindex: unknown;
+      let probed = false;
+      onEmbedBatchDuringTest = () => {
+        if (probed) {
+          return;
+        }
+        probed = true;
+        identityDuringReindex = manager.status().custom?.indexIdentity;
+      };
+      resetManagerForTest(manager);
+      await manager.sync({ reason: "test", force: true });
+      onEmbedBatchDuringTest = null;
+
+      expect(probed).toBe(true);
+      expect(identityDuringReindex).toEqual({ status: "valid" });
+      expect(manager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+    } finally {
+      onEmbedBatchDuringTest = null;
+      vi.unstubAllEnvs();
+      await manager.close?.();
     }
   });
 });

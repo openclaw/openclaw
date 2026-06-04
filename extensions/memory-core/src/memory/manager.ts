@@ -434,6 +434,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       ...(provider !== undefined ? { provider } : {}),
       providerKeyKnown: params?.providerKeyKnown,
     });
+    // During a safe reindex the live db is briefly swapped to a fresh temp db
+    // with no metadata. Don't let that transient "missing" overwrite a known
+    // valid identity, or concurrent status()/search() reads fail closed mid
+    // rebuild (#90361). Real mismatches — and "missing" outside a rebuild —
+    // still propagate so genuine provider/model/settings drift keeps failing
+    // closed.
+    if (
+      this.reindexInProgress &&
+      state.status === "missing" &&
+      this.indexIdentityState.status === "valid"
+    ) {
+      return this.indexIdentityState;
+    }
     this.indexIdentityState = state;
     this.indexIdentityDirty =
       state.status === "mismatched" ||

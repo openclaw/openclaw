@@ -258,6 +258,12 @@ export abstract class MemoryManagerSyncOps {
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
   protected vectorDegradedWriteWarningShown = false;
+  /**
+   * True while runSafeReindex has the live db swapped to a temp db. Lets index
+   * identity refresh keep the last stable identity instead of surfacing a
+   * transient "missing" to concurrent status()/search() reads (#90361).
+   */
+  protected reindexInProgress = false;
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
@@ -2059,6 +2065,7 @@ export abstract class MemoryManagerSyncOps {
     let nextMeta: MemoryIndexMeta | null;
 
     try {
+      this.reindexInProgress = true;
       nextMeta = await runMemoryAtomicReindex({
         targetPath: dbPath,
         tempPath: tempDbPath,
@@ -2141,6 +2148,8 @@ export abstract class MemoryManagerSyncOps {
       } catch {}
       restoreOriginalState();
       throw err;
+    } finally {
+      this.reindexInProgress = false;
     }
   }
 
