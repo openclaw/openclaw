@@ -203,6 +203,120 @@ describe("buildGuardedModelFetch", () => {
     expect(release).toHaveBeenCalled();
   });
 
+  it("allows ChatGPT Codex responses streams with missing content-type", async () => {
+    const sseBody = 'event: response.output_text.delta\ndata: {"delta":"ok"}\n\n';
+    const sseBytes = new TextEncoder().encode(sseBody);
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as unknown as Model<"openai-chatgpt-responses">;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(sseBytes, { status: 200 }),
+      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
+      release: vi.fn(async () => undefined),
+    });
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://chatgpt.com/backend-api/codex/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(sseBody);
+  });
+
+  it("allows ChatGPT Codex transport-alias streams with missing content-type", async () => {
+    const sseBody = 'event: response.output_text.delta\ndata: {"delta":"ok"}\n\n';
+    const sseBytes = new TextEncoder().encode(sseBody);
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openclaw-openai-responses-transport",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as unknown as Model<"openclaw-openai-responses-transport">;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(sseBytes, { status: 200 }),
+      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
+      release: vi.fn(async () => undefined),
+    });
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://chatgpt.com/backend-api/codex/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+    expect(await response.text()).toBe(sseBody);
+  });
+
+  it("still rejects missing content-type for other OpenAI-compatible streams", async () => {
+    const release = vi.fn(async () => undefined);
+    const model = {
+      id: "private-model",
+      provider: "custom-openai",
+      api: "openai-completions",
+      baseUrl: "https://proxy.example.com",
+    } as unknown as Model<"openai-completions">;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(new TextEncoder().encode('data: {"ok": true}\n\n'), { status: 200 }),
+      finalUrl: "https://proxy.example.com/chat/completions",
+      release,
+    });
+
+    await expect(
+      buildGuardedModelFetch(model)("https://proxy.example.com/chat/completions", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "private-model", stream: true }),
+      }),
+    ).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 200,
+      code: "invalid_provider_content_type",
+      errorType: "invalid_response",
+    });
+    expect(release).toHaveBeenCalled();
+  });
+
+  it("still rejects missing content-type for non-Codex ChatGPT responses paths", async () => {
+    const release = vi.fn(async () => undefined);
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex-preview",
+    } as unknown as Model<"openai-chatgpt-responses">;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(new TextEncoder().encode('data: {"ok": true}\n\n'), { status: 200 }),
+      finalUrl: "https://chatgpt.com/backend-api/codex-preview/responses",
+      release,
+    });
+
+    await expect(
+      buildGuardedModelFetch(model)("https://chatgpt.com/backend-api/codex-preview/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      }),
+    ).rejects.toMatchObject({
+      name: "ProviderHttpError",
+      status: 200,
+      code: "invalid_provider_content_type",
+      errorType: "invalid_response",
+    });
+    expect(release).toHaveBeenCalled();
+  });
+
   it("ensures configured local services before the model request", async () => {
     const release = vi.fn();
     ensureModelProviderLocalServiceMock.mockResolvedValue({ release });
