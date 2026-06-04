@@ -248,6 +248,18 @@ export type EmbeddedAgentSubscribeContext = {
   clearDeferredBlockReplies: () => void;
   /** Abort the current agent run (forwarded from params.abortRun). */
   abortRun?: (reason: string) => void;
+  /**
+   * Source delivery mode for this run. `message_tool_only` keeps final/block/preview
+   * output private, so a directReply block reply would not be visibly delivered and
+   * must not trigger an early abort.
+   */
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  /**
+   * Record text as the run's final assistant text fallback. Used by directReply so the
+   * answer still surfaces through final delivery when block streaming is disabled (text
+   * blocks are otherwise reconstructed from final text rather than sent live).
+   */
+  noteDirectReplyFinalText?: (text: string) => void;
 };
 
 /**
