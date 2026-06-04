@@ -453,13 +453,13 @@ describe("auditGatewayServiceConfig", () => {
     },
   );
 
-  it("does not warn when KillMode is control-group", async () => {
+  it.each(["control-group", "mixed"])("does not warn when KillMode is %s", async (killMode) => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-service-audit-killmode-"));
     await writeSystemdUnitForAudit(home, [
       "After=network-online.target",
       "Wants=network-online.target",
       "RestartSec=5",
-      "KillMode=control-group",
+      `KillMode=${killMode}`,
     ]);
     const audit = await auditGatewayServiceConfig({
       env: { HOME: home },

@@ -78,12 +78,12 @@ export function buildSystemdUnit({
     "Restart=always",
     "RestartSec=5",
     "RestartPreventExitStatus=78",
-    "TimeoutStopSec=30",
+    "TimeoutStopSec=330",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
-    // Keep service children in the same lifecycle so restarts do not leave
-    // orphan ACP/runtime workers behind.
-    "KillMode=control-group",
+    // Let the gateway drain active runs before systemd terminates child
+    // workers, while still cleaning up the cgroup if the stop timeout expires.
+    "KillMode=mixed",
     workingDirLine,
     ...environmentFileLines,
     ...envLines,
