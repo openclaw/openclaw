@@ -315,6 +315,39 @@ export async function prepareWhatsAppInboundContext(params: {
   };
 }
 
+function isExplicitWhatsAppCommandTurn(params: {
+  commandTurn?: CommandTurnContext;
+  commandSource?: "native" | "text";
+  commandAuthorized?: boolean;
+}): boolean {
+  const isNativeCommandTurn = params.commandTurn?.kind === "native";
+  const isNativeCommandSource = params.commandSource === "native";
+  const isAuthorizedTextCommandTurn =
+    params.commandTurn?.kind === "text-slash" ? params.commandTurn.authorized : false;
+  const isAuthorizedTextCommandSource =
+    params.commandSource === "text" ? Boolean(params.commandAuthorized) : false;
+
+  return (
+    isNativeCommandTurn ||
+    isNativeCommandSource ||
+    isAuthorizedTextCommandTurn ||
+    isAuthorizedTextCommandSource
+  );
+}
+
+function resolveWhatsAppTypingStartPolicy(params: {
+  chatType?: string;
+  commandTurn?: CommandTurnContext;
+  commandSource?: "native" | "text";
+  commandAuthorized?: boolean;
+  wasMentioned?: boolean;
+}): "visible_delivery" | undefined {
+  if (params.chatType !== "group" || params.wasMentioned === true) {
+    return undefined;
+  }
+  return isExplicitWhatsAppCommandTurn(params) ? undefined : "visible_delivery";
+}
+
 export function resolveWhatsAppDmRouteTarget(params: {
   msg: AdmittedWebInboundMessage;
   senderE164?: string;

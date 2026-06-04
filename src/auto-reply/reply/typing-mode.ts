@@ -11,6 +11,7 @@ export function resolveTypingMode({
   wasMentioned,
   typingPolicy,
   suppressTyping,
+  typingStartPolicy,
   sourceReplyDeliveryMode,
 }: {
   configured?: TypingMode;
@@ -18,9 +19,15 @@ export function resolveTypingMode({
   wasMentioned: boolean;
   typingPolicy?: TypingPolicy;
   suppressTyping?: boolean;
+  typingStartPolicy?: "visible_delivery";
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): TypingMode {
-  if (typingPolicy === "system_event" || typingPolicy === "internal_webchat" || suppressTyping) {
+  if (
+    typingPolicy === "system_event" ||
+    typingPolicy === "internal_webchat" ||
+    suppressTyping ||
+    typingStartPolicy === "visible_delivery"
+  ) {
     return "never";
   }
   if (configured) {

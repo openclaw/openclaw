@@ -266,6 +266,8 @@ export type GetReplyOptions = {
   /** Current user turn is already durable; replay it without appending another copy. */
   suppressNextUserMessagePersistence?: boolean;
   onReplyStart?: () => Promise<void> | void;
+  /** Starts typing at the first accepted visible delivery attempt. */
+  onVisibleDeliveryStart?: () => Promise<void>;
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
@@ -275,6 +277,8 @@ export type GetReplyOptions = {
   typingPolicy?: TypingPolicy;
   /** Force-disable typing indicators for this run (system/internal/cross-channel routes). */
   suppressTyping?: boolean;
+  /** Start typing only when the channel is about to send a visible reply. */
+  typingStartPolicy?: "visible_delivery";
   /** One-shot thinking level override for this run; does not persist to the session. */
   thinkingLevelOverride?: string;
   /** One-shot fast-mode override for this run; does not persist to the session. */

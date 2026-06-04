@@ -369,6 +369,7 @@ async function routeReplyOperation(
       replyToId: resolvedReplyToId ?? null,
       ...(inferredReplyTarget ? { replyToMode: replyDelivery?.replyToMode ?? "all" } : {}),
       threadId: resolvedThreadId,
+      onPlatformSendStart: params.onVisibleDeliveryStart,
       session: outboundSession,
       signal: abortSignal,
       onPlatformSendDispatch: params.beforeDeliver,
