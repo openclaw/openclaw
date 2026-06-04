@@ -797,6 +797,7 @@ export function loadGatewayPlugins(params: {
     logger: createGatewayPluginRegistrationLogger({
       suppressInfoLogs: params.suppressPluginInfoLogs,
     }),
+    resolveRawConfigEnvVars: true,
     ...(params.coreGatewayHandlers !== undefined && {
       coreGatewayHandlers: params.coreGatewayHandlers,
     }),
