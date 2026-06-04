@@ -2320,6 +2320,8 @@ export async function runAgentTurnWithFallback(params: {
                     agentHarnessId: embeddedRunHarnessOverride,
                     agentHarnessRuntimeOverride: embeddedRunHarnessOverride,
                     sandboxSessionKey: params.runtimePolicySessionKey,
+                    sessionStorePath: params.storePath,
+                    sessionStoreEntry: params.getActiveSessionEntry(),
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
                     userTurnTranscriptRecorder,
