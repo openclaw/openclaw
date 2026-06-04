@@ -1,7 +1,33 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+
+const canCreateDirectorySymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-dir-test-${Math.random().toString(36).substring(2)}`);
+    fsSync.symlinkSync(os.tmpdir(), tempLink, process.platform === "win32" ? "junction" : "dir");
+    fsSync.unlinkSync(tempLink);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+const canCreateHardlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `hardlink-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `hardlink-target-${Math.random().toString(36).substring(2)}`);
+    fsSync.writeFileSync(tempFile, "temp");
+    fsSync.linkSync(tempFile, tempLink);
+    fsSync.unlinkSync(tempLink);
+    fsSync.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 import {
   getPwToolsCoreSessionMocks,
   installPwToolsCoreTestHooks,
@@ -231,7 +257,7 @@ describe("pw-tools-core", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "does not write outside the output root when a download parent is swapped after save",
     async () => {
       await withTempDir(async (tempDir) => {
@@ -251,7 +277,7 @@ describe("pw-tools-core", () => {
           expect(beforeSwap.isDirectory()).toBe(true);
           expect(beforeSwap.isSymbolicLink()).toBe(false);
           await fs.rm(targetParent, { recursive: true, force: true });
-          await fs.symlink(outsideDir, targetParent);
+          await fs.symlink(outsideDir, targetParent, process.platform === "win32" ? "junction" : "dir");
           const afterSwap = await fs.lstat(targetParent);
           expect(afterSwap.isSymbolicLink()).toBe(true);
           parentSwappedBeforeFinalize = true;
@@ -345,7 +371,7 @@ describe("pw-tools-core", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateHardlinks)(
     "does not overwrite outside files when explicit output path is a hardlink alias",
     async () => {
       await withTempDir(async (tempDir) => {
@@ -417,13 +443,13 @@ describe("pw-tools-core", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "rejects implicit downloads when the output directory is a symlink",
     async () => {
       await withTempDir(async (tempDir) => {
         const outsideDir = path.join(tempDir, "outside");
         await fs.mkdir(outsideDir, { recursive: true });
-        await fs.symlink(outsideDir, path.join(tempDir, "downloads"));
+        await fs.symlink(outsideDir, path.join(tempDir, "downloads"), process.platform === "win32" ? "junction" : "dir");
         tmpDirMocks.resolvePreferredOpenClawTmpDir.mockReturnValue(tempDir);
 
         const harness = createDownloadEventHarness();
