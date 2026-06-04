@@ -604,9 +604,9 @@ export async function editMessageMatrix(
       };
       const threadId = normalizeThreadId(opts.threadId);
       if (threadId) {
-        // Thread-aware replace: Synapse needs the thread context to keep the
-        // edited event visible in the thread timeline.
-        replaceRelation["m.in_reply_to"] = { event_id: threadId };
+        // Matrix keeps edit events threaded through m.new_content, not the
+        // outer replace relation. The outer relation must stay a pure replace.
+        newContent["m.relates_to"] = buildThreadRelation(threadId);
       }
 
       // Spread newContent into the outer event so clients that don't support

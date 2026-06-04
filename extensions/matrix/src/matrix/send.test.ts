@@ -607,6 +607,34 @@ describe("sendMessageMatrix threads", () => {
       "m.relates_to"?: {
         rel_type?: string;
         event_id?: string;
+        is_falling_back?: boolean;
+        "m.in_reply_to"?: { event_id?: string };
+      };
+    };
+
+    expect(content["m.relates_to"]).toEqual({
+      rel_type: "m.thread",
+      event_id: "$thread",
+    });
+    expect(content["m.relates_to"]).not.toHaveProperty("is_falling_back");
+    expect(content["m.relates_to"]).not.toHaveProperty("m.in_reply_to");
+  });
+
+  it("includes thread fallback metadata only with an explicit reply target", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendMessageMatrix("room:!room:example", "hello thread", {
+      client,
+      cfg: {} as never,
+      threadId: "$thread",
+      replyToId: "$reply",
+    });
+
+    const content = sentContent(sendMessage) as {
+      "m.relates_to"?: {
+        rel_type?: string;
+        event_id?: string;
+        is_falling_back?: boolean;
         "m.in_reply_to"?: { event_id?: string };
       };
     };
@@ -615,7 +643,7 @@ describe("sendMessageMatrix threads", () => {
       rel_type: "m.thread",
       event_id: "$thread",
       is_falling_back: true,
-      "m.in_reply_to": { event_id: "$thread" },
+      "m.in_reply_to": { event_id: "$reply" },
     });
   });
 
@@ -912,6 +940,26 @@ describe("editMessageMatrix mentions", () => {
     const content = sentContent(sendMessage);
     expect(content[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
     expect(newContent(content)[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
+  });
+
+  it("keeps thread context in m.new_content without making the replace a main-room reply", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await editMessageMatrix("room:!room:example", "$original", "done", {
+      client,
+      cfg: {} as never,
+      threadId: "$thread",
+    });
+
+    const content = sentContent(sendMessage);
+    expect(content["m.relates_to"]).toEqual({
+      rel_type: "m.replace",
+      event_id: "$original",
+    });
+    expect(newContent(content)["m.relates_to"]).toEqual({
+      rel_type: "m.thread",
+      event_id: "$thread",
+    });
   });
 });
 
