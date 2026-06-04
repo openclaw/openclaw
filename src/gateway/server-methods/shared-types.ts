@@ -41,6 +41,7 @@ export type GatewayClient = {
   internal?: {
     allowModelOverride?: boolean;
     approvalRuntime?: boolean;
+    trustedMessageActionRequester?: boolean;
     pluginRuntimeOwnerId?: string;
     agentRunTracking?: "plugin_subagent";
   };

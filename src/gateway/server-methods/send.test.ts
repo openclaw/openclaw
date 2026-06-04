@@ -5,7 +5,6 @@ import { jsonResult } from "../../agents/tools/common.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createTrustedMessageActionRequesterToken } from "../trusted-message-action-requester.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ResolveOutboundTarget = typeof import("../../infra/outbound/targets.js").resolveOutboundTarget;
@@ -198,6 +197,7 @@ async function runMessageActionRequest(
   params: Record<string, unknown>,
   client?: {
     connect?: { scopes?: string[]; client?: { id?: string; mode?: string } };
+    internal?: { trustedMessageActionRequester?: boolean };
   } | null,
 ) {
   const respond = vi.fn();
@@ -1588,12 +1588,6 @@ describe("gateway send mirroring", () => {
           emoji: "✅",
         },
         requesterSenderId: "trusted-user",
-        senderIsOwner: true,
-        trustedRequesterToken: createTrustedMessageActionRequesterToken({
-          requesterSenderId: "trusted-user",
-          requesterSourceProvider: "whatsapp-voice",
-          currentChannelProvider: "whatsapp",
-        }),
         toolContext: {
           currentChannelProvider: "whatsapp",
           requesterSourceProvider: "whatsapp-voice",
@@ -1603,6 +1597,9 @@ describe("gateway send mirroring", () => {
       {
         connect: {
           scopes: ["operator.write"],
+        },
+        internal: {
+          trustedMessageActionRequester: true,
         },
       },
     );
@@ -1628,14 +1625,14 @@ describe("gateway send mirroring", () => {
           emoji: "✅",
         },
         senderIsOwner: true,
-        trustedRequesterToken: createTrustedMessageActionRequesterToken({
-          senderIsOwner: true,
-        }),
         idempotencyKey: "idem-message-action-owner",
       },
       {
         connect: {
           scopes: ["operator.write"],
+        },
+        internal: {
+          trustedMessageActionRequester: true,
         },
       },
     );

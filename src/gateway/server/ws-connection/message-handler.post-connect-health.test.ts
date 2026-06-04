@@ -451,10 +451,14 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     });
     const connectedClient = harness.client as {
       connect?: { scopes?: string[] };
-      internal?: { approvalRuntime?: boolean };
+      internal?: {
+        approvalRuntime?: boolean;
+        trustedMessageActionRequester?: boolean;
+      };
     } | null;
     expect(connectedClient?.connect?.scopes).toEqual(["operator.approvals"]);
     expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
+    expect(connectedClient?.internal?.trustedMessageActionRequester).toBe(true);
   });
 
   it("marks operator approval clients with the server runtime token", async () => {

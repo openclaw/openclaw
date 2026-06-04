@@ -107,9 +107,6 @@ export const MessageActionParamsSchema = Type.Object(
     params: Type.Record(Type.String(), Type.Unknown()),
     accountId: Type.Optional(Type.String()),
     requesterSenderId: Type.Optional(Type.String()),
-    // Internal server-minted token that binds requesterSenderId to toolContext.
-    // Non-admin gateway callers cannot make requesterSenderId trusted without it.
-    trustedRequesterToken: Type.Optional(Type.String()),
     // Honored only when the RPC caller has the full operator scope set
     // (shared-secret bearer or `operator.admin`). For narrowly-scoped
     // callers (e.g. `operator.write`-only) the gateway forces this to
