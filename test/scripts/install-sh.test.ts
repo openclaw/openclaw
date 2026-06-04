@@ -1411,8 +1411,12 @@ describe("install.sh macOS Homebrew Node behavior", () => {
 
   it("falls back when gum reports raw-mode ioctl failures", () => {
     expect(script).toContain("setrawmode|inappropriate ioctl");
+    // Gum spin stdin redirect is now conditional on needs_stdin_isolation
     expect(script).toContain(
-      'if "$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err"; then',
+      '"$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?',
+    );
+    expect(script).toContain(
+      '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
     );
     expect(script).toContain(
       'if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then',
@@ -1457,6 +1461,59 @@ describe("install.sh macOS Homebrew Node behavior", () => {
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it("gum spin preserves terminal stdin for direct interactive installs", () => {
+    // When needs_stdin_isolation returns false (direct interactive run),
+    // gum spin should NOT redirect stdin from /dev/null so that wrapped
+    // commands like Homebrew can still prompt the user via stdin.
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-install-sh-gum-stdin-"));
+    try {
+      const gumPath = join(dir, "gum");
+      const commandPath = join(dir, "command");
+      const stdinLog = join(dir, "stdin-source");
+      // Gum stub: skip args up to and including "--", then run the rest
+      writeFileSync(
+        gumPath,
+        '#!/usr/bin/env bash\nwhile [[ "$#" -gt 0 && "$1" != "--" ]]; do shift; done\nshift\n"$@"\n',
+        { mode: 0o755 },
+      );
+      // Command: records whether /dev/null was supplied as stdin
+      writeFileSync(
+        commandPath,
+        `#!/usr/bin/env bash\nif [ -t 0 ] || [ -p /dev/stdin ] || [ -s /dev/stdin ]; then echo "has-stdin" > "${stdinLog}"; else echo "no-stdin" > "${stdinLog}"; fi\nexit 0\n`,
+        { mode: 0o755 },
+      );
+
+      const result = runInstallShell(`
+        set -euo pipefail
+        source "${SCRIPT_PATH}"
+        # Override needs_stdin_isolation to return false (direct interactive)
+        needs_stdin_isolation() { return 1; }
+        gum_is_tty() { return 0; }
+        GUM="${gumPath}"
+        run_with_spinner "Installing node" "${commandPath}"
+      `);
+
+      // The gum spin command should NOT have redirected stdin from /dev/null
+      expect(result.status).toBe(0);
+      expect(script).toContain("needs_stdin_isolation; then");
+      expect(script).toContain(
+        '"$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("gum spin redirects stdin from /dev/null for piped installs", () => {
+    // When needs_stdin_isolation returns true (piped install),
+    // gum spin MUST redirect stdin from /dev/null to prevent
+    // wrapped commands from consuming the pipe stream.
+    expect(script).toContain("needs_stdin_isolation; then");
+    expect(script).toContain(
+      '"$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?',
+    );
   });
 });
 

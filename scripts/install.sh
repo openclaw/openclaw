@@ -458,7 +458,13 @@ run_with_spinner() {
         local gum_err gum_out
         gum_err="$(mktempfile)"
         gum_out="$(mktempfile)"
-        if "$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err"; then
+        local gum_status=0
+        if needs_stdin_isolation; then
+            "$GUM" spin --spinner dot --title "$title" -- "$@" < /dev/null >"$gum_out" 2>"$gum_err" || gum_status=$?
+        else
+            "$GUM" spin --spinner dot --title "$title" -- "$@" >"$gum_out" 2>"$gum_err" || gum_status=$?
+        fi
+        if [[ "$gum_status" -eq 0 ]]; then
             if is_gum_raw_mode_failure "$gum_out" || is_gum_raw_mode_failure "$gum_err"; then
                 GUM=""
                 GUM_STATUS="skipped"
@@ -476,7 +482,6 @@ run_with_spinner() {
             fi
             return 0
         fi
-        local gum_status=$?
         if is_gum_raw_mode_failure "$gum_err" || is_gum_raw_mode_failure "$gum_out"; then
             GUM=""
             GUM_STATUS="skipped"
