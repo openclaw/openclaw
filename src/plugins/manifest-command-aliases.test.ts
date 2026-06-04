@@ -56,6 +56,32 @@ describe("manifest command aliases", () => {
     });
   });
 
+  it("skips unreadable command alias owner rows", () => {
+    const poisonedPlugin: {
+      id: string;
+      commandAliases: { name: string }[];
+    } = {
+      get id(): string {
+        throw new Error("manifest command alias plugin id exploded");
+      },
+      commandAliases: [{ name: "legacy-memory" }],
+    };
+    const registry = {
+      plugins: [
+        poisonedPlugin,
+        {
+          id: "memory",
+          commandAliases: [{ name: "memory" }],
+        },
+      ],
+    };
+
+    expect(resolveManifestCommandAliasOwnerInRegistry({ command: "memory", registry })).toEqual({
+      name: "memory",
+      pluginId: "memory",
+    });
+  });
+
   it("resolves agent tool owners from contracts.tools", () => {
     const registry = {
       plugins: [
@@ -82,5 +108,34 @@ describe("manifest command aliases", () => {
       resolveManifestToolOwnerInRegistry({ toolName: "missing_tool", registry }),
     ).toBeUndefined();
     expect(resolveManifestToolOwnerInRegistry({ toolName: "", registry })).toBeUndefined();
+  });
+
+  it("skips unreadable tool owner rows", () => {
+    const poisonedPlugin = Object.defineProperty(
+      {
+        id: "poisoned-plugin",
+      },
+      "contracts",
+      {
+        enumerable: true,
+        get() {
+          throw new Error("manifest tool owner contracts exploded");
+        },
+      },
+    );
+    const registry = {
+      plugins: [
+        poisonedPlugin,
+        {
+          id: "healthy-plugin",
+          contracts: { tools: ["healthy_tool"] },
+        },
+      ],
+    };
+
+    expect(resolveManifestToolOwnerInRegistry({ toolName: "healthy_tool", registry })).toEqual({
+      toolName: "healthy_tool",
+      pluginId: "healthy-plugin",
+    });
   });
 });

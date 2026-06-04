@@ -46,6 +46,69 @@ export type PluginManifestCommandAliasRegistry = {
   }[];
 };
 
+function readRecordValue(value: unknown, key: string): unknown {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  try {
+    return value[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readArrayEntries(value: unknown): unknown[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  let length: number;
+  try {
+    length = value.length;
+  } catch {
+    return [];
+  }
+  const entries: unknown[] = [];
+  for (let index = 0; index < length; index += 1) {
+    try {
+      entries.push(value[index]);
+    } catch {
+      // Ignore only the unreadable row; readable siblings can still resolve.
+    }
+  }
+  return entries;
+}
+
+function readManifestPluginId(plugin: unknown): string | undefined {
+  return normalizeOptionalString(readRecordValue(plugin, "id"));
+}
+
+function readManifestCommandAlias(alias: unknown): PluginManifestCommandAlias | undefined {
+  const name = normalizeOptionalString(readRecordValue(alias, "name"));
+  if (!name) {
+    return undefined;
+  }
+  const kind = readRecordValue(alias, "kind") === "runtime-slash" ? "runtime-slash" : undefined;
+  const cliCommand = normalizeOptionalString(readRecordValue(alias, "cliCommand"));
+  return {
+    name,
+    ...(kind ? { kind } : {}),
+    ...(cliCommand ? { cliCommand } : {}),
+  };
+}
+
+function readManifestCommandAliases(plugin: unknown): PluginManifestCommandAlias[] {
+  return readArrayEntries(readRecordValue(plugin, "commandAliases"))
+    .map(readManifestCommandAlias)
+    .filter((alias): alias is PluginManifestCommandAlias => Boolean(alias));
+}
+
+function readManifestToolNames(plugin: unknown): string[] {
+  const contracts = readRecordValue(plugin, "contracts");
+  return readArrayEntries(readRecordValue(contracts, "tools"))
+    .map((entry) => normalizeOptionalString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+}
+
 export function normalizeManifestCommandAliases(
   value: unknown,
 ): PluginManifestCommandAlias[] | undefined {
@@ -89,15 +152,18 @@ export function resolveManifestToolOwnerInRegistry(params: {
     return undefined;
   }
   for (const plugin of params.registry.plugins) {
-    const tools = plugin.contracts?.tools;
-    if (!tools || tools.length === 0) {
+    const tools = readManifestToolNames(plugin);
+    if (tools.length === 0) {
       continue;
     }
-    const match = tools.find(
-      (entry) => normalizeOptionalLowercaseString(entry) === normalizedToolName,
-    );
-    if (match) {
-      return { toolName: match, pluginId: plugin.id };
+    const pluginId = readManifestPluginId(plugin);
+    if (!pluginId) {
+      continue;
+    }
+    for (const tool of tools) {
+      if (normalizeOptionalLowercaseString(tool) === normalizedToolName) {
+        return { toolName: tool, pluginId };
+      }
     }
   }
   return undefined;
@@ -112,22 +178,27 @@ export function resolveManifestCommandAliasOwnerInRegistry(params: {
     return undefined;
   }
 
-  const commandIsPluginId = params.registry.plugins.some(
-    (plugin) => normalizeOptionalLowercaseString(plugin.id) === normalizedCommand,
-  );
+  const commandIsPluginId = params.registry.plugins.some((plugin) => {
+    const pluginId = readManifestPluginId(plugin);
+    return pluginId ? normalizeOptionalLowercaseString(pluginId) === normalizedCommand : false;
+  });
 
   for (const plugin of params.registry.plugins) {
-    const alias = plugin.commandAliases?.find(
+    const pluginId = readManifestPluginId(plugin);
+    if (!pluginId) {
+      continue;
+    }
+    const alias = readManifestCommandAliases(plugin).find(
       (entry) => normalizeOptionalLowercaseString(entry.name) === normalizedCommand,
     );
     if (alias) {
-      if (commandIsPluginId && normalizeOptionalLowercaseString(plugin.id) !== normalizedCommand) {
+      if (commandIsPluginId && normalizeOptionalLowercaseString(pluginId) !== normalizedCommand) {
         continue;
       }
       return {
         ...alias,
-        pluginId: plugin.id,
-        ...(plugin.enabledByDefault === true ? { enabledByDefault: true } : {}),
+        pluginId,
+        ...(readRecordValue(plugin, "enabledByDefault") === true ? { enabledByDefault: true } : {}),
       };
     }
   }
