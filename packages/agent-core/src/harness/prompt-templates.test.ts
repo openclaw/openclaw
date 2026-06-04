@@ -35,6 +35,13 @@ describe("prompt template argument substitution", () => {
     expect(parseCommandArgs(`don't "quote this"`)).toEqual(["don't", "quote this"]);
   });
 
+  it("keeps apostrophes literal across multiple contractions", () => {
+    expect(parseCommandArgs("don't it's broken now")).toEqual(["don't", "it's", "broken", "now"]);
+    const args = parseCommandArgs("don't it's broken now");
+    expect(substituteArgs("$ARGUMENTS", args)).toBe("don't it's broken now");
+    expect(substituteArgs("[$1][$2][$3][$4]", args)).toBe("[don't][it's][broken][now]");
+  });
+
   it("rejects unsafe positional placeholders", () => {
     expect(substituteArgs("$9007199254740992", ["first", "second"])).toBe("");
   });

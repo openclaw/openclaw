@@ -1,3 +1,20 @@
+function isTokenBoundary(char: string | undefined): boolean {
+  return char === undefined || /\s/.test(char);
+}
+
+function opensQuotedSpan(chars: string[], index: number): boolean {
+  if (!isTokenBoundary(chars[index - 1])) {
+    return false;
+  }
+  const quote = chars[index];
+  for (let j = index + 1; j < chars.length; j++) {
+    if (chars[j] === quote && isTokenBoundary(chars[j + 1])) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Parse an argument string using simple shell-style single and double quotes. */
 export function parseCommandArgs(argsString: string): string[] {
   const args: string[] = [];
@@ -13,7 +30,7 @@ export function parseCommandArgs(argsString: string): string[] {
       } else {
         current += char;
       }
-    } else if ((char === '"' || char === "'") && chars.includes(char, i + 1)) {
+    } else if ((char === '"' || char === "'") && opensQuotedSpan(chars, i)) {
       inQuote = char;
     } else if (/\s/.test(char)) {
       if (current) {
