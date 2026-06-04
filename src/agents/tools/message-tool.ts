@@ -1,3 +1,8 @@
+/**
+ * message built-in tool.
+ *
+ * Sends, edits, reacts to, polls, and routes messages through channel plugins and Gateway-backed actions.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings, uniqueValues } from "@openclaw/normalization-core/string-normalization";
 import { Type, type TSchema } from "typebox";

@@ -546,29 +546,44 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
-  it("does not default commentary on for generic progress-mode channels", () => {
+  it.each([
+    {
+      label: "generic",
+      channelId: "forum",
+      deliveryContext: progressCommentaryDeliveryContext,
+    },
+    {
+      label: "Telegram",
+      channelId: "telegram",
+      deliveryContext: {
+        ...progressCommentaryDeliveryContext,
+        channel: "telegram",
+      },
+    },
+  ])("defaults commentary on for $label parent progress mode", ({ channelId, deliveryContext }) => {
+    const runId = `run-${channelId}-commentary-default`;
     const relay = startAcpSpawnParentStreamRelay({
-      runId: "run-generic-commentary-default",
+      runId,
       parentSessionKey: "agent:main:main",
-      childSessionKey: "agent:codex:acp:child-generic-commentary-default",
+      childSessionKey: `agent:codex:acp:child-${channelId}-commentary-default`,
       agentId: "codex",
       cfg: {
         channels: {
-          forum: {
+          [channelId]: {
             streaming: {
               mode: "progress",
             },
           },
         },
       },
-      deliveryContext: progressCommentaryDeliveryContext,
+      deliveryContext,
       streamFlushMs: 10,
       noOutputNoticeMs: 120_000,
       emitStartNotice: false,
     });
 
     emitAgentEvent({
-      runId: "run-generic-commentary-default",
+      runId,
       stream: "assistant",
       data: {
         delta: "checking thread context; then post a tight progress reply here.",
@@ -577,7 +592,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
     });
     vi.advanceTimersByTime(15);
 
-    expect(collectedTexts()).toEqual([]);
+    expectTextWithFragment(
+      collectedTexts(),
+      "codex: checking thread context; then post a tight progress reply here.",
+    );
     relay.dispose();
   });
 

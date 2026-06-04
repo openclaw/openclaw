@@ -1,3 +1,8 @@
+/**
+ * Direct-message allowlist audit state.
+ *
+ * Merges configured and persisted allowFrom entries for setup/status prompts.
+ */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ChannelId } from "../plugins/types.public.js";
 import { readChannelIngressStoreAllowFromForDmPolicy } from "./runtime.js";
@@ -21,8 +26,6 @@ export function normalizeDmAllowAuditEntries(
   );
 }
 
-// Builds the normalized DM allowlist state used by audits and setup prompts.
-// Config and persisted ingress-store entries are merged before counting users.
 export async function resolveDmAllowAuditState(params: {
   provider: ChannelId;
   accountId: string;

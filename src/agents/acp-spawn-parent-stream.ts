@@ -198,10 +198,9 @@ function resolveParentProgressCommentary(params: {
   cfg: OpenClawConfig | undefined;
   deliveryContext: DeliveryContext | undefined;
 }): boolean {
-  const channelId = normalizeOptionalString(params.deliveryContext?.channel);
   return resolveChannelStreamingProgressCommentary(
     resolveParentProgressStreamingEntry(params),
-    channelId === "discord",
+    true,
   );
 }
 
