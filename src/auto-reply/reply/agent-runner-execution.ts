@@ -2211,6 +2211,7 @@ export async function runAgentTurnWithFallback(params: {
                     currentMessageId: cliCurrentMessageId,
                     currentInboundAudio: hasInboundAudio(params.sessionCtx),
                     agentAccountId: params.followupRun.run.agentAccountId,
+                    senderId: params.followupRun.run.senderId,
                     senderIsOwner: params.followupRun.run.senderIsOwner,
                     toolsAllow: params.opts?.toolsAllow,
                     disableTools: params.opts?.disableTools,
