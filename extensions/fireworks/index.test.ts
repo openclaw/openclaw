@@ -69,6 +69,10 @@ describe("fireworks provider plugin", () => {
     expect(models.map((model) => model.id)).toEqual([
       FIREWORKS_K2_6_MODEL_ID,
       FIREWORKS_DEFAULT_MODEL_ID,
+      "accounts/fireworks/models/deepseek-v4-pro",
+      "accounts/fireworks/models/minimax-m2p7",
+      "accounts/fireworks/models/glm-5p1",
+      "accounts/fireworks/models/gpt-oss-120b",
     ]);
     expect(models[0]?.reasoning).toBe(false);
     expect(models[0]?.input).toEqual(["text", "image"]);
@@ -78,6 +82,53 @@ describe("fireworks provider plugin", () => {
     expect(models[1]?.input).toEqual(["text", "image"]);
     expect(models[1]?.contextWindow).toBe(FIREWORKS_DEFAULT_CONTEXT_WINDOW);
     expect(models[1]?.maxTokens).toBe(FIREWORKS_DEFAULT_MAX_TOKENS);
+  });
+
+  it("catalogs reasoning families with reasoning_effort compat from the manifest", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    const catalogProvider = await runSingleProviderCatalog(provider);
+    const byId = new Map(catalogProvider.models?.map((model) => [model.id, model]) ?? []);
+
+    const deepseek = byId.get("accounts/fireworks/models/deepseek-v4-pro");
+    expect(deepseek?.reasoning).toBe(true);
+    // thinkingFormat "openai" opts out of core's deepseek-native fallback for
+    // deepseek-v4-* ids; Fireworks 400s on payloads carrying `thinking` next to
+    // `reasoning_effort`.
+    expect(deepseek?.compat).toMatchObject({
+      thinkingFormat: "openai",
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      reasoningEffortMap: { off: "none", minimal: "low", max: "max" },
+    });
+
+    const minimax = byId.get("accounts/fireworks/models/minimax-m2p7");
+    expect(minimax?.reasoning).toBe(true);
+    expect(minimax?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortMap: { minimal: "low", max: "high" },
+    });
+    expect(minimax?.compat?.reasoningEffortMap).not.toHaveProperty("off");
+
+    const glm = byId.get("accounts/fireworks/models/glm-5p1");
+    expect(glm?.reasoning).toBe(true);
+    expect(glm?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "medium", "high"],
+      reasoningEffortMap: { off: "none", max: "high" },
+    });
+
+    const gptOss = byId.get("accounts/fireworks/models/gpt-oss-120b");
+    expect(gptOss?.reasoning).toBe(true);
+    expect(gptOss?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortMap: { minimal: "low", max: "high" },
+    });
+    expect(gptOss?.compat?.supportedReasoningEfforts).not.toContain("minimal");
+    // No-off rows share one convention: omit `off` from the map so a bypassed
+    // off request sends no reasoning_effort instead of a silent low.
+    expect(gptOss?.compat?.reasoningEffortMap).not.toHaveProperty("off");
   });
 
   it("resolves forward-compat Fireworks model ids from the default template", async () => {
@@ -116,17 +167,70 @@ describe("fireworks provider plugin", () => {
 
   it("keeps Fireworks GLM dynamic models text-only", async () => {
     const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    // glm-5p1 is a manifest row (deferred to core); use a non-cataloged GLM id
+    // to exercise the dynamic text-only path.
     const resolved = provider.resolveDynamicModel?.(
       createProviderDynamicModelContext({
         provider: "fireworks",
-        modelId: "accounts/fireworks/models/glm-5p1",
+        modelId: "accounts/fireworks/models/glm-4p6",
         models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
       }),
     );
 
     expect(resolved?.provider).toBe("fireworks");
-    expect(resolved?.id).toBe("accounts/fireworks/models/glm-5p1");
+    expect(resolved?.id).toBe("accounts/fireworks/models/glm-4p6");
     expect(resolved?.input).toEqual(["text"]);
+  });
+
+  it("carries the GLM effort compat on dynamic GLM-5+ ids", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    // Profile-matched dynamic ids need explicit effort compat: the proxy-like
+    // Fireworks endpoint disables detected reasoning_effort, so without it the
+    // advertised off/on menu would never encode on the request.
+    const resolved = provider.resolveDynamicModel?.(
+      createProviderDynamicModelContext({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/glm-5p2",
+        models: [createFireworksDefaultRuntimeModel({ reasoning: false })],
+      }),
+    );
+
+    expect(resolved?.id).toBe("accounts/fireworks/models/glm-5p2");
+    expect(resolved?.compat).toMatchObject({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "medium", "high"],
+    });
+  });
+
+  it("opts dynamic DeepSeek V4 ids out of the deepseek-native thinking format", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+    // Non-cataloged deepseek-v4 id: core's fallback matches the id family, so
+    // dynamic resolution must carry the same thinkingFormat opt-out as the
+    // deepseek-v4-pro manifest row.
+    const resolved = provider.resolveDynamicModel?.(
+      createProviderDynamicModelContext({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/deepseek-v4-flash",
+        models: [
+          {
+            ...createFireworksDefaultRuntimeModel({ reasoning: false }),
+            compat: { unsupportedToolSchemaKeywords: ["not"] },
+          },
+        ],
+      }),
+    );
+
+    expect(resolved?.id).toBe("accounts/fireworks/models/deepseek-v4-flash");
+    expect(resolved?.reasoning).toBe(true);
+    // Inherits the cataloged v4-pro compat (effort surface included, so the
+    // advertised off..max profile encodes faithfully) merged into the cloned
+    // template compat, not replacing it.
+    expect(resolved?.compat).toMatchObject({
+      thinkingFormat: "openai",
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "low", "medium", "high", "xhigh", "max"],
+      unsupportedToolSchemaKeywords: ["not"],
+    });
   });
 
   it("disables reasoning metadata for Fireworks Kimi k2.5 aliases", async () => {
@@ -157,6 +261,62 @@ describe("fireworks provider plugin", () => {
     expect(resolved?.provider).toBe("fireworks");
     expect(resolved?.id).toBe("accounts/fireworks/models/kimi-k2p6");
     expect(resolved?.reasoning).toBe(false);
+  });
+
+  it("exposes per-family thinking profiles for Fireworks reasoning models", async () => {
+    const provider = await registerSingleProviderPlugin(fireworksPlugin);
+
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/deepseek-v4-pro",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "off" },
+        { id: "low", rank: 20 },
+        { id: "medium", rank: 30 },
+        { id: "high", rank: 40 },
+        { id: "xhigh", rank: 60 },
+        { id: "max", rank: 80 },
+      ],
+      defaultLevel: "high",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/minimax-m2p7",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "low", rank: 20 },
+        { id: "medium", rank: 30 },
+        { id: "high", rank: 40 },
+      ],
+      defaultLevel: "medium",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/glm-5p1",
+      }),
+    ).toEqual({
+      levels: [{ id: "off" }, { id: "low", label: "on", rank: 20 }],
+      defaultLevel: "low",
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/gpt-oss-120b",
+      }),
+    ).toEqual({
+      levels: [
+        { id: "low", rank: 20 },
+        { id: "medium", rank: 30 },
+        { id: "high", rank: 40 },
+      ],
+      defaultLevel: "low",
+    });
   });
 
   it("exposes off-only thinking policy for Fireworks Kimi models", async () => {

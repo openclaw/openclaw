@@ -282,6 +282,23 @@ describe("listThinkingLevels", () => {
     ).toBe("low");
   });
 
+  it("clamps off to the lowest level on profiles without an off level", () => {
+    providerRuntimeMocks.resolveProviderThinkingProfile.mockImplementation(() => ({
+      levels: [{ id: "low" }, { id: "medium" }, { id: "high" }],
+      defaultLevel: "medium",
+    }));
+    const catalog = [{ provider: "fireworks", id: "minimax-m2p7", reasoning: true }];
+
+    expect(
+      resolveSupportedThinkingLevel({
+        provider: "fireworks",
+        model: "minimax-m2p7",
+        level: "off",
+        catalog,
+      }),
+    ).toBe("low");
+  });
+
   it("uses canonical Fable params when no provider thinking profile exists", () => {
     const catalog = [
       {

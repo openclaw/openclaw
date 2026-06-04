@@ -377,9 +377,12 @@ function resolveSupportedThinkingLevelFromProfile(
   }
   const requestedRank = THINKING_LEVEL_RANKS[level];
   const ranked = profile.levels.toSorted((a, b) => b.rank - a.rank);
+  // When every supported level exceeds the request (e.g. `off` on a profile
+  // without an off level), clamp to the lowest non-off level — never escalate
+  // a low/off request to the most expensive level.
   return (
     ranked.find((entry) => entry.id !== "off" && entry.rank <= requestedRank)?.id ??
-    ranked.find((entry) => entry.id !== "off")?.id ??
+    ranked.findLast((entry) => entry.id !== "off")?.id ??
     "off"
   );
 }
