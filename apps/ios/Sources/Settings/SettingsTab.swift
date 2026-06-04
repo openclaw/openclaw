@@ -14,6 +14,7 @@ struct SettingsTab: View {
     @AppStorage("node.instanceId") private var instanceId: String = UUID().uuidString
     @AppStorage("voiceWake.enabled") private var voiceWakeEnabled: Bool = false
     @AppStorage("talk.enabled") private var talkEnabled: Bool = false
+    @AppStorage("talk.ttsEngine") private var ttsEngine: String = "elevenlabs"
     @AppStorage("talk.button.enabled") private var talkButtonEnabled: Bool = true
     @AppStorage("camera.enabled") private var cameraEnabled: Bool = true
     @AppStorage("location.enabledMode") private var locationEnabledModeRaw: String = OpenClawLocationMode.off.rawValue
@@ -289,6 +290,19 @@ struct SettingsTab: View {
                         LabeledContent("Platform", value: self.platformString())
                         LabeledContent("Version", value: self.appVersion())
                         LabeledContent("Model", value: self.modelIdentifier())
+                    }
+                }
+
+                Section("Voice Engine") {
+                    Picker("Engine", selection: self.$ttsEngine) {
+                        Text("ElevenLabs (Cloud)").tag("elevenlabs")
+                        Text("Piper (On-Device)").tag("piper")
+                        Text("System (Apple)").tag("system")
+                    }
+                    if self.ttsEngine == "piper" {
+                        Text("Downloads ~30MB voice model on first use. Runs fully offline after download.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
                     }
                 }
             }

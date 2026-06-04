@@ -54,6 +54,9 @@ function normalizeTalkConfigSection(value: unknown): Record<string, unknown> | u
   if (typeof source.interruptOnSpeech === "boolean") {
     talk.interruptOnSpeech = source.interruptOnSpeech;
   }
+  if (typeof source.ttsEngine === "string") {
+    talk.ttsEngine = source.ttsEngine;
+  }
   return Object.keys(talk).length > 0 ? talk : undefined;
 }
 

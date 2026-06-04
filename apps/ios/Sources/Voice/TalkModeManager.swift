@@ -66,6 +66,7 @@ final class TalkModeManager: NSObject {
     private var mainSessionKey: String = "main"
     private var fallbackVoiceId: String?
     private var lastPlaybackWasPCM: Bool = false
+    private var ttsEngine: String = "elevenlabs"
     var pcmPlayer: PCMStreamingAudioPlaying = PCMStreamingAudioPlayer.shared
     var mp3Player: StreamingAudioPlaying = StreamingAudioPlayer.shared
 
@@ -981,6 +982,41 @@ final class TalkModeManager: NSObject {
             }
             let canUseElevenLabs = (voiceId?.isEmpty == false) && (apiKey?.isEmpty == false)
 
+            // Piper on-device TTS
+            if self.ttsEngine == "piper" {
+                let piper = PiperTTSSynthesizer.shared
+                if piper.isModelReady {
+                    do {
+                        GatewayDiagnostics.log("talk tts: provider=piper")
+                        if self.interruptOnSpeech {
+                            do { try self.startRecognition() } catch {
+                                self.logger.warning("startRecognition during piper speak failed: \(error.localizedDescription, privacy: .public)")
+                            }
+                        }
+                        self.statusText = "Speaking (Piper)…"
+                        try await piper.speak(text: cleaned)
+                        self.isSpeaking = false
+                        return
+                    } catch {
+                        self.logger.warning("piper tts failed: \(error.localizedDescription, privacy: .public); falling back")
+                        GatewayDiagnostics.log("talk tts: piper failed, falling back")
+                    }
+                } else {
+                    self.logger.info("piper model not ready; falling back to system voice")
+                    GatewayDiagnostics.log("talk tts: piper model not ready, falling back")
+                }
+                // Fall through to system voice
+                if self.interruptOnSpeech {
+                    do { try self.startRecognition() } catch {
+                        self.logger.warning("startRecognition during speak failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+                self.statusText = "Speaking (System)…"
+                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: ElevenLabsTTSClient.validatedLanguage(directive?.language))
+                self.isSpeaking = false
+                return
+            }
+
             if canUseElevenLabs, let voiceId, let apiKey {
                 GatewayDiagnostics.log("talk tts: provider=elevenlabs voiceId=\(voiceId)")
                 let desiredOutputFormat = (directive?.outputFormat ?? self.defaultOutputFormat)?
@@ -1323,6 +1359,20 @@ final class TalkModeManager: NSObject {
             try? await TalkSystemSpeechSynthesizer.shared.speak(
                 text: text,
                 language: self.incrementalSpeechLanguage)
+            return
+        }
+
+        if self.ttsEngine == "piper" {
+            let piper = PiperTTSSynthesizer.shared
+            if piper.isModelReady {
+                do {
+                    try await piper.speak(text: text)
+                    return
+                } catch {
+                    // fall through to system
+                }
+            }
+            try? await TalkSystemSpeechSynthesizer.shared.speak(text: text, language: self.incrementalSpeechLanguage)
             return
         }
 
@@ -1702,6 +1752,9 @@ extension TalkModeManager {
             self.apiKey = (talk?["apiKey"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let interrupt = talk?["interruptOnSpeech"] as? Bool {
                 self.interruptOnSpeech = interrupt
+            }
+            if let engine = talk?["ttsEngine"] as? String {
+                self.ttsEngine = engine
             }
         } catch {
             self.defaultModelId = Self.defaultModelIdFallback
