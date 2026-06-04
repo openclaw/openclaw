@@ -1934,7 +1934,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                                 maxLines: resolveChannelProgressDraftMaxLines(account.config),
                               },
                             );
-                            draftStream.update(
+                            await draftStream.update(
                               formatChannelProgressDraftText({
                                 entry: account.config,
                                 lines: progressLines,
@@ -1971,7 +1971,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                                 maxLines: resolveChannelProgressDraftMaxLines(account.config),
                               },
                             );
-                            draftStream.update(
+                            await draftStream.update(
                               formatChannelProgressDraftText({
                                 entry: account.config,
                                 lines: progressLines,
