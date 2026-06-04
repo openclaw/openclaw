@@ -12,6 +12,7 @@ const DEFAULT_SAFE_BUILTINS: ReadonlySet<string> = new Set([
   "true",
 ]);
 
+/** Returns true when a parsed POSIX shell segment is one of the closed safe builtin forms. */
 export function isSafeBuiltinSegment(params: {
   segment: ExecCommandSegment;
   platform?: string | null;

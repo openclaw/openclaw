@@ -1,3 +1,6 @@
+/**
+ * Tests channel lifecycle queue ordering and failure handling.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { markGatewayDraining, resetAllLanes } from "../process/command-queue.js";
 import { createChannelRunQueue, waitForChannelRunQueueDrain } from "./channel-lifecycle.core.js";

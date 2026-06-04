@@ -10,6 +10,7 @@ import {
   resetChatAttachmentPayloadStoreForTest,
 } from "./chat/attachment-payload-store.ts";
 import type { executeSlashCommand } from "./chat/slash-command-executor.ts";
+import { loadSessions } from "./controllers/sessions.ts";
 import type { GatewaySessionRow, SessionsListResult } from "./types.ts";
 
 type ExecuteSlashCommand = typeof executeSlashCommand;
@@ -51,6 +52,7 @@ let clearPendingQueueItemsForRun: typeof import("./app-chat.ts").clearPendingQue
 let removeQueuedMessage: typeof import("./app-chat.ts").removeQueuedMessage;
 let markQueuedChatSendsWaitingForReconnect: typeof import("./app-chat.ts").markQueuedChatSendsWaitingForReconnect;
 let retryReconnectableQueuedChatSends: typeof import("./app-chat.ts").retryReconnectableQueuedChatSends;
+let recordChatSendServerTiming: typeof import("./app-chat.ts").recordChatSendServerTiming;
 
 async function loadChatHelpers(): Promise<void> {
   ({
@@ -65,6 +67,7 @@ async function loadChatHelpers(): Promise<void> {
     removeQueuedMessage,
     markQueuedChatSendsWaitingForReconnect,
     retryReconnectableQueuedChatSends,
+    recordChatSendServerTiming,
   } = await import("./app-chat.ts"));
 }
 
@@ -426,7 +429,7 @@ describe("refreshChat", () => {
     expect(requestUpdate).toHaveBeenCalled();
   });
 
-  it("records chat history timing when a reload resets active stream state", async () => {
+  it("records chat history timing when a reload keeps active stream state visible", async () => {
     const request = vi.fn((method: string) => {
       if (method === "chat.history") {
         return Promise.resolve({
@@ -445,20 +448,13 @@ describe("refreshChat", () => {
 
     await refreshChat(host, { awaitHistory: true, scheduleScroll: false });
 
-    expect(host.chatStream).toBeNull();
+    expect(host.chatStream).toBe("partial");
     expect(eventPayloads(host, "control-ui.chat.history")).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           phase: "start",
           sessionKey: "main",
           previousRunId: "run-main",
-        }),
-        expect.objectContaining({
-          phase: "stream-reset",
-          sessionKey: "main",
-          previousRunId: "run-main",
-          activeRunId: "run-main",
-          visibleMessageCount: 1,
         }),
         expect.objectContaining({
           phase: "applied",
@@ -1241,7 +1237,14 @@ describe("handleSendChat", () => {
   it("records visible send timing phases for a normal chat send", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "chat.send") {
-        return { status: "started" };
+        return {
+          status: "started",
+          serverTiming: {
+            receivedToAckMs: 17,
+            loadSessionMs: 4,
+            prepareAttachmentsMs: 0.5,
+          },
+        };
       }
       throw new Error(`Unexpected request: ${method}`);
     });
@@ -1266,6 +1269,62 @@ describe("handleSendChat", () => {
     });
     expect(ack?.durationMs).toEqual(expect.any(Number));
     expect(ack?.requestDurationMs).toEqual(expect.any(Number));
+    expect(ack).toMatchObject({
+      serverReceivedToAckMs: 17,
+      serverLoadSessionMs: 4,
+      serverPrepareAttachmentsMs: 0.5,
+    });
+  });
+
+  it("records Gateway post-ACK server timing milestones for a chat send", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "chat.send") {
+        return { status: "started" };
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "measure server milestone",
+      eventLogBuffer: [],
+      tab: "debug",
+    });
+
+    await handleSendChat(host);
+
+    const ack = eventPayloads(host, "control-ui.chat.send").find(
+      (payload) => payload.phase === "ack",
+    );
+    const runId = typeof ack?.runId === "string" ? ack.runId : "";
+    expect(runId).toMatch(uuidPattern);
+
+    recordChatSendServerTiming(host, {
+      phase: "agent-run-started",
+      runId,
+      sessionKey: "agent:main",
+      agentId: "main",
+      ackToPhaseMs: 12,
+      receivedToPhaseMs: 25,
+      dispatchStartedToPhaseMs: 8,
+      agentRunId: "agent-run-1",
+    });
+
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "server-agent-run-started",
+          runId,
+          sessionKey: "agent:main",
+          agentId: "main",
+          ackStatus: "started",
+          serverPhase: "agent-run-started",
+          serverAckToPhaseMs: 12,
+          serverReceivedToPhaseMs: 25,
+          serverDispatchStartedToPhaseMs: 8,
+          agentRunId: "agent-run-1",
+        }),
+      ]),
+    );
   });
 
   it("records pending send paint timing before a delayed chat.send ACK", async () => {
@@ -1720,6 +1779,8 @@ describe("handleSendChat", () => {
       client: { request } as unknown as ChatHost["client"],
       chatMessage: "wait for selected model",
       chatModelSwitchPromises: { "agent:main": switchUpdate.promise },
+      eventLogBuffer: [],
+      tab: "debug",
     });
 
     const send = handleSendChat(host);
@@ -1728,6 +1789,14 @@ describe("handleSendChat", () => {
       sendState: "waiting-model",
       text: "wait for selected model",
     });
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "waiting-model",
+          sendState: "waiting-model",
+        }),
+      ]),
+    );
 
     await retryReconnectableQueuedChatSends(host);
     expect(request).not.toHaveBeenCalled();
@@ -2016,6 +2085,43 @@ describe("handleSendChat", () => {
     expect(userMessage.role).toBe("user");
   });
 
+  it("keeps ACK-completed sends idle when sessions.list returns a stale active row", async () => {
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "chat.send") {
+        const payload = requireRecord(params, "chat send payload");
+        return { runId: payload.idempotencyKey, status: "ok" };
+      }
+      if (method === "chat.history") {
+        return { messages: [] };
+      }
+      if (method === "sessions.list") {
+        return createSessionsResult([
+          row("agent:main", { hasActiveRun: true, status: "running", startedAt: 1 }),
+        ]);
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const host = makeHost({
+      client: { request } as unknown as ChatHost["client"],
+      chatMessage: "already done",
+      sessionsResult: createSessionsResult([
+        row("agent:main", { hasActiveRun: true, status: "running", startedAt: 1 }),
+      ]),
+    });
+
+    await handleSendChat(host);
+    await Promise.resolve();
+    await loadSessions(host as unknown as Parameters<typeof loadSessions>[0]);
+
+    expect(host.chatRunId).toBeNull();
+    expect(host.chatStream).toBeNull();
+    expect(hasAbortableSessionRun(host)).toBe(false);
+    expect(host.sessionsResult?.sessions[0]).toMatchObject({
+      hasActiveRun: false,
+      status: "done",
+    });
+  });
+
   it("keeps delayed chat.send ACK effects scoped to the submitted session", async () => {
     const sent = createDeferred<unknown>();
     const request = vi.fn((method: string) => {
@@ -2082,6 +2188,8 @@ describe("handleSendChat", () => {
       client: null,
       connected: false,
       chatMessage: "send after reconnect",
+      eventLogBuffer: [],
+      tab: "debug",
     });
 
     await handleSendChat(host);
@@ -2095,6 +2203,14 @@ describe("handleSendChat", () => {
       sessionKey: "agent:main",
     });
     expect(host.chatQueue[0]?.sendRunId).toEqual(expect.any(String));
+    expect(eventPayloads(host, "control-ui.chat.send")).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          phase: "waiting-reconnect",
+          sendState: "waiting-reconnect",
+        }),
+      ]),
+    );
   });
 
   it("replays queued global sends under the originally selected agent", async () => {

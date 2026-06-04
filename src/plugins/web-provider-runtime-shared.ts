@@ -11,6 +11,7 @@ import {
   createPluginRuntimeLoaderLogger,
 } from "./runtime/load-context.js";
 
+/** Shared options for resolving plugin-backed web providers. */
 export type ResolvePluginWebProvidersParams = {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
@@ -144,6 +145,7 @@ function resolveRuntimeRegistryWebProviders<TEntry>(params: {
   };
 }
 
+/** Resolves plugin web providers from setup, active runtime, or a scoped load. */
 export function resolvePluginWebProviders<TEntry>(
   params: ResolvePluginWebProvidersParams,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,
@@ -236,6 +238,7 @@ export function resolvePluginWebProviders<TEntry>(
   });
 }
 
+/** Resolves web providers from the active runtime registry before falling back to plugin loading. */
 export function resolveRuntimeWebProviders<TEntry>(
   params: Omit<ResolvePluginWebProvidersParams, "activate" | "cache" | "mode">,
   deps: ResolveWebProviderRuntimeDeps<TEntry>,

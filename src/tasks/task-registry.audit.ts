@@ -28,6 +28,7 @@ export type { TaskAuditCode, TaskAuditFinding, TaskAuditSeverity, TaskAuditSumma
 
 let taskAuditTaskProvider: () => TaskRecord[] = () => [];
 
+/** Installs the task source used by inspectable task audits. */
 export function configureTaskAuditTaskProvider(provider: () => TaskRecord[]): void {
   taskAuditTaskProvider = provider;
 }

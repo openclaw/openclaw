@@ -1,3 +1,4 @@
+// Keyed inbound-message debouncer that preserves same-key delivery order.
 import type { InboundDebounceByProvider } from "../config/types.messages.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runWithGatewayDrainInternalContext } from "../process/command-queue.js";
@@ -109,6 +110,7 @@ const resolveChannelOverride = (params: {
   return resolveMs(params.byChannel[params.channel]);
 };
 
+/** Resolve effective inbound debounce milliseconds from explicit, channel, and global config. */
 export function resolveInboundDebounceMs(params: {
   cfg: OpenClawConfig;
   channel: string;
@@ -137,6 +139,7 @@ type DebounceBuffer<T> = {
 
 const DEFAULT_MAX_TRACKED_KEYS = 2048;
 
+/** Options for creating a keyed inbound debouncer. */
 export type InboundDebounceCreateParams<T> = {
   debounceMs: number;
   maxTrackedKeys?: number;
@@ -149,6 +152,7 @@ export type InboundDebounceCreateParams<T> = {
   onCancel?: (items: T[]) => void;
 };
 
+/** Create a keyed debouncer with flush/cancel controls and same-key serialization. */
 export function createInboundDebouncer<T>(params: InboundDebounceCreateParams<T>) {
   const buffers = new Map<string, DebounceBuffer<T>>();
   const keyChains = new Map<string, Promise<void>>();

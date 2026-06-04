@@ -15,6 +15,7 @@ type SpawnNodeEvalOptions = Omit<NonNullable<Parameters<typeof spawnSync>[2]>, "
     encoding?: BufferEncoding;
   };
 
+/** Builds node args for ESM eval snippets used by subprocess boundary tests. */
 export function createNodeEvalArgs(source: string, options: NodeEvalArgsOptions = {}): string[] {
   const args = (options.imports ?? []).flatMap((specifier) => ["--import", specifier]);
   args.push("--input-type=module", options.evalFlag ?? "--eval", source);

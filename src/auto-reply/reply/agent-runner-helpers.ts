@@ -11,6 +11,7 @@ import type { TypingSignaler } from "./typing-mode.js";
 const hasAudioMedia = (urls?: string[]): boolean =>
   Boolean(urls?.some((url) => isAudioFileName(url)));
 
+/** True when a reply payload contains audio media. */
 export const isAudioPayload = (payload: ReplyPayload): boolean =>
   hasAudioMedia(resolveSendableOutboundReplyParts(payload).mediaUrls);
 
@@ -69,14 +70,17 @@ function createVerboseGate(
   };
 }
 
+/** Creates the gate for emitting tool result summaries. */
 export const createShouldEmitToolResult = (params: VerboseGateParams): (() => boolean) => {
   return createVerboseGate(params, (level) => level !== "off");
 };
 
+/** Creates the gate for emitting full tool output. */
 export const createShouldEmitToolOutput = (params: VerboseGateParams): (() => boolean) => {
   return createVerboseGate(params, (level) => level === "full");
 };
 
+/** Starts typing if any payload has user-visible outbound content. */
 export const signalTypingIfNeeded = async (
   payloads: ReplyPayload[],
   typingSignals: TypingSignaler,

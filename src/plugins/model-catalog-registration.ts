@@ -58,6 +58,7 @@ function mergeModelCatalogHooks(
   };
 }
 
+/** Creates handlers that register plugin model catalog providers into a registry. */
 export function createModelCatalogRegistrationHandlers(params: {
   registry: PluginRegistry;
   pushDiagnostic: (diagnostic: PluginDiagnostic) => void;

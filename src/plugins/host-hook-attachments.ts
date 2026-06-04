@@ -23,6 +23,7 @@ import type {
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 const DEFAULT_ATTACHMENT_MAX_BYTES = 25 * 1024 * 1024;
+/** Filesystem adapter used by attachment MIME probes and tests. */
 export const attachmentProbeFs = {
   open: (...args: Parameters<typeof fsPromises.open>) => fsPromises.open(...args),
 };
@@ -95,6 +96,7 @@ async function readMimeSniffBuffer(
   }
 }
 
+/** Resolves channel-specific attachment delivery options from caption format and hints. */
 export function resolveAttachmentDelivery(params: {
   channel: string;
   captionFormat?: PluginSessionAttachmentCaptionFormat;
@@ -218,6 +220,7 @@ function normalizeOptionalThreadId(value: unknown): string | number | undefined 
   return normalizeOptionalString(value);
 }
 
+/** Resolves the thread id used when delivering a plugin session attachment. */
 export function resolveSessionAttachmentThreadId(params: {
   deliveryThreadId?: unknown;
   explicitThreadId?: unknown;
@@ -232,6 +235,7 @@ export function resolveSessionAttachmentThreadId(params: {
   );
 }
 
+/** Sends a bundled-plugin session attachment through the session's active delivery route. */
 export async function sendPluginSessionAttachment(
   params: PluginSessionAttachmentParams & { config?: OpenClawConfig; origin?: PluginOrigin },
 ): Promise<PluginSessionAttachmentResult> {

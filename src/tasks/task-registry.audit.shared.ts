@@ -1,5 +1,6 @@
 import type { TaskRecord } from "./task-registry.types.js";
 
+/** Severity used by task registry audit findings. */
 export type TaskAuditSeverity = "warn" | "error";
 export type TaskAuditCode =
   | "stale_queued"

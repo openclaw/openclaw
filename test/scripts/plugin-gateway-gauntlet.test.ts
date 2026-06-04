@@ -173,6 +173,7 @@ describe("plugin gateway gauntlet helpers", () => {
     ]);
     expect(buildGauntletPrebuildEnv({}, { buildIds: [matrix[0].buildId] })).toEqual({
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "kimi-coding",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
   });
 
@@ -381,6 +382,7 @@ describe("plugin gateway gauntlet helpers", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "qa-channel,qa-lab,qa-matrix",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
     const env = { EXISTING: "1" };
     expect(buildGauntletPrebuildEnv(env, { includePrivateQa: false })).toBe(env);
@@ -399,6 +401,7 @@ describe("plugin gateway gauntlet helpers", () => {
       EXISTING: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx",
       OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
     });
   });
 
@@ -416,6 +419,18 @@ describe("plugin gateway gauntlet helpers", () => {
       OPENCLAW_BUILD_PRIVATE_QA: "1",
       OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "acpx,active-memory,qa-channel,qa-lab,qa-matrix",
       OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1",
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "false",
+    });
+  });
+
+  it("preserves caller pnpm dependency verification overrides in gauntlet prebuilds", () => {
+    expect(
+      buildGauntletPrebuildEnv(
+        { EXISTING: "1", PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true" },
+        { includePrivateQa: true },
+      ),
+    ).toMatchObject({
+      PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "true",
     });
   });
 

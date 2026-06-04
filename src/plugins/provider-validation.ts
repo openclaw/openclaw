@@ -309,6 +309,7 @@ function normalizeProviderWizard(params: {
   };
 }
 
+/** Normalizes provider plugin metadata and emits diagnostics for invalid public fields. */
 export function normalizeRegisteredProvider(params: {
   pluginId: string;
   source: string;

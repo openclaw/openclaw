@@ -4,7 +4,11 @@ import {
   resolveAuthStorePath,
   resolveLegacyAuthStorePath,
 } from "./path-resolve.js";
-import { hasAnyRuntimeAuthProfileStoreSource } from "./runtime-snapshots.js";
+import {
+  getRuntimeAuthProfileStoreSnapshot,
+  hasAnyRuntimeAuthProfileStoreSource,
+} from "./runtime-snapshots.js";
+import { readPersistedAuthProfileStateRaw, readPersistedAuthProfileStoreRaw } from "./sqlite.js";
 
 function hasStoredAuthProfileFiles(agentDir?: string): boolean {
   return (
@@ -15,17 +19,36 @@ function hasStoredAuthProfileFiles(agentDir?: string): boolean {
 }
 
 export function hasAnyAuthProfileStoreSource(agentDir?: string): boolean {
-  if (hasAnyRuntimeAuthProfileStoreSource(agentDir)) {
+  if (hasLocalAuthProfileStoreSource(agentDir)) {
     return true;
   }
-  if (hasStoredAuthProfileFiles(agentDir)) {
+  if (hasAnyRuntimeAuthProfileStoreSource(agentDir)) {
     return true;
   }
 
   const authPath = resolveAuthStorePath(agentDir);
   const mainAuthPath = resolveAuthStorePath();
-  if (agentDir && authPath !== mainAuthPath && hasStoredAuthProfileFiles(undefined)) {
+  if (
+    agentDir &&
+    authPath !== mainAuthPath &&
+    (hasStoredAuthProfileFiles(undefined) ||
+      readPersistedAuthProfileStoreRaw(undefined) ||
+      readPersistedAuthProfileStateRaw(undefined))
+  ) {
     return true;
   }
   return false;
+}
+
+export function hasLocalAuthProfileStoreSource(agentDir?: string): boolean {
+  const runtimeStore = getRuntimeAuthProfileStoreSnapshot(agentDir);
+  if (runtimeStore && Object.keys(runtimeStore.profiles).length > 0) {
+    return true;
+  }
+  if (hasStoredAuthProfileFiles(agentDir)) {
+    return true;
+  }
+  return Boolean(
+    readPersistedAuthProfileStoreRaw(agentDir) || readPersistedAuthProfileStateRaw(agentDir),
+  );
 }

@@ -1,3 +1,6 @@
+/**
+ * Tests talk transcription relay behavior between realtime events and clients.
+ */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSessionCreateRequest } from "../realtime-transcription/provider-types.js";

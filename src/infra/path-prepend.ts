@@ -21,6 +21,7 @@ export function findPathKey(env: Record<string, string>): string {
   return "PATH";
 }
 
+/** Normalizes configured PATH prepends by trimming blanks and preserving first-seen order. */
 export function normalizePathPrepend(entries?: string[]) {
   if (!Array.isArray(entries)) {
     return [];
@@ -41,6 +42,7 @@ export function normalizePathPrepend(entries?: string[]) {
   return normalized;
 }
 
+/** Merges prepended PATH entries ahead of the existing PATH while deduping normalized parts. */
 export function mergePathPrepend(existing: string | undefined, prepend: string[]) {
   if (prepend.length === 0) {
     return existing;
@@ -50,6 +52,7 @@ export function mergePathPrepend(existing: string | undefined, prepend: string[]
   );
 }
 
+/** Removes managed prepend entries from an existing PATH, including later duplicate copies. */
 export function removePathPrepend(
   existing: string | undefined,
   prepend: string[],
@@ -67,6 +70,7 @@ export function removePathPrepend(
   return remaining.join(path.delimiter);
 }
 
+/** Applies configured PATH prepends in-place, preserving Windows PATH key casing. */
 export function applyPathPrepend(
   env: Record<string, string>,
   prepend: string[] | undefined,

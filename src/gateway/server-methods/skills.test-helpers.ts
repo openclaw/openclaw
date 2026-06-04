@@ -1,6 +1,10 @@
+/**
+ * Small gateway-handler invocation harness for skills method tests.
+ */
 import { vi } from "vitest";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 
+/** Captured JSON-RPC response tuple emitted by a gateway request handler. */
 export type CapturedGatewayResponse = {
   ok: boolean | null;
   response: unknown;
@@ -14,6 +18,7 @@ function makeGatewayHandlerTestContext(): GatewayRequestContext {
   } as unknown as GatewayRequestContext;
 }
 
+/** Invokes a named gateway handler with a minimal context and captures its response. */
 export async function callGatewayHandler(
   handlers: GatewayRequestHandlers,
   method: string,

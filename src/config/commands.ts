@@ -24,6 +24,7 @@ function resolveAutoDefault(
   if (typeof options?.autoDefault === "boolean") {
     return options.autoDefault;
   }
+  // Prefer live plugin metadata; fall back to read-only manifest defaults during cold config paths.
   const commandDefaults =
     getLoadedChannelPlugin(id)?.commands ??
     (options?.config
@@ -38,6 +39,7 @@ function resolveAutoDefault(
   return commandDefaults?.nativeSkillsAutoEnabled === true;
 }
 
+/** Resolves native skill exposure for a provider, with provider config overriding global config. */
 export function resolveNativeSkillsEnabled(params: {
   providerId: ChannelId;
   providerSetting?: NativeCommandsSetting;
@@ -51,6 +53,7 @@ export function resolveNativeSkillsEnabled(params: {
   return resolveNativeCommandSetting({ ...params, kind: "nativeSkills" });
 }
 
+/** Resolves native command exposure for a provider, with provider config overriding global config. */
 export function resolveNativeCommandsEnabled(params: {
   providerId: ChannelId;
   providerSetting?: NativeCommandsSetting;
@@ -86,6 +89,7 @@ function resolveNativeCommandSetting(params: {
   return resolveAutoDefault(providerId, kind, options);
 }
 
+/** Returns true only when native commands are explicitly disabled by provider or inherited global config. */
 export function isNativeCommandsExplicitlyDisabled(params: {
   providerSetting?: NativeCommandsSetting;
   globalSetting?: NativeCommandsSetting;
