@@ -5,7 +5,7 @@ import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from 
 import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
-import { createWebSendApi } from "./send-api.js";
+import { createWebSendApi, WHATSAPP_SEND_TIMEOUT_MS } from "./send-api.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
 const imageOps = vi.hoisted(() => ({
@@ -68,12 +68,17 @@ describe("createWebSendApi", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
     imageOps.getImageMetadata.mockResolvedValue(null);
     imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     api = createWebSendApi({
       sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
     });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
@@ -454,6 +459,32 @@ describe("createWebSendApi", () => {
       providerAccepted: false,
     });
     expect(res.receipt ? listMessageReceiptPlatformIds(res.receipt) : []).toStrictEqual([]);
+  });
+
+  it("times out stalled socket message sends", async () => {
+    vi.useFakeTimers();
+    const neverSettles = new Promise<WAMessage | undefined>(() => {
+      // Keep the provider send pending so the timeout path fires.
+    });
+    sendMessage.mockImplementationOnce(() => neverSettles);
+
+    const pending = api.sendMessage("+1555", "hello");
+    const expectation = expect(pending).rejects.toThrow(
+      `WhatsApp sendMessage timed out after ${WHATSAPP_SEND_TIMEOUT_MS}ms`,
+    );
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(WHATSAPP_SEND_TIMEOUT_MS);
+
+    await expectation;
+    expect(recordChannelActivity).not.toHaveBeenCalled();
+  });
+
+  it("clears the socket send timeout after successful sends", async () => {
+    vi.useFakeTimers();
+
+    await api.sendMessage("+1555", "hello");
+
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("keeps direct-chat reactions without a participant key", async () => {
