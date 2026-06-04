@@ -1,9 +1,25 @@
 // Covers JSON file load/save behavior.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { loadJsonFile, saveJsonFile } from "./json-file.js";
+
+const canCreateFileSymlinks = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-json-symlink-probe-"));
+  const targetFile = path.join(probeDir, "target.json");
+  const linkFile = path.join(probeDir, "link.json");
+  try {
+    fs.writeFileSync(targetFile, "{}", "utf8");
+    fs.symlinkSync(targetFile, linkFile, "file");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
 
 const SAVED_PAYLOAD = { enabled: true, count: 2 };
 const PREVIOUS_JSON = '{"enabled":false}\n';
@@ -129,7 +145,7 @@ describe("json-file helpers", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "preserves symlink destinations when replacing existing JSON files",
     async () => {
       await withJsonSymlink(({ targetDir, targetPath, linkPath }) => {
@@ -144,7 +160,7 @@ describe("json-file helpers", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "creates a missing target file through an existing symlink",
     async () => {
       await withJsonSymlink(({ targetDir, targetPath, linkPath }) => {
@@ -158,7 +174,7 @@ describe("json-file helpers", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "does not create missing target directories through an existing symlink",
     async () => {
       await withTempDir({ prefix: "openclaw-json-file-" }, async (root) => {
