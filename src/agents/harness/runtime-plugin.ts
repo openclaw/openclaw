@@ -8,6 +8,7 @@ import {
 import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
+import { getRegisteredAgentHarness } from "./registry.js";
 
 const COLD_LOADABLE_HARNESS_PLUGIN_IDS = new Set(["codex", "copilot"]);
 
@@ -149,4 +150,18 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     workspaceDir: params.workspaceDir,
     onlyPluginIds: pluginIds,
   });
+  if (!getRegisteredAgentHarness(runtime)) {
+    ensurePluginRegistryLoaded({
+      scope: "all",
+      ...(activatedConfig
+        ? {
+            config: activatedConfig,
+            activationSourceConfig: activatedConfig,
+          }
+        : {}),
+      workspaceDir: params.workspaceDir,
+      onlyPluginIds: pluginIds,
+      forceReload: true,
+    });
+  }
 }
