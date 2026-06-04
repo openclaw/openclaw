@@ -6,17 +6,36 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 
+type EmbeddedLoadSessionEntryResult = {
+  cfg: Record<string, unknown>;
+  storePath: string;
+  entry: {
+    sessionId: string;
+    sessionFile?: string;
+    usageFamilySessionIds?: string[];
+  };
+};
+
 const runtime = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({ agents: { list: [{ id: "main", default: true }] } })),
   resolveSessionKeyFromResolveParams: vi.fn(),
   resolveSessionAgentId: vi.fn(() => "main"),
-  loadSessionEntry: vi.fn(() => ({
-    cfg: {},
-    storePath: "/tmp/openclaw-sessions.json",
-    entry: { sessionId: "sess-main" },
-  })),
+  loadSessionEntry: vi.fn(
+    (): EmbeddedLoadSessionEntryResult => ({
+      cfg: {},
+      storePath: "/tmp/openclaw-sessions.json",
+      entry: { sessionId: "sess-main" },
+    }),
+  ),
   resolveSessionModelRef: vi.fn(() => ({ provider: "openai" })),
-  readSessionMessagesAsync: vi.fn(async (): Promise<unknown[]> => []),
+  readSessionMessagesAsync: vi.fn(
+    async (
+      _sessionId: string,
+      _storePath: string,
+      _sessionFile: string | undefined,
+      _opts: unknown,
+    ): Promise<unknown[]> => [],
+  ),
   augmentChatHistoryWithCliSessionImports: vi.fn(
     ({ localMessages }: { localMessages?: unknown[] }) => localMessages ?? [],
   ),
