@@ -100,14 +100,19 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
   if (!pluginId || !actionId) {
     return undefined;
   }
-  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
-    (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
-  );
-  if (!registration) {
-    return undefined;
+  for (const entry of getPluginRegistryState()?.activeRegistry?.sessionActions ?? []) {
+    try {
+      const action = entry.action;
+      if (entry.pluginId === pluginId && action.id === actionId) {
+        const requiredScopes = action.requiredScopes;
+        return requiredScopes && requiredScopes.length > 0 ? [...requiredScopes] : [WRITE_SCOPE];
+      }
+    } catch {
+      // Stale plugin rows must not block least-privilege checks for healthy registrations.
+      continue;
+    }
   }
-  const requiredScopes = registration.action.requiredScopes;
-  return requiredScopes && requiredScopes.length > 0 ? [...requiredScopes] : [WRITE_SCOPE];
+  return undefined;
 }
 
 function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScope[] {

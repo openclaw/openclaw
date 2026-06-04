@@ -3,6 +3,7 @@
  */
 import { afterEach, describe, expect, it } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginSessionActionRegistryRegistration } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   authorizeOperatorScopesForMethod,
@@ -192,6 +193,47 @@ describe("method scope resolution", () => {
       "operator.pairing",
       "operator.talk.secrets",
     ]);
+  });
+
+  it("keeps healthy plugin session action scopes after unreadable action metadata", () => {
+    const registry = createEmptyPluginRegistry();
+    const staleAction = {
+      pluginId: "scope-plugin",
+      pluginName: "Scope Plugin",
+      source: "test",
+    } as PluginSessionActionRegistryRegistration;
+    Object.defineProperty(staleAction, "action", {
+      get() {
+        throw new Error("plugin session action metadata getter exploded");
+      },
+    });
+    registry.sessionActions = [
+      staleAction,
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual(["operator.approvals"]);
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual({ allowed: true });
   });
 
   it("returns empty scopes for unknown methods", () => {

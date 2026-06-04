@@ -11,6 +11,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
+import type { PluginSessionActionRegistryRegistration } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   validateJsonSchemaValue,
@@ -24,6 +25,24 @@ const log = createSubsystemLogger("gateway/plugin-host-hooks");
 
 function formatSessionActionPayloadSchemaErrors(errors: JsonSchemaValidationError[]): string {
   return errors.map((error) => error.text).join("; ");
+}
+
+function findPluginSessionActionRegistration(
+  registrations: readonly PluginSessionActionRegistryRegistration[],
+  pluginId: string,
+  actionId: string,
+): PluginSessionActionRegistryRegistration | undefined {
+  for (const entry of registrations) {
+    try {
+      if (entry.pluginId === pluginId && entry.action.id === actionId) {
+        return entry;
+      }
+    } catch {
+      // Stale plugin rows must not block dispatch for a healthy later registration.
+      continue;
+    }
+  }
+  return undefined;
 }
 
 /** Ensures plugin action result extension fields stay JSON-compatible on the wire. */
@@ -90,8 +109,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     const pluginLoaded = Boolean(
       registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
     );
-    const registration = (registry?.sessionActions ?? []).find(
-      (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
+    const registration = findPluginSessionActionRegistration(
+      registry?.sessionActions ?? [],
+      pluginId,
+      actionId,
     );
     if (!registration || !pluginLoaded) {
       respond(
