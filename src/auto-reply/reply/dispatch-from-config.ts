@@ -718,6 +718,7 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
         pendingFinalDeliveryAttemptCount: undefined,
         pendingFinalDeliveryLastError: undefined,
         pendingFinalDeliveryContext: undefined,
+        pendingFinalDeliveryIntentId: undefined,
         updatedAt: Date.now(),
       };
     },

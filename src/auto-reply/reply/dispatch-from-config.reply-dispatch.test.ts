@@ -187,6 +187,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       pendingFinalDeliveryAttemptCount: 3,
       pendingFinalDeliveryLastError: "previous failure",
       pendingFinalDeliveryContext: { source: "heartbeat" },
+      pendingFinalDeliveryIntentId: "intent-1",
     };
     sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
@@ -209,6 +210,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("clears pending final delivery when abort arrives after final dispatch succeeds", async () => {
@@ -222,6 +224,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       pendingFinalDeliveryAttemptCount: 3,
       pendingFinalDeliveryLastError: "previous failure",
       pendingFinalDeliveryContext: { source: "heartbeat" },
+      pendingFinalDeliveryIntentId: "intent-1",
     };
     sessionStoreMocks.resolveSessionStoreEntry.mockReturnValue({
       existing: sessionStoreMocks.currentEntry,
@@ -251,6 +254,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryAttemptCount).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryLastError).toBeUndefined();
     expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryContext).toBeUndefined();
+    expect(sessionStoreMocks.currentEntry?.pendingFinalDeliveryIntentId).toBeUndefined();
   });
 
   it("preserves pending final delivery when final dispatch fails", async () => {
