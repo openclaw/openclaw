@@ -133,6 +133,7 @@ function installMessagingTestRegistry() {
 
 function createOpenClawTools(options?: {
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   agentChannel?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
@@ -142,18 +143,21 @@ function createOpenClawTools(options?: {
   return [
     createSessionsListTool({
       agentSessionKey: options?.agentSessionKey,
+      requesterAgentIdOverride: options?.requesterAgentIdOverride,
       sandboxed: options?.sandboxed,
       config,
       callGateway: gatewayCall,
     }),
     createSessionsHistoryTool({
       agentSessionKey: options?.agentSessionKey,
+      requesterAgentIdOverride: options?.requesterAgentIdOverride,
       sandboxed: options?.sandboxed,
       config,
       callGateway: gatewayCall,
     }),
     createSessionsSendTool({
       agentSessionKey: options?.agentSessionKey,
+      requesterAgentIdOverride: options?.requesterAgentIdOverride,
       agentChannel: options?.agentChannel as never,
       sandboxed: options?.sandboxed,
       config,
@@ -546,6 +550,45 @@ describe("sessions tools", () => {
     };
     expect(cronDetails.sessions).toHaveLength(1);
     expect(cronDetails.sessions?.[0]?.kind).toBe("cron");
+  });
+
+  it("uses requesterAgentIdOverride as spawned filter root for sandboxed list calls", async () => {
+    const cfg = {
+      session: { scope: "per-sender", mainKey: "main" },
+      tools: {
+        agentToAgent: { enabled: true, allow: ["*"] },
+        sessions: { visibility: "all" },
+      },
+      agents: {
+        defaults: { sandbox: { sessionToolsVisibility: "spawned" } },
+        list: [{ id: "tony", sandbox: { sessionToolsVisibility: "spawned" } }],
+      },
+    } as unknown as OpenClawConfig;
+    callGatewayMock.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [],
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "global",
+      requesterAgentIdOverride: "tony",
+      sandboxed: true,
+      config: cfg,
+    }).find((candidate) => candidate.name === "sessions_list");
+    if (!tool) {
+      throw new Error("missing sessions_list tool");
+    }
+
+    await tool.execute("call-override-spawned-list", {});
+
+    expect(callGatewayMock).toHaveBeenCalledWith({
+      method: "sessions.list",
+      params: expect.objectContaining({
+        includeGlobal: false,
+        includeUnknown: false,
+        spawnedBy: "agent:tony:main",
+      }),
+    });
   });
 
   it("derives mailbox previews only after agent visibility filtering", async () => {
