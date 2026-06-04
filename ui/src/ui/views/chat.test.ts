@@ -865,13 +865,51 @@ describe("chat goal status", () => {
 });
 
 describe("chat composer workbench", () => {
-  it("renders session controls in the composer and workspace files in the rail", () => {
+  it("keeps workspace files hidden until explicitly opened", () => {
+    const onToggle = vi.fn();
+    const container = renderChatView({
+      workspaceFiles: {
+        activeName: null,
+        agentId: "main",
+        error: null,
+        list: {
+          agentId: "main",
+          workspace: "/workspace",
+          files: [{ name: "AGENTS.md", path: "/workspace/AGENTS.md", missing: false }],
+        },
+        loading: false,
+        open: false,
+        onClose: () => undefined,
+        onOpenFile: () => undefined,
+        onRefresh: () => undefined,
+        onToggle,
+      },
+    });
+
+    const toggle = container.querySelector<HTMLButtonElement>(
+      '.agent-chat__input-btn[aria-label="Workspace files"]',
+    );
+    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".chat-workspace-rail")).toBeNull();
+    expect(container.querySelector(".chat-workbench")?.className).not.toContain(
+      "chat-workbench--workspace-rail-open",
+    );
+
+    toggle?.click();
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders session controls in the composer and workspace files in the opened rail", () => {
+    const onClose = vi.fn();
     const onRefresh = vi.fn();
     const onOpenFile = vi.fn();
     const container = renderChatView({
       composerControls: html`<button class="test-composer-control">Model</button>`,
       workspaceFiles: {
+        activeName: "AGENTS.md",
         agentId: "main",
+        error: null,
         list: {
           agentId: "main",
           workspace: "/workspace",
@@ -885,16 +923,25 @@ describe("chat composer workbench", () => {
           ],
         },
         loading: false,
-        error: null,
-        activeName: "AGENTS.md",
+        open: true,
+        onClose,
         onRefresh,
         onOpenFile,
+        onToggle: () => undefined,
       },
     });
 
     expect(
       container.querySelector(".agent-chat__composer-controls .test-composer-control"),
     ).not.toBeNull();
+    expect(
+      container
+        .querySelector('.agent-chat__input-btn[aria-label="Workspace files"]')
+        ?.getAttribute("aria-expanded"),
+    ).toBe("true");
+    expect(container.querySelector(".chat-workbench")?.className).toContain(
+      "chat-workbench--workspace-rail-open",
+    );
     expect(container.querySelector(".chat-workspace-rail__path")?.textContent?.trim()).toBe(
       "/workspace",
     );
@@ -903,8 +950,10 @@ describe("chat composer workbench", () => {
     expect(file?.textContent).toContain("2 KB");
 
     file?.click();
+    container.querySelector<HTMLButtonElement>(".chat-workspace-rail__close")?.click();
 
     expect(onOpenFile).toHaveBeenCalledWith("AGENTS.md");
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the secondary New session and Export controls suppressed in the composer", () => {

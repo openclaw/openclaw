@@ -184,13 +184,16 @@ export type ChatProps = {
   basePath?: string;
   composerControls?: TemplateResult | typeof nothing | ReturnType<typeof guard>;
   workspaceFiles?: {
+    activeName: string | null;
     agentId: string;
+    error: string | null;
     list: AgentsFilesListResult | null;
     loading: boolean;
-    error: string | null;
-    activeName: string | null;
-    onRefresh: () => void;
+    open: boolean;
+    onClose: () => void;
     onOpenFile: (name: string) => void;
+    onRefresh: () => void;
+    onToggle: () => void;
   };
 };
 
@@ -1008,7 +1011,7 @@ function formatWorkspaceFileSize(file: AgentFileEntry): string {
 function renderWorkspaceFileRail(
   workspaceFiles: NonNullable<ChatProps["workspaceFiles"]> | undefined,
 ): TemplateResult | typeof nothing {
-  if (!workspaceFiles) {
+  if (!workspaceFiles?.open) {
     return nothing;
   }
   const files = workspaceFiles.list?.files ?? [];
@@ -1019,16 +1022,27 @@ function renderWorkspaceFileRail(
           <span class="chat-workspace-rail__eyebrow">Workspace</span>
           <strong>Files</strong>
         </div>
-        <button
-          class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
-          type="button"
-          title="Refresh files"
-          aria-label="Refresh files"
-          ?disabled=${workspaceFiles.loading}
-          @click=${workspaceFiles.onRefresh}
-        >
-          ${icons.refresh}
-        </button>
+        <div class="chat-workspace-rail__actions">
+          <button
+            class="btn btn--ghost btn--sm chat-workspace-rail__refresh"
+            type="button"
+            title="Refresh files"
+            aria-label="Refresh files"
+            ?disabled=${workspaceFiles.loading}
+            @click=${workspaceFiles.onRefresh}
+          >
+            ${icons.refresh}
+          </button>
+          <button
+            class="btn btn--ghost btn--sm chat-workspace-rail__close"
+            type="button"
+            title="Hide workspace files"
+            aria-label="Hide workspace files"
+            @click=${workspaceFiles.onClose}
+          >
+            ${icons.x}
+          </button>
+        </div>
       </div>
       ${workspaceFiles.list?.workspace
         ? html`<div class="chat-workspace-rail__path" title=${workspaceFiles.list.workspace}>
@@ -1997,7 +2011,11 @@ export function renderChat(props: ChatProps) {
         : nothing}
       ${renderSearchBar(requestUpdate)} ${renderPinnedSection(props, pinned, requestUpdate)}
 
-      <div class="chat-workbench">
+      <div
+        class="chat-workbench ${props.workspaceFiles?.open
+          ? "chat-workbench--workspace-rail-open"
+          : ""}"
+      >
         <div class="chat-split-container ${sidebarOpen ? "chat-split-container--open" : ""}">
           <div
             class="chat-main"
@@ -2142,6 +2160,24 @@ export function renderChat(props: ChatProps) {
               <span class="agent-chat__control-label">${t("chat.composer.attachFile")}</span>
             </button>
 
+            ${props.workspaceFiles
+              ? html`
+                  <button
+                    type="button"
+                    class="agent-chat__input-btn ${props.workspaceFiles.open
+                      ? "agent-chat__input-btn--active"
+                      : ""}"
+                    @click=${props.workspaceFiles.onToggle}
+                    title="Workspace files"
+                    aria-label="Workspace files"
+                    aria-expanded=${props.workspaceFiles.open ? "true" : "false"}
+                    ?disabled=${!props.connected}
+                  >
+                    ${icons.fileText}
+                    <span class="agent-chat__control-label">Workspace files</span>
+                  </button>
+                `
+              : nothing}
             ${props.onToggleRealtimeTalk
               ? html`
                   <button

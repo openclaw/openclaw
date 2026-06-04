@@ -681,6 +681,7 @@ type ChatWorkspaceFilesState = {
   error: string | null;
   list: AgentsFilesListResult | null;
   loading: boolean;
+  open: boolean;
   requestId: number;
 };
 
@@ -701,6 +702,7 @@ function getChatWorkspaceFilesState(state: AppViewState, agentId: string): ChatW
     error: null,
     list: null,
     loading: false,
+    open: false,
     requestId: 0,
   };
   chatWorkspaceFilesStates.set(state, next);
@@ -2096,6 +2098,7 @@ export function renderApp(state: AppViewState) {
   };
   if (
     isChat &&
+    chatWorkspaceFiles.open &&
     state.connected &&
     state.agentsList &&
     !chatWorkspaceFiles.loading &&
@@ -2104,7 +2107,19 @@ export function renderApp(state: AppViewState) {
   ) {
     loadChatWorkspaceFiles();
   }
+  const toggleChatWorkspaceFiles = () => {
+    chatWorkspaceFiles.open = !chatWorkspaceFiles.open;
+    if (chatWorkspaceFiles.open && chatWorkspaceFiles.list?.agentId !== chatAgentId) {
+      loadChatWorkspaceFiles();
+    }
+    requestHostUpdate?.();
+  };
+  const closeChatWorkspaceFiles = () => {
+    chatWorkspaceFiles.open = false;
+    requestHostUpdate?.();
+  };
   const refreshChatWorkspaceFiles = () => {
+    chatWorkspaceFiles.open = true;
     loadChatWorkspaceFiles({ force: true });
   };
   function loadChatWorkspaceFiles(opts?: { force?: boolean }) {
@@ -3524,16 +3539,19 @@ export function renderApp(state: AppViewState) {
                   sessions: state.sessionsResult,
                   composerControls: renderGuardedChatControls(state),
                   workspaceFiles: {
+                    activeName: chatWorkspaceFiles.activeName,
                     agentId: chatAgentId,
+                    error: chatWorkspaceFiles.error,
                     list:
                       chatWorkspaceFiles.list?.agentId === chatAgentId
                         ? chatWorkspaceFiles.list
                         : null,
                     loading: chatWorkspaceFiles.loading,
-                    error: chatWorkspaceFiles.error,
-                    activeName: chatWorkspaceFiles.activeName,
-                    onRefresh: refreshChatWorkspaceFiles,
+                    open: chatWorkspaceFiles.open,
+                    onClose: closeChatWorkspaceFiles,
                     onOpenFile: openChatWorkspaceFile,
+                    onRefresh: refreshChatWorkspaceFiles,
+                    onToggle: toggleChatWorkspaceFiles,
                   },
                   autoExpandToolCalls: false,
                   onRefresh: () => {
