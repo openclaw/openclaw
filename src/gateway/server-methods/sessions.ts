@@ -96,6 +96,7 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   archiveFileOnDisk,
+  buildGatewaySessionDiskCompactionCheckpointPreviewsByDirSync,
   buildGatewaySessionInfo,
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
@@ -1236,6 +1237,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(true, { session: null }, undefined);
       return;
     }
+    const checkpointPreviewsByDir = buildGatewaySessionDiskCompactionCheckpointPreviewsByDirSync({
+      storePath,
+      entries: [[target.canonicalKey, entry]],
+    });
     const row = buildGatewaySessionInfo({
       cfg,
       storePath,
@@ -1247,6 +1252,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       transcriptUsageMaxBytes: 64 * 1024,
       skipTranscriptUsageFallback: false,
       lightweightListRow: false,
+      checkpointPreviewsByDir,
     });
     respond(true, { session: row }, undefined);
   },
