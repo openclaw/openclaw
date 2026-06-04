@@ -26,12 +26,10 @@ function denylistBlocksName(name: string, denylist: ToolDenylist): boolean {
 }
 
 function denylistContainsMcpServerEntry(params: {
-  serverName: string;
+  safeServerName: string;
   rawDenylist?: string[];
 }): boolean {
-  const serverPrefix = normalizeToolName(
-    sanitizeServerName(params.serverName, new Set<string>()) + TOOL_NAME_SEPARATOR,
-  );
+  const serverPrefix = normalizeToolName(params.safeServerName + TOOL_NAME_SEPARATOR);
   if (!serverPrefix) {
     return false;
   }
@@ -42,14 +40,14 @@ function denylistContainsMcpServerEntry(params: {
 }
 
 function denylistBlocksMcpServer(params: {
-  serverName: string;
+  safeServerName: string;
   rawDenylist?: string[];
   denylist: ToolDenylist;
 }): boolean {
   return (
     denylistBlocksName("bundle-mcp", params.denylist) ||
     denylistContainsMcpServerEntry({
-      serverName: params.serverName,
+      safeServerName: params.safeServerName,
       rawDenylist: params.rawDenylist,
     })
   );
@@ -79,18 +77,25 @@ function collectConfiguredMcpServerNames(params: {
 }): string[] {
   const servers = normalizeConfiguredMcpServers(params.config?.mcp?.servers);
   const denylist = normalizeToolDenylist(params.toolDenylist);
-  return Object.entries(servers)
-    .filter(([, value]) => isRecord(value) && value.enabled !== false)
-    .filter(
-      ([name]) =>
-        !denylistBlocksMcpServer({
-          serverName: name,
-          rawDenylist: params.toolDenylist,
-          denylist,
-        }),
-    )
-    .map(([name]) => name.trim())
-    .filter(Boolean);
+  const usedServerNames = new Set<string>();
+  const names: string[] = [];
+  for (const [name, value] of Object.entries(servers)) {
+    if (!isRecord(value) || value.enabled === false || !name.trim()) {
+      continue;
+    }
+    const safeServerName = sanitizeServerName(name, usedServerNames);
+    if (
+      denylistBlocksMcpServer({
+        safeServerName,
+        rawDenylist: params.toolDenylist,
+        denylist,
+      })
+    ) {
+      continue;
+    }
+    names.push(safeServerName);
+  }
+  return names;
 }
 
 function collectAvailableManifestToolNames(params: {

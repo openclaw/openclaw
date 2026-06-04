@@ -334,6 +334,42 @@ describe("tool-policy-pipeline", () => {
     ]);
   });
 
+  test("warns when denied duplicate-safe MCP server namespace is allowlisted", () => {
+    const warnings: string[] = [];
+    const declared = buildDeclaredToolAllowlistContext({
+      config: {
+        mcp: {
+          servers: {
+            "vigil harbor": { command: "vigil-mcp" },
+            "vigil:harbor": { command: "vigil-alt-mcp" },
+          },
+        },
+      },
+      workspaceDir: process.cwd(),
+      toolDenylist: ["vigil-harbor-2__*"],
+    });
+
+    expect(Array.from(declared?.mcpServerNames ?? [])).toEqual(["vigil-harbor"]);
+
+    applyToolPolicyPipeline({
+      tools: [{ name: "exec" }] as any,
+      toolMeta: () => undefined,
+      warn: (msg) => warnings.push(msg),
+      declaredToolAllowlist: declared,
+      steps: [
+        {
+          policy: { allow: ["vigil-harbor__*", "vigil-harbor-2__*"] },
+          label: "tools.allow",
+          stripPluginOnlyAllowlist: true,
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([
+      "tools: tools.allow allowlist contains unknown entries (vigil-harbor-2__*). These entries won't match any tool unless the plugin is enabled.",
+    ]);
+  });
+
   test("dedupes identical unknown-allowlist warnings across repeated runs", () => {
     const warnings: string[] = [];
     const tools = [{ name: "exec" }] as unknown as DummyTool[];
