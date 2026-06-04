@@ -38,6 +38,20 @@ function writeExecutable(pathname: string, content: string): void {
   fs.writeFileSync(pathname, content, { mode: 0o755 });
 }
 
+function writeSupportedTelegramFaultHook(root: string): void {
+  const pathname = path.join(root, "extensions/telegram/src/bot-message-dispatch.ts");
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  fs.writeFileSync(
+    pathname,
+    [
+      "process.env.OPENCLAW_TELEGRAM_QA_DISPATCH_FAULT;",
+      'const scenario = "late-dispatch-after-final";',
+      'throw new Error("telegram qa forced late dispatch error after final delivery");',
+    ].join("\n"),
+    "utf8",
+  );
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
   while (Date.now() - started < timeoutMs) {
@@ -228,6 +242,33 @@ setInterval(() => {}, 1000);
     }
   });
 
+  it("rejects late dispatch proof scenarios when the SUT lacks the fault hook", async () => {
+    const root = makeTempDir();
+    const outputDir = makeTempDir();
+
+    await expect(
+      startLocalSut(
+        {
+          gatewayPort: 19042,
+          groupId: "group",
+          mockPort: 19043,
+          mockResponseText: "ok",
+          outputDir,
+          proofScenario: "late-dispatch-after-final",
+          repoRoot: root,
+          sutToken: "token",
+          testerId: "tester",
+        },
+        {
+          drainUpdates: async () => ({
+            drained: 0,
+            webhookUrlSet: false,
+          }),
+        },
+      ),
+    ).rejects.toThrow("requires this SUT checkout to include the Telegram QA dispatch fault hook");
+  });
+
   posixIt("cleans local SUT children when gateway startup fails", async () => {
     const root = makeTempDir();
     const outputDir = makeTempDir();
@@ -236,6 +277,7 @@ setInterval(() => {}, 1000);
     const mockPidPath = path.join(root, "mock.pid");
     const mockTermPath = path.join(root, "mock.term");
     fs.mkdirSync(path.dirname(mockScript), { recursive: true });
+    writeSupportedTelegramFaultHook(root);
     let gatewayEnv: NodeJS.ProcessEnv | undefined;
     vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
     vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");

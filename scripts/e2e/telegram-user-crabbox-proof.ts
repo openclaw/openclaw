@@ -26,6 +26,8 @@ type PreviewCrop = "telegram-window";
 type ProofScenario = "late-dispatch-after-final";
 
 const TELEGRAM_LATE_DISPATCH_AFTER_FINAL_SCENARIO: ProofScenario = "late-dispatch-after-final";
+const TELEGRAM_QA_DISPATCH_FAULT_ENV = "OPENCLAW_TELEGRAM_QA_DISPATCH_FAULT";
+const TELEGRAM_DISPATCH_FAULT_HOOK_PATH = "extensions/telegram/src/bot-message-dispatch.ts";
 
 type CrabboxInspect = {
   host?: string;
@@ -503,9 +505,43 @@ function gatewayEnv(params: {
     OPENCLAW_STATE_DIR: params.stateDir,
     TELEGRAM_BOT_TOKEN: params.sutToken,
     ...(params.proofScenario === TELEGRAM_LATE_DISPATCH_AFTER_FINAL_SCENARIO
-      ? { OPENCLAW_TELEGRAM_QA_DISPATCH_FAULT: params.proofScenario }
+      ? { [TELEGRAM_QA_DISPATCH_FAULT_ENV]: params.proofScenario }
       : {}),
   };
+}
+
+function repoSupportsLateDispatchFaultScenario(sutRepoRoot: string): boolean {
+  try {
+    const source = fs.readFileSync(
+      path.join(sutRepoRoot, TELEGRAM_DISPATCH_FAULT_HOOK_PATH),
+      "utf8",
+    );
+    return (
+      source.includes(TELEGRAM_QA_DISPATCH_FAULT_ENV) &&
+      source.includes(TELEGRAM_LATE_DISPATCH_AFTER_FINAL_SCENARIO) &&
+      source.includes("telegram qa forced late dispatch error after final delivery")
+    );
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+function assertProofScenarioSupportedBySut(params: {
+  proofScenario?: ProofScenario;
+  repoRoot: string;
+}) {
+  if (params.proofScenario !== TELEGRAM_LATE_DISPATCH_AFTER_FINAL_SCENARIO) {
+    return;
+  }
+  if (repoSupportsLateDispatchFaultScenario(params.repoRoot)) {
+    return;
+  }
+  throw new Error(
+    "Proof scenario late-dispatch-after-final requires this SUT checkout to include the Telegram QA dispatch fault hook. Rebase the candidate onto the harness or run proof against a merge result before using it as exact-path proof.",
+  );
 }
 
 export function createOpenClawGatewaySpawnSpec(params: {
@@ -1075,6 +1111,7 @@ export async function startLocalSut(
   try {
     const drained = await drainUpdates(params.sutToken);
     const config = writeConfig(params);
+    assertProofScenarioSupportedBySut(params);
     const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
     mock = spawnLoggedCommand("node", ["scripts/e2e/mock-openai-server.mjs"], {
       cwd: params.repoRoot,
@@ -1179,6 +1216,7 @@ async function startLocalSutDaemon(params: {
 }) {
   const drained = await drainSutUpdates(params.sutToken);
   const config = writeSutConfig(params);
+  assertProofScenarioSupportedBySut(params);
   const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
   const mockLog = path.join(params.outputDir, "mock-openai.log");
   const gatewayLog = path.join(params.outputDir, "gateway.log");

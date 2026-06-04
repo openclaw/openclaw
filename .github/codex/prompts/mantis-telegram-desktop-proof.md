@@ -104,6 +104,11 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    Telegram-visible delta is a duplicate generic fallback after a final answer
    and later dispatch/cleanup error, use the proof runner with
    `--proof-scenario late-dispatch-after-final` for both baseline and candidate.
+   This scenario is exact-path proof only when the runner accepts it in each SUT
+   checkout. If the runner says the candidate checkout does not include the
+   Telegram QA dispatch fault hook, report that the candidate must rebase onto
+   the harness or be tested as a merge result; do not treat that run as proof
+   that the candidate fixed the duplicate fallback.
 5. Create detached worktrees under
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/baseline` and
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/candidate`, then
