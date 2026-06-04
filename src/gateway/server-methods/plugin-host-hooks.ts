@@ -18,6 +18,7 @@ import {
   type JsonSchemaValue,
 } from "../../plugins/schema-validator.js";
 import { ADMIN_SCOPE, READ_SCOPE, WRITE_SCOPE } from "../operator-scopes.js";
+import { findReadablePluginSessionActionRegistration } from "../plugin-session-action-registrations.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("gateway/plugin-host-hooks");
@@ -90,10 +91,12 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
     const pluginLoaded = Boolean(
       registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
     );
-    const registration = (registry?.sessionActions ?? []).find(
-      (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
-    );
-    if (!registration || !pluginLoaded) {
+    const sessionAction = findReadablePluginSessionActionRegistration({
+      registrations: registry?.sessionActions,
+      pluginId,
+      actionId,
+    });
+    if (!sessionAction || !pluginLoaded) {
       respond(
         false,
         undefined,
@@ -104,12 +107,10 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    const registration = sessionAction.registration;
     const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
     const hasAdmin = scopes.includes(ADMIN_SCOPE);
-    const requiredScopes =
-      registration.action.requiredScopes && registration.action.requiredScopes.length > 0
-        ? registration.action.requiredScopes
-        : [WRITE_SCOPE];
+    const requiredScopes = sessionAction.requiredScopes;
     // Plugin actions default to write access, while read-only actions can opt
     // down. Admin bypasses all checks and write includes read for UI callers.
     const missingScope = requiredScopes.find(

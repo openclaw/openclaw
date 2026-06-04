@@ -651,6 +651,107 @@ describe("plugin session actions", () => {
     expect(originalScopes).toEqual([READ_SCOPE]);
   });
 
+  it("skips unreadable session action rows when dispatching through the gateway", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ result: { ok: true } }));
+    const unreadableAction = Object.defineProperty(
+      {
+        pluginId: "session-action-fixture",
+        pluginName: "Session Action Fixture",
+        source: "test",
+      },
+      "action",
+      {
+        get() {
+          throw new Error("plugin session action row exploded");
+        },
+      },
+    );
+    registry.sessionActions = [
+      unreadableAction as never,
+      {
+        pluginId: "session-action-fixture",
+        pluginName: "Session Action Fixture",
+        source: "test",
+        action: {
+          id: "view",
+          requiredScopes: [READ_SCOPE],
+          handler,
+        },
+      },
+    ];
+    registry.plugins = [
+      createPluginRecord({
+        id: "session-action-fixture",
+        name: "Session Action Fixture",
+      }),
+    ];
+    setActivePluginRegistry(registry);
+
+    await expect(
+      callRegisteredSessionActionThroughGatewayForTest({
+        pluginId: "session-action-fixture",
+        actionId: "view",
+        scopes: [READ_SCOPE],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { ok: true, result: { ok: true } },
+      error: undefined,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not authorize session actions with sparse requiredScopes", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn(() => ({ result: { ok: true } }));
+    const sparseRequiredScopes = [] as string[];
+    sparseRequiredScopes.length = 1;
+    registry.sessionActions = [
+      {
+        pluginId: "sparse-scope-fixture",
+        pluginName: "Sparse Scope Fixture",
+        source: "test",
+        action: {
+          id: "run",
+          requiredScopes: sparseRequiredScopes as never,
+          handler,
+        },
+      },
+    ];
+    registry.plugins = [
+      createPluginRecord({
+        id: "sparse-scope-fixture",
+        name: "Sparse Scope Fixture",
+      }),
+    ];
+    setActivePluginRegistry(registry);
+
+    const response = await callRegisteredSessionActionThroughGatewayForTest({
+      pluginId: "sparse-scope-fixture",
+      actionId: "run",
+      scopes: [],
+    });
+
+    const error = requireHookError(response);
+    expect(error.code).toBe("INVALID_REQUEST");
+    expect(error.message).toBe(`missing scope: ${WRITE_SCOPE}`);
+    expect(handler).not.toHaveBeenCalled();
+
+    await expect(
+      callRegisteredSessionActionThroughGatewayForTest({
+        pluginId: "sparse-scope-fixture",
+        actionId: "run",
+        scopes: [WRITE_SCOPE],
+      }),
+    ).resolves.toEqual({
+      ok: true,
+      payload: { ok: true, result: { ok: true } },
+      error: undefined,
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
   it("does not dispatch session actions for plugins that are not loaded", async () => {
     const handler = vi.fn(() => ({ result: { stale: true } }));
     const registry = createEmptyPluginRegistry();

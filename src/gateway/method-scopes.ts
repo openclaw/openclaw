@@ -17,6 +17,7 @@ import {
   isOperatorScope,
   type OperatorScope,
 } from "./operator-scopes.js";
+import { findReadablePluginSessionActionRegistration } from "./plugin-session-action-registrations.js";
 
 export {
   ADMIN_SCOPE,
@@ -100,14 +101,15 @@ function resolveSessionActionRegisteredScopes(params: unknown): OperatorScope[] 
   if (!pluginId || !actionId) {
     return undefined;
   }
-  const registration = getPluginRegistryState()?.activeRegistry?.sessionActions?.find(
-    (entry) => entry.pluginId === pluginId && entry.action.id === actionId,
-  );
+  const registration = findReadablePluginSessionActionRegistration({
+    registrations: getPluginRegistryState()?.activeRegistry?.sessionActions,
+    pluginId,
+    actionId,
+  });
   if (!registration) {
     return undefined;
   }
-  const requiredScopes = registration.action.requiredScopes;
-  return requiredScopes && requiredScopes.length > 0 ? [...requiredScopes] : [WRITE_SCOPE];
+  return [...registration.requiredScopes];
 }
 
 function resolveSessionActionLeastPrivilegeScopes(params: unknown): OperatorScope[] {

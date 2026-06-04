@@ -178,6 +178,50 @@ describe("method scope resolution", () => {
     ).toEqual({ allowed: false, missingScope: "operator.approvals" });
   });
 
+  it("skips unreadable plugin session action rows while resolving scopes", () => {
+    const registry = createEmptyPluginRegistry();
+    const unreadableAction = Object.defineProperty(
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+      },
+      "action",
+      {
+        get() {
+          throw new Error("plugin session action row exploded");
+        },
+      },
+    );
+    registry.sessionActions = [
+      unreadableAction as never,
+      {
+        pluginId: "scope-plugin",
+        pluginName: "Scope Plugin",
+        source: "test",
+        action: {
+          id: "approve",
+          requiredScopes: ["operator.approvals"],
+          handler: () => ({ result: { ok: true } }),
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+
+    expect(
+      resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual(["operator.approvals"]);
+    expect(
+      authorizeOperatorScopesForMethod("plugins.sessionAction", ["operator.approvals"], {
+        pluginId: "scope-plugin",
+        actionId: "approve",
+      }),
+    ).toEqual({ allowed: true });
+  });
+
   it("falls back to broad operator scopes when a dynamic session action is not locally registered", () => {
     expect(
       resolveLeastPrivilegeOperatorScopesForMethod("plugins.sessionAction", {
