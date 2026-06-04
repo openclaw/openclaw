@@ -3,7 +3,7 @@ import type { SandboxFsBridge, SandboxFsStat } from "./sandbox/fs-bridge.js";
 import { verifyWrittenContent, verifyWrittenStat } from "./sessions/tools/write-verification.js";
 
 export async function verifyHostFile(absolutePath: string, content: string): Promise<void> {
-  let stat: { type: "file" | "directory" | "other"; size: number } | null = null;
+  let stat: { type: "file" | "directory" | "other"; size: number } | null;
   try {
     const fileStat = await fs.stat(absolutePath);
     stat = {

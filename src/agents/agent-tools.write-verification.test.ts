@@ -44,6 +44,7 @@ describe("agent-tools write verification", () => {
       stat: async () => ({
         type: "file",
         size: Buffer.byteLength(content, "utf8"),
+        mtimeMs: Date.now(),
       }),
     };
 
