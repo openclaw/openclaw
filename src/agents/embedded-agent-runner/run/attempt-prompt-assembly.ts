@@ -81,6 +81,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
   orphanRepair?: OrphanRepairPlan;
   sessionAgentId: string;
   runtimeModel: string;
+  runtimeSelfContextToolAvailable: boolean;
   systemPromptText: string;
   setActiveSessionSystemPrompt: (systemPrompt: string) => void;
   setLeasedSteering: (lease: EmbeddedAttemptSteeringLease) => void;
@@ -322,6 +323,7 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
       prompt: promptForRuntimeContextSplit,
       config: attempt.config ?? getRuntimeConfig(),
+      runtimeToolAvailable: input.runtimeSelfContextToolAvailable,
     });
   }
   const transcriptLeafId =
