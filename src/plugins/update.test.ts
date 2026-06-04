@@ -908,6 +908,67 @@ describe("updateNpmInstalledPlugins", () => {
     expect(npmInstallCall(1)?.expectedIntegrity).toBe("sha512-old");
   });
 
+  it("keeps integrity checks when beta fallback bare spec resolves to a prerelease first", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@openclaw/acpx",
+      version: "2026.5.2",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.3-beta.1",
+      integrity: "sha512-beta",
+    });
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.3-beta.1",
+      integrity: "sha512-beta",
+    });
+    mockNpmViewVersions(["2026.5.2", "2026.5.3-beta.1"]);
+    mockNpmViewMetadata({
+      name: "@openclaw/acpx",
+      version: "2026.5.2",
+      integrity: "sha512-old",
+    });
+    installPluginFromNpmSpecMock
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "No matching version found for @openclaw/acpx@beta",
+        code: "npm_package_not_found",
+      })
+      .mockResolvedValueOnce(
+        createSuccessfulNpmUpdateResult({
+          pluginId: "acpx",
+          targetDir: installPath,
+          version: "2026.5.2",
+          npmResolution: {
+            name: "@openclaw/acpx",
+            version: "2026.5.2",
+            resolvedSpec: "@openclaw/acpx@2026.5.2",
+          },
+        }),
+      );
+
+    await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "acpx",
+        spec: "@openclaw/acpx@2026.5.2",
+        installPath,
+        resolvedName: "@openclaw/acpx",
+        resolvedSpec: "@openclaw/acpx@2026.5.2",
+        resolvedVersion: "2026.5.2",
+        integrity: "sha512-old",
+      }),
+      pluginIds: ["acpx"],
+      syncOfficialPluginInstalls: true,
+      updateChannel: "beta",
+    });
+
+    expect(npmInstallCall(0)?.spec).toBe("@openclaw/acpx@beta");
+    expect(npmInstallCall(0)?.expectedIntegrity).toBeUndefined();
+    expect(npmInstallCall(1)?.spec).toBe("@openclaw/acpx");
+    expect(npmInstallCall(1)?.expectedIntegrity).toBe("sha512-old");
+  });
+
   it("keeps third-party moving npm specs when their updates resolve exact artifacts", async () => {
     const installPath = createInstalledPackageDir({
       name: "@martian-engineering/lossless-claw",
