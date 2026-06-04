@@ -1318,10 +1318,6 @@ function resolvePackageRegistryTargetFromInstallSpec(installSpec: string | null)
   return resolveRegistryLookupTarget(target);
 }
 
-function hasPackageInstallSpecOverride(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.OPENCLAW_UPDATE_PACKAGE_SPEC?.trim());
-}
-
 async function resolvePackageTargetAvailabilityPreflightError(params: {
   installSpec: string | null;
   timeoutMs?: number;
@@ -3615,9 +3611,15 @@ async function updateCommandInternal(opts: UpdateCommandOptions): Promise<void> 
       tag,
       env: process.env,
     });
-    const availabilityInstallSpec = hasPackageInstallSpecOverride(process.env)
-      ? null
-      : packageInstallSpec;
+    // Run the availability preflight against the spec the package manager will
+    // actually install. When OPENCLAW_UPDATE_PACKAGE_SPEC is set, that override
+    // *is* the install target, so a registry-style override such as
+    // `openclaw@<version|tag>` must be preflighted too — otherwise dry-run/apply
+    // green-lights an override target npm install later rejects with ETARGET.
+    // Non-registry overrides (tarball/git/URL specs) and custom registries stay
+    // exempt because resolvePackageTargetAvailabilityPreflightError only probes
+    // registry-style `openclaw@<target>` specs on the public npm registry.
+    const availabilityInstallSpec = packageInstallSpec;
     const packageTargetManager = resolvePackageRegistryTargetFromInstallSpec(availabilityInstallSpec)
       ? await resolvePackageUpdateManager()
       : null;

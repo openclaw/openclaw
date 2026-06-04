@@ -3049,7 +3049,7 @@ describe("update-cli", () => {
     expectPackageInstallSpec("http://10.211.55.2:8138/openclaw-next.tgz");
   });
 
-  it("skips npm availability preflight for registry-style package spec overrides", async () => {
+  it("runs npm availability preflight for absent registry-style package spec overrides", async () => {
     mockPackageInstallStatus(createCaseDir("openclaw-update"));
     readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
     vi.mocked(fetchNpmPackageTargetStatus).mockImplementation(async ({ target }) => ({
@@ -3063,16 +3063,45 @@ describe("update-cli", () => {
       await updateCommand({ yes: true, tag: "2026.5.26", restart: false });
     });
 
-    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    // `openclaw@next` is the spec the package manager will actually install, so
+    // the availability preflight must check that override target, not just the
+    // requested `--tag`. An absent override must fail closed before install.
+    expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
+      target: "next",
+      timeoutMs: undefined,
+    });
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(runGatewayUpdate).not.toHaveBeenCalled();
+    expect(packageInstallCommandCall()).toBeUndefined();
+    expect(serviceStop).not.toHaveBeenCalled();
+    const errors = vi.mocked(defaultRuntime.error).mock.calls.map((call) => String(call[0]));
+    expect(errors.join("\n")).toContain(
+      "openclaw@next is not available on the npm registry yet.",
+    );
+  });
+
+  it("allows available registry-style package spec overrides through the preflight", async () => {
+    mockPackageInstallStatus(createCaseDir("openclaw-update"));
+    readPackageVersion.mockResolvedValue("2026.5.24-beta.2");
+    vi.mocked(fetchNpmPackageTargetStatus).mockResolvedValue({
+      target: "2026.5.26",
+      version: "2026.5.26",
+      nodeEngine: ">=22.19.0",
+    });
+
+    await withEnvAsync(
+      { OPENCLAW_UPDATE_PACKAGE_SPEC: "openclaw@2026.5.26" },
+      async () => {
+        await updateCommand({ yes: true, tag: "latest", restart: false });
+      },
+    );
+
     expect(fetchNpmPackageTargetStatus).toHaveBeenCalledWith({
       target: "2026.5.26",
       timeoutMs: undefined,
     });
-    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalledWith({
-      target: "next",
-      timeoutMs: undefined,
-    });
-    expectPackageInstallSpec("openclaw@next");
+    expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+    expectPackageInstallSpec("openclaw@2026.5.26");
   });
 
   it.each([
