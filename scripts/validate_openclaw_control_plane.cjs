@@ -362,7 +362,7 @@ function checkRegistries() {
     }
 
     for (const componentKey of REQUIRED_COMPONENT_KEYS) {
-      if (!Object.prototype.hasOwnProperty.call(workflow.components, componentKey)) {
+      if (!Object.hasOwn(workflow.components, componentKey)) {
         addFinding(
           "error",
           `Workflow is missing component declaration: ${componentKey}.`,
@@ -420,14 +420,14 @@ function checkPhiPatternsInArtifacts() {
 }
 
 function summarizeStatus() {
-  const severities = findings.map((finding) => finding.severity);
-  if (severities.includes("blocked")) {
+  const severities = new Set(findings.map((finding) => finding.severity));
+  if (severities.has("blocked")) {
     return "BLOCKED";
   }
-  if (severities.includes("error")) {
+  if (severities.has("error")) {
     return "FAIL";
   }
-  if (severities.includes("warning")) {
+  if (severities.has("warning")) {
     return "WARN";
   }
   return "PASS";
