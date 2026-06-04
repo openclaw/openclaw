@@ -192,6 +192,11 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
   it("returns true for comments only", () => {
     expect(isHeartbeatContentEffectivelyEmpty("# Header\n# Another comment")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
+    expect(
+      isHeartbeatContentEffectivelyEmpty(
+        "<!-- Heartbeat template; comments-only content prevents scheduled heartbeat API calls. -->",
+      ),
+    ).toBe(true);
   });
 
   it("returns false when a template includes plain instructional prose", () => {
