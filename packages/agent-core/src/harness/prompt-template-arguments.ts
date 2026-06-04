@@ -1,14 +1,14 @@
-function isTokenBoundary(char: string | undefined): boolean {
-  return char === undefined || /\s/.test(char);
+function isWordCharacter(char: string | undefined): boolean {
+  return char !== undefined && /\w/.test(char);
 }
 
 function opensQuotedSpan(chars: string[], index: number): boolean {
-  if (!isTokenBoundary(chars[index - 1])) {
+  const quote = chars[index];
+  if (quote === "'" && isWordCharacter(chars[index - 1])) {
     return false;
   }
-  const quote = chars[index];
   for (let j = index + 1; j < chars.length; j++) {
-    if (chars[j] === quote && isTokenBoundary(chars[j + 1])) {
+    if (chars[j] === quote) {
       return true;
     }
   }

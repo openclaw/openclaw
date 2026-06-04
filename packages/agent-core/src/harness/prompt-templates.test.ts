@@ -42,6 +42,13 @@ describe("prompt template argument substitution", () => {
     expect(substituteArgs("[$1][$2][$3][$4]", args)).toBe("[don't][it's][broken][now]");
   });
 
+  it("groups shell-style quoted spans embedded in a token", () => {
+    expect(parseCommandArgs(`--title="two words" next`)).toEqual(["--title=two words", "next"]);
+    expect(parseCommandArgs("foo='bar baz' next")).toEqual(["foo=bar baz", "next"]);
+    const args = parseCommandArgs(`--title="two words" next`);
+    expect(substituteArgs("[$1][$2]", args)).toBe("[--title=two words][next]");
+  });
+
   it("rejects unsafe positional placeholders", () => {
     expect(substituteArgs("$9007199254740992", ["first", "second"])).toBe("");
   });
