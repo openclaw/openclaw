@@ -492,17 +492,42 @@ export function normalizeSessionRuntimeModelFields(entry: SessionEntry): Session
   return next;
 }
 
+function normalizeSessionRuntimeModelPair(runtime: {
+  provider: string;
+  model: string;
+}): { provider: string; model: string } | undefined {
+  const provider = runtime.provider.trim();
+  const model = runtime.model.trim();
+  if (!provider || !model) {
+    return undefined;
+  }
+
+  const normalizedProvider = provider.toLowerCase();
+  const normalizedModel = model.toLowerCase();
+  if (normalizedProvider === "openai-codex") {
+    const legacyPrefix = "openai-codex/";
+    const nextModel = normalizedModel.startsWith(legacyPrefix)
+      ? model.slice(legacyPrefix.length).trim()
+      : model;
+    return nextModel ? { provider: "openai", model: nextModel } : undefined;
+  }
+  if (normalizedProvider === "openai" && normalizedModel.startsWith("openai-codex/")) {
+    const nextModel = model.slice("openai-codex/".length).trim();
+    return nextModel ? { provider, model: nextModel } : undefined;
+  }
+  return { provider, model };
+}
+
 export function setSessionRuntimeModel(
   entry: SessionEntry,
   runtime: { provider: string; model: string },
 ): boolean {
-  const provider = runtime.provider.trim();
-  const model = runtime.model.trim();
-  if (!provider || !model) {
+  const normalized = normalizeSessionRuntimeModelPair(runtime);
+  if (!normalized) {
     return false;
   }
-  entry.modelProvider = provider;
-  entry.model = model;
+  entry.modelProvider = normalized.provider;
+  entry.model = normalized.model;
   return true;
 }
 

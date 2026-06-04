@@ -25,7 +25,12 @@ import {
   updateSessionStoreEntry,
 } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
-import { mergeSessionEntry, mergeSessionEntryWithPolicy, type SessionEntry } from "./types.js";
+import {
+  mergeSessionEntry,
+  mergeSessionEntryWithPolicy,
+  setSessionRuntimeModel,
+  type SessionEntry,
+} from "./types.js";
 
 type WriteTextAtomicCall = Parameters<typeof jsonFiles.writeTextAtomic>;
 
@@ -980,6 +985,31 @@ describe("session store writer queue", () => {
     );
 
     expect(merged.updatedAt).toBe(now);
+  });
+
+  it("canonicalizes legacy Codex runtime model pairs before persisting sessions", () => {
+    const entry: SessionEntry = {
+      sessionId: "sess-codex-runtime",
+      updatedAt: 1,
+    };
+
+    expect(
+      setSessionRuntimeModel(entry, {
+        provider: "openai-codex",
+        model: "openai-codex/gpt-5.5",
+      }),
+    ).toBe(true);
+    expect(entry.modelProvider).toBe("openai");
+    expect(entry.model).toBe("gpt-5.5");
+
+    expect(
+      setSessionRuntimeModel(entry, {
+        provider: "openai",
+        model: "openai-codex/gpt-5.4",
+      }),
+    ).toBe(true);
+    expect(entry.modelProvider).toBe("openai");
+    expect(entry.model).toBe("gpt-5.4");
   });
 
   it("normalizes orphan modelProvider fields at store write boundary", async () => {
