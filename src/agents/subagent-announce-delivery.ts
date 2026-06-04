@@ -13,6 +13,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
 import { sourceDeliveryTargetsMatch } from "../infra/outbound/source-delivery-plan.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -1474,12 +1475,46 @@ async function sendSubagentAnnounceDirectly(params: {
         expectedMediaUrls.length === 0 &&
         !requiresMessageToolDelivery
       ) {
-        return {
-          delivered: false,
-          path: "direct",
-          reason: "completion_handoff_pending",
-          error: "completion agent handoff is still pending",
-        };
+        // The gateway accepted the agent run but it has not yet reached a
+        // streaming/terminal state. This commonly happens when the
+        // requester parent is registered in ACTIVE_EMBEDDED_RUNS but its
+        // handle.isStreaming() is false (yielded, queued behind work,
+        // compaction-prep, or tool-result truncation). Returning
+        // {delivered:false} here is what produces today's `delivery_failed`
+        // audit findings: the requester is stuck waiting for an event that
+        // already arrived in the gateway but cannot deliver back.
+        //
+        // Instead, enqueue the trigger message into the requester's
+        // in-process durable system-event inbox keyed by the announce's
+        // direct idempotency key (which uniquely identifies this child
+        // announce). The inbox is drained on the requester's next
+        // turn-start (the same path used by jobs, hooks, restart
+        // sentinels, ACP child spawns, monitor events, and the
+        // group/channel completion path in task-registry). Idempotent on
+        // (text, contextKey, deliveryContext); MAX_EVENTS=20 per session.
+        try {
+          const durableContextKey = `subagent-announce:${params.directIdempotencyKey}`;
+          const durableDeliveryContext =
+            requesterSessionOrigin ?? completionExternalFallbackOrigin ?? directOrigin;
+          enqueueSystemEvent(params.triggerMessage, {
+            sessionKey: canonicalRequesterSessionKey,
+            contextKey: durableContextKey,
+            deliveryContext: durableDeliveryContext,
+          });
+          return {
+            delivered: true,
+            path: "durable_queue",
+          };
+        } catch {
+          // Fall through to the original give-up shape so existing
+          // retry/give-up bookkeeping stays as the safety net.
+          return {
+            delivered: false,
+            path: "direct",
+            reason: "completion_handoff_pending",
+            error: "completion agent handoff is still pending",
+          };
+        }
       }
       return {
         delivered: true,
