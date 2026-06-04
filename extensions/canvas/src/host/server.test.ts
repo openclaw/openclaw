@@ -383,8 +383,14 @@ describe("canvas host", () => {
       createdBundle = true;
     }
 
-    await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
-    createdLink = true;
+    try {
+      await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
+      createdLink = true;
+    } catch (err: any) {
+      if (err.code !== "EPERM") {
+        throw err;
+      }
+    }
 
     try {
       const res = await captureA2uiResponse(`${A2UI_PATH}/`);

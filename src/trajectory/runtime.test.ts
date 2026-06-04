@@ -44,7 +44,7 @@ describe("trajectory runtime", () => {
         sessionFile: "/tmp/session.jsonl",
         sessionId: "session-1",
       }),
-    ).toBe("/tmp/session.trajectory.jsonl");
+    ).toBe(path.resolve("/tmp/session.trajectory.jsonl"));
   });
 
   it("sanitizes session ids when resolving an override directory", () => {
@@ -53,7 +53,7 @@ describe("trajectory runtime", () => {
         env: { OPENCLAW_TRAJECTORY_DIR: "/tmp/traces" },
         sessionId: "../evil/session",
       }),
-    ).toBe("/tmp/traces/___evil_session.jsonl");
+    ).toBe(path.resolve("/tmp/traces/___evil_session.jsonl"));
   });
 
   it("records sanitized runtime events by default", () => {

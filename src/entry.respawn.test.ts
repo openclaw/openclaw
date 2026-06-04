@@ -45,6 +45,7 @@ describe("buildCliRespawnPlan", () => {
       env: {},
       execArgv: [],
       autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
     });
 
     const respawnPlan = expectCliRespawnPlan(plan);
@@ -63,6 +64,7 @@ describe("buildCliRespawnPlan", () => {
         env: {},
         execArgv: [],
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
       });
 
       const respawnPlan = expectCliRespawnPlan(plan);
@@ -80,6 +82,7 @@ describe("buildCliRespawnPlan", () => {
         env: { [OPENCLAW_NODE_EXTRA_CA_CERTS_READY]: "1" },
         execArgv: [],
         autoNodeExtraCaCerts: undefined,
+        platform: "linux",
       }),
     ).toBeNull();
   });
@@ -90,6 +93,7 @@ describe("buildCliRespawnPlan", () => {
       env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" },
       execArgv: [],
       autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+      platform: "linux",
     });
 
     const respawnPlan = expectCliRespawnPlan(plan);
@@ -106,6 +110,7 @@ describe("buildCliRespawnPlan", () => {
         },
         execArgv: [EXPERIMENTAL_WARNING_FLAG],
         autoNodeExtraCaCerts: "/etc/ssl/certs/ca-certificates.crt",
+        platform: "linux",
       }),
     ).toBeNull();
   });
