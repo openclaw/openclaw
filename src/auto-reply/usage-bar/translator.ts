@@ -29,7 +29,10 @@ function toGlyphs(scale: unknown): string[] {
     return scale.filter((g): g is string => typeof g === "string");
   }
   if (typeof scale === "string") {
-    return [...scale];
+    // Array.from iterates by code point (like spread) so astral glyphs survive,
+    // without tripping no-misused-spread. Scales are single-code-point glyphs;
+    // multi-code-point emoji (e.g. ☀️) are supplied as array scales instead.
+    return Array.from(scale);
   }
   return [];
 }
@@ -208,7 +211,7 @@ function renderSegment(seg: Segment, ctx: unknown, vocab: Vocab): string | null 
     const key = typeof v === "boolean" ? String(v) : String(v);
     const cases = isObject(seg.cases) ? seg.cases : {};
     const hit = key in cases ? cases[key] : cases["_default"];
-    return hit ? String(hit) : null;
+    return typeof hit === "string" ? hit : null;
   }
   if ("each" in seg) {
     const arr = getPath(ctx, String(seg.each));
@@ -259,7 +262,7 @@ function resolveLayout(
     typeof surface === "string" &&
     isObject(template.surfaces) &&
     isObject(template.surfaces[surface])
-      ? (template.surfaces[surface] as Record<string, unknown>)
+      ? template.surfaces[surface]
       : {};
   const sep =
     typeof ov.sep === "string" ? ov.sep : typeof template.sep === "string" ? template.sep : " ";
