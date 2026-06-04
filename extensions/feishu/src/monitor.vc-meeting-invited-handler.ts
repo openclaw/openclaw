@@ -159,7 +159,8 @@ async function dispatchVcMeetingInvitedTurn(params: {
 }): Promise<void> {
   const account = resolveFeishuRuntimeAccount({ cfg: params.cfg, accountId: params.accountId });
   const feishuCfg = account.config;
-  const core = { channel: params.channelRuntime ?? getFeishuRuntime().channel } as ReturnType<
+  const feishuRuntime = getFeishuRuntime();
+  const core = { channel: params.channelRuntime ?? feishuRuntime.channel } as ReturnType<
     typeof getFeishuRuntime
   >;
   const log = params.runtime?.log ?? console.log;
@@ -231,7 +232,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
     if (dynamicCfg?.enabled) {
       const dynamicResult = await maybeCreateDynamicAgent({
         cfg: params.cfg,
-        runtime: core,
+        runtime: feishuRuntime,
         senderOpenId: params.turn.inviter.senderId,
         dynamicCfg,
         configWritesAllowed: resolveChannelConfigWrites({

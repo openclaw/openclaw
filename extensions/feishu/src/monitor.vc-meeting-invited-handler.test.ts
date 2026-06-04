@@ -94,7 +94,7 @@ function buildAccount(): ResolvedFeishuAccount {
   } as ResolvedFeishuAccount;
 }
 
-function buildRoute() {
+function buildRoute(overrides?: { matchedBy?: "binding.channel" | "default" }) {
   return {
     agentId: "main",
     channel: "feishu",
@@ -102,7 +102,7 @@ function buildRoute() {
     sessionKey: "agent:main:feishu:direct:ou_inviter_1",
     mainSessionKey: "agent:main:feishu",
     lastRoutePolicy: "session" as const,
-    matchedBy: "binding.channel" as const,
+    matchedBy: overrides?.matchedBy ?? ("binding.channel" as const),
   };
 }
 
@@ -120,6 +120,7 @@ function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex 
 function createTestRuntime(overrides?: {
   readAllowFromStore?: () => Promise<Array<string | number>>;
   upsertPairingRequest?: () => Promise<{ code: string; created: boolean }>;
+  resolveAgentRoute?: () => ReturnType<typeof buildRoute>;
 }) {
   const finalizeInboundContext = vi.fn((ctx: Record<string, unknown>) => ctx);
   const dispatchReplyFromConfig = vi.fn(async () => ({
@@ -160,7 +161,7 @@ function createTestRuntime(overrides?: {
   return {
     channel: {
       routing: {
-        resolveAgentRoute: vi.fn(() => buildRoute()),
+        resolveAgentRoute: vi.fn(overrides?.resolveAgentRoute ?? (() => buildRoute())),
         buildAgentSessionKey: vi.fn(),
       },
       reply: {
@@ -207,6 +208,9 @@ function createTestRuntime(overrides?: {
         resolveInboundDebounceMs: vi.fn(() => 0),
         createInboundDebouncer: vi.fn(),
       },
+    },
+    config: {
+      replaceConfigFile: vi.fn(async () => {}),
     },
   } as unknown as PluginRuntime;
 }
@@ -369,6 +373,47 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     expect(pairingReply?.accountId).toBe("default");
     expect(pairingReply?.text).toContain("Pairing code:");
     expect(pairingReply?.text).toContain("TESTCODE");
+  });
+
+  it("passes the full runtime to dynamic agent creation", async () => {
+    const runtime = createTestRuntime({
+      readAllowFromStore: async () => ["ou_inviter_1"],
+      resolveAgentRoute: () => buildRoute({ matchedBy: "default" }),
+    });
+    setFeishuRuntime(runtime);
+    const handler = createFeishuVcMeetingInvitedHandler({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "pairing",
+            allowFrom: [],
+            dynamicAgentCreation: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      accountId: "default",
+      chatHistories: new Map(),
+      fireAndForget: false,
+    });
+
+    await handler(vcEvent);
+
+    expect(maybeCreateDynamicAgentMock).toHaveBeenCalledTimes(1);
+    const dynamicAgentArgs = mockCallArg(maybeCreateDynamicAgentMock, "maybeCreateDynamicAgent") as
+      | {
+          runtime?: { config?: { replaceConfigFile?: unknown } };
+          senderOpenId?: string;
+          configWritesAllowed?: boolean;
+        }
+      | undefined;
+    expect(dynamicAgentArgs?.senderOpenId).toBe("ou_inviter_1");
+    expect(dynamicAgentArgs?.configWritesAllowed).toBe(true);
+    expect(dynamicAgentArgs?.runtime?.config?.replaceConfigFile).toBe(
+      runtime.config.replaceConfigFile,
+    );
   });
 });
 
