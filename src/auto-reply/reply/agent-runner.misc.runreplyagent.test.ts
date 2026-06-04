@@ -3142,6 +3142,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     inboundEventKind?: string;
     transcriptPrompt?: string;
     summaryLine?: string;
+    strandedReplyRecovery?: boolean;
   }) {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-stranded-"));
     const storePath = path.join(tmp, "sessions.json");
@@ -3190,7 +3191,16 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
         workspaceDir: tmp,
         // Direct chat + visibleReplies=message_tool resolves to message_tool_only,
         // so the final text is kept private (no automatic delivery).
-        config: { messages: { visibleReplies: "message_tool" } },
+        config: {
+          messages: {
+            visibleReplies: "message_tool",
+            // Default-off contract: stranded-reply recovery only runs when the
+            // operator opts in. Tests that exercise the retry enable it here.
+            ...(params.strandedReplyRecovery === undefined
+              ? {}
+              : { strandedReplyRecovery: params.strandedReplyRecovery }),
+          },
+        },
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude",
@@ -3237,8 +3247,16 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(warnPrivateFinalSpy.mock.calls[0]?.[0]).toMatchObject({ sessionKey: "stranded" });
   });
 
-  it("enqueues a followup retry for a stranded substantive reply (#85714)", async () => {
+  it("does not enqueue recovery retry by default (flag off) but still warns (#85714)", async () => {
+    // Default contract: no message call means no source reply. The diagnostic
+    // WARN must still fire, but recovery is opt-in, so no retry is enqueued.
     await runPrivateFinalCase({});
+    expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
+  });
+
+  it("enqueues a followup retry for a stranded substantive reply when opted in (#85714)", async () => {
+    await runPrivateFinalCase({ strandedReplyRecovery: true });
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     const retryPrompt = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1]?.prompt;
@@ -3247,12 +3265,16 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("does not enqueue retry for short private final replies", async () => {
-    await runPrivateFinalCase({ finalAssistantText: "Nothing to send here." });
+    await runPrivateFinalCase({
+      strandedReplyRecovery: true,
+      finalAssistantText: "Nothing to send here.",
+    });
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });
 
   it("does not enqueue retry when the message tool delivered this turn", async () => {
     await runPrivateFinalCase({
+      strandedReplyRecovery: true,
       messagingToolSentTargets: [{ tool: "message", provider: "whatsapp", to: "+15550001111" }],
     });
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
@@ -3281,7 +3303,10 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("clears transcriptPrompt on retry to prevent original prompt from hiding retry instruction (#85714)", async () => {
-    await runPrivateFinalCase({ transcriptPrompt: "original user question" });
+    await runPrivateFinalCase({
+      strandedReplyRecovery: true,
+      transcriptPrompt: "original user question",
+    });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
     // transcriptPrompt must be cleared so the followup runner uses the retry
@@ -3294,7 +3319,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
   });
 
   it("suppresses user-message persistence on retry to prevent private-text leak (#85714)", async () => {
-    await runPrivateFinalCase({});
+    await runPrivateFinalCase({ strandedReplyRecovery: true });
     expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
     // The retry prompt quotes the private message_tool_only final. Persisting it
     // as a user turn would leak that private text into durable session context,
@@ -3307,7 +3332,7 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     // The retry turn itself can fail to call message(action=send). Bound the
     // recovery to a single attempt: a run already marked as a stranded-reply
     // retry must not enqueue another retry, or it loops forever.
-    await runPrivateFinalCase({ summaryLine: "stranded-reply-retry" });
+    await runPrivateFinalCase({ strandedReplyRecovery: true, summaryLine: "stranded-reply-retry" });
     expect(warnPrivateFinalSpy).toHaveBeenCalledTimes(1);
     expect(vi.mocked(enqueueFollowupRun)).not.toHaveBeenCalled();
   });

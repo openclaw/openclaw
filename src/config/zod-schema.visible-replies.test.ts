@@ -67,6 +67,44 @@ describe("visible reply config schema", () => {
     }
   });
 
+  it("accepts the opt-in strandedReplyRecovery flag", () => {
+    const enabled = validateConfigObjectRaw({
+      messages: {
+        strandedReplyRecovery: true,
+      },
+    });
+    const disabled = validateConfigObjectRaw({
+      messages: {
+        strandedReplyRecovery: false,
+      },
+    });
+
+    expect(enabled.ok).toBe(true);
+    expect(disabled.ok).toBe(true);
+    if (enabled.ok) {
+      expect(enabled.config.messages?.strandedReplyRecovery).toBe(true);
+    }
+    if (disabled.ok) {
+      expect(disabled.config.messages?.strandedReplyRecovery).toBe(false);
+    }
+  });
+
+  it("rejects non-boolean strandedReplyRecovery values", () => {
+    const result = validateConfigObjectRaw({
+      messages: {
+        strandedReplyRecovery: "yes",
+      },
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      const issue = result.issues.find(
+        (candidate) => candidate.path === "messages.strandedReplyRecovery",
+      );
+      expect(issue?.path).toBe("messages.strandedReplyRecovery");
+    }
+  });
+
   it("accepts enum unmentioned group inbound values", () => {
     const legacy = validateConfigObjectRaw({
       messages: {
