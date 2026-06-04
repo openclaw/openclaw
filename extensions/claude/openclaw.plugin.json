@@ -43,14 +43,12 @@
           "turnTimeoutMs": {
             "type": "number",
             "minimum": 1,
-            "default": 600000,
-            "description": "Hard per-turn timeout in ms."
+            "description": "Hard per-turn timeout in ms. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS) so there is one source of truth; omit here to avoid the manifest default shadowing it."
           },
           "turnIdleTimeoutMs": {
             "type": "number",
             "minimum": 1,
-            "default": 90000,
-            "description": "Idle watchdog: fail the turn if no notification arrives for this many ms."
+            "description": "Idle watchdog: fail the turn if no notification arrives for this many ms. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS) for a single source of truth."
           }
         }
       },
