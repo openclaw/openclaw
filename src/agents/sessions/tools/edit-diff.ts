@@ -210,7 +210,7 @@ function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
  * and normalizes the complete segment, so cross-code-point NFKC composition
  * is handled correctly.
  */
-function mapLineOffsetThroughNfkc(origLine: string, normOffset: number): number {
+function mapLineOffsetThroughNfkc(origLine: string, normOffset: number, snapToEnd = false): number {
   const nfkcLine = origLine.normalize("NFKC");
   // Fast path: NFKC did not change the line length, so positions map 1:1.
   if (nfkcLine.length === origLine.length) {
@@ -241,9 +241,12 @@ function mapLineOffsetThroughNfkc(origLine: string, normOffset: number): number 
     }
 
     const segNfkc = segment.normalize("NFKC");
-    // Target falls inside this segment: map to segment start in original.
+    // Target falls inside this segment.
+    // When mapping end-of-match offsets (snapToEnd), snap to the segment end
+    // so partial matches inside NFKC-expanded characters produce a nonzero
+    // original range instead of a zero-length splice.
     if (nfkcPos + segNfkc.length > normOffset) {
-      return origPos;
+      return snapToEnd ? origPos + segOrigLen : origPos;
     }
 
     origPos += segOrigLen;
@@ -265,6 +268,7 @@ function mapNormalizedOffsetToOriginal(
   origLines: string[],
   normLines: string[],
   normalizedOffset: number,
+  snapToEnd = false,
 ): number {
   let normPos = 0;
   let origPos = 0;
@@ -275,7 +279,7 @@ function mapNormalizedOffsetToOriginal(
 
     if (normalizedOffset <= normPos + normLineLen) {
       const offsetInNormLine = normalizedOffset - normPos;
-      return origPos + mapLineOffsetThroughNfkc(origLines[i], offsetInNormLine);
+      return origPos + mapLineOffsetThroughNfkc(origLines[i], offsetInNormLine, snapToEnd);
     }
 
     normPos += normLineLen + 1;
@@ -339,6 +343,7 @@ export function applyEditsToNormalizedContent(
         origLines,
         normLines,
         matchResult.index + matchResult.matchLength,
+        true,
       );
       matchedEdits.push({
         editIndex: i,
