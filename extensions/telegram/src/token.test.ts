@@ -1,6 +1,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fs.writeFileSync(tempFile, "temp");
+    fs.symlinkSync(tempFile, tempLink, "file");
+    fs.unlinkSync(tempLink);
+    fs.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withStateDirEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -92,13 +106,13 @@ describe("resolveTelegramToken", () => {
     expect(res).toEqual(expected);
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinked tokenFile paths", () => {
+  it.skipIf(!canCreateFileSymlinks)("rejects symlinked tokenFile paths", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const dir = createTempDir();
     const tokenFile = path.join(dir, "token.txt");
     const tokenLink = path.join(dir, "token-link.txt");
     fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
-    fs.symlinkSync(tokenFile, tokenLink);
+    fs.symlinkSync(tokenFile, tokenLink, "file");
 
     const cfg = { channels: { telegram: { tokenFile: tokenLink } } } as OpenClawConfig;
     expect(() => resolveTelegramToken(cfg)).toThrow(
@@ -106,13 +120,13 @@ describe("resolveTelegramToken", () => {
     );
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinked account-level tokenFile paths", () => {
+  it.skipIf(!canCreateFileSymlinks)("rejects symlinked account-level tokenFile paths", () => {
     vi.stubEnv("TELEGRAM_BOT_TOKEN", "");
     const dir = createTempDir();
     const tokenFile = path.join(dir, "token.txt");
     const tokenLink = path.join(dir, "token-link.txt");
     fs.writeFileSync(tokenFile, "file-token\n", "utf-8");
-    fs.symlinkSync(tokenFile, tokenLink);
+    fs.symlinkSync(tokenFile, tokenLink, "file");
 
     const cfg = {
       channels: {
