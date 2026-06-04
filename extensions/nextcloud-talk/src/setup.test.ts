@@ -1,6 +1,20 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fs.writeFileSync(tempFile, "temp");
+    fs.symlinkSync(tempFile, tempLink, "file");
+    fs.unlinkSync(tempLink);
+    fs.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/routing";
 import { describe, expect, it } from "vitest";
 import { resolveNextcloudTalkAccount } from "./accounts.js";
@@ -371,12 +385,12 @@ describe("resolveNextcloudTalkAccount", () => {
     expect(account.secretSource).toBe("config");
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinked botSecretFile paths", () => {
+  it.skipIf(!canCreateFileSymlinks)("rejects symlinked botSecretFile paths", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-nextcloud-talk-"));
     const secretFile = path.join(dir, "secret.txt");
     const secretLink = path.join(dir, "secret-link.txt");
     fs.writeFileSync(secretFile, "bot-secret\n", "utf8");
-    fs.symlinkSync(secretFile, secretLink);
+    fs.symlinkSync(secretFile, secretLink, "file");
 
     const cfg = {
       channels: {
