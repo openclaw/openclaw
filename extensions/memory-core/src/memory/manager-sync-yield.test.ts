@@ -40,6 +40,8 @@ vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
 
 vi.mock("./embeddings.js", () => ({
   resolveEmbeddingProviderAdapterId: (providerId: string) => providerId,
+  resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+    providerId === "local" ? "local" : "remote",
   createEmbeddingProvider: vi.fn(),
 }));
 

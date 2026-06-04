@@ -68,6 +68,8 @@ vi.mock("./embeddings.js", () => {
         };
       },
     ) => config?.models?.providers?.[providerId]?.api ?? providerId,
+    resolveEmbeddingProviderAdapterTransport: (providerId: string) =>
+      providerId === "local" ? "local" : "remote",
     createEmbeddingProvider: async (options: {
       provider?: string;
       model?: string;

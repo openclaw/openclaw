@@ -34,11 +34,6 @@ export type ResolvedMemorySearchConfig = {
   extraPaths: string[];
   multimodal: MemoryMultimodalSettings;
   provider: string;
-  providerRequirement: {
-    mode: "fts-only" | "optional" | "required";
-    provider: string;
-    configuredProvider?: string;
-  };
   remote?: {
     baseUrl?: string;
     apiKey?: SecretInput;
@@ -211,21 +206,6 @@ function getConfiguredMemoryEmbeddingProvider(
     return undefined;
   }
   return getMemoryEmbeddingProvider(normalizedOwner);
-}
-
-function resolveMemoryEmbeddingProviderRequirement(
-  rawProvider: string | undefined,
-  provider: string,
-  adapterTransport?: "local" | "remote",
-): ResolvedMemorySearchConfig["providerRequirement"] {
-  const configuredProvider = rawProvider?.trim();
-  if (configuredProvider === "none") {
-    return { mode: "fts-only", provider };
-  }
-  if (!configuredProvider || configuredProvider === "auto" || adapterTransport === "local") {
-    return { mode: "optional", provider };
-  }
-  return { mode: "required", provider, configuredProvider };
 }
 
 function mergeConfig(
@@ -405,11 +385,6 @@ function mergeConfig(
     extraPaths,
     multimodal,
     provider,
-    providerRequirement: resolveMemoryEmbeddingProviderRequirement(
-      rawProvider,
-      provider,
-      primaryAdapter?.transport,
-    ),
     remote,
     experimental: {
       sessionMemory,
