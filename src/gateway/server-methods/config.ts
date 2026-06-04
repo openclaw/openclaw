@@ -181,7 +181,7 @@ export function resolveConfigOpenCommand(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `Start-Process -LiteralPath '${escapePowerShellSingleQuotedString(configPath)}'`,
+        `Start-Process -FilePath '${escapePowerShellSingleQuotedString(configPath)}'`,
       ],
     };
   }
