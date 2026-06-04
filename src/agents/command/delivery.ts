@@ -18,6 +18,7 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import type { QueuedReplyPayloadSendingHook } from "../../infra/outbound/delivery-queue-storage.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
 import {
   createOutboundPayloadPlan,
@@ -307,6 +308,33 @@ function noVisiblePayloadStatus(): AgentCommandDeliveryStatus {
     succeeded: true,
     reason: "no_visible_payload",
     resultCount: 0,
+  };
+}
+
+function buildReplyPayloadSendingHook(params: {
+  channel: string;
+  to: string;
+  accountId?: string;
+  sessionKey?: string;
+  runId?: string;
+}): QueuedReplyPayloadSendingHook {
+  const sessionKey = hasNonEmptyString(params.sessionKey) ? params.sessionKey : undefined;
+  const runId = hasNonEmptyString(params.runId) ? params.runId : undefined;
+
+  // Agent-command delivery bypasses the auto-reply dispatcher, so rebuild the
+  // same pre-delivery hook context before handing payloads to durable send.
+  return {
+    kind: "final",
+    channel: params.channel,
+    ...(sessionKey ? { sessionKey } : {}),
+    ...(runId ? { runId } : {}),
+    context: {
+      channelId: params.channel,
+      ...(hasNonEmptyString(params.accountId) ? { accountId: params.accountId } : {}),
+      conversationId: params.to,
+      ...(sessionKey ? { sessionKey } : {}),
+      ...(runId ? { runId } : {}),
+    },
   };
 }
 
@@ -712,6 +740,13 @@ export async function deliverAgentCommandResult(
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
         durability: bestEffortDeliver ? "best_effort" : "required",
+        replyPayloadSendingHook: buildReplyPayloadSendingHook({
+          channel: deliveryChannel,
+          to: deliveryTarget,
+          accountId: resolvedAccountId,
+          sessionKey: effectiveSessionKey,
+          runId: opts.runId,
+        }),
         onError: logDeliveryError,
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),

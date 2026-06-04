@@ -109,6 +109,13 @@ function latestOutboundDeliveryArgs(): {
   payloads: ReplyPayload[];
   bestEffort?: boolean;
   queuePolicy?: string;
+  replyPayloadSendingHook?: {
+    kind?: string;
+    channel?: string;
+    sessionKey?: string;
+    runId?: string;
+    context?: Record<string, unknown>;
+  };
 } {
   const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
   if (!args || typeof args !== "object") {
@@ -121,6 +128,13 @@ function latestOutboundDeliveryArgs(): {
     payloads: ReplyPayload[];
     bestEffort?: boolean;
     queuePolicy?: string;
+    replyPayloadSendingHook?: {
+      kind?: string;
+      channel?: string;
+      sessionKey?: string;
+      runId?: string;
+      context?: Record<string, unknown>;
+    };
   };
 }
 
@@ -393,6 +407,62 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       status: "sent",
       succeeded: true,
       resultCount: 1,
+    });
+  });
+
+  it("passes reply payload hook metadata through recovered agent delivery", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "resume interrupted turn",
+        deliver: true,
+        bestEffortDeliver: true,
+        channel: "slack",
+        to: "#general",
+        accountId: "workspace-1",
+        threadId: "thread-7",
+        sessionKey: "agent:tester:slack:direct:alice",
+        runId: "run-recovered",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+        restartRecoveryDeliveryContext: {
+          channel: "slack",
+          to: "#general",
+          accountId: "workspace-1",
+          threadId: "thread-7",
+        },
+        restartRecoveryDeliveryRunId: "run-recovered",
+      },
+      payloads: [{ text: "after restart" }],
+      result: createResult(),
+    });
+
+    expect(latestOutboundDeliveryArgs().replyPayloadSendingHook).toEqual({
+      kind: "final",
+      channel: "slack",
+      sessionKey: "agent:tester:slack:direct:alice",
+      runId: "run-recovered",
+      context: {
+        channelId: "slack",
+        accountId: "workspace-1",
+        conversationId: "#general",
+        sessionKey: "agent:tester:slack:direct:alice",
+        runId: "run-recovered",
+      },
     });
   });
 
