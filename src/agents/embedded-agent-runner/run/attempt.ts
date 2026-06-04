@@ -1342,8 +1342,6 @@ export async function runEmbeddedAttempt(
         })();
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
-    const runtimeSelfContextToolAvailable =
-      toolsEnabled && toolsRaw.some((tool) => tool.name === RUNTIME_SELF_CONTEXT_TOOL_NAME);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapWarn = makeBootstrapWarn({
       sessionLabel,
@@ -1741,6 +1739,9 @@ export async function runEmbeddedAttempt(
       sessionId: params.sessionId,
     });
     effectiveTools = [...toolSearchSchemaProjection.tools];
+    const runtimeSelfContextToolAvailable = effectiveTools.some(
+      (tool) => tool.name === RUNTIME_SELF_CONTEXT_TOOL_NAME,
+    );
     if (toolSearch.compacted && !toolSearch.catalogReused) {
       prepStages.mark(codeModeControlsEnabledForRun ? "code-mode" : "tool-search");
       log.info(
