@@ -14,7 +14,10 @@ import {
   logoutWeb,
   waitForWaConnection,
 } from "./session.js";
-import type { WhatsAppSocketTimingOptions } from "./socket-timing.js";
+import {
+  DEFAULT_WHATSAPP_SOCKET_TIMING,
+  type WhatsAppSocketTimingOptions,
+} from "./socket-timing.js";
 
 const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
 const POST_PAIRING_RESTART_STATUS = 515;
@@ -228,7 +231,7 @@ export async function waitForWhatsAppLoginResult(params: {
 
   while (true) {
     try {
-      await wait(currentSock);
+      await wait(currentSock, { timeout: "none" });
       return {
         outcome: "connected",
         restarted: postPairingRestarted || timeoutRestarted,
@@ -306,7 +309,7 @@ export class WhatsAppConnectionController {
   private readonly abortSignal?: AbortSignal;
   private readonly sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
   private readonly isNonRetryableStatus: (statusCode: unknown) => boolean;
-  private readonly socketTiming: WhatsAppSocketTimingOptions;
+  private readonly socketTiming: Required<WhatsAppSocketTimingOptions>;
   private readonly abortPromise?: Promise<"aborted">;
   private readonly disconnectRetryController = new AbortController();
 
@@ -342,7 +345,10 @@ export class WhatsAppConnectionController {
     this.abortSignal = params.abortSignal;
     this.sleep = params.sleep ?? ((ms: number, signal?: AbortSignal) => sleepWithAbort(ms, signal));
     this.isNonRetryableStatus = params.isNonRetryableStatus ?? (() => false);
-    this.socketTiming = params.socketTiming ?? {};
+    this.socketTiming = {
+      ...DEFAULT_WHATSAPP_SOCKET_TIMING,
+      ...params.socketTiming,
+    };
     this.socketRef = { current: null };
     this.abortPromise =
       params.abortSignal &&
@@ -445,7 +451,7 @@ export class WhatsAppConnectionController {
         authDir: this.authDir,
         ...this.socketTiming,
       });
-      await waitForWaConnection(sock);
+      await waitForWaConnection(sock, { timeoutMs: this.socketTiming.connectTimeoutMs });
 
       this.socketRef.current = sock;
       const placeholderListener = {} as ManagedWhatsAppListener;
