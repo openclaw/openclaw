@@ -29,16 +29,25 @@ A development clone should define two remotes:
 - `origin` (pointing to this repo)
 - `upstream` (pointing to https://github.com/openclaw/openclaw)
 
-The following `upstream` branches and tags are used:
-- `upstream/main` - the default branch for the OpenClaw repo. Contains a trunk of the latest work, but may or may not include actual releases.
-- `upstream/release/YYYY.M.D (matching the release version, e.g. upstream/release/2026.4.1)` - a branch for a specific OpenClaw release that will not be merged into `upstream/main`.
-- `upstream/vYYYY.MM.DD` - a tag for an OpenClaw release.
+### Upstream refs
+- `upstream/main` — latest OpenClaw trunk; not guaranteed to correspond to a release.
+- `upstream/release/YYYY.M.D` — release branch for a specific OpenClaw release.
+- `upstream/vYYYY.M.D` — tag for a specific OpenClaw release.
 
-The following `origin` branches and tags are used:
-- `origin/master` - the default branch for the Polytropos repo. Intentionally kept behind `upstream/main` by at least several releases.
-- `origin/release/YYYY.M.D (matching the release version, e.g. origin/release/2026.4.1)` - a branch for a specific Polytropos release. Will have `origin/master` merged into it as a part of the release. Will often be based off the corresponding `upstream/release/YYYY.M.D (matching the release version, e.g. upstream/release/2026.4.1)` branch, but there is no hard rule on this.
-- `origin/vYYYY.MM.DD+poly.N*` - a tag for a Polytropos release
-- `origin/main` - A legacy branch that had releases incorrectly merged into it. Will be force reset to `upstream/main` at some point.
+### Origin refs
+- `origin/master` — the long-lived Polytropos fork branch.
+- `origin/release/YYYY.M.D` — a Polytropos release-preparation branch created from a target upstream release tag/branch, then updated by merging `origin/master` into it.
+- `origin/vYYYY.M.D+poly.N` — a Polytropos release tag.
+- `origin/main` — legacy branch with incorrect historical release merges; not authoritative for update/release work.
+
+### Operational rule
+- **Updates** start from the target upstream release ref and happen on `origin/release/YYYY.M.D`.
+- **Releases** are cut from `origin/release/YYYY.M.D`.
+- **Do not** use `origin/main` for update or release work.
+
+See also:
+- [`docs/polytropos/UPDATE-PROCEDURE.md`](docs/polytropos/UPDATE-PROCEDURE.md)
+- [`docs/polytropos/CORE-RELEASES.md`](docs/polytropos/CORE-RELEASES.md)
 
 ---
 

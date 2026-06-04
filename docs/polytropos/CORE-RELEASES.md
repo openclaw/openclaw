@@ -1,135 +1,63 @@
-# Polytropos Core Releases (Single-Gateway Strategy)
+# Polytropos Core Releases
 
 ## Purpose
 
-Maintain an **authoritative local release store** of runnable OpenClaw tarballs and switch the single running gateway between them safely.
+Stage and activate versioned Polytropos core releases from a valid release branch.
 
 ## Definitions
 
-- **Release (staging):** stage a new version by placing a versioned tarball in `~/polytropos/releases/`, updating `previous.tgz`/`current.tgz`, and installing `current.tgz` globally.
-- **Activation:** restart/reload the gateway so the running process begins using the newly-installed global package.
+- **Release branch:** `release/YYYY.M.D`
+- **Release tag:** `vYYYY.M.D+poly.N`
+- **Staging:** download the CI-built tarball into the authoritative release store, update `previous.tgz` / `current.tgz`, install globally, and run the bundled deps helper.
+- **Activation:** restart/reload the gateway so the running process uses the newly installed version.
 
-## Release store layout (authoritative)
+## Authoritative release store
 
-- `~/polytropos/releases/v<version>+poly.<N> (e.g. v2026.4.1+poly.21).tgz` — immutable versioned release tarballs
+- `~/polytropos/releases/v<version>+poly.<N>.tgz` — immutable versioned release tarballs
 - `~/polytropos/releases/current.tgz` — symlink to the staged tarball
 - `~/polytropos/releases/previous.tgz` — symlink to the rollback tarball
 
-## Correct procedure order
+## Canonical release flow
 
-1) **Build** the release tarball in CI (GitHub Actions) from the intended code.
-2) **Release (stage)** it on the gateway host (symlinks + global install).
-3) **Activate** by restarting/reloading the gateway.
+1. Work from a valid `release/YYYY.M.D` branch.
+2. Run the release script.
+3. The script creates/pushes the next `v<version>+poly.<N>` tag automatically.
+4. GitHub Actions builds the tarball artifact.
+5. The script waits for CI, downloads the artifact, stages it, installs it globally, and runs the bundled deps helper.
+6. Restart/reload the gateway to activate it.
 
-Rollback uses the same order: stage rollback first, then restart/reload.
-
-## Build (CI)
-
-A release tarball is produced by `npm pack` in CI. The output is an npm package tarball (`.tgz`).
-
-Rationale: runtime dependencies are installed via npm when the tarball is installed globally; a raw `dist/` directory is not sufficient.
-
-## Release (stage) procedure (scripted)
-
-Core releases are staged by the release script:
-
-- [`scripts/polytropos-release.mjs`](../../scripts/polytropos-release.mjs)
-
-Usage (canonical):
+## Canonical command
 
 ```bash
 node scripts/polytropos-release.mjs release
 ```
 
-Optional overrides (rare):
+## Optional overrides
 
 ```bash
 node scripts/polytropos-release.mjs release --tag v2026.4.1+poly.24
 node scripts/polytropos-release.mjs release --workflow polytropos-build-pack.yml
 ```
 
-What staging does:
+## Rules
 
-- requires the current branch to match `release/YYYY.M.D`
-- creates and pushes the next `v<version>+poly.<N> (e.g. v2026.4.1+poly.21)` tag from that release branch
-- waits for the default GitHub Actions release workflow (`polytropos-build-pack.yml`) triggered by the tag
-- downloads the built artifact from Actions
-- derives base upstream version `v<ver>` from the nearest reachable tag
-- computes next global build number `poly.N` and creates tag `v<version>+poly.<N> (e.g. v2026.4.1+poly.21)`
-- validates the provided tarball (`package/package.json` name/version)
-- stages the tarball into `~/polytropos/releases/v<version>+poly.<N> (e.g. v2026.4.1+poly.21).tgz`
-- updates symlinks **in order**: `previous.tgz` then `current.tgz`
-- installs `current.tgz` globally into `/home/ec2-user/.npm-global`
-- runs the Polytropos bundled plugin deps helper from the installed package
+- The release script must run from a branch matching `release/YYYY.M.D`.
+- `origin/main` is legacy and should not be used for release work.
+- Versioned tarballs in `~/polytropos/releases/` are immutable.
+- Never overwrite `current.tgz` / `previous.tgz` via `cp`; they are symlinks.
 
 ## Activation
 
-After staging, restart/reload the gateway using the appropriate procedure for your environment.
-(Activation is intentionally not automated by the release script.)
+Activation is intentionally separate from staging.
+After staging succeeds, restart/reload the gateway using the correct environment-specific procedure.
 
-## Dev mode (without a second gateway)
+## Rollback
 
-Dev mode uses `npm link` so the **globally installed** `openclaw` package resolves to your working tree checkout.
+Rollback uses the same model:
+1. point `current.tgz` back at the desired prior version (or restage it properly)
+2. reinstall if needed
+3. restart/reload the gateway
 
-High level:
-
-1. In the fork repo:
-
-```bash
-cd ~/polytropos/openclaw-polytropos
-pnpm install
-pnpm build
-pnpm ui:build
-npm link
-```
-
-2. Link the global package name to that checkout:
-
-```bash
-npm link openclaw
-```
-
-After this, the systemd unit continues to run the same ExecStart, but the underlying `openclaw` install points at the dev checkout.
-
-To exit dev mode, reinstall a released tarball (see release procedure above).
-
----
-
-## Notes / guardrails
-
-### Important: releases must be cut from a release branch
-
-The release script refuses to run unless the current branch matches `release/YYYY.M.D`.
-
-Polytropos release work should be performed from a dedicated `origin/release/YYYY.M.D (matching the release version, e.g. origin/release/2026.4.1)` branch, not `main`.
-
-### Release directory invariants (DO NOT VIOLATE)
-
-- `~/polytropos/releases/` is an **authoritative store** of runnable releases.
-- Versioned files `v<version>+poly.<N> (e.g. v2026.4.1+poly.21).tgz` are **immutable** once created. Never overwrite them.
-- `current.tgz` and `previous.tgz` are **symlinks** to versioned tarballs.
-
-**Critical footgun:** do **not** use `cp` to write to `current.tgz` or `previous.tgz`.
-
-- `cp some.tgz current.tgz` will **follow the symlink** and overwrite the target versioned file.
-- This silently corrupts the release store (filenames no longer match contents) and can destroy rollback.
-
-If you must copy for any reason, use symlink-safe semantics (e.g. `cp -P` / `--no-dereference`) and still prefer the scripted procedure.
-
-### Required verification
-
-Before updating symlinks or installing anything globally, verify:
-
-- Each `v<version>+poly.<N> (e.g. v2026.4.1+poly.21).tgz` contains `package/package.json` with `version == <ver>`.
-- `current.tgz` points at the intended versioned tarball.
-
-### Activation safety
-
-Activation (restart/reload) must use the **proper gateway procedure/tooling** for the environment.
-Do not improvise restarts.
-
----
-
-- Plugins remain deployed separately under `~/.openclaw/extensions/<pluginId>`.
-- Core switching changes only the gateway runtime code, not the config file.
-- Avoid watch-mode gateways. Rebuild the worktree `dist/` and restart when needed.
+See also:
+- [`../../POLYTROPOS.md`](../../POLYTROPOS.md)
+- [`./UPDATE-PROCEDURE.md`](./UPDATE-PROCEDURE.md)
