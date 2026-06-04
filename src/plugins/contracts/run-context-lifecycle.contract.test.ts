@@ -857,4 +857,50 @@ describe("plugin run context lifecycle", () => {
       }),
     ).toBe(false);
   });
+
+  it("keeps dispatching healthy agent event subscriptions after unreadable metadata", async () => {
+    const registry = createEmptyPluginRegistry();
+    const healthyHandle = vi.fn();
+    const brokenRegistration = {
+      pluginId: "broken-event-subscription",
+      pluginName: "Broken Event Subscription",
+      source: "test",
+    } as NonNullable<typeof registry.agentEventSubscriptions>[number];
+    Object.defineProperty(brokenRegistration, "subscription", {
+      get() {
+        throw new Error("agent event subscription getter exploded");
+      },
+    });
+    registry.agentEventSubscriptions = [
+      brokenRegistration,
+      {
+        pluginId: "healthy-event-subscription",
+        pluginName: "Healthy Event Subscription",
+        source: "test",
+        subscription: {
+          id: "healthy-events",
+          streams: ["status"],
+          handle: healthyHandle,
+        },
+      },
+    ];
+
+    dispatchPluginAgentEventSubscriptions({
+      registry,
+      event: {
+        runId: "run-agent-event",
+        seq: 1,
+        stream: "status",
+        ts: Date.now(),
+        data: { phase: "running" },
+      },
+    });
+    await waitForPluginEventHandlers();
+
+    expect(healthyHandle).toHaveBeenCalledTimes(1);
+    expect(healthyHandle.mock.calls[0]?.[0]).toMatchObject({
+      runId: "run-agent-event",
+      stream: "status",
+    });
+  });
 });
