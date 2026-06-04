@@ -1,3 +1,5 @@
+// Thinking sanitization tests cover reasoning-block retention, stripping, and
+// recovery behavior for provider transcripts and active assistant turns.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
@@ -16,6 +18,8 @@ import {
 type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
 
 function dropSingleAssistantContent(content: Array<Record<string, unknown>>) {
+  // Single-assistant fixture exercises the "latest assistant turn" path where
+  // reasoning blocks should remain available for continuation.
   const messages: AgentMessage[] = [
     castAgentMessage({
       role: "assistant",
@@ -37,6 +41,8 @@ const noThinkingReferenceCases = [
 ];
 
 function createNoThinkingMessages(): AgentMessage[] {
+  // No-thinking fixtures should keep reference identity to avoid unnecessary
+  // transcript rewrites in the common path.
   return [
     castAgentMessage({ role: "user", content: "hello" }),
     castAgentMessage({ role: "assistant", content: [{ type: "text", text: "world" }] }),
@@ -210,6 +216,8 @@ describe("dropReasoningFromHistory", () => {
   });
 
   it("preserves reasoning for the active tool-call continuation after the latest user turn", () => {
+    // Active tool-call turns may need reasoning signatures for provider
+    // continuation, so only completed prior turns are stripped.
     const messages: AgentMessage[] = [
       castAgentMessage({ role: "user", content: "look up the answer" }),
       castAgentMessage({
