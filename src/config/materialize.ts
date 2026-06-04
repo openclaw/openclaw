@@ -16,6 +16,7 @@ import type { OpenClawConfig, ResolvedSourceConfig, RuntimeConfig } from "./type
 
 type ConfigMaterializationMode = "load" | "missing" | "snapshot";
 
+/** Defaults profile selected for config load, missing-file, or snapshot materialization. */
 type MaterializationProfile = {
   includeCompactionDefaults: boolean;
   includeContextPruningDefaults: boolean;

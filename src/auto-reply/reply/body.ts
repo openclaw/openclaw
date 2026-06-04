@@ -10,6 +10,7 @@ function loadSessionStoreRuntime() {
   return sessionStoreRuntimeLoader.load();
 }
 
+/** Applies one-shot session hints to the agent-visible body and clears consumed flags. */
 export async function applySessionHints(params: {
   baseBody: string;
   abortedLastRun: boolean;
@@ -25,6 +26,7 @@ export async function applySessionHints(params: {
     : "";
   if (abortedHint) {
     prefixedBodyBase = `${abortedHint}\n\n${prefixedBodyBase}`;
+    // The abort hint is one-shot; clear durable state once it is added.
     if (params.sessionEntry && params.sessionStore && params.sessionKey) {
       params.sessionEntry.abortedLastRun = false;
       params.sessionEntry.updatedAt = Date.now();

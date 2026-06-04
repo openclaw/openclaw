@@ -3,10 +3,12 @@ import type { PluginHookReplyPayloadSendingContext } from "../../plugins/hook-ty
 import type { ReplyPayload } from "../reply-payload.js";
 import type { ReplyDispatchKind } from "./reply-dispatcher.types.js";
 
+/** True when plugins have registered outbound reply payload hooks. */
 export function hasReplyPayloadSendingHooks(): boolean {
   return getGlobalHookRunner()?.hasHooks("reply_payload_sending") === true;
 }
 
+/** Runs plugin hooks that may rewrite or cancel an outbound reply payload. */
 export async function runReplyPayloadSendingHook(params: {
   payload: ReplyPayload;
   kind: ReplyDispatchKind;

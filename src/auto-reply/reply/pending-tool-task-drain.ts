@@ -1,5 +1,6 @@
 const DEFAULT_PENDING_TOOL_DRAIN_IDLE_TIMEOUT_MS = 30_000;
 
+/** Result from waiting for pending tool tasks before final delivery. */
 export type PendingToolTaskDrainResult =
   | { kind: "settled" }
   | { kind: "timeout"; remaining: number };
@@ -29,6 +30,7 @@ function createIdleTimeoutPromise(timeoutMs: number): {
   };
 }
 
+/** Waits for pending tool tasks to settle or times out to avoid session deadlock. */
 export async function drainPendingToolTasks({
   tasks,
   idleTimeoutMs = DEFAULT_PENDING_TOOL_DRAIN_IDLE_TIMEOUT_MS,
@@ -42,6 +44,7 @@ export async function drainPendingToolTasks({
   }
 
   while (tasks.size > 0) {
+    // Snapshot current tasks; newly added tasks are handled in later loop passes.
     const snapshot = [...tasks];
     const timeout = createIdleTimeoutPromise(idleTimeoutMs);
     const outcome = await Promise.race<{ kind: "settled"; task: Promise<void> } | "timeout">([

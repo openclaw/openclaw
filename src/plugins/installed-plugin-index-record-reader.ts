@@ -306,6 +306,7 @@ function readPersistedInstalledPluginIndexForRecords(
   }
 }
 
+/** Reads install records from the persisted installed plugin index. */
 export async function readPersistedInstalledPluginIndexInstallRecords(
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord> | null> {
@@ -313,6 +314,7 @@ export async function readPersistedInstalledPluginIndexInstallRecords(
   return extractPluginInstallRecordsFromPersistedInstalledPluginIndex(parsed);
 }
 
+/** Synchronously reads install records from the persisted installed plugin index. */
 export function readPersistedInstalledPluginIndexInstallRecordsSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> | null {
@@ -327,6 +329,7 @@ function resolveInstallRecordsCacheKey(options: InstalledPluginIndexStoreOptions
   ].join("\0");
 }
 
+/** Loads installed plugin records, recovering managed npm installs and caching the result. */
 export async function loadInstalledPluginIndexInstallRecords(
   params: InstalledPluginIndexStoreOptions = {},
 ): Promise<Record<string, PluginInstallRecord>> {
@@ -342,6 +345,7 @@ export async function loadInstalledPluginIndexInstallRecords(
       params,
     ),
   );
+  // A concurrent cache clear means the caller expects fresh data, so retry with the new generation.
   if (cacheGeneration !== getInstalledPluginIndexInstallRecordsCacheGeneration()) {
     return await loadInstalledPluginIndexInstallRecords(params);
   }
@@ -349,6 +353,7 @@ export async function loadInstalledPluginIndexInstallRecords(
   return cloneInstallRecords(records);
 }
 
+/** Synchronously loads installed plugin records, recovering managed npm installs and caching them. */
 export function loadInstalledPluginIndexInstallRecordsSync(
   params: InstalledPluginIndexStoreOptions = {},
 ): Record<string, PluginInstallRecord> {
