@@ -82,6 +82,11 @@ carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
 `oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
 manifest registry is loaded.
 
+When OpenClaw writes config, it also writes `openclaw.schema.json` next to the
+active `openclaw.json` and adds `"$schema": "./openclaw.schema.json"` when the
+config does not already have a schema. This lets editors provide validation and
+completion without a separate setup step.
+
 When validation fails:
 
 - The Gateway does not boot

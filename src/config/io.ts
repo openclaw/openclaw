@@ -33,6 +33,7 @@ import { isRecord } from "../utils.js";
 import { VERSION } from "../version.js";
 import { DuplicateAgentDirError, findDuplicateAgentDirs } from "./agent-dirs.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import { EDITOR_CONFIG_SCHEMA_REF, writeEditorConfigSchemaFile } from "./editor-schema.js";
 import { restoreEnvVarRefs } from "./env-preserve.js";
 import {
   type EnvSubstitutionWarning,
@@ -383,6 +384,17 @@ function coerceConfig(value: unknown): OpenClawConfig {
     return {};
   }
   return value as OpenClawConfig;
+}
+
+function ensureEditorSchemaRef(cfg: OpenClawConfig): OpenClawConfig {
+  if (typeof cfg.$schema === "string" && cfg.$schema.trim()) {
+    return cfg;
+  }
+  const { $schema: _schema, ...rest } = cfg;
+  return {
+    $schema: EDITOR_CONFIG_SCHEMA_REF,
+    ...rest,
+  } as OpenClawConfig;
 }
 
 function hasConfigMeta(value: unknown): boolean {
@@ -2326,7 +2338,7 @@ export function createConfigIO(
     // Do NOT apply runtime defaults when writing - user config should only contain
     // explicitly set values. Runtime defaults are applied when loading (issue #6070).
     const stampedOutputConfig = stampConfigVersion(
-      outputConfig,
+      ensureEditorSchemaRef(outputConfig),
       options.lastTouchedVersionOverride,
     );
     const json = JSON.stringify(stampedOutputConfig, null, 2).trimEnd().concat("\n");
@@ -2473,6 +2485,11 @@ export function createConfigIO(
       ensureShippedPluginInstallConfigRecordsMigratedForWrite(snapshot);
     let configCommitted = false;
     try {
+      await writeEditorConfigSchemaFile({
+        configPath,
+        fsModule: deps.fs,
+        pluginMetadataSnapshot: snapshotRead.pluginMetadataSnapshot,
+      });
       const result = await replaceFileAtomic({
         filePath: configPath,
         content: json,

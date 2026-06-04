@@ -10,6 +10,7 @@ import { replaceFileAtomic } from "../infra/replace-file.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isRecord } from "../utils.js";
 import { maintainConfigBackups } from "./backup-rotation.js";
+import { insertEditorConfigSchemaRefRaw, writeEditorConfigSchemaFile } from "./editor-schema.js";
 import { INCLUDE_KEY } from "./includes.js";
 import { createInvalidConfigError, formatInvalidConfigDetails } from "./io.invalid-config.js";
 import {
@@ -313,6 +314,32 @@ async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<vo
   });
 }
 
+async function stampRootEditorSchemaRef(params: {
+  snapshot: ConfigFileSnapshot;
+}): Promise<{ committedHash: string } | null> {
+  const committedRootRaw = insertEditorConfigSchemaRefRaw({
+    raw: params.snapshot.raw,
+    parsed: params.snapshot.parsed,
+  });
+  if (committedRootRaw === null) {
+    return null;
+  }
+  await replaceFileAtomic({
+    filePath: params.snapshot.path,
+    content: committedRootRaw,
+    dirMode: 0o700,
+    mode: 0o600,
+    tempPrefix: path.basename(params.snapshot.path),
+    beforeRename: async () => {
+      await fs.access(params.snapshot.path).then(
+        async () => await maintainConfigBackups(params.snapshot.path, fs),
+        () => undefined,
+      );
+    },
+  });
+  return { committedHash: hashFileRaw(committedRootRaw) };
+}
+
 async function tryWriteSingleTopLevelIncludeMutation(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
@@ -364,11 +391,19 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const previousIncludeRaw = await readFileRawIfExists(includePath);
   const committedIncludeRaw = formatJsonFileValue(nextConfigRecord[key]);
   const committedIncludeHash = hashFileRaw(committedIncludeRaw);
+  let committedRootSchemaRefHash: string | null = null;
   await writeJsonFileAtomic(includePath, nextConfigRecord[key]);
   const writeEnv = params.io?.env ?? process.env;
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
   try {
+    await writeEditorConfigSchemaFile({
+      configPath: params.snapshot.path,
+      pluginMetadataSnapshot: params.writeOptions?.basePluginMetadataSnapshot,
+    });
+    committedRootSchemaRefHash =
+      (await stampRootEditorSchemaRef({ snapshot: params.snapshot }))?.committedHash ?? null;
+
     if (
       params.writeOptions?.skipRuntimeSnapshotRefresh &&
       !hadRuntimeSnapshot &&
@@ -432,12 +467,20 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
     return { persistedHash, persistedConfig: refreshedSnapshot.sourceConfig };
   } catch (error) {
     try {
+      let rolledBackRoot = true;
+      if (committedRootSchemaRefHash) {
+        rolledBackRoot = await rollbackJsonFileWriteIfUnchanged({
+          filePath: params.snapshot.path,
+          previousRaw: params.snapshot.raw,
+          committedHash: committedRootSchemaRefHash,
+        });
+      }
       const rolledBack = await rollbackJsonFileWriteIfUnchanged({
         filePath: includePath,
         previousRaw: previousIncludeRaw,
         committedHash: committedIncludeHash,
       });
-      if (rolledBack) {
+      if (rolledBack && rolledBackRoot) {
         restoreEnvChangesIfUnchanged({
           env: writeEnv,
           before: envBeforePostWriteRead,

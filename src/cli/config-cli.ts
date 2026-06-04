@@ -16,6 +16,7 @@ import {
   readConfigFileSnapshot,
   replaceConfigFile,
 } from "../config/config.js";
+import { buildEditorConfigSchema } from "../config/editor-schema.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
 import {
@@ -2432,17 +2433,7 @@ export async function runConfigFile(opts: { runtime?: RuntimeEnv }) {
 }
 
 async function buildCliConfigSchema(): Promise<Record<string, unknown>> {
-  const schema = structuredClone((await readBestEffortRuntimeConfigSchema()).schema) as {
-    properties?: Record<string, unknown>;
-    required?: string[];
-  };
-
-  schema.properties = {
-    $schema: { type: "string" },
-    ...schema.properties,
-  };
-
-  return schema;
+  return buildEditorConfigSchema(await readBestEffortRuntimeConfigSchema());
 }
 
 export async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {

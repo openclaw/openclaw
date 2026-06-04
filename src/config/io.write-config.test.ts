@@ -578,6 +578,40 @@ describe("config io write", () => {
     };
   };
 
+  it("writes an editor schema and adds a local $schema ref when creating config", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createFastConfigIO(home);
+
+      await io.writeConfigFile({ gateway: { mode: "local" } });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+      };
+      const schema = JSON.parse(
+        await fs.readFile(path.join(path.dirname(configPath), "openclaw.schema.json"), "utf-8"),
+      ) as { properties?: Record<string, unknown> };
+      expect(persisted.$schema).toBe("./openclaw.schema.json");
+      expect(schema.properties?.$schema).toEqual({ type: "string" });
+      expect(schema.properties?.gateway).toBeDefined();
+      expect(schema.properties?.channels).toBeDefined();
+    });
+  });
+
+  it("replaces blank $schema values with the local editor schema ref", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const io = createFastConfigIO(home);
+
+      await io.writeConfigFile({ $schema: "  ", gateway: { mode: "local" } });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+      };
+      expect(persisted.$schema).toBe("./openclaw.schema.json");
+    });
+  });
+
   it.runIf(process.platform !== "win32")(
     "tightens world-writable state dir when writing the default config",
     async () => {
@@ -1343,6 +1377,7 @@ describe("config io write", () => {
           meta?: Record<string, unknown>;
         };
         expect(persisted).toEqual({
+          $schema: "./openclaw.schema.json",
           gateway: { mode: "local", port: 18789 },
           models: {
             providers: {
