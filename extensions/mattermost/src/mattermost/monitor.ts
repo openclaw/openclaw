@@ -1906,7 +1906,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               draftStream.update("Thinking…");
                             }
                           },
-                          onToolStart: async (payloadValue) => {
+                          onToolStart: (payloadValue) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
@@ -1934,7 +1934,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                                 maxLines: resolveChannelProgressDraftMaxLines(account.config),
                               },
                             );
-                            await draftStream.update(
+                            draftStream.update(
                               formatChannelProgressDraftText({
                                 entry: account.config,
                                 lines: progressLines,
@@ -1942,7 +1942,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                               }),
                             );
                           },
-                          onItemEvent: async (payloadLocal) => {
+                          onItemEvent: (payloadLocal) => {
                             if (!draftToolProgressEnabled) {
                               return;
                             }
@@ -1971,7 +1971,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                                 maxLines: resolveChannelProgressDraftMaxLines(account.config),
                               },
                             );
-                            await draftStream.update(
+                            draftStream.update(
                               formatChannelProgressDraftText({
                                 entry: account.config,
                                 lines: progressLines,
