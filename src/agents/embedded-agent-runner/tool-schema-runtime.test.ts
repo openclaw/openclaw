@@ -127,4 +127,26 @@ describe("tool schema runtime diagnostics", () => {
       },
     );
   });
+
+  it("warns instead of crashing when provider diagnostic inspection throws", () => {
+    mocks.inspectProviderToolSchemasWithPlugin.mockImplementationOnce(() => {
+      throw new Error("fuzzplugin schema inspector exploded");
+    });
+
+    expect(() =>
+      logProviderToolSchemaDiagnostics({
+        provider: "example",
+        tools: [{ name: "alpha" }] as never,
+      }),
+    ).not.toThrow();
+
+    expect(mocks.log.warn).toHaveBeenCalledTimes(1);
+    expect(mocks.log.warn).toHaveBeenCalledWith(
+      "provider tool schema diagnostics failed for example: fuzzplugin schema inspector exploded",
+      {
+        provider: "example",
+        toolCount: 1,
+      },
+    );
+  });
 });

@@ -5,10 +5,12 @@
  */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { copyPluginToolMeta } from "../../plugins/tools.js";
 import { copyChannelAgentToolMeta } from "../channel-tools.js";
+import { log } from "../embedded-agent-runner/logger.js";
 import {
   logProviderToolSchemaDiagnostics,
   normalizeProviderToolSchemas,
@@ -149,7 +151,17 @@ export function normalizeAgentRuntimeTools<
 export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyParams): void {
   const planContext = runtimePlanToolContext(params);
   if (params.runtimePlan) {
-    params.runtimePlan.tools.logDiagnostics(params.tools, planContext);
+    try {
+      params.runtimePlan.tools.logDiagnostics(params.tools, planContext);
+    } catch (error) {
+      log.warn(
+        `runtime plan tool schema diagnostics failed for ${params.provider}: ${formatErrorMessage(error)}`,
+        {
+          provider: params.provider,
+          toolCount: readRuntimeToolCount(params.tools),
+        },
+      );
+    }
     return;
   }
   logProviderToolSchemaDiagnostics({
@@ -163,4 +175,12 @@ export function logAgentRuntimeToolDiagnostics(params: AgentRuntimeToolPolicyPar
     model: params.model,
     runtimeHandle: params.runtimeHandle,
   });
+}
+
+function readRuntimeToolCount(tools: readonly unknown[]): number {
+  try {
+    return tools.length;
+  } catch {
+    return 0;
+  }
 }

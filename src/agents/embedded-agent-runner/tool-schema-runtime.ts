@@ -3,6 +3,7 @@
  */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import {
@@ -71,15 +72,27 @@ export function normalizeProviderToolSchemas<
  */
 export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParams): void {
   const provider = params.provider.trim();
-  const diagnostics = inspectProviderToolSchemasWithPlugin({
-    provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env: params.env,
-    runtimeHandle: params.runtimeHandle,
-    allowRuntimePluginLoad: params.allowRuntimePluginLoad,
-    context: buildProviderToolSchemaContext(params, provider),
-  });
+  let diagnostics: ProviderToolSchemaDiagnostic[] | null | undefined;
+  try {
+    diagnostics = inspectProviderToolSchemasWithPlugin({
+      provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      runtimeHandle: params.runtimeHandle,
+      allowRuntimePluginLoad: params.allowRuntimePluginLoad,
+      context: buildProviderToolSchemaContext(params, provider),
+    });
+  } catch (error) {
+    log.warn(
+      `provider tool schema diagnostics failed for ${provider}: ${formatErrorMessage(error)}`,
+      {
+        provider,
+        toolCount: readToolCount(params.tools),
+      },
+    );
+    return;
+  }
   if (!Array.isArray(diagnostics)) {
     return;
   }
@@ -103,6 +116,14 @@ export function logProviderToolSchemaDiagnostics(params: ProviderToolSchemaParam
       })),
     },
   );
+}
+
+function readToolCount(tools: readonly unknown[]): number {
+  try {
+    return tools.length;
+  } catch {
+    return 0;
+  }
 }
 
 function formatDiagnosticToolNames(tools: readonly Pick<AgentTool, "name">[]): string[] {
