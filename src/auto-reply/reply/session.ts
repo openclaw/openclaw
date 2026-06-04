@@ -519,11 +519,13 @@ export async function initSessionState(params: {
       persistedTrace = entry.traceLevel;
       persistedReasoning = entry.reasoningLevel;
       persistedTtsAuto = entry.ttsAuto;
-      // Only carry over user-driven overrides on reset. Auto-created
-      // fallback overrides (e.g. rate-limit auth rotation, model auto-pin)
-      // must be cleared so /new and /reset actually return the session to
-      // the configured default instead of staying pinned to the auto pick
-      // (#69301).
+    }
+    if (entry) {
+      // Carry user-driven model/auth selections across both explicit resets and
+      // implicit stale rollovers. Auto-created fallback overrides (e.g.
+      // rate-limit auth rotation, model auto-pin) must be cleared so /new,
+      // /reset, and daily/idle rollover return to the configured default instead
+      // of staying pinned to the auto pick (#69301, #90119).
       const preservedSelection = resolveResetPreservedSelection({ entry });
       persistedModelOverride = preservedSelection.modelOverride;
       persistedProviderOverride = preservedSelection.providerOverride;
@@ -532,6 +534,8 @@ export async function initSessionState(params: {
       persistedAuthProfileOverrideSource = preservedSelection.authProfileOverrideSource;
       persistedAuthProfileOverrideCompactionCount =
         preservedSelection.authProfileOverrideCompactionCount;
+    }
+    if (resetTriggered && entry) {
       // Explicit /new and /reset should rotate the underlying CLI conversation too.
       // Keep the model/auth choice, but force the next turn to mint a fresh CLI binding.
       persistedLabel = entry.label;

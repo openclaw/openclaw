@@ -1456,6 +1456,84 @@ describe("initSessionState reset policy", () => {
     expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
+  it("preserves user model/auth overrides across implicit daily rollover (#90119)", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-daily-user-overrides-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:user-model-rollover";
+    const existingSessionId = "daily-user-model-session";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        providerOverride: "openai",
+        modelOverride: "gpt-4o",
+        modelOverrideSource: "user",
+        authProfileOverride: "openai:work",
+        authProfileOverrideSource: "user",
+        authProfileOverrideCompactionCount: 2,
+        verboseLevel: "on",
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.providerOverride).toBe("openai");
+    expect(result.sessionEntry.modelOverride).toBe("gpt-4o");
+    expect(result.sessionEntry.modelOverrideSource).toBe("user");
+    expect(result.sessionEntry.authProfileOverride).toBe("openai:work");
+    expect(result.sessionEntry.authProfileOverrideSource).toBe("user");
+    expect(result.sessionEntry.authProfileOverrideCompactionCount).toBe(2);
+    expect(result.sessionEntry.verboseLevel).toBeUndefined();
+  });
+
+  it("clears auto model/auth overrides across implicit daily rollover (#90119)", async () => {
+    vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+    const root = await makeCaseDir("openclaw-reset-daily-auto-overrides-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:telegram:direct:auto-model-rollover";
+    const existingSessionId = "daily-auto-model-session";
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "auto",
+        authProfileOverride: "openai:fallback",
+        authProfileOverrideSource: "auto",
+        authProfileOverrideCompactionCount: 1,
+      },
+    });
+
+    const cfg = { session: { store: storePath } } as OpenClawConfig;
+    const result = await initSessionState({
+      ctx: { Body: "hello", SessionKey: sessionKey },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    expect(result.sessionEntry.providerOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverride).toBeUndefined();
+    expect(result.sessionEntry.modelOverrideSource).toBeUndefined();
+    expect(result.sessionEntry.authProfileOverride).toBeUndefined();
+    expect(result.sessionEntry.authProfileOverrideSource).toBeUndefined();
+    expect(result.sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 3, 0, 0));
     const root = await makeCaseDir("openclaw-reset-daily-edge-");
