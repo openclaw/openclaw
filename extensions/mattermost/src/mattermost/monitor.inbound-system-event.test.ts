@@ -180,7 +180,7 @@ function createRuntimeCore(
     },
     markDispatchIdle: () => {
       params.typingCallbacks?.onIdle?.();
-      params.onIdle?.();
+      void params.onIdle?.();
     },
     markRunComplete: () => {},
   });
@@ -501,7 +501,7 @@ describe("mattermost inbound user posts", () => {
         },
         markDispatchIdle: () => {
           params.typingCallbacks?.onIdle?.();
-          params.onIdle?.();
+          void params.onIdle?.();
         },
         markRunComplete: () => {},
       }),
