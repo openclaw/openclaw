@@ -10,13 +10,36 @@ import {
 import type { CodexAppServerRuntimeOptions, resolveCodexPluginsPolicy } from "./config.js";
 
 type TrustedDiagnosticEventInput = Parameters<typeof emitTrustedDiagnosticEventWithPrivateData>[0];
+const UNREADABLE_DIAGNOSTIC_VALUE = "<unreadable>";
+const UNREADABLE_DIAGNOSTIC_TOOL_NAME = "<unreadable diagnostic tool>";
+const MAX_DIAGNOSTIC_VALUE_DEPTH = 6;
+const MAX_DIAGNOSTIC_VALUE_NODES = 1_000;
+const MAX_DIAGNOSTIC_ARRAY_ITEMS = 100;
+const MAX_DIAGNOSTIC_OBJECT_KEYS = 100;
+
+type CodexDiagnosticValueState = {
+  seen: WeakSet<object>;
+  nodes: number;
+};
 
 /** Reads a tool schema field in either app-server or OpenClaw naming. */
 export function readCodexDiagnosticToolParameters(tool: {
   inputSchema?: unknown;
   parameters?: unknown;
 }): unknown {
-  return tool.inputSchema ?? tool.parameters;
+  const inputSchema = readCodexDiagnosticToolField(tool, "inputSchema");
+  if (!inputSchema.readable) {
+    return UNREADABLE_DIAGNOSTIC_VALUE;
+  }
+  if (inputSchema.value !== undefined) {
+    return toJsonSafeCodexDiagnosticValue(inputSchema.value);
+  }
+
+  const parameters = readCodexDiagnosticToolField(tool, "parameters");
+  if (!parameters.readable) {
+    return UNREADABLE_DIAGNOSTIC_VALUE;
+  }
+  return toJsonSafeCodexDiagnosticValue(parameters.value);
 }
 
 /** Builds compact diagnostic tool definitions for trusted private telemetry. */
@@ -29,10 +52,131 @@ export function buildCodexDiagnosticToolDefinitions(
   }[],
 ) {
   return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
+    name: readCodexDiagnosticToolName(tool),
+    description: readCodexDiagnosticToolDescription(tool),
     parameters: readCodexDiagnosticToolParameters(tool),
   }));
+}
+
+function readCodexDiagnosticToolName(tool: { name: string }): string {
+  const name = readCodexDiagnosticToolField(tool, "name");
+  if (!name.readable || typeof name.value !== "string" || name.value.trim().length === 0) {
+    return UNREADABLE_DIAGNOSTIC_TOOL_NAME;
+  }
+  return name.value;
+}
+
+function readCodexDiagnosticToolDescription(tool: { description: string }): string {
+  const description = readCodexDiagnosticToolField(tool, "description");
+  return description.readable && typeof description.value === "string" ? description.value : "";
+}
+
+function readCodexDiagnosticToolField<TTool extends object, TField extends keyof TTool & string>(
+  tool: TTool,
+  field: TField,
+): { readable: true; value: TTool[TField] } | { readable: false } {
+  try {
+    return { readable: true, value: tool[field] };
+  } catch {
+    return { readable: false };
+  }
+}
+
+function toJsonSafeCodexDiagnosticValue(
+  value: unknown,
+  depth = 0,
+  state: CodexDiagnosticValueState = { seen: new WeakSet(), nodes: 0 },
+): unknown {
+  state.nodes += 1;
+  if (state.nodes > MAX_DIAGNOSTIC_VALUE_NODES) {
+    return "<truncated>";
+  }
+  if (
+    value === null ||
+    typeof value === "string" ||
+    typeof value === "boolean" ||
+    typeof value === "number"
+  ) {
+    return value;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (value === undefined || typeof value === "function" || typeof value === "symbol") {
+    return null;
+  }
+  if (depth >= MAX_DIAGNOSTIC_VALUE_DEPTH) {
+    return "<truncated>";
+  }
+  if (isDiagnosticArray(value)) {
+    if (state.seen.has(value)) {
+      return "<truncated>";
+    }
+    state.seen.add(value);
+    let length: number;
+    try {
+      length = Math.min(value.length, MAX_DIAGNOSTIC_ARRAY_ITEMS);
+    } catch {
+      return UNREADABLE_DIAGNOSTIC_VALUE;
+    }
+    const result: unknown[] = [];
+    for (let index = 0; index < length; index += 1) {
+      result.push(
+        toJsonSafeCodexDiagnosticValue(readDiagnosticArrayItem(value, index), depth + 1, state),
+      );
+    }
+    return result;
+  }
+  if (typeof value === "object") {
+    if (state.seen.has(value)) {
+      return "<truncated>";
+    }
+    state.seen.add(value);
+    let keys: string[];
+    try {
+      keys = Object.keys(value).slice(0, MAX_DIAGNOSTIC_OBJECT_KEYS);
+    } catch {
+      return UNREADABLE_DIAGNOSTIC_VALUE;
+    }
+    const result: Record<string, unknown> = {};
+    for (const key of keys) {
+      result[key] = toJsonSafeCodexDiagnosticValue(
+        readDiagnosticObjectField(value as Record<string, unknown>, key),
+        depth + 1,
+        state,
+      );
+    }
+    return result;
+  }
+  try {
+    return JSON.stringify(value) ?? null;
+  } catch {
+    return UNREADABLE_DIAGNOSTIC_VALUE;
+  }
+}
+
+function isDiagnosticArray(value: unknown): value is unknown[] {
+  try {
+    return Array.isArray(value);
+  } catch {
+    return false;
+  }
+}
+
+function readDiagnosticArrayItem(value: readonly unknown[], index: number): unknown {
+  try {
+    return value[index];
+  } catch {
+    return UNREADABLE_DIAGNOSTIC_VALUE;
+  }
+}
+
+function readDiagnosticObjectField(value: Record<string, unknown>, key: string): unknown {
+  try {
+    return value[key];
+  } catch {
+    return UNREADABLE_DIAGNOSTIC_VALUE;
+  }
 }
 
 /** Returns the serialized UTF-8 byte length for a JSON-compatible value. */
