@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   TranscriptRewriteReplacement,
   TranscriptRewriteRequest,
@@ -35,6 +36,45 @@ function remapEntryId(
     return null;
   }
   return rewrittenEntryIds.get(entryId) ?? entryId;
+}
+
+function hashJson(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value ?? null)).digest("hex");
+}
+
+// Replay identity that collapses ONLY the proven context-overflow clone pattern
+// during suffix replay, preserving exact suffix history for everything else.
+// Recovery duplicated byte-identical role=user rows in the persisted transcript
+// (issue #66443). A legitimately repeated user message carries a distinct
+// timestamp, so hashing the full payload keeps it while collapsing the identical
+// recovery clone. Compaction identity folds in the remapped firstKeptEntryId so
+// two genuinely distinct compactions (different kept boundary) are not merged —
+// buildSessionContext() uses that boundary to pick surviving pre-compaction
+// messages. Assistant, tool-result, and custom entries are never deduped:
+// identical payloads there can be legitimate history, so they always replay.
+function computeBranchEntryReplayIdentity(
+  entry: SessionBranchEntry,
+  rewrittenEntryIds: ReadonlyMap<string, string>,
+): string | null {
+  if (entry.type === "message") {
+    return computeMessageReplayIdentity(entry.message);
+  }
+  if (entry.type === "compaction") {
+    const keptId = remapEntryId(entry.firstKeptEntryId, rewrittenEntryIds) ?? entry.firstKeptEntryId;
+    return `compaction:${entry.tokensBefore}:${hashJson({
+      keptId,
+      summary: entry.summary,
+      details: entry.details,
+      fromHook: entry.fromHook,
+    })}`;
+  }
+  return null;
+}
+
+// Only role=user messages are clone-deduped; the message timestamp separates a
+// recovery clone (byte-identical) from a legitimate repeat (distinct timestamp).
+function computeMessageReplayIdentity(message: AgentMessage): string | null {
+  return message.role === "user" ? `user:${hashJson(message)}` : null;
 }
 
 function appendBranchEntry(params: {
@@ -227,19 +267,41 @@ export function rewriteTranscriptEntriesInSessionManager(params: {
   // re-running persistence hooks or size truncation on replayed messages.
   const appendMessage = getRawSessionAppendMessage(params.sessionManager);
   const rewrittenEntryIds = new Map<string, string>();
+  const emittedReplayIdentities = new Map<string, string>();
   for (let index = matchedIndices[0]; index < branch.length; index++) {
     const entry = branch[index];
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
-    const newEntryId =
-      replacement === undefined
-        ? appendBranchEntry({
-            sessionManager: params.sessionManager,
-            entry,
-            rewrittenEntryIds,
-            appendMessage,
-          })
-        : appendMessage(replacement as Parameters<typeof params.sessionManager.appendMessage>[0]);
+    if (replacement === undefined) {
+      const replayIdentity = computeBranchEntryReplayIdentity(entry, rewrittenEntryIds);
+      const existingEntryId =
+        replayIdentity === null ? undefined : emittedReplayIdentities.get(replayIdentity);
+      if (existingEntryId !== undefined) {
+        // Identical entry already replayed in this pass; collapse the clone and
+        // point its id at the survivor so repeated overflow recovery cannot keep
+        // re-appending duplicate suffix entries.
+        rewrittenEntryIds.set(entry.id, existingEntryId);
+        continue;
+      }
+      const newEntryId = appendBranchEntry({
+        sessionManager: params.sessionManager,
+        entry,
+        rewrittenEntryIds,
+        appendMessage,
+      });
+      rewrittenEntryIds.set(entry.id, newEntryId);
+      if (replayIdentity !== null) {
+        emittedReplayIdentities.set(replayIdentity, newEntryId);
+      }
+      continue;
+    }
+    const newEntryId = appendMessage(
+      replacement as Parameters<typeof params.sessionManager.appendMessage>[0],
+    );
     rewrittenEntryIds.set(entry.id, newEntryId);
+    const replacementReplayIdentity = computeMessageReplayIdentity(replacement);
+    if (replacementReplayIdentity !== null) {
+      emittedReplayIdentities.set(replacementReplayIdentity, newEntryId);
+    }
   }
 
   return {
@@ -345,19 +407,38 @@ export function rewriteTranscriptEntriesInState(params: {
 
   const appendedEntries: SessionBranchEntry[] = [];
   const rewrittenEntryIds = new Map<string, string>();
+  const emittedReplayIdentities = new Map<string, string>();
   for (let index = matchedIndices[0]; index < branch.length; index++) {
     const entry = branch[index];
     const replacement = entry.type === "message" ? replacementsById.get(entry.id) : undefined;
-    const newEntry =
-      replacement === undefined
-        ? appendTranscriptStateBranchEntry({
-            state: params.state,
-            entry,
-            rewrittenEntryIds,
-          })
-        : params.state.appendMessage(replacement);
+    if (replacement === undefined) {
+      const replayIdentity = computeBranchEntryReplayIdentity(entry, rewrittenEntryIds);
+      const existingEntryId =
+        replayIdentity === null ? undefined : emittedReplayIdentities.get(replayIdentity);
+      if (existingEntryId !== undefined) {
+        // Collapse the replay clone (see rewriteTranscriptEntriesInSessionManager).
+        rewrittenEntryIds.set(entry.id, existingEntryId);
+        continue;
+      }
+      const newEntry = appendTranscriptStateBranchEntry({
+        state: params.state,
+        entry,
+        rewrittenEntryIds,
+      });
+      rewrittenEntryIds.set(entry.id, newEntry.id);
+      appendedEntries.push(newEntry);
+      if (replayIdentity !== null) {
+        emittedReplayIdentities.set(replayIdentity, newEntry.id);
+      }
+      continue;
+    }
+    const newEntry = params.state.appendMessage(replacement);
     rewrittenEntryIds.set(entry.id, newEntry.id);
     appendedEntries.push(newEntry);
+    const replacementReplayIdentity = computeMessageReplayIdentity(replacement);
+    if (replacementReplayIdentity !== null) {
+      emittedReplayIdentities.set(replacementReplayIdentity, newEntry.id);
+    }
   }
 
   return {
