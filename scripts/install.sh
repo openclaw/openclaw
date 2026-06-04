@@ -3333,8 +3333,9 @@ main() {
             local config_path="${OPENCLAW_CONFIG_PATH:-$effective_home/.openclaw/openclaw.json}"
             if [[ -f "${config_path}" || -f "$effective_home/.clawdbot/clawdbot.json" ]]; then
                 ui_info "Config already present; running doctor"
-                run_doctor
-                should_open_dashboard=true
+                if run_doctor; then
+                    should_open_dashboard=true
+                fi
                 ui_info "Config already present; skipping onboarding"
                 skip_onboard=true
             fi
