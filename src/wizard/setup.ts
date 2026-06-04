@@ -362,7 +362,7 @@ export async function runSetupWizard(
           value: "modify",
           label: t("wizard.setup.modifyCurrent"),
           hint:
-            opts.authChoice === undefined
+            opts.authChoice === undefined || opts.authChoice === "skip"
               ? undefined
               : t("wizard.setup.modifyCurrentAuthChoiceHint"),
         },
