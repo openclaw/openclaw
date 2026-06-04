@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type FeishuGroupSessionScope =
   | "group"
@@ -37,7 +37,6 @@ export function buildFeishuConversationId(params: {
         return `${chatId}:topic:${topicId}`;
       }
       return senderOpenId ? `${chatId}:sender:${senderOpenId}` : chatId;
-    case "group":
     default:
       return chatId;
   }

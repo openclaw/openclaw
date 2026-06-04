@@ -1,8 +1,9 @@
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 
+/** Parsed `/plugins` command variants accepted by auto-reply command handling. */
 export type PluginsCommand =
   | { action: "list" }
   | { action: "inspect"; name?: string }
@@ -11,6 +12,7 @@ export type PluginsCommand =
   | { action: "disable"; name: string }
   | { action: "error"; message: string };
 
+/** Parses a `/plugin` or `/plugins` command into a closed command action. */
 export function parsePluginsCommand(raw: string): PluginsCommand | null {
   const match = raw.match(/^\/plugins?(?:\s+(.*))?$/i);
   if (!match) {
@@ -43,7 +45,7 @@ export function parsePluginsCommand(raw: string): PluginsCommand | null {
     if (!name) {
       return {
         action: "error",
-        message: "Usage: /plugins install <path|archive|npm-spec|clawhub:pkg>",
+        message: "Usage: /plugins install <path|archive|npm-spec|git:repo|clawhub:pkg>",
       };
     }
     return { action: "install", spec: name };

@@ -1,4 +1,4 @@
-import { completeSimple, getModel } from "@mariozechner/pi-ai";
+import { completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import {
   createSingleUserPromptMessage,
@@ -8,11 +8,23 @@ import {
 
 const ZAI_KEY = process.env.ZAI_API_KEY ?? process.env.Z_AI_API_KEY ?? "";
 const LIVE = isLiveTestEnabled(["ZAI_LIVE_TEST"]);
+const ZAI_LIVE_TIMEOUT_MS = 45_000;
 
 const describeLive = LIVE && ZAI_KEY ? describe : describe.skip;
 
-async function expectModelReturnsAssistantText(modelId: "glm-5" | "glm-4.7") {
-  const model = getModel("zai", modelId);
+async function expectModelReturnsAssistantText(modelId: "glm-5-turbo" | "glm-5.1") {
+  const model: Model<"openai-completions"> = {
+    id: modelId,
+    name: modelId,
+    api: "openai-completions",
+    provider: "zai",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 202_800,
+    maxTokens: 131_100,
+  };
   const res = await completeSimple(
     model,
     {
@@ -25,11 +37,19 @@ async function expectModelReturnsAssistantText(modelId: "glm-5" | "glm-4.7") {
 }
 
 describeLive("zai live", () => {
-  it("returns assistant text", async () => {
-    await expectModelReturnsAssistantText("glm-5");
-  }, 20000);
+  it(
+    "returns assistant text",
+    async () => {
+      await expectModelReturnsAssistantText("glm-5-turbo");
+    },
+    ZAI_LIVE_TIMEOUT_MS,
+  );
 
-  it("glm-4.7 returns assistant text", async () => {
-    await expectModelReturnsAssistantText("glm-4.7");
-  }, 20000);
+  it(
+    "glm-5.1 returns assistant text",
+    async () => {
+      await expectModelReturnsAssistantText("glm-5.1");
+    },
+    ZAI_LIVE_TIMEOUT_MS,
+  );
 });

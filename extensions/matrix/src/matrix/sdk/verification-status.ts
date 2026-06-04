@@ -1,6 +1,6 @@
 import type { MatrixDeviceVerificationStatusLike } from "./types.js";
 
-export function isMatrixDeviceLocallyVerified(
+function isMatrixDeviceLocallyVerified(
   status: MatrixDeviceVerificationStatusLike | null | undefined,
 ): boolean {
   return status?.localVerified === true;
@@ -9,7 +9,7 @@ export function isMatrixDeviceLocallyVerified(
 export function isMatrixDeviceOwnerVerified(
   status: MatrixDeviceVerificationStatusLike | null | undefined,
 ): boolean {
-  return status?.crossSigningVerified === true || status?.signedByOwner === true;
+  return status?.crossSigningVerified === true;
 }
 
 export function isMatrixDeviceVerifiedInCurrentClient(

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { getChatChannelMeta, normalizeChatChannelId } from "../channels/registry.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -96,7 +96,7 @@ function resolveBuiltInChannelPreferOver(channelId: string): readonly string[] {
   if (!builtInChannelId) {
     return [];
   }
-  return getChatChannelMeta(builtInChannelId).preferOver ?? [];
+  return getChatChannelMeta(builtInChannelId)?.preferOver ?? [];
 }
 
 function resolvePreferredOverIds(
@@ -122,6 +122,10 @@ function resolvePreferredOverIds(
   return resolveExternalCatalogPreferOver(channelId, env);
 }
 
+function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandidate): string {
+  return `${candidate.pluginId}:${candidate.kind === "channel-configured" ? candidate.channelId : candidate.pluginId}`;
+}
+
 export function shouldSkipPreferredPluginAutoEnable(params: {
   config: OpenClawConfig;
   entry: PluginAutoEnableCandidate;
@@ -130,7 +134,19 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
   registry: PluginManifestRegistry;
   isPluginDenied: (config: OpenClawConfig, pluginId: string) => boolean;
   isPluginExplicitlyDisabled: (config: OpenClawConfig, pluginId: string) => boolean;
+  preferOverCache: Map<string, string[]>;
 }): boolean {
+  const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
+    const cacheKey = getPluginAutoEnableCandidateCacheKey(candidate);
+    const cached = params.preferOverCache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const resolved = resolvePreferredOverIds(candidate, params.env, params.registry);
+    params.preferOverCache.set(cacheKey, resolved);
+    return resolved;
+  };
+
   for (const other of params.configured) {
     if (other.pluginId === params.entry.pluginId) {
       continue;
@@ -141,9 +157,7 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     ) {
       continue;
     }
-    if (
-      resolvePreferredOverIds(other, params.env, params.registry).includes(params.entry.pluginId)
-    ) {
+    if (getPreferredOverIds(other).includes(params.entry.pluginId)) {
       return true;
     }
   }

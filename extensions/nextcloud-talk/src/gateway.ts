@@ -1,4 +1,4 @@
-import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { runStoppablePassiveMonitor } from "openclaw/plugin-sdk/extension-shared";
 import { resolveNextcloudTalkAccount, type ResolvedNextcloudTalkAccount } from "./accounts.js";
 import {
@@ -7,7 +7,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "./channel-api.js";
-import { monitorNextcloudTalkProvider } from "./monitor.js";
+import { monitorNextcloudTalkProvider } from "./monitor-runtime.js";
 import { getNextcloudTalkRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
@@ -94,7 +94,10 @@ export const nextcloudTalkGatewayAdapter: NonNullable<
     const loggedOut = resolved.secretSource === "none";
 
     if (changed) {
-      await getNextcloudTalkRuntime().config.writeConfigFile(nextCfg);
+      await getNextcloudTalkRuntime().config.replaceConfigFile({
+        nextConfig: nextCfg,
+        afterWrite: { mode: "auto" },
+      });
     }
 
     return {

@@ -1,19 +1,34 @@
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
 import { registerDnsCli } from "./dns-cli.js";
-import { parseCanvasSnapshotPayload } from "./nodes-canvas.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
-import { shouldSkipRespawnForArgv } from "./respawn-policy.js";
+import {
+  shouldSkipRespawnForArgv,
+  shouldSkipStartupEnvironmentRespawnForArgv,
+} from "./respawn-policy.js";
 import { waitForever } from "./wait.js";
 
 describe("waitForever", () => {
-  it("creates an unref'ed interval and returns a pending promise", () => {
-    const setIntervalSpy = vi.spyOn(global, "setInterval");
-    const promise = waitForever();
-    expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 1_000_000);
-    expect(promise).toBeInstanceOf(Promise);
-    setIntervalSpy.mockRestore();
+  it("keeps the event loop alive (ref'd interval) and returns a pending promise", () => {
+    const unref = vi.fn();
+    const interval = { unref } as unknown as ReturnType<typeof setInterval>;
+    const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
+    try {
+      const promise = waitForever();
+      expect(setIntervalSpy).toHaveBeenCalledTimes(1);
+      const [callback, delay] = setIntervalSpy.mock.calls[0] ?? [];
+      expect(typeof callback).toBe("function");
+      expect(delay).toBe(1_000_000);
+      // Regression guard for the previous `.unref()` bug: an unref'd interval
+      // does NOT keep the event loop alive, so `await waitForever()` would
+      // exit immediately with code 13 ("unsettled top-level await"). The
+      // function must NOT unref the interval.
+      expect(unref).not.toHaveBeenCalled();
+      expect(promise).toBeInstanceOf(Promise);
+    } finally {
+      setIntervalSpy.mockRestore();
+    }
   });
 });
 
@@ -21,27 +36,44 @@ describe("shouldSkipRespawnForArgv", () => {
   it.each([
     { argv: ["node", "openclaw", "--help"] },
     { argv: ["node", "openclaw", "-V"] },
+    { argv: ["node", "openclaw", "tui"] },
+    { argv: ["node", "openclaw", "terminal"] },
+    { argv: ["node", "openclaw", "chat"] },
+    { argv: ["node", "openclaw", "gateway"] },
+    { argv: ["node", "openclaw", "gateway", "--port", "14720", "--bind", "loopback"] },
+    { argv: ["node", "openclaw", "gateway", "run", "--port=14720", "--bind", "loopback"] },
+    {
+      argv: ["node", "openclaw", "--profile", "server", "gateway", "run", "--allow-unconfigured"],
+    },
   ] as const)("skips respawn for argv %j", ({ argv }) => {
     expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
   });
 
-  it("keeps respawn path for normal commands", () => {
-    expect(shouldSkipRespawnForArgv(["node", "openclaw", "status"])).toBe(false);
+  it.each([
+    { argv: ["node", "openclaw", "status"] },
+    { argv: ["node", "openclaw", "gateway", "status"] },
+    { argv: ["node", "openclaw", "gateway", "call", "health"] },
+  ] as const)("keeps respawn path for argv %j", ({ argv }) => {
+    expect(shouldSkipRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
   });
 });
 
-describe("nodes canvas helpers", () => {
-  it("parses canvas.snapshot payload", () => {
-    expect(parseCanvasSnapshotPayload({ format: "png", base64: "aGk=" })).toEqual({
-      format: "png",
-      base64: "aGk=",
-    });
+describe("shouldSkipStartupEnvironmentRespawnForArgv", () => {
+  it.each([
+    { argv: ["node", "openclaw", "--help"] },
+    { argv: ["node", "openclaw", "gateway"] },
+    { argv: ["node", "openclaw", "gateway", "run", "--port=14720"] },
+  ] as const)("skips startup env respawn for argv %j", ({ argv }) => {
+    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(true);
   });
 
-  it("rejects invalid canvas.snapshot payload", () => {
-    expect(() => parseCanvasSnapshotPayload({ format: "png" })).toThrow(
-      /invalid canvas\.snapshot payload/i,
-    );
+  it.each([
+    { argv: ["node", "openclaw", "tui"] },
+    { argv: ["node", "openclaw", "terminal"] },
+    { argv: ["node", "openclaw", "chat"] },
+    { argv: ["node", "openclaw", "status"] },
+  ] as const)("allows startup env respawn for argv %j", ({ argv }) => {
+    expect(shouldSkipStartupEnvironmentRespawnForArgv([...argv]), argv.join(" ")).toBe(false);
   });
 });
 
@@ -59,6 +91,25 @@ describe("dns cli", () => {
       log.mockRestore();
     }
   });
+
+  it.each(["foo/bar", "../../x", "evil\nrecords"])(
+    "rejects invalid --domain %j with explicit DNS-name diagnostic",
+    async (domain) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const program = new Command();
+        registerDnsCli(program);
+        await expect(
+          program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" }),
+        ).rejects.toThrow("wide-area discovery domain must be a valid DNS name");
+        const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
+        expect(output).not.toContain("No wide-area domain configured");
+        expect(output).not.toContain("DNS setup");
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
 });
 
 describe("parseByteSize", () => {
@@ -77,7 +128,7 @@ describe("parseByteSize", () => {
   });
 
   it.each(["", "nope", "-5kb"] as const)("rejects invalid value %j", (input) => {
-    expect(() => parseByteSize(input)).toThrow();
+    expect(() => parseByteSize(input)).toThrow(/Invalid byte size/);
   });
 });
 
@@ -96,7 +147,12 @@ describe("parseDurationMs", () => {
   });
 
   it("rejects invalid composite strings", () => {
-    expect(() => parseDurationMs("1h30")).toThrow();
-    expect(() => parseDurationMs("1h-30m")).toThrow();
+    expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
+  });
+
+  it("rejects unsafe millisecond results", () => {
+    expect(() => parseDurationMs("9007199254740993ms")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("9007199254740990ms10ms")).toThrow(/Invalid duration/);
   });
 });

@@ -5,12 +5,13 @@ import type {
   DmPolicy,
   GroupPolicy,
   MarkdownConfig,
+  ReplyToMode,
 } from "./types.base.js";
 import type {
   ChannelHealthMonitorConfig,
   ChannelHeartbeatVisibilityConfig,
-} from "./types.channels.js";
-import type { DmConfig } from "./types.messages.js";
+} from "./types.channel-health.js";
+import type { DmConfig, MentionPatternsPolicyConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
 export type WhatsAppActionConfig = {
@@ -25,6 +26,13 @@ export type WhatsAppGroupConfig = {
   requireMention?: boolean;
   tools?: GroupToolPolicyConfig;
   toolsBySender?: GroupToolPolicyBySenderConfig;
+  /** Optional system prompt for this group. */
+  systemPrompt?: string;
+};
+
+export type WhatsAppDirectConfig = {
+  /** Optional system prompt for this direct chat. */
+  systemPrompt?: string;
 };
 
 export type WhatsAppAckReactionConfig = {
@@ -62,13 +70,15 @@ type WhatsAppSharedConfig = {
    * - "allowlist": only allow group messages from senders in groupAllowFrom/allowFrom
    */
   groupPolicy?: GroupPolicy;
+  /** Scope configured groupChat mentionPatterns to selected WhatsApp conversation IDs. */
+  mentionPatterns?: MentionPatternsPolicyConfig;
   /** Supplemental context visibility policy (all|allowlist|allowlist_quote). */
   contextVisibility?: ContextVisibilityMode;
   /** Max group messages to keep as history context (0 disables). */
   historyLimit?: number;
   /** Max DM turns to keep as history context. */
   dmHistoryLimit?: number;
-  /** Per-DM config overrides keyed by user ID. */
+  /** Per-DM history overrides keyed by user ID. */
   dms?: Record<string, DmConfig>;
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
@@ -81,6 +91,8 @@ type WhatsAppSharedConfig = {
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
   groups?: Record<string, WhatsAppGroupConfig>;
+  /** Per-direct-chat prompt overrides keyed by user ID or `*` wildcard. */
+  direct?: Record<string, WhatsAppDirectConfig>;
   /** Acknowledgment reaction sent immediately upon message receipt. */
   ackReaction?: WhatsAppAckReactionConfig;
   /**
@@ -93,6 +105,8 @@ type WhatsAppSharedConfig = {
   reactionLevel?: WhatsAppReactionLevel;
   /** Debounce window (ms) for batching rapid consecutive messages from the same sender (0 to disable). */
   debounceMs?: number;
+  /** Reply threading mode for auto-replies (off|first|all|batched). */
+  replyToMode?: ReplyToMode;
   /** Heartbeat visibility settings. */
   heartbeat?: ChannelHeartbeatVisibilityConfig;
   /** Channel health monitor overrides for this channel/account. */
@@ -122,6 +136,11 @@ export type WhatsAppConfig = WhatsAppConfigCore &
     defaultAccount?: string;
     /** Per-action tool gating (default: true for all). */
     actions?: WhatsAppActionConfig;
+    /** Plugin hook opt-in configuration for privacy-sensitive inbound events. */
+    pluginHooks?: {
+      /** Enable message_received hooks to broadcast inbound WhatsApp messages to plugins. */
+      messageReceived?: boolean;
+    };
   };
 
 export type WhatsAppAccountConfig = WhatsAppConfigCore &
@@ -132,10 +151,9 @@ export type WhatsAppAccountConfig = WhatsAppConfigCore &
     enabled?: boolean;
     /** Override auth directory (Baileys multi-file auth state). */
     authDir?: string;
+    /** Plugin hook opt-in configuration for privacy-sensitive inbound events. */
+    pluginHooks?: {
+      /** Enable message_received hooks to broadcast inbound WhatsApp messages to plugins. */
+      messageReceived?: boolean;
+    };
   };
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    whatsapp?: WhatsAppConfig;
-  }
-}

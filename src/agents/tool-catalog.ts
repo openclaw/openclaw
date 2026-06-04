@@ -10,14 +10,16 @@ import {
   UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
 } from "./tool-description-presets.js";
 
+/** Built-in tool profile ids exposed in config and UI. */
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
+/** Allow/deny policy generated from a built-in tool profile. */
 type ToolProfilePolicy = {
   allow?: string[];
   deny?: string[];
 };
 
-export type CoreToolSection = {
+type CoreToolSection = {
   id: string;
   label: string;
   tools: Array<{
@@ -36,6 +38,8 @@ type CoreToolDefinition = {
   includeInOpenClawGroup?: boolean;
 };
 
+// The core tool catalog drives profile defaults, UI grouping, and group:openclaw
+// expansion. Keep ids normalized because policy matching is string-based.
 const CORE_TOOL_SECTION_ORDER: Array<{ id: string; label: string }> = [
   { id: "fs", label: "Files" },
   { id: "runtime", label: "Runtime" },
@@ -208,10 +212,9 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "canvas",
     label: "canvas",
-    description: "Control canvases",
+    description: "Control node Canvas surfaces when the Canvas plugin is enabled",
     sectionId: "ui",
     profiles: [],
-    includeInOpenClawGroup: true,
   },
   {
     id: "message",
@@ -219,6 +222,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     description: "Send messages",
     sectionId: "messaging",
     profiles: ["messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "heartbeat_respond",
+    label: "heartbeat_respond",
+    description: "Record heartbeat outcomes",
+    sectionId: "automation",
+    profiles: [],
     includeInOpenClawGroup: true,
   },
   {
@@ -254,9 +265,42 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "get_goal",
+    label: "get_goal",
+    description: "Get current thread goal",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "create_goal",
+    label: "create_goal",
+    description: "Create a thread goal",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "update_goal",
+    label: "update_goal",
+    description: "Complete or block a thread goal",
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "update_plan",
     label: "update_plan",
     description: UPDATE_PLAN_TOOL_DISPLAY_SUMMARY,
+    sectionId: "agents",
+    profiles: ["coding"],
+    includeInOpenClawGroup: true,
+  },
+  {
+    id: "skill_workshop",
+    label: "skill_workshop",
+    description:
+      "Create, update, revise, list, inspect, apply, reject, or quarantine Skill Workshop proposals",
     sectionId: "agents",
     profiles: ["coding"],
     includeInOpenClawGroup: true,
@@ -318,12 +362,14 @@ const CORE_TOOL_PROFILES: Record<ToolProfileId, ToolProfilePolicy> = {
     allow: listCoreToolIdsForProfile("minimal"),
   },
   coding: {
-    allow: listCoreToolIdsForProfile("coding"),
+    allow: [...listCoreToolIdsForProfile("coding"), "bundle-mcp"],
   },
   messaging: {
-    allow: listCoreToolIdsForProfile("messaging"),
+    allow: [...listCoreToolIdsForProfile("messaging"), "bundle-mcp"],
   },
-  full: {},
+  full: {
+    allow: ["*"],
+  },
 };
 
 function buildCoreToolGroupMap() {
@@ -343,8 +389,10 @@ function buildCoreToolGroupMap() {
   };
 }
 
+/** Built-in core tool groups keyed by group id. */
 export const CORE_TOOL_GROUPS = buildCoreToolGroupMap();
 
+/** Profile options shown in model/tool configuration UIs. */
 export const PROFILE_OPTIONS = [
   { id: "minimal", label: "Minimal" },
   { id: "coding", label: "Coding" },
@@ -352,6 +400,7 @@ export const PROFILE_OPTIONS = [
   { id: "full", label: "Full" },
 ] as const;
 
+/** Resolves the allow/deny policy for a built-in tool profile. */
 export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolicy | undefined {
   if (!profile) {
     return undefined;
@@ -369,6 +418,7 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
   };
 }
 
+/** Lists core tools grouped into UI sections. */
 export function listCoreToolSections(): CoreToolSection[] {
   return CORE_TOOL_SECTION_ORDER.map((section) => ({
     id: section.id,
@@ -381,6 +431,7 @@ export function listCoreToolSections(): CoreToolSection[] {
   })).filter((section) => section.tools.length > 0);
 }
 
+/** Lists built-in profile ids that include a core tool. */
 export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
   const tool = CORE_TOOL_BY_ID.get(toolId);
   if (!tool) {
@@ -389,6 +440,7 @@ export function resolveCoreToolProfiles(toolId: string): ToolProfileId[] {
   return [...tool.profiles];
 }
 
+/** Returns true when a tool id is a known core tool. */
 export function isKnownCoreToolId(toolId: string): boolean {
   return CORE_TOOL_BY_ID.has(toolId);
 }

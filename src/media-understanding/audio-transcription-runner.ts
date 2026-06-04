@@ -9,6 +9,7 @@ import {
 } from "./runner.js";
 import type { MediaAttachment, MediaUnderstandingProvider } from "./types.js";
 
+/** Runs the configured audio-understanding pipeline and returns the first transcript output. */
 export async function runAudioTranscription(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -24,10 +25,10 @@ export async function runAudioTranscription(params: {
   }
 
   const providerRegistry = buildProviderRegistry(params.providers, params.cfg);
-  const cache = createMediaAttachmentCache(
-    attachments,
-    params.localPathRoots ? { localPathRoots: params.localPathRoots } : undefined,
-  );
+  const cache = createMediaAttachmentCache(attachments, {
+    ...(params.localPathRoots ? { localPathRoots: params.localPathRoots } : {}),
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+  });
 
   try {
     const result = await runCapability({

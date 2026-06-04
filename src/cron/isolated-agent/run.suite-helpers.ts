@@ -8,10 +8,14 @@ import {
   restoreFastTestEnv,
 } from "./run.test-harness.js";
 
-export function setupRunCronIsolatedAgentTurnSuite() {
+/** Installs the common before/after hooks for isolated-agent run suites. */
+export function setupRunCronIsolatedAgentTurnSuite(options?: { fast?: boolean }) {
   let previousFastTestEnv: string | undefined;
   beforeEach(() => {
     previousFastTestEnv = clearFastTestEnv();
+    if (options?.fast) {
+      process.env.OPENCLAW_TEST_FAST = "1";
+    }
     resetRunCronIsolatedAgentTurnHarness();
     resolveCronSessionMock.mockReturnValue(makeCronSession());
   });

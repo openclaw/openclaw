@@ -1,5 +1,6 @@
 package ai.openclaw.app.ui
 
+import ai.openclaw.app.R
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Brush
@@ -9,11 +10,6 @@ import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
-import ai.openclaw.app.R
-
-// ---------------------------------------------------------------------------
-// MobileColors – semantic color tokens with light + dark variants
-// ---------------------------------------------------------------------------
 
 internal data class MobileColors(
   val surface: Color,
@@ -101,6 +97,8 @@ internal fun darkMobileColors() =
     chipBorderError = Color(0xFF3E1E1E),
   )
 
+// Defaulting to light tokens keeps previews/tests usable when a screen forgets to
+// provide the app theme; production roots override this composition local.
 internal val LocalMobileColors = staticCompositionLocalOf { lightMobileColors() }
 
 internal object MobileColorsAccessor {
@@ -108,12 +106,8 @@ internal object MobileColorsAccessor {
     @Composable get() = LocalMobileColors.current
 }
 
-// ---------------------------------------------------------------------------
-// Backward-compatible top-level accessors (composable getters)
-// ---------------------------------------------------------------------------
-// These allow existing call sites to keep using `mobileSurface`, `mobileText`, etc.
-// without converting every file at once. Each resolves to the themed value.
-
+// Keep these accessors while screens migrate to `MobileColorsAccessor.current`.
+// Each getter must stay composable so callers always read the active theme.
 internal val mobileSurface: Color @Composable get() = LocalMobileColors.current.surface
 internal val mobileSurfaceStrong: Color @Composable get() = LocalMobileColors.current.surfaceStrong
 internal val mobileCardSurface: Color @Composable get() = LocalMobileColors.current.cardSurface
@@ -136,7 +130,8 @@ internal val mobileCodeText: Color @Composable get() = LocalMobileColors.current
 internal val mobileCodeBorder: Color @Composable get() = LocalMobileColors.current.codeBorder
 internal val mobileCodeAccent: Color @Composable get() = LocalMobileColors.current.codeAccent
 
-// Background gradient – light fades white→gray, dark fades near-black→dark-gray
+// Build the page backdrop from semantic surfaces so light/dark palettes keep
+// their contrast relationship without duplicating raw color stops.
 internal val mobileBackgroundGradient: Brush
   @Composable get() {
     val colors = LocalMobileColors.current
@@ -148,10 +143,6 @@ internal val mobileBackgroundGradient: Brush
       ),
     )
   }
-
-// ---------------------------------------------------------------------------
-// Typography tokens (theme-independent)
-// ---------------------------------------------------------------------------
 
 internal val mobileFontFamily =
   FontFamily(

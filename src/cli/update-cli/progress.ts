@@ -1,4 +1,7 @@
+// Update command presentation helpers: spinner lifecycle, failure hints, and result summaries.
 import { spinner } from "@clack/prompts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import type {
   UpdateRunResult,
@@ -6,8 +9,6 @@ import type {
   UpdateStepProgress,
 } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { theme } from "../../terminal/theme.js";
 import type { UpdateCommandOptions } from "./shared.js";
 
 const STEP_LABELS: Record<string, string> = {
@@ -30,6 +31,9 @@ const STEP_LABELS: Record<string, string> = {
   "git rev-parse HEAD (after)": "Verifying update",
   "global update": "Updating via package manager",
   "global update (omit optional)": "Retrying update without optional deps",
+  "global install stage": "Preparing staged package install",
+  "global install verify": "Verifying global package",
+  "global install swap": "Activating global package",
   "global install": "Installing global package",
 };
 
@@ -37,6 +41,7 @@ function getStepLabel(step: UpdateStepInfo): string {
   return STEP_LABELS[step.name] ?? step.name;
 }
 
+/** Convert updater failure reasons and stderr tails into operator-facing recovery hints. */
 export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   if (result.status !== "error") {
     return [];
@@ -75,12 +80,20 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
 
   const stderr = normalizeLowercaseStringOrEmpty(failedStep.stderrTail);
   const hints: string[] = [];
+  const isGlobalPackageInstallStep =
+    failedStep.name.startsWith("global update") || failedStep.name.startsWith("global install");
 
-  if (failedStep.name.startsWith("global update") && stderr.includes("eacces")) {
+  if (isGlobalPackageInstallStep && stderr.includes("eacces")) {
     hints.push(
       "Detected permission failure (EACCES). Re-run with a writable global prefix or sudo (for system-managed Node installs).",
     );
+    hints.push(
+      "If you recover with sudo/manual package install on a managed Gateway, stop the Gateway first so it does not load files while the package tree is being replaced.",
+    );
     hints.push("Example: npm config set prefix ~/.local && npm i -g openclaw@latest");
+    hints.push(
+      "System install outline: openclaw gateway stop -> sudo <system-npm> i -g openclaw@latest -> openclaw gateway install --force -> openclaw gateway restart.",
+    );
   }
 
   if (
@@ -96,11 +109,13 @@ export function inferUpdateFailureHints(result: UpdateRunResult): string[] {
   return hints;
 }
 
+/** Runner-facing progress callbacks plus terminal spinner cleanup. */
 export type ProgressController = {
   progress: UpdateStepProgress;
   stop: () => void;
 };
 
+/** Create a progress adapter for the updater runner without coupling runner code to terminal UI. */
 export function createUpdateProgress(enabled: boolean): ProgressController {
   if (!enabled) {
     return {
@@ -164,6 +179,7 @@ type PrintResultOptions = UpdateCommandOptions & {
   hideSteps?: boolean;
 };
 
+/** Render a completed updater run as JSON or terminal output. */
 export function printResult(result: UpdateRunResult, opts: PrintResultOptions): void {
   if (opts.json) {
     defaultRuntime.writeJson(result);

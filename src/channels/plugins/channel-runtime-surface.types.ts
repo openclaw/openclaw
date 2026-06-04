@@ -21,6 +21,7 @@ export type ChannelRuntimeContextRegistry = {
       abortSignal?: AbortSignal;
     },
   ) => { dispose: () => void };
+  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Runtime context values are caller-typed by key.
   get: <T = unknown>(params: ChannelRuntimeContextKey) => T | undefined;
   watch: (params: {
     channelId?: string;
@@ -31,11 +32,10 @@ export type ChannelRuntimeContextRegistry = {
 };
 
 /**
- * Minimal channel-runtime surface threaded through gateway/setup flows.
+ * Minimal channel-runtime surface exported through the public plugin SDK.
  *
- * Most callers only pass this object through or use `runtimeContexts`.
- * Keeping this leaf contract small avoids dragging the full plugin runtime
- * graph into generic channel adapter types.
+ * Gateway startup supplies the full plugin channel runtime, but external callers
+ * may still type context-only helpers against this compatibility surface.
  */
 export type ChannelRuntimeSurface = {
   runtimeContexts: ChannelRuntimeContextRegistry;

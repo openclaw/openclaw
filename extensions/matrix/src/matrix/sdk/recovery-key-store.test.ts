@@ -11,6 +11,8 @@ function createTempRecoveryKeyPath(): string {
   return path.join(dir, "recovery-key.json");
 }
 
+const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
+
 function createGeneratedRecoveryKey(params: {
   keyId: string;
   name: string;
@@ -53,6 +55,31 @@ function createRecoveryKeyCrypto(params: {
     getSecretStorageStatus: vi.fn(async () => params.status),
     requestOwnUserVerification: vi.fn(async () => null),
   } as unknown as MatrixCryptoBootstrapApi;
+}
+
+function bootstrapSecretStorageCallArg(
+  bootstrapSecretStorage: ReturnType<typeof vi.fn>,
+  index: number,
+) {
+  const call = bootstrapSecretStorage.mock.calls[index];
+  if (!call) {
+    throw new Error(`expected bootstrapSecretStorage call ${index}`);
+  }
+  return call[0] as { setupNewSecretStorage?: boolean } | undefined;
+}
+
+function expectRecoveryKeySummary(
+  store: MatrixRecoveryKeyStore,
+  expected: { keyId: string; encodedPrivateKey?: string },
+) {
+  const summary = store.getRecoveryKeySummary();
+  if (!summary) {
+    throw new Error("expected recovery key summary");
+  }
+  expect(summary.keyId).toBe(expected.keyId);
+  if (expected.encodedPrivateKey !== undefined) {
+    expect(summary.encodedPrivateKey).toBe(expected.encodedPrivateKey);
+  }
 }
 
 async function runSecretStorageBootstrapScenario(params: {
@@ -133,7 +160,9 @@ describe("MatrixRecoveryKeyStore", () => {
     expect(saved.privateKeyBase64).toBe(Buffer.from([9, 8, 7]).toString("base64"));
 
     const mode = fs.statSync(recoveryKeyPath).mode & 0o777;
-    expect(mode).toBe(0o600);
+    if (EXPECTS_POSIX_PRIVATE_FILE_MODE) {
+      expect(mode).toBe(0o600);
+    }
   });
 
   it("creates and persists a recovery key when secret storage is missing", async () => {
@@ -149,12 +178,10 @@ describe("MatrixRecoveryKeyStore", () => {
       });
 
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
-    expect(bootstrapSecretStorage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        setupNewSecretStorage: true,
-      }),
+    expect(bootstrapSecretStorageCallArg(bootstrapSecretStorage, 0)?.setupNewSecretStorage).toBe(
+      true,
     );
-    expect(store.getRecoveryKeySummary()).toMatchObject({
+    expectRecoveryKeySummary(store, {
       keyId: "GENERATED",
       encodedPrivateKey: "encoded-generated-key", // pragma: allowlist secret
     });
@@ -190,7 +217,7 @@ describe("MatrixRecoveryKeyStore", () => {
     await store.bootstrapSecretStorageWithRecoveryKey(crypto);
 
     expect(createRecoveryKeyFromPassphrase).not.toHaveBeenCalled();
-    expect(store.getRecoveryKeySummary()).toMatchObject({
+    expectRecoveryKeySummary(store, {
       keyId: "NEW",
     });
   });
@@ -208,12 +235,10 @@ describe("MatrixRecoveryKeyStore", () => {
       });
 
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
-    expect(bootstrapSecretStorage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        setupNewSecretStorage: true,
-      }),
+    expect(bootstrapSecretStorageCallArg(bootstrapSecretStorage, 0)?.setupNewSecretStorage).toBe(
+      true,
     );
-    expect(store.getRecoveryKeySummary()).toMatchObject({
+    expectRecoveryKeySummary(store, {
       keyId: "RECOVERED",
       encodedPrivateKey: "encoded-recovered-key", // pragma: allowlist secret
     });
@@ -239,12 +264,10 @@ describe("MatrixRecoveryKeyStore", () => {
 
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
     expect(bootstrapSecretStorage).toHaveBeenCalledTimes(2);
-    expect(bootstrapSecretStorage).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        setupNewSecretStorage: true,
-      }),
+    expect(bootstrapSecretStorageCallArg(bootstrapSecretStorage, 1)?.setupNewSecretStorage).toBe(
+      true,
     );
-    expect(store.getRecoveryKeySummary()).toMatchObject({
+    expectRecoveryKeySummary(store, {
       keyId: "REPAIRED",
       encodedPrivateKey: "encoded-repaired-key", // pragma: allowlist secret
     });
@@ -270,10 +293,8 @@ describe("MatrixRecoveryKeyStore", () => {
 
     expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
     expect(bootstrapSecretStorage).toHaveBeenCalledTimes(2);
-    expect(bootstrapSecretStorage).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        setupNewSecretStorage: true,
-      }),
+    expect(bootstrapSecretStorageCallArg(bootstrapSecretStorage, 1)?.setupNewSecretStorage).toBe(
+      true,
     );
   });
 
@@ -381,5 +402,58 @@ describe("MatrixRecoveryKeyStore", () => {
     };
     expect(persisted.keyId).toBe("OLD");
     expect(persisted.encodedPrivateKey).toBe(storedEncoded);
+  });
+
+  it("generates a fresh recovery key when secret storage is explicitly rotated", async () => {
+    const recoveryKeyPath = createTempRecoveryKeyPath();
+    const oldEncoded = encodeRecoveryKey(
+      new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)),
+    );
+    fs.writeFileSync(
+      recoveryKeyPath,
+      JSON.stringify({
+        version: 1,
+        createdAt: "2026-03-12T00:00:00.000Z",
+        keyId: "OLD",
+        encodedPrivateKey: oldEncoded,
+        privateKeyBase64: Buffer.from(
+          new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 1)),
+        ).toString("base64"),
+      }),
+      "utf8",
+    );
+
+    const freshEncoded = encodeRecoveryKey(
+      new Uint8Array(Array.from({ length: 32 }, (_, i) => i + 101)),
+    ) as string;
+    const bootstrapSecretStorage = createBootstrapSecretStorageMock();
+    const createRecoveryKeyFromPassphrase = vi.fn(async () =>
+      createGeneratedRecoveryKey({
+        keyId: "NEW",
+        name: "Fresh key",
+        bytes: Array.from({ length: 32 }, (_, i) => i + 101),
+        encodedPrivateKey: freshEncoded,
+      }),
+    );
+    const crypto = createRecoveryKeyCrypto({
+      bootstrapSecretStorage,
+      createRecoveryKeyFromPassphrase,
+      status: { ready: true, defaultKeyId: "OLD" },
+    });
+    const store = new MatrixRecoveryKeyStore(recoveryKeyPath);
+
+    await store.bootstrapSecretStorageWithRecoveryKey(crypto, {
+      forceNewRecoveryKey: true,
+      forceNewSecretStorage: true,
+    });
+
+    const persisted = JSON.parse(fs.readFileSync(recoveryKeyPath, "utf8")) as {
+      keyId?: string;
+      encodedPrivateKey?: string;
+    };
+    expect(createRecoveryKeyFromPassphrase).toHaveBeenCalledTimes(1);
+    expect(persisted.keyId).toBe("NEW");
+    expect(persisted.encodedPrivateKey).toBe(freshEncoded);
+    expect(persisted.encodedPrivateKey).not.toBe(oldEncoded);
   });
 });

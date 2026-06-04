@@ -1,22 +1,26 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import {
+  channelRouteTargetsMatchExact,
+  channelRouteTargetsShareConversation,
+} from "../../plugin-sdk/channel-route.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   comparableChannelTargetsMatch,
-  comparableChannelTargetsShareRoute,
-  parseExplicitTargetForChannel,
-  resolveComparableTargetForChannel,
-} from "./target-parsing.js";
+  parseExplicitTargetForLoadedChannel,
+  resolveComparableTargetForLoadedChannel,
+  resolveRouteTargetForLoadedChannel,
+} from "./target-parsing-loaded.js";
 
-function parseTelegramTargetForTest(raw: string): {
+function parseThreadedTargetForTest(raw: string): {
   to: string;
   threadId?: number;
   chatType?: "direct" | "group";
 } {
   const trimmed = raw
     .trim()
-    .replace(/^telegram:/i, "")
-    .replace(/^tg:/i, "");
+    .replace(/^threaded:/i, "")
+    .replace(/^mock:/i, "");
   const prefixedTopic = /^group:([^:]+):topic:(\d+)$/i.exec(trimmed);
   if (prefixedTopic) {
     return {
@@ -43,14 +47,14 @@ function setMinimalTargetParsingRegistry(): void {
   setActivePluginRegistry(
     createTestRegistry([
       {
-        pluginId: "telegram",
+        pluginId: "mock-threaded",
         plugin: {
-          id: "telegram",
+          id: "mock-threaded",
           meta: {
-            id: "telegram",
-            label: "Telegram",
-            selectionLabel: "Telegram",
-            docsPath: "/channels/telegram",
+            id: "mock-threaded",
+            label: "Mock Threaded",
+            selectionLabel: "Mock Threaded",
+            docsPath: "/channels/mock-threaded",
             blurb: "test stub",
           },
           capabilities: { chatTypes: ["direct", "group"] },
@@ -59,7 +63,7 @@ function setMinimalTargetParsingRegistry(): void {
             resolveAccount: () => ({}),
           },
           messaging: {
-            parseExplicitTarget: ({ raw }: { raw: string }) => parseTelegramTargetForTest(raw),
+            parseExplicitTarget: ({ raw }: { raw: string }) => parseThreadedTargetForTest(raw),
           },
         },
         source: "test",
@@ -93,64 +97,121 @@ function setMinimalTargetParsingRegistry(): void {
   );
 }
 
-describe("parseExplicitTargetForChannel", () => {
+describe("parseExplicitTargetForLoadedChannel", () => {
   beforeEach(() => {
     setMinimalTargetParsingRegistry();
   });
 
-  it("parses Telegram targets via the registered channel plugin contract", () => {
-    expect(parseExplicitTargetForChannel("telegram", "telegram:group:-100123:topic:77")).toEqual({
-      to: "-100123",
+  it("parses threaded targets via the registered channel plugin contract", () => {
+    expect(
+      parseExplicitTargetForLoadedChannel("mock-threaded", "threaded:group:room-a:topic:77"),
+    ).toEqual({
+      to: "room-a",
       threadId: 77,
       chatType: "group",
     });
-    expect(parseExplicitTargetForChannel("telegram", "-100123")).toEqual({
-      to: "-100123",
-      chatType: "group",
+    expect(parseExplicitTargetForLoadedChannel("mock-threaded", "room-a")).toEqual({
+      to: "room-a",
+      chatType: undefined,
     });
   });
 
   it("parses registered non-bundled channel targets via the active plugin contract", () => {
-    expect(parseExplicitTargetForChannel("demo-target", "team-room")).toEqual({
+    expect(parseExplicitTargetForLoadedChannel("demo-target", "team-room")).toEqual({
+      to: "TEAM-ROOM",
+      chatType: "direct",
+    });
+    expect(parseExplicitTargetForLoadedChannel("demo-target", "team-room")).toEqual({
       to: "TEAM-ROOM",
       chatType: "direct",
     });
   });
 
-  it("builds comparable targets from plugin-owned grammar", () => {
+  it("builds route targets from plugin-owned grammar", () => {
     expect(
-      resolveComparableTargetForChannel({
-        channel: "telegram",
-        rawTarget: "telegram:group:-100123:topic:77",
+      resolveRouteTargetForLoadedChannel({
+        channel: "mock-threaded",
+        rawTarget: "threaded:group:room-a:topic:77",
       }),
     ).toEqual({
-      rawTo: "telegram:group:-100123:topic:77",
-      to: "-100123",
+      channel: "mock-threaded",
+      rawTo: "threaded:group:room-a:topic:77",
+      to: "room-a",
+      threadId: 77,
+      chatType: "group",
+    });
+    expect(
+      resolveRouteTargetForLoadedChannel({
+        channel: "mock-threaded",
+        rawTarget: "threaded:group:room-a:topic:77",
+      }),
+    ).toEqual({
+      channel: "mock-threaded",
+      rawTo: "threaded:group:room-a:topic:77",
+      to: "room-a",
       threadId: 77,
       chatType: "group",
     });
   });
 
-  it("matches comparable targets when only the plugin grammar differs", () => {
-    const topicTarget = resolveComparableTargetForChannel({
-      channel: "telegram",
-      rawTarget: "telegram:-100123:topic:77",
+  it("matches route targets when only the plugin grammar differs", () => {
+    const topicTarget = resolveRouteTargetForLoadedChannel({
+      channel: "mock-threaded",
+      rawTarget: "threaded:room-a:topic:77",
     });
-    const bareTarget = resolveComparableTargetForChannel({
-      channel: "telegram",
-      rawTarget: "-100123",
+    const bareTarget = resolveRouteTargetForLoadedChannel({
+      channel: "mock-threaded",
+      rawTarget: "room-a",
     });
 
     expect(
-      comparableChannelTargetsMatch({
+      channelRouteTargetsMatchExact({
         left: topicTarget,
         right: bareTarget,
       }),
     ).toBe(false);
     expect(
-      comparableChannelTargetsShareRoute({
+      channelRouteTargetsShareConversation({
         left: topicTarget,
         right: bareTarget,
+      }),
+    ).toBe(true);
+  });
+
+  it("compares numeric and string thread ids through the shared route contract", () => {
+    const numericThread = resolveRouteTargetForLoadedChannel({
+      channel: "mock-threaded",
+      rawTarget: "threaded:room-a:topic:77",
+    });
+    const stringThread = resolveRouteTargetForLoadedChannel({
+      channel: "mock-threaded",
+      rawTarget: "room-a",
+      fallbackThreadId: "77",
+    });
+
+    expect(
+      channelRouteTargetsMatchExact({
+        left: numericThread,
+        right: stringThread,
+      }),
+    ).toBe(true);
+  });
+
+  it("keeps deprecated comparable target helpers as route wrappers", () => {
+    const numericThread = resolveComparableTargetForLoadedChannel({
+      channel: "mock-threaded",
+      rawTarget: "threaded:room-a:topic:77",
+    });
+    const stringThread = resolveRouteTargetForLoadedChannel({
+      channel: "mock-threaded",
+      rawTarget: "room-a",
+      fallbackThreadId: "77",
+    });
+
+    expect(
+      comparableChannelTargetsMatch({
+        left: numericThread,
+        right: stringThread,
       }),
     ).toBe(true);
   });

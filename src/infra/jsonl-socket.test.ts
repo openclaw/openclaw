@@ -1,8 +1,9 @@
 import net from "node:net";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
-import { requestJsonlSocket } from "./jsonl-socket.js";
+import { requestJsonlSocket, testApi } from "./jsonl-socket.js";
 
 async function listenOnSocket(server: net.Server, socketPath: string): Promise<boolean> {
   try {
@@ -20,7 +21,16 @@ async function listenOnSocket(server: net.Server, socketPath: string): Promise<b
   }
 }
 
+function acceptDoneValue(msg: unknown): number | null | undefined {
+  const value = msg as { type?: string; value?: number };
+  return value.type === "done" ? (value.value ?? null) : undefined;
+}
+
 describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
+  it("caps oversized socket timeouts before arming the watchdog", () => {
+    expect(testApi.resolveJsonlSocketTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(MAX_TIMER_TIMEOUT_MS);
+  });
+
   it("ignores malformed and non-accepted lines until one is accepted", async () => {
     await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
@@ -42,10 +52,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
             socketPath,
             requestLine: '{"hello":"world"}',
             timeoutMs: 500,
-            accept: (msg) => {
-              const value = msg as { type?: string; value?: number };
-              return value.type === "done" ? (value.value ?? null) : undefined;
-            },
+            accept: acceptDoneValue,
           }),
         ).resolves.toBe(42);
       } finally {
@@ -79,10 +86,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
             socketPath,
             requestLine: '{"hello":"world"}',
             timeoutMs: 500,
-            accept: (msg) => {
-              const value = msg as { type?: string; value?: number };
-              return value.type === "done" ? (value.value ?? null) : undefined;
-            },
+            accept: acceptDoneValue,
           }),
         ).resolves.toBe(7);
         expect(receivedBuffer).toBe('{"hello":"world"}\n');
@@ -124,6 +128,36 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
           accept: () => undefined,
         }),
       ).resolves.toBeNull();
+    });
+  });
+
+  it("returns null when the socket closes without an accepted response", async () => {
+    await withTempDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+      const socketPath = path.join(dir, "socket.sock");
+      const server = net.createServer((socket) => {
+        socket.on("data", () => {
+          socket.destroy();
+        });
+      });
+      const listening = await listenOnSocket(server, socketPath);
+      if (!listening) {
+        return;
+      }
+
+      try {
+        const startMs = Date.now();
+        const result = await requestJsonlSocket({
+          socketPath,
+          requestLine: "{}",
+          timeoutMs: 250,
+          accept: () => undefined,
+        });
+
+        expect(result).toBeNull();
+        expect(Date.now() - startMs).toBeLessThan(100);
+      } finally {
+        server.close();
+      }
     });
   });
 });

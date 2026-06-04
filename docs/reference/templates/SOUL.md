@@ -1,6 +1,6 @@
 ---
-title: "SOUL.md Template"
 summary: "Workspace template for SOUL.md"
+title: "SOUL.md template"
 read_when:
   - Bootstrapping a workspace manually
 ---
@@ -43,3 +43,7 @@ If you change this file, tell the user — it's your soul, and they should know.
 ---
 
 _This file is yours to evolve. As you learn who you are, update it._
+
+## Related
+
+- [SOUL.md personality guide](/concepts/soul)

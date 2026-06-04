@@ -1,12 +1,17 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ProcessSession } from "./bash-process-registry.js";
 import { deriveSessionName } from "./bash-tools.shared.js";
 import { encodeKeySequence, hasCursorModeSensitiveKeys } from "./pty-keys.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
+// Process send-keys support for background PTY sessions. It encodes symbolic,
+// hex, and literal input before writing to a live session stdin.
 export type WritableStdin = {
   write: (data: string, cb?: (err?: Error | null) => void) => void;
   end: () => void;
   destroyed?: boolean;
+  writable?: boolean;
+  writableEnded?: boolean;
+  writableFinished?: boolean;
 };
 
 function failText(text: string): AgentToolResult<unknown> {
@@ -33,6 +38,7 @@ async function writeToStdin(stdin: WritableStdin, data: string) {
   });
 }
 
+/** Encode and write requested key data into a running process session. */
 export async function handleProcessSendKeys(params: {
   sessionId: string;
   session: ProcessSession;
@@ -47,6 +53,8 @@ export async function handleProcessSendKeys(params: {
     literal: params.literal,
   };
   if (params.session.cursorKeyMode === "unknown" && hasCursorModeSensitiveKeys(request)) {
+    // Arrow/keypad encodings depend on cursor key mode. Wait for startup output
+    // to identify the mode before sending potentially wrong bytes.
     return failText(
       `Session ${params.sessionId} cursor key mode is not known yet. Poll or log until startup output appears, then retry send-keys.`,
     );

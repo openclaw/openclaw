@@ -1,17 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import * as noteModule from "../../packages/terminal-core/src/note.js";
 import {
   createPluginLoadResult,
   createPluginRecord,
   createTypedHook,
 } from "../plugins/status.test-helpers.js";
-import * as noteModule from "../terminal/note.js";
 import { noteWorkspaceStatus } from "./doctor-workspace-status.js";
 
 const mocks = vi.hoisted(() => ({
   resolveAgentWorkspaceDir: vi.fn(),
   resolveDefaultAgentId: vi.fn(),
   buildWorkspaceSkillStatus: vi.fn(),
-  buildPluginDiagnosticsReport: vi.fn(),
+  buildPluginRegistrySnapshotReport: vi.fn(),
   buildPluginCompatibilityWarnings: vi.fn(),
   listTaskFlowRecords: vi.fn<() => unknown[]>(() => []),
   listTasksForFlowId: vi.fn<(flowId: string) => unknown[]>((_flowId: string) => []),
@@ -22,12 +22,13 @@ vi.mock("../agents/agent-scope.js", () => ({
   resolveDefaultAgentId: (...args: unknown[]) => mocks.resolveDefaultAgentId(...args),
 }));
 
-vi.mock("../agents/skills-status.js", () => ({
+vi.mock("../skills/discovery/status.js", () => ({
   buildWorkspaceSkillStatus: (...args: unknown[]) => mocks.buildWorkspaceSkillStatus(...args),
 }));
 
 vi.mock("../plugins/status.js", () => ({
-  buildPluginDiagnosticsReport: (...args: unknown[]) => mocks.buildPluginDiagnosticsReport(...args),
+  buildPluginRegistrySnapshotReport: (...args: unknown[]) =>
+    mocks.buildPluginRegistrySnapshotReport(...args),
   buildPluginCompatibilityWarnings: (...args: unknown[]) =>
     mocks.buildPluginCompatibilityWarnings(...args),
 }));
@@ -53,7 +54,7 @@ async function runNoteWorkspaceStatusForTest(
   mocks.buildWorkspaceSkillStatus.mockReturnValue({
     skills: [],
   });
-  mocks.buildPluginDiagnosticsReport.mockReturnValue({
+  mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
     workspaceDir: "/workspace",
     ...loadResult,
   });
@@ -85,7 +86,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(mocks.buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
       });
@@ -162,7 +163,7 @@ describe("noteWorkspaceStatus", () => {
       }),
     );
     try {
-      expect(noteSpy.mock.calls.some(([, title]) => title === "Plugin compatibility")).toBe(false);
+      expect(noteSpy.mock.calls.map(([, title]) => title)).not.toContain("Plugin compatibility");
     } finally {
       noteSpy.mockRestore();
     }
@@ -183,7 +184,7 @@ describe("noteWorkspaceStatus", () => {
       "legacy-plugin still uses legacy before_agent_start",
     ]);
     try {
-      expect(mocks.buildPluginDiagnosticsReport).toHaveBeenCalledWith({
+      expect(mocks.buildPluginRegistrySnapshotReport).toHaveBeenCalledWith({
         config: {},
         workspaceDir: "/workspace",
       });

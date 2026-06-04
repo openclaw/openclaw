@@ -1,13 +1,15 @@
-import { Type } from "@sinclair/typebox";
 import { describeAccountSnapshot } from "openclaw/plugin-sdk/account-helpers";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
-import { createMessageToolCardSchema } from "openclaw/plugin-sdk/channel-actions";
 import { createTopLevelChannelConfigAdapter } from "openclaw/plugin-sdk/channel-config-helpers";
 import type {
   ChannelMessageActionAdapter,
   ChannelMessageToolDiscovery,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
+import {
+  createChannelMessageAdapterFromOutbound,
+  createRuntimeOutboundDelegates,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import {
   createAllowlistProviderGroupPolicyWarningCollector,
@@ -18,11 +20,20 @@ import {
   createRuntimeDirectoryLiveAdapter,
   listDirectoryEntriesFromSources,
 } from "openclaw/plugin-sdk/directory-runtime";
+import { normalizeMessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { createRuntimeOutboundDelegates } from "openclaw/plugin-sdk/outbound-runtime";
 import { createComputedAccountStatusAdapter } from "openclaw/plugin-sdk/status-helpers";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
-import type { ChannelMessageActionName, ChannelPlugin, OpenClawConfig } from "../runtime-api.js";
+import {
+  normalizeOptionalString,
+  normalizeStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { Type } from "typebox";
+import type {
+  ChannelMessageActionName,
+  ChannelOutboundAdapter,
+  ChannelPlugin,
+  OpenClawConfig,
+} from "../runtime-api.js";
 import {
   buildProbeChannelStatusSummary,
   chunkTextForOutbound,
@@ -34,6 +45,7 @@ import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { MSTeamsChannelConfigSchema } from "./config-schema.js";
 import { collectMSTeamsMutableAllowlistWarnings } from "./doctor.js";
 import { resolveMSTeamsGroupToolPolicy } from "./policy.js";
+import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import type { ProbeMSTeamsResult } from "./probe.js";
 import {
   normalizeMSTeamsMessagingTarget,
@@ -384,11 +396,11 @@ function describeMSTeamsMessageTool({
           "renameGroup",
         ] satisfies ChannelMessageActionName[])
       : [],
-    capabilities: enabled ? ["cards"] : [],
+    capabilities: enabled ? ["presentation"] : [],
     schema: enabled
       ? {
+          actions: ["unpin"],
           properties: {
-            card: createMessageToolCardSchema(),
             pinnedMessageId: Type.Optional(
               Type.String({
                 description:
@@ -400,6 +412,51 @@ function describeMSTeamsMessageTool({
       : null,
   };
 }
+
+const msteamsChannelOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  chunker: chunkTextForOutbound,
+  chunkerMode: "markdown",
+  textChunkLimit: 4000,
+  pollMaxOptions: 12,
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      payload: true,
+      messageSendingHooks: true,
+    },
+  },
+  presentationCapabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
+  ...createRuntimeOutboundDelegates({
+    getRuntime: loadMSTeamsChannelRuntime,
+    renderPresentation: { resolve: (runtime) => runtime.msteamsOutbound.renderPresentation },
+    sendPayload: { resolve: (runtime) => runtime.msteamsOutbound.sendPayload },
+    sendText: { resolve: (runtime) => runtime.msteamsOutbound.sendText },
+    sendMedia: { resolve: (runtime) => runtime.msteamsOutbound.sendMedia },
+    sendPoll: { resolve: (runtime) => runtime.msteamsOutbound.sendPoll },
+  }),
+};
+
+const msteamsMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: "msteams",
+  outbound: msteamsChannelOutbound,
+  live: {
+    capabilities: {
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
+      nativeStreaming: true,
+    },
+    finalizer: {
+      capabilities: {
+        finalEdit: true,
+        normalFallback: true,
+        previewReceipt: true,
+      },
+    },
+  },
+});
 
 export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsResult> =
   createChatChannelPlugin({
@@ -443,12 +500,13 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       doctor: {
         dmAllowFromMode: "topOnly",
         groupModel: "hybrid",
-        groupAllowFromFallbackToAllowFrom: false,
+        groupAllowFromFallbackToAllowFrom: true,
         warnOnEmptyGroupSenderAllowlist: true,
         collectMutableAllowlistWarnings: collectMSTeamsMutableAllowlistWarnings,
       },
       setup: msteamsSetupAdapter,
       messaging: {
+        targetPrefixes: ["msteams", "teams"],
         normalizeTarget: normalizeMSTeamsMessagingTarget,
         resolveOutboundSessionRoute: (params) => resolveMSTeamsOutboundSessionRoute(params),
         targetResolver: {
@@ -456,6 +514,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           hint: "<conversationId|user:ID|conversation:ID>",
         },
       },
+      message: msteamsMessageAdapter,
       directory: createChannelDirectoryAdapter({
         self: async ({ cfg }) => {
           const creds = resolveMSTeamsCredentials(cfg.channels?.msteams);
@@ -631,9 +690,15 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
       actions: {
         describeMessageTool: describeMSTeamsMessageTool,
         handleAction: async (ctx) => {
-          // Handle send action with card parameter
-          if (ctx.action === "send" && ctx.params.card) {
-            const card = ctx.params.card as Record<string, unknown>;
+          const presentation =
+            ctx.action === "send"
+              ? normalizeMessagePresentation(ctx.params.presentation)
+              : undefined;
+          if (ctx.action === "send" && presentation) {
+            const card = buildMSTeamsPresentationCard({
+              presentation,
+              text: resolveActionContent(ctx.params),
+            });
             return await runWithRequiredActionTarget({
               actionLabel: "Card send",
               toolParams: ctx.params,
@@ -1032,12 +1097,8 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           }
           const graph = teamsProbe?.graph;
           if (graph) {
-            const roles = Array.isArray(graph.roles)
-              ? graph.roles.map((role) => role.trim()).filter(Boolean)
-              : [];
-            const scopes = Array.isArray(graph.scopes)
-              ? graph.scopes.map((scope) => scope.trim()).filter(Boolean)
-              : [];
+            const roles = Array.isArray(graph.roles) ? normalizeStringEntries(graph.roles) : [];
+            const scopes = Array.isArray(graph.scopes) ? normalizeStringEntries(graph.scopes) : [];
             const formatPermission = (permission: string) => {
               const hint = TEAMS_GRAPH_PERMISSION_HINTS[permission];
               return hint ? `${permission} (${hint})` : permission;
@@ -1112,17 +1173,5 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         };
       },
     },
-    outbound: {
-      deliveryMode: "direct",
-      chunker: chunkTextForOutbound,
-      chunkerMode: "markdown",
-      textChunkLimit: 4000,
-      pollMaxOptions: 12,
-      ...createRuntimeOutboundDelegates({
-        getRuntime: loadMSTeamsChannelRuntime,
-        sendText: { resolve: (runtime) => runtime.msteamsOutbound.sendText },
-        sendMedia: { resolve: (runtime) => runtime.msteamsOutbound.sendMedia },
-        sendPoll: { resolve: (runtime) => runtime.msteamsOutbound.sendPoll },
-      }),
-    },
+    outbound: msteamsChannelOutbound,
   });

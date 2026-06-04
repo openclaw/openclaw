@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 
-export type DreamingArtifactsAuditIssue = {
+type DreamingArtifactsAuditIssue = {
   severity: "warn" | "error";
   code:
     | "dreaming-session-corpus-unreadable"
@@ -87,8 +88,8 @@ function buildArchiveTimestamp(now: Date): string {
 }
 
 async function ensureArchivablePath(targetPath: string): Promise<"file" | "dir" | null> {
-  const stat = await fs.lstat(targetPath).catch((err: NodeJS.ErrnoException) => {
-    if (err.code === "ENOENT") {
+  const stat = await fs.lstat(targetPath).catch((err: unknown) => {
+    if (extractErrorCode(err) === "ENOENT") {
       return null;
     }
     throw err;

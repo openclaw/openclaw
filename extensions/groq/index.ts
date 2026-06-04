@@ -3,9 +3,16 @@ import { groqMediaUnderstandingProvider } from "./media-understanding-provider.j
 
 export default definePluginEntry({
   id: "groq",
-  name: "Groq Media Understanding",
-  description: "Bundled Groq audio transcription provider",
+  name: "Groq Provider",
+  description: "Bundled Groq provider plugin",
   register(api) {
+    api.registerProvider({
+      id: "groq",
+      label: "Groq",
+      docsPath: "/providers/groq",
+      envVars: ["GROQ_API_KEY"],
+      auth: [],
+    });
     api.registerMediaUnderstandingProvider(groqMediaUnderstandingProvider);
   },
 });

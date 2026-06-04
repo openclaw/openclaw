@@ -6,8 +6,8 @@ import { makeTempWorkspace } from "../../src/test-helpers/workspace.js";
 import { captureEnv } from "../../src/test-utils/env.js";
 import type { WizardPrompter } from "../../src/wizard/prompts.js";
 
-export const noopAsync = async () => {};
-export const noop = () => {};
+const noopAsync = async () => {};
+const noop = () => {};
 
 export function createExitThrowingRuntime(): RuntimeEnv {
   return {
@@ -47,12 +47,11 @@ export async function setupAuthTestEnv(
   const agentDir = path.join(stateDir, options?.agentSubdir ?? "agent");
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_AGENT_DIR = agentDir;
-  process.env.PI_CODING_AGENT_DIR = agentDir;
   await fs.mkdir(agentDir, { recursive: true });
   return { stateDir, agentDir };
 }
 
-export type AuthTestLifecycle = {
+type AuthTestLifecycle = {
   setStateDir: (stateDir: string) => void;
   cleanup: () => Promise<void>;
 };
@@ -82,7 +81,7 @@ export function requireOpenClawAgentDir(): string {
   return agentDir;
 }
 
-export function authProfilePathForAgent(agentDir: string): string {
+function authProfilePathForAgent(agentDir: string): string {
   return path.join(agentDir, "auth-profiles.json");
 }
 

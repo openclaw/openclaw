@@ -5,6 +5,7 @@ export const APPROVALS_SCOPE = "operator.approvals" as const;
 export const PAIRING_SCOPE = "operator.pairing" as const;
 export const TALK_SECRETS_SCOPE = "operator.talk.secrets" as const;
 
+/** Operator privileges advertised by gateway auth and checked by method policy. */
 export type OperatorScope =
   | typeof ADMIN_SCOPE
   | typeof READ_SCOPE
@@ -12,3 +13,19 @@ export type OperatorScope =
   | typeof APPROVALS_SCOPE
   | typeof PAIRING_SCOPE
   | typeof TALK_SECRETS_SCOPE;
+
+const KNOWN_OPERATOR_SCOPE_VALUES: readonly OperatorScope[] = [
+  ADMIN_SCOPE,
+  READ_SCOPE,
+  WRITE_SCOPE,
+  APPROVALS_SCOPE,
+  PAIRING_SCOPE,
+  TALK_SECRETS_SCOPE,
+];
+
+const KNOWN_OPERATOR_SCOPES: ReadonlySet<OperatorScope> = new Set(KNOWN_OPERATOR_SCOPE_VALUES);
+
+/** Narrows untrusted auth-token scope entries to the gateway's closed scope set. */
+export function isOperatorScope(value: unknown): value is OperatorScope {
+  return typeof value === "string" && KNOWN_OPERATOR_SCOPES.has(value as OperatorScope);
+}

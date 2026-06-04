@@ -1,6 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createLazyImportLoader, type LazyPromiseLoader } from "../shared/lazy-promise.js";
 import { MODEL_CONTEXT_TOKEN_CACHE } from "./context-cache.js";
 
+// Process-global context-window runtime state. Keeping this on globalThis avoids
+// duplicate model-config loads when modules are reloaded in tests/runtime seams.
 const CONTEXT_WINDOW_RUNTIME_STATE_KEY = Symbol.for("openclaw.contextWindowRuntimeState");
 
 type ContextWindowRuntimeState = {
@@ -8,7 +11,7 @@ type ContextWindowRuntimeState = {
   configuredConfig: OpenClawConfig | undefined;
   configLoadFailures: number;
   nextConfigLoadAttemptAtMs: number;
-  modelsConfigRuntimePromise: Promise<typeof import("./models-config.runtime.js")> | undefined;
+  modelsConfigRuntimeLoader: LazyPromiseLoader<typeof import("./models-config.runtime.js")>;
 };
 
 export const CONTEXT_WINDOW_RUNTIME_STATE = (() => {
@@ -16,22 +19,25 @@ export const CONTEXT_WINDOW_RUNTIME_STATE = (() => {
     [CONTEXT_WINDOW_RUNTIME_STATE_KEY]?: ContextWindowRuntimeState;
   };
   if (!globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY]) {
+    // The loader is lifecycle-owned here; callers reuse the same pending load
+    // promise and backoff counters instead of racing config discovery.
     globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY] = {
       loadPromise: null,
       configuredConfig: undefined,
       configLoadFailures: 0,
       nextConfigLoadAttemptAtMs: 0,
-      modelsConfigRuntimePromise: undefined,
+      modelsConfigRuntimeLoader: createLazyImportLoader(() => import("./models-config.runtime.js")),
     };
   }
   return globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY];
 })();
 
+/** Reset context-window runtime state and token cache for isolated tests. */
 export function resetContextWindowCacheForTest(): void {
   CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
   CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = undefined;
   CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
   CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
-  CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimePromise = undefined;
+  CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.clear();
   MODEL_CONTEXT_TOKEN_CACHE.clear();
 }

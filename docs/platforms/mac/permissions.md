@@ -2,12 +2,11 @@
 summary: "macOS permission persistence (TCC) and signing requirements"
 read_when:
   - Debugging missing or stuck macOS permission prompts
+  - Deciding whether to grant Accessibility to node or a CLI runtime
   - Packaging or signing the macOS app
   - Changing bundle IDs or app install paths
-title: "macOS Permissions"
+title: "macOS permissions"
 ---
-
-# macOS permissions (TCC)
 
 macOS permission grants are fragile. TCC associates a permission grant with the
 app's code signature, bundle identifier, and on-disk path. If any of those change,
@@ -23,6 +22,25 @@ macOS treats the app as new and may drop or hide prompts.
 
 Ad-hoc signatures generate a new identity every build. macOS will forget previous
 grants, and prompts can disappear entirely until the stale entries are cleared.
+
+## Accessibility grants for Node and CLI runtimes
+
+Prefer granting Accessibility to OpenClaw.app, Peekaboo.app, or another signed
+helper with its own bundle identifier instead of a generic `node` binary.
+
+macOS TCC grants Accessibility to the code identity of the process it sees. If a
+Homebrew, nvm, pnpm, or npm workflow causes a shared `node` executable to
+receive Accessibility, any JavaScript package launched through that same
+executable may inherit GUI automation privileges.
+
+Treat a `node` entry in System Settings as broad permission for that Node
+runtime, not as permission for one npm package. Avoid granting Accessibility to
+`node` unless you trust every script and package launched through that exact
+Node install.
+
+If you accidentally granted Accessibility to `node`, remove that entry from
+System Settings -> Privacy & Security -> Accessibility. Then grant the signed
+app or helper that should own UI automation.
 
 ## Recovery checklist when prompts disappear
 
@@ -48,3 +66,8 @@ Workaround: move files into the OpenClaw workspace (`~/.openclaw/workspace`) if 
 
 If you are testing permissions, always sign with a real certificate. Ad-hoc
 builds are only acceptable for quick local runs where permissions do not matter.
+
+## Related
+
+- [macOS app](/platforms/macos)
+- [macOS signing](/platforms/mac/signing)

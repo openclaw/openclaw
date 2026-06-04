@@ -1,11 +1,11 @@
 package ai.openclaw.app.ui
 
-import java.util.Base64
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.util.Base64
 
 @RunWith(RobolectricTestRunner::class)
 class GatewayConfigResolverTest {
@@ -114,18 +114,10 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointAllowsMdnsCleartextWsUrls() {
+  fun parseGatewayEndpointRejectsMdnsCleartextWsUrls() {
     val parsed = parseGatewayEndpoint("ws://gateway.local:18789")
 
-    assertEquals(
-      GatewayEndpointConfig(
-        host = "gateway.local",
-        port = 18789,
-        tls = false,
-        displayUrl = "http://gateway.local:18789",
-      ),
-      parsed,
-    )
+    assertNull(parsed)
   }
 
   @Test
@@ -271,6 +263,16 @@ class GatewayConfigResolverTest {
   }
 
   @Test
+  fun resolveScannedSetupCodeAcceptsPrivateLanCleartextGateway() {
+    val setupCode =
+      encodeSetupCode("""{"url":"ws://192.168.31.100:18789","bootstrapToken":"bootstrap-1"}""")
+
+    val resolved = resolveScannedSetupCode(setupCode)
+
+    assertEquals(setupCode, resolved)
+  }
+
+  @Test
   fun resolveScannedSetupCodeResultFlagsInsecureRemoteGateway() {
     val setupCode =
       encodeSetupCode("""{"url":"ws://attacker.example:18789","bootstrapToken":"bootstrap-1"}""")
@@ -290,7 +292,15 @@ class GatewayConfigResolverTest {
   }
 
   @Test
-  fun parseGatewayEndpointResultAcceptsLanCleartextGateway() {
+  fun parseGatewayEndpointResultRejectsUnsupportedSchemes() {
+    val parsed = parseGatewayEndpointResult("ftp://gateway.example:21")
+
+    assertNull(parsed.config)
+    assertEquals(GatewayEndpointValidationError.INVALID_URL, parsed.error)
+  }
+
+  @Test
+  fun parseGatewayEndpointResultAllowsPrivateLanCleartextGateway() {
     val parsed = parseGatewayEndpointResult("ws://192.168.1.20:18789")
 
     assertEquals(
@@ -500,7 +510,5 @@ class GatewayConfigResolverTest {
     assertEquals(true, resolved?.tls)
   }
 
-  private fun encodeSetupCode(payloadJson: String): String {
-    return Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
-  }
+  private fun encodeSetupCode(payloadJson: String): String = Base64.getUrlEncoder().withoutPadding().encodeToString(payloadJson.toByteArray(Charsets.UTF_8))
 }

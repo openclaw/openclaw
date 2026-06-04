@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
-import path from "node:path";
-import { pathExists } from "./source-path-shared.js";
+import { timestampMsToIsoString } from "openclaw/plugin-sdk/number-runtime";
+import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
 import {
   setImportedSourceEntry,
   shouldSkipImportedSourceWrite,
@@ -8,6 +8,23 @@ import {
 } from "./source-sync-state.js";
 
 type ImportedSourceState = Parameters<typeof shouldSkipImportedSourceWrite>[0]["state"];
+
+type FileStatLike = {
+  isFile?: unknown;
+  nlink?: unknown;
+};
+
+function isRegularFileStat(value: unknown): value is FileStatLike & { nlink: number } {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const stat = value as FileStatLike;
+  const isFile =
+    typeof stat.isFile === "function"
+      ? (stat.isFile as () => boolean).call(stat)
+      : stat.isFile === true;
+  return isFile && typeof stat.nlink === "number";
+}
 
 export async function writeImportedSourcePage(params: {
   vaultRoot: string;
@@ -21,9 +38,18 @@ export async function writeImportedSourcePage(params: {
   state: ImportedSourceState;
   buildRendered: (raw: string, updatedAt: string) => string;
 }): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
-  const pageAbsPath = path.join(params.vaultRoot, params.pagePath);
-  const created = !(await pathExists(pageAbsPath));
-  const updatedAt = new Date(params.sourceUpdatedAtMs).toISOString();
+  const vault = await fsRoot(params.vaultRoot);
+  const pageStat = await vault.stat(params.pagePath).catch((error: unknown) => {
+    if (
+      error instanceof FsSafeError &&
+      (error.code === "not-found" || error.code === "path-alias")
+    ) {
+      return null;
+    }
+    throw error;
+  });
+  const created = !pageStat;
+  const updatedAt = timestampMsToIsoString(params.sourceUpdatedAtMs) ?? new Date().toISOString();
   const shouldSkip = await shouldSkipImportedSourceWrite({
     vaultRoot: params.vaultRoot,
     syncKey: params.syncKey,
@@ -40,9 +66,28 @@ export async function writeImportedSourcePage(params: {
 
   const raw = await fs.readFile(params.sourcePath, "utf8");
   const rendered = params.buildRendered(raw, updatedAt);
-  const existing = await fs.readFile(pageAbsPath, "utf8").catch(() => "");
+  const existing = pageStat ? await vault.readText(params.pagePath).catch(() => "") : "";
   if (existing !== rendered) {
-    await fs.writeFile(pageAbsPath, rendered, "utf8");
+    try {
+      if (isRegularFileStat(pageStat) && pageStat.nlink > 1) {
+        await vault.remove(params.pagePath);
+      }
+      await vault.write(params.pagePath, rendered);
+    } catch (error) {
+      if (error instanceof FsSafeError) {
+        if (error.code !== "symlink" && error.code !== "path-alias") {
+          throw new Error(
+            `Refusing to write imported source page (${error.code}): ${params.pagePath}: ${error.message}`,
+            { cause: error },
+          );
+        }
+        throw new Error(
+          `Refusing to write imported source page through symlink: ${params.pagePath}`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
   }
 
   setImportedSourceEntry({

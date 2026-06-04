@@ -4,7 +4,7 @@ import type { ModelAliasIndex } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { installDirectiveBehaviorE2EHooks } from "./reply.directive.directive-behavior.e2e-harness.js";
-import { runEmbeddedPiAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
+import { runEmbeddedAgentMock } from "./reply.directive.directive-behavior.e2e-mocks.js";
 import { handleDirectiveOnly } from "./reply/directive-handling.impl.js";
 import type { HandleDirectiveOnlyParams } from "./reply/directive-handling.params.js";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
@@ -61,6 +61,7 @@ async function runDirectiveStatus(
     model: "claude-opus-4-6",
     initialModelLabel: "anthropic/claude-opus-4-6",
     formatModelSwitchEvent: (label) => `Switched to ${label}`,
+    senderIsOwner: true,
     ...restOverrides,
   });
   return { text: result?.text, sessionEntry: effectiveSessionEntry };
@@ -87,7 +88,7 @@ describe("directive behavior", () => {
       } as OpenClawConfig,
     });
     expect(fastText).toContain("Current fast mode: on (config)");
-    expect(fastText).toContain("Options: status, on, off.");
+    expect(fastText).toContain("Options: status, on, off, default.");
 
     const { text: verboseText } = await runDirectiveStatus("/verbose", {
       currentVerboseLevel: "on",
@@ -132,7 +133,7 @@ describe("directive behavior", () => {
     expect(execText).toContain(
       "Options: host=auto|sandbox|gateway|node, security=deny|allowlist|full, ask=off|on-miss|always, node=<id>.",
     );
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("treats /fast status like the no-argument status query", async () => {
     const { text: statusText } = await runDirectiveStatus("/fast status", {
@@ -153,8 +154,8 @@ describe("directive behavior", () => {
     });
 
     expect(statusText).toContain("Current fast mode: on (config)");
-    expect(statusText).toContain("Options: status, on, off.");
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(statusText).toContain("Options: status, on, off, default.");
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("enforces per-agent elevated restrictions and status visibility", async () => {
     const { text: deniedText } = await runDirectiveStatus("/elevated on", {
@@ -170,7 +171,7 @@ describe("directive behavior", () => {
     });
     expect(deniedText).toContain("agents.list[].tools.elevated.enabled");
 
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("applies per-agent allowlist requirements before allowing elevated", async () => {
     const { text: deniedText } = await runDirectiveStatus("/elevated on", {
@@ -192,7 +193,7 @@ describe("directive behavior", () => {
       elevatedAllowed: true,
     });
     expect(allowedText).toContain("Elevated mode set to ask");
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("handles runtime warning, invalid level, and multi-directive elevated inputs", async () => {
     for (const scenario of [
@@ -220,7 +221,7 @@ describe("directive behavior", () => {
         expect(text).toContain(snippet);
       }
     }
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
   it("persists queue overrides and reset behavior", async () => {
     const interrupt = await runDirectiveStatus("/queue interrupt");
@@ -255,7 +256,7 @@ describe("directive behavior", () => {
     expect(reset.sessionEntry.queueDebounceMs).toBeUndefined();
     expect(reset.sessionEntry.queueCap).toBeUndefined();
     expect(reset.sessionEntry.queueDrop).toBeUndefined();
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
   it("shows current trace level and persists trace directives", async () => {
@@ -265,14 +266,40 @@ describe("directive behavior", () => {
     expect(currentText).toContain("Current trace level: on");
 
     const enabled = await runDirectiveStatus("/trace on");
-    expect(enabled.text).toContain("Plugin trace enabled.");
+    expect(enabled.text).toContain("Trace enabled.");
+    expect(enabled.text).toContain("may contain sensitive information");
     expect(enabled.sessionEntry.traceLevel).toBe("on");
 
     const disabled = await runDirectiveStatus("/trace off", {
       sessionEntry: { sessionId: "trace", updatedAt: Date.now(), traceLevel: "on" },
     });
-    expect(disabled.text).toContain("Plugin trace disabled.");
+    expect(disabled.text).toContain("Trace disabled.");
+    expect(disabled.text).not.toContain("may contain sensitive information");
     expect(disabled.sessionEntry.traceLevel).toBe("off");
-    expect(runEmbeddedPiAgentMock).not.toHaveBeenCalled();
+
+    const raw = await runDirectiveStatus("/trace raw");
+    expect(raw.text).toContain("Trace set to raw.");
+    expect(raw.text).toContain("may contain sensitive information");
+    expect(raw.sessionEntry.traceLevel).toBe("raw");
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks /trace for non-owners without delegated gateway scope", async () => {
+    const denied = await runDirectiveStatus("/trace raw", {
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.write"],
+    });
+    expect(denied.text).toContain("/trace is restricted to owners and gateway clients");
+    expect(denied.sessionEntry.traceLevel).toBeUndefined();
+  });
+
+  it("allows /trace for delegated gateway clients with operator.admin", async () => {
+    const allowed = await runDirectiveStatus("/trace on", {
+      senderIsOwner: false,
+      gatewayClientScopes: ["operator.admin"],
+    });
+    expect(allowed.text).toContain("Trace enabled.");
+    expect(allowed.text).toContain("may contain sensitive information");
+    expect(allowed.sessionEntry.traceLevel).toBe("on");
   });
 });

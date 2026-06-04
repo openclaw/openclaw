@@ -1,5 +1,11 @@
 import path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
+import {
+  type EventSessionRoutingPolicy,
+  resolveEventSessionKeyForPolicy,
+  scopedHeartbeatWakeOptionsForPolicy,
+} from "../infra/event-session-routing.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
@@ -7,14 +13,15 @@ import {
   type ExecApprovalDecision,
   type ExecTarget,
 } from "../infra/exec-approvals.js";
-import { requestHeartbeatNow } from "../infra/heartbeat-wake.js";
+import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
-import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
+import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { isSubagentSessionKey } from "../sessions/session-key-utils.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
+import type { AgentToolResult } from "./runtime/index.js";
 export { applyPathPrepend, findPathKey, normalizePathPrepend } from "../infra/path-prepend.js";
 export {
   normalizeExecAsk,
@@ -26,7 +33,11 @@ import { logWarn } from "../logger.js";
 import type { ManagedRun } from "../process/supervisor/index.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
 import type { RunExit, TerminationReason } from "../process/supervisor/types.js";
-import { normalizeDeliveryContext, type DeliveryContext } from "../utils/delivery-context.js";
+import {
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../utils/delivery-context.shared.js";
+import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import {
   addSession,
   appendOutput,
@@ -34,6 +45,7 @@ import {
   markExited,
   tail,
 } from "./bash-process-registry.js";
+import { renderExecUpdateText } from "./bash-tools.exec-output.js";
 import {
   buildDockerExecArgs,
   chunkString,
@@ -41,12 +53,20 @@ import {
   readEnvInt,
 } from "./bash-tools.shared.js";
 import { buildCursorPositionResponse, stripDsrRequests } from "./pty-dsr.js";
+import { maybeWrapCommandWithShellSnapshot } from "./shell-snapshot.js";
 import { getShellConfig, sanitizeBinaryOutput } from "./shell-utils.js";
 
 export { execSchema } from "./bash-tools.schemas.js";
 
 const SMKX = "\x1b[?1h";
 const RMKX = "\x1b[?1l";
+
+function resolveExecTimeoutMs(timeoutSec: number | null | undefined): number | undefined {
+  if (typeof timeoutSec !== "number" || !Number.isFinite(timeoutSec) || timeoutSec <= 0) {
+    return undefined;
+  }
+  return resolveSafeTimeoutDelayMs(timeoutSec * 1000);
+}
 
 /**
  * Detect cursor key mode from PTY output chunk.
@@ -104,7 +124,7 @@ export function validateHostEnv(env: Record<string, string>): void {
   }
 }
 export const DEFAULT_MAX_OUTPUT = clampWithDefault(
-  readEnvInt("PI_BASH_MAX_OUTPUT_CHARS"),
+  readEnvInt("OPENCLAW_BASH_MAX_OUTPUT_CHARS", "PI_BASH_MAX_OUTPUT_CHARS"),
   200_000,
   1_000,
   200_000,
@@ -164,6 +184,40 @@ export type ExecProcessHandle = {
   /** Immediately suppress all future `onUpdate` calls for this handle. */
   disableUpdates: () => void;
 };
+
+function normalizeExecExitSignal(signal: NodeJS.Signals | number | null): string | undefined {
+  if (signal === null) {
+    return undefined;
+  }
+  return String(signal);
+}
+
+function emitExecProcessCompleted(params: {
+  command: string;
+  mode: "child" | "pty";
+  outcome: ExecProcessOutcome;
+  sessionKey?: string;
+  target: "host" | "sandbox";
+}): void {
+  const exitSignal = normalizeExecExitSignal(params.outcome.exitSignal);
+  emitDiagnosticEvent({
+    type: "exec.process.completed",
+    target: params.target,
+    mode: params.mode,
+    outcome: params.outcome.status,
+    durationMs: params.outcome.durationMs,
+    commandLength: params.command.length,
+    ...(params.sessionKey?.trim() ? { sessionKey: params.sessionKey.trim() } : {}),
+    ...(typeof params.outcome.exitCode === "number" ? { exitCode: params.outcome.exitCode } : {}),
+    ...(exitSignal ? { exitSignal } : {}),
+    ...(params.outcome.status === "failed"
+      ? {
+          timedOut: params.outcome.timedOut,
+          failureKind: params.outcome.failureKind,
+        }
+      : {}),
+  });
+}
 
 export function renderExecHostLabel(host: ExecHost) {
   return host === "sandbox" ? "sandbox" : host === "gateway" ? "gateway" : "node";
@@ -262,10 +316,7 @@ export function applyShellPath(env: Record<string, string>, shellPath?: string |
   if (!shellPath) {
     return;
   }
-  const entries = shellPath
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
+  const entries = normalizeStringEntries(shellPath.split(path.delimiter));
   if (entries.length === 0) {
     return;
   }
@@ -291,18 +342,39 @@ function maybeNotifyOnExit(session: ProcessSession, status: "completed" | "faile
   const output = compactNotifyOutput(
     tail(session.tail || session.aggregated || "", DEFAULT_NOTIFY_TAIL_CHARS),
   );
+  if (status === "failed" && session.exitReason === "manual-cancel" && !output) {
+    return;
+  }
   if (status === "completed" && !output && session.notifyOnExitEmptySuccess !== true) {
     return;
   }
   const summary = output
     ? `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel}) :: ${output}`
     : `Exec ${status} (${session.id.slice(0, 8)}, ${exitLabel})`;
+  const eventRouting = session.eventRouting ?? {
+    mainKey: session.mainKey,
+    sessionScope: session.sessionScope,
+  };
   enqueueSystemEvent(summary, {
-    sessionKey,
+    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
     deliveryContext: session.notifyDeliveryContext,
-    trusted: false,
   });
-  requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+  // Subagent sessions receive exec results via process poll and announce flow;
+  // the heartbeat would fall back to the main session and cause spurious wakes.
+  if (!isSubagentSessionKey(sessionKey)) {
+    requestHeartbeat(
+      scopedHeartbeatWakeOptionsForPolicy(
+        sessionKey,
+        {
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          coalesceMs: 0,
+        },
+        eventRouting,
+      ),
+    );
+  }
 }
 
 export function createApprovalSlug(id: string) {
@@ -367,19 +439,51 @@ export function resolveApprovalRunningNoticeMs(value?: number) {
 
 export function emitExecSystemEvent(
   text: string,
-  opts: { sessionKey?: string; contextKey?: string; deliveryContext?: DeliveryContext },
+  opts: {
+    sessionKey?: string;
+    contextKey?: string;
+    deliveryContext?: DeliveryContext;
+    /** `session.mainKey` from the runtime config; pass-through of `undefined`
+     *  falls back to the literal "main" default in `resolveEventSessionKey`. */
+    mainKey?: string;
+    /** `session.scope` from the runtime config; needed so global-scope
+     *  agents route cron-run events to the "global" queue. */
+    sessionScope?: "per-sender" | "global";
+    eventRouting?: EventSessionRoutingPolicy;
+  },
 ) {
   const sessionKey = opts.sessionKey?.trim();
   if (!sessionKey) {
     return;
   }
+  const eventRouting = opts.eventRouting ?? {
+    mainKey: opts.mainKey,
+    sessionScope: opts.sessionScope,
+  };
   enqueueSystemEvent(text, {
-    sessionKey,
+    sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
     contextKey: opts.contextKey,
     deliveryContext: opts.deliveryContext,
   });
-  requestHeartbeatNow(scopedHeartbeatWakeOptions(sessionKey, { reason: "exec-event" }));
+  // Subagent sessions receive exec results via process poll and announce flow;
+  // the heartbeat would fall back to the main session and cause spurious wakes.
+  if (!isSubagentSessionKey(sessionKey)) {
+    requestHeartbeat(
+      scopedHeartbeatWakeOptionsForPolicy(
+        sessionKey,
+        {
+          source: "exec-event",
+          intent: "event",
+          reason: "exec-event",
+          coalesceMs: 0,
+        },
+        eventRouting,
+      ),
+    );
+  }
 }
+
+export { renderExecUpdateText } from "./bash-tools.exec-output.js";
 
 function joinExecFailureOutput(aggregated: string, reason: string) {
   return aggregated ? `${aggregated}\n\n${reason}` : reason;
@@ -492,6 +596,41 @@ export function buildExecRuntimeErrorOutcome(params: {
   };
 }
 
+/**
+ * Apply PATH prepends inside the shell command.
+ * This ensures our paths take precedence even if user RC files (e.g. ~/.zshenv)
+ * prepend their own entries to PATH during shell startup.
+ */
+function wrapPosixCommandWithPathPrepend(
+  command: string,
+  env: Record<string, string>,
+  pathPrepend?: string[],
+): string {
+  if (process.platform === "win32") {
+    return command;
+  }
+
+  if (!pathPrepend || pathPrepend.length === 0) {
+    return command;
+  }
+
+  // Strip prepended entries from the base env.PATH to avoid duplicate segments.
+  // The wrapper will re-apply them after shell startup.
+  const pathKey = findPathKey(env);
+  const currentPath = env[pathKey];
+  if (currentPath) {
+    const newPath = removePathPrepend(currentPath, pathPrepend);
+    if (newPath !== undefined) {
+      env[pathKey] = newPath;
+    }
+  }
+
+  // Pass the prepend string safely via a temporary environment variable.
+  env.OPENCLAW_PREPEND_PATH = pathPrepend.join(path.delimiter);
+
+  return `export PATH="\${OPENCLAW_PREPEND_PATH}\${PATH:+:$PATH}"; unset OPENCLAW_PREPEND_PATH; ${command}`;
+}
+
 export async function runExecProcess(opts: {
   command: string;
   // Execute this instead of `command` (which is kept for display/session/logging).
@@ -499,6 +638,7 @@ export async function runExecProcess(opts: {
   execCommand?: string;
   workdir: string;
   env: Record<string, string>;
+  pathPrepend?: string[];
   sandbox?: BashSandboxConfig;
   containerWorkdir?: string | null;
   usePty: boolean;
@@ -509,6 +649,17 @@ export async function runExecProcess(opts: {
   notifyOnExitEmptySuccess?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** `session.mainKey` from the runtime config; snapshotted onto the
+   *  ProcessSession so background-exit notifications can remap cron-run
+   *  keys without an ambient config load. Long-running background exits use
+   *  this start-time value even if config changes while the process runs. */
+  mainKey?: string;
+  /** `session.scope` from the runtime config; snapshotted alongside
+   *  `mainKey` so the cron-run remap can route global-scope agents to
+   *  the "global" queue instead of agent-main. */
+  sessionScope?: "per-sender" | "global";
+  /** Start-time routing policy for detached exec system events. */
+  eventRouting?: EventSessionRoutingPolicy;
   notifyDeliveryContext?: DeliveryContext;
   timeoutSec: number | null;
   onUpdate?: (partialResult: AgentToolResult<ExecToolDetails>) => void;
@@ -516,6 +667,7 @@ export async function runExecProcess(opts: {
   const startedAt = Date.now();
   const sessionId = createSessionSlug();
   const execCommand = opts.execCommand ?? opts.command;
+  const diagnosticTarget = opts.sandbox ? "sandbox" : "host";
   const supervisor = getProcessSupervisor();
   const shellRuntimeEnv: Record<string, string> = {
     ...opts.env,
@@ -527,6 +679,9 @@ export async function runExecProcess(opts: {
     command: opts.command,
     scopeKey: opts.scopeKey,
     sessionKey: opts.sessionKey,
+    mainKey: opts.mainKey,
+    sessionScope: opts.sessionScope,
+    eventRouting: opts.eventRouting,
     notifyDeliveryContext: normalizeDeliveryContext(opts.notifyDeliveryContext),
     notifyOnExit: opts.notifyOnExit,
     notifyOnExitEmptySuccess: opts.notifyOnExitEmptySuccess === true,
@@ -569,8 +724,7 @@ export async function runExecProcess(opts: {
       return;
     }
     const tailText = session.tail || session.aggregated;
-    const warningText = opts.warnings.length ? `${opts.warnings.join("\n")}\n\n` : "";
-    // Note: opts.onUpdate() is provided by pi-agent-core's agent-loop and
+    // Note: opts.onUpdate() is provided by agent runtime's agent-loop and
     // internally pushes Promise.resolve(emit(event)) into an updateEvents
     // array.  Because emit → processEvents is async, any failure (e.g.
     // activeRun cleared) produces a *rejected Promise*, not a synchronous
@@ -580,7 +734,9 @@ export async function runExecProcess(opts: {
     // signal (Layer 2) — both of which prevent this call from ever being
     // reached after the agent run has ended.
     opts.onUpdate({
-      content: [{ type: "text", text: warningText + (tailText || "") }],
+      content: [
+        { type: "text", text: renderExecUpdateText({ tailText, warnings: opts.warnings }) },
+      ],
       details: {
         status: "running",
         sessionId,
@@ -616,10 +772,7 @@ export async function runExecProcess(opts: {
     }
   };
 
-  const timeoutMs =
-    typeof opts.timeoutSec === "number" && opts.timeoutSec > 0
-      ? Math.floor(opts.timeoutSec * 1000)
-      : undefined;
+  const timeoutMs = resolveExecTimeoutMs(opts.timeoutSec);
   let sandboxFinalizeToken: unknown;
 
   const spawnSpec:
@@ -663,11 +816,26 @@ export async function runExecProcess(opts: {
       };
     }
     const { shell, args: shellArgs } = getShellConfig();
-    const childArgv = [shell, ...shellArgs, execCommand];
+
+    // Wrap the command to enforce PATH prepend precedence over shell RC overrides.
+    const commandWithPathPrepend = wrapPosixCommandWithPathPrepend(
+      execCommand,
+      shellRuntimeEnv,
+      opts.pathPrepend,
+    );
+    const commandWithShellSnapshot = await maybeWrapCommandWithShellSnapshot({
+      command: commandWithPathPrepend,
+      shell,
+      shellArgs,
+      cwd: opts.workdir,
+      env: shellRuntimeEnv,
+    });
+
+    const childArgv = [shell, ...shellArgs, commandWithShellSnapshot];
     if (opts.usePty) {
       return {
         mode: "pty" as const,
-        ptyCommand: execCommand,
+        ptyCommand: commandWithShellSnapshot,
         childFallbackArgv: childArgv,
         env: shellRuntimeEnv,
         stdinMode: "pipe-open" as const,
@@ -752,11 +920,33 @@ export async function runExecProcess(opts: {
       } catch (retryErr) {
         markExited(session, null, null, "failed");
         maybeNotifyOnExit(session, "failed");
+        emitExecProcessCompleted({
+          command: opts.command,
+          mode: "child",
+          outcome: buildExecRuntimeErrorOutcome({
+            error: retryErr,
+            aggregated: session.aggregated.trim(),
+            durationMs: Date.now() - startedAt,
+          }),
+          sessionKey: opts.sessionKey,
+          target: diagnosticTarget,
+        });
         throw retryErr;
       }
     } else {
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
+      emitExecProcessCompleted({
+        command: opts.command,
+        mode: spawnSpec.mode,
+        outcome: buildExecRuntimeErrorOutcome({
+          error: err,
+          aggregated: session.aggregated.trim(),
+          durationMs: Date.now() - startedAt,
+        }),
+        sessionKey: opts.sessionKey,
+        target: diagnosticTarget,
+      });
       throw err;
     }
   }
@@ -779,7 +969,7 @@ export async function runExecProcess(opts: {
         timeoutSec: opts.timeoutSec,
       });
 
-      markExited(session, exit.exitCode, exit.exitSignal, outcome.status);
+      markExited(session, exit.exitCode, exit.exitSignal, outcome.status, exit.reason);
       maybeNotifyOnExit(session, outcome.status);
       if (!session.child && session.stdin) {
         session.stdin.destroyed = true;
@@ -792,17 +982,32 @@ export async function runExecProcess(opts: {
           token: sandboxFinalizeToken,
         });
       }
+      emitExecProcessCompleted({
+        command: opts.command,
+        mode: usingPty ? "pty" : "child",
+        outcome,
+        sessionKey: opts.sessionKey,
+        target: diagnosticTarget,
+      });
       return outcome;
     })
-    .catch((err): ExecProcessOutcome => {
+    .catch((err: unknown): ExecProcessOutcome => {
       updatesDisabled = true;
       markExited(session, null, null, "failed");
       maybeNotifyOnExit(session, "failed");
-      return buildExecRuntimeErrorOutcome({
+      const outcome = buildExecRuntimeErrorOutcome({
         error: err,
         aggregated: session.aggregated.trim(),
         durationMs: Date.now() - startedAt,
       });
+      emitExecProcessCompleted({
+        command: opts.command,
+        mode: usingPty ? "pty" : "child",
+        outcome,
+        sessionKey: opts.sessionKey,
+        target: diagnosticTarget,
+      });
+      return outcome;
     });
 
   return {

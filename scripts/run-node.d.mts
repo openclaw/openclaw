@@ -13,6 +13,24 @@ export function resolveBuildRequirement(deps: {
   configFiles: string[];
 }): { shouldBuild: boolean; reason: string };
 
+export function resolveRuntimePostBuildRequirement(deps: {
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  fs: unknown;
+  spawnSync: unknown;
+  buildStampPath: string;
+  runtimePostBuildStampPath: string;
+}): { shouldSync: boolean; reason: string };
+
+export function acquireRunNodeBuildLock(deps: {
+  cwd: string;
+  args: readonly string[];
+  env: NodeJS.ProcessEnv;
+  fs: unknown;
+  process: NodeJS.Process;
+  stderr: { write: (value: string) => void };
+}): Promise<() => void>;
+
 export function runNodeMain(params?: {
   spawn?: (
     cmd: string,
@@ -33,5 +51,9 @@ export function runNodeMain(params?: {
   cwd?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
   platform?: NodeJS.Platform;
 }): Promise<number>;

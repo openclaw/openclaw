@@ -1,9 +1,17 @@
 {
   "id": "litellm",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["litellm"],
-  "providerAuthEnvVars": {
-    "litellm": ["LITELLM_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "litellm",
+        "envVars": ["LITELLM_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -21,6 +29,9 @@
       "cliDescription": "LiteLLM API key"
     }
   ],
+  "contracts": {
+    "imageGenerationProviders": ["litellm"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

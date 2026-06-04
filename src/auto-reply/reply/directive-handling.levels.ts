@@ -1,5 +1,6 @@
 import type { ElevatedLevel, ReasoningLevel, ThinkLevel, VerboseLevel } from "../thinking.js";
 
+/** Resolves current directive levels from session, agent, and config defaults. */
 export async function resolveCurrentDirectiveLevels(params: {
   sessionEntry?: {
     thinkingLevel?: unknown;
@@ -15,6 +16,7 @@ export async function resolveCurrentDirectiveLevels(params: {
   agentCfg?: {
     thinkingDefault?: unknown;
     verboseDefault?: unknown;
+    reasoningDefault?: unknown;
     elevatedDefault?: unknown;
   };
   resolveDefaultThinkingLevel: () => Promise<ThinkLevel | undefined>;
@@ -42,6 +44,7 @@ export async function resolveCurrentDirectiveLevels(params: {
   const currentReasoningLevel =
     (params.sessionEntry?.reasoningLevel as ReasoningLevel | undefined) ??
     (params.agentEntry?.reasoningDefault as ReasoningLevel | undefined) ??
+    (params.agentCfg?.reasoningDefault as ReasoningLevel | undefined) ??
     "off";
   const currentElevatedLevel =
     (params.sessionEntry?.elevatedLevel as ElevatedLevel | undefined) ??

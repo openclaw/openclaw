@@ -1,18 +1,17 @@
 import os from "node:os";
 import type { NetworkInterfacesSnapshot } from "../infra/network-interfaces.js";
 
+// Builders for deterministic os.networkInterfaces() snapshots in network tests.
 type NetworkInterfaceEntry = NonNullable<ReturnType<typeof os.networkInterfaces>[string]>[number];
 
-export type NetworkInterfaceEntryInput = {
+type NetworkInterfaceEntryInput = {
   address: string;
   family: "IPv4" | "IPv6";
   internal?: boolean;
   netmask?: string;
 };
 
-export function makeNetworkInterfaceEntry(
-  input: NetworkInterfaceEntryInput,
-): NetworkInterfaceEntry {
+function makeNetworkInterfaceEntry(input: NetworkInterfaceEntryInput): NetworkInterfaceEntry {
   if (input.family === "IPv6") {
     return {
       address: input.address,

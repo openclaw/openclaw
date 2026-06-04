@@ -107,6 +107,32 @@ describe("runDaemonInstall integration", () => {
     expect(joined).toContain("MISSING_GATEWAY_TOKEN");
   });
 
+  it("refuses service install when config was written by a newer OpenClaw", async () => {
+    await fs.writeFile(
+      configPath,
+      JSON.stringify(
+        {
+          meta: {
+            lastTouchedVersion: "9999.1.1",
+          },
+          gateway: {
+            auth: {
+              mode: "token",
+            },
+          },
+        },
+        null,
+        2,
+      ),
+    );
+    clearConfigCache();
+
+    await expect(runDaemonInstall({ json: true, force: true })).rejects.toThrow("__exit__:1");
+
+    expect(serviceMock.install).not.toHaveBeenCalled();
+    expect(runtimeLogs.join("\n")).toContain("Refusing to install or rewrite the gateway service");
+  });
+
   it("auto-mints token when no source exists without embedding it into service env", async () => {
     await fs.writeFile(
       configPath,
@@ -130,8 +156,7 @@ describe("runDaemonInstall integration", () => {
     const updated = await readJson(configPath);
     const gateway = (updated.gateway ?? {}) as { auth?: { token?: string } };
     const persistedToken = gateway.auth?.token;
-    expect(typeof persistedToken).toBe("string");
-    expect((persistedToken ?? "").length).toBeGreaterThan(0);
+    expect(persistedToken).toEqual(expect.stringMatching(/^[0-9a-f]{48}$/));
 
     const installEnv = serviceMock.install.mock.calls[0]?.[0]?.environment;
     expect(installEnv?.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();

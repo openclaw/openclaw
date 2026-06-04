@@ -1,7 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CONTENT_ROLES, INTERACTIVE_ROLES, STRUCTURAL_ROLES } from "./snapshot-roles.js";
 
-export type RoleRef = {
+type RoleRef = {
   role: string;
   name?: string;
   /** Index used only when role+name duplicates exist. */
@@ -10,7 +10,7 @@ export type RoleRef = {
 
 export type RoleRefMap = Record<string, RoleRef>;
 
-export type RoleSnapshotStats = {
+type RoleSnapshotStats = {
   lines: number;
   chars: number;
   refs: number;
@@ -53,7 +53,9 @@ function matchInteractiveSnapshotLine(
   if (!match) {
     return null;
   }
-  const [, , roleRaw, name, suffix] = match;
+  const roleRaw = match[2];
+  const name = match[3];
+  const suffix = match[4];
   if (roleRaw.startsWith("/")) {
     return null;
   }
@@ -265,7 +267,13 @@ export function parseRoleRef(raw: string): string | null {
     : trimmed.startsWith("ref=")
       ? trimmed.slice(4)
       : trimmed;
-  return /^e\d+$/.test(normalized) ? normalized : null;
+  if (/^e\d+$/i.test(normalized)) {
+    return normalized;
+  }
+  if (/^\d{1,9}$/.test(normalized)) {
+    return normalized;
+  }
+  return null;
 }
 
 export function buildRoleSnapshotFromAriaSnapshot(
@@ -328,8 +336,12 @@ export function buildRoleSnapshotFromAriaSnapshot(
 }
 
 function parseAiSnapshotRef(suffix: string): string | null {
-  const match = suffix.match(/\[ref=(e\d+)\]/i);
-  return match ? match[1] : null;
+  const eMatch = suffix.match(/\[ref=(e\d+)\]/i);
+  if (eMatch) {
+    return eMatch[1];
+  }
+  const numMatch = suffix.match(/\[ref=(\d{1,9})\]/);
+  return numMatch ? numMatch[1] : null;
 }
 
 /**
@@ -374,7 +386,9 @@ export function buildRoleSnapshotFromAiSnapshot(
       out.push(line);
       continue;
     }
-    const [, , roleRaw, name, suffix] = match;
+    const roleRaw = match[2];
+    const name = match[3];
+    const suffix = match[4];
     if (roleRaw.startsWith("/")) {
       out.push(line);
       continue;

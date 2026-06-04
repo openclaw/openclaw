@@ -1,12 +1,27 @@
-import { describe, expect, it } from "vitest";
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "../../src/media-understanding/audio.test-helpers.ts";
-import { transcribeOpenAiAudio } from "./media-understanding-provider.js";
+} from "openclaw/plugin-sdk/test-env";
+import { describe, expect, it } from "vitest";
+import {
+  openaiMediaUnderstandingProvider,
+  transcribeOpenAiAudio,
+} from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
+
+describe("openaiMediaUnderstandingProvider", () => {
+  it("declares audio support with the transcription default", () => {
+    expect(openaiMediaUnderstandingProvider.capabilities).toEqual(["image", "audio"]);
+    expect(openaiMediaUnderstandingProvider.defaultModels).toEqual({
+      image: "gpt-5.5",
+      audio: "gpt-4o-transcribe",
+    });
+    expect(openaiMediaUnderstandingProvider.autoPriority).toEqual({ image: 20, audio: 20 });
+    expect(openaiMediaUnderstandingProvider.transcribeAudio).toBe(transcribeOpenAiAudio);
+  });
+});
 
 describe("transcribeOpenAiAudio", () => {
   it("respects lowercase authorization header overrides", async () => {
@@ -59,12 +74,12 @@ describe("transcribeOpenAiAudio", () => {
     expect(form.get("language")).toBe("en");
     expect(form.get("prompt")).toBe("hello");
     const file = form.get("file") as Blob | { type?: string; name?: string } | null;
-    expect(file).not.toBeNull();
-    if (file) {
-      expect(file.type).toBe("audio/wav");
-      if ("name" in file && typeof file.name === "string") {
-        expect(file.name).toBe("voice.wav");
-      }
+    if (!file) {
+      throw new Error("expected OpenAI audio file");
+    }
+    expect(file.type).toBe("audio/wav");
+    if (file && "name" in file && typeof file.name === "string") {
+      expect(file.name).toBe("voice.wav");
     }
   });
 

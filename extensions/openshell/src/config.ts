@@ -1,8 +1,13 @@
 import path from "node:path";
 import { buildPluginConfigSchema, type OpenClawPluginConfigSchema } from "openclaw/plugin-sdk/core";
-import { z } from "openclaw/plugin-sdk/zod";
+import {
+  formatPluginConfigIssue,
+  mapPluginConfigIssues,
+} from "openclaw/plugin-sdk/extension-shared";
+import { MAX_TIMER_TIMEOUT_SECONDS } from "openclaw/plugin-sdk/number-runtime";
+import { z } from "zod";
 
-export type OpenShellPluginConfig = {
+type OpenShellPluginConfig = {
   mode?: "mirror" | "remote";
   command?: string;
   gateway?: string;
@@ -86,23 +91,15 @@ const OpenShellPluginConfigSchema = z.strictObject({
     "remoteAgentWorkspaceDir must be a non-empty string",
   ).optional(),
   timeoutSeconds: z
-    .number({ error: "timeoutSeconds must be a number >= 1" })
+    .number({
+      error: `timeoutSeconds must be a number between 1 and ${MAX_TIMER_TIMEOUT_SECONDS}`,
+    })
     .min(1, { error: "timeoutSeconds must be a number >= 1" })
+    .max(MAX_TIMER_TIMEOUT_SECONDS, {
+      error: `timeoutSeconds must be a number <= ${MAX_TIMER_TIMEOUT_SECONDS}`,
+    })
     .optional(),
 });
-
-function formatOpenShellConfigIssue(issue: z.ZodIssue | undefined): string {
-  if (!issue) {
-    return "invalid config";
-  }
-  if (issue.code === "unrecognized_keys" && issue.keys.length > 0) {
-    return `unknown config key: ${issue.keys[0]}`;
-  }
-  if (issue.code === "invalid_type" && issue.path.length === 0) {
-    return "expected config object";
-  }
-  return issue.message;
-}
 
 function isManagedOpenShellRemotePath(value: string): boolean {
   return OPEN_SHELL_MANAGED_REMOTE_ROOTS.some(
@@ -110,7 +107,7 @@ function isManagedOpenShellRemotePath(value: string): boolean {
   );
 }
 
-export function normalizeOpenShellRemotePath(
+function normalizeOpenShellRemotePath(
   value: string | undefined,
   fallback: string,
   fieldName = "remote path",
@@ -141,13 +138,7 @@ export function createOpenShellPluginConfigSchema(): OpenClawPluginConfigSchema 
       return {
         success: false,
         error: {
-          issues: parsed.error.issues.map((issue) => ({
-            path: issue.path.filter((segment): segment is string | number => {
-              const kind = typeof segment;
-              return kind === "string" || kind === "number";
-            }),
-            message: formatOpenShellConfigIssue(issue),
-          })),
+          issues: mapPluginConfigIssues(parsed.error.issues),
         },
       };
     },
@@ -176,7 +167,7 @@ export function resolveOpenShellPluginConfig(value: unknown): ResolvedOpenShellP
 
   const parsed = OpenShellPluginConfigSchema.safeParse(value);
   if (!parsed.success) {
-    const message = formatOpenShellConfigIssue(parsed.error.issues[0]);
+    const message = formatPluginConfigIssue(parsed.error.issues[0]);
     throw new Error(`Invalid openshell plugin config: ${message}`);
   }
   const cfg = parsed.data as OpenShellPluginConfig;

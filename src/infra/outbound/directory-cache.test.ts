@@ -7,21 +7,21 @@ describe("buildDirectoryCacheKey", () => {
   it.each([
     {
       input: {
-        channel: "slack",
+        channel: "workspace",
         kind: "channel",
         source: "cache",
       },
-      expected: "slack:default:channel:cache:default",
+      expected: "workspace:default:channel:cache:default",
     },
     {
       input: {
-        channel: "discord",
+        channel: "richchat",
         accountId: "work",
         kind: "user",
         source: "live",
         signature: "v2",
       },
-      expected: "discord:work:user:live:v2",
+      expected: "richchat:work:user:live:v2",
     },
   ] satisfies Array<{ input: DirectoryCacheKey; expected: string }>)(
     "includes account and signature fallbacks for %j",
@@ -68,5 +68,17 @@ describe("DirectoryCache", () => {
 
     cache.clear(cfg);
     expect(cache.get("a", cfg)).toBeUndefined();
+  });
+
+  it("uses the default max size when maxSize is non-finite", () => {
+    const cache = new DirectoryCache<number>(60_000, Number.NaN);
+    const cfg = {} as OpenClawConfig;
+
+    for (let i = 0; i <= 2000; i++) {
+      cache.set(`key-${i}`, i, cfg);
+    }
+
+    expect(cache.get("key-0", cfg)).toBeUndefined();
+    expect(cache.get("key-2000", cfg)).toBe(2000);
   });
 });

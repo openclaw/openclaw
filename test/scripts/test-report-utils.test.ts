@@ -3,8 +3,10 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  collectVitestAssertionDurations,
   collectVitestFileDurations,
   normalizeTrackedRepoPath,
+  runVitestJsonReport,
   tryReadJsonFile,
 } from "../../scripts/test-report-utils.mjs";
 
@@ -63,6 +65,31 @@ describe("scripts/test-report-utils collectVitestFileDurations", () => {
   });
 });
 
+describe("scripts/test-report-utils collectVitestAssertionDurations", () => {
+  it("extracts per-test durations with normalized files", () => {
+    const report = {
+      testResults: [
+        {
+          name: path.join(process.cwd(), "src", "alpha.test.ts"),
+          assertionResults: [
+            { duration: 25, fullName: "alpha fast", status: "passed" },
+            { duration: 0, fullName: "alpha zero", status: "passed" },
+          ],
+        },
+      ],
+    };
+
+    expect(collectVitestAssertionDurations(report, normalizeTrackedRepoPath)).toEqual([
+      {
+        file: "src/alpha.test.ts",
+        durationMs: 25,
+        fullName: "alpha fast",
+        status: "passed",
+      },
+    ]);
+  });
+});
+
 describe("scripts/test-report-utils tryReadJsonFile", () => {
   it("returns the fallback when the file is missing", () => {
     const missingPath = path.join(os.tmpdir(), `openclaw-missing-${Date.now()}.json`);
@@ -84,14 +111,12 @@ describe("scripts/test-report-utils tryReadJsonFile", () => {
 
 describe("scripts/test-report-utils runVitestJsonReport", () => {
   beforeEach(() => {
-    vi.resetModules();
     spawnSyncMock.mockReset();
   });
 
   it("launches Vitest through pnpm exec", async () => {
     spawnSyncMock.mockReturnValue({ status: 0 });
     const reportPath = path.join(os.tmpdir(), `openclaw-vitest-json-${Date.now()}.json`);
-    const { runVitestJsonReport } = await import("../../scripts/test-report-utils.mjs");
 
     expect(
       runVitestJsonReport({
@@ -112,10 +137,10 @@ describe("scripts/test-report-utils runVitestJsonReport", () => {
         "--outputFile",
         reportPath,
       ],
-      expect.objectContaining({
+      {
         stdio: "inherit",
         env: process.env,
-      }),
+      },
     );
   });
 });

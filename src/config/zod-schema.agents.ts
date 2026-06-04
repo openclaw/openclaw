@@ -1,5 +1,5 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { AgentDefaultsSchema } from "./zod-schema.agent-defaults.js";
 import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 import { TranscribeAudioSchema } from "./zod-schema.core.js";
@@ -35,12 +35,26 @@ const BindingMatchSchema = z
   })
   .strict();
 
+const BindingSessionSchema = z
+  .object({
+    dmScope: z
+      .union([
+        z.literal("main"),
+        z.literal("per-peer"),
+        z.literal("per-channel-peer"),
+        z.literal("per-account-channel-peer"),
+      ])
+      .optional(),
+  })
+  .strict();
+
 const RouteBindingSchema = z
   .object({
     type: z.literal("route").optional(),
     agentId: z.string(),
     comment: z.string().optional(),
     match: BindingMatchSchema,
+    session: BindingSessionSchema.optional(),
   })
   .strict();
 
@@ -69,7 +83,6 @@ const AcpBindingSchema = z
         path: ["match", "peer"],
         message: "ACP bindings require match.peer.id to target a concrete conversation.",
       });
-      return;
     }
   });
 

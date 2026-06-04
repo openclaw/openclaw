@@ -7,6 +7,7 @@ const pageState = vi.hoisted(() => ({
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
+  closeBlockedNavigationTarget: vi.fn(async () => {}),
   ensurePageState: vi.fn(() => ({})),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
   getPageForTargetId: vi.fn(async () => {
@@ -16,6 +17,9 @@ const sessionMocks = vi.hoisted(() => ({
     return pageState.page;
   }),
   gotoPageWithNavigationGuard: vi.fn(async () => null),
+  isBrowserObservedDialogBlockedError: vi.fn(() => false),
+  isPolicyDenyNavigationError: vi.fn(() => false),
+  markObservedDialogsHandledRemotelyForPage: vi.fn(() => ({})),
   refLocator: vi.fn(() => {
     if (!pageState.locator) {
       throw new Error("missing locator");
@@ -27,6 +31,7 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 
 const pageCdpMocks = vi.hoisted(() => ({
+  markBackendDomRefsOnPage: vi.fn(async () => new Set<string>()),
   withPageScopedCdpClient: vi.fn(
     async ({ fn }: { fn: (send: () => Promise<unknown>) => unknown }) =>
       await fn(async () => ({ nodes: [] })),
@@ -76,6 +81,83 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
   });
 
+  it("re-checks select-triggered navigations with the session safety helper", async () => {
+    let currentUrl = "https://example.com";
+    pageState.page = { url: vi.fn(() => currentUrl) };
+    pageState.locator = {
+      selectOption: vi.fn(async () => {
+        currentUrl = "https://target.example";
+      }),
+    };
+
+    await interactions.selectOptionViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      ref: "1",
+      values: ["go"],
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "tab-1",
+    });
+  });
+
+  it("re-checks form fill-triggered navigations with the session safety helper", async () => {
+    let currentUrl = "https://example.com";
+    pageState.page = { url: vi.fn(() => currentUrl) };
+    pageState.locator = {
+      fill: vi.fn(async () => {
+        currentUrl = "https://target.example";
+      }),
+    };
+
+    await interactions.fillFormViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      fields: [{ ref: "1", type: "text", value: "go" }],
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "tab-1",
+    });
+  });
+
+  it("re-checks the current page before evaluating page content", async () => {
+    const evaluate = vi.fn(async () => "ok");
+    pageState.page = {
+      evaluate,
+      url: vi.fn(() => "https://example.com"),
+    };
+
+    await interactions.evaluateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      fn: "() => document.body.innerText",
+      ssrfPolicy: { allowPrivateNetwork: false },
+    });
+
+    expect(sessionMocks.assertPageNavigationCompletedSafely).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      page: pageState.page,
+      response: null,
+      ssrfPolicy: { allowPrivateNetwork: false },
+      targetId: "tab-1",
+    });
+    expect(
+      sessionMocks.assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
+    ).toBeLessThan(evaluate.mock.invocationCallOrder[0]);
+  });
+
   it("preserves helper compatibility when no ssrfPolicy is provided", async () => {
     pageState.page = { url: vi.fn(() => "https://example.com") };
     pageState.locator = { click: vi.fn(async () => {}) };
@@ -116,9 +198,9 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it("re-checks current page URL before snapshotting AI content", async () => {
-    const snapshotForAI = vi.fn(async () => ({ full: 'button "Save"' }));
+    const ariaSnapshot = vi.fn(async () => 'button "Save"');
     pageState.page = {
-      _snapshotForAI: snapshotForAI,
+      ariaSnapshot,
       url: vi.fn(() => "https://example.com"),
     };
 
@@ -137,7 +219,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
     expect(
       sessionMocks.assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
-    ).toBeLessThan(snapshotForAI.mock.invocationCallOrder[0]);
+    ).toBeLessThan(ariaSnapshot.mock.invocationCallOrder[0]);
   });
 
   it("re-checks current page URL before role snapshots", async () => {

@@ -1,3 +1,5 @@
+import { ACP_ERROR_CODES, AcpRuntimeError } from "@openclaw/acp-core/runtime/errors";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   canonicalizeMainSessionAlias,
   resolveMainSessionKey,
@@ -9,10 +11,9 @@ import {
   normalizeMainKey,
   parseAgentSessionKey,
 } from "../../routing/session-key.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
-import { ACP_ERROR_CODES, AcpRuntimeError } from "../runtime/errors.js";
 import type { AcpSessionResolution } from "./manager.types.js";
 
+/** Resolves the agent id encoded in an ACP session key. */
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? fallback);
@@ -44,10 +45,10 @@ export function requireReadySessionMeta(resolution: AcpSessionResolution): Sessi
   if (resolution.kind === "ready") {
     return resolution.meta;
   }
-  throw resolveAcpSessionResolutionError(resolution);
+  throw toLintErrorObject(resolveAcpSessionResolutionError(resolution), "Non-Error thrown");
 }
 
-export function normalizeSessionKey(sessionKey: string): string {
+function normalizeSessionKey(sessionKey: string): string {
   return sessionKey.trim();
 }
 
@@ -120,4 +121,18 @@ export function hasLegacyAcpIdentityProjection(meta: SessionAcpMeta): boolean {
     Object.hasOwn(raw, "agentSessionId") ||
     Object.hasOwn(raw, "sessionIdsProvisional")
   );
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

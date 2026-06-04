@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const prepareSlackMessageMock =
   vi.fn<
@@ -8,28 +8,34 @@ const prepareSlackMessageMock =
   >();
 const dispatchPreparedSlackMessageMock = vi.fn<(prepared: unknown) => Promise<void>>();
 
-vi.mock("../../../../src/channels/inbound-debounce-policy.js", () => ({
-  shouldDebounceTextInbound: () => false,
-  createChannelInboundDebouncer: (params: {
-    onFlush: (
-      entries: Array<{
-        message: Record<string, unknown>;
-        opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
-      }>,
-    ) => Promise<void>;
-  }) => ({
-    debounceMs: 0,
-    debouncer: {
-      enqueue: async (entry: {
-        message: Record<string, unknown>;
-        opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
-      }) => {
-        await params.onFlush([entry]);
+vi.mock("openclaw/plugin-sdk/channel-inbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-inbound")>(
+    "openclaw/plugin-sdk/channel-inbound",
+  );
+  return {
+    ...actual,
+    shouldDebounceTextInbound: () => false,
+    createChannelInboundDebouncer: (params: {
+      onFlush: (
+        entries: Array<{
+          message: Record<string, unknown>;
+          opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+        }>,
+      ) => Promise<void>;
+    }) => ({
+      debounceMs: 0,
+      debouncer: {
+        enqueue: async (entry: {
+          message: Record<string, unknown>;
+          opts: { source: "message" | "app_mention"; wasMentioned?: boolean };
+        }) => {
+          await params.onFlush([entry]);
+        },
+        flushKey: async (_key: string) => {},
       },
-      flushKey: async (_key: string) => {},
-    },
-  }),
-}));
+    }),
+  };
+});
 
 vi.mock("./thread-resolution.js", () => ({
   createSlackThreadTsResolver: () => ({
@@ -51,30 +57,44 @@ vi.mock("./message-handler/dispatch.js", () => ({
 }));
 
 let createSlackMessageHandler: typeof import("./message-handler.js").createSlackMessageHandler;
+let SlackRetryableInboundError: typeof import("./message-handler.js").SlackRetryableInboundError;
+let clearSlackInboundDeliveryStateForTest: typeof import("./inbound-delivery-state.js").clearSlackInboundDeliveryStateForTest;
+let clearSlackRuntime: typeof import("../runtime.js").clearSlackRuntime;
+let setSlackRuntime: typeof import("../runtime.js").setSlackRuntime;
 
 function createMarkMessageSeen() {
   const seen = new Set<string>();
-  return (channel: string | undefined, ts: string | undefined) => {
-    if (!channel || !ts) {
+  return {
+    markMessageSeen(channel: string | undefined, ts: string | undefined) {
+      if (!channel || !ts) {
+        return false;
+      }
+      const key = `${channel}:${ts}`;
+      if (seen.has(key)) {
+        return true;
+      }
+      seen.add(key);
       return false;
-    }
-    const key = `${channel}:${ts}`;
-    if (seen.has(key)) {
-      return true;
-    }
-    seen.add(key);
-    return false;
+    },
+    releaseSeenMessage(channel: string | undefined, ts: string | undefined) {
+      if (!channel || !ts) {
+        return;
+      }
+      seen.delete(`${channel}:${ts}`);
+    },
   };
 }
 
 function createTestHandler() {
+  const seenMessages = createMarkMessageSeen();
   return createSlackMessageHandler({
     ctx: {
       cfg: {},
       accountId: "default",
       app: { client: {} },
       runtime: {},
-      markMessageSeen: createMarkMessageSeen(),
+      markMessageSeen: seenMessages["markMessageSeen"],
+      releaseSeenMessage: seenMessages["releaseSeenMessage"],
     } as Parameters<typeof createSlackMessageHandler>[0]["ctx"],
     account: { accountId: "default" } as Parameters<typeof createSlackMessageHandler>[0]["account"],
   });
@@ -118,12 +138,21 @@ async function createInFlightMessageScenario(ts: string) {
 
 describe("createSlackMessageHandler app_mention race handling", () => {
   beforeAll(async () => {
-    ({ createSlackMessageHandler } = await import("./message-handler.js"));
+    ({ createSlackMessageHandler, SlackRetryableInboundError } =
+      await import("./message-handler.js"));
+    ({ clearSlackInboundDeliveryStateForTest } = await import("./inbound-delivery-state.js"));
+    ({ clearSlackRuntime, setSlackRuntime } = await import("../runtime.js"));
   });
 
   beforeEach(() => {
     prepareSlackMessageMock.mockReset();
     dispatchPreparedSlackMessageMock.mockReset();
+    clearSlackInboundDeliveryStateForTest();
+    clearSlackRuntime();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   it("allows a single app_mention retry when message event was dropped before dispatch", async () => {
@@ -142,6 +171,43 @@ describe("createSlackMessageHandler app_mention race handling", () => {
 
     expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not retain app_mention retry allowance when the current clock is not a valid date timestamp", async () => {
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    prepareSlackMessageMock.mockImplementation(async ({ opts }) => {
+      if (opts.source === "message") {
+        return null;
+      }
+      return { ctxPayload: {} };
+    });
+
+    const handler = createTestHandler();
+
+    await sendMessageEvent(handler, "1700000000.000125");
+    nowSpy.mockReturnValue(1_700_000_000_000);
+    await sendMentionEvent(handler, "1700000000.000125");
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
+  });
+
+  it("does not retain app_mention retry allowance when the expiry timestamp would exceed the valid date range", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_000);
+    prepareSlackMessageMock.mockImplementation(async ({ opts }) => {
+      if (opts.source === "message") {
+        return null;
+      }
+      return { ctxPayload: {} };
+    });
+
+    const handler = createTestHandler();
+
+    await sendMessageEvent(handler, "1700000000.000126");
+    await sendMentionEvent(handler, "1700000000.000126");
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchPreparedSlackMessageMock).not.toHaveBeenCalled();
   });
 
   it("allows app_mention while message handling is still in-flight, then keeps later duplicates deduped", async () => {
@@ -180,6 +246,69 @@ describe("createSlackMessageHandler app_mention race handling", () => {
     await sendMessageEvent(handler, "1700000000.000200");
     await sendMentionEvent(handler, "1700000000.000200");
 
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries message replay after an explicit retryable dispatch failure", async () => {
+    prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
+    dispatchPreparedSlackMessageMock
+      .mockRejectedValueOnce(new SlackRetryableInboundError("retry me"))
+      .mockResolvedValueOnce(undefined);
+
+    const handler = createTestHandler();
+
+    await expect(sendMessageEvent(handler, "1700000000.000250")).rejects.toThrow("retry me");
+    await expect(sendMessageEvent(handler, "1700000000.000250")).resolves.toBeUndefined();
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(2);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps message replay deduped after a non-retryable dispatch failure", async () => {
+    prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
+    dispatchPreparedSlackMessageMock.mockRejectedValueOnce(new Error("post-send failure"));
+
+    const handler = createTestHandler();
+
+    await expect(sendMessageEvent(handler, "1700000000.000300")).rejects.toThrow(
+      "post-send failure",
+    );
+    await sendMessageEvent(handler, "1700000000.000300");
+
+    expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
+    expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("dedupes delayed app_mention replays after in-memory seen state is gone", async () => {
+    const stored = new Map<string, unknown>();
+    const register = vi.fn(async (key: string, value: unknown) => {
+      stored.set(key, value);
+    });
+    const lookup = vi.fn(async (key: string) => stored.get(key));
+    setSlackRuntime({
+      state: {
+        openKeyedStore: vi.fn(() => ({
+          register,
+          lookup,
+          consume: vi.fn(),
+          delete: vi.fn(),
+          entries: vi.fn(),
+          clear: vi.fn(),
+        })),
+      },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+    prepareSlackMessageMock.mockResolvedValue({ ctxPayload: {} });
+
+    await sendMessageEvent(createTestHandler(), "1700000000.000350");
+    clearSlackInboundDeliveryStateForTest();
+    await sendMentionEvent(createTestHandler(), "1700000000.000350");
+
+    expect(register).toHaveBeenCalledWith("default:C1:1700000000.000350", {
+      deliveredAt: expect.any(Number),
+    });
+    expect(lookup).toHaveBeenCalledWith("default:C1:1700000000.000350");
     expect(prepareSlackMessageMock).toHaveBeenCalledTimes(1);
     expect(dispatchPreparedSlackMessageMock).toHaveBeenCalledTimes(1);
   });

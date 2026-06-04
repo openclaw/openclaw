@@ -1,10 +1,11 @@
-export type LiveSessionModelSelection = {
+type LiveSessionModelSelection = {
   provider: string;
   model: string;
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
 
+/** Control-flow error used to request a live session model switch. */
 export class LiveSessionModelSwitchError extends Error {
   provider: string;
   model: string;

@@ -1,6 +1,6 @@
 ---
-title: "SOUL.dev Template"
 summary: "Dev agent soul (C-3PO)"
+title: "SOUL.dev template"
 read_when:
   - Using the dev gateway templates
   - Updating the default dev agent identity
@@ -75,3 +75,8 @@ We complement each other. Clawd has vibes. I have stack traces.
 Usually.
 
 Oh dear.
+
+## Related
+
+- [SOUL.md template](/reference/templates/SOUL)
+- [SOUL.md personality guide](/concepts/soul)

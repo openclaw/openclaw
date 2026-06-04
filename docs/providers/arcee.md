@@ -1,12 +1,10 @@
 ---
-title: "Arcee AI"
 summary: "Arcee AI setup (auth + model selection)"
+title: "Arcee AI"
 read_when:
   - You want to use Arcee AI with OpenClaw
   - You need the API key env var or CLI auth choice
 ---
-
-# Arcee AI
 
 [Arcee AI](https://arcee.ai) provides access to the Trinity family of mixture-of-experts models through an OpenAI-compatible API. All Trinity models are Apache 2.0 licensed.
 
@@ -112,12 +110,12 @@ The onboarding preset sets `arcee/trinity-large-thinking` as the default model.
 
 ## Supported features
 
-| Feature                                       | Supported                    |
-| --------------------------------------------- | ---------------------------- |
-| Streaming                                     | Yes                          |
-| Tool use / function calling                   | Yes                          |
-| Structured output (JSON mode and JSON schema) | Yes                          |
-| Extended thinking                             | Yes (Trinity Large Thinking) |
+| Feature                                       | Supported                                    |
+| --------------------------------------------- | -------------------------------------------- |
+| Streaming                                     | Yes                                          |
+| Tool use / function calling                   | Yes (Trinity Mini, Trinity Large Preview)    |
+| Structured output (JSON mode and JSON schema) | Yes                                          |
+| Extended thinking                             | Yes (Trinity Large Thinking; tools disabled) |
 
 <AccordionGroup>
   <Accordion title="Environment note">

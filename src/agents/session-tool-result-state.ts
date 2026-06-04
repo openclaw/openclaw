@@ -1,6 +1,6 @@
-export type PendingToolCall = { id: string; name?: string };
+type PendingToolCall = { id: string; name?: string };
 
-export type PendingToolCallState = {
+type PendingToolCallState = {
   size: () => number;
   entries: () => IterableIterator<[string, string | undefined]>;
   getToolName: (id: string) => string | undefined;
@@ -13,6 +13,7 @@ export type PendingToolCallState = {
   shouldFlushBeforeNewToolCalls: (toolCallCount: number) => boolean;
 };
 
+/** Tracks pending tool calls so sanitized transcript repair can flush in order. */
 export function createPendingToolCallState(): PendingToolCallState {
   const pending = new Map<string, string | undefined>();
 

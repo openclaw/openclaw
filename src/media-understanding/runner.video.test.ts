@@ -1,9 +1,36 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { runCapability } from "./runner.js";
 import { withVideoFixture } from "./runner.test-utils.js";
+
+vi.mock("../media/channel-inbound-roots.js", () => ({
+  resolveChannelInboundAttachmentRoots: () => undefined,
+}));
+
+vi.mock("../agents/api-key-rotation.js", () => ({
+  collectProviderApiKeysForExecution: ({ primaryApiKey }: { primaryApiKey?: string }) => [
+    primaryApiKey ?? "test-key",
+  ],
+  executeWithApiKeyRotation: async <T>({ execute }: { execute: (apiKey: string) => Promise<T> }) =>
+    execute("test-key"),
+}));
+
+vi.mock("../plugins/capability-provider-runtime.js", async () => {
+  const { createEmptyCapabilityProviderMockModule } = await import("./runner.test-mocks.js");
+  return createEmptyCapabilityProviderMockModule();
+});
+
+type CapabilityResult = Awaited<ReturnType<typeof runCapability>>;
+
+function requireCapabilityOutput(result: CapabilityResult, index: number) {
+  const output = result.outputs[index];
+  if (!output) {
+    throw new Error(`expected media-understanding output at index ${index}`);
+  }
+  return output;
+}
 
 describe("runCapability video provider wiring", () => {
   it("merges video baseUrl and headers with entry precedence", async () => {
@@ -66,10 +93,11 @@ describe("runCapability video provider wiring", () => {
           ]),
         });
 
-        expect(result.outputs[0]?.text).toBe("video ok");
-        expect(result.outputs[0]?.provider).toBe("moonshot");
+        const output = requireCapabilityOutput(result, 0);
+        expect(output.text).toBe("video ok");
+        expect(output.provider).toBe("moonshot");
         expect(seenBaseUrl).toBe("https://entry.example/v1");
-        expect(seenHeaders).toMatchObject({
+        expect(seenHeaders).toEqual({
           "X-Provider": "1",
           "X-Config": "2",
           "X-Entry": "3",
@@ -86,7 +114,6 @@ describe("runCapability video provider wiring", () => {
           GOOGLE_API_KEY: undefined,
           MOONSHOT_API_KEY: undefined,
           OPENCLAW_AGENT_DIR: isolatedAgentDir,
-          PI_CODING_AGENT_DIR: isolatedAgentDir,
         },
         async () => {
           await withVideoFixture("openclaw-video-auto-moonshot", async ({ ctx, media, cache }) => {
@@ -137,8 +164,9 @@ describe("runCapability video provider wiring", () => {
             });
 
             expect(result.decision.outcome).toBe("success");
-            expect(result.outputs[0]?.provider).toBe("moonshot");
-            expect(result.outputs[0]?.text).toBe("moonshot");
+            const output = requireCapabilityOutput(result, 0);
+            expect(output.provider).toBe("moonshot");
+            expect(output.text).toBe("moonshot");
           });
         },
       );

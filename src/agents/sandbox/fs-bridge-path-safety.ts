@@ -1,34 +1,50 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PathAliasPolicy } from "../../infra/path-alias-guards.js";
-import type { SafeOpenSyncAllowedType } from "../../infra/safe-open-sync.js";
-import { openBoundaryFile, type BoundaryFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
+import { openRootFile, type RootFileOpenResult } from "./fs-bridge-path-safety.runtime.js";
 import type { SandboxResolvedFsPath, SandboxFsMount } from "./fs-paths.js";
-import { isPathInsideContainerRoot, normalizeContainerPath } from "./path-utils.js";
+import {
+  isPathInsideContainerRoot,
+  normalizeContainerPath,
+  relativePathEscapesContainerRoot,
+} from "./path-utils.js";
 
+/**
+ * Host/container path safety guard for the sandbox fs bridge.
+ *
+ * Every bridge operation must prove the requested container path resolves inside
+ * an allowed mount before the host path is opened or mutated.
+ */
+type BoundaryAllowedType = "file" | "directory";
+
+/** Caller-provided path safety requirements for one fs bridge operation. */
 export type PathSafetyOptions = {
   action: string;
   aliasPolicy?: PathAliasPolicy;
   requireWritable?: boolean;
-  allowedType?: SafeOpenSyncAllowedType;
+  allowedType?: BoundaryAllowedType;
 };
 
+/** Path plus operation constraints to validate before execution. */
 export type PathSafetyCheck = {
   target: SandboxResolvedFsPath;
   options: PathSafetyOptions;
 };
 
+/** Container entry pinned by mount root plus lexical parent and basename. */
 export type PinnedSandboxEntry = {
   mountRootPath: string;
   relativeParentPath: string;
   basename: string;
 };
 
+/** Entry anchored by canonical parent path after symlink resolution. */
 export type AnchoredSandboxEntry = {
   canonicalParentPath: string;
   basename: string;
 };
 
+/** Directory entry pinned relative to a container mount root. */
 export type PinnedSandboxDirectoryEntry = {
   mountRootPath: string;
   relativePath: string;
@@ -44,6 +60,7 @@ type RunCommand = (
   },
 ) => Promise<{ stdout: Buffer }>;
 
+/** Validates sandbox fs bridge paths against mount, symlink, and writability boundaries. */
 export class SandboxFsPathGuard {
   private readonly mountsByContainer: SandboxFsMount[];
   private readonly runCommand: RunCommand;
@@ -69,7 +86,7 @@ export class SandboxFsPathGuard {
 
   async openReadableFile(
     target: SandboxResolvedFsPath,
-  ): Promise<BoundaryFileOpenResult & { ok: true }> {
+  ): Promise<RootFileOpenResult & { ok: true }> {
     const opened = await this.openBoundaryWithinRequiredMount(target, "read files");
     if (!opened.ok) {
       throw opened.error instanceof Error
@@ -95,7 +112,7 @@ export class SandboxFsPathGuard {
     action: string;
   }): PinnedSandboxEntry {
     const relativeParentPath = path.posix.relative(params.mount.containerRoot, params.parentPath);
-    if (relativeParentPath.startsWith("..") || path.posix.isAbsolute(relativeParentPath)) {
+    if (relativePathEscapesContainerRoot(relativeParentPath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${params.action}: ${params.targetPath}`,
       );
@@ -110,7 +127,7 @@ export class SandboxFsPathGuard {
   private async assertGuardedPathSafety(
     target: SandboxResolvedFsPath,
     options: PathSafetyOptions,
-    guarded: BoundaryFileOpenResult,
+    guarded: RootFileOpenResult,
   ) {
     if (!guarded.ok) {
       if (guarded.reason !== "path") {
@@ -132,6 +149,7 @@ export class SandboxFsPathGuard {
       containerPath: target.containerPath,
       allowFinalSymlinkForUnlink: options.aliasPolicy?.allowFinalSymlinkForUnlink === true,
     });
+    // Re-check the canonical path against mounts so symlinks cannot escape the sandbox root.
     const canonicalMount = this.resolveRequiredMount(canonicalContainerPath, options.action);
     if (options.requireWritable && !canonicalMount.writable) {
       throw new Error(
@@ -145,11 +163,11 @@ export class SandboxFsPathGuard {
     action: string,
     options?: {
       aliasPolicy?: PathAliasPolicy;
-      allowedType?: SafeOpenSyncAllowedType;
+      allowedType?: BoundaryAllowedType;
     },
-  ): Promise<BoundaryFileOpenResult> {
+  ): Promise<RootFileOpenResult> {
     const lexicalMount = this.resolveRequiredMount(target.containerPath, action);
-    const guarded = await openBoundaryFile({
+    const guarded = await openRootFile({
       absolutePath: target.hostPath,
       rootPath: lexicalMount.hostRoot,
       boundaryLabel: "sandbox mount root",
@@ -188,6 +206,7 @@ export class SandboxFsPathGuard {
       containerPath: parentPath,
       allowFinalSymlinkForUnlink: false,
     });
+    // Anchor mutations to the canonical parent; the basename is applied after boundary checks.
     this.resolveRequiredMount(canonicalParentPath, action);
     return {
       canonicalParentPath,
@@ -216,7 +235,7 @@ export class SandboxFsPathGuard {
   ): PinnedSandboxDirectoryEntry {
     const mount = this.resolveRequiredMount(target.containerPath, action);
     const relativePath = path.posix.relative(mount.containerRoot, target.containerPath);
-    if (relativePath.startsWith("..") || path.posix.isAbsolute(relativePath)) {
+    if (relativePathEscapesContainerRoot(relativePath)) {
       throw new Error(
         `Sandbox path escapes allowed mounts; cannot ${action}: ${target.containerPath}`,
       );
@@ -249,6 +268,7 @@ export class SandboxFsPathGuard {
     containerPath: string;
     allowFinalSymlinkForUnlink: boolean;
   }): Promise<string> {
+    // Resolve the deepest existing path and append missing suffixes to handle create operations.
     const script = [
       "set -eu",
       'target="$1"',

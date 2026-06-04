@@ -1,3 +1,5 @@
+// Public auth-profile barrel for agent/provider auth code. Keep external callers
+// on these exported contracts instead of deep auth-profile implementation files.
 export { CLAUDE_CLI_PROFILE_ID, CODEX_CLI_PROFILE_ID } from "./auth-profiles/constants.js";
 export type {
   AuthCredentialReasonCode,
@@ -6,8 +8,25 @@ export type {
 export type { AuthProfileEligibilityReasonCode } from "./auth-profiles/order.js";
 export { resolveAuthProfileDisplayLabel } from "./auth-profiles/display.js";
 export { formatAuthDoctorHint } from "./auth-profiles/doctor.js";
-export { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
-export { resolveAuthProfileEligibility, resolveAuthProfileOrder } from "./auth-profiles/order.js";
+export {
+  externalCliDiscoveryExisting,
+  externalCliDiscoveryForConfigStatus,
+  externalCliDiscoveryForProviderAuth,
+  externalCliDiscoveryForProviders,
+  externalCliDiscoveryNone,
+  externalCliDiscoveryScoped,
+  type ExternalCliAuthDiscovery,
+} from "./auth-profiles/external-cli-discovery.js";
+export {
+  refreshOAuthCredentialForRuntime,
+  resolveApiKeyForProfile,
+} from "./auth-profiles/oauth.js";
+export {
+  isConfiguredAwsSdkAuthProfileForProvider,
+  isStoredCredentialCompatibleWithAuthProvider,
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "./auth-profiles/order.js";
 export {
   resolveAuthStatePathForDisplay,
   resolveAuthStorePathForDisplay,
@@ -15,7 +34,8 @@ export {
 export {
   dedupeProfileIds,
   listProfilesForProvider,
-  markAuthProfileGood,
+  markAuthProfileSuccess,
+  removeProviderAuthProfilesWithLock,
   setAuthProfileOrder,
   upsertAuthProfile,
   upsertAuthProfileWithLock,
@@ -25,17 +45,32 @@ export {
   suggestOAuthProfileIdForLegacyDefault,
 } from "./auth-profiles/repair.js";
 export {
+  buildPortableAuthProfileSecretsStoreForAgentCopy,
+  isAuthProfileCredentialPortableForAgentCopy,
+  resolveAuthProfilePortability,
+  type AuthProfilePortability,
+  type AuthProfilePortabilityReason,
+} from "./auth-profiles/portability.js";
+export {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
+  getRuntimeAuthProfileStoreSnapshot,
   hasAnyAuthProfileStoreSource,
+  hasLocalAuthProfileStoreSource,
   loadAuthProfileStoreForSecretsRuntime,
+  loadAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForRuntime,
   replaceRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStore,
   saveAuthProfileStore,
+  findPersistedAuthProfileCredential,
+  resolvePersistedAuthProfileOwnerAgentDir,
 } from "./auth-profiles/store.js";
 export type {
   ApiKeyCredential,
+  AuthProfileBlockedReason,
+  AuthProfileBlockedSource,
   AuthProfileCredential,
   AuthProfileFailureReason,
   AuthProfileIdRepairResult,
@@ -52,8 +87,9 @@ export {
   getSoonestCooldownExpiry,
   isProfileInCooldown,
   markAuthProfileCooldown,
+  markAuthProfileBlockedUntil,
   markAuthProfileFailure,
-  markAuthProfileUsed,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
+  setAuthProfileFailureHook,
 } from "./auth-profiles/usage.js";

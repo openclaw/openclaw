@@ -1,4 +1,5 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
 import { DEFAULT_DDG_SAFE_SEARCH, resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 
 const { runDuckDuckGoSearch } = vi.hoisted(() => ({
@@ -11,11 +12,16 @@ vi.mock("./ddg-client.js", () => ({
 
 describe("duckduckgo web search provider", () => {
   let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
-  let ddgClientTesting: typeof import("./ddg-client.js").__testing;
+  let ddgClientTesting: typeof import("./ddg-client.js").testing;
+
+  afterAll(() => {
+    vi.doUnmock("./ddg-client.js");
+    vi.resetModules();
+  });
 
   beforeAll(async () => {
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
-    ({ __testing: ddgClientTesting } =
+    ({ testing: ddgClientTesting } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
     await import("../index.js");
   });
@@ -34,9 +40,17 @@ describe("duckduckgo web search provider", () => {
 
     expect(provider.id).toBe("duckduckgo");
     expect(provider.label).toBe("DuckDuckGo Search (experimental)");
+    expect(provider.onboardingScopes).toEqual(["text-inference"]);
+    expect(createDuckDuckGoWebSearchContractProvider().onboardingScopes).toEqual([
+      "text-inference",
+    ]);
     expect(provider.requiresCredential).toBe(false);
     expect(provider.credentialPath).toBe("");
-    expect(applied.plugins?.entries?.duckduckgo?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.duckduckgo;
+    if (!pluginEntry) {
+      throw new Error("expected DuckDuckGo plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("maps generic tool arguments into DuckDuckGo search params", async () => {
@@ -69,6 +83,24 @@ describe("duckduckgo web search provider", () => {
       region: "us-en",
       safeSearch: "off",
     });
+  });
+
+  it("rejects fractional and out-of-range counts before searching", async () => {
+    const provider = createDuckDuckGoWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "openclaw docs", count: 4.5 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
+    await expect(tool.execute({ query: "openclaw docs", count: 11 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
+    expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
   });
 
   it("reads region from plugin config and normalizes empty values away", () => {
@@ -194,7 +226,7 @@ describe("duckduckgo web search provider", () => {
     `;
 
     expect(ddgClientTesting.isBotChallenge(challengeHtml)).toBe(true);
-    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toEqual([]);
+    expect(ddgClientTesting.parseDuckDuckGoHtml(challengeHtml)).toStrictEqual([]);
     expect(ddgClientTesting.isBotChallenge(normalHtml)).toBe(false);
     expect(ddgClientTesting.parseDuckDuckGoHtml(normalHtml)).toEqual([
       {

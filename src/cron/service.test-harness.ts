@@ -6,9 +6,10 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
+import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
-export type NoopLogger = {
+type NoopLogger = {
   debug: MockFn;
   info: MockFn;
   warn: MockFn;
@@ -52,19 +53,10 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
 }
 
 export async function writeCronStoreSnapshot(params: { storePath: string; jobs: CronJob[] }) {
-  await fs.mkdir(path.dirname(params.storePath), { recursive: true });
-  await fs.writeFile(
-    params.storePath,
-    JSON.stringify(
-      {
-        version: 1,
-        jobs: params.jobs,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  await saveCronStore(params.storePath, {
+    version: 1,
+    jobs: params.jobs,
+  });
 }
 
 export function installCronTestHooks(options: {
@@ -127,22 +119,22 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
 }): {
   cron: CronService;
   enqueueSystemEvent: MockFn;
-  requestHeartbeatNow: MockFn;
+  requestHeartbeat: MockFn;
   finished: ReturnType<typeof createFinishedBarrier>;
 } {
   const enqueueSystemEvent = vi.fn();
-  const requestHeartbeatNow = vi.fn();
+  const requestHeartbeat = vi.fn();
   const finished = createFinishedBarrier();
   const cron = new CronService({
     storePath: params.storePath,
     cronEnabled: true,
     log: params.logger,
     enqueueSystemEvent,
-    requestHeartbeatNow,
+    requestHeartbeat,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     onEvent: finished.onEvent,
   });
-  return { cron, enqueueSystemEvent, requestHeartbeatNow, finished };
+  return { cron, enqueueSystemEvent, requestHeartbeat, finished };
 }
 
 export async function withCronServiceForTest(
@@ -155,18 +147,18 @@ export async function withCronServiceForTest(
   run: (context: {
     cron: CronService;
     enqueueSystemEvent: ReturnType<typeof vi.fn>;
-    requestHeartbeatNow: ReturnType<typeof vi.fn>;
+    requestHeartbeat: ReturnType<typeof vi.fn>;
   }) => Promise<void>,
 ): Promise<void> {
   const store = await params.makeStorePath();
   const enqueueSystemEvent = vi.fn();
-  const requestHeartbeatNow = vi.fn();
+  const requestHeartbeat = vi.fn();
   const cron = new CronService({
     cronEnabled: params.cronEnabled,
     storePath: store.storePath,
     log: params.logger,
     enqueueSystemEvent,
-    requestHeartbeatNow,
+    requestHeartbeat,
     runIsolatedAgentJob:
       params.runIsolatedAgentJob ??
       (vi.fn(async () => ({ status: "ok" as const, summary: "done" })) as never),
@@ -174,7 +166,7 @@ export async function withCronServiceForTest(
 
   await cron.start();
   try {
-    await run({ cron, enqueueSystemEvent, requestHeartbeatNow });
+    await run({ cron, enqueueSystemEvent, requestHeartbeat });
   } finally {
     cron.stop();
     await store.cleanup();
@@ -193,7 +185,7 @@ export function createRunningCronServiceState(params: {
     log: params.log,
     nowMs: params.nowMs,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
   });
   state.running = true;
@@ -204,7 +196,7 @@ export function createRunningCronServiceState(params: {
   return state;
 }
 
-export function disposeCronServiceState(state: { timer: NodeJS.Timeout | null }): void {
+function disposeCronServiceState(state: { timer: NodeJS.Timeout | null }): void {
   if (state.timer) {
     clearTimeout(state.timer);
     state.timer = null;
@@ -242,15 +234,17 @@ export function createMockCronStateForJobs(params: {
     running: false,
     timer: null,
     storeLoadedAtMs: nowMs,
-    storeFileMtimeMs: null,
     op: Promise.resolve(),
     warnedDisabled: false,
+    warnedInvalidPersistedJobKeys: new Set<string>(),
+    pendingQuarantineConfigJobs: [],
+    lastQuarantineFailureWarnKey: null,
     deps: {
       storePath: "/mock/path",
       cronEnabled: true,
       nowMs: () => nowMs,
       enqueueSystemEvent: () => {},
-      requestHeartbeatNow: () => {},
+      requestHeartbeat: () => {},
       runIsolatedAgentJob: async () => ({ status: "ok" }),
       log: {
         debug: () => {},

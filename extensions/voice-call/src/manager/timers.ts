@@ -1,6 +1,10 @@
 import { TerminalStates, type CallId } from "../types.js";
 import type { CallManagerContext } from "./context.js";
 import { persistCallRecord } from "./store.js";
+import {
+  resolveVoiceCallSecondsTimerDelayMs,
+  resolveVoiceCallTimerDelayMs,
+} from "./timer-delays.js";
 
 type TimerContext = Pick<
   CallManagerContext,
@@ -27,25 +31,31 @@ export function startMaxDurationTimer(params: {
   ctx: MaxDurationTimerContext;
   callId: CallId;
   onTimeout: (callId: CallId) => Promise<void>;
+  timeoutMs?: number;
 }): void {
   clearMaxDurationTimer(params.ctx, params.callId);
 
-  const maxDurationMs = params.ctx.config.maxDurationSeconds * 1000;
+  const maxDurationMs =
+    params.timeoutMs === undefined
+      ? resolveVoiceCallSecondsTimerDelayMs(params.ctx.config.maxDurationSeconds)
+      : resolveVoiceCallTimerDelayMs(params.timeoutMs);
   console.log(
-    `[voice-call] Starting max duration timer (${params.ctx.config.maxDurationSeconds}s) for call ${params.callId}`,
+    `[voice-call] Starting max duration timer (${Math.ceil(maxDurationMs / 1000)}s) for call ${params.callId}`,
   );
 
-  const timer = setTimeout(async () => {
-    params.ctx.maxDurationTimers.delete(params.callId);
-    const call = params.ctx.activeCalls.get(params.callId);
-    if (call && !TerminalStates.has(call.state)) {
-      console.log(
-        `[voice-call] Max duration reached (${params.ctx.config.maxDurationSeconds}s), ending call ${params.callId}`,
-      );
-      call.endReason = "timeout";
-      persistCallRecord(params.ctx.storePath, call);
-      await params.onTimeout(params.callId);
-    }
+  const timer = setTimeout(() => {
+    void (async () => {
+      params.ctx.maxDurationTimers.delete(params.callId);
+      const call = params.ctx.activeCalls.get(params.callId);
+      if (call && !TerminalStates.has(call.state)) {
+        console.log(
+          `[voice-call] Max duration reached (${Math.ceil(maxDurationMs / 1000)}s), ending call ${params.callId}`,
+        );
+        call.endReason = "timeout";
+        persistCallRecord(params.ctx.storePath, call);
+        await params.onTimeout(params.callId);
+      }
+    })();
   }, maxDurationMs);
 
   params.ctx.maxDurationTimers.set(params.callId, timer);
@@ -100,7 +110,7 @@ export function waitForFinalTranscript(
     return Promise.reject(new Error("Already waiting for transcript"));
   }
 
-  const timeoutMs = ctx.config.transcriptTimeoutMs;
+  const timeoutMs = resolveVoiceCallTimerDelayMs(ctx.config.transcriptTimeoutMs);
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       ctx.transcriptWaiters.delete(callId);

@@ -3,8 +3,10 @@ import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "../../packages/normalization-core/src/string-coerce.js";
+import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
 
+/** Final execution strategy chosen for a Windows spawn command. */
 export type WindowsSpawnResolution =
   | "direct"
   | "node-entrypoint"
@@ -12,13 +14,20 @@ export type WindowsSpawnResolution =
   | "shell-fallback";
 
 export type WindowsSpawnCandidateResolution = Exclude<WindowsSpawnResolution, "shell-fallback">;
+
+/** Direct-spawn candidate before shell fallback policy is applied. */
 export type WindowsSpawnProgramCandidate = {
+  /** Executable passed to child_process after wrapper resolution. */
   command: string;
+  /** Arguments prepended before call-site argv, usually a resolved JS entrypoint. */
   leadingArgv: string[];
+  /** Candidate resolution path, or unresolved-wrapper when shell policy must decide. */
   resolution: WindowsSpawnCandidateResolution | "unresolved-wrapper";
+  /** Hide the transient Windows console for Node/exe entrypoint launches. */
   windowsHide?: boolean;
 };
 
+/** Spawn program after Windows wrapper resolution and fallback policy. */
 export type WindowsSpawnProgram = {
   command: string;
   leadingArgv: string[];
@@ -27,6 +36,7 @@ export type WindowsSpawnProgram = {
   windowsHide?: boolean;
 };
 
+/** Fully materialized child_process invocation for a resolved Windows spawn program. */
 export type WindowsSpawnInvocation = {
   command: string;
   argv: string[];
@@ -35,6 +45,7 @@ export type WindowsSpawnInvocation = {
   windowsHide?: boolean;
 };
 
+/** Inputs used to resolve a command into a Windows-safe direct spawn program. */
 export type ResolveWindowsSpawnProgramParams = {
   command: string;
   platform?: NodeJS.Platform;
@@ -48,6 +59,27 @@ export type ResolveWindowsSpawnProgramCandidateParams = Omit<
   ResolveWindowsSpawnProgramParams,
   "allowShellFallback"
 >;
+export type WindowsSpawnCommandInlineArgs = {
+  executable: string;
+  arguments: string;
+};
+
+const INLINE_ARGUMENT_EXECUTABLES = new Set([
+  "node",
+  "node.exe",
+  "npm",
+  "npm.cmd",
+  "npm.exe",
+  "npx",
+  "npx.cmd",
+  "npx.exe",
+  "pnpm",
+  "pnpm.cmd",
+  "pnpm.exe",
+  "yarn",
+  "yarn.cmd",
+  "yarn.exe",
+]);
 
 function isFilePath(candidate: string): boolean {
   try {
@@ -57,6 +89,49 @@ function isFilePath(candidate: string): boolean {
   }
 }
 
+function readCommandToken(command: string): { token: string; rest: string } | null {
+  const trimmed = command.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (trimmed.startsWith('"')) {
+    const closeIndex = trimmed.indexOf('"', 1);
+    if (closeIndex <= 0) {
+      return null;
+    }
+    return {
+      token: trimmed.slice(1, closeIndex),
+      rest: trimmed.slice(closeIndex + 1).trim(),
+    };
+  }
+  const match = trimmed.match(/^(\S+)\s+(.+)$/);
+  if (!match) {
+    return null;
+  }
+  return {
+    token: match[1] ?? "",
+    rest: (match[2] ?? "").trim(),
+  };
+}
+
+export function detectWindowsSpawnCommandInlineArgs(
+  command: string,
+): WindowsSpawnCommandInlineArgs | null {
+  const parsed = readCommandToken(command);
+  if (!parsed?.rest) {
+    return null;
+  }
+  const normalizedToken = parsed.token.replace(/\\/g, "/");
+  const executable = normalizeLowercaseStringOrEmpty(path.posix.basename(normalizedToken));
+  if (!INLINE_ARGUMENT_EXECUTABLES.has(executable)) {
+    return null;
+  }
+  return {
+    executable: parsed.token,
+    arguments: parsed.rest,
+  };
+}
+
 /** Resolve a Windows command name through PATH and PATHEXT so wrapper inspection sees the real file. */
 export function resolveWindowsExecutablePath(command: string, env: NodeJS.ProcessEnv): string {
   if (command.includes("/") || command.includes("\\") || path.isAbsolute(command)) {
@@ -64,10 +139,7 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
   }
 
   const pathValue = env.PATH ?? env.Path ?? process.env.PATH ?? process.env.Path ?? "";
-  const pathEntries = pathValue
-    .split(";")
-    .map((entry) => entry.trim())
-    .filter(Boolean);
+  const pathEntries = normalizeStringEntries(pathValue.split(";"));
   const hasExtension = path.extname(command).length > 0;
   const pathExtRaw =
     env.PATHEXT ??
@@ -77,11 +149,9 @@ export function resolveWindowsExecutablePath(command: string, env: NodeJS.Proces
     ".EXE;.CMD;.BAT;.COM";
   const pathExt = hasExtension
     ? [""]
-    : pathExtRaw
-        .split(";")
-        .map((ext) => ext.trim())
-        .filter(Boolean)
-        .map((ext) => (ext.startsWith(".") ? ext : `.${ext}`));
+    : normalizeStringEntries(pathExtRaw.split(";")).map((ext) =>
+        ext.startsWith(".") ? ext : `.${ext}`,
+      );
 
   for (const dir of pathEntries) {
     for (const ext of pathExt) {
@@ -214,6 +284,12 @@ export function resolveWindowsSpawnProgramCandidate(
       resolution: "direct",
     };
   }
+  const inlineArgs = detectWindowsSpawnCommandInlineArgs(params.command);
+  if (inlineArgs) {
+    throw new Error(
+      `Windows spawn command must be an executable path only; "${inlineArgs.executable}" was configured with inline arguments "${inlineArgs.arguments}". Put arguments in the caller's args array instead.`,
+    );
+  }
 
   const resolvedCommand = resolveWindowsExecutablePath(params.command, env);
   const ext = normalizeLowercaseStringOrEmpty(path.extname(resolvedCommand));
@@ -248,6 +324,8 @@ export function resolveWindowsSpawnProgramCandidate(
       };
     }
 
+    // Unresolved .cmd/.bat wrappers are not passed through cmd.exe unless the
+    // caller explicitly accepts shell metacharacter parsing with allowShellFallback.
     return {
       command: resolvedCommand,
       leadingArgv: [],

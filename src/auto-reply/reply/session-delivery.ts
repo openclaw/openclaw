@@ -1,11 +1,11 @@
-import type { SessionEntry } from "../../config/sessions.js";
-import { buildAgentMainSessionKey } from "../../routing/session-key.js";
-import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../../config/sessions.js";
+import { buildAgentMainSessionKey } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import {
   deliveryContextFromSession,
   deliveryContextKey,
@@ -220,6 +220,7 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
     return undefined;
   }
   if (
+    legacyMain.route === undefined &&
     legacyMain.deliveryContext === undefined &&
     legacyMain.lastChannel === undefined &&
     legacyMain.lastTo === undefined &&
@@ -232,6 +233,7 @@ export function maybeRetireLegacyMainDeliveryRoute(params: {
     key: canonicalMainSessionKey,
     entry: {
       ...legacyMain,
+      route: undefined,
       deliveryContext: undefined,
       lastChannel: undefined,
       lastTo: undefined,

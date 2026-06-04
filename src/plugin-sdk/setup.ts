@@ -3,8 +3,15 @@
 export type { OpenClawConfig } from "../config/config.js";
 export type { DmPolicy, GroupPolicy } from "../config/types.js";
 export type { SecretInput } from "../config/types.secrets.js";
-export type { WizardPrompter } from "../wizard/prompts.js";
+export type {
+  WizardMultiSelectParams,
+  WizardProgress,
+  WizardPrompter,
+  WizardSelectParams,
+} from "../wizard/prompts.js";
 export { WizardCancelledError } from "../wizard/prompts.js";
+export { createSetupTranslator } from "../wizard/i18n/index.js";
+export type { SetupTranslator, WizardI18nParams } from "../wizard/i18n/index.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 export type {
@@ -18,7 +25,7 @@ export type {
 export { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
 export { formatCliCommand } from "../cli/command-format.js";
 export { detectBinary } from "../plugins/setup-binary.js";
-export { formatDocsLink } from "../terminal/links.js";
+export { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 export { hasConfiguredSecretInput, normalizeSecretInputString } from "../config/types.secrets.js";
 export { normalizeE164, pathExists } from "../utils.js";
 

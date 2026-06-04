@@ -1,19 +1,23 @@
+import type {
+  ProviderDefaultThinkingPolicyContext,
+  ProviderThinkingProfile,
+} from "openclaw/plugin-sdk/core";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-types";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAntigravityModelId, normalizeGoogleModelId } from "./model-id.js";
+import { isGoogleGemini3ProModel, isGoogleGemini3ThinkingLevelModel } from "./thinking-api.js";
 
 type GoogleApiCarrier = {
   api?: string | null;
 };
 
 type GoogleProviderConfigLike = GoogleApiCarrier & {
+  baseUrl?: string | null;
   models?: ReadonlyArray<GoogleApiCarrier | null | undefined> | null;
 };
 
 export const DEFAULT_GOOGLE_API_BASE_URL = "https://generativelanguage.googleapis.com/v1beta";
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
+const GOOGLE_MODEL_ID_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
 
 function trimTrailingSlashes(value: string): string {
   return value.replace(/\/+$/, "");
@@ -29,14 +33,41 @@ function isGoogleGenerativeAiUrl(url: URL): boolean {
   );
 }
 
+function stripUrlUserInfo(url: URL): void {
+  url.username = "";
+  url.password = "";
+}
+
+const GOOGLE_VERTEX_HOST = "aiplatform.googleapis.com";
+const GOOGLE_VERTEX_REGION_HOST_SUFFIX = "-aiplatform.googleapis.com";
+
+export function isGoogleVertexHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === GOOGLE_VERTEX_HOST || normalized.endsWith(GOOGLE_VERTEX_REGION_HOST_SUFFIX);
+}
+
+export function isGoogleVertexBaseUrl(baseUrl?: string | null): boolean {
+  const raw = normalizeOptionalString(baseUrl);
+  if (!raw) {
+    return false;
+  }
+  try {
+    return isGoogleVertexHostname(new URL(raw).hostname);
+  } catch {
+    return false;
+  }
+}
+
 export function normalizeGoogleApiBaseUrl(baseUrl?: string): string {
   const raw = trimTrailingSlashes(normalizeOptionalString(baseUrl) || DEFAULT_GOOGLE_API_BASE_URL);
   try {
     const url = new URL(raw);
     url.hash = "";
     url.search = "";
-    if (isGoogleGenerativeAiUrl(url) && trimTrailingSlashes(url.pathname || "") === "") {
-      url.pathname = "/v1beta";
+    stripUrlUserInfo(url);
+    if (isGoogleGenerativeAiUrl(url)) {
+      const normalizedPath = trimTrailingSlashes(url.pathname || "");
+      url.pathname = normalizedPath || "/v1beta";
     }
     return trimTrailingSlashes(url.toString());
   } catch {
@@ -52,36 +83,70 @@ export function isGoogleGenerativeAiApi(api?: string | null): boolean {
 }
 
 export function normalizeGoogleGenerativeAiBaseUrl(baseUrl?: string): string | undefined {
-  return baseUrl ? normalizeGoogleApiBaseUrl(baseUrl) : baseUrl;
+  if (!baseUrl) {
+    return baseUrl;
+  }
+
+  const normalized = normalizeGoogleApiBaseUrl(baseUrl);
+  try {
+    const url = new URL(normalized);
+    stripUrlUserInfo(url);
+    if (isGoogleGenerativeAiUrl(url)) {
+      url.pathname = trimTrailingSlashes(url.pathname || "").replace(/\/openai$/i, "") || "/v1beta";
+      return trimTrailingSlashes(url.toString());
+    }
+  } catch {
+    // `normalizeGoogleApiBaseUrl` already returned the best-effort input form.
+  }
+
+  return normalized;
 }
 
 export function resolveGoogleGenerativeAiTransport<TApi extends string | null | undefined>(params: {
+  provider?: string;
   api: TApi;
   baseUrl?: string;
-}): { api: TApi; baseUrl?: string } {
+}): { api: TApi | "google-generative-ai" | "google-vertex"; baseUrl?: string } {
+  const api =
+    params.api ??
+    (params.provider === "google-vertex" && isGoogleVertexBaseUrl(params.baseUrl)
+      ? "google-vertex"
+      : undefined) ??
+    (params.provider === "google" && params.baseUrl ? "google-generative-ai" : params.api);
   return {
-    api: params.api,
-    baseUrl: isGoogleGenerativeAiApi(params.api)
+    api,
+    baseUrl: isGoogleGenerativeAiApi(api)
       ? normalizeGoogleGenerativeAiBaseUrl(params.baseUrl)
       : params.baseUrl,
   };
 }
 
 export function resolveGoogleGenerativeAiApiOrigin(baseUrl?: string): string {
-  return normalizeGoogleApiBaseUrl(baseUrl).replace(/\/v1beta$/i, "");
+  return (
+    normalizeGoogleGenerativeAiBaseUrl(baseUrl) ?? normalizeGoogleApiBaseUrl(baseUrl)
+  ).replace(/\/v1beta$/i, "");
 }
 
 export function shouldNormalizeGoogleGenerativeAiProviderConfig(
   providerKey: string,
   provider: GoogleProviderConfigLike,
 ): boolean {
-  if (providerKey === "google" || providerKey === "google-vertex") {
-    return true;
+  if (providerKey === "google-vertex" && isGoogleVertexBaseUrl(provider.baseUrl)) {
+    return false;
   }
   if (isGoogleGenerativeAiApi(provider.api)) {
     return true;
   }
-  return provider.models?.some((model) => isGoogleGenerativeAiApi(model?.api)) ?? false;
+  const hasGoogleGenerativeAiModelApi =
+    provider.models?.some((model) => isGoogleGenerativeAiApi(model?.api)) ?? false;
+  if (hasGoogleGenerativeAiModelApi) {
+    return true;
+  }
+  if (providerKey !== "google" && providerKey !== "google-vertex") {
+    return false;
+  }
+  const hasExplicitNonGoogleApi = normalizeOptionalString(provider.api) !== undefined;
+  return !hasExplicitNonGoogleApi;
 }
 
 export function shouldNormalizeGoogleProviderConfig(
@@ -110,7 +175,7 @@ function normalizeProviderModels(
       return model;
     }
     mutated = true;
-    return { ...model, id: nextId };
+    return Object.assign({}, model, { id: nextId });
   });
 
   return mutated ? { ...provider, models: nextModels } : provider;
@@ -121,14 +186,19 @@ export function normalizeGoogleProviderConfig(
   provider: ModelProviderConfig,
 ): ModelProviderConfig {
   let nextProvider = provider;
+  const shouldNormalizeModelIds = GOOGLE_MODEL_ID_PROVIDERS.has(providerKey);
 
-  if (shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, nextProvider)) {
+  if (shouldNormalizeModelIds) {
     const modelNormalized = normalizeProviderModels(nextProvider, normalizeGoogleModelId);
-    const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
-    nextProvider =
-      normalizedBaseUrl !== modelNormalized.baseUrl
-        ? { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl }
-        : modelNormalized;
+    if (shouldNormalizeGoogleGenerativeAiProviderConfig(providerKey, modelNormalized)) {
+      const normalizedBaseUrl = normalizeGoogleGenerativeAiBaseUrl(modelNormalized.baseUrl);
+      nextProvider =
+        normalizedBaseUrl !== modelNormalized.baseUrl
+          ? { ...modelNormalized, baseUrl: normalizedBaseUrl ?? modelNormalized.baseUrl }
+          : modelNormalized;
+    } else {
+      nextProvider = modelNormalized;
+    }
   }
 
   if (providerKey === "google-antigravity") {
@@ -136,4 +206,31 @@ export function normalizeGoogleProviderConfig(
   }
 
   return nextProvider;
+}
+
+export function resolveGoogleThinkingProfile({
+  modelId,
+  reasoning,
+}: ProviderDefaultThinkingPolicyContext): ProviderThinkingProfile | undefined {
+  const normalizedModelId = normalizeGoogleModelId(modelId);
+  const isGemini3ThinkingModel = isGoogleGemini3ThinkingLevelModel(normalizedModelId);
+  if (reasoning === false && !isGemini3ThinkingModel) {
+    return undefined;
+  }
+
+  const levels: ProviderThinkingProfile["levels"] = isGoogleGemini3ProModel(normalizedModelId)
+    ? [{ id: "off" }, { id: "low" }, { id: "adaptive" }, { id: "high" }]
+    : [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "adaptive" },
+        { id: "high" },
+      ];
+
+  return {
+    levels,
+    ...(isGemini3ThinkingModel ? { preserveWhenCatalogReasoningFalse: true } : {}),
+  };
 }

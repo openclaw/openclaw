@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import { resolveExpiresAtMsFromDurationMs } from "@openclaw/normalization-core/number-coercion";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildExecApprovalUnavailableReplyPayload } from "../infra/exec-approval-reply.js";
 import {
@@ -16,6 +16,7 @@ import {
   type ExecSecurity,
 } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
+import { registerExecApprovalFollowupRuntimeHandoff } from "./bash-tools.exec-approval-followup-state.js";
 import { sendExecApprovalFollowup } from "./bash-tools.exec-approval-followup.js";
 import {
   type ExecApprovalRegistration,
@@ -23,7 +24,9 @@ import {
 } from "./bash-tools.exec-approval-request.js";
 import { buildApprovalPendingMessage } from "./bash-tools.exec-runtime.js";
 import { DEFAULT_APPROVAL_TIMEOUT_MS } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecElevatedDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import { isExecDeniedResultText } from "./exec-approval-result.js";
+import type { AgentToolResult } from "./runtime/index.js";
 
 type ResolvedExecApprovals = ReturnType<typeof resolveExecApprovals>;
 export const MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS = 256;
@@ -61,6 +64,8 @@ export type ExecApprovalRequestState = ExecApprovalPendingState & {
   noticeSeconds: number;
 };
 
+const EXPIRED_EXEC_APPROVAL_EXPIRES_AT_MS = 0;
+
 export type ExecApprovalUnavailableReason =
   | "no-approval-route"
   | "initiating-platform-disabled"
@@ -88,6 +93,8 @@ export type ExecApprovalFollowupTarget = {
   turnSourceTo?: string;
   turnSourceAccountId?: string;
   turnSourceThreadId?: string | number;
+  direct?: boolean;
+  bashElevated?: ExecElevatedDefaults;
 };
 
 export type ExecApprovalFollowupResultDeps = {
@@ -107,9 +114,11 @@ export function createExecApprovalPendingState(params: {
   warnings: string[];
   timeoutMs: number;
 }): ExecApprovalPendingState {
+  const expiresAtMs =
+    resolveExpiresAtMsFromDurationMs(params.timeoutMs) ?? EXPIRED_EXEC_APPROVAL_EXPIRES_AT_MS;
   return {
     warningText: params.warnings.length ? `${params.warnings.join("\n")}\n\n` : "",
-    expiresAtMs: Date.now() + params.timeoutMs,
+    expiresAtMs,
     preResolvedDecision: undefined,
   };
 }
@@ -322,6 +331,8 @@ export function buildExecApprovalFollowupTarget(
     turnSourceTo: params.turnSourceTo,
     turnSourceAccountId: params.turnSourceAccountId,
     turnSourceThreadId: params.turnSourceThreadId,
+    direct: params.direct,
+    bashElevated: params.bashElevated,
   };
 }
 
@@ -347,15 +358,14 @@ export function enforceStrictInlineEvalApprovalBoundary(params: {
   approvedByAsk: boolean;
   deniedReason: string | null;
   requiresInlineEvalApproval: boolean;
+  requiresAutoReviewHumanApproval?: boolean;
 }): {
   approvedByAsk: boolean;
   deniedReason: string | null;
 } {
-  if (
-    !params.baseDecision.timedOut ||
-    !params.requiresInlineEvalApproval ||
-    !params.approvedByAsk
-  ) {
+  const requiresRealApproval =
+    params.requiresInlineEvalApproval || params.requiresAutoReviewHumanApproval === true;
+  if (!params.baseDecision.timedOut || !requiresRealApproval || !params.approvedByAsk) {
     return {
       approvedByAsk: params.approvedByAsk,
       deniedReason: params.deniedReason,
@@ -406,6 +416,14 @@ export async function sendExecApprovalFollowupResult(
 ): Promise<void> {
   const send = deps.sendExecApprovalFollowup ?? sendExecApprovalFollowup;
   const warn = deps.logWarn ?? logWarn;
+  const runtimeHandoff =
+    target.direct === true || !target.sessionKey || isExecDeniedResultText(resultText)
+      ? undefined
+      : registerExecApprovalFollowupRuntimeHandoff({
+          approvalId: target.approvalId,
+          sessionKey: target.sessionKey,
+          bashElevated: target.bashElevated,
+        });
   await send({
     approvalId: target.approvalId,
     sessionKey: target.sessionKey,
@@ -414,7 +432,14 @@ export async function sendExecApprovalFollowupResult(
     turnSourceAccountId: target.turnSourceAccountId,
     turnSourceThreadId: target.turnSourceThreadId,
     resultText,
-  }).catch((error) => {
+    direct: target.direct,
+    ...(runtimeHandoff
+      ? {
+          internalRuntimeHandoffId: runtimeHandoff.handoffId,
+          idempotencyKey: runtimeHandoff.idempotencyKey,
+        }
+      : {}),
+  }).catch((error: unknown) => {
     const message = formatErrorMessage(error);
     const key = `${target.approvalId}:${message}`;
     if (!rememberExecApprovalFollowupFailureKey(key)) {

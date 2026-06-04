@@ -1,8 +1,8 @@
+import { readBool, readString } from "@openclaw/acp-core/meta";
+import type { AcpServerOptions } from "@openclaw/acp-core/types";
 import type { GatewayClient } from "../gateway/client.js";
-import { readBool, readString } from "./meta.js";
-import type { AcpServerOptions } from "./types.js";
 
-export type AcpSessionMeta = {
+type AcpSessionMeta = {
   sessionKey?: string;
   sessionLabel?: string;
   resetSession?: boolean;
@@ -10,6 +10,7 @@ export type AcpSessionMeta = {
   prefixCwd?: boolean;
 };
 
+/** Parses ACP request metadata into OpenClaw session routing hints. */
 export function parseSessionMeta(meta: unknown): AcpSessionMeta {
   if (!meta || typeof meta !== "object") {
     return {};

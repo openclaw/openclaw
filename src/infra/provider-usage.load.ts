@@ -1,4 +1,4 @@
-import { loadConfig, type OpenClawConfig } from "../config/config.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../config/config.js";
 import { resolveProviderUsageSnapshotWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveFetch } from "./fetch.js";
 import { type ProviderAuth, resolveProviderAuths } from "./provider-usage.auth.js";
@@ -15,6 +15,7 @@ import type {
   UsageSummary,
 } from "./provider-usage.types.js";
 
+// Built-in fallback intentionally reports unsupported until a plugin supplies usage behavior.
 async function fetchProviderUsageSnapshotFallback(params: {
   auth: ProviderAuth;
   timeoutMs: number;
@@ -40,6 +41,7 @@ type UsageSummaryOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
+  skipPluginAuthWithoutCredentialSource?: boolean;
 };
 
 async function fetchProviderUsageSnapshot(params: {
@@ -78,12 +80,13 @@ async function fetchProviderUsageSnapshot(params: {
   });
 }
 
+/** Loads usage snapshots from configured provider auth and plugin-backed usage hooks. */
 export async function loadProviderUsageSummary(
   opts: UsageSummaryOptions = {},
 ): Promise<UsageSummary> {
   const now = opts.now ?? Date.now();
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const config = opts.config ?? loadConfig();
+  const config = opts.config ?? getRuntimeConfig();
   const env = opts.env ?? process.env;
   const fetchFn = resolveFetch(opts.fetch);
   if (!fetchFn) {
@@ -96,13 +99,20 @@ export async function loadProviderUsageSummary(
     agentDir: opts.agentDir,
     config,
     env,
+    skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
   });
   if (auths.length === 0) {
     return { updatedAt: now, providers: [] };
   }
 
-  const tasks = auths.map((auth) =>
-    withTimeout(
+  const tasks = auths.map((auth) => {
+    const failureSnapshot = (error: string): ProviderUsageSnapshot => ({
+      provider: auth.provider,
+      displayName: PROVIDER_LABELS[auth.provider] ?? auth.provider,
+      windows: [],
+      error,
+    });
+    return withTimeout(
       fetchProviderUsageSnapshot({
         auth,
         config,
@@ -119,12 +129,18 @@ export async function loadProviderUsageSummary(
         windows: [],
         error: "Timeout",
       },
-    ),
-  );
+    ).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      return failureSnapshot(message.trim() || "Fetch failed");
+    });
+  });
 
   const snapshots = await Promise.all(tasks);
   const providers = snapshots.filter((entry) => {
     if (entry.windows.length > 0) {
+      return true;
+    }
+    if (entry.summary?.trim()) {
       return true;
     }
     if (!entry.error) {

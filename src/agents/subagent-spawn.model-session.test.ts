@@ -1,5 +1,5 @@
 import os from "node:os";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSubagentSpawnTestConfig,
   expectPersistedRuntimeModel,
@@ -16,14 +16,17 @@ let resetSubagentRegistryForTests: typeof import("./subagent-registry.js").reset
 let spawnSubagentDirect: typeof import("./subagent-spawn.js").spawnSubagentDirect;
 
 describe("spawnSubagentDirect runtime model persistence", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
     ({ resetSubagentRegistryForTests, spawnSubagentDirect } = await loadSubagentSpawnModuleForTest({
       callGatewayMock,
-      loadConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
+      getRuntimeConfig: () => createSubagentSpawnTestConfig(os.tmpdir()),
       updateSessionStoreMock,
       pruneLegacyStoreKeysMock,
       workspaceDir: os.tmpdir(),
     }));
+  });
+
+  beforeEach(() => {
     resetSubagentRegistryForTests();
     callGatewayMock.mockReset();
     updateSessionStoreMock.mockReset();
@@ -68,30 +71,30 @@ describe("spawnSubagentDirect runtime model persistence", () => {
     const result = await spawnSubagentDirect(
       {
         task: "test",
-        model: "openai-codex/gpt-5.4",
+        model: "openai/gpt-5.4",
       },
       {
         agentSessionKey: "agent:main:main",
-        agentChannel: "discord",
+        agentChannel: "guildchat",
       },
     );
 
-    expect(result).toMatchObject({
-      status: "accepted",
-      modelApplied: true,
-    });
-    expect(updateSessionStoreMock).toHaveBeenCalledTimes(1);
+    expect(result.status).toBe("accepted");
+    expect(result.modelApplied).toBe(true);
+    expect(result.resolvedModel).toBe("openai/gpt-5.4");
+    expect(result.resolvedProvider).toBe("openai");
+    expect(updateSessionStoreMock).toHaveBeenCalledTimes(3);
     expectPersistedRuntimeModel({
       persistedStore,
       sessionKey: /^agent:main:subagent:/,
-      provider: "openai-codex",
+      provider: "openai",
       model: "gpt-5.4",
+      overrideSource: "user",
     });
-    expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(1);
-    expect(operations.indexOf("gateway:sessions.patch")).toBeGreaterThan(-1);
-    expect(operations.indexOf("store:update")).toBeGreaterThan(
-      operations.indexOf("gateway:sessions.patch"),
+    expect(pruneLegacyStoreKeysMock).toHaveBeenCalledTimes(3);
+    expect(operations.indexOf("store:update")).toBeGreaterThan(-1);
+    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(
+      operations.lastIndexOf("store:update"),
     );
-    expect(operations.indexOf("gateway:agent")).toBeGreaterThan(operations.indexOf("store:update"));
   });
 });

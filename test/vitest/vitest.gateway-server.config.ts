@@ -20,6 +20,8 @@ export function createGatewayServerVitestConfig(env?: Record<string, string | un
         "src/gateway/server.startup-matrix-migration.integration.test.ts",
         "src/gateway/sessions-history-http.test.ts",
       ],
+      fileParallelism: false,
+      isolate: false,
       name: "gateway-server",
     },
   );

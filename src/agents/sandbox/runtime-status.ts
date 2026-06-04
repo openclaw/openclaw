@@ -1,11 +1,12 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../../config/sessions/main-session.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
+import { auditSandboxToolPolicyBlock } from "../tool-policy-audit.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
 import {
   classifyToolAgainstSandboxToolPolicy,
@@ -13,6 +14,12 @@ import {
 } from "./tool-policy.js";
 import type { SandboxConfig, SandboxToolPolicyResolved } from "./types.js";
 
+/**
+ * Resolves whether a session is sandboxed and why sandbox tool policy blocks a tool.
+ *
+ * This module is used by tool entrypoints before execution, so diagnostics must
+ * be actionable without exposing full session keys.
+ */
 function shouldSandboxSession(cfg: SandboxConfig, sessionKey: string, mainSessionKey: string) {
   if (cfg.mode === "off") {
     return false;
@@ -48,6 +55,7 @@ function resolveComparableSessionKeyForSandbox(params: {
   });
 }
 
+/** Resolves sandbox mode, effective session scope, and tool policy for a session. */
 export function resolveSandboxRuntimeStatus(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
@@ -125,10 +133,12 @@ function shellEscapeSingleArg(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/** Formats the user-facing denial message when sandbox tool policy blocks a tool. */
 export function formatSandboxToolPolicyBlockedMessage(params: {
   cfg?: OpenClawConfig;
   sessionKey?: string;
   toolName: string;
+  audit?: boolean;
 }): string | undefined {
   const tool = normalizeOptionalLowercaseString(params.toolName);
   if (!tool) {
@@ -149,6 +159,21 @@ export function formatSandboxToolPolicyBlockedMessage(params: {
   );
   if (!blockedByDeny && !blockedByAllow) {
     return undefined;
+  }
+
+  const blockingSource = blockedByDeny
+    ? runtime.toolPolicy.sources.deny
+    : runtime.toolPolicy.sources.allow;
+  if (params.audit === true) {
+    // Audit only on actual enforcement paths; explain/status calls can format without side effects.
+    auditSandboxToolPolicyBlock({
+      toolName: tool,
+      ruleType: blockedByDeny ? "deny" : "allow",
+      ruleSource: blockingSource.source,
+      configKey: blockingSource.key,
+      policy: runtime.toolPolicy,
+      mode: runtime.mode,
+    });
   }
 
   const reasons: string[] = [];

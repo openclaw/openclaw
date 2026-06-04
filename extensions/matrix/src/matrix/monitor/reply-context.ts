@@ -5,7 +5,7 @@ import type { MatrixRawEvent } from "./types.js";
 const MAX_CACHED_REPLY_CONTEXTS = 256;
 const MAX_REPLY_BODY_LENGTH = 500;
 
-export type MatrixReplyContext = {
+type MatrixReplyContext = {
   replyToBody?: string;
   replyToSender?: string;
   replyToSenderId?: string;
@@ -56,12 +56,14 @@ export function createMatrixReplyContextResolver(params: {
       return cached;
     }
 
-    const event = await params.client.getEvent(input.roomId, input.eventId).catch((err) => {
-      params.logVerboseMessage(
-        `matrix: failed resolving reply context room=${input.roomId} id=${input.eventId}: ${String(err)}`,
-      );
-      return null;
-    });
+    const event = await params.client
+      .getEvent(input.roomId, input.eventId)
+      .catch((err: unknown) => {
+        params.logVerboseMessage(
+          `matrix: failed resolving reply context room=${input.roomId} id=${input.eventId}: ${String(err)}`,
+        );
+        return null;
+      });
     if (!event) {
       // Do not cache failures so transient errors can be retried on the next
       // message that references the same event.

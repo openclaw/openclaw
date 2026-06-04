@@ -19,7 +19,7 @@ async function createFixture() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-updates-"));
   tempDirs.push(root);
   const storePath = path.join(root, "sessions.json");
-  const sessionKey = "agent:main:telegram:direct:compaction";
+  const sessionKey = "agent:main:forum:direct:compaction";
   const transcriptPath = path.join(root, "s1.jsonl");
   await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf-8");
   const entry = {
@@ -33,6 +33,14 @@ async function createFixture() {
   };
   await fs.writeFile(storePath, JSON.stringify(sessionStore, null, 2), "utf-8");
   return { storePath, sessionKey, sessionStore, entry, transcriptPath };
+}
+
+function firstSessionEndCall() {
+  return hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
+}
+
+function firstSessionStartCall() {
+  return hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
 }
 
 describe("session-updates lifecycle hooks", () => {
@@ -80,31 +88,23 @@ describe("session-updates lifecycle hooks", () => {
     expect(hookRunnerMocks.runSessionEnd).toHaveBeenCalledTimes(1);
     expect(hookRunnerMocks.runSessionStart).toHaveBeenCalledTimes(1);
 
-    const [endEvent, endContext] = hookRunnerMocks.runSessionEnd.mock.calls[0] ?? [];
-    const [startEvent, startContext] = hookRunnerMocks.runSessionStart.mock.calls[0] ?? [];
+    const [endEvent, endContext] = firstSessionEndCall();
+    const [startEvent, startContext] = firstSessionStartCall();
 
-    expect(endEvent).toMatchObject({
-      sessionId: "s1",
-      sessionKey,
-      reason: "compaction",
-      transcriptArchived: false,
-    });
+    expect(endEvent?.sessionId).toBe("s1");
+    expect(endEvent?.sessionKey).toBe(sessionKey);
+    expect(endEvent?.reason).toBe("compaction");
+    expect(endEvent?.transcriptArchived).toBe(false);
     expect(endEvent?.sessionFile).toBe(await fs.realpath(transcriptPath));
-    expect(endContext).toMatchObject({
-      sessionId: "s1",
-      sessionKey,
-      agentId: "main",
-    });
+    expect(endContext?.sessionId).toBe("s1");
+    expect(endContext?.sessionKey).toBe(sessionKey);
+    expect(endContext?.agentId).toBe("main");
     expect(endEvent?.nextSessionId).toBe(startEvent?.sessionId);
-    expect(startEvent).toMatchObject({
-      sessionId: "s2",
-      sessionKey,
-      resumedFrom: "s1",
-    });
-    expect(startContext).toMatchObject({
-      sessionId: "s2",
-      sessionKey,
-      agentId: "main",
-    });
+    expect(startEvent?.sessionId).toBe("s2");
+    expect(startEvent?.sessionKey).toBe(sessionKey);
+    expect(startEvent?.resumedFrom).toBe("s1");
+    expect(startContext?.sessionId).toBe("s2");
+    expect(startContext?.sessionKey).toBe(sessionKey);
+    expect(startContext?.agentId).toBe("main");
   });
 });

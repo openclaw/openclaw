@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resetRecentMediaGenerationDuplicateGuardsForTests } from "./media-generation-task-status-shared.js";
 import {
   buildActiveVideoGenerationTaskPromptContextForSession,
   buildVideoGenerationTaskStatusDetails,
@@ -9,16 +10,39 @@ import {
   VIDEO_GENERATION_TASK_KIND,
 } from "./video-generation-task-status.js";
 
-const taskRuntimeInternalMocks = vi.hoisted(() => ({
-  listTasksForOwnerKey: vi.fn(),
-}));
+const taskRuntimeInternalMocks = vi.hoisted(() => {
+  const mocks = {
+    listTasksForOwnerKey: vi.fn(),
+    listFreshTasksForOwnerKey: vi.fn(),
+    reloadTaskRegistryFromStore: vi.fn(),
+  };
+  mocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+    mocks.listTasksForOwnerKey(ownerKey),
+  );
+  return mocks;
+});
 
 vi.mock("../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
+
+function expectActiveVideoGenerationTask(
+  task: ReturnType<typeof findActiveVideoGenerationTaskForSession>,
+): NonNullable<ReturnType<typeof findActiveVideoGenerationTaskForSession>> {
+  if (task == null) {
+    throw new Error("Expected active video generation task");
+  }
+  return task;
+}
 
 describe("video generation task status", () => {
   beforeEach(() => {
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
     taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockReset();
+    taskRuntimeInternalMocks.listFreshTasksForOwnerKey.mockImplementation((ownerKey) =>
+      taskRuntimeInternalMocks.listTasksForOwnerKey(ownerKey),
+    );
+    taskRuntimeInternalMocks.reloadTaskRegistryFromStore.mockReset();
+    resetRecentMediaGenerationDuplicateGuardsForTests();
   });
 
   it("recognizes active session-backed video generation tasks", () => {
@@ -92,18 +116,18 @@ describe("video generation task status", () => {
     const task = findActiveVideoGenerationTaskForSession("agent:main");
 
     expect(task?.taskId).toBe("task-running");
-    expect(getVideoGenerationTaskProviderId(task!)).toBe("openai");
-    expect(buildVideoGenerationTaskStatusText(task!, { duplicateGuard: true })).toContain(
+    const activeTask = expectActiveVideoGenerationTask(task);
+    expect(getVideoGenerationTaskProviderId(activeTask)).toBe("openai");
+    expect(buildVideoGenerationTaskStatusText(activeTask, { duplicateGuard: true })).toContain(
       "Do not call video_generate again for this request.",
     );
-    expect(buildVideoGenerationTaskStatusDetails(task!)).toMatchObject({
-      active: true,
-      existingTask: true,
-      status: "running",
-      taskKind: VIDEO_GENERATION_TASK_KIND,
-      provider: "openai",
-      progressSummary: "Generating video",
-    });
+    const details = buildVideoGenerationTaskStatusDetails(activeTask);
+    expect(details.active).toBe(true);
+    expect(details.existingTask).toBe(true);
+    expect(details.status).toBe("running");
+    expect(details.taskKind).toBe(VIDEO_GENERATION_TASK_KIND);
+    expect(details.provider).toBe("openai");
+    expect(details.progressSummary).toBe("Generating video");
   });
 
   it("builds prompt context for active session work", () => {

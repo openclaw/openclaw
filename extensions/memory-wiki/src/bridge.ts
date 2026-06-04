@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
+  getMemoryCapabilityRegistration,
   listActiveMemoryPublicArtifacts,
   type MemoryPluginPublicArtifact,
 } from "openclaw/plugin-sdk/memory-host-core";
@@ -224,14 +225,13 @@ export async function syncMemoryWikiBridgeSources(params: {
   const publicArtifacts = await listActiveMemoryPublicArtifacts({ cfg: params.appConfig });
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
   const results: Array<{ pagePath: string; changed: boolean; created: boolean }> = [];
-  let artifactCount = 0;
   const activeKeys = new Set<string>();
   const artifacts = await collectBridgeArtifacts(params.config.bridge, publicArtifacts);
   const agentIdsByWorkspace = new Map<string, string[]>();
   for (const artifact of publicArtifacts) {
     agentIdsByWorkspace.set(artifact.workspaceDir, artifact.agentIds);
   }
-  artifactCount = artifacts.length;
+  const artifactCount = artifacts.length;
   for (const artifact of artifacts) {
     const stats = await fs.stat(artifact.absolutePath);
     activeKeys.add(artifact.syncKey);
@@ -248,12 +248,17 @@ export async function syncMemoryWikiBridgeSources(params: {
   }
   const workspaceCount = new Set(publicArtifacts.map((artifact) => artifact.workspaceDir)).size;
 
-  const removedCount = await pruneImportedSourceEntries({
-    vaultRoot: params.config.vault.path,
-    group: "bridge",
-    activeKeys,
-    state,
-  });
+  // Skip pruning when memory-core is not loaded (e.g. CLI context) to avoid
+  // removing all bridge-imported entries. See #68373.
+  const memoryCapability = getMemoryCapabilityRegistration();
+  const removedCount = memoryCapability
+    ? await pruneImportedSourceEntries({
+        vaultRoot: params.config.vault.path,
+        group: "bridge",
+        activeKeys,
+        state,
+      })
+    : 0;
   await writeMemoryWikiSourceSyncState(params.config.vault.path, state);
   const importedCount = results.filter((result) => result.changed && result.created).length;
   const updatedCount = results.filter((result) => result.changed && !result.created).length;

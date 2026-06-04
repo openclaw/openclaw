@@ -8,11 +8,24 @@ import { normalizeProviders } from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
-vi.mock("./models-config.providers.policy.runtime.js", () => ({
-  applyProviderNativeStreamingUsagePolicy: () => undefined,
-  normalizeProviderConfigPolicy: () => undefined,
-  resolveProviderConfigApiKeyPolicy: () => undefined,
-}));
+function normalizeLmstudioBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim().replace(/\/+$/, "");
+  return trimmed.replace(/\/api\/v1$/, "").replace(/\/v1$/, "") + "/v1";
+}
+
+vi.mock("./models-config.providers.policy.runtime.js", () => {
+  return {
+    applyProviderNativeStreamingUsagePolicy: () => undefined,
+    normalizeProviderConfigPolicy: (
+      providerKey: string,
+      provider: { baseUrl?: unknown } | undefined,
+    ) =>
+      providerKey === "lmstudio" && typeof provider?.baseUrl === "string"
+        ? { ...provider, baseUrl: normalizeLmstudioBaseUrl(provider.baseUrl) }
+        : undefined,
+    resolveProviderConfigApiKeyPolicy: () => undefined,
+  };
+});
 
 describe("normalizeProviders", () => {
   const createModel = (
@@ -97,6 +110,101 @@ describe("normalizeProviders", () => {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
   });
+
+  it("normalizes retired Google Gemini model ids before emitting provider config", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        google: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          api: "google-generative-ai",
+          apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
+          models: [
+            createModel({
+              id: "gemini-3-pro-preview",
+              name: "Gemini 3 Pro",
+            }),
+          ],
+        },
+        "google-gemini-cli": {
+          baseUrl: "openclaw://google-gemini-cli",
+          models: [
+            createModel({
+              id: "gemini-3-pro-preview",
+              name: "Gemini CLI 3 Pro",
+            }),
+          ],
+        },
+        openrouter: {
+          baseUrl: "https://openrouter.ai/api/v1",
+          api: "openai-completions",
+          apiKey: "OPENROUTER_API_KEY", // pragma: allowlist secret
+          models: [
+            createModel({
+              id: "google/gemini-3-pro-preview",
+              name: "Gemini 3 Pro via OpenRouter",
+            }),
+          ],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+
+      expect(normalized?.google?.models?.map((model) => model.id)).toEqual([
+        "gemini-3.1-pro-preview",
+      ]);
+      expect(normalized?.["google-gemini-cli"]?.models?.map((model) => model.id)).toEqual([
+        "gemini-3.1-pro-preview",
+      ]);
+      expect(normalized?.openrouter?.models?.map((model) => model.id)).toEqual([
+        "google/gemini-3.1-pro-preview",
+      ]);
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
+  it("deduplicates Google Gemini provider rows after model id normalization", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        google: {
+          baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+          api: "google-generative-ai",
+          apiKey: "GOOGLE_API_KEY", // pragma: allowlist secret
+          models: [
+            createModel({
+              id: "gemini-3-pro-preview",
+              name: "Pinned Gemini",
+              contextWindow: 12345,
+              cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4 },
+            }),
+            createModel({
+              id: "gemini-3.1-pro-preview",
+              name: "Discovered Gemini",
+              contextWindow: 1_048_576,
+              maxTokens: 65536,
+              reasoning: true,
+            }),
+          ],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+
+      expect(normalized?.google?.models).toHaveLength(1);
+      const model = normalized?.google?.models?.[0];
+      expect(model?.id).toBe("gemini-3.1-pro-preview");
+      expect(model?.name).toBe("Pinned Gemini");
+      expect(model?.contextWindow).toBe(12345);
+      expect(model?.maxTokens).toBe(2048);
+      expect(model?.reasoning).toBe(false);
+      expect(model?.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("replaces resolved env var value with env var name to prevent plaintext persistence", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     const env = {
@@ -268,5 +376,24 @@ describe("normalizeProviders", () => {
     });
     expect((enforced as Record<string, unknown>).openai).toBeNull();
     expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
+    try {
+      const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
+        lmstudio: {
+          baseUrl: "http://localhost:1234/api/v1/",
+          api: "openai-completions",
+          apiKey: "LM_API_TOKEN",
+          models: [],
+        },
+      };
+
+      const normalized = normalizeProviders({ providers, agentDir });
+      expect(normalized?.lmstudio?.baseUrl).toBe("http://localhost:1234/v1");
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
   });
 });

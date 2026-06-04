@@ -13,6 +13,14 @@ vi.mock("./graph.js", () => ({
   fetchGraphJson: vi.fn(),
 }));
 
+const firstGraphPath = () => {
+  const [call] = vi.mocked(fetchGraphJson).mock.calls;
+  if (!call) {
+    throw new Error("expected Graph fetch call");
+  }
+  return call[0].path;
+};
+
 describe("stripHtmlFromTeamsMessage", () => {
   it("preserves @mention display names from <at> tags", () => {
     expect(stripHtmlFromTeamsMessage("<at>Alice</at> hello")).toBe("@Alice hello");
@@ -67,6 +75,35 @@ describe("resolveTeamGroupId", () => {
     await resolveTeamGroupId("tok", "team-456");
 
     expect(fetchGraphJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache team ids when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-boundary" } as never);
+
+      await resolveTeamGroupId("tok", "team-boundary");
+      await resolveTeamGroupId("tok", "team-boundary");
+
+      expect(fetchGraphJson).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("evicts cached team ids when the current clock is invalid", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-invalid-clock" } as never);
+
+    await resolveTeamGroupId("tok", "team-invalid-clock");
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      await resolveTeamGroupId("tok", "team-invalid-clock");
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(fetchGraphJson).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to conversationTeamId when Graph returns no id", async () => {
@@ -138,8 +175,7 @@ describe("fetchThreadReplies", () => {
 
     await fetchThreadReplies("tok", "g", "c", "m", 200);
 
-    const path = vi.mocked(fetchGraphJson).mock.calls[0]?.[0]?.path ?? "";
-    expect(path).toContain("$top=50");
+    expect(firstGraphPath()).toContain("$top=50");
   });
 
   it("clamps limit to 1 minimum", async () => {
@@ -147,15 +183,14 @@ describe("fetchThreadReplies", () => {
 
     await fetchThreadReplies("tok", "g", "c", "m", 0);
 
-    const path = vi.mocked(fetchGraphJson).mock.calls[0]?.[0]?.path ?? "";
-    expect(path).toContain("$top=1");
+    expect(firstGraphPath()).toContain("$top=1");
   });
 
   it("returns empty array when value is missing", async () => {
     vi.mocked(fetchGraphJson).mockResolvedValueOnce({} as never);
 
     const result = await fetchThreadReplies("tok", "g", "c", "m");
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 });
 

@@ -1,9 +1,30 @@
 {
   "id": "opencode",
+  "activation": {
+    "onStartup": false
+  },
   "enabledByDefault": true,
   "providers": ["opencode"],
-  "providerAuthEnvVars": {
-    "opencode": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+  "providerEndpoints": [
+    {
+      "endpointClass": "opencode-native",
+      "hostSuffixes": ["opencode.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "opencode": {
+        "family": "opencode"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "opencode",
+        "envVars": ["OPENCODE_API_KEY", "OPENCODE_ZEN_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -20,6 +41,17 @@
       "cliDescription": "OpenCode API key (Zen catalog)"
     }
   ],
+  "contracts": {
+    "mediaUnderstandingProviders": ["opencode"]
+  },
+  "mediaUnderstandingProviderMetadata": {
+    "opencode": {
+      "capabilities": ["image"],
+      "defaultModels": {
+        "image": "gpt-5-nano"
+      }
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

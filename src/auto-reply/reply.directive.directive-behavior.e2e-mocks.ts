@@ -1,7 +1,7 @@
 import { vi, type Mock } from "vitest";
 
-export const runEmbeddedPiAgentMock: Mock = vi.fn();
-export const compactEmbeddedPiSessionMock: Mock = vi.fn();
+export const runEmbeddedAgentMock: Mock = vi.fn();
+export const compactEmbeddedAgentSessionMock: Mock = vi.fn();
 export const loadModelCatalogMock: Mock = vi.fn();
 export const resolveCommandSecretRefsViaGatewayMock: Mock = vi.fn();
 export const clearSessionAuthProfileOverrideMock: Mock = vi.fn();
@@ -37,9 +37,8 @@ function normalizeReplyAgentPayload(payload: Record<string, unknown>, params: un
   };
 }
 
-export async function runDirectiveBehaviorReplyAgent(params: unknown) {
-  const runParams = objectRecord(objectRecord(params)?.followupRun)?.run ?? {};
-  const result = await runEmbeddedPiAgentMock(runParams);
+async function runMockedReplyAgent(runParams: unknown, params: unknown) {
+  const result = await runEmbeddedAgentMock(runParams);
   const payloadsRaw = objectRecord(result)?.payloads;
   const payloads = Array.isArray(payloadsRaw)
     ? payloadsRaw.flatMap((payload) => {
@@ -52,6 +51,11 @@ export async function runDirectiveBehaviorReplyAgent(params: unknown) {
     return undefined;
   }
   return normalized.length === 1 ? normalized[0] : normalized;
+}
+
+export async function runDirectiveBehaviorReplyAgent(params: unknown) {
+  const runParams = objectRecord(objectRecord(params)?.followupRun)?.run ?? {};
+  return await runMockedReplyAgent(runParams, params);
 }
 
 export const runReplyAgentMock: Mock = vi.fn(runDirectiveBehaviorReplyAgent);
@@ -71,43 +75,31 @@ export async function runDirectiveBehaviorPreparedReply(params: unknown) {
       fullAccessAvailable: true,
     },
   };
-  const result = await runEmbeddedPiAgentMock(runParams);
-  const payloadsRaw = objectRecord(result)?.payloads;
-  const payloads = Array.isArray(payloadsRaw)
-    ? payloadsRaw.flatMap((payload) => {
-        const record = objectRecord(payload);
-        return record ? [record] : [];
-      })
-    : [];
-  const normalized = payloads.map((payload) => normalizeReplyAgentPayload(payload, params));
-  if (normalized.length === 0) {
-    return undefined;
-  }
-  return normalized.length === 1 ? normalized[0] : normalized;
+  return await runMockedReplyAgent(runParams, params);
 }
 
 export const runPreparedReplyMock: Mock = vi.fn(runDirectiveBehaviorPreparedReply);
 
-vi.mock("../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  compactEmbeddedPiSession: (...args: unknown[]) => compactEmbeddedPiSessionMock(...args),
-  runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+vi.mock("../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
+  runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
+  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
 }));
 
-vi.mock("../agents/pi-embedded.runtime.js", () => ({
-  abortEmbeddedPiRun: vi.fn().mockReturnValue(false),
-  compactEmbeddedPiSession: (...args: unknown[]) => compactEmbeddedPiSessionMock(...args),
-  runEmbeddedPiAgent: (...args: unknown[]) => runEmbeddedPiAgentMock(...args),
-  queueEmbeddedPiMessage: vi.fn().mockReturnValue(false),
+vi.mock("../agents/embedded-agent.runtime.js", () => ({
+  abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
+  compactEmbeddedAgentSession: (...args: unknown[]) => compactEmbeddedAgentSessionMock(...args),
+  runEmbeddedAgent: (...args: unknown[]) => runEmbeddedAgentMock(...args),
+  queueEmbeddedAgentMessage: vi.fn().mockReturnValue(false),
   resolveActiveEmbeddedRunSessionId: vi.fn().mockReturnValue(undefined),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
-  isEmbeddedPiRunActive: vi.fn().mockReturnValue(false),
-  isEmbeddedPiRunStreaming: vi.fn().mockReturnValue(false),
-  waitForEmbeddedPiRunEnd: vi.fn().mockResolvedValue(true),
+  isEmbeddedAgentRunActive: vi.fn().mockReturnValue(false),
+  isEmbeddedAgentRunStreaming: vi.fn().mockReturnValue(false),
+  waitForEmbeddedAgentRunEnd: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock("../agents/model-catalog.js", () => ({

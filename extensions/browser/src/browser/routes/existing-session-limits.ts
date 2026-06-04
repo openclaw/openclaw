@@ -5,6 +5,7 @@ export const EXISTING_SESSION_LIMITS = {
       "existing-session click currently supports left-click only (no button overrides/modifiers).",
     typeSelector: "existing-session type does not support selector targeting yet; use ref.",
     typeSlowly: "existing-session type does not support slowly=true; use fill/press instead.",
+    typeTimeout: "existing-session type does not support timeoutMs overrides.",
     pressDelay: "existing-session press does not support delayMs.",
     hoverSelector: "existing-session hover does not support selector targeting yet; use ref.",
     hoverTimeout: "existing-session hover does not support timeoutMs overrides.",
@@ -27,6 +28,7 @@ export const EXISTING_SESSION_LIMITS = {
       "existing-session file uploads do not support element selectors; use ref/inputRef.",
     uploadSingleFile: "existing-session file uploads currently support one file at a time.",
     uploadRefRequired: "existing-session file uploads require ref or inputRef.",
+    dialogId: "existing-session dialog handling does not support dialogId.",
     dialogTimeout: "existing-session dialog handling does not support timeoutMs.",
   },
   download: {

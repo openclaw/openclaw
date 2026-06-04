@@ -20,7 +20,22 @@ export function isLocalCheckEnabled(env) {
   return raw !== "0" && raw !== "false";
 }
 
-export function hasFlag(args, name) {
+function isCiLikeEnv(env = process.env) {
+  return env.CI === "true" || env.GITHUB_ACTIONS === "true";
+}
+
+export function resolveLocalHeavyCheckEnv(env = process.env) {
+  if (isCiLikeEnv(env) || isLocalCheckEnabled(env)) {
+    return env;
+  }
+
+  return {
+    ...env,
+    OPENCLAW_LOCAL_CHECK: "1",
+  };
+}
+
+function hasFlag(args, name) {
   return args.some((arg) => arg === name || arg.startsWith(`${name}=`));
 }
 
@@ -46,7 +61,7 @@ export function applyLocalTsgoPolicy(args, env, hostResources) {
     );
   }
 
-  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
+  if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources, "auto")) {
     insertBeforeSeparator(nextArgs, "--singleThreaded");
     insertBeforeSeparator(nextArgs, "--checkers", "1");
 
@@ -69,7 +84,7 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
   const nextArgs = [...args];
 
   insertBeforeSeparator(nextArgs, "--type-aware");
-  insertBeforeSeparator(nextArgs, "--tsconfig", "tsconfig.oxlint.json");
+  insertBeforeSeparator(nextArgs, "--tsconfig", "config/tsconfig/oxlint.json");
   if (
     !hasFlag(nextArgs, "--report-unused-disable-directives") &&
     !hasFlag(nextArgs, "--report-unused-disable-directives-severity")
@@ -78,7 +93,15 @@ export function applyLocalOxlintPolicy(args, env, hostResources) {
   }
 
   if (shouldThrottleLocalHeavyChecks(nextEnv, hostResources)) {
-    insertBeforeSeparator(nextArgs, "--threads=1");
+    if (!hasFlag(nextArgs, "--threads")) {
+      insertBeforeSeparator(nextArgs, "--threads=1");
+    }
+    if (!nextEnv.GOGC) {
+      nextEnv.GOGC = DEFAULT_LOCAL_GO_GC;
+    }
+    if (!nextEnv.GOMEMLIMIT) {
+      nextEnv.GOMEMLIMIT = DEFAULT_LOCAL_GO_MEMORY_LIMIT;
+    }
   }
 
   return { env: nextEnv, args: nextArgs };
@@ -145,12 +168,12 @@ export function shouldAcquireLocalHeavyCheckLockForTsgo(args, env = process.env)
   );
 }
 
-export function shouldThrottleLocalHeavyChecks(env, hostResources) {
+function shouldThrottleLocalHeavyChecks(env, hostResources, defaultMode = "throttled") {
   if (!isLocalCheckEnabled(env)) {
     return false;
   }
 
-  const mode = readLocalCheckMode(env);
+  const mode = readLocalCheckMode(env, defaultMode);
   if (mode === "throttled") {
     return true;
   }
@@ -172,26 +195,40 @@ export function acquireLocalHeavyCheckLockSync(params) {
     return () => {};
   }
 
-  const commonDir = resolveGitCommonDir(params.cwd);
-  const locksDir = path.join(commonDir, "openclaw-local-checks");
+  const locksDir = resolveHeavyCheckLocksDir(params.cwd, env);
   const lockDir = path.join(locksDir, `${params.lockName ?? "heavy-check"}.lock`);
   const ownerPath = path.join(lockDir, "owner.json");
   const timeoutMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS,
     DEFAULT_LOCK_TIMEOUT_MS,
+    "OPENCLAW_HEAVY_CHECK_LOCK_TIMEOUT_MS",
   );
-  const pollMs = readPositiveInt(env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS, DEFAULT_LOCK_POLL_MS);
+  const pollMs = readPositiveInt(
+    env.OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS,
+    DEFAULT_LOCK_POLL_MS,
+    "OPENCLAW_HEAVY_CHECK_LOCK_POLL_MS",
+  );
   const progressMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_LOCK_PROGRESS_MS,
     DEFAULT_LOCK_PROGRESS_MS,
+    "OPENCLAW_HEAVY_CHECK_LOCK_PROGRESS_MS",
   );
   const staleLockMs = readPositiveInt(
     env.OPENCLAW_HEAVY_CHECK_STALE_LOCK_MS,
     DEFAULT_STALE_LOCK_MS,
+    "OPENCLAW_HEAVY_CHECK_STALE_LOCK_MS",
   );
   const startedAt = Date.now();
-  let waitingLogged = false;
-  let lastProgressAt = 0;
+  let waitLogBudget = 1;
+  let lastProgressAt = startedAt;
+  const consumeInitialWaitLog = () => waitLogBudget-- > 0;
+  const consumeProgressLog = (now) => {
+    if (now - lastProgressAt < progressMs) {
+      return false;
+    }
+    lastProgressAt = now;
+    return true;
+  };
 
   fs.mkdirSync(locksDir, { recursive: true });
   if (!params.lockName) {
@@ -233,23 +270,20 @@ export function acquireLocalHeavyCheckLockSync(params) {
         );
       }
 
-      if (!waitingLogged) {
+      if (consumeInitialWaitLog()) {
         const ownerLabel = describeOwner(owner);
         console.error(
           `[${params.toolName}] queued behind the local heavy-check lock${
             ownerLabel ? ` held by ${ownerLabel}` : ""
           }...`,
         );
-        waitingLogged = true;
-        lastProgressAt = Date.now();
-      } else if (Date.now() - lastProgressAt >= progressMs) {
+      } else if (consumeProgressLog(Date.now())) {
         const ownerLabel = describeOwner(owner);
         console.error(
           `[${params.toolName}] still waiting ${formatElapsedMs(elapsedMs)} for the local heavy-check lock${
             ownerLabel ? ` held by ${ownerLabel}` : ""
           }...`,
         );
-        lastProgressAt = Date.now();
       }
 
       sleepSync(pollMs);
@@ -257,7 +291,33 @@ export function acquireLocalHeavyCheckLockSync(params) {
   }
 }
 
-export function resolveGitCommonDir(cwd) {
+function resolveHeavyCheckLocksDir(cwd, env) {
+  const lockScope = env.OPENCLAW_HEAVY_CHECK_LOCK_SCOPE?.trim().toLowerCase();
+  if (lockScope === "worktree") {
+    return path.join(resolveGitWorktreeRoot(cwd), ".artifacts", "openclaw-local-checks");
+  }
+
+  return path.join(resolveGitCommonDir(cwd), "openclaw-local-checks");
+}
+
+function resolveGitWorktreeRoot(cwd) {
+  const result = spawnSync("git", ["rev-parse", "--show-toplevel"], {
+    cwd,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+
+  if (result.status === 0) {
+    const raw = result.stdout.trim();
+    if (raw.length > 0) {
+      return path.resolve(cwd, raw);
+    }
+  }
+
+  return cwd;
+}
+
+function resolveGitCommonDir(cwd) {
   const result = spawnSync("git", ["rev-parse", "--git-common-dir"], {
     cwd,
     encoding: "utf8",
@@ -298,7 +358,7 @@ function insertBeforeSeparator(args, ...items) {
   args.splice(insertIndex, 0, ...items);
 }
 
-function readLocalCheckMode(env) {
+function readLocalCheckMode(env, defaultMode) {
   const raw = env.OPENCLAW_LOCAL_CHECK_MODE?.trim().toLowerCase();
   if (raw === "throttled" || raw === "low-memory") {
     return "throttled";
@@ -306,9 +366,7 @@ function readLocalCheckMode(env) {
   if (raw === "full" || raw === "fast") {
     return "full";
   }
-  // Keep local heavy checks conservative by default. Developers can still opt
-  // into full-speed runs explicitly with OPENCLAW_LOCAL_CHECK_MODE=full.
-  return "throttled";
+  return defaultMode;
 }
 
 function resolveHostResources(hostResources) {
@@ -323,9 +381,19 @@ function resolveHostResources(hostResources) {
   };
 }
 
-function readPositiveInt(rawValue, fallback) {
-  const parsed = Number.parseInt(rawValue ?? "", 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+function readPositiveInt(rawValue, fallback, label) {
+  const text = rawValue?.trim();
+  if (!text) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer; got: ${rawValue}`);
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer; got: ${rawValue}`);
+  }
+  return parsed;
 }
 
 function writeOwnerFile(ownerPath, owner) {

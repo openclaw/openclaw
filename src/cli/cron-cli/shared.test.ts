@@ -1,7 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CronJob } from "../../cron/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import { getCronChannelOptions, printCronList } from "./shared.js";
+import {
+  coerceCronDeliveryPreviews,
+  getCronChannelOptions,
+  parseAt,
+  parseCronToolsAllow,
+  printCronList,
+} from "./shared.js";
 
 const hoisted = vi.hoisted(() => ({
   listChannelPluginsMock: vi.fn(),
@@ -20,6 +26,14 @@ function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   } as RuntimeEnv;
   return { logs, runtime };
 }
+
+function expectLogsToInclude(logs: readonly string[], text: string): void {
+  expect(logs.join("\n")).toContain(text);
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
   const now = Date.now();
@@ -53,12 +67,11 @@ describe("printCronList", () => {
       // sessionTarget is intentionally omitted to simulate the bug
     });
 
-    // This should not throw "Cannot read properties of undefined (reading 'trim')"
-    expect(() => printCronList([jobWithUndefinedTarget], runtime)).not.toThrow();
+    printCronList([jobWithUndefinedTarget], runtime);
 
     // Verify output contains the job
     expect(logs.length).toBeGreaterThan(1);
-    expect(logs.some((line) => line.includes("test-job-id"))).toBe(true);
+    expectLogsToInclude(logs, "test-job-id");
   });
 
   it("handles job with defined sessionTarget", () => {
@@ -69,8 +82,24 @@ describe("printCronList", () => {
       sessionTarget: "isolated",
     });
 
-    expect(() => printCronList([jobWithTarget], runtime)).not.toThrow();
-    expect(logs.some((line) => line.includes("isolated"))).toBe(true);
+    printCronList([jobWithTarget], runtime);
+    expectLogsToInclude(logs, "isolated");
+  });
+
+  it("tolerates malformed rows in human-readable output", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const malformedJob = {
+      id: "malformed-job",
+      name: undefined,
+      enabled: true,
+      sessionTarget: undefined,
+      payload: undefined,
+      schedule: undefined,
+      state: undefined,
+    } as unknown as CronJob;
+
+    printCronList([malformedJob], runtime);
+    expectLogsToInclude(logs, "malformed-job");
   });
 
   it("shows stagger label for cron schedules", () => {
@@ -85,7 +114,7 @@ describe("printCronList", () => {
     });
 
     printCronList([job], runtime);
-    expect(logs.some((line) => line.includes("(stagger 5m)"))).toBe(true);
+    expectLogsToInclude(logs, "(stagger 5m)");
   });
 
   it("shows dash for unset agentId instead of default", () => {
@@ -120,6 +149,32 @@ describe("printCronList", () => {
     expect(logs[0]).toContain("Model");
     const dataLine = logs[1] ?? "";
     expect(dataLine).toContain("sonnet");
+  });
+
+  it("shows delivery preview when provided", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const job = createBaseJob({
+      id: "delivery-job",
+      name: "Delivery",
+      sessionTarget: "isolated",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+
+    printCronList([job], runtime, {
+      deliveryPreviews: new Map([
+        [
+          "delivery-job",
+          {
+            label: "announce -> telegram:-100",
+            detail: "resolved from last, main session",
+          },
+        ],
+      ]),
+    });
+
+    expect(logs[0]).toContain("Delivery");
+    expect(logs[1]).toContain("announce -> telegram:-100");
+    expect(logs[1]).toContain("resolved from last");
   });
 
   it("shows dash in Model column for systemEvent jobs", () => {
@@ -177,7 +232,35 @@ describe("printCronList", () => {
     });
 
     printCronList([job], runtime);
-    expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
+    expectLogsToInclude(logs, "(exact)");
+  });
+});
+
+describe("parseAt", () => {
+  it("accepts leading plus relative durations for cron add --at", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    expect(parseAt("+30m")).toBe("2026-05-25T00:30:00.000Z");
+    expect(parseAt("30m")).toBe("2026-05-25T00:30:00.000Z");
+  });
+
+  it("rejects out-of-range epoch milliseconds", () => {
+    expect(parseAt(String(Number.MAX_SAFE_INTEGER))).toBeNull();
+  });
+
+  it("rejects relative durations outside the Date range", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
+
+    expect(parseAt("+999999999999999999d")).toBeNull();
+  });
+
+  it("rejects relative durations when the current clock is at the Date boundary", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    expect(parseAt("+1m")).toBeNull();
   });
 });
 
@@ -188,7 +271,45 @@ describe("getCronChannelOptions", () => {
   });
 
   it("lists discovered channel plugin ids when plugins are available", () => {
-    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "telegram" }, { id: "signal" }]);
-    expect(getCronChannelOptions()).toBe("last|telegram|signal");
+    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "quietchat" }, { id: "forum" }]);
+    expect(getCronChannelOptions()).toBe("last|quietchat|forum");
+  });
+});
+
+describe("parseCronToolsAllow", () => {
+  it.each([
+    { input: "exec,read,write", expected: ["exec", "read", "write"] },
+    { input: "exec, read, write", expected: ["exec", "read", "write"] },
+    { input: "exec read write", expected: ["exec", "read", "write"] },
+    { input: " exec  read,write ", expected: ["exec", "read", "write"] },
+    { input: ["exec", "read", "write"], expected: ["exec", "read", "write"] },
+  ])("parses $input", ({ input, expected }) => {
+    expect(parseCronToolsAllow(input)).toEqual(expected);
+  });
+
+  it("returns undefined for empty input", () => {
+    expect(parseCronToolsAllow(" ,  ")).toBeUndefined();
+  });
+});
+
+describe("coerceCronDeliveryPreviews", () => {
+  it("keeps gateway-provided preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123", detail: "explicit" },
+        },
+      }).get("job1"),
+    ).toEqual({ label: "announce -> telegram:123", detail: "explicit" });
+  });
+
+  it("drops malformed preview entries", () => {
+    expect(
+      coerceCronDeliveryPreviews({
+        deliveryPreviews: {
+          job1: { label: "announce -> telegram:123" },
+        },
+      }).size,
+    ).toBe(0);
   });
 });

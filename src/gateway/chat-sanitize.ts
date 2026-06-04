@@ -1,10 +1,14 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
-  extractInboundSenderLabel,
-  stripInboundMetadata,
-} from "../auto-reply/reply/strip-inbound-meta.js";
-import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+  stripInternalMetadataForDisplay,
+  stripUserEnvelopeForDisplay,
+} from "../auto-reply/reply/display-text-sanitize.js";
+import { extractInboundSenderLabel } from "../auto-reply/reply/strip-inbound-meta.js";
+import { stripEnvelope } from "../shared/chat-envelope.js";
 
+// Gateway chat history display strips internal/user envelopes while preserving
+// sender labels for UI rows. The helpers return original object identities when
+// nothing changes so callers can avoid unnecessary snapshot churn.
 export { stripEnvelope };
 
 function extractMessageSenderLabel(entry: Record<string, unknown>): string | null {
@@ -35,6 +39,8 @@ function extractMessageSenderLabel(entry: Record<string, unknown>): string | nul
   return null;
 }
 
+// Text content blocks need role-aware stripping because user messages carry
+// inbound envelopes while assistant/tool content may carry internal metadata.
 function stripEnvelopeFromContentWithRole(
   content: unknown[],
   stripUserEnvelope: boolean,
@@ -48,10 +54,9 @@ function stripEnvelopeFromContentWithRole(
     if (entry.type !== "text" || typeof entry.text !== "string") {
       return item;
     }
-    const inboundStripped = stripInboundMetadata(entry.text);
     const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+      ? stripUserEnvelopeForDisplay(entry.text)
+      : stripInternalMetadataForDisplay(entry.text);
     if (stripped === entry.text) {
       return item;
     }
@@ -64,6 +69,7 @@ function stripEnvelopeFromContentWithRole(
   return { content: next, changed };
 }
 
+/** Strips OpenClaw envelope metadata from one display message without mutating it. */
 export function stripEnvelopeFromMessage(message: unknown): unknown {
   if (!message || typeof message !== "object") {
     return message;
@@ -81,10 +87,9 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   }
 
   if (typeof entry.content === "string") {
-    const inboundStripped = stripInboundMetadata(entry.content);
     const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+      ? stripUserEnvelopeForDisplay(entry.content)
+      : stripInternalMetadataForDisplay(entry.content);
     if (stripped !== entry.content) {
       next.content = stripped;
       changed = true;
@@ -96,10 +101,9 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
       changed = true;
     }
   } else if (typeof entry.text === "string") {
-    const inboundStripped = stripInboundMetadata(entry.text);
     const stripped = stripUserEnvelope
-      ? stripMessageIdHints(stripEnvelope(inboundStripped))
-      : inboundStripped;
+      ? stripUserEnvelopeForDisplay(entry.text)
+      : stripInternalMetadataForDisplay(entry.text);
     if (stripped !== entry.text) {
       next.text = stripped;
       changed = true;
@@ -109,6 +113,7 @@ export function stripEnvelopeFromMessage(message: unknown): unknown {
   return changed ? next : message;
 }
 
+/** Strips envelope metadata from a message array, preserving the original array when unchanged. */
 export function stripEnvelopeFromMessages(messages: unknown[]): unknown[] {
   if (messages.length === 0) {
     return messages;

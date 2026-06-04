@@ -16,12 +16,14 @@ export type GenerationRuntimeMocks = {
   getProvider: ResettableReturnMock;
   getProviderEnvVars: ResettableReturnMock;
   resolveProviderAuthEnvVarCandidates: ResettableReturnMock;
+  resolveProviderAuthLookupMaps: ResettableReturnMock;
   isFailoverError: ResettableReturnMock;
   listProviders: ResettableReturnMock;
   parseModelRef: ClearableMock;
   resolveAgentModelFallbackValues: ResettableReturnMock;
   resolveAgentModelPrimaryValue: ResettableReturnMock;
   debug: ResettableMock;
+  warn: ResettableMock;
 };
 
 export function resetGenerationRuntimeMocks(mocks: GenerationRuntimeMocks): void {
@@ -32,6 +34,12 @@ export function resetGenerationRuntimeMocks(mocks: GenerationRuntimeMocks): void
   mocks.getProviderEnvVars.mockReturnValue([]);
   mocks.resolveProviderAuthEnvVarCandidates.mockReset();
   mocks.resolveProviderAuthEnvVarCandidates.mockReturnValue({});
+  mocks.resolveProviderAuthLookupMaps.mockReset();
+  mocks.resolveProviderAuthLookupMaps.mockReturnValue({
+    aliasMap: {},
+    envCandidateMap: {},
+    authEvidenceMap: {},
+  });
   mocks.isFailoverError.mockReset();
   mocks.isFailoverError.mockReturnValue(false);
   mocks.listProviders.mockReset();
@@ -42,4 +50,5 @@ export function resetGenerationRuntimeMocks(mocks: GenerationRuntimeMocks): void
   mocks.resolveAgentModelPrimaryValue.mockReset();
   mocks.resolveAgentModelPrimaryValue.mockReturnValue(undefined);
   mocks.debug.mockReset();
+  mocks.warn.mockReset();
 }

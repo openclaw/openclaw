@@ -1,14 +1,7 @@
 import { vi } from "vitest";
-import type { MsgContext } from "../../../auto-reply/templating.js";
 
-export type InboundContextCapture = {
-  ctx: MsgContext | undefined;
-};
-
-export function createInboundContextCapture(): InboundContextCapture {
-  return { ctx: undefined };
-}
-
+// Test helper for inbound channel contract suites. It replaces dispatch with a
+// capture mock while preserving the rest of the actual module surface.
 export function buildDispatchInboundCaptureMock<T extends Record<string, unknown>>(
   actual: T,
   setCtx: (ctx: unknown) => void,
@@ -25,15 +18,3 @@ export function buildDispatchInboundCaptureMock<T extends Record<string, unknown
     dispatchInboundMessageWithBufferedDispatcher: dispatchInboundMessage,
   };
 }
-
-export async function buildDispatchInboundContextCapture(
-  loadActual: <T extends Record<string, unknown>>() => Promise<T>,
-  capture: InboundContextCapture,
-) {
-  const actual = await loadActual<typeof import("../../../auto-reply/dispatch.js")>();
-  return buildDispatchInboundCaptureMock(actual, (ctx) => {
-    capture.ctx = ctx as MsgContext;
-  });
-}
-
-export const inboundCtxCapture = createInboundContextCapture();

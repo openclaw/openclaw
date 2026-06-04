@@ -1,19 +1,20 @@
-import type { ChannelType, Client, User } from "@buape/carbon";
-import type { ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { InboundEventKind } from "openclaw/plugin-sdk/channel-inbound";
+import type { ChannelBotLoopProtectionFacts } from "openclaw/plugin-sdk/channel-inbound";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import type { SessionBindingRecord } from "openclaw/plugin-sdk/conversation-runtime";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import type { ChannelType, Client, User } from "../internal/discord.js";
 import type { DiscordChannelConfigResolved, DiscordGuildEntryResolved } from "./allow-list.js";
 import type { DiscordChannelInfo } from "./message-utils.js";
 import type { DiscordThreadBindingLookup } from "./reply-delivery.js";
+import type { DiscordReplyTypingFeedback } from "./reply-typing-feedback.js";
 import type { DiscordSenderIdentity } from "./sender-identity.js";
 
 export type { DiscordSenderIdentity } from "./sender-identity.js";
 import type { DiscordThreadChannel } from "./threading.js";
 
-export type LoadedConfig = ReturnType<
-  typeof import("openclaw/plugin-sdk/config-runtime").loadConfig
->;
+type LoadedConfig = OpenClawConfig;
 export type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
 
 export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
@@ -21,7 +22,7 @@ export type DiscordMessageEvent = import("./listeners.js").DiscordMessageEvent;
 type DiscordMessagePreflightSharedFields = {
   cfg: LoadedConfig;
   discordConfig: NonNullable<
-    import("openclaw/plugin-sdk/config-runtime").OpenClawConfig["channels"]
+    import("openclaw/plugin-sdk/config-contracts").OpenClawConfig["channels"]
   >["discord"];
   accountId: string;
   token: string;
@@ -44,6 +45,8 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   messageChannelId: string;
   author: User;
   sender: DiscordSenderIdentity;
+  canonicalMessageId?: string;
+  memberRoleIds: string[];
 
   channelInfo: DiscordChannelInfo | null;
   channelName?: string;
@@ -55,6 +58,7 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
   commandAuthorized: boolean;
   baseText: string;
   messageText: string;
+  preflightAudioTranscript?: string;
   wasMentioned: boolean;
 
   route: ReturnType<typeof resolveAgentRoute>;
@@ -83,20 +87,25 @@ export type DiscordMessagePreflightContext = DiscordMessagePreflightSharedFields
 
   shouldRequireMention: boolean;
   hasAnyMention: boolean;
+  hasControlCommand: boolean;
   allowTextCommands: boolean;
   shouldBypassMention: boolean;
   effectiveWasMentioned: boolean;
+  inboundEventKind: InboundEventKind;
   canDetectMention: boolean;
 
   historyEntry?: HistoryEntry;
   threadBindings: DiscordThreadBindingLookup;
+  replyTypingFeedback?: DiscordReplyTypingFeedback;
   discordRestFetch?: typeof fetch;
+  botLoopProtection?: ChannelBotLoopProtectionFacts;
 };
 
 export type DiscordMessagePreflightParams = DiscordMessagePreflightSharedFields & {
   dmEnabled: boolean;
   groupDmEnabled: boolean;
   groupDmChannels?: string[];
+  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
   allowFrom?: string[];
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
   ackReactionScope: DiscordMessagePreflightContext["ackReactionScope"];

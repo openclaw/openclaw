@@ -9,8 +9,9 @@ import type {
 } from "./reply-dispatcher.js";
 
 type DispatchReplyContext = MsgContext | FinalizedMsgContext;
-type DispatchReplyOptions = Omit<GetReplyOptions, "onToolResult" | "onBlockReply">;
+type DispatchReplyOptions = Omit<GetReplyOptions, "onBlockReply">;
 
+/** Buffered block dispatcher entry point used by provider reply flows. */
 export type DispatchReplyWithBufferedBlockDispatcher = (params: {
   ctx: DispatchReplyContext;
   cfg: OpenClawConfig;
@@ -19,6 +20,7 @@ export type DispatchReplyWithBufferedBlockDispatcher = (params: {
   replyResolver?: GetReplyFromConfig;
 }) => Promise<DispatchFromConfigResult>;
 
+/** Plain dispatcher entry point used when block buffering is not needed. */
 export type DispatchReplyWithDispatcher = (params: {
   ctx: DispatchReplyContext;
   cfg: OpenClawConfig;

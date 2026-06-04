@@ -1,7 +1,9 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getChannelPlugin, normalizeChannelId } from "../channels/plugins/index.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { normalizeMessageChannel } from "./message-channel.js";
 export {
+  channelRouteFromDeliveryContext,
+  deliveryContextFromChannelRoute,
   deliveryContextFromSession,
   deliveryContextKey,
   mergeDeliveryContext,
@@ -10,30 +12,41 @@ export {
 } from "./delivery-context.shared.js";
 export type { DeliveryContext, DeliveryContextSessionSource } from "./delivery-context.types.js";
 
-export function formatConversationTarget(params: {
+type ConversationTargetParams = {
   channel?: string;
   conversationId?: string | number;
   parentConversationId?: string | number;
-}): string | undefined {
+};
+
+function normalizeConversationId(value: string | number | undefined): string | undefined {
+  return typeof value === "number" && Number.isFinite(value)
+    ? String(Math.trunc(value))
+    : typeof value === "string"
+      ? normalizeOptionalString(value)
+      : undefined;
+}
+
+function normalizeConversationTargetParams(params: ConversationTargetParams): {
+  channel?: string;
+  conversationId?: string;
+  parentConversationId?: string;
+} {
   const channel =
     typeof params.channel === "string"
       ? (normalizeMessageChannel(params.channel) ?? params.channel.trim())
       : undefined;
-  const conversationId =
-    typeof params.conversationId === "number" && Number.isFinite(params.conversationId)
-      ? String(Math.trunc(params.conversationId))
-      : typeof params.conversationId === "string"
-        ? normalizeOptionalString(params.conversationId)
-        : undefined;
+  const conversationId = normalizeConversationId(params.conversationId);
+  const parentConversationId = normalizeConversationId(params.parentConversationId);
+  return { channel, conversationId, parentConversationId };
+}
+
+/** Formats a conversation id into a deliverable target, using plugin hooks before generic fallback. */
+export function formatConversationTarget(params: ConversationTargetParams): string | undefined {
+  const { channel, conversationId, parentConversationId } =
+    normalizeConversationTargetParams(params);
   if (!channel || !conversationId) {
     return undefined;
   }
-  const parentConversationId =
-    typeof params.parentConversationId === "number" && Number.isFinite(params.parentConversationId)
-      ? String(Math.trunc(params.parentConversationId))
-      : typeof params.parentConversationId === "string"
-        ? normalizeOptionalString(params.parentConversationId)
-        : undefined;
   const pluginTarget = normalizeChannelId(channel)
     ? getChannelPlugin(normalizeChannelId(channel)!)?.messaging?.resolveDeliveryTarget?.({
         conversationId,
@@ -46,43 +59,14 @@ export function formatConversationTarget(params: {
   return `channel:${conversationId}`;
 }
 
+/** Resolves a channel conversation into target/thread fields for delivery routing. */
 export function resolveConversationDeliveryTarget(params: {
   channel?: string;
   conversationId?: string | number;
   parentConversationId?: string | number;
 }): { to?: string; threadId?: string } {
-  const channel =
-    typeof params.channel === "string"
-      ? (normalizeMessageChannel(params.channel) ?? params.channel.trim())
-      : undefined;
-  const conversationId =
-    typeof params.conversationId === "number" && Number.isFinite(params.conversationId)
-      ? String(Math.trunc(params.conversationId))
-      : typeof params.conversationId === "string"
-        ? normalizeOptionalString(params.conversationId)
-        : undefined;
-  const parentConversationId =
-    typeof params.parentConversationId === "number" && Number.isFinite(params.parentConversationId)
-      ? String(Math.trunc(params.parentConversationId))
-      : typeof params.parentConversationId === "string"
-        ? normalizeOptionalString(params.parentConversationId)
-        : undefined;
-  const isThreadChild =
-    conversationId && parentConversationId && parentConversationId !== conversationId;
-  if (channel && isThreadChild) {
-    if (channel === "matrix") {
-      return {
-        to: `room:${parentConversationId}`,
-        threadId: conversationId,
-      };
-    }
-    if (channel === "slack" || channel === "mattermost" || channel === "telegram") {
-      return {
-        to: `channel:${parentConversationId}`,
-        threadId: conversationId,
-      };
-    }
-  }
+  const { channel, conversationId, parentConversationId } =
+    normalizeConversationTargetParams(params);
   const pluginTarget =
     channel && conversationId
       ? getChannelPlugin(

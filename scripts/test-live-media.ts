@@ -1,6 +1,6 @@
 #!/usr/bin/env -S node --import tsx
 
-import { spawn, type ChildProcess } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 import { collectProviderApiKeys } from "../src/agents/live-auth-keys.js";
@@ -25,6 +25,7 @@ export type MediaSuiteConfig = {
   testFile: string;
   providerEnvVar: string;
   providers: string[];
+  defaultProviders?: string[];
 };
 
 export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
@@ -32,13 +33,13 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
     id: "image",
     testFile: "test/image-generation.runtime.live.test.ts",
     providerEnvVar: "OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS",
-    providers: ["fal", "google", "minimax", "openai", "vydra"],
+    providers: ["deepinfra", "fal", "google", "minimax", "openai", "openrouter", "vydra", "xai"],
   },
   music: {
     id: "music",
     testFile: "extensions/music-generation-providers.live.test.ts",
     providerEnvVar: "OPENCLAW_LIVE_MUSIC_GENERATION_PROVIDERS",
-    providers: ["google", "minimax"],
+    providers: ["fal", "google", "minimax", "openrouter"],
   },
   video: {
     id: "video",
@@ -47,10 +48,26 @@ export const MEDIA_SUITES: Record<MediaSuiteId, MediaSuiteConfig> = {
     providers: [
       "alibaba",
       "byteplus",
+      "deepinfra",
       "fal",
       "google",
       "minimax",
       "openai",
+      "openrouter",
+      "qwen",
+      "runway",
+      "together",
+      "vydra",
+      "xai",
+    ],
+    defaultProviders: [
+      "alibaba",
+      "byteplus",
+      "deepinfra",
+      "google",
+      "minimax",
+      "openai",
+      "openrouter",
       "qwen",
       "runway",
       "together",
@@ -78,20 +95,15 @@ export type SuiteRunPlan = {
   skippedReason?: string;
 };
 
-function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }): ChildProcess {
-  const npmExecPath = process.env.npm_execpath?.trim();
-  if (npmExecPath) {
-    return spawn(process.execPath, [npmExecPath, ...params.pnpmArgs], {
-      stdio: "inherit",
-      env: params.env,
-      shell: false,
-    });
-  }
+function formatProviderList(providers: Iterable<string>): string {
+  return [...providers].toSorted().join(", ");
+}
 
-  return spawn(process.platform === "win32" ? "pnpm.cmd" : "pnpm", params.pnpmArgs, {
+function spawnLivePnpm(params: { pnpmArgs: string[]; env: NodeJS.ProcessEnv }): ChildProcess {
+  return _spawnPnpmRunner({
+    pnpmArgs: params.pnpmArgs,
     stdio: "inherit",
     env: params.env,
-    shell: false,
   });
 }
 
@@ -116,6 +128,9 @@ function parseSuiteToken(raw: string): MediaSuiteId | null {
 }
 
 export function parseArgs(argv: string[]): CliOptions {
+  const separatorIndex = argv.indexOf("--");
+  const optionArgs = separatorIndex >= 0 ? argv.slice(0, separatorIndex) : argv;
+  const separatorPassthroughArgs = separatorIndex >= 0 ? argv.slice(separatorIndex + 1) : [];
   const suites = new Set<MediaSuiteId>();
   const suiteProviders: Partial<Record<MediaSuiteId, Set<string>>> = {};
   const passthroughArgs: string[] = [];
@@ -125,16 +140,16 @@ export function parseArgs(argv: string[]): CliOptions {
   let help = false;
 
   const readValue = (index: number): string => {
-    const value = argv[index + 1]?.trim();
+    const value = optionArgs[index + 1]?.trim();
     if (!value) {
-      throw new Error(`Missing value for ${argv[index]}`);
+      throw new Error(`Missing value for ${optionArgs[index]}`);
     }
     return value;
   };
 
-  for (let index = 0; index < argv.length; index += 1) {
-    const arg = argv[index] ?? "";
-    if (!arg || arg === "--") {
+  for (let index = 0; index < optionArgs.length; index += 1) {
+    const arg = optionArgs[index] ?? "";
+    if (!arg) {
       continue;
     }
     if (arg === "--help" || arg === "-h") {
@@ -195,15 +210,49 @@ export function parseArgs(argv: string[]): CliOptions {
     throw new Error(`Unknown argument: ${arg}`);
   }
 
-  return {
+  const options = {
     suites: (suites.size ? [...suites] : DEFAULT_SUITES).toSorted(),
     globalProviders,
     suiteProviders,
     requireAuth,
     quietArgs,
-    passthroughArgs,
+    passthroughArgs: [...passthroughArgs, ...separatorPassthroughArgs],
     help,
   };
+  validateProviderFilters(options);
+  return options;
+}
+
+function validateProviderFilters(options: CliOptions): void {
+  if (options.globalProviders) {
+    const selectedProviders = new Set(
+      options.suites.flatMap((suiteId) => MEDIA_SUITES[suiteId].providers),
+    );
+    const unknown = [...options.globalProviders].filter(
+      (provider) => !selectedProviders.has(provider),
+    );
+    if (unknown.length > 0) {
+      throw new Error(
+        `Unknown provider(s) for selected media suite(s): ${formatProviderList(unknown)}`,
+      );
+    }
+  }
+
+  for (const [suiteId, providers] of Object.entries(options.suiteProviders) as [
+    MediaSuiteId,
+    Set<string>,
+  ][]) {
+    const suite = MEDIA_SUITES[suiteId];
+    const supported = new Set(suite.providers);
+    const unknown = [...providers].filter((provider) => !supported.has(provider));
+    if (unknown.length > 0) {
+      throw new Error(`Unknown ${suiteId} provider(s): ${formatProviderList(unknown)}`);
+    }
+  }
+}
+
+function hasExplicitProviderSelection(options: CliOptions): boolean {
+  return options.globalProviders !== null || Object.keys(options.suiteProviders).length > 0;
 }
 
 function selectProviders(params: {
@@ -213,9 +262,10 @@ function selectProviders(params: {
   requireAuth: boolean;
 }): string[] {
   const explicit = params.suiteProviders ?? params.globalProviders;
-  let providers = params.suite.providers.filter((provider) =>
-    explicit ? explicit.has(provider) : true,
-  );
+  const candidates = explicit
+    ? params.suite.providers
+    : (params.suite.defaultProviders ?? params.suite.providers);
+  let providers = candidates.filter((provider) => (explicit ? explicit.has(provider) : true));
   if (!params.requireAuth) {
     return providers;
   }
@@ -275,6 +325,7 @@ Defaults:
   - runs image + music + video
   - auto-loads missing provider env vars from ~/.profile
   - narrows each suite to providers that currently have usable auth
+  - skips the slow fal video smoke by default; pass --video-providers fal to run it
   - forwards extra args to scripts/test-live.mjs
 
 Flags:
@@ -346,6 +397,10 @@ export async function runCli(argv: string[]): Promise<number> {
   }
   if (runnable.length === 0) {
     console.log("[live:media] nothing to run");
+    if (hasExplicitProviderSelection(options)) {
+      console.error("[live:media] no runnable providers matched the explicit provider selection");
+      return 1;
+    }
     return 0;
   }
 
@@ -365,7 +420,7 @@ export async function runCli(argv: string[]): Promise<number> {
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   runCli(process.argv.slice(2))
     .then((code) => process.exit(code))
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exit(1);
     });

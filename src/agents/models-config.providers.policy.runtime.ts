@@ -6,6 +6,9 @@ import {
 import { resolveProviderPluginLookupKey } from "./models-config.providers.policy.lookup.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
+// Runtime-policy bridge for provider config normalization. These helpers call
+// plugin hooks without triggering runtime plugin loading from config assembly.
+/** Apply provider native-streaming usage compatibility policy. */
 export function applyProviderNativeStreamingUsagePolicy(
   providerKey: string,
   provider: ProviderConfig,
@@ -14,6 +17,7 @@ export function applyProviderNativeStreamingUsagePolicy(
   return (
     applyProviderNativeStreamingUsageCompatWithPlugin({
       provider: runtimeProviderKey,
+      allowRuntimePluginLoad: false,
       context: {
         provider: providerKey,
         providerConfig: provider,
@@ -22,6 +26,7 @@ export function applyProviderNativeStreamingUsagePolicy(
   );
 }
 
+/** Normalize provider config through any already-available plugin policy hook. */
 export function normalizeProviderConfigPolicy(
   providerKey: string,
   provider: ProviderConfig,
@@ -30,6 +35,7 @@ export function normalizeProviderConfigPolicy(
   return (
     normalizeProviderConfigWithPlugin({
       provider: runtimeProviderKey,
+      allowRuntimePluginLoad: false,
       context: {
         provider: providerKey,
         providerConfig: provider,
@@ -38,6 +44,7 @@ export function normalizeProviderConfigPolicy(
   );
 }
 
+/** Resolve a provider API-key policy function from already-available plugin hooks. */
 export function resolveProviderConfigApiKeyPolicy(
   providerKey: string,
   provider?: ProviderConfig,
@@ -46,6 +53,7 @@ export function resolveProviderConfigApiKeyPolicy(
   return (env) =>
     resolveProviderConfigApiKeyWithPlugin({
       provider: runtimeProviderKey,
+      allowRuntimePluginLoad: false,
       context: {
         provider: providerKey,
         env,

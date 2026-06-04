@@ -1,3 +1,7 @@
+import { Type } from "typebox";
+import type { TSchema } from "typebox";
+import { stringEnum as createStringEnum } from "../agents/schema/typebox.js";
+
 export {
   createUnionActionGate,
   listTokenSourcedAccounts,
@@ -7,8 +11,10 @@ export {
   createActionGate,
   imageResultFromFile,
   jsonResult,
+  readNonNegativeIntegerParam,
   parseAvailableTags,
   readNumberParam,
+  readPositiveIntegerParam,
   readReactionParams,
   readStringArrayParam,
   readStringOrNumberParam,
@@ -19,12 +25,18 @@ export type { ActionGate } from "../agents/tools/common.js";
 export { withNormalizedTimestamp } from "../agents/date-time.js";
 export { assertMediaNotDataUrl } from "../agents/sandbox-paths.js";
 export { resolvePollMaxSelections } from "../polls.js";
-export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";
-import { Type } from "@sinclair/typebox";
-import type { TSchema } from "@sinclair/typebox";
-import { stringEnum as createStringEnum } from "../agents/schema/typebox.js";
+export {
+  optionalFiniteNumberSchema,
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+  optionalStringEnum,
+  stringEnum,
+} from "../agents/schema/typebox.js";
 
-/** Schema helper for channels that expose button rows on the shared `message` tool. */
+/**
+ * @deprecated Use semantic `presentation` capabilities instead of exposing
+ * provider-native button schemas through the shared message tool.
+ */
 export function createMessageToolButtonsSchema(): TSchema {
   return Type.Optional(
     Type.Array(
@@ -42,7 +54,10 @@ export function createMessageToolButtonsSchema(): TSchema {
   );
 }
 
-/** Schema helper for channels that accept provider-native card payloads. */
+/**
+ * @deprecated Use semantic `presentation` capabilities instead of exposing
+ * provider-native card schemas through the shared message tool.
+ */
 export function createMessageToolCardSchema(): TSchema {
   return Type.Optional(
     Type.Object(

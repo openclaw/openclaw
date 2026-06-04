@@ -7,7 +7,7 @@ import {
   resolveRepoRootPath,
   sharedVitestConfig,
 } from "./vitest.shared.config.ts";
-import { unitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
+import { getUnitFastTestFiles } from "./vitest.unit-fast-paths.mjs";
 
 function normalizePathPattern(value: string): string {
   return value.replaceAll("\\", "/");
@@ -35,6 +35,55 @@ function relativizeScopedPatterns(values: string[], dir?: string): string[] {
   return values.map((value) => relativizeScopedPattern(value, dir));
 }
 
+function globRoot(pattern: string): string | null {
+  const globStart = pattern.search(/[*{[]/u);
+  if (globStart < 0) {
+    return null;
+  }
+  const slashBeforeGlob = pattern.lastIndexOf("/", globStart);
+  if (slashBeforeGlob < 0) {
+    return "";
+  }
+  return pattern.slice(0, slashBeforeGlob);
+}
+
+function directoryPatternCoversInclude(excludePattern: string, includePattern: string): boolean {
+  if (!excludePattern.endsWith("/**")) {
+    return false;
+  }
+  const excludeRoot = excludePattern.slice(0, -"/**".length);
+  const includeRoot = globRoot(includePattern);
+  const candidate = includeRoot ?? includePattern;
+  return candidate === excludeRoot || candidate.startsWith(`${excludeRoot}/`);
+}
+
+export function includePatternIsFullyExcluded(
+  includePattern: string,
+  excludePattern: string,
+): boolean {
+  const include = normalizePathPattern(includePattern);
+  const exclude = normalizePathPattern(excludePattern);
+  return (
+    include === exclude ||
+    path.matchesGlob(include, exclude) ||
+    directoryPatternCoversInclude(exclude, include)
+  );
+}
+
+export function shouldPassWithNoTestsForCliIncludes(
+  cliIncludePatterns: string[] | null,
+  excludePatterns: string[],
+): boolean {
+  if (cliIncludePatterns === null) {
+    return false;
+  }
+  return cliIncludePatterns.every((includePattern) =>
+    excludePatterns.some((excludePattern) =>
+      includePatternIsFullyExcluded(includePattern, excludePattern),
+    ),
+  );
+}
+
 export function resolveVitestIsolation(
   _env: Record<string, string | undefined> = process.env,
 ): boolean {
@@ -45,6 +94,10 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
   [
     "acp",
     "agents",
+    "agents-core",
+    "agents-embedded-agent",
+    "agents-support",
+    "agents-tools",
     "auto-reply",
     "auto-reply-core",
     "auto-reply-reply",
@@ -57,18 +110,26 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "commands-light",
     "cron",
     "daemon",
+    "extension-active-memory",
     "extension-acpx",
-    "extension-bluebubbles",
     "extension-channels",
+    "extension-codex",
     "extension-diffs",
+    "extension-discord",
     "extension-feishu",
+    "extension-imessage",
     "extension-irc",
+    "extension-line",
     "extension-mattermost",
     "extension-matrix",
+    "extension-media",
     "extension-memory",
     "extension-messaging",
     "extension-msteams",
+    "extension-provider-openai",
     "extension-providers",
+    "extension-signal",
+    "extension-slack",
     "extension-telegram",
     "extension-voice-call",
     "extension-whatsapp",
@@ -88,9 +149,11 @@ const SCOPED_PROJECT_GROUP_ORDER_BY_NAME = new Map(
     "secrets",
     "shared-core",
     "tasks",
+    "tooling-isolated",
     "tooling",
     "tui",
     "ui",
+    "ui-e2e",
     "unit-fast",
     "unit-security",
     "unit-src",
@@ -141,8 +204,10 @@ export function createScopedVitestConfig(
     includeOpenClawRuntimeSetup?: boolean;
     isolate?: boolean;
     name?: string;
+    fileParallelism?: boolean;
     pool?: "forks" | "threads";
     passWithNoTests?: boolean;
+    excludeUnitFastTests?: boolean;
     setupFiles?: string[];
     useNonIsolatedRunner?: boolean;
   },
@@ -154,10 +219,13 @@ export function createScopedVitestConfig(
   const env = options?.env;
   const includeFromEnv = loadPatternListFromEnv("OPENCLAW_VITEST_INCLUDE_FILE", env);
   const cliInclude = narrowIncludePatternsForCli(include, options?.argv);
+  const unitFastExcludePatterns =
+    options?.excludeUnitFastTests === false ? [] : getUnitFastTestFiles();
   const exclude = relativizeScopedPatterns(
-    [...(baseTest.exclude ?? []), ...unitFastTestFiles, ...(options?.exclude ?? [])],
+    [...(baseTest.exclude ?? []), ...unitFastExcludePatterns, ...(options?.exclude ?? [])],
     scopedDir,
   );
+  const scopedCliInclude = cliInclude ? relativizeScopedPatterns(cliInclude, scopedDir) : null;
   const isolate = options?.isolate ?? resolveVitestIsolation(options?.env);
   const setupFiles = [
     ...new Set([
@@ -184,6 +252,9 @@ export function createScopedVitestConfig(
       include: relativizeScopedPatterns(includeFromEnv ?? cliInclude ?? include, scopedDir),
       exclude,
       ...(options?.pool ? { pool: options.pool } : {}),
+      ...(options?.fileParallelism === undefined
+        ? {}
+        : { fileParallelism: options.fileParallelism }),
       ...(scopedGroupOrder === undefined
         ? {}
         : {
@@ -192,9 +263,11 @@ export function createScopedVitestConfig(
               groupOrder: scopedGroupOrder,
             },
           }),
-      ...(options?.passWithNoTests !== undefined || cliInclude !== null
-        ? { passWithNoTests: options?.passWithNoTests ?? true }
-        : {}),
+      ...(options?.passWithNoTests !== undefined
+        ? { passWithNoTests: options.passWithNoTests }
+        : shouldPassWithNoTestsForCliIncludes(scopedCliInclude, exclude)
+          ? { passWithNoTests: true }
+          : {}),
     },
   });
 }

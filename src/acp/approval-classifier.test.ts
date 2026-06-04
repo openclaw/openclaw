@@ -83,14 +83,8 @@ describe("classifyAcpToolApproval", () => {
       expectedToolName: "nodes",
       expectedClass: "exec_capable",
     },
-    {
-      title: "whatsapp_login: start",
-      rawInput: { name: "whatsapp_login" },
-      expectedToolName: "whatsapp_login",
-      expectedClass: "interactive",
-    },
   ] as const)(
-    "classifies shared owner-only ACP backstops for $expectedToolName",
+    "classifies shared ACP backstop tools for $expectedToolName",
     ({ title, rawInput, expectedToolName, expectedClass }) => {
       expect(
         classify({

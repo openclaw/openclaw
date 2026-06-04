@@ -1,5 +1,11 @@
+/**
+ * Tests approval auth helper decisions and implicit same-chat authorization markers.
+ */
 import { describe, expect, it } from "vitest";
-import { createResolvedApproverActionAuthAdapter } from "./approval-auth-helpers.js";
+import {
+  createResolvedApproverActionAuthAdapter,
+  isImplicitSameChatApprovalAuthorization,
+} from "./approval-auth-helpers.js";
 
 describe("createResolvedApproverActionAuthAdapter", () => {
   it.each([
@@ -54,5 +60,37 @@ describe("createResolvedApproverActionAuthAdapter", () => {
         }),
       ).toEqual(testCase.expected);
     }
+  });
+
+  it("marks empty-approver fallback auth as implicit", () => {
+    const auth = createResolvedApproverActionAuthAdapter({
+      channelLabel: "Signal",
+      resolveApprovers: () => [],
+    });
+    const result = auth.authorizeActorAction({
+      cfg: {},
+      senderId: "uuid:attacker",
+      action: "approve",
+      approvalKind: "exec",
+    });
+
+    expect(result).toEqual({ authorized: true });
+    expect(isImplicitSameChatApprovalAuthorization(result)).toBe(true);
+  });
+
+  it("does not mark configured-approver auth as implicit", () => {
+    const auth = createResolvedApproverActionAuthAdapter({
+      channelLabel: "Signal",
+      resolveApprovers: () => ["uuid:owner"],
+    });
+    const result = auth.authorizeActorAction({
+      cfg: {},
+      senderId: "uuid:owner",
+      action: "approve",
+      approvalKind: "exec",
+    });
+
+    expect(result).toEqual({ authorized: true });
+    expect(isImplicitSameChatApprovalAuthorization(result)).toBe(false);
   });
 });

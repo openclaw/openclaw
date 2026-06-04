@@ -1,15 +1,16 @@
-import type { MsgContext } from "../../auto-reply/templating.js";
-import { normalizeChatType } from "../../channels/chat-type.js";
-import { resolveConversationLabel } from "../../channels/conversation-label.js";
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { MsgContext } from "../../auto-reply/templating.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveConversationLabel } from "../../channels/conversation-label.js";
+import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { buildGroupDisplayName, resolveGroupSessionKey } from "./group.js";
 import type { GroupKeyResolution, SessionEntry, SessionOrigin } from "./types.js";
 
+// Origin updates merge sparse channel metadata without deleting previously known fields.
 const mergeOrigin = (
   existing: SessionOrigin | undefined,
   next: SessionOrigin | undefined,
@@ -51,7 +52,16 @@ const mergeOrigin = (
   return Object.keys(merged).length > 0 ? merged : undefined;
 };
 
-export function deriveSessionOrigin(ctx: MsgContext): SessionOrigin | undefined {
+/** Derives session origin metadata from an inbound message context. */
+export function deriveSessionOrigin(
+  ctx: MsgContext,
+  opts?: { skipSystemEventOrigin?: boolean },
+): SessionOrigin | undefined {
+  const isSystemEventProvider =
+    ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
+  if (opts?.skipSystemEventOrigin && isSystemEventProvider) {
+    return undefined;
+  }
   const label = normalizeOptionalString(resolveConversationLabel(ctx));
   const providerRaw =
     (typeof ctx.OriginatingChannel === "string" && ctx.OriginatingChannel) ||
@@ -131,7 +141,7 @@ export function deriveGroupSessionPatch(params: {
     subjectLooksChannel && resolution.chatType !== "channel" ? normalizeChannelId(channel) : null;
   const isChannelProvider = Boolean(
     normalizedChannel &&
-    getChannelPlugin(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
+    getLoadedChannelPlugin(normalizedChannel)?.capabilities.chatTypes.includes("channel"),
   );
   const nextGroupChannel =
     explicitChannel ??
@@ -175,9 +185,12 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
+  skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
   const groupPatch = deriveGroupSessionPatch(params);
-  const origin = deriveSessionOrigin(params.ctx);
+  const origin = deriveSessionOrigin(params.ctx, {
+    skipSystemEventOrigin: params.skipSystemEventOrigin,
+  });
   if (!groupPatch && !origin) {
     return null;
   }

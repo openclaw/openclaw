@@ -6,17 +6,23 @@ import {
   type MediaNormalizationEntry,
 } from "../media-generation/runtime-shared.js";
 import type {
+  ImageGenerationBackground,
   ImageGenerationIgnoredOverride,
   ImageGenerationNormalization,
+  ImageGenerationOutputFormat,
   ImageGenerationProvider,
+  ImageGenerationQuality,
   ImageGenerationResolution,
   ImageGenerationSourceImage,
 } from "./types.js";
 
-export type ResolvedImageGenerationOverrides = {
+type ResolvedImageGenerationOverrides = {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  quality?: ImageGenerationQuality;
+  outputFormat?: ImageGenerationOutputFormat;
+  background?: ImageGenerationBackground;
   ignoredOverrides: ImageGenerationIgnoredOverride[];
   normalization?: ImageGenerationNormalization;
 };
@@ -33,26 +39,46 @@ function finalizeImageNormalization(
 
 export function resolveImageGenerationOverrides(params: {
   provider: ImageGenerationProvider;
+  model?: string;
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  quality?: ImageGenerationQuality;
+  outputFormat?: ImageGenerationOutputFormat;
+  background?: ImageGenerationBackground;
   inputImages?: ImageGenerationSourceImage[];
 }): ResolvedImageGenerationOverrides {
   const hasInputImages = (params.inputImages?.length ?? 0) > 0;
+  // Edit and generate modes can expose different knobs for the same provider,
+  // so normalize requested overrides against the active mode only.
   const modeCaps = hasInputImages
     ? params.provider.capabilities.edit
     : params.provider.capabilities.generate;
   const geometry = params.provider.capabilities.geometry;
+  const modelGeometry = {
+    sizes: params.model
+      ? (geometry?.sizesByModel?.[params.model] ?? geometry?.sizes)
+      : geometry?.sizes,
+    aspectRatios: params.model
+      ? (geometry?.aspectRatiosByModel?.[params.model] ?? geometry?.aspectRatios)
+      : geometry?.aspectRatios,
+    resolutions: params.model
+      ? (geometry?.resolutionsByModel?.[params.model] ?? geometry?.resolutions)
+      : geometry?.resolutions,
+  };
   const ignoredOverrides: ImageGenerationIgnoredOverride[] = [];
   const normalization: ImageGenerationNormalization = {};
   let size = params.size;
   let aspectRatio = params.aspectRatio;
   let resolution = params.resolution;
+  let quality = params.quality;
+  let outputFormat = params.outputFormat;
+  let background = params.background;
 
-  if (size && (geometry?.sizes?.length ?? 0) > 0 && modeCaps.supportsSize) {
+  if (size && (modelGeometry.sizes?.length ?? 0) > 0 && modeCaps.supportsSize) {
     const normalizedSize = resolveClosestSize({
       requestedSize: size,
-      supportedSizes: geometry?.sizes,
+      supportedSizes: modelGeometry.sizes,
     });
     if (normalizedSize && normalizedSize !== size) {
       normalization.size = {
@@ -66,10 +92,12 @@ export function resolveImageGenerationOverrides(params: {
   if (!modeCaps.supportsSize && size) {
     let translated = false;
     if (modeCaps.supportsAspectRatio) {
+      // Prefer translating size into aspect ratio when the provider supports
+      // shape but not exact dimensions; otherwise report the size as ignored.
       const normalizedAspectRatio = resolveClosestAspectRatio({
         requestedAspectRatio: aspectRatio,
         requestedSize: size,
-        supportedAspectRatios: geometry?.aspectRatios,
+        supportedAspectRatios: modelGeometry.aspectRatios,
       });
       if (normalizedAspectRatio) {
         aspectRatio = normalizedAspectRatio;
@@ -86,11 +114,15 @@ export function resolveImageGenerationOverrides(params: {
     size = undefined;
   }
 
-  if (aspectRatio && (geometry?.aspectRatios?.length ?? 0) > 0 && modeCaps.supportsAspectRatio) {
+  if (
+    aspectRatio &&
+    (modelGeometry.aspectRatios?.length ?? 0) > 0 &&
+    modeCaps.supportsAspectRatio
+  ) {
     const normalizedAspectRatio = resolveClosestAspectRatio({
       requestedAspectRatio: aspectRatio,
       requestedSize: size,
-      supportedAspectRatios: geometry?.aspectRatios,
+      supportedAspectRatios: modelGeometry.aspectRatios,
     });
     if (normalizedAspectRatio && normalizedAspectRatio !== aspectRatio) {
       normalization.aspectRatio = {
@@ -105,11 +137,13 @@ export function resolveImageGenerationOverrides(params: {
         ? resolveClosestSize({
             requestedSize: params.size,
             requestedAspectRatio: aspectRatio,
-            supportedSizes: geometry?.sizes,
+            supportedSizes: modelGeometry.sizes,
           })
         : undefined;
     let translated = false;
     if (derivedSize) {
+      // Reverse translation lets size-only providers still honor common
+      // landscape/portrait requests when a supported size is close enough.
       size = derivedSize;
       normalization.size = {
         applied: derivedSize,
@@ -123,10 +157,10 @@ export function resolveImageGenerationOverrides(params: {
     aspectRatio = undefined;
   }
 
-  if (resolution && (geometry?.resolutions?.length ?? 0) > 0 && modeCaps.supportsResolution) {
+  if (resolution && (modelGeometry.resolutions?.length ?? 0) > 0 && modeCaps.supportsResolution) {
     const normalizedResolution = resolveClosestResolution({
       requestedResolution: resolution,
-      supportedResolutions: geometry?.resolutions,
+      supportedResolutions: modelGeometry.resolutions,
     });
     if (normalizedResolution && normalizedResolution !== resolution) {
       normalization.resolution = {
@@ -155,11 +189,31 @@ export function resolveImageGenerationOverrides(params: {
     resolution = undefined;
   }
 
+  const supportedQualities = params.provider.capabilities.output?.qualities;
+  if (quality && !(supportedQualities ?? []).includes(quality)) {
+    ignoredOverrides.push({ key: "quality", value: quality });
+    quality = undefined;
+  }
+
+  const supportedFormats = params.provider.capabilities.output?.formats;
+  if (outputFormat && !(supportedFormats ?? []).includes(outputFormat)) {
+    ignoredOverrides.push({ key: "outputFormat", value: outputFormat });
+    outputFormat = undefined;
+  }
+
+  const supportedBackgrounds = params.provider.capabilities.output?.backgrounds;
+  if (background && !(supportedBackgrounds ?? []).includes(background)) {
+    ignoredOverrides.push({ key: "background", value: background });
+    background = undefined;
+  }
+
   if (
     !normalization.aspectRatio &&
     aspectRatio &&
     ((!params.aspectRatio && params.size) || params.aspectRatio !== aspectRatio)
   ) {
+    // Record derived aspect ratios even when the applied value is already in
+    // place, otherwise callers cannot explain why a size became a shape.
     const entry: MediaNormalizationEntry<string> = {
       applied: aspectRatio,
       ...(params.aspectRatio ? { requested: params.aspectRatio } : {}),
@@ -198,6 +252,9 @@ export function resolveImageGenerationOverrides(params: {
     size,
     aspectRatio,
     resolution,
+    quality,
+    outputFormat,
+    background,
     ignoredOverrides,
     normalization: finalizeImageNormalization(normalization),
   };

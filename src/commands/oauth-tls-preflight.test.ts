@@ -1,12 +1,15 @@
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   formatOpenAIOAuthTlsPreflightFix,
   runOpenAIOAuthTlsPreflight,
+  shouldRunOpenAIOAuthTlsPrerequisites,
 } from "./oauth-tls-preflight.js";
 
 describe("runOpenAIOAuthTlsPreflight", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it("returns ok when OpenAI auth endpoint is reachable", async () => {
@@ -15,6 +18,23 @@ describe("runOpenAIOAuthTlsPreflight", () => {
     ) as unknown as typeof fetch;
     const result = await runOpenAIOAuthTlsPreflight({ fetchImpl, timeoutMs: 20 });
     expect(result).toEqual({ ok: true });
+  });
+
+  it("caps oversized probe timeouts before creating abort signals", async () => {
+    const timeoutController = new AbortController();
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      expect(init?.signal).toBe(timeoutController.signal);
+      return new Response("", { status: 400 });
+    }) as unknown as typeof fetch;
+
+    const result = await runOpenAIOAuthTlsPreflight({
+      fetchImpl,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("classifies TLS trust failures from fetch cause code", async () => {
@@ -26,11 +46,12 @@ describe("runOpenAIOAuthTlsPreflight", () => {
       throw new TypeError("fetch failed", { cause });
     }) as unknown as typeof fetch;
     const result = await runOpenAIOAuthTlsPreflight({ fetchImpl: tlsFetchImpl, timeoutMs: 20 });
-    expect(result).toMatchObject({
-      ok: false,
-      kind: "tls-cert",
-      code: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
-    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected TLS certificate preflight failure");
+    }
+    expect(result.kind).toBe("tls-cert");
+    expect(result.code).toBe("UNABLE_TO_GET_ISSUER_CERT_LOCALLY");
   });
 
   it("keeps generic TLS transport failures in network classification", async () => {
@@ -45,22 +66,51 @@ describe("runOpenAIOAuthTlsPreflight", () => {
       fetchImpl: networkFetchImpl,
       timeoutMs: 20,
     });
-    expect(result).toMatchObject({
-      ok: false,
-      kind: "network",
-    });
+    expect(result.ok).toBe(false);
+    if (result.ok) {
+      throw new Error("expected network preflight failure");
+    }
+    expect(result.kind).toBe("network");
   });
 });
 
 describe("formatOpenAIOAuthTlsPreflightFix", () => {
   it("includes remediation commands for TLS failures", () => {
+    vi.stubEnv("HOMEBREW_PREFIX", "");
     const text = formatOpenAIOAuthTlsPreflightFix({
       ok: false,
       kind: "tls-cert",
       code: "UNABLE_TO_GET_ISSUER_CERT_LOCALLY",
       message: "unable to get local issuer certificate",
     });
-    expect(text).toContain("brew postinstall ca-certificates");
-    expect(text).toContain("brew postinstall openssl@3");
+    expect(text).toContain(
+      "OpenAI OAuth prerequisites check failed: Node/OpenSSL cannot validate TLS certificates.",
+    );
+    expect(text).toContain(
+      "Cause: UNABLE_TO_GET_ISSUER_CERT_LOCALLY (unable to get local issuer certificate)",
+    );
+    expect(text).toContain("Fix (Homebrew Node/OpenSSL):");
+    expect(text).toContain("- brew postinstall ca-certificates");
+    expect(text).toContain("- brew postinstall openssl@3");
+    expect(text).toContain("- Retry the OAuth login flow.");
+  });
+});
+
+describe("shouldRunOpenAIOAuthTlsPrerequisites", () => {
+  it("runs for OpenAI OAuth profiles", () => {
+    expect(
+      shouldRunOpenAIOAuthTlsPrerequisites({
+        cfg: {
+          auth: {
+            profiles: {
+              "openai:default": {
+                provider: "openai",
+                mode: "oauth",
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(true);
   });
 });

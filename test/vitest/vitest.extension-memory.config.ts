@@ -17,8 +17,8 @@ export function createExtensionMemoryVitestConfig(
     {
       dir: "extensions",
       env,
+      isolate: true,
       name: "extension-memory",
-      pool: "forks",
       passWithNoTests: true,
       setupFiles: ["test/setup.extensions.ts"],
     },

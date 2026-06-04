@@ -5,7 +5,7 @@ import {
   normalizeSecretInputString,
   type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixEnvAuthReadiness } from "./matrix/client/env-auth.js";
 import { updateMatrixAccountConfig } from "./matrix/config-update.js";
 import { isSupportedMatrixAvatarSource } from "./matrix/profile.js";
@@ -85,7 +85,7 @@ export function moveSingleMatrixAccountConfigToNamedAccount(cfg: CoreConfig): Co
     typeof base.accounts === "object" && base.accounts
       ? (base.accounts as Record<string, Record<string, unknown>>)
       : {};
-  const hasNamedAccounts = Object.keys(accounts).filter(Boolean).length > 0;
+  const hasNamedAccounts = Object.keys(accounts).some(Boolean);
   const keysToMove = Object.entries(base)
     .filter(([key, value]) => {
       if (key === "accounts" || key === "enabled" || value === undefined) {

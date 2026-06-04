@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import {
@@ -8,10 +9,20 @@ import {
   type BrowserFormField,
 } from "../core-api.js";
 
-export type BrowserActionContext = {
+type BrowserActionContext = {
   parent: BrowserParentOpts;
   profile: string | undefined;
 };
+
+const BROWSER_ACTION_TIMEOUT_SLACK_MS = 5000;
+const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 20000;
+
+export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {
+  return (
+    Math.max(1, Math.floor(timeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS)) +
+    BROWSER_ACTION_TIMEOUT_SLACK_MS
+  );
+}
 
 export function resolveBrowserActionContext(
   cmd: Command,
@@ -36,7 +47,7 @@ export async function callBrowserAct<T = unknown>(params: {
       query: params.profile ? { profile: params.profile } : undefined,
       body: params.body,
     },
-    { timeoutMs: params.timeoutMs ?? 20000 },
+    { timeoutMs: withBrowserActionTimeoutSlack(params.timeoutMs) },
   );
 }
 
@@ -63,7 +74,6 @@ export function requireRef(ref: string | undefined) {
 }
 
 async function readFile(path: string): Promise<string> {
-  const fs = await import("node:fs/promises");
   return await fs.readFile(path, "utf8");
 }
 

@@ -1,12 +1,15 @@
 import type { PluginServicesHandle } from "../plugins/services.js";
 import type { HooksConfigResolved } from "./hooks.js";
 import type { GatewayCronState } from "./server-cron.js";
-import type { HookClientIpConfig } from "./server-http.js";
 import {
   createGatewayServerMutableState,
   type GatewayServerMutableState,
 } from "./server-runtime-handles.js";
+import type { HookClientIpConfig } from "./server/hooks-request-handler.js";
 
+// Live state combines mutable runtime handles with startup-resolved services
+// that server methods need during request handling.
+/** Mutable gateway server state shared across request contexts. */
 export type GatewayServerLiveState = GatewayServerMutableState & {
   hooksConfig: HooksConfigResolved | null;
   hookClientIpConfig: HookClientIpConfig;
@@ -15,6 +18,7 @@ export type GatewayServerLiveState = GatewayServerMutableState & {
   gatewayMethods: string[];
 };
 
+/** Creates gateway live state with fresh mutable runtime handles. */
 export function createGatewayServerLiveState(params: {
   hooksConfig: HooksConfigResolved | null;
   hookClientIpConfig: HookClientIpConfig;

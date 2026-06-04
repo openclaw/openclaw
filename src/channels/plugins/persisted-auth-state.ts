@@ -1,22 +1,37 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import {
   hasBundledChannelPackageState,
   listBundledChannelIdsForPackageState,
 } from "./package-state-probes.js";
 
-export function listBundledChannelIdsWithPersistedAuthState(): string[] {
-  return listBundledChannelIdsForPackageState("persistedAuthState");
+/**
+ * Persisted-auth state probes backed by bundled channel package metadata.
+ */
+
+/**
+ * Lists bundled channels that declare persisted-auth state metadata.
+ */
+export function listBundledChannelIdsWithPersistedAuthState(
+  discovery?: PluginDiscoveryResult,
+): string[] {
+  return listBundledChannelIdsForPackageState("persistedAuthState", discovery);
 }
 
+/**
+ * Returns whether a bundled channel reports persisted auth state.
+ */
 export function hasBundledChannelPersistedAuthState(params: {
   channelId: string;
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
 }): boolean {
   return hasBundledChannelPackageState({
     metadataKey: "persistedAuthState",
     channelId: params.channelId,
     cfg: params.cfg,
     env: params.env,
+    discovery: params.discovery,
   });
 }

@@ -3,10 +3,8 @@ summary: "Get OpenClaw installed and run your first chat in minutes."
 read_when:
   - First time setup from zero
   - You want the fastest path to a working chat
-title: "Getting Started"
+title: "Getting started"
 ---
-
-# Getting Started
 
 Install OpenClaw, run onboarding, and chat with your AI assistant — all in
 about 5 minutes. By the end you will have a running Gateway, configured auth,
@@ -14,13 +12,13 @@ and a working chat session.
 
 ## What you need
 
-- **Node.js** — Node 24 recommended (Node 22.14+ also supported)
+- **Node.js** — Node 24 recommended (Node 22.19+ also supported)
 - **An API key** from a model provider (Anthropic, OpenAI, Google, etc.) — onboarding will prompt you
 
 <Tip>
 Check your Node version with `node --version`.
-**Windows users:** both native Windows and WSL2 are supported. WSL2 is more
-stable and recommended for the full experience. See [Windows](/platforms/windows).
+**Windows users:** the native Windows Hub app is the easiest desktop path. The
+PowerShell installer and WSL2 Gateway paths are also supported. See [Windows](/platforms/windows).
 Need to install Node? See [Node setup](/install/node).
 </Tip>
 
@@ -146,3 +144,9 @@ openclaw dashboard
 
 Full reference: [Environment variables](/help/environment).
 </Accordion>
+
+## Related
+
+- [Install overview](/install)
+- [Channels overview](/channels)
+- [Setup](/start/setup)

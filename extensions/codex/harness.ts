@@ -1,25 +1,32 @@
-import type { AgentHarness } from "openclaw/plugin-sdk/agent-harness";
-import { maybeCompactCodexAppServerSession } from "./src/app-server/compact.js";
-import { listCodexAppServerModels } from "./src/app-server/models.js";
+import type {
+  AgentHarness,
+  ContextEngineHostCapability,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
   CodexAppServerListModelsOptions,
   CodexAppServerModel,
   CodexAppServerModelListResult,
 } from "./src/app-server/models.js";
-import { runCodexAppServerAttempt } from "./src/app-server/run-attempt.js";
-import { clearCodexAppServerBinding } from "./src/app-server/session-binding.js";
-import { clearSharedCodexAppServerClient } from "./src/app-server/shared-client.js";
 
-const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex"]);
+const DEFAULT_CODEX_HARNESS_PROVIDER_IDS = new Set(["codex", "openai"]);
+const CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES = [
+  "bootstrap",
+  "assemble-before-prompt",
+  "after-turn",
+  "maintain",
+  "compact",
+  "runtime-llm-complete",
+  "thread-bootstrap-projection",
+] as const satisfies readonly ContextEngineHostCapability[];
 
 export type { CodexAppServerListModelsOptions, CodexAppServerModel, CodexAppServerModelListResult };
-export { listCodexAppServerModels };
 
 export function createCodexAppServerAgentHarness(options?: {
   id?: string;
   label?: string;
   providerIds?: Iterable<string>;
   pluginConfig?: unknown;
+  resolvePluginConfig?: () => unknown;
 }): AgentHarness {
   const providerIds = new Set(
     [...(options?.providerIds ?? DEFAULT_CODEX_HARNESS_PROVIDER_IDS)].map((id) =>
@@ -29,6 +36,10 @@ export function createCodexAppServerAgentHarness(options?: {
   return {
     id: options?.id ?? "codex",
     label: options?.label ?? "Codex agent harness",
+    contextEngineHostCapabilities: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST_CAPABILITIES,
+    deliveryDefaults: {
+      sourceVisibleReplies: "message_tool",
+    },
     supports: (ctx) => {
       const provider = ctx.provider.trim().toLowerCase();
       if (providerIds.has(provider)) {
@@ -39,17 +50,36 @@ export function createCodexAppServerAgentHarness(options?: {
         reason: `provider is not one of: ${[...providerIds].toSorted().join(", ")}`,
       };
     },
-    runAttempt: (params) =>
-      runCodexAppServerAttempt(params, { pluginConfig: options?.pluginConfig }),
-    compact: (params) =>
-      maybeCompactCodexAppServerSession(params, { pluginConfig: options?.pluginConfig }),
+    runAttempt: async (params) => {
+      const { runCodexAppServerAttempt } = await import("./src/app-server/run-attempt.js");
+      return runCodexAppServerAttempt(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        nativeHookRelay: { enabled: true },
+      });
+    },
+    runSideQuestion: async (params) => {
+      const { runCodexAppServerSideQuestion } = await import("./src/app-server/side-question.js");
+      return runCodexAppServerSideQuestion(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+        nativeHookRelay: { enabled: true },
+      });
+    },
+    compact: async (params) => {
+      const { maybeCompactCodexAppServerSession } = await import("./src/app-server/compact.js");
+      return maybeCompactCodexAppServerSession(params, {
+        pluginConfig: options?.resolvePluginConfig?.() ?? options?.pluginConfig,
+      });
+    },
     reset: async (params) => {
       if (params.sessionFile) {
+        const { clearCodexAppServerBinding } = await import("./src/app-server/session-binding.js");
         await clearCodexAppServerBinding(params.sessionFile);
       }
     },
-    dispose: () => {
-      clearSharedCodexAppServerClient();
+    dispose: async () => {
+      const { clearSharedCodexAppServerClientAndWait } =
+        await import("./src/app-server/shared-client.js");
+      await clearSharedCodexAppServerClientAndWait();
     },
   };
 }

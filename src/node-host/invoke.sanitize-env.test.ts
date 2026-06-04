@@ -1,20 +1,8 @@
 import { describe, expect, it } from "vitest";
+import { parseWindowsCodePage } from "../infra/windows-encoding.js";
 import { withEnv } from "../test-utils/env.js";
-import { decodeCapturedOutputBuffer, parseWindowsCodePage, sanitizeEnv } from "./invoke.js";
-import { buildNodeInvokeResultParams } from "./runner.js";
-
-function getEnvValueCaseInsensitive(
-  env: Record<string, string>,
-  expectedKey: string,
-): string | undefined {
-  const direct = env[expectedKey];
-  if (direct !== undefined) {
-    return direct;
-  }
-  const upper = expectedKey.toUpperCase();
-  const actualKey = Object.keys(env).find((key) => key.toUpperCase() === upper);
-  return actualKey ? env[actualKey] : undefined;
-}
+import { decodeCapturedOutputBuffer, sanitizeEnv } from "./invoke.js";
+import { buildNodeEventParams, buildNodeInvokeResultParams } from "./runner.js";
 
 describe("node-host sanitizeEnv", () => {
   it("ignores PATH overrides", () => {
@@ -68,7 +56,7 @@ describe("node-host sanitizeEnv", () => {
   it("preserves inherited non-portable Windows-style env keys", () => {
     withEnv({ "ProgramFiles(x86)": "C:\\Program Files (x86)" }, () => {
       const env = sanitizeEnv(undefined);
-      expect(getEnvValueCaseInsensitive(env, "ProgramFiles(x86)")).toBe("C:\\Program Files (x86)");
+      expect(env["ProgramFiles(x86)"]).toBe("C:\\Program Files (x86)");
     });
   });
 });
@@ -131,5 +119,30 @@ describe("buildNodeInvokeResultParams", () => {
     );
 
     expect(params.payload).toEqual({ reason: "bad" });
+  });
+});
+
+describe("buildNodeEventParams", () => {
+  it("serializes explicit falsy event payloads", () => {
+    expect(buildNodeEventParams("node.test", undefined)).toEqual({
+      event: "node.test",
+      payloadJSON: null,
+    });
+    expect(buildNodeEventParams("node.test", null)).toEqual({
+      event: "node.test",
+      payloadJSON: "null",
+    });
+    expect(buildNodeEventParams("node.test", false)).toEqual({
+      event: "node.test",
+      payloadJSON: "false",
+    });
+    expect(buildNodeEventParams("node.test", 0)).toEqual({
+      event: "node.test",
+      payloadJSON: "0",
+    });
+    expect(buildNodeEventParams("node.test", "")).toEqual({
+      event: "node.test",
+      payloadJSON: '""',
+    });
   });
 });

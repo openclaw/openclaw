@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../test-utils/env.js";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { scanOpenRouterModels } from "./model-scan.js";
@@ -14,6 +15,16 @@ function createFetchFixture(payload: unknown): typeof fetch {
 }
 
 describe("scanOpenRouterModels", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+  });
+
   it("lists free models without probing", async () => {
     const fetchImpl = createFetchFixture({
       data: [
@@ -57,8 +68,7 @@ describe("scanOpenRouterModels", () => {
     ]);
 
     const [byPricing] = results;
-    expect(byPricing).toBeTruthy();
-    if (!byPricing) {
+    if (byPricing === undefined) {
       throw new Error("Expected pricing-based model result.");
     }
     expect(byPricing.supportsToolsMeta).toBe(true);
@@ -66,6 +76,28 @@ describe("scanOpenRouterModels", () => {
     expect(byPricing.isFree).toBe(true);
     expect(byPricing.tool.skipped).toBe(true);
     expect(byPricing.image.skipped).toBe(true);
+  });
+
+  it("drops out-of-range OpenRouter created_at timestamps", async () => {
+    const fetchImpl = createFetchFixture({
+      data: [
+        {
+          id: "acme/free-invalid-created:free",
+          name: "Free Invalid Created",
+          context_length: 16_384,
+          supported_parameters: [],
+          modality: "text",
+          created_at: 8_640_000_000_000_001,
+        },
+      ],
+    });
+
+    const [result] = await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+    });
+
+    expect(result?.createdAtMs).toBeNull();
   });
 
   it("requires an API key when probing", async () => {
@@ -81,7 +113,49 @@ describe("scanOpenRouterModels", () => {
     });
   });
 
-  it("matches provider filters across canonical provider aliases", async () => {
+  it("applies the scan timeout to the OpenRouter catalog request", async () => {
+    vi.useFakeTimers();
+    const fetchImpl: typeof fetch = async (_input, init) =>
+      await new Promise<Response>((_resolve, reject) => {
+        const signal = typeof init === "object" && init ? init.signal : undefined;
+        if (signal?.aborted) {
+          reject(new Error("catalog aborted"));
+          return;
+        }
+        signal?.addEventListener("abort", () => reject(new Error("catalog aborted")), {
+          once: true,
+        });
+      });
+
+    const scan = expect(
+      scanOpenRouterModels({
+        fetchImpl,
+        probe: false,
+        timeoutMs: 1,
+      }),
+    ).rejects.toThrow(/catalog aborted/);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await scan;
+  });
+
+  it("caps oversized scan timeouts before scheduling catalog aborts", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const fetchImpl = createFetchFixture({ data: [] });
+
+    await scanOpenRouterModels({
+      fetchImpl,
+      probe: false,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("does not match provider filters across provider id variants", async () => {
     const fetchImpl = createFetchFixture({
       data: [
         {
@@ -109,6 +183,6 @@ describe("scanOpenRouterModels", () => {
       providerFilter: "z-ai",
     });
 
-    expect(results.map((entry) => entry.id)).toEqual(["z.ai/glm-5"]);
+    expect(results.map((entry) => entry.id)).toEqual([]);
   });
 });

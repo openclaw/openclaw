@@ -1,14 +1,16 @@
 import { expect, it } from "vitest";
 
-type ResolveTargetMode = "explicit" | "implicit" | "heartbeat";
+// Shared resolve-target negative cases used by messaging/channel tests. The
+// target resolver shape is intentionally tiny so each channel can adapt it.
+export type ResolveTargetMode = "explicit" | "implicit" | "heartbeat";
 
-type ResolveTargetResult = {
+export type ResolveTargetResult = {
   ok: boolean;
   to?: string;
   error?: unknown;
 };
 
-type ResolveTargetFn = (params: {
+export type ResolveTargetFn = (params: {
   to?: string;
   mode: ResolveTargetMode;
   allowFrom: string[];
@@ -19,6 +21,12 @@ export function installCommonResolveTargetErrorCases(params: {
   implicitAllowFrom: string[];
 }) {
   const { resolveTarget, implicitAllowFrom } = params;
+  const expectResolveTargetError = (result: ResolveTargetResult) => {
+    expect(result.ok).toBe(false);
+    if (result.error === undefined) {
+      throw new Error("expected resolveTarget to return an error");
+    }
+  };
 
   it("should error on normalization failure with allowlist (implicit mode)", () => {
     const result = resolveTarget({
@@ -27,8 +35,7 @@ export function installCommonResolveTargetErrorCases(params: {
       allowFrom: implicitAllowFrom,
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
+    expectResolveTargetError(result);
   });
 
   it("should error when no target provided with allowlist", () => {
@@ -38,8 +45,7 @@ export function installCommonResolveTargetErrorCases(params: {
       allowFrom: implicitAllowFrom,
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
+    expectResolveTargetError(result);
   });
 
   it("should error when no target and no allowlist", () => {
@@ -49,8 +55,7 @@ export function installCommonResolveTargetErrorCases(params: {
       allowFrom: [],
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
+    expectResolveTargetError(result);
   });
 
   it("should handle whitespace-only target", () => {
@@ -60,7 +65,6 @@ export function installCommonResolveTargetErrorCases(params: {
       allowFrom: [],
     });
 
-    expect(result.ok).toBe(false);
-    expect(result.error).toBeDefined();
+    expectResolveTargetError(result);
   });
 }

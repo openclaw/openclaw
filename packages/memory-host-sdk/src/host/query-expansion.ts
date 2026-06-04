@@ -1,4 +1,4 @@
-import { normalizeLowercaseStringOrEmpty } from "../../../../src/shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 /**
  * Query expansion for FTS-only search mode.
@@ -632,6 +632,7 @@ const STOP_WORDS_ZH = new Set([
   "告诉",
 ]);
 
+/** Returns true for low-value conversational tokens that should not drive FTS matching. */
 export function isQueryStopWordToken(token: string): boolean {
   return (
     STOP_WORDS_EN.has(token) ||

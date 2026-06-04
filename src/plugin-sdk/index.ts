@@ -52,7 +52,14 @@ export type {
   ProviderPreparedRuntimeAuth,
   RealtimeTranscriptionProviderPlugin,
   SpeechProviderPlugin,
+  UnifiedModelCatalogProviderContext,
+  UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
+export type {
+  UnifiedModelCatalogEntry,
+  UnifiedModelCatalogKind,
+  UnifiedModelCatalogSource,
+} from "@openclaw/model-catalog-core/model-catalog-types";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 export type { ResolvedProviderRuntimeAuth } from "../plugins/runtime/model-auth-types.js";
 export type {
@@ -62,8 +69,16 @@ export type {
   SubagentRunResult,
 } from "../plugins/runtime/types.js";
 export type {
+  LlmCompleteCaller,
+  LlmCompleteMessage,
+  LlmCompleteParams,
+  LlmCompleteResult,
+  LlmCompleteUsage,
+} from "../plugins/runtime/types-core.js";
+export type {
   BoundTaskFlowsRuntime,
   BoundTaskRunsRuntime,
+  DetachedTaskLifecycleRuntime,
   PluginRuntimeTaskFlows,
   PluginRuntimeTaskRuns,
   PluginRuntimeTasks,
@@ -79,28 +94,37 @@ export type {
 export type { OpenClawConfig } from "../config/config.js";
 /** @deprecated Use OpenClawConfig instead */
 export type { OpenClawConfig as ClawdbotConfig } from "../config/config.js";
+/** @deprecated Use OpenClawConfig instead */
+export type { OpenClawConfig as OpenClawSchemaType } from "../config/config.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,
   MemoryPluginPublicArtifactsProvider,
 } from "../plugins/memory-state.js";
 export type { CliBackendConfig } from "../config/types.js";
-export * from "./image-generation.js";
-export * from "./music-generation.js";
+export type * from "./image-generation.js";
+export type * from "./music-generation.js";
 export type { SecretInput, SecretRef } from "../config/types.secrets.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { HookEntry } from "../hooks/types.js";
-export type { ReplyPayload } from "../auto-reply/reply-payload.js";
+export type { ReplyPayload } from "./reply-payload.js";
 export type { WizardPrompter } from "../wizard/prompts.js";
-export type { ContextEngineFactory } from "../context-engine/registry.js";
+export type {
+  ContextEngineFactory,
+  ContextEngineFactoryContext,
+} from "../context-engine/registry.js";
 export type { DiagnosticEventPayload } from "../infra/diagnostic-events.js";
+export type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 export type {
   AssembleResult,
   BootstrapResult,
   CompactResult,
   ContextEngine,
+  ContextEngineHostCapability,
+  ContextEngineHostRequirements,
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
+  ContextEngineOperation,
   ContextEngineRuntimeContext,
   IngestBatchResult,
   IngestResult,
@@ -113,8 +137,10 @@ export type {
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
+export { assertContextEngineHostSupport } from "../context-engine/host-compat.js";
 export {
   buildMemorySystemPromptAddition,
   delegateCompactionToRuntime,
 } from "../context-engine/delegate.js";
 export { onDiagnosticEvent } from "../infra/diagnostic-events.js";
+export { optionalStringEnum, stringEnum } from "../agents/schema/typebox.js";

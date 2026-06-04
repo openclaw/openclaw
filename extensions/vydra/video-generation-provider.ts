@@ -1,17 +1,25 @@
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { assertOkOrThrowHttpError, postJsonRequest } from "openclaw/plugin-sdk/provider-http";
+import {
+  assertOkOrThrowHttpError,
+  createProviderOperationDeadline,
+  createProviderOperationTimeoutResolver,
+  postJsonRequest,
+  resolveProviderOperationTimeoutMs,
+} from "openclaw/plugin-sdk/provider-http";
 import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_VYDRA_VIDEO_MODEL,
   downloadVydraAsset,
   extractVydraResultUrls,
   resolveCompletedVydraPayload,
+  resolveVydraGeneratedMediaMaxBytes,
   resolveVydraResponseJobId,
   resolveVydraResponseStatus,
   resolveVydraRequestContext,
 } from "./shared.js";
 
 const VYDRA_KLING_MODEL = "kling";
+const DEFAULT_VYDRA_VIDEO_TIMEOUT_MS = 120_000;
 
 function resolveVydraVideoRequestBody(
   req: Parameters<VideoGenerationProvider["generateVideo"]>[0],
@@ -82,12 +90,19 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
           authStore: req.authStore,
           capability: "video",
         });
+      const deadline = createProviderOperationDeadline({
+        timeoutMs: req.timeoutMs ?? DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
+        label: "Vydra video generation",
+      });
       const { model, body } = resolveVydraVideoRequestBody(req);
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/models/${model}`,
         headers,
         body,
-        timeoutMs: req.timeoutMs,
+        timeoutMs: resolveProviderOperationTimeoutMs({
+          deadline,
+          defaultTimeoutMs: DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
+        }),
         fetchFn,
         allowPrivateNetwork,
         dispatcherPolicy,
@@ -100,7 +115,7 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
           submitted,
           baseUrl,
           headers,
-          timeoutMs: req.timeoutMs,
+          deadline,
           fetchFn,
           kind: "video",
           missingJobIdMessage: "Vydra video generation response missing job id",
@@ -112,8 +127,12 @@ export function buildVydraVideoGenerationProvider(): VideoGenerationProvider {
         const video = await downloadVydraAsset({
           url: videoUrl,
           kind: "video",
-          timeoutMs: req.timeoutMs,
+          timeoutMs: createProviderOperationTimeoutResolver({
+            deadline,
+            defaultTimeoutMs: DEFAULT_VYDRA_VIDEO_TIMEOUT_MS,
+          }),
           fetchFn,
+          maxBytes: resolveVydraGeneratedMediaMaxBytes({ cfg: req.cfg, kind: "video" }),
         });
         return {
           videos: [

@@ -5,6 +5,7 @@ import type {
   TaskStatusCounts,
 } from "./task-registry.types.js";
 
+// Summary helpers keep task status/runtime counters stable for UI and plugin views.
 function createEmptyTaskStatusCounts(): TaskStatusCounts {
   return {
     queued: 0,

@@ -32,44 +32,58 @@ const suspiciousPatterns = [
   /id:\s*"firecrawl"/,
 ];
 
+let webFetchProviderViolationsPromise;
+
 export async function collectWebFetchProviderBoundaryViolations() {
-  const violations = [];
-  const files = await collectSourceFileContents({
-    repoRoot,
-    scanRoots: ["src"],
-    scanExtensions,
-    ignoredDirNames,
-  });
-  for (const { relativeFile, content } of files) {
-    if (
-      allowedFiles.has(relativeFile) ||
-      relativeFile.includes(".test.") ||
-      relativeFile.includes("test-support")
-    ) {
-      continue;
-    }
-    const lines = content.split(/\r?\n/);
-    for (const [index, line] of lines.entries()) {
-      if (!line.includes("firecrawl") && !line.includes("Firecrawl")) {
-        continue;
-      }
-      if (!suspiciousPatterns.some((pattern) => pattern.test(line))) {
-        continue;
-      }
-      violations.push({
-        file: relativeFile,
-        line: index + 1,
-        reason: "core web-fetch runtime/tooling contains Firecrawl-specific fetch logic",
+  if (!webFetchProviderViolationsPromise) {
+    webFetchProviderViolationsPromise = (async () => {
+      const violations = [];
+      const files = await collectSourceFileContents({
+        repoRoot,
+        scanRoots: ["src"],
+        scanExtensions,
+        ignoredDirNames,
       });
+      for (const { relativeFile, content } of files) {
+        if (
+          allowedFiles.has(relativeFile) ||
+          relativeFile.includes(".test.") ||
+          relativeFile.includes("test-support")
+        ) {
+          continue;
+        }
+        const lines = content.split(/\r?\n/);
+        for (const [index, line] of lines.entries()) {
+          if (!line.includes("firecrawl") && !line.includes("Firecrawl")) {
+            continue;
+          }
+          if (!suspiciousPatterns.some((pattern) => pattern.test(line))) {
+            continue;
+          }
+          violations.push({
+            file: relativeFile,
+            line: index + 1,
+            reason: "core web-fetch runtime/tooling contains Firecrawl-specific fetch logic",
+          });
+        }
+      }
+      return violations.toSorted(
+        (left, right) => left.file.localeCompare(right.file) || left.line - right.line,
+      );
+    })();
+    try {
+      return await webFetchProviderViolationsPromise;
+    } catch (error) {
+      webFetchProviderViolationsPromise = undefined;
+      throw error;
     }
   }
-  return violations.toSorted(
-    (left, right) => left.file.localeCompare(right.file) || left.line - right.line,
-  );
+  return await webFetchProviderViolationsPromise;
 }
 
-export async function main(argv = process.argv.slice(2), io) {
-  const json = argv.includes("--json");
+export async function main(argv, io) {
+  const args = argv ?? process.argv.slice(2);
+  const json = args.includes("--json");
   const violations = await collectWebFetchProviderBoundaryViolations();
   const writeStdout = (chunk) => {
     if (io?.stdout?.write) {

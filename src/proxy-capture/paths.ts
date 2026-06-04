@@ -1,7 +1,9 @@
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 
-export function resolveDebugProxyRootDir(env: NodeJS.ProcessEnv = process.env): string {
+// Debug proxy capture artifacts live under OpenClaw state so DB, blobs, and CA
+// files are grouped and easy to purge.
+function resolveDebugProxyRootDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "debug-proxy");
 }
 

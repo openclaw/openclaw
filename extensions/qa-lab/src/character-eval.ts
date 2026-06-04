@@ -1,40 +1,31 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { isQaFastModeModelRef, type QaProviderMode } from "./model-selection.js";
-import { type QaThinkingLevel } from "./qa-gateway-config.js";
+import {
+  QA_FRONTIER_CHARACTER_EVAL_MODELS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS,
+  QA_FRONTIER_CHARACTER_JUDGE_MODELS,
+  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL,
+} from "./providers/live-frontier/character-eval.js";
+import type { QaThinkingLevel } from "./qa-gateway-config.js";
 import { extractQaVisibleReplyLeakText } from "./reply-failure.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import type { QaSuiteResult } from "./suite.js";
 
 const DEFAULT_CHARACTER_SCENARIO_ID = "character-vibes-gollum";
-const DEFAULT_CHARACTER_EVAL_MODELS = Object.freeze([
-  "openai/gpt-5.4",
-  "openai/gpt-5.2",
-  "openai/gpt-5",
-  "anthropic/claude-opus-4-6",
-  "anthropic/claude-sonnet-4-6",
-  "zai/glm-5.1",
-  "moonshot/kimi-k2.5",
-  "google/gemini-3.1-pro-preview",
-]);
+const DEFAULT_CHARACTER_EVAL_MODELS = QA_FRONTIER_CHARACTER_EVAL_MODELS;
 const DEFAULT_CHARACTER_THINKING: QaThinkingLevel = "high";
 const DEFAULT_CHARACTER_EVAL_CONCURRENCY = 16;
 const DEFAULT_CHARACTER_THINKING_BY_MODEL: Readonly<Record<string, QaThinkingLevel>> =
-  Object.freeze({
-    "openai/gpt-5.4": "xhigh",
-    "openai/gpt-5.2": "xhigh",
-    "openai/gpt-5": "xhigh",
-  });
-const DEFAULT_JUDGE_MODELS = Object.freeze(["openai/gpt-5.4", "anthropic/claude-opus-4-6"]);
+  QA_FRONTIER_CHARACTER_THINKING_BY_MODEL;
+const DEFAULT_JUDGE_MODELS = QA_FRONTIER_CHARACTER_JUDGE_MODELS;
 const DEFAULT_JUDGE_THINKING: QaThinkingLevel = "xhigh";
 const DEFAULT_JUDGE_TIMEOUT_MS = 300_000;
 const DEFAULT_JUDGE_MODEL_OPTIONS: Readonly<Record<string, QaCharacterModelOptions>> =
-  Object.freeze({
-    "openai/gpt-5.4": { thinkingDefault: "xhigh" },
-    "anthropic/claude-opus-4-6": { thinkingDefault: "high" },
-  });
+  QA_FRONTIER_CHARACTER_JUDGE_MODEL_OPTIONS;
 
 type QaCharacterRunStatus = "pass" | "fail";
 
@@ -43,7 +34,7 @@ export type QaCharacterModelOptions = {
   fastMode?: boolean;
 };
 
-export type QaCharacterEvalRun = {
+type QaCharacterEvalRun = {
   model: string;
   status: QaCharacterRunStatus;
   durationMs: number;
@@ -71,7 +62,7 @@ export type QaCharacterEvalJudgment = {
   weaknesses: string[];
 };
 
-export type QaCharacterEvalResult = {
+type QaCharacterEvalResult = {
   outputDir: string;
   reportPath: string;
   summaryPath: string;
@@ -79,7 +70,7 @@ export type QaCharacterEvalResult = {
   judgments: QaCharacterEvalJudgeResult[];
 };
 
-export type QaCharacterEvalJudgeResult = {
+type QaCharacterEvalJudgeResult = {
   model: string;
   thinkingDefault: QaThinkingLevel;
   fastMode: boolean;
@@ -135,7 +126,7 @@ export type QaCharacterEvalParams = {
 };
 
 function normalizeModelRefs(models: readonly string[]) {
-  return [...new Set(models.map((model) => model.trim()).filter((model) => model.length > 0))];
+  return uniqueStrings(normalizeStringEntries(models));
 }
 
 function resolveCandidateThinkingDefault(params: {
@@ -217,12 +208,16 @@ async function mapWithConcurrency<T, U>(
 }
 
 function extractTranscript(result: QaSuiteResult) {
-  const details = result.scenarios.flatMap((scenario) =>
-    scenario.steps
-      .map((step) => step.details)
-      .filter((detail): detail is string => Boolean(detail)),
-  );
-  return details.toSorted((left, right) => right.length - left.length)[0] ?? result.report;
+  let longestDetail: string | undefined;
+  for (const scenario of result.scenarios) {
+    for (const step of scenario.steps) {
+      const detail = step.details;
+      if (detail && (!longestDetail || detail.length > longestDetail.length)) {
+        longestDetail = detail;
+      }
+    }
+  }
+  return longestDetail ?? result.report;
 }
 
 function collectTranscriptStats(transcript: string) {
@@ -661,10 +656,10 @@ export async function runQaCharacterEval(params: QaCharacterEvalParams) {
           timeoutMs: judgeTimeoutMs,
         });
         rankings = parseJudgeReply(rawReply, new Set(judgePrompt.labelToModel.keys())).map(
-          (ranking) => ({
-            ...ranking,
-            model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
-          }),
+          (ranking) =>
+            Object.assign({}, ranking, {
+              model: judgePrompt.labelToModel.get(ranking.model) ?? ranking.model,
+            }),
         );
       } catch (error) {
         judgeError = formatErrorMessage(error);

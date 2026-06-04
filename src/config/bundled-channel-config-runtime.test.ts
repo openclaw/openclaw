@@ -1,5 +1,5 @@
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
 
 vi.mock("../plugins/bundled-plugin-metadata.js", () => ({
   listBundledPluginMetadata: () => [
@@ -53,8 +53,10 @@ describe("bundled channel config runtime", () => {
       "../../test/helpers/config/bundled-channel-config-runtime.js?scope=missing-bundled-list",
     );
 
-    expect(runtimeModule.getBundledChannelConfigSchemaMap().get("msteams")).toBeDefined();
-    expect(runtimeModule.getBundledChannelRuntimeMap().get("msteams")).toBeDefined();
+    const schemaEntry = runtimeModule.getBundledChannelConfigSchemaMap().get("msteams");
+    expect(schemaEntry?.schema).toEqual({ type: "object" });
+    expect(schemaEntry?.runtime).toEqual({});
+    expect(runtimeModule.getBundledChannelRuntimeMap().get("msteams")).toStrictEqual({});
   });
 
   it("falls back to static channel schemas when bundled plugin access hits a TDZ-style ReferenceError", async () => {

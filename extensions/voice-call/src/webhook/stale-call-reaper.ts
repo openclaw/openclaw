@@ -1,4 +1,5 @@
 import type { CallManager } from "../manager.js";
+import { TerminalStates } from "../types.js";
 
 const CHECK_INTERVAL_MS = 30_000;
 
@@ -15,12 +16,16 @@ export function startStaleCallReaper(params: {
   const interval = setInterval(() => {
     const now = Date.now();
     for (const call of params.manager.getActiveCalls()) {
+      if (call.answeredAt || TerminalStates.has(call.state)) {
+        continue;
+      }
+
       const age = now - call.startedAt;
       if (age > maxAgeMs) {
         console.log(
           `[voice-call] Reaping stale call ${call.callId} (age: ${Math.round(age / 1000)}s, state: ${call.state})`,
         );
-        void params.manager.endCall(call.callId).catch((err) => {
+        void params.manager.endCall(call.callId).catch((err: unknown) => {
           console.warn(`[voice-call] Reaper failed to end call ${call.callId}:`, err);
         });
       }

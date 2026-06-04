@@ -1,3 +1,10 @@
+import {
+  resolveCdpControlPolicy,
+  resolveCdpReachabilityPolicy,
+} from "./cdp-reachability-policy.js";
+import { usesFastLoopbackCdpProbeClass } from "./cdp-timeouts.js";
+import { redactCdpUrl } from "./cdp.helpers.js";
+import { listChromeMcpTabs } from "./chrome-mcp.js";
 import { isChromeReachable, resolveOpenClawUserDataDir } from "./chrome.js";
 import type { ResolvedBrowserProfile } from "./config.js";
 import { resolveProfile } from "./config.js";
@@ -68,25 +75,30 @@ function createProfileContext(
     profileState.running = running;
   };
 
-  const { listTabs, openTab } = createProfileTabOps({
+  const { listTabs, openTab, labelTab } = createProfileTabOps({
     profile,
     state,
     getProfileState,
   });
 
-  const { ensureBrowserAvailable, isHttpReachable, isReachable, stopRunningBrowser } =
-    createProfileAvailability({
-      opts,
-      profile,
-      state,
-      getProfileState,
-      setProfileRunning,
-    });
+  const {
+    ensureBrowserAvailable,
+    isHttpReachable,
+    isTransportAvailable,
+    isReachable,
+    stopRunningBrowser,
+  } = createProfileAvailability({
+    opts,
+    profile,
+    state,
+    getProfileState,
+    setProfileRunning,
+  });
 
   const { ensureTabAvailable, focusTab, closeTab } = createProfileSelectionOps({
     profile,
     getProfileState,
-    getSsrFPolicy: () => state().resolved.ssrfPolicy,
+    getCdpControlPolicy: () => resolveCdpControlPolicy(profile, state().resolved.ssrfPolicy),
     ensureBrowserAvailable,
     listTabs,
     openTab,
@@ -105,9 +117,11 @@ function createProfileContext(
     ensureBrowserAvailable,
     ensureTabAvailable,
     isHttpReachable,
+    isTransportAvailable,
     isReachable,
     listTabs,
     openTab,
+    labelTab,
     focusTab,
     closeTab,
     stopRunningBrowser,
@@ -167,9 +181,11 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
 
       if (capabilities.usesChromeMcp) {
         try {
-          running = await profileCtx.isReachable(300);
+          running = await profileCtx.isTransportAvailable(300);
           if (running) {
-            const tabs = await profileCtx.listTabs();
+            const tabs = await listChromeMcpTabs(profile.name, profile, {
+              ephemeral: true,
+            }).catch(() => [] as BrowserTab[]);
             tabCount = tabs.filter((t) => t.type === "page").length;
           }
         } catch {
@@ -186,10 +202,16 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
       } else {
         // Check if something is listening on the port
         try {
+          const probeTimeoutMs = usesFastLoopbackCdpProbeClass({
+            profileIsLoopback: profile.cdpIsLoopback,
+            attachOnly: profile.attachOnly,
+          })
+            ? 200
+            : current.resolved.remoteCdpTimeoutMs;
           const reachable = await isChromeReachable(
             profile.cdpUrl,
-            200,
-            current.resolved.ssrfPolicy,
+            probeTimeoutMs,
+            resolveCdpReachabilityPolicy(profile, current.resolved.ssrfPolicy),
           );
           if (reachable) {
             running = true;
@@ -205,7 +227,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         name,
         transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
         cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
-        cdpUrl: capabilities.usesChromeMcp ? null : profile.cdpUrl,
+        cdpUrl: capabilities.usesChromeMcp ? null : (redactCdpUrl(profile.cdpUrl) ?? null),
         color: profile.color,
         driver: profile.driver,
         running,
@@ -239,9 +261,11 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     ensureBrowserAvailable: () => getDefaultContext().ensureBrowserAvailable(),
     ensureTabAvailable: (targetId) => getDefaultContext().ensureTabAvailable(targetId),
     isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
-    isReachable: (timeoutMs) => getDefaultContext().isReachable(timeoutMs),
+    isTransportAvailable: (timeoutMs) => getDefaultContext().isTransportAvailable(timeoutMs),
+    isReachable: (timeoutMs, options) => getDefaultContext().isReachable(timeoutMs, options),
     listTabs: () => getDefaultContext().listTabs(),
-    openTab: (url) => getDefaultContext().openTab(url),
+    openTab: (url, optsLocal) => getDefaultContext().openTab(url, optsLocal),
+    labelTab: (targetId, label) => getDefaultContext().labelTab(targetId, label),
     focusTab: (targetId) => getDefaultContext().focusTab(targetId),
     closeTab: (targetId) => getDefaultContext().closeTab(targetId),
     stopRunningBrowser: () => getDefaultContext().stopRunningBrowser(),

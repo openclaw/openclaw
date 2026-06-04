@@ -4,11 +4,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatLinkUnderstandingBody } from "./format.js";
 import { runLinkUnderstanding } from "./runner.js";
 
-export type ApplyLinkUnderstandingResult = {
+type ApplyLinkUnderstandingResult = {
   outputs: string[];
   urls: string[];
 };
 
+/** Runs link understanding and folds successful outputs into the inbound context. */
 export async function applyLinkUnderstanding(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;

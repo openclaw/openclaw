@@ -7,6 +7,8 @@ import { isDeliverableMessageChannel, normalizeMessageChannel } from "../utils/m
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { enqueueSystemEvent } from "./system-events.js";
 
+// Session maintenance warnings notify an active session before warn-only
+// cleanup would prune it, with per-session dedupe and system-event fallback.
 type WarningParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -16,20 +18,20 @@ type WarningParams = {
 
 const warnedContexts = new Map<string, string>();
 const log = createSubsystemLogger("session-maintenance-warning");
-let deliverRuntimePromise: Promise<typeof import("./outbound/deliver-runtime.js")> | null = null;
+let messageRuntimePromise: Promise<typeof import("../channels/message/runtime.js")> | null = null;
 
 function resetSessionMaintenanceWarningForTests() {
   warnedContexts.clear();
-  deliverRuntimePromise = null;
+  messageRuntimePromise = null;
 }
 
-export const __testing = {
+export const testing = {
   resetSessionMaintenanceWarningForTests,
 } as const;
 
 function loadDeliverRuntime() {
-  deliverRuntimePromise ??= import("./outbound/deliver-runtime.js");
-  return deliverRuntimePromise;
+  messageRuntimePromise ??= import("../channels/message/runtime.js");
+  return messageRuntimePromise;
 }
 
 function shouldSendWarning(): boolean {
@@ -100,6 +102,7 @@ function resolveWarningDeliveryTarget(entry: SessionEntry): {
   };
 }
 
+/** Deliver or enqueue a warn-only session maintenance notification. */
 export async function deliverSessionMaintenanceWarning(params: WarningParams): Promise<void> {
   if (!shouldSendWarning()) {
     return;
@@ -109,6 +112,8 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   if (warnedContexts.get(params.sessionKey) === contextKey) {
     return;
   }
+  // Dedupe by effective warning context so repeated maintenance scans do not
+  // spam the same session, but changed limits still produce a fresh warning.
   warnedContexts.set(params.sessionKey, contextKey);
 
   const text = buildWarningText(params.warning);
@@ -126,12 +131,12 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
   }
 
   try {
-    const { deliverOutboundPayloads } = await loadDeliverRuntime();
+    const { sendDurableMessageBatch } = await loadDeliverRuntime();
     const outboundSession = buildOutboundSessionContext({
       cfg: params.cfg,
       sessionKey: params.sessionKey,
     });
-    await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg: params.cfg,
       channel,
       to: target.to,
@@ -140,8 +145,12 @@ export async function deliverSessionMaintenanceWarning(params: WarningParams): P
       payloads: [{ text }],
       session: outboundSession,
     });
+    if (send.status === "failed" || send.status === "partial_failed") {
+      throw send.error;
+    }
   } catch (err) {
     log.warn(`Failed to deliver session maintenance warning: ${String(err)}`);
     enqueueSystemEvent(text, { sessionKey: params.sessionKey });
   }
 }
+export { testing as __testing };

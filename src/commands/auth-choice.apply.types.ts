@@ -11,6 +11,7 @@ export type ApplyAuthChoiceParams = {
   runtime: RuntimeEnv;
   agentDir?: string;
   setDefaultModel: boolean;
+  preserveExistingDefaultModel?: boolean;
   agentId?: string;
   opts?: Partial<OnboardOptions>;
 };
@@ -18,4 +19,5 @@ export type ApplyAuthChoiceParams = {
 export type ApplyAuthChoiceResult = {
   config: OpenClawConfig;
   agentModelOverride?: string;
+  retrySelection?: boolean;
 };

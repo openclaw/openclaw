@@ -1,6 +1,6 @@
-import { readStringValue } from "../shared/string-coerce.js";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 
-export type GatewaySelfPresence = {
+type GatewaySelfPresence = {
   host?: string;
   ip?: string;
   version?: string;

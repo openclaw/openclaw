@@ -9,6 +9,7 @@ import {
 import type { GatewayService, GatewayServiceInstallArgs } from "./service.js";
 import { resolveGatewayService } from "./service.js";
 
+// Wraps the generic gateway service with node-specific service identifiers and env.
 function withNodeServiceEnv(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
@@ -17,6 +18,7 @@ function withNodeServiceEnv(
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
     OPENCLAW_LOG_PREFIX: "node",
     OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
@@ -33,6 +35,7 @@ function withNodeInstallEnv(args: GatewayServiceInstallArgs): GatewayServiceInst
       OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
       OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
       OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+      OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
       OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
       OPENCLAW_LOG_PREFIX: "node",
       OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,

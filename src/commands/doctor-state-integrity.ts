@@ -1,33 +1,49 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentEntries, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { listBundledChannelPluginIds } from "../channels/plugins/bundled-ids.js";
-import { hasBundledChannelPersistedAuthState } from "../channels/plugins/persisted-auth-state.js";
+import {
+  clearWedgedSubagentRecoveryAbort,
+  formatSubagentRecoveryWedgedReason,
+  isSubagentRecoveryWedgedEntry,
+} from "../agents/subagent-recovery-state.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import {
   formatSessionArchiveTimestamp,
   isPrimarySessionTranscriptFileName,
-  loadSessionStore,
-  resolveMainSessionKey,
+} from "../config/sessions/artifacts.js";
+import { resolveMainSessionKey } from "../config/sessions/main-session.js";
+import {
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptsDirForAgent,
   resolveStorePath,
-} from "../config/sessions.js";
+} from "../config/sessions/paths.js";
+import { loadSessionStore } from "../config/sessions/store-load.js";
+import { updateSessionStore } from "../config/sessions/store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
+import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
+import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { asNullableObjectRecord } from "../shared/record-coerce.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
+import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
+import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
+import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
 
 type DoctorPrompterLike = {
-  confirmRuntimeRepair: (params: { message: string; initialValue?: boolean }) => Promise<boolean>;
+  confirmRuntimeRepair: (params: {
+    message: string;
+    initialValue?: boolean;
+    requiresInteractiveConfirmation?: boolean;
+  }) => Promise<boolean>;
   note?: typeof note;
 };
 
@@ -73,6 +89,16 @@ function tryResolveNativeRealPath(targetPath: string): string | null {
   }
 }
 
+function resolveComparableTranscriptPath(filePath: string): string {
+  return tryResolveNativeRealPath(filePath) ?? path.resolve(filePath);
+}
+
+function areComparablePathsEqual(leftPath: string, rightPath: string): boolean {
+  const leftRealPath = tryResolveNativeRealPath(leftPath);
+  const rightRealPath = tryResolveNativeRealPath(rightPath);
+  return leftRealPath !== null && leftRealPath === rightRealPath;
+}
+
 function isReachableConfiguredAgentDir(params: {
   agentsRoot: string;
   dirName: string;
@@ -109,6 +135,7 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
   }
 
   const agentsRoot = path.join(stateDir, "agents");
+  const liveCompatibilityAgentDir = resolveOpenClawAgentDir();
   try {
     const entries = fs.readdirSync(agentsRoot, { withFileTypes: true });
     return entries
@@ -118,8 +145,12 @@ function listOrphanAgentDirs(cfg: OpenClawConfig, stateDir: string): OrphanAgent
         agentId: normalizeAgentId(entry.name),
       }))
       .filter(({ dirName, agentId }) => {
-        const hasNestedAgentDir = existsDir(path.join(agentsRoot, dirName, "agent"));
+        const nestedAgentDir = path.join(agentsRoot, dirName, "agent");
+        const hasNestedAgentDir = existsDir(nestedAgentDir);
         if (!hasNestedAgentDir) {
+          return false;
+        }
+        if (areComparablePathsEqual(nestedAgentDir, liveCompatibilityAgentDir)) {
           return false;
         }
         if (!configuredIds.has(agentId)) {
@@ -187,8 +218,8 @@ function countJsonlLines(filePath: string): number {
       return 0;
     }
     let count = 0;
-    for (let i = 0; i < raw.length; i += 1) {
-      if (raw[i] === "\n") {
+    for (const char of raw) {
+      if (char === "\n") {
         count += 1;
       }
     }
@@ -207,7 +238,7 @@ function findOtherStateDirs(stateDir: string): string[] {
     process.platform === "darwin" ? ["/Users"] : process.platform === "linux" ? ["/home"] : [];
   const found: string[] = [];
   for (const root of roots) {
-    let entries: fs.Dirent[] = [];
+    let entries: fs.Dirent[];
     try {
       entries = fs.readdirSync(root, { withFileTypes: true });
     } catch {
@@ -547,10 +578,21 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   if (!channels) {
     return false;
   }
-  for (const channelId of listBundledChannelPluginIds()) {
-    if (hasBundledChannelPersistedAuthState({ channelId, cfg, env })) {
-      return true;
-    }
+  const withPersistedAuth = new Set(
+    listConfiguredChannelIdsForReadOnlyScope({
+      config: cfg,
+      env,
+    }),
+  );
+  const withoutPersistedAuth = new Set(
+    listConfiguredChannelIdsForReadOnlyScope({
+      config: cfg,
+      env,
+      includePersistedAuthState: false,
+    }),
+  );
+  if ([...withPersistedAuth].some((channelId) => !withoutPersistedAuth.has(channelId))) {
+    return true;
   }
   // Pairing allowlists are persisted under credentials/<channel>-allowFrom.json.
   for (const [channelId, channelCfg] of Object.entries(channels)) {
@@ -811,7 +853,10 @@ export async function noteStateIntegrity(
     );
   }
 
-  const store = loadSessionStore(storePath);
+  // Read-only diagnostic load: skip the cache and the defensive return clone so a
+  // very large monolithic sessions.json is materialized once, not several times.
+  // Re-cloning a multi-hundred-MB store here is what made `doctor` OOM (#56827).
+  const store = loadSessionStore(storePath, { skipCache: true, clone: false });
   const sessionPathOpts = resolveSessionFilePathOptions({ agentId, storePath });
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
@@ -841,6 +886,82 @@ export async function noteStateIntegrity(
           `  Prune missing entries: ${formatCliCommand(`openclaw sessions cleanup --store "${absoluteStorePath}" --enforce --fix-missing`)}`,
         ].join("\n"),
       );
+    }
+
+    const wedgedSubagentSessions = entries.filter(([, entry]) =>
+      isSubagentRecoveryWedgedEntry(entry),
+    );
+    if (wedgedSubagentSessions.length > 0) {
+      const wedgedCount = countLabel(wedgedSubagentSessions.length, "wedged subagent session");
+      warnings.push(
+        [
+          `- Found ${wedgedCount} with automatic restart recovery tombstoned.`,
+          "  OpenClaw will not auto-resume these child sessions on restart; reconcile their task records instead.",
+          `  Examples: ${wedgedSubagentSessions
+            .slice(0, 3)
+            .map(([key]) => key)
+            .join(", ")}`,
+          `  Fix: ${formatCliCommand("openclaw tasks maintenance --apply")}`,
+        ].join("\n"),
+      );
+      const repairWedged = await prompter.confirmRuntimeRepair({
+        message: `Clear stale aborted recovery flags for ${wedgedCount}?`,
+        initialValue: true,
+      });
+      if (repairWedged) {
+        let repaired = 0;
+        const repairedAt = Date.now();
+        await updateSessionStore(absoluteStorePath, (currentStore) => {
+          for (const [key] of wedgedSubagentSessions) {
+            const current = currentStore[key];
+            if (current && clearWedgedSubagentRecoveryAbort(current, repairedAt)) {
+              repaired += 1;
+              currentStore[key] = current;
+            }
+          }
+        });
+        if (repaired > 0) {
+          changes.push(
+            `- Cleared aborted restart-recovery flags for ${countLabel(
+              repaired,
+              "wedged subagent session",
+            )}.`,
+          );
+        }
+      }
+
+      const wedgedReasons = wedgedSubagentSessions.map(([, entry]) =>
+        formatSubagentRecoveryWedgedReason(entry),
+      );
+      const visibleWedgedReasons = uniqueStrings(wedgedReasons).slice(0, 2);
+      if (visibleWedgedReasons.length > 0) {
+        warnings.push(visibleWedgedReasons.map((reason) => `  Reason: ${reason}`).join("\n"));
+      }
+    }
+
+    await runPluginSessionStateDoctorRepairs({
+      cfg,
+      store,
+      absoluteStorePath,
+      prompter,
+      env,
+      warnings,
+      changes,
+    });
+
+    await repairHeartbeatPoisonedMainSession({
+      cfg,
+      store,
+      absoluteStorePath,
+      stateDir,
+      sessionPathOpts,
+      prompter,
+      warnings,
+      changes,
+    });
+
+    for (const warning of describeHeartbeatSessionTargetIssues(cfg)) {
+      warnings.push(warning);
     }
 
     const mainKey = resolveMainSessionKey(cfg);
@@ -874,7 +995,9 @@ export async function noteStateIntegrity(
       }
       try {
         referencedTranscriptPaths.add(
-          path.resolve(resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts)),
+          resolveComparableTranscriptPath(
+            resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts),
+          ),
         );
       } catch {
         // ignore invalid legacy paths
@@ -883,8 +1006,10 @@ export async function noteStateIntegrity(
     const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
     const orphanTranscriptPaths = sessionDirEntries
       .filter((entry) => entry.isFile() && isPrimarySessionTranscriptFileName(entry.name))
-      .map((entry) => path.resolve(path.join(sessionsDir, entry.name)))
-      .filter((filePath) => !referencedTranscriptPaths.has(filePath));
+      .map((entry) => path.join(sessionsDir, entry.name))
+      .filter(
+        (filePath) => !referencedTranscriptPaths.has(resolveComparableTranscriptPath(filePath)),
+      );
     if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
       const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
       const orphanPreview = formatFilePreview(orphanTranscriptPaths);
@@ -899,6 +1024,7 @@ export async function noteStateIntegrity(
       const archiveOrphans = await prompter.confirmRuntimeRepair({
         message: `Archive ${orphanCount} in ${displaySessionsDir}? This only renames them to *.deleted.<timestamp>.`,
         initialValue: false,
+        requiresInteractiveConfirmation: true,
       });
       if (archiveOrphans) {
         let archived = 0;
@@ -931,20 +1057,24 @@ export async function noteStateIntegrity(
   }
 }
 
-export function noteWorkspaceBackupTip(workspaceDir: string) {
+export function collectWorkspaceBackupTip(workspaceDir: string): string | null {
   if (!existsDir(workspaceDir)) {
-    return;
+    return null;
   }
   const gitMarker = path.join(workspaceDir, ".git");
   if (fs.existsSync(gitMarker)) {
-    return;
+    return null;
   }
-  note(
-    [
-      "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
-      "- Keep ~/.openclaw out of git; it contains credentials and session history.",
-      "- Details: /concepts/agent-workspace#git-backup-recommended",
-    ].join("\n"),
-    "Workspace",
-  );
+  return [
+    "- Tip: back up the workspace in a private git repo (GitHub or GitLab).",
+    "- Keep ~/.openclaw out of git; it contains credentials and session history.",
+    "- Details: /concepts/agent-workspace#git-backup-recommended",
+  ].join("\n");
+}
+
+export function noteWorkspaceBackupTip(workspaceDir: string) {
+  const tip = collectWorkspaceBackupTip(workspaceDir);
+  if (tip) {
+    note(tip, "Workspace");
+  }
 }

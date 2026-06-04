@@ -30,6 +30,16 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     waitForGatewayHealthy: fn,
     waitForTransportReady: fn,
     waitForQaChannelReady: fn,
+    browserRequest: fn,
+    waitForBrowserReady: fn,
+    browserOpenTab: fn,
+    browserSnapshot: fn,
+    browserAct: fn,
+    webOpenPage: fn,
+    webWait: fn,
+    webType: fn,
+    webSnapshot: fn,
+    webEvaluate: fn,
     waitForConfigRestartSettle: fn,
     patchConfig: fn,
     applyConfig: fn,
@@ -38,6 +48,11 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     readEffectiveTools: fn,
     readSkillStatus: fn,
     readRawQaSessionStore: fn,
+    readGatewayLogs: fn,
+    markGatewayLogCursor: fn,
+    scanGatewayLogSentinels: fn,
+    assertNoGatewayLogSentinels: fn,
+    readSessionTranscriptSummary: fn,
     runQaCli: fn,
     extractMediaPathFromText: fn,
     resolveGeneratedImagePath: fn,
@@ -45,6 +60,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     waitForAgentRun: fn,
     listCronJobs: fn,
     waitForCronRunCompletion: fn,
+    findManagedDreamingCronJob: fn,
     readDoctorMemoryStatus: fn,
     forceMemoryIndex: fn,
     findSkill: fn,
@@ -53,6 +69,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     runAgentPrompt: fn,
     ensureImageGenerationConfigured: fn,
     handleQaAction: fn,
+    runRuntimeToolFixture: fn,
     extractQaToolPayload: fn,
     formatMemoryDreamingDay: fn,
     resolveSessionTranscriptsDirForAgent: fn,
@@ -66,7 +83,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     hasDiscoveryLabels: fn,
     reportsDiscoveryScopeLeak: fn,
     reportsMissingDiscoveryFiles: fn,
-    hasModelSwitchContinuityEvidence: fn,
+    hasModelSwitchContinuitySignal: fn,
     ...overrides,
   };
 }
@@ -76,6 +93,19 @@ const constants: QaScenarioRuntimeConstants = {
   imageUnderstandingLargePngBase64: "png-large",
   imageUnderstandingValidPngBase64: "png-valid",
 };
+
+const browserAndWebRuntimeTools = [
+  "browserRequest",
+  "waitForBrowserReady",
+  "browserOpenTab",
+  "browserSnapshot",
+  "browserAct",
+  "webOpenPage",
+  "webWait",
+  "webType",
+  "webSnapshot",
+  "webEvaluate",
+] as const;
 
 describe("createQaScenarioRuntimeApi", () => {
   it("builds a markdown-flow runtime surface from generic transport capabilities", async () => {
@@ -117,11 +147,12 @@ describe("createQaScenarioRuntimeApi", () => {
         },
       },
     };
+    const deps = createDeps({ sleep });
 
     const api = createQaScenarioRuntimeApi({
       env,
       scenario,
-      deps: createDeps({ sleep }),
+      deps,
       constants,
     });
 
@@ -130,23 +161,29 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
+    expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
+    expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
+    expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);
+    for (const toolName of browserAndWebRuntimeTools) {
+      expect(api[toolName]).toBe(deps[toolName]);
+    }
     expect(api.getTransportSnapshot()).toEqual(state.getSnapshot());
     expect(api.imageUnderstandingPngBase64).toBe("png-small");
 
-    const inbound = await api.injectInboundMessage({
+    const inbound = api.injectInboundMessage({
       accountId: "qa-channel",
       conversation: { id: "qa-operator", kind: "direct" },
       senderId: "qa-operator",
       text: "hello",
     });
-    const outbound = await api.injectOutboundMessage({
+    const outbound = api.injectOutboundMessage({
       accountId: "qa-channel",
       to: "dm:qa-operator",
       text: "hi",
     });
-    expect(inbound.id).toBeTruthy();
-    expect(outbound.id).toBeTruthy();
-    await api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
+    expect(inbound.id.trim()).not.toBe("");
+    expect(outbound.id.trim()).not.toBe("");
+    api.readTransportMessage({ accountId: "qa-channel", messageId: outbound.id });
     await api.reset();
     await api.resetBus();
     await api.resetTransport();
