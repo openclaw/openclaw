@@ -55,7 +55,7 @@ describe("wakeRestoredFollowupQueueSessions", () => {
     try {
       enqueueFollowupRun(
         key,
-        createRun({ prompt: "after restart", sessionKey: key }),
+        createRun({ prompt: "after restart" }),
         settings,
         "message-id",
         undefined,
