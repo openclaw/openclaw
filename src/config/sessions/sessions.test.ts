@@ -1037,10 +1037,13 @@ describe("session store writer queue", () => {
       },
     });
 
-    await updateSessionStore(storePath, async (store) => {
-      const entry = store[key];
-      entry.modelProvider = "openai";
-      entry.model = "openai-codex/gpt-5.5";
+    await updateSessionStoreEntry({
+      storePath,
+      sessionKey: key,
+      update: () => ({
+        modelProvider: "openai",
+        model: "openai-codex/gpt-5.5",
+      }),
     });
 
     const store = loadSessionStore(storePath);
