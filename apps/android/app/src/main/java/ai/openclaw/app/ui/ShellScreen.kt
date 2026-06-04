@@ -157,7 +157,7 @@ fun ShellScreen(
     Scaffold(
       modifier = modifier.fillMaxSize(),
       containerColor = ClawTheme.colors.canvas,
-      contentWindowInsets = WindowInsets(0, 0, 0, 0),
+      contentWindowInsets = WindowInsets.ime,
       bottomBar = {
         if (showBottomNav) {
           ClawBottomNav(
@@ -863,7 +863,7 @@ private fun SettingsShellScreen(
   }
 
   if (route != SettingsRoute.Home) {
-    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onRouteBack)
+    SettingsDetailScreen(viewModel = viewModel, route = route, onBack = onRouteBack, onNavigate = onRouteChange)
     return
   }
 

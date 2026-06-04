@@ -49,27 +49,36 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.LocationOn
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCode2
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Security
 import androidx.compose.material.icons.filled.Sensors
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.WifiTethering
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -108,6 +117,7 @@ import kotlinx.coroutines.delay
 private enum class OnboardingStep {
   Welcome,
   Gateway,
+  SshTunnel,
   Recovery,
   Permissions,
 }
@@ -144,6 +154,15 @@ fun OnboardingFlow(
     var attemptedConnect by rememberSaveable { mutableStateOf(false) }
     var connectAttemptStartedAtMs by rememberSaveable { mutableLongStateOf(0L) }
     var recoveryNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+
+    // SSH tunnel onboarding state.
+    val sshEnabled by viewModel.sshEnabled.collectAsState()
+    var sshHost by rememberSaveable { mutableStateOf("") }
+    var sshPort by rememberSaveable { mutableStateOf("22") }
+    var sshUsername by rememberSaveable { mutableStateOf("") }
+    var sshPassword by rememberSaveable { mutableStateOf("") }
+    var sshPrivateKey by rememberSaveable { mutableStateOf("") }
+    var sshKeyPassphrase by rememberSaveable { mutableStateOf("") }
 
     val qrScannerOptions =
       remember {
@@ -217,6 +236,9 @@ fun OnboardingFlow(
           token = token,
           password = password,
           nearbyGatewayName = gateways.firstOrNull()?.name,
+          sshEnabled = sshEnabled,
+          sshHost = sshHost,
+          sshUsername = sshUsername,
           error = setupError,
           onBack = { step = OnboardingStep.Welcome },
           onScan = {
@@ -257,6 +279,7 @@ fun OnboardingFlow(
             viewModel.connect(endpoint)
             step = OnboardingStep.Recovery
           },
+          onSshSetup = { step = OnboardingStep.SshTunnel },
           onPair = {
             val config =
               resolveGatewayConfig(
@@ -292,6 +315,42 @@ fun OnboardingFlow(
               password = config.password.ifEmpty { null },
             )
             step = OnboardingStep.Recovery
+          },
+        )
+      OnboardingStep.SshTunnel ->
+        SshTunnelOnboardingScreen(
+          modifier = modifier,
+          sshHost = sshHost,
+          sshPort = sshPort,
+          sshUsername = sshUsername,
+          sshPassword = sshPassword,
+          sshPrivateKey = sshPrivateKey,
+          sshKeyPassphrase = sshKeyPassphrase,
+          onSshHostChange = { sshHost = it },
+          onSshPortChange = { sshPort = it },
+          onSshUsernameChange = { sshUsername = it },
+          onSshPasswordChange = { sshPassword = it },
+          onSshPrivateKeyChange = { sshPrivateKey = it },
+          onSshKeyPassphraseChange = { sshKeyPassphrase = it },
+          onBack = { step = OnboardingStep.Gateway },
+          onSkip = { step = OnboardingStep.Gateway },
+          onContinue = {
+            // Persist SSH config before continuing.
+            val portInt = sshPort.trim().toIntOrNull() ?: 22
+            viewModel.setSshEnabled(sshHost.trim().isNotBlank() && sshUsername.trim().isNotBlank())
+            viewModel.setSshHost(sshHost.trim())
+            viewModel.setSshPort(portInt)
+            viewModel.setSshUsername(sshUsername.trim())
+            viewModel.setSshPassword(sshPassword.trim())
+            viewModel.setSshPrivateKey(sshPrivateKey.trim())
+            viewModel.setSshKeyPassphrase(sshKeyPassphrase.trim())
+            
+            if (attemptedConnect) {
+              viewModel.refreshGatewayConnection()
+              step = OnboardingStep.Recovery
+            } else {
+              step = OnboardingStep.Gateway
+            }
           },
         )
       OnboardingStep.Recovery ->
@@ -428,6 +487,9 @@ private fun GatewaySetupScreen(
   token: String,
   password: String,
   nearbyGatewayName: String?,
+  sshEnabled: Boolean,
+  sshHost: String,
+  sshUsername: String,
   error: String?,
   onBack: () -> Unit,
   onScan: () -> Unit,
@@ -438,6 +500,7 @@ private fun GatewaySetupScreen(
   onTokenChange: (String) -> Unit,
   onPasswordChange: (String) -> Unit,
   onUseNearby: () -> Unit,
+  onSshSetup: () -> Unit,
   onPair: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
@@ -472,6 +535,15 @@ private fun GatewaySetupScreen(
             title = "Enter gateway URL",
             subtitle = "Connect using a manual URL",
             onClick = { advancedOpen = true },
+          )
+        }
+        item {
+          GatewayOption(
+            icon = Icons.Default.Lock,
+            title = "Configure SSH Tunnel",
+            subtitle = if (sshEnabled && sshHost.isNotBlank()) "Tunnel enabled: ${sshUsername}@${sshHost}" else "Connect through a remote server",
+            status = if (sshEnabled) "Active" else null,
+            onClick = onSshSetup,
           )
         }
         error?.let { message ->
@@ -1197,3 +1269,171 @@ private fun hasMotionCapabilities(context: Context): Boolean {
     sensorManager.getDefaultSensor(Sensor.TYPE_STEP_COUNTER) != null ||
     sensorManager.getDefaultSensor(Sensor.TYPE_STEP_DETECTOR) != null
 }
+
+// =============================================================================
+// SSH Tunnel Onboarding Screen
+// =============================================================================
+
+/**
+ * Optional SSH tunnel setup step that appears after the user enters gateway credentials.
+ * The user can skip this step to connect directly on the local network.
+ */
+@Composable
+private fun SshTunnelOnboardingScreen(
+  sshHost: String,
+  sshPort: String,
+  sshUsername: String,
+  sshPassword: String,
+  sshPrivateKey: String,
+  sshKeyPassphrase: String,
+  onSshHostChange: (String) -> Unit,
+  onSshPortChange: (String) -> Unit,
+  onSshUsernameChange: (String) -> Unit,
+  onSshPasswordChange: (String) -> Unit,
+  onSshPrivateKeyChange: (String) -> Unit,
+  onSshKeyPassphraseChange: (String) -> Unit,
+  onBack: () -> Unit,
+  onSkip: () -> Unit,
+  onContinue: () -> Unit,
+  modifier: Modifier = Modifier,
+) {
+  ClawScaffold(modifier = modifier, contentPadding = PaddingValues(horizontal = 24.dp, vertical = 18.dp)) {
+    val context = LocalContext.current
+    val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+      uri?.let {
+        context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader ->
+          onSshPrivateKeyChange(reader.readText())
+        }
+      }
+    }
+    
+    Column(modifier = Modifier.fillMaxSize().imePadding()) {
+      Column(modifier = Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+        // Back button
+        TextButton(onClick = onBack) {
+          Icon(
+            Icons.AutoMirrored.Filled.ArrowBack,
+            contentDescription = "Back",
+            modifier = Modifier.size(18.dp),
+            tint = ClawTheme.colors.textMuted,
+          )
+          Spacer(modifier = Modifier.width(4.dp))
+          Text("Back", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
+
+        // Header
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+          Surface(shape = RoundedCornerShape(12.dp), color = ClawTheme.colors.surfaceRaised) {
+            Icon(
+              imageVector = Icons.Default.Lock,
+              contentDescription = null,
+              modifier = Modifier.padding(10.dp).size(22.dp),
+              tint = ClawTheme.colors.textMuted,
+            )
+          }
+          Column {
+            Text("SSH Tunnel", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+            Text(
+              "Required for access outside your local network.",
+              style = ClawTheme.type.label,
+              color = ClawTheme.colors.textMuted,
+            )
+          }
+        }
+
+        Spacer(modifier = Modifier.height(20.dp))
+
+        ClawPanel {
+          Text(
+            "If your OpenClaw gateway is on a home network, set up an SSH tunnel so you can " +
+              "connect from anywhere. Leave blank and tap Skip if you're on the same network.",
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+          )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
+      ClawPanel {
+        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+          Text("SSH Server Host", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+          ClawTextField(
+            value = sshHost,
+            onValueChange = onSshHostChange,
+            placeholder = "your-server.example.com",
+          )
+
+          Text("SSH Server Port", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+          ClawTextField(
+            value = sshPort,
+            onValueChange = onSshPortChange,
+            placeholder = "22",
+          )
+
+          Text("SSH Username", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+          ClawTextField(
+            value = sshUsername,
+            onValueChange = onSshUsernameChange,
+            placeholder = "pi",
+          )
+
+          Text("SSH Password", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+          ClawTextField(
+            value = sshPassword,
+            onValueChange = onSshPasswordChange,
+            placeholder = "password (stored encrypted)",
+          )
+
+          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+            Text("SSH Private Key", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+            TextButton(
+              onClick = { launcher.launch(arrayOf("*/*")) },
+              contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+            ) {
+              Text("Import File", style = ClawTheme.type.label, color = ClawTheme.colors.primary)
+            }
+          }
+          ClawTextField(
+            value = sshPrivateKey,
+            onValueChange = onSshPrivateKeyChange,
+            placeholder = "-----BEGIN OPENSSH PRIVATE KEY-----...",
+          )
+
+          Text("Private Key Passphrase", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+          ClawTextField(
+            value = sshKeyPassphrase,
+            onValueChange = onSshKeyPassphraseChange,
+            placeholder = "passphrase (if key is encrypted)",
+          )
+        }
+      }
+      Spacer(modifier = Modifier.height(16.dp))
+      }
+
+      // Actions
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        ClawPrimaryButton(
+          text = if (sshHost.isNotBlank() && sshUsername.isNotBlank()) "Save & Continue" else "Continue",
+          onClick = onContinue,
+          modifier = Modifier.fillMaxWidth(),
+        )
+        TextButton(
+          onClick = onSkip,
+          modifier = Modifier.fillMaxWidth(),
+        ) {
+          Text(
+            "Skip – I'm on the local network",
+            style = ClawTheme.type.body,
+            color = ClawTheme.colors.textMuted,
+            textAlign = TextAlign.Center,
+          )
+        }
+      }
+
+      Spacer(modifier = Modifier.height(16.dp))
+    }
+  }
+}
+

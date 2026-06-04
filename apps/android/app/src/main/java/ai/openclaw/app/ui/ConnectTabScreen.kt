@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -54,6 +55,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 
 private enum class ConnectInputMode {
@@ -77,6 +80,17 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
   val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
 
   var advancedOpen by rememberSaveable { mutableStateOf(false) }
+  var sshOpen by rememberSaveable { mutableStateOf(false) }
+
+  // SSH tunnel state
+  val sshEnabled by viewModel.sshEnabled.collectAsState()
+  val sshHost by viewModel.sshHost.collectAsState()
+  val sshPort by viewModel.sshPort.collectAsState()
+  val sshUsername by viewModel.sshUsername.collectAsState()
+  val sshLocalPort by viewModel.sshLocalPort.collectAsState()
+  val sshRemoteHost by viewModel.sshRemoteHost.collectAsState()
+  val sshRemotePort by viewModel.sshRemotePort.collectAsState()
+  var sshPasswordInput by rememberSaveable { mutableStateOf("") }
   var inputMode by
     remember(manualEnabled, manualHost, gatewayToken) {
       mutableStateOf(
@@ -375,6 +389,223 @@ fun ConnectTabScreen(viewModel: MainViewModel) {
       }
     }
 
+    // ── SSH Tunnel ────────────────────────────────────────────────────────
+    Surface(
+      modifier = Modifier.fillMaxWidth(),
+      shape = RoundedCornerShape(14.dp),
+      color = if (sshEnabled) mobileAccentSoft else mobileSurface,
+      border = BorderStroke(1.dp, if (sshEnabled) mobileAccent.copy(alpha = 0.5f) else mobileBorder),
+      onClick = { sshOpen = !sshOpen },
+    ) {
+      Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween,
+      ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+          Surface(
+            shape = RoundedCornerShape(10.dp),
+            color = if (sshEnabled) mobileAccent else mobileBorder,
+          ) {
+            Icon(
+              imageVector = Icons.Default.Lock,
+              contentDescription = null,
+              modifier = Modifier.padding(6.dp).size(16.dp),
+              tint = if (sshEnabled) Color.White else mobileTextSecondary,
+            )
+          }
+          Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("SSH Tunnel", style = mobileHeadline, color = mobileText)
+            Text(
+              if (sshEnabled && sshHost.isNotBlank()) "${sshUsername}@${sshHost}:${sshPort}" else "Disabled — tap to configure",
+              style = mobileCaption1,
+              color = if (sshEnabled) mobileAccent else mobileTextSecondary,
+            )
+          }
+        }
+        Icon(
+          imageVector = if (sshOpen) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+          contentDescription = null,
+          tint = mobileTextSecondary,
+        )
+      }
+    }
+
+    AnimatedVisibility(visible = sshOpen) {
+      Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = mobileCardSurface,
+        border = BorderStroke(1.dp, mobileBorder),
+      ) {
+        Column(
+          modifier = Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp),
+          verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+          // Enable toggle
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+          ) {
+            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+              Text("Enable SSH Tunnel", style = mobileHeadline, color = mobileText)
+              Text(
+                "Route gateway traffic through a remote SSH server.",
+                style = mobileCallout,
+                color = mobileTextSecondary,
+              )
+            }
+            Switch(
+              checked = sshEnabled,
+              onCheckedChange = {
+                viewModel.setSshEnabled(it)
+                if (it && sshPasswordInput.isNotBlank()) {
+                  viewModel.setSshPassword(sshPasswordInput)
+                }
+              },
+              colors =
+                SwitchDefaults.colors(
+                  checkedTrackColor = mobileAccent,
+                  uncheckedTrackColor = mobileBorderStrong,
+                  checkedThumbColor = Color.White,
+                  uncheckedThumbColor = Color.White,
+                ),
+            )
+          }
+
+          HorizontalDivider(color = mobileBorder)
+
+          // SSH server host
+          Text("SSH Server Host", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+          OutlinedTextField(
+            value = sshHost,
+            onValueChange = { viewModel.setSshHost(it) },
+            placeholder = { Text("example.com or 1.2.3.4", style = mobileBody, color = mobileTextTertiary) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            textStyle = mobileBody.copy(color = mobileText),
+            shape = RoundedCornerShape(14.dp),
+            colors = outlinedColors(),
+          )
+
+          // SSH server port
+          Text("SSH Server Port", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+          OutlinedTextField(
+            value = sshPort.toString(),
+            onValueChange = { it.toIntOrNull()?.let { p -> viewModel.setSshPort(p) } },
+            placeholder = { Text("22", style = mobileBody, color = mobileTextTertiary) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle = mobileBody.copy(fontFamily = FontFamily.Monospace, color = mobileText),
+            shape = RoundedCornerShape(14.dp),
+            colors = outlinedColors(),
+          )
+
+          // SSH username
+          Text("SSH Username", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+          OutlinedTextField(
+            value = sshUsername,
+            onValueChange = { viewModel.setSshUsername(it) },
+            placeholder = { Text("pi", style = mobileBody, color = mobileTextTertiary) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Ascii),
+            textStyle = mobileBody.copy(color = mobileText),
+            shape = RoundedCornerShape(14.dp),
+            colors = outlinedColors(),
+          )
+
+          // SSH password
+          var sshPasswordVisible by remember { mutableStateOf(false) }
+          Text("SSH Password", style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold), color = mobileTextSecondary)
+          OutlinedTextField(
+            value = sshPasswordInput,
+            onValueChange = {
+              sshPasswordInput = it
+              viewModel.setSshPassword(it)
+            },
+            placeholder = { Text("password (stored encrypted)", style = mobileBody, color = mobileTextTertiary) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+            visualTransformation = if (sshPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = {
+              TextButton(onClick = { sshPasswordVisible = !sshPasswordVisible }) {
+                Text(
+                  if (sshPasswordVisible) "Hide" else "Show",
+                  style = mobileCaption1,
+                  color = mobileAccent,
+                )
+              }
+            },
+            textStyle = mobileBody.copy(color = mobileText),
+            shape = RoundedCornerShape(14.dp),
+            colors = outlinedColors(),
+          )
+
+          HorizontalDivider(color = mobileBorder)
+
+          Text(
+            "Port Forwarding (Advanced)",
+            style = mobileCaption1.copy(fontWeight = FontWeight.SemiBold),
+            color = mobileTextSecondary,
+          )
+
+          // Local forward port
+          Text("Local Bind Port", style = mobileCaption1, color = mobileTextSecondary)
+          OutlinedTextField(
+            value = sshLocalPort.toString(),
+            onValueChange = { it.toIntOrNull()?.let { p -> viewModel.setSshLocalPort(p) } },
+            placeholder = { Text("18799", style = mobileBody, color = mobileTextTertiary) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle = mobileBody.copy(fontFamily = FontFamily.Monospace, color = mobileText),
+            shape = RoundedCornerShape(14.dp),
+            colors = outlinedColors(),
+          )
+
+          // Remote host inside SSH network
+          Text("Remote Gateway Host", style = mobileCaption1, color = mobileTextSecondary)
+          OutlinedTextField(
+            value = sshRemoteHost,
+            onValueChange = { viewModel.setSshRemoteHost(it) },
+            placeholder = { Text("127.0.0.1", style = mobileBody, color = mobileTextTertiary) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+            textStyle = mobileBody.copy(color = mobileText),
+            shape = RoundedCornerShape(14.dp),
+            colors = outlinedColors(),
+          )
+
+          // Remote port inside SSH network
+          Text("Remote Gateway Port", style = mobileCaption1, color = mobileTextSecondary)
+          OutlinedTextField(
+            value = sshRemotePort.toString(),
+            onValueChange = { it.toIntOrNull()?.let { p -> viewModel.setSshRemotePort(p) } },
+            placeholder = { Text("18789", style = mobileBody, color = mobileTextTertiary) },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+            textStyle = mobileBody.copy(fontFamily = FontFamily.Monospace, color = mobileText),
+            shape = RoundedCornerShape(14.dp),
+            colors = outlinedColors(),
+          )
+
+          Text(
+            "When the tunnel is active, the app will route the gateway connection through 127.0.0.1:$sshLocalPort on this device.",
+            style = mobileCaption1,
+            color = mobileTextSecondary,
+          )
+        }
+      }
+    }
+
+    // ── Advanced controls ─────────────────────────────────────────────────
     Surface(
       modifier = Modifier.fillMaxWidth(),
       shape = RoundedCornerShape(14.dp),

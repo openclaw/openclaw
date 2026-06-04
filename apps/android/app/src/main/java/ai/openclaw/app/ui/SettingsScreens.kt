@@ -81,6 +81,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -120,6 +121,7 @@ internal enum class SettingsRoute {
   Appearance,
   Health,
   About,
+  SshTunnel,
 }
 
 /**
@@ -130,6 +132,7 @@ internal fun SettingsDetailScreen(
   viewModel: MainViewModel,
   route: SettingsRoute,
   onBack: () -> Unit,
+  onNavigate: (SettingsRoute) -> Unit = {},
 ) {
   when (route) {
     SettingsRoute.Home -> Unit
@@ -146,10 +149,11 @@ internal fun SettingsDetailScreen(
     SettingsRoute.Canvas -> CanvasSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.Notifications -> NotificationSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.PhoneCapabilities -> PhoneCapabilitiesScreen(viewModel = viewModel, onBack = onBack)
-    SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.Gateway -> GatewaySettingsScreen(viewModel = viewModel, onBack = onBack, onNavigate = onNavigate)
     SettingsRoute.Appearance -> AppearanceSettingsScreen(onBack = onBack)
     SettingsRoute.Health -> HealthLogsSettingsScreen(viewModel = viewModel, onBack = onBack)
     SettingsRoute.About -> AboutSettingsScreen(viewModel = viewModel, onBack = onBack)
+    SettingsRoute.SshTunnel -> SshTunnelSettingsScreen(viewModel = viewModel, onBack = onBack)
   }
 }
 
@@ -801,6 +805,7 @@ private fun PhoneCapabilitiesScreen(
 private fun GatewaySettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
+  onNavigate: (SettingsRoute) -> Unit = {},
 ) {
   val isConnected by viewModel.isConnected.collectAsState()
   val isNodeConnected by viewModel.isNodeConnected.collectAsState()
@@ -915,6 +920,182 @@ private fun GatewaySettingsScreen(
         )
       }
     }
+
+    // SSH Tunnel shortcut inside Gateway settings
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = "SSH Tunnel", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(
+          text = "Route the gateway connection through an SSH server for access outside the local network.",
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+        )
+        ClawSecondaryButton(
+          text = "Configure SSH Tunnel",
+          onClick = { onNavigate(SettingsRoute.SshTunnel) },
+          modifier = Modifier.fillMaxWidth(),
+          icon = Icons.Default.Lock,
+        )
+      }
+    }
+  }
+}
+
+@Composable
+private fun SshTunnelSettingsScreen(
+  viewModel: MainViewModel,
+  onBack: () -> Unit,
+) {
+  val sshEnabled by viewModel.sshEnabled.collectAsState()
+  val sshHost by viewModel.sshHost.collectAsState()
+  val sshPort by viewModel.sshPort.collectAsState()
+  val sshUsername by viewModel.sshUsername.collectAsState()
+  val sshLocalPort by viewModel.sshLocalPort.collectAsState()
+  val sshRemoteHost by viewModel.sshRemoteHost.collectAsState()
+  val sshRemotePort by viewModel.sshRemotePort.collectAsState()
+  var sshPasswordDraft by remember { mutableStateOf("") }
+  var sshPrivateKeyDraft by remember { mutableStateOf("") }
+  var sshKeyPassphraseDraft by remember { mutableStateOf("") }
+  var portDraft by remember(sshPort) { mutableStateOf(sshPort.toString()) }
+  var localPortDraft by remember(sshLocalPort) { mutableStateOf(sshLocalPort.toString()) }
+  var remotePortDraft by remember(sshRemotePort) { mutableStateOf(sshRemotePort.toString()) }
+
+  SettingsDetailFrame(
+    title = "SSH Tunnel",
+    subtitle = "Secure remote access to the gateway.",
+    icon = Icons.Default.Lock,
+    onBack = onBack,
+  ) {
+    SettingsMetricPanel(
+      rows = listOf(
+        SettingsMetric("Status", if (sshEnabled) "Enabled" else "Disabled"),
+        SettingsMetric("Server", if (sshHost.isBlank()) "Not set" else "${sshUsername}@${sshHost}:${sshPort}"),
+        SettingsMetric("Local Port", sshLocalPort.toString()),
+        SettingsMetric("Remote", "${sshRemoteHost}:${sshRemotePort}"),
+      ),
+    )
+
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+          modifier = Modifier.fillMaxWidth(),
+          horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+          Text(text = "Enable SSH Tunnel", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+          Switch(
+            checked = sshEnabled,
+            onCheckedChange = { viewModel.setSshEnabled(it) },
+          )
+        }
+        Text(
+          text = "When enabled, the gateway connection is forwarded through an SSH server.",
+          style = ClawTheme.type.body,
+          color = ClawTheme.colors.textMuted,
+        )
+      }
+    }
+
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = "SSH Credentials", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        ClawTextField(value = sshHost, onValueChange = { viewModel.setSshHost(it) }, placeholder = "SSH server host")
+        ClawTextField(
+          value = portDraft,
+          onValueChange = {
+            portDraft = it
+            it.toIntOrNull()?.let { p -> viewModel.setSshPort(p) }
+          },
+          placeholder = "Port (22)",
+        )
+        ClawTextField(value = sshUsername, onValueChange = { viewModel.setSshUsername(it) }, placeholder = "Username")
+        ClawTextField(
+          value = sshPasswordDraft,
+          onValueChange = {
+            sshPasswordDraft = it
+            viewModel.setSshPassword(it)
+          },
+          placeholder = "Password (stored encrypted)",
+        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
+          Text("SSH Private Key", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+          val context = LocalContext.current
+          val launcher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            uri?.let {
+              context.contentResolver.openInputStream(it)?.bufferedReader()?.use { reader ->
+                val key = reader.readText()
+                sshPrivateKeyDraft = key
+                viewModel.setSshPrivateKey(key)
+              }
+            }
+          }
+          TextButton(
+            onClick = { launcher.launch(arrayOf("*/*")) },
+            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 4.dp),
+          ) {
+            Text("Import File", style = ClawTheme.type.label, color = ClawTheme.colors.primary)
+          }
+        }
+        ClawTextField(
+          value = sshPrivateKeyDraft,
+          onValueChange = {
+            sshPrivateKeyDraft = it
+            viewModel.setSshPrivateKey(it)
+          },
+          placeholder = "-----BEGIN OPENSSH PRIVATE KEY-----...",
+        )
+        ClawTextField(
+          value = sshKeyPassphraseDraft,
+          onValueChange = {
+            sshKeyPassphraseDraft = it
+            viewModel.setSshKeyPassphrase(it)
+          },
+          placeholder = "Passphrase (if key is encrypted)",
+        )
+      }
+    }
+
+    ClawPanel {
+      Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(text = "Port Forwarding", style = ClawTheme.type.section, color = ClawTheme.colors.text)
+        Text(text = "The app binds a local port and forwards it to the gateway port inside the SSH network.", style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Local Port", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+            ClawTextField(
+              value = localPortDraft,
+              onValueChange = {
+                localPortDraft = it
+                it.toIntOrNull()?.let { p -> viewModel.setSshLocalPort(p) }
+              },
+              placeholder = "18799",
+            )
+          }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Remote Gateway Host", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+            ClawTextField(value = sshRemoteHost, onValueChange = { viewModel.setSshRemoteHost(it) }, placeholder = "127.0.0.1")
+          }
+          Column(modifier = Modifier.weight(0.55f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text("Remote Port", style = ClawTheme.type.label, color = ClawTheme.colors.textMuted)
+            ClawTextField(
+              value = remotePortDraft,
+              onValueChange = {
+                remotePortDraft = it
+                it.toIntOrNull()?.let { p -> viewModel.setSshRemotePort(p) }
+              },
+              placeholder = "18789",
+            )
+          }
+        }
+      }
+    }
+
+    ClawPrimaryButton(
+      text = "Save & Reconnect",
+      onClick = viewModel::refreshGatewayConnection,
+      modifier = Modifier.fillMaxWidth(),
+    )
   }
 }
 

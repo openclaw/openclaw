@@ -13,6 +13,7 @@ import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.GatewayTlsProbeFailure
 import ai.openclaw.app.gateway.GatewayTlsProbeResult
 import ai.openclaw.app.gateway.GatewayUpdateAvailableSummary
+import ai.openclaw.app.gateway.SshTunnelManager
 import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprint
 import ai.openclaw.app.gateway.probeGatewayTlsFingerprint
 import ai.openclaw.app.node.A2UIHandler
@@ -104,6 +105,9 @@ class NodeRuntime(
   private val externalAudioCaptureActive = MutableStateFlow(false)
   private val _voiceCaptureMode = MutableStateFlow(VoiceCaptureMode.Off)
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = _voiceCaptureMode.asStateFlow()
+
+  /** SSH tunnel manager – starts a local port-forward before each gateway connection attempt. */
+  private val sshTunnelManager = SshTunnelManager(scope)
 
   private val discovery = GatewayDiscovery(appContext, scope = scope)
   val gateways: StateFlow<List<GatewayEndpoint>> = discovery.gateways
@@ -1528,6 +1532,8 @@ class NodeRuntime(
     operatorStatusText = "Connecting…"
     nodeStatusText = "Connecting…"
     updateStatus()
+    // Start the SSH tunnel (if configured) before opening WebSocket sessions.
+    sshTunnelManager.start(prefs.loadSshTunnelConfig())
     connectWithAuth(endpoint = endpoint, auth = auth)
   }
 
@@ -1623,6 +1629,8 @@ class NodeRuntime(
     _pendingGatewayTrust.value = null
     operatorSession.disconnect()
     nodeSession.disconnect()
+    // Stop the SSH tunnel when the user explicitly disconnects.
+    sshTunnelManager.stop()
   }
 
   fun handleCanvasA2UIActionFromWebView(payloadJson: String) {

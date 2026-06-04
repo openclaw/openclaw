@@ -216,6 +216,9 @@ dependencies {
   // Unicast DNS-SD (Wide-Area Bonjour) for tailnet discovery domains.
   implementation(libs.dnsjava)
 
+  // SSH tunnel support – modernized JSch fork with BouncyCastle backend already in the project.
+  implementation(libs.jsch)
+
   testImplementation(libs.junit)
   testImplementation(libs.kotlinx.coroutines.test)
   testImplementation(libs.kotest.runner.junit5)

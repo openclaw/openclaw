@@ -150,6 +150,15 @@ class MainViewModel(
   val canvasDebugStatusEnabled: StateFlow<Boolean> = prefs.canvasDebugStatusEnabled
   val installedAppsSharingEnabled: StateFlow<Boolean> = prefs.installedAppsSharingEnabled
   val speakerEnabled: StateFlow<Boolean> = prefs.speakerEnabled
+
+  // SSH tunnel configuration flows (non-secret fields only).
+  val sshEnabled: StateFlow<Boolean> = prefs.sshEnabled
+  val sshHost: StateFlow<String> = prefs.sshHost
+  val sshPort: StateFlow<Int> = prefs.sshPort
+  val sshUsername: StateFlow<String> = prefs.sshUsername
+  val sshLocalPort: StateFlow<Int> = prefs.sshLocalPort
+  val sshRemoteHost: StateFlow<String> = prefs.sshRemoteHost
+  val sshRemotePort: StateFlow<Int> = prefs.sshRemotePort
   val voiceCaptureMode: StateFlow<VoiceCaptureMode> = runtimeState(initial = VoiceCaptureMode.Off) { it.voiceCaptureMode }
   val micEnabled: StateFlow<Boolean> = runtimeState(initial = false) { it.micEnabled }
 
@@ -381,6 +390,50 @@ class MainViewModel(
 
   fun setSpeakerEnabled(enabled: Boolean) {
     ensureRuntime().setSpeakerEnabled(enabled)
+  }
+
+  // -------------------------------------------------------------------------
+  // SSH tunnel setters
+  // -------------------------------------------------------------------------
+
+  fun setSshEnabled(value: Boolean) {
+    prefs.setSshEnabled(value)
+  }
+
+  fun setSshHost(value: String) {
+    prefs.setSshHost(value)
+  }
+
+  fun setSshPort(value: Int) {
+    prefs.setSshPort(value)
+  }
+
+  fun setSshUsername(value: String) {
+    prefs.setSshUsername(value)
+  }
+
+  fun setSshPassword(value: String) {
+    prefs.setSshPassword(value)
+  }
+
+  fun setSshPrivateKey(value: String) {
+    prefs.setSshPrivateKey(value)
+  }
+
+  fun setSshKeyPassphrase(value: String) {
+    prefs.setSshKeyPassphrase(value)
+  }
+
+  fun setSshLocalPort(value: Int) {
+    prefs.setSshLocalPort(value)
+  }
+
+  fun setSshRemoteHost(value: String) {
+    prefs.setSshRemoteHost(value)
+  }
+
+  fun setSshRemotePort(value: Int) {
+    prefs.setSshRemotePort(value)
   }
 
   fun refreshGatewayConnection() {

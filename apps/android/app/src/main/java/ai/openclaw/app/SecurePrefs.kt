@@ -42,6 +42,15 @@ class SecurePrefs(
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
+
+    // SSH tunnel preference keys.
+    private const val sshEnabledKey = "ssh.tunnel.enabled"
+    private const val sshHostKey = "ssh.tunnel.host"
+    private const val sshPortKey = "ssh.tunnel.port"
+    private const val sshUsernameKey = "ssh.tunnel.username"
+    private const val sshLocalPortKey = "ssh.tunnel.localPort"
+    private const val sshRemoteHostKey = "ssh.tunnel.remoteHost"
+    private const val sshRemotePortKey = "ssh.tunnel.remotePort"
   }
 
   private val appContext = context.applicationContext
@@ -180,6 +189,30 @@ class SecurePrefs(
 
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
+
+  // SSH tunnel config flows.
+  private val _sshEnabled = MutableStateFlow(plainPrefs.getBoolean(sshEnabledKey, false))
+  val sshEnabled: StateFlow<Boolean> = _sshEnabled
+
+  private val _sshHost = MutableStateFlow(plainPrefs.getString(sshHostKey, "") ?: "")
+  val sshHost: StateFlow<String> = _sshHost
+
+  private val _sshPort = MutableStateFlow(plainPrefs.getInt(sshPortKey, 22))
+  val sshPort: StateFlow<Int> = _sshPort
+
+  private val _sshUsername = MutableStateFlow(plainPrefs.getString(sshUsernameKey, "") ?: "")
+  val sshUsername: StateFlow<String> = _sshUsername
+
+  private val _sshLocalPort = MutableStateFlow(
+    plainPrefs.getInt(sshLocalPortKey, ai.openclaw.app.gateway.SshTunnelConfig.DEFAULT_LOCAL_PORT),
+  )
+  val sshLocalPort: StateFlow<Int> = _sshLocalPort
+
+  private val _sshRemoteHost = MutableStateFlow(plainPrefs.getString(sshRemoteHostKey, "127.0.0.1") ?: "127.0.0.1")
+  val sshRemoteHost: StateFlow<String> = _sshRemoteHost
+
+  private val _sshRemotePort = MutableStateFlow(plainPrefs.getInt(sshRemotePortKey, 18789))
+  val sshRemotePort: StateFlow<Int> = _sshRemotePort
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -524,6 +557,93 @@ class SecurePrefs(
     plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
     _speakerEnabled.value = value
   }
+
+  // -------------------------------------------------------------------------
+  // SSH tunnel setters
+  // -------------------------------------------------------------------------
+
+  /** Enables or disables the SSH tunnel globally. */
+  fun setSshEnabled(value: Boolean) {
+    plainPrefs.edit { putBoolean(sshEnabledKey, value) }
+    _sshEnabled.value = value
+  }
+
+  /** Saves the SSH server hostname. */
+  fun setSshHost(value: String) {
+    val trimmed = value.trim()
+    plainPrefs.edit { putString(sshHostKey, trimmed) }
+    _sshHost.value = trimmed
+  }
+
+  /** Saves the SSH server port. */
+  fun setSshPort(value: Int) {
+    plainPrefs.edit { putInt(sshPortKey, value) }
+    _sshPort.value = value
+  }
+
+  /** Saves the SSH login username. */
+  fun setSshUsername(value: String) {
+    val trimmed = value.trim()
+    plainPrefs.edit { putString(sshUsernameKey, trimmed) }
+    _sshUsername.value = trimmed
+  }
+
+  /** Saves the SSH password in encrypted storage. */
+  fun setSshPassword(value: String) {
+    securePrefs.edit { putString("ssh.tunnel.password", value.trim()) }
+  }
+
+  /** Loads the SSH password from encrypted storage (empty string if unset). */
+  fun loadSshPassword(): String = securePrefs.getString("ssh.tunnel.password", "")?.trim() ?: ""
+
+  fun setSshPrivateKey(value: String) {
+    securePrefs.edit { putString("ssh.tunnel.privateKey", value.trim()) }
+  }
+
+  fun loadSshPrivateKey(): String = securePrefs.getString("ssh.tunnel.privateKey", "")?.trim() ?: ""
+
+  fun setSshKeyPassphrase(value: String) {
+    securePrefs.edit { putString("ssh.tunnel.keyPassphrase", value.trim()) }
+  }
+
+  fun loadSshKeyPassphrase(): String = securePrefs.getString("ssh.tunnel.keyPassphrase", "")?.trim() ?: ""
+
+  /** Saves the local forwarded port. */
+  fun setSshLocalPort(value: Int) {
+    plainPrefs.edit { putInt(sshLocalPortKey, value) }
+    _sshLocalPort.value = value
+  }
+
+  /** Saves the remote gateway hostname inside the SSH target network. */
+  fun setSshRemoteHost(value: String) {
+    val trimmed = value.trim()
+    plainPrefs.edit { putString(sshRemoteHostKey, trimmed) }
+    _sshRemoteHost.value = trimmed
+  }
+
+  /** Saves the remote gateway port inside the SSH target network. */
+  fun setSshRemotePort(value: Int) {
+    plainPrefs.edit { putInt(sshRemotePortKey, value) }
+    _sshRemotePort.value = value
+  }
+
+  /**
+   * Assembles a [ai.openclaw.app.gateway.SshTunnelConfig] from the current stored values.
+   * The password is read from encrypted storage each time to avoid in-memory persistence.
+   */
+  fun loadSshTunnelConfig(): ai.openclaw.app.gateway.SshTunnelConfig =
+    ai.openclaw.app.gateway.SshTunnelConfig(
+      enabled = _sshEnabled.value,
+      host = _sshHost.value,
+      port = _sshPort.value,
+      username = _sshUsername.value,
+      password = loadSshPassword(),
+      privateKey = loadSshPrivateKey(),
+      privateKeyPassphrase = loadSshKeyPassphrase(),
+      localPort = _sshLocalPort.value,
+      remoteHost = _sshRemoteHost.value,
+      remotePort = _sshRemotePort.value,
+    )
 
   private fun loadNotificationForwardingPackages(): Set<String> {
     val raw = plainPrefs.getString(notificationsForwardingPackagesKey, null)?.trim()
