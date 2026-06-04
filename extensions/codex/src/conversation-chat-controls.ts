@@ -795,6 +795,20 @@ function buildCodexMergedFreeformAnswerText(
 ): string | undefined {
   const questions = pending.questions;
   if (questions.length <= 1) {
+    // For a single question, normalize the typed answer against
+    // the question's options so a typed prefix like "CLI Cleanup"
+    // resolves to the canonical option label "CLI Cleanup
+    // (Recommended) - Keeps the fake plan small…". The Codex
+    // app-server contract normalizes request_user_input
+    // questions to isOther=true, so the matcher accepts the
+    // freeform text; the canonical form is what reaches Codex.
+    const question = questions[0];
+    if (question) {
+      const resolved = resolveFreeformOptionAnswer(question, answerText);
+      if (resolved.matched) {
+        return resolved.answer;
+      }
+    }
     return answerText;
   }
   const selectedAnswerCount = Object.keys(pending.selectedAnswers).length;
@@ -850,10 +864,12 @@ function parseCodexFreeformAnswersForUnselectedQuestions(
 /**
  * Normalize a typed freeform reply against a single question's rendered
  * options. Accepts: the numeric prefix the prompt renders (e.g. "1"),
- * the exact option label (case-insensitive), or the raw text. Returns
- * the canonical option label when one matched, or the raw answer
- * with matched: false so callers can decide whether to consume the
- * freeform fallback.
+ * the exact option label (case-insensitive), a prefix of the option
+ * label that is unambiguously a single match (e.g. "CLI Cleanup"
+ * against "CLI Cleanup    (Recommended)    - Keeps the fake plan
+ * small…"), or the raw text. Returns the canonical option label when
+ * one matched, or the raw answer with matched: false so callers can
+ * decide whether to consume the freeform fallback.
  */
 function resolveFreeformOptionAnswer(
   question: UserInputQuestion,
@@ -881,6 +897,20 @@ function resolveFreeformOptionAnswer(
   const exact = options.find((option) => option.label.toLowerCase() === lowered);
   if (exact) {
     return { matched: true, answer: exact.label };
+  }
+  // Prefix match (case-insensitive): a user that types the option's
+  // prefix — e.g. "CLI Cleanup" against an option rendered as
+  // "CLI Cleanup    (Recommended)    - Keeps the fake plan small
+  // and engineering-shaped." — should still resolve to that
+  // single option. Only accept the prefix when exactly one option
+  // matches; if two or more options share a common prefix, fall
+  // through so the caller's freeform fallback (or the "couldn't
+  // match" reply) can handle the ambiguity.
+  const prefixMatches = options.filter((option) =>
+    option.label.toLowerCase().startsWith(lowered),
+  );
+  if (prefixMatches.length === 1) {
+    return { matched: true, answer: prefixMatches[0]?.label ?? answerText };
   }
   return { matched: false, answer: answerText };
 }

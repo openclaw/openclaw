@@ -388,13 +388,58 @@ describe("codex conversation chat controls", () => {
         sessionFile: scope.sessionFile,
       }),
     ).toEqual({ matched: false });
+  });
+
+  it("resolves a typed prefix of a single matching option to that option", async () => {
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    createCodexUserInputPrompt({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "theme",
+          header: "Theme",
+          question: "Which fake plan theme should I use?",
+          isOther: true,
+          isSecret: false,
+          options: [
+            {
+              label: "CLI Cleanup    (Recommended)    - Keeps the fake plan small and engineering-shaped.",
+              description: "",
+            },
+            {
+              label: "Docs Polish - Makes the fake plan about wording and navigation.",
+              description: "",
+            },
+            {
+              label: "UI Tweak - Makes the fake plan about a small visual change.",
+              description: "",
+            },
+          ],
+        },
+      ],
+    });
+
     expect(
       answerCodexUserInputFreeform({
-        answerText: "/codex input token Runtime",
+        answerText: "CLI Cleanup",
         ctx,
         sessionFile: scope.sessionFile,
       }),
-    ).toEqual({ matched: false });
+    ).toEqual({
+      matched: true,
+      consumed: true,
+      message: "Sent answer to Codex.",
+    });
+    // The single-question freeform path now resolves the typed
+    // prefix to the canonical option label so Codex receives the
+    // full option text instead of the user's shortened input.
+    await expect(answered).resolves.toBe(
+      "CLI Cleanup    (Recommended)    - Keeps the fake plan small and engineering-shaped.",
+    );
   });
 
   it("leaves incomplete multi-question freeform text alone", () => {
