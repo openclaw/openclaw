@@ -2122,18 +2122,23 @@ describe("installPluginFromNpmSpec", () => {
       `${JSON.stringify(
         {
           name: "openclaw",
-          overrides: {
-            axios: "1.16.0",
-            "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-            nested: {
-              alias: "npm:@scope/alias@1.0.0",
-              semver: "1.2.3",
-            },
-          },
         },
         null,
         2,
       )}\n`,
+      "utf8",
+    );
+    fs.writeFileSync(
+      path.join(hostRoot, "pnpm-workspace.yaml"),
+      [
+        "overrides:",
+        "  axios: 1.16.0",
+        '  node-domexception: "npm:@nolyfill/domexception@1.0.28"',
+        "  nested:",
+        '    alias: "npm:@scope/alias@1.0.0"',
+        "    semver: 1.2.3",
+        "",
+      ].join("\n"),
       "utf8",
     );
     resolveOpenClawPackageRootSyncMock.mockReturnValue(hostRoot);

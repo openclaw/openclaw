@@ -3,6 +3,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { PassThrough } from "node:stream";
 import { vi } from "vitest";
 
+/**
+ * Minimal HTTP response mock used by gateway handler tests.
+ */
 export function makeMockHttpResponse(): {
   res: ServerResponse;
   setHeader: ReturnType<typeof vi.fn>;

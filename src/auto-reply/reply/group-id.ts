@@ -66,6 +66,7 @@ function extractLegacyParsedGroupTargetId(params: {
   return target || undefined;
 }
 
+/** Extracts a group/channel target id from explicit channel target syntax. */
 export function extractExplicitGroupId(raw: string | undefined | null): string | undefined {
   const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed) {

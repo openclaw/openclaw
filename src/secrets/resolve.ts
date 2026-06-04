@@ -68,6 +68,7 @@ type ResolutionLimits = {
 
 type ProviderResolutionOutput = Map<string, unknown>;
 
+/** Error for failures that affect an entire configured secret provider. */
 export class SecretProviderResolutionError extends Error {
   readonly scope = "provider" as const;
   readonly source: SecretRefSource;
@@ -86,6 +87,7 @@ export class SecretProviderResolutionError extends Error {
   }
 }
 
+/** Error for failures limited to one SecretRef id under a provider. */
 export class SecretRefResolutionError extends Error {
   readonly scope = "ref" as const;
   readonly source: SecretRefSource;
@@ -107,6 +109,7 @@ export class SecretRefResolutionError extends Error {
   }
 }
 
+/** Type guard for provider-scoped secret resolution failures. */
 export function isProviderScopedSecretResolutionError(
   value: unknown,
 ): value is SecretProviderResolutionError {
@@ -366,6 +369,8 @@ async function readFileProviderPayload(params: {
   })();
 
   if (cache) {
+    // Cache the in-flight read, not just the fulfilled payload, so concurrent refs share one
+    // permission-checked file read and observe the same provider error.
     cache.filePayloadByProvider ??= new Map();
     cache.filePayloadByProvider.set(cacheKey, readPromise);
   }
@@ -871,6 +876,7 @@ async function resolveProviderRefs(params: {
   }
 }
 
+/** Resolves a batch of SecretRefs, grouped by provider for bounded provider concurrency. */
 export async function resolveSecretRefValues(
   refs: SecretRef[],
   options: ResolveSecretRefOptions,
@@ -898,6 +904,8 @@ export async function resolveSecretRefValues(
     { source: SecretRefSource; providerName: string; refs: SecretRef[] }
   >();
   for (const ref of uniqueRefs.values()) {
+    // Provider calls are batched by source/provider so exec providers receive one request for
+    // many ids and file providers parse once per payload.
     const key = toProviderKey(ref.source, ref.provider);
     const existing = grouped.get(key);
     if (existing) {
@@ -960,6 +968,7 @@ export async function resolveSecretRefValues(
   return resolved;
 }
 
+/** Resolves one SecretRef, using the optional shared runtime cache. */
 export async function resolveSecretRefValue(
   ref: SecretRef,
   options: ResolveSecretRefOptions,
@@ -985,12 +994,14 @@ export async function resolveSecretRefValue(
   })();
 
   if (cache) {
+    // Store the in-flight promise so repeated callers do not race duplicate provider work.
     cache.resolvedByRefKey ??= new Map();
     cache.resolvedByRefKey.set(key, promise);
   }
   return await promise;
 }
 
+/** Resolves one SecretRef and requires a non-empty string result. */
 export async function resolveSecretRefString(
   ref: SecretRef,
   options: ResolveSecretRefOptions,

@@ -14,6 +14,7 @@ import type { InstallPolicyOrigin, InstallPolicySource } from "../../security/in
 
 const VALID_SLUG_PATTERN = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 const DEFAULT_SKILL_ARCHIVE_ROOT_MARKERS = ["SKILL.md"] as const;
+/** Accepted root marker names for ClawHub skill archive uploads. */
 export const CLAWHUB_SKILL_ARCHIVE_ROOT_MARKERS = [
   "SKILL.md",
   "skill.md",
@@ -38,12 +39,14 @@ type SkillArchiveInstallPolicy = {
   source?: InstallPolicySource;
 };
 
+/** Result shape for installing a skill archive into a workspace skills dir. */
 export type SkillArchiveInstallResult =
   | { ok: true; targetDir: string }
   | { ok: false; error: string; failureKind: SkillArchiveInstallFailureKind };
 
 export type SkillArchiveInstallFailureKind = "invalid-request" | "unavailable";
 
+/** Normalizes a tracked slug without accepting traversal or path separators. */
 export function normalizeTrackedSkillSlug(raw: string): string {
   const slug = raw.trim();
   if (!slug || slug.includes("/") || slug.includes("\\") || slug.includes("..")) {

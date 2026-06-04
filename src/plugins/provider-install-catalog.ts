@@ -24,6 +24,7 @@ import {
   type ProviderAuthChoiceMetadata,
 } from "./provider-auth-choices.js";
 
+/** Provider setup choice paired with install metadata for the owning plugin. */
 export type ProviderInstallCatalogEntry = ProviderAuthChoiceMetadata & {
   label: string;
   origin: PluginOrigin;
@@ -369,6 +370,7 @@ function resolveOfficialExternalProviderInstallCatalogEntries(params: {
   return entries;
 }
 
+/** Lists install catalog entries for provider setup choices. */
 export function resolveProviderInstallCatalogEntries(
   params?: ProviderInstallCatalogParams,
 ): ProviderInstallCatalogEntry[] {
@@ -411,6 +413,7 @@ export function resolveProviderInstallCatalogEntries(
   );
 }
 
+/** Resolves one provider install catalog entry by setup choice id. */
 export function resolveProviderInstallCatalogEntry(
   choiceId: string,
   params?: ProviderInstallCatalogParams,

@@ -9,6 +9,8 @@ import { listBundledChannelPluginIds as listCatalogBundledChannelPluginIds } fro
 import type { ChannelId } from "../../channel-id.types.js";
 import type { ChannelPlugin } from "../../types.js";
 
+// Loads bundled channel plugin public surfaces for core contract tests without
+// reaching into extension-private source paths.
 type ChannelPluginApiModule = Record<string, unknown>;
 type ChannelDirectoryContractModule = Record<string, unknown>;
 
@@ -212,6 +214,7 @@ export function listBundledChannelPluginIds(): readonly ChannelId[] {
   return listCatalogBundledChannelPluginIds() as ChannelId[];
 }
 
+/** Returns a bundled channel plugin from its generated public API artifact. */
 export async function getBundledChannelPluginAsync(
   id: ChannelId,
 ): Promise<ChannelPlugin | undefined> {
@@ -224,6 +227,8 @@ export async function getBundledChannelPluginAsync(
     return (await cachedPromise) ?? undefined;
   }
 
+  // Cache both resolved plugins and in-flight loads so sharded contract suites
+  // do not repeatedly import the same generated plugin artifact.
   const loading = loadBundledPluginPublicSurface<ChannelPluginApiModule>({
     pluginId: id,
     artifactBasename: "channel-plugin-api.js",

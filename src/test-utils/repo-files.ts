@@ -3,6 +3,7 @@ import path from "node:path";
 
 const gitTrackedFilesCache = new Map<string, string[] | null>();
 
+/** Normalizes file paths to repo-style forward slash separators. */
 export function toRepoPath(filePath: string): string {
   return filePath.replaceAll("\\", "/");
 }
