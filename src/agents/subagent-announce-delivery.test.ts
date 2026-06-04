@@ -1,9 +1,14 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OutboundDeliveryError } from "../infra/outbound/deliver-types.js";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import {
+  drainSystemEvents,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type {
@@ -4488,5 +4493,155 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+  });
+});
+
+describe("durable-queue fallback when direct handoff is pending", () => {
+  beforeEach(() => {
+    resetSystemEventsForTest();
+  });
+
+  afterEach(() => {
+    resetSystemEventsForTest();
+  });
+
+  // The canonical requester store key (resolveRequesterStoreKey) leaves keys
+  // that already start with "agent:" untouched. Using a canonical key in the
+  // test avoids the "agent:<inferred>:<raw>" remap and keeps the assertions
+  // clean.
+  const parentSessionKey = "agent:main:session:durable-queue-test-parent";
+
+  function pendingHandoffArgs(
+    overrides: Partial<Parameters<typeof deliverSubagentAnnouncement>[0]> = {},
+  ): Parameters<typeof deliverSubagentAnnouncement>[0] {
+    const callGateway = vi.fn(async () => ({
+      runId: "agent:main:run:announce-pending",
+      status: "accepted" as const,
+      acceptedAt: 4_000,
+    })) as unknown as typeof runtimeCallGateway;
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "durable-queue-test-parent-session",
+        isActive: false,
+      }),
+      queueEmbeddedAgentMessageWithOutcome: createQueueOutcomeMock(false),
+    });
+
+    return {
+      requesterSessionKey: parentSessionKey,
+      targetRequesterSessionKey: parentSessionKey,
+      triggerMessage: "child cipher:abc done: APPROVE",
+      steerMessage: "child cipher:abc done: APPROVE",
+      requesterOrigin: slackThreadOrigin,
+      requesterSessionOrigin: slackThreadOrigin,
+      completionDirectOrigin: slackThreadOrigin,
+      directOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "durable-queue-test-idem",
+      sourceTool: "sessions_spawn",
+      ...overrides,
+    } as Parameters<typeof deliverSubagentAnnouncement>[0];
+  }
+
+  it("enqueues into the durable inbox when direct handoff is pending and parent is non-streaming", async () => {
+    const result = await deliverSubagentAnnouncement(pendingHandoffArgs());
+
+    expect(result.delivered).toBe(true);
+    expect(result.path).toBe("durable_queue");
+    expect(result.error).toBeUndefined();
+    expect(peekSystemEvents(parentSessionKey)).toEqual(["child cipher:abc done: APPROVE"]);
+  });
+
+  it("is idempotent on duplicate fallback fires for the same idempotency key", async () => {
+    const args = pendingHandoffArgs({
+      directIdempotencyKey: "durable-queue-test-dup",
+    });
+    const r1 = await deliverSubagentAnnouncement(args);
+    const r2 = await deliverSubagentAnnouncement(args);
+
+    expect(r1.path).toBe("durable_queue");
+    expect(r2.path).toBe("durable_queue");
+    // Inbox dedupes on (text, contextKey, deliveryContext); duplicate fires
+    // collapse to one entry.
+    expect(peekSystemEvents(parentSessionKey)).toEqual(["child cipher:abc done: APPROVE"]);
+  });
+
+  it("does not invoke durable fallback when parent is active-streaming (steered path wins)", async () => {
+    const callGateway = vi.fn(async () => ({
+      runId: "agent:main:run:announce-pending",
+      status: "accepted" as const,
+      acceptedAt: 4_000,
+    })) as unknown as typeof runtimeCallGateway;
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "durable-queue-test-parent-session",
+        isActive: true,
+      }),
+      queueEmbeddedAgentMessageWithOutcome: createQueueOutcomeMock(true),
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: parentSessionKey,
+      targetRequesterSessionKey: parentSessionKey,
+      triggerMessage: "child active",
+      steerMessage: "child active",
+      requesterOrigin: slackThreadOrigin,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      directIdempotencyKey: "durable-queue-test-active",
+    });
+
+    expect(result.path).toBe("steered");
+    expect(peekSystemEvents(parentSessionKey)).toEqual([]);
+  });
+
+  it("does NOT redirect to durable_queue when expectedMediaUrls is non-empty (existing direct/media path preserved)", async () => {
+    const args = pendingHandoffArgs({
+      directIdempotencyKey: "durable-queue-test-media",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-test",
+          childSessionId: "task-test",
+          announceType: "image generation task",
+          taskLabel: "test image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated.\nMEDIA:/tmp/generated-test.png",
+          mediaUrls: ["/tmp/generated-test.png"],
+          replyInstruction: "Deliver the generated image.",
+        },
+      ],
+    });
+    const result = await deliverSubagentAnnouncement(args);
+
+    // Either the existing direct/media path returns delivered:true
+    // (downstream of the patched branch) or the existing pending give-up
+    // returns delivered:false; the contract this test enforces is simply
+    // that the durable_queue branch is NOT taken when media is in play.
+    expect(result.path).not.toBe("durable_queue");
+    expect(peekSystemEvents(parentSessionKey)).toEqual([]);
+  });
+
+  it("records the result envelope shape consumers can route on", async () => {
+    const result = await deliverSubagentAnnouncement(
+      pendingHandoffArgs({
+        directIdempotencyKey: "durable-queue-test-shape",
+      }),
+    );
+
+    expect(result).toEqual({
+      delivered: true,
+      path: "durable_queue",
+      phases: expect.any(Array),
+    });
+    // Drain confirms the next-turn prompt would receive the trigger.
+    expect(drainSystemEvents(parentSessionKey)).toEqual(["child cipher:abc done: APPROVE"]);
+    expect(peekSystemEvents(parentSessionKey)).toEqual([]);
   });
 });
