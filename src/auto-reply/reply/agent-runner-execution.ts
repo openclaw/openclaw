@@ -1994,6 +1994,7 @@ export async function runAgentTurnWithFallback(params: {
               step,
             });
           },
+          exposeNextCandidateToRun: true,
           classifyResult: async ({ result, provider, model }) => {
             const classification = outcomePlan.classifyRunResult({
               result,
@@ -2304,6 +2305,7 @@ export async function runAgentTurnWithFallback(params: {
                     sandboxSessionKey: params.runtimePolicySessionKey,
                     prompt: params.commandBody,
                     transcriptPrompt: params.transcriptCommandBody,
+                    nextModelFallbackCandidate: runOptions?.nextCandidate,
                     userTurnTranscriptRecorder,
                     currentInboundEventKind: params.followupRun.currentInboundEventKind,
                     currentInboundContext: params.followupRun.currentInboundContext,
@@ -2882,38 +2884,6 @@ export async function runAgentTurnWithFallback(params: {
 
       const isFallbackSummary = isFallbackSummaryError(err);
 
-      // Emit model_failure_terminal plugin hook (fire-and-forget). This gives plugins
-      // a structured in-process signal when all model attempts have been exhausted,
-      // without requiring them to poll or parse gateway logs.
-      const terminalHookRunner = getGlobalHookRunner();
-      if (terminalHookRunner?.hasHooks("model_failure_terminal")) {
-        const terminalKind = isFallbackSummary ? "all_models_failed" : "run_failed_before_reply";
-        const terminalAttempts = isFallbackSummary
-          ? err.attempts.map((a) => ({
-              provider: a.provider,
-              model: a.model,
-              reason: a.reason ?? null,
-            }))
-          : undefined;
-        void terminalHookRunner.runModelFailureTerminal(
-          {
-            runId,
-            agentId: params.followupRun.run.agentId,
-            sessionId: params.followupRun.run.sessionId,
-            sessionKey: params.sessionKey,
-            finalMessage: message,
-            kind: terminalKind,
-            attempts: terminalAttempts,
-          },
-          {
-            runId,
-            agentId: params.followupRun.run.agentId,
-            sessionId: params.followupRun.run.sessionId,
-            sessionKey: params.sessionKey,
-          },
-        );
-      }
-
       // Only classify as rate-limit when we have concrete evidence from the
       // underlying error. FallbackSummaryError messages embed per-attempt
       // reason labels like `(rate_limit)`, so string-matching the summary text
@@ -2978,6 +2948,39 @@ export async function runAgentTurnWithFallback(params: {
           fallbackExhaustedFailure: true,
         },
       });
+
+      // Emit model_failure_terminal plugin hook (fire-and-forget). This gives plugins
+      // a structured in-process signal when all model attempts have been exhausted,
+      // without requiring them to poll or parse gateway logs.
+      const terminalHookRunner = getGlobalHookRunner();
+      if (terminalHookRunner?.hasHooks("model_failure_terminal")) {
+        const terminalKind = isFallbackSummary ? "all_models_failed" : "run_failed_before_reply";
+        const terminalAttempts = isFallbackSummary
+          ? err.attempts.map((a) => ({
+              provider: a.provider,
+              model: a.model,
+              reason: a.reason ?? null,
+            }))
+          : undefined;
+        void terminalHookRunner.runModelFailureTerminal(
+          {
+            runId,
+            agentId: params.followupRun.run.agentId,
+            sessionId: params.followupRun.run.sessionId,
+            sessionKey: params.sessionKey,
+            finalMessage: userVisibleFallbackText,
+            kind: terminalKind,
+            attempts: terminalAttempts,
+          },
+          {
+            runId,
+            agentId: params.followupRun.run.agentId,
+            sessionId: params.followupRun.run.sessionId,
+            sessionKey: params.sessionKey,
+          },
+        );
+      }
+
       params.replyOperation?.fail("run_failed", err);
       return {
         kind: "final",
