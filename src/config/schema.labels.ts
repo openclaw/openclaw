@@ -131,6 +131,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "gateway.tools": "Gateway Tool Exposure Policy",
   "gateway.tools.allow": "Gateway Tool Allowlist",
   "gateway.tools.deny": "Gateway Tool Denylist",
+  "gateway.tools.directInvoke": "Gateway Direct-Invoke Opt-Ins",
+  "gateway.tools.directInvoke.hostFsRead": "Direct-Invoke Host-FS Read Opt-In",
   "gateway.handshakeTimeoutMs": "Gateway Handshake Timeout",
   "gateway.channelHealthCheckMinutes": "Gateway Channel Health Check Interval (min)",
   "gateway.channelStaleEventThresholdMinutes": "Gateway Channel Stale Event Threshold (min)",
