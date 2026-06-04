@@ -221,13 +221,22 @@ function getNodeErrorCode(error: unknown): string | undefined {
 }
 
 type FsSafeModule = typeof import("../infra/fs-safe.js");
+type SkillEnvOverridesModule = typeof import("./skills/env-overrides.runtime.js");
 
 const fsSafeModuleLoader = createLazyImportLoader<FsSafeModule>(
   () => import("../infra/fs-safe.js"),
 );
+const skillEnvOverridesModuleLoader = createLazyImportLoader<SkillEnvOverridesModule>(
+  () => import("./skills/env-overrides.runtime.js"),
+);
 
 async function loadFsSafeModule(): Promise<FsSafeModule> {
   return await fsSafeModuleLoader.load();
+}
+
+async function getActiveHostExecSkillEnvKeys(): Promise<ReadonlySet<string>> {
+  const { getActiveSkillEnvKeys } = await skillEnvOverridesModuleLoader.load();
+  return getActiveSkillEnvKeys();
 }
 
 function shouldSkipScriptPreflightPathError(
@@ -1685,6 +1694,7 @@ export function createExecTool(
               baseEnv: inheritedBaseEnv,
               overrides: requestedEnv,
               blockPathOverrides: true,
+              stripInheritedKeys: await getActiveHostExecSkillEnvKeys(),
             });
       if (
         hostEnvResult &&
