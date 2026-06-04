@@ -359,6 +359,7 @@ describe("models.list", () => {
                 provider: "openai",
                 api: "openai-responses",
                 available: true,
+                agentRuntime: { id: "codex", label: "OpenAI Codex", source: "implicit" },
               },
             ],
           },

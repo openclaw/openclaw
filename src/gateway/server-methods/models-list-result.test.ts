@@ -120,4 +120,39 @@ describe("models-list-result runtime metadata", () => {
       },
     ]);
   });
+
+  it("resolves configured runtime metadata for provider-native slash ids", () => {
+    const models = addConfiguredAgentRuntimeMetadata({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "nvidia/moonshotai/kimi-k2.5": { agentRuntime: { id: "openclaw" } },
+            },
+          },
+        },
+      } as never,
+      agentId: "main",
+      catalog: [
+        {
+          id: "moonshotai/kimi-k2.5",
+          name: "Kimi K2.5",
+          provider: "nvidia",
+        },
+      ],
+    });
+
+    expect(models).toEqual([
+      {
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5",
+        provider: "nvidia",
+        agentRuntime: {
+          id: "openclaw",
+          label: "OpenClaw Default",
+          source: "model",
+        },
+      },
+    ]);
+  });
 });
