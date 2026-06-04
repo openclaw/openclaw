@@ -1020,6 +1020,52 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.dispose();
   });
 
+  it("preserves explicit channel streaming off for account commentary overrides", () => {
+    const relay = startAcpSpawnParentStreamRelay({
+      runId: "run-account-commentary-channel-off",
+      parentSessionKey: "agent:main:main",
+      childSessionKey: "agent:codex:acp:child-account-commentary-channel-off",
+      agentId: "codex",
+      cfg: {
+        channels: {
+          discord: {
+            streaming: false,
+            accounts: {
+              carey: {
+                streaming: {
+                  progress: {
+                    commentary: true,
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+      deliveryContext: {
+        ...progressCommentaryDeliveryContext,
+        channel: "discord",
+        accountId: "carey",
+      },
+      streamFlushMs: 10,
+      noOutputNoticeMs: 120_000,
+      emitStartNotice: false,
+    });
+
+    emitAgentEvent({
+      runId: "run-account-commentary-channel-off",
+      stream: "assistant",
+      data: {
+        delta: "Checking",
+        phase: "commentary",
+      },
+    });
+    vi.advanceTimersByTime(15);
+
+    expect(collectedTexts()).toEqual([]);
+    relay.dispose();
+  });
+
   it("inherits legacy parent channel progress mode for account commentary overrides", () => {
     const relay = startAcpSpawnParentStreamRelay({
       runId: "run-account-legacy-commentary-enabled",

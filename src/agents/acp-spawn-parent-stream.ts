@@ -75,10 +75,23 @@ function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
     : undefined;
 }
 
+function asStreamingConfigRecord(value: unknown): Record<string, unknown> | undefined {
+  const record = asObjectRecord(value);
+  if (record) {
+    return record;
+  }
+  if (typeof value === "string") {
+    return { mode: value };
+  }
+  if (typeof value === "boolean") {
+    return { mode: value ? "partial" : "off" };
+  }
+  return undefined;
+}
+
 function mergeStreamingConfig(base: unknown, override: unknown): unknown {
-  const baseRecord =
-    asObjectRecord(base) ?? (typeof base === "string" ? { mode: base } : undefined);
-  const overrideRecord = asObjectRecord(override);
+  const baseRecord = asStreamingConfigRecord(base);
+  const overrideRecord = asStreamingConfigRecord(override);
   if (!baseRecord || !overrideRecord) {
     return override ?? base;
   }
