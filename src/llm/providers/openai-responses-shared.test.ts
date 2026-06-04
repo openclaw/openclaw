@@ -1,6 +1,8 @@
 // OpenAI Responses shared tests cover tool conversion and response item mapping.
 import type {
+  ResponseCreateParamsStreaming,
   ResponseInput,
+  ResponseStreamEvent,
   Tool as OpenAIResponsesTool,
 } from "openai/resources/responses/responses.js";
 import { describe, expect, it } from "vitest";
@@ -11,6 +13,7 @@ import {
   convertResponsesMessages,
   type OpenAIResponsesStreamEvent,
   processResponsesStream,
+  runResponsesStreamLifecycle,
   sanitizeResponsesInput,
 } from "./openai-responses-shared.js";
 import { convertResponsesTools } from "./openai-responses-tools.js";
@@ -889,5 +892,80 @@ describe("Azure OpenAI Responses content type support", () => {
       type: "text",
       text: "No explicit part",
     });
+  });
+});
+
+describe("runResponsesStreamLifecycle", () => {
+  it("sanitizes null content injected by onPayload before sending to the SDK", async () => {
+    const stream = new AssistantMessageEventStream();
+    const output = createResponsesAssistantOutput(nativeOpenAIModel);
+    let capturedParams: ResponseCreateParamsStreaming | undefined;
+
+    async function* mockData(): AsyncGenerator<ResponseStreamEvent> {
+      yield {
+        type: "response.completed",
+        response: {
+          id: "resp_test",
+          object: "response",
+          created_at: Math.floor(Date.now() / 1000),
+          status: "completed",
+          model: "gpt-5.5",
+          output: [],
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        },
+      } as unknown as ResponseStreamEvent;
+    }
+
+    const mockClient = {
+      responses: {
+        create(params: ResponseCreateParamsStreaming, _options: unknown) {
+          capturedParams = params;
+          return {
+            withResponse: async () => ({
+              data: mockData(),
+              response: new Response(),
+            }),
+          };
+        },
+      },
+    };
+
+    const buildParams = (): ResponseCreateParamsStreaming =>
+      ({
+        model: "gpt-5.5",
+        input: [{ role: "user", content: "hello" }],
+        stream: true,
+      }) as unknown as ResponseCreateParamsStreaming;
+
+    await runResponsesStreamLifecycle({
+      stream,
+      model: nativeOpenAIModel,
+      output,
+      createClient: () =>
+        mockClient as unknown as ReturnType<
+          Parameters<typeof runResponsesStreamLifecycle>[0]["createClient"]
+        >,
+      buildParams,
+      formatError: (err) => String(err),
+      options: {
+        onPayload(requestParams) {
+          (requestParams.input as unknown as Array<Record<string, unknown>>).push({
+            type: "message",
+            role: "assistant",
+            content: null,
+            status: "completed",
+          });
+        },
+      },
+    });
+
+    expect(capturedParams).toBeDefined();
+    const input = capturedParams!.input as unknown as Array<Record<string, unknown>>;
+    for (const item of input) {
+      expect(item.content).not.toBeNull();
+    }
+    const assistantItem = input.find((item) => item.role === "assistant");
+    expect(assistantItem).toBeDefined();
+    expect(assistantItem!.content).toEqual([]);
   });
 });
