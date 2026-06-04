@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
+import { resolveMergeHeadDiffBase } from "./lib/merge-head-diff-base.mjs";
 
 /** @typedef {{ runNode: boolean; runMacos: boolean; runAndroid: boolean; runWindows: boolean; runSkillsPython: boolean; runChangedSmoke: boolean; runControlUiI18n: boolean }} ChangedScope */
 /** @typedef {{ runFastOnly: boolean; runPluginContracts: boolean; runCiRouting: boolean }} NodeFastScope */
@@ -228,13 +229,26 @@ export function detectInstallSmokeScope(changedPaths) {
 /**
  * @param {string} base
  * @param {string} [head]
+ * @param {string} [cwd]
  * @returns {string[]}
  */
-export function listChangedPaths(base, head = "HEAD") {
+export function listChangedPaths(
+  base,
+  head = "HEAD",
+  cwd = process.cwd(),
+  preferMergeHeadFirstParent = false,
+) {
   if (!base) {
     return [];
   }
-  const output = execFileSync("git", ["diff", "--name-only", base, head], {
+  const diffBase = resolveMergeHeadDiffBase({
+    base,
+    head,
+    cwd,
+    preferFirstParent: preferMergeHeadFirstParent,
+  });
+  const output = execFileSync("git", ["diff", "--name-only", diffBase, head], {
+    cwd,
     stdio: ["ignore", "pipe", "pipe"],
     encoding: "utf8",
   });
@@ -293,7 +307,7 @@ function isDirectRun() {
 
 /** @param {string[]} argv */
 function parseArgs(argv) {
-  const args = { base: "", head: "HEAD" };
+  const args = { base: "", head: "HEAD", mergeHeadFirstParent: false };
   for (let i = 0; i < argv.length; i += 1) {
     if (argv[i] === "--base") {
       args.base = argv[i + 1] ?? "";
@@ -303,6 +317,10 @@ function parseArgs(argv) {
     if (argv[i] === "--head") {
       args.head = argv[i + 1] ?? "HEAD";
       i += 1;
+      continue;
+    }
+    if (argv[i] === "--merge-head-first-parent") {
+      args.mergeHeadFirstParent = true;
     }
   }
   return args;
@@ -311,7 +329,12 @@ function parseArgs(argv) {
 if (isDirectRun()) {
   const args = parseArgs(process.argv.slice(2));
   try {
-    const changedPaths = listChangedPaths(args.base, args.head);
+    const changedPaths = listChangedPaths(
+      args.base,
+      args.head,
+      process.cwd(),
+      args.mergeHeadFirstParent,
+    );
     if (changedPaths.length === 0) {
       writeGitHubOutput(EMPTY_SCOPE);
       process.exit(0);

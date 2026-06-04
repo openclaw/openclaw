@@ -1,3 +1,4 @@
+// Covers CLI session transcript loading and reseeding boundaries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +24,8 @@ function createSessionTranscript(params: {
   filePath?: string;
   messages?: string[];
 }): string {
+  // Tests write the canonical session envelope first so loaders exercise the
+  // same JSONL record order used by persisted OpenClaw sessions.
   const sessionFile =
     params.filePath ??
     path.join(
@@ -120,6 +123,8 @@ describe("loadCliSessionHistoryMessages", () => {
     });
 
     try {
+      // The caller-supplied path is intentionally hostile here; canonical state
+      // resolution prevents a stale or external file from becoming hook input.
       const history = await loadCliSessionHistoryMessages({
         sessionId: "session-test",
         sessionFile: outsideFile,
@@ -285,6 +290,8 @@ describe("loadCliSessionHistoryMessages", () => {
     );
 
     try {
+      // Context-engine snapshots need the compacted summary plus the exact tail
+      // records so downstream context reconstruction preserves branch metadata.
       const history = await loadCliSessionContextEngineMessages({
         sessionId: "session-context-engine-compacted",
         sessionFile,
@@ -325,6 +332,8 @@ describe("loadCliSessionHistoryMessages", () => {
     fs.symlinkSync(outsideFile, canonicalSessionFile);
 
     try {
+      // lstat rejection is the security boundary; following the link would make
+      // arbitrary filesystem content eligible for prompt/history injection.
       expect(
         await loadCliSessionHistoryMessages({
           sessionId: "session-symlink",
@@ -441,6 +450,8 @@ describe("loadCliSessionReseedMessages", () => {
     });
 
     try {
+      // Raw transcript reseed is deliberately opt-in and bounded so missing CLI
+      // sessions do not replay an unbounded pre-compaction transcript.
       const reseed = await loadCliSessionReseedMessages({
         sessionId: "session-opt-in-raw-tail",
         sessionFile,
@@ -473,6 +484,8 @@ describe("loadCliSessionReseedMessages", () => {
     });
 
     try {
+      // Auth changes are a hard boundary: old raw messages may belong to a
+      // different credential context and must not reseed a fresh CLI session.
       await expect(
         loadCliSessionReseedMessages({
           sessionId: "session-auth-boundary",
