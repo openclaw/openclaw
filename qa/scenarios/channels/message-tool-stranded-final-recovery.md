@@ -14,6 +14,9 @@ objective: Reproduce #85714 end to end — under messages.visibleReplies=message
 gatewayConfigPatch:
   messages:
     visibleReplies: message_tool
+    # #85714: stranded-reply recovery is opt-in (default off). This scenario
+    # exercises the recovery path, so it must enable the flag explicitly.
+    strandedReplyRecovery: true
 successCriteria:
   - Turn 1 returns a long normal final answer and does not plan the message tool, so the reply strands.
   - The gateway logs the private-final WARN from source-reply/private-final and enqueues one retry.
