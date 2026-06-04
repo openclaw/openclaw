@@ -37,6 +37,7 @@ function resolveAccountCapabilities(params: {
   if (accounts && typeof accounts === "object") {
     const match = resolveAccountEntry(accounts, normalizedAccountId);
     if (match) {
+      // Account capabilities override provider capabilities; empty/object account values fall back.
       return normalizeCapabilities(match.capabilities) ?? normalizeCapabilities(cfg.capabilities);
     }
   }
@@ -44,6 +45,7 @@ function resolveAccountCapabilities(params: {
   return normalizeCapabilities(cfg.capabilities);
 }
 
+/** Resolves normalized string capabilities for a channel/account config pair. */
 export function resolveChannelCapabilities(params: {
   cfg?: Partial<OpenClawConfig>;
   channel?: string | null;

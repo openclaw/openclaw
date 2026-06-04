@@ -521,6 +521,7 @@ function buildActiveChatSendDedupeKey(params: {
   message: string;
   originatingChannel: string;
   sessionKey: string;
+  systemScope?: string;
 }): string | null {
   const message = params.message.trim();
   if (
@@ -532,8 +533,11 @@ function buildActiveChatSendDedupeKey(params: {
   ) {
     return null;
   }
+  const dedupeParts = params.systemScope?.trim()
+    ? [params.sessionKey, message, params.systemScope.trim()]
+    : [params.sessionKey, message];
   const digest = createHash("sha256")
-    .update(JSON.stringify([params.sessionKey, message]))
+    .update(JSON.stringify(dedupeParts))
     .digest("hex")
     .slice(0, 32);
   return `${ACTIVE_CHAT_SEND_DEDUPE_PREFIX}:${digest}`;
@@ -3071,8 +3075,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       timeoutMs?: number;
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
+      suppressCommandInterpretation?: boolean;
       idempotencyKey: string;
     };
+    const suppressCommandInterpretation = p.suppressCommandInterpretation === true;
     const explicitOriginResult = normalizeExplicitChatSendOrigin({
       originatingChannel: p.originatingChannel,
       originatingTo: p.originatingTo,
@@ -3084,7 +3090,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       return;
     }
     if (
-      (p.systemInputProvenance || p.systemProvenanceReceipt || explicitOriginResult.value) &&
+      (p.systemInputProvenance ||
+        p.systemProvenanceReceipt ||
+        suppressCommandInterpretation ||
+        explicitOriginResult.value) &&
       !canInjectSystemProvenance(client)
     ) {
       respond(
@@ -3092,7 +3101,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          p.systemInputProvenance || p.systemProvenanceReceipt
+          p.systemInputProvenance || p.systemProvenanceReceipt || suppressCommandInterpretation
             ? "system provenance fields require admin scope"
             : "originating route fields require admin scope",
         ),
@@ -3116,7 +3125,11 @@ export const chatHandlers: GatewayRequestHandlers = {
     const inboundMessage = sanitizedMessageResult.message;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
-    const stopCommand = isChatStopCommandText(inboundMessage);
+    const systemDedupeScope =
+      systemInputProvenance || systemProvenanceReceipt
+        ? JSON.stringify([systemProvenanceReceipt ?? null, systemInputProvenance ?? null])
+        : undefined;
+    const stopCommand = !suppressCommandInterpretation && isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
     const rawMessage = inboundMessage.trim();
     if (!rawMessage && normalizedAttachments.length === 0) {
@@ -3284,6 +3297,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: rawMessage,
       originatingChannel: originatingRoute.originatingChannel,
       sessionKey: activeRunScopeKey,
+      systemScope: systemDedupeScope,
     });
     if (activeChatSendDedupeKey) {
       const activeRunId = resolveActiveChatSendRunId(
@@ -3484,7 +3498,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         p.thinking && trimmedMessage && !trimmedMessage.startsWith("/"),
       );
       const commandBody = injectThinking ? `/think ${p.thinking} ${parsedMessage}` : parsedMessage;
-      const commandSource = trimmedMessage.startsWith("/") ? "text" : undefined;
+      const commandSource =
+        !suppressCommandInterpretation && trimmedMessage.startsWith("/") ? "text" : undefined;
       const messageForAgent = systemProvenanceReceipt
         ? [systemProvenanceReceipt, parsedMessage].filter(Boolean).join("\n\n")
         : parsedMessage;
@@ -3518,7 +3533,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         MessageThreadId: messageThreadId,
         ChatType: "direct",
         ...(commandSource ? { CommandSource: commandSource } : {}),
-        CommandAuthorized: true,
+        CommandAuthorized: !suppressCommandInterpretation,
         CommandTurn: commandSource
           ? {
               kind: "text-slash",

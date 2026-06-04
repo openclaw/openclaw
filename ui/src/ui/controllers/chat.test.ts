@@ -9,6 +9,7 @@ import {
   handleChatEvent,
   loadChatHistory,
   requestChatSend,
+  requestSkillWorkshopRevisionChatSend,
   sendChatMessage,
   type ChatEventPayload,
   type ChatState,
@@ -1872,6 +1873,36 @@ describe("sendChatMessage", () => {
       "chat.send",
       expect.objectContaining({ sessionKey: "global", agentId: "ops" }),
     );
+  });
+
+  it("requests Skill Workshop revisions with visible instructions and target agent routing", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-revision", status: "started" });
+    const state = createState({
+      sessionKey: "global",
+      currentSessionId: "session-visible",
+      assistantAgentId: "target",
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+
+    const result = await requestSkillWorkshopRevisionChatSend(state, {
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      agentId: "proposal-owner",
+      targetAgentId: "target",
+      instructions: "Make the support files 5",
+      runId: "run-revision",
+    });
+
+    expect(result).toEqual({ runId: "run-revision", status: "started" });
+    expect(request).toHaveBeenCalledWith("skills.proposals.requestRevision", {
+      agentId: "proposal-owner",
+      targetAgentId: "target",
+      proposalId: "support-file-sampler-20260531-68207b7b7f",
+      instructions: "Make the support files 5",
+      sessionKey: "global",
+      sessionId: "session-visible",
+      idempotencyKey: "run-revision",
+    });
   });
 
   it("adopts the run id and terminal status from the chat.send ack", async () => {

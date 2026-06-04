@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect } from "vitest";
 
+/** Platform flag shared by config backup permission tests. */
 export const IS_WINDOWS = process.platform === "win32";
 
 export function resolveConfigPathFromTempState(fileName = "openclaw.json"): string {

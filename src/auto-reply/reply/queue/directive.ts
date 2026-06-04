@@ -5,6 +5,7 @@ import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
 
+/** Parses debounce durations in `/queue` directives. */
 function parseQueueDebounce(raw?: string): number | undefined {
   if (!raw) {
     return undefined;
@@ -125,6 +126,7 @@ function parseQueueDirectiveArgs(raw: string): {
   };
 }
 
+/** Extracts and removes a `/queue` directive from message text. */
 export function extractQueueDirective(body?: string): {
   cleaned: string;
   queueMode?: QueueMode;
@@ -161,6 +163,7 @@ export function extractQueueDirective(body?: string): {
   const argsStart = start + "/queue".length;
   const args = body.slice(argsStart);
   const parsed = parseQueueDirectiveArgs(args);
+  // Remove only the directive and consumed options; leave the rest as agent input.
   const cleanedRaw = `${body.slice(0, start)} ${body.slice(argsStart + parsed.consumed)}`;
   const cleaned = cleanedRaw.replace(/\s+/g, " ").trim();
   return {

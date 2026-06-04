@@ -26,6 +26,7 @@ type SlackConfigLike = {
   accounts?: Record<string, SlackAccountLike | undefined>;
 };
 
+// Only enabled accounts need per-account secret requirement checks.
 function forEachEnabledAccount<T extends { enabled?: unknown }>(
   accounts: Record<string, T | undefined> | undefined,
   run: (accountId: string, account: T) => void,
@@ -41,6 +42,7 @@ function forEachEnabledAccount<T extends { enabled?: unknown }>(
   }
 }
 
+/** Validates Telegram webhook URLs have a usable shared or account webhook secret. */
 export function validateTelegramWebhookSecretRequirements(
   value: TelegramConfigLike,
   ctx: z.RefinementCtx,

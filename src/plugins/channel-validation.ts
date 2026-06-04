@@ -50,6 +50,7 @@ function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): st
   return missing;
 }
 
+/** Validates and normalizes a channel plugin registration before runtime catalog insertion. */
 export function normalizeRegisteredChannelPlugin(params: {
   pluginId: string;
   source: string;

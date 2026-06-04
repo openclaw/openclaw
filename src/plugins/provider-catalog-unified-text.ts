@@ -6,6 +6,7 @@ import {
 } from "./provider-catalog-result.js";
 import type { ProviderCatalogResult } from "./types.js";
 
+/** Projects plugin provider catalog results into unified text-model catalog rows. */
 export function projectProviderCatalogResultToUnifiedTextRows(params: {
   providerId: string;
   result: ProviderCatalogResult;

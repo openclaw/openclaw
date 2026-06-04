@@ -5,7 +5,7 @@ import { createServer as createNetServer } from "node:net";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Page } from "playwright";
-import { createServer, type ViteDevServer } from "vite";
+import type { ViteDevServer } from "vite";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
 import {
@@ -123,6 +123,7 @@ export function canRunPlaywrightChromium(chromiumExecutablePath: string): boolea
 }
 
 export async function startControlUiE2eServer(): Promise<ControlUiE2eServer> {
+  const { createServer } = await import("vite");
   const repoRoot = resolveRepoRoot();
   const uiRoot = path.join(repoRoot, "ui");
   const port = await resolveAvailableLoopbackPort();

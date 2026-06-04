@@ -6,8 +6,10 @@ import { isValidExecSecretRefId, isValidSecretProviderAlias } from "./ref-contra
 import { parseDotPath, toDotPath } from "./shared.js";
 import { resolvePlanTargetAgainstRegistry, type ResolvedPlanTarget } from "./target-registry.js";
 
+/** Registry target id accepted by a secrets apply plan. */
 export type SecretsPlanTargetType = string;
 
+/** One planned SecretRef mutation against config or auth-profile storage. */
 export type SecretsPlanTarget = {
   type: SecretsPlanTargetType;
   /**
@@ -41,6 +43,7 @@ export type SecretsPlanTarget = {
   authProfileProvider?: string;
 };
 
+/** Serialized plan produced by `openclaw secrets configure` or supplied manually. */
 export type SecretsApplyPlan = {
   version: 1;
   protocolVersion: 1;
@@ -89,6 +92,8 @@ export function resolveValidatedPlanTarget(candidate: {
   if (segments.length === 0 || hasForbiddenPathSegment(segments) || path !== toDotPath(segments)) {
     return null;
   }
+  // Registry resolution is the ownership gate; caller-provided paths must map to a known
+  // mutable SecretRef target before apply code can write anything.
   return resolvePlanTargetAgainstRegistry({
     type: candidate.type,
     pathSegments: segments,
@@ -97,6 +102,7 @@ export function resolveValidatedPlanTarget(candidate: {
   });
 }
 
+/** Validates the external secrets apply plan shape and every target/provider mutation. */
 export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -176,6 +182,7 @@ export function isSecretsApplyPlan(value: unknown): value is SecretsApplyPlan {
   return true;
 }
 
+/** Normalizes omitted plan options to the apply-time defaults. */
 export function normalizeSecretsPlanOptions(
   options: SecretsApplyPlan["options"] | undefined,
 ): Required<NonNullable<SecretsApplyPlan["options"]>> {

@@ -3,6 +3,7 @@ import { isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
+/** Coalesces many streaming reply fragments into fewer outbound payloads. */
 export type BlockReplyCoalescer = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
@@ -10,6 +11,7 @@ export type BlockReplyCoalescer = {
   stop: () => void;
 };
 
+/** Creates a text coalescer with idle and size-based flush behavior. */
 export function createBlockReplyCoalescer(params: {
   config: BlockStreamingCoalescing;
   shouldAbort: () => boolean;
@@ -100,6 +102,7 @@ export function createBlockReplyCoalescer(params: {
     }) &&
     (!payload.replyToId || bufferReplyToId === payload.replyToId);
 
+  /** Merges buffered text into a media payload without changing media metadata. */
   const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
     const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
     const mergedPayload: ReplyPayload = {
@@ -164,6 +167,7 @@ export function createBlockReplyCoalescer(params: {
           isFallbackNotice: bufferIsFallbackNotice,
           isStatusNotice: bufferIsStatusNotice,
         }) !== isReplyPayloadStatusNotice(payload));
+    // Flush before changing reply target, audio mode, or visibility class.
     if (
       bufferText &&
       (replyToConflict || bufferAudioAsVoice !== payload.audioAsVoice || visibilityConflict)

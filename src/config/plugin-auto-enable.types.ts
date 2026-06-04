@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "./types.openclaw.js";
 
+/** Reasons a configured surface can cause a plugin to be auto-enabled. */
 export type PluginAutoEnableCandidate =
   | {
       pluginId: string;
