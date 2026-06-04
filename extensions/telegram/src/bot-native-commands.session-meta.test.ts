@@ -46,6 +46,7 @@ const persistentBindingMocks = vi.hoisted(() => ({
   })),
 }));
 const sessionMocks = vi.hoisted(() => ({
+  listSessionEntries: vi.fn(() => []),
   loadSessionStore: vi.fn(),
   recordSessionMetaFromInbound: vi.fn(),
   resolveAndPersistSessionFile: vi.fn(),
@@ -165,6 +166,7 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
+    listSessionEntries: sessionMocks.listSessionEntries,
     loadSessionStore: sessionMocks.loadSessionStore,
     resolveAndPersistSessionFile: sessionMocks.resolveAndPersistSessionFile,
     resolveStorePath: sessionMocks.resolveStorePath,
@@ -561,6 +563,12 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       },
     ]);
     sessionMocks.loadSessionStore.mockClear().mockReturnValue({});
+    sessionMocks.listSessionEntries.mockClear().mockImplementation(({ storePath }) =>
+      Object.entries(sessionMocks.loadSessionStore(storePath)).map(([sessionKey, entry]) => ({
+        sessionKey,
+        entry,
+      })),
+    );
     sessionMocks.recordSessionMetaFromInbound.mockClear().mockResolvedValue(undefined);
     sessionMocks.resolveAndPersistSessionFile.mockClear().mockImplementation(async (params) => {
       const sessionFile =

@@ -397,6 +397,11 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
 export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
   loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
+  listSessionEntries: ((params) =>
+    Object.entries(loadSessionStoreMock(params.storePath)).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    }))) as TelegramBotDeps["listSessionEntries"],
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAt: readSessionUpdatedAtMock,
   recordInboundSession: recordInboundSessionMock as TelegramBotDeps["recordInboundSession"],

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { loadSessionStore } from "../config.runtime.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
@@ -47,15 +47,8 @@ const resolveWorkGroupActivation = (storePath: string) =>
     conversationId: GROUP_CONVERSATION_ID,
   });
 
-const expectWorkGroupActivationEntry = async (
-  storePath: string,
-  assertEntry?: (entry: SessionStoreEntry | undefined) => void,
-) => {
-  await vi.waitFor(() => {
-    const scopedEntry = loadSessionStore(storePath, { skipCache: true })[WORK_GROUP_SESSION_KEY];
-    expect(scopedEntry?.groupActivation).toBe("always");
-    assertEntry?.(scopedEntry);
-  });
+const readWorkGroupEntry = (storePath: string): SessionStoreEntry | undefined => {
+  return loadSessionStore(storePath, { skipCache: true })[WORK_GROUP_SESSION_KEY];
 };
 
 const expectResolvedWorkGroupActivation = async (
@@ -64,7 +57,7 @@ const expectResolvedWorkGroupActivation = async (
 ) => {
   const activation = await resolveWorkGroupActivation(storePath);
   expect(activation).toBe("always");
-  await expectWorkGroupActivationEntry(storePath, assertEntry);
+  assertEntry?.(readWorkGroupEntry(storePath));
 };
 
 describe("resolveGroupActivationFor", () => {
@@ -76,7 +69,7 @@ describe("resolveGroupActivationFor", () => {
     }
   });
 
-  it("reads legacy named-account group activation and backfills the scoped key", async () => {
+  it("reads legacy named-account group activation without creating a scoped row", async () => {
     const { storePath, cleanup } = await makeSessionStore({
       [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
@@ -87,24 +80,26 @@ describe("resolveGroupActivationFor", () => {
     cleanups.push(cleanup);
 
     await expectResolvedWorkGroupActivation(storePath, (scopedEntry) => {
-      expect(scopedEntry?.sessionId).toBeUndefined();
-      expect(scopedEntry?.updatedAt).toBeUndefined();
+      expect(scopedEntry).toBeUndefined();
     });
   });
 
-  it("preserves legacy group activation when the scoped entry already exists without activation", async () => {
+  it("patches legacy group activation onto an existing real scoped entry", async () => {
     const { storePath, cleanup } = await makeSessionStore({
       [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
       },
       [WORK_GROUP_SESSION_KEY]: {
         sessionId: "scoped-session",
+        updatedAt: 456,
       },
     });
     cleanups.push(cleanup);
 
     await expectResolvedWorkGroupActivation(storePath, (scopedEntry) => {
       expect(scopedEntry?.sessionId).toBe("scoped-session");
+      expect(scopedEntry?.updatedAt).toBe(456);
+      expect(scopedEntry?.groupActivation).toBe("always");
     });
   });
 
@@ -151,7 +146,7 @@ describe("resolveGroupActivationFor", () => {
     });
 
     expect(defaultActivation).toBe("mention");
-    await expectWorkGroupActivationEntry(storePath);
+    expect(readWorkGroupEntry(storePath)).toBeUndefined();
   });
 
   it("does not treat mixed-case default account keys as named accounts", async () => {

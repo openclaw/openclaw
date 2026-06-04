@@ -3,24 +3,24 @@
  */
 import { describe, expect, it } from "vitest";
 import {
-  listSessionEntries as listAccessorSessionEntries,
-  loadSessionEntry,
-  readSessionUpdatedAt as readAccessorSessionUpdatedAt,
-} from "../config/sessions/session-accessor.js";
-import {
-  getSessionEntry,
-  listSessionEntries,
-  readSessionUpdatedAt,
+  getSessionEntry as getConfigRuntimeSessionEntry,
+  listSessionEntries as listConfigRuntimeSessionEntries,
+  readSessionUpdatedAt as readConfigRuntimeSessionUpdatedAt,
   resolveLivePluginConfigObject,
   resolvePluginConfigObject,
   type OpenClawConfig,
 } from "./config-runtime.js";
+import {
+  getSessionEntry,
+  listSessionEntries,
+  readSessionUpdatedAt,
+} from "./session-store-runtime.js";
 
 describe("config-runtime session read exports", () => {
-  it("routes read helpers through the session accessor seam", () => {
-    expect(getSessionEntry).toBe(loadSessionEntry);
-    expect(listSessionEntries).toBe(listAccessorSessionEntries);
-    expect(readSessionUpdatedAt).toBe(readAccessorSessionUpdatedAt);
+  it("routes read helpers through the session-store runtime wrapper", () => {
+    expect(getConfigRuntimeSessionEntry).toBe(getSessionEntry);
+    expect(listConfigRuntimeSessionEntries).toBe(listSessionEntries);
+    expect(readConfigRuntimeSessionUpdatedAt).toBe(readSessionUpdatedAt);
   });
 });
 

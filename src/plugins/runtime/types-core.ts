@@ -58,6 +58,40 @@ type RuntimeReplaceConfigFileParams = {
   afterWrite: RuntimeConfigAfterWrite;
   writeOptions?: RuntimeWriteConfigOptions;
 };
+type RuntimeSessionEntry = import("../../config/sessions/types.js").SessionEntry;
+type RuntimeSessionStoreReadParams = {
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+  hydrateSkillPromptRefs?: boolean;
+  sessionKey: string;
+  storePath?: string;
+};
+type RuntimeSessionStoreListParams = Partial<Omit<RuntimeSessionStoreReadParams, "sessionKey">>;
+type RuntimeSessionStoreEntrySummary = {
+  sessionKey: string;
+  entry: RuntimeSessionEntry;
+};
+type RuntimeSessionStoreEntryPatchParams = RuntimeSessionStoreReadParams & {
+  fallbackEntry?: RuntimeSessionEntry;
+  preserveActivity?: boolean;
+  replaceEntry?: boolean;
+  update: (
+    entry: RuntimeSessionEntry,
+    context: { existingEntry?: RuntimeSessionEntry },
+  ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+};
+type RuntimeUpsertSessionEntryParams = RuntimeSessionStoreReadParams & {
+  entry: RuntimeSessionEntry;
+};
+type RuntimeSessionStoreEntryUpdateParams = {
+  storePath: string;
+  sessionKey: string;
+  update: (
+    entry: RuntimeSessionEntry,
+  ) => Promise<Partial<RuntimeSessionEntry> | null> | Partial<RuntimeSessionEntry> | null;
+  skipMaintenance?: boolean;
+  takeCacheOwnership?: boolean;
+};
 export type PluginRuntimeThinkingPolicyRequest = {
   provider?: string | null;
   model?: string | null;
@@ -204,10 +238,14 @@ export type PluginRuntimeCore = {
     ensureAgentWorkspace: typeof import("../../agents/workspace.js").ensureAgentWorkspace;
     session: {
       resolveStorePath: typeof import("../../config/sessions/paths.js").resolveStorePath;
-      getSessionEntry: typeof import("../../config/sessions/session-accessor.js").loadSessionEntry;
-      listSessionEntries: typeof import("../../config/sessions/session-accessor.js").listSessionEntries;
-      patchSessionEntry: typeof import("../../config/sessions/store.js").patchSessionEntry;
-      upsertSessionEntry: typeof import("../../config/sessions/store.js").upsertSessionEntry;
+      getSessionEntry: (params: RuntimeSessionStoreReadParams) => RuntimeSessionEntry | undefined;
+      listSessionEntries: (
+        params?: RuntimeSessionStoreListParams,
+      ) => RuntimeSessionStoreEntrySummary[];
+      patchSessionEntry: (
+        params: RuntimeSessionStoreEntryPatchParams,
+      ) => Promise<RuntimeSessionEntry | null>;
+      upsertSessionEntry: (params: RuntimeUpsertSessionEntryParams) => Promise<void>;
       /**
        * @deprecated Use getSessionEntry/listSessionEntries for reads and
        * patchSessionEntry/upsertSessionEntry for writes. This keeps the legacy
@@ -216,7 +254,9 @@ export type PluginRuntimeCore = {
       loadSessionStore: typeof import("../../config/sessions/store-load.js").loadSessionStore;
       saveSessionStore: import("../../config/sessions/runtime-types.js").SaveSessionStore;
       updateSessionStore: typeof import("../../config/sessions/store.js").updateSessionStore;
-      updateSessionStoreEntry: typeof import("../../config/sessions/store.js").updateSessionStoreEntry;
+      updateSessionStoreEntry: (
+        params: RuntimeSessionStoreEntryUpdateParams,
+      ) => Promise<RuntimeSessionEntry | null>;
       resolveSessionFilePath: typeof import("../../config/sessions/paths.js").resolveSessionFilePath;
     };
   };

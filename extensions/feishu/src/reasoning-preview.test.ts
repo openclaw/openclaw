@@ -2,8 +2,8 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "./bot-runtime-api.js";
 import { resolveFeishuReasoningPreviewEnabled } from "./reasoning-preview.js";
 
-const { loadSessionStoreMock } = vi.hoisted(() => ({
-  loadSessionStoreMock: vi.fn(),
+const { getSessionEntryMock } = vi.hoisted(() => ({
+  getSessionEntryMock: vi.fn(),
 }));
 
 vi.mock("./bot-runtime-api.js", async () => {
@@ -11,7 +11,7 @@ vi.mock("./bot-runtime-api.js", async () => {
     await vi.importActual<typeof import("./bot-runtime-api.js")>("./bot-runtime-api.js");
   return {
     ...actual,
-    loadSessionStore: loadSessionStoreMock,
+    getSessionEntry: getSessionEntryMock,
   };
 });
 
@@ -28,9 +28,12 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
   });
 
   it("enables previews only for stream reasoning sessions", () => {
-    loadSessionStoreMock.mockReturnValue({
-      "agent:main:feishu:dm:ou_sender_1": { reasoningLevel: "stream" },
-      "agent:main:feishu:dm:ou_sender_2": { reasoningLevel: "on" },
+    getSessionEntryMock.mockImplementation(({ sessionKey }) => {
+      const entries = {
+        "agent:main:feishu:dm:ou_sender_1": { reasoningLevel: "stream" },
+        "agent:main:feishu:dm:ou_sender_2": { reasoningLevel: "on" },
+      } as const;
+      return entries[sessionKey as keyof typeof entries];
     });
 
     expect(
@@ -52,7 +55,7 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
   });
 
   it("returns false for missing sessions or load failures", () => {
-    loadSessionStoreMock.mockImplementationOnce(() => {
+    getSessionEntryMock.mockImplementationOnce(() => {
       throw new Error("disk unavailable");
     });
 
@@ -74,9 +77,12 @@ describe("resolveFeishuReasoningPreviewEnabled", () => {
   });
 
   it("falls back to configured stream defaults", () => {
-    loadSessionStoreMock.mockReturnValue({
-      "agent:main:feishu:dm:ou_sender_1": {},
-      "agent:main:feishu:dm:ou_sender_2": { reasoningLevel: "off" },
+    getSessionEntryMock.mockImplementation(({ sessionKey }) => {
+      const entries = {
+        "agent:main:feishu:dm:ou_sender_1": {},
+        "agent:main:feishu:dm:ou_sender_2": { reasoningLevel: "off" },
+      } as const;
+      return entries[sessionKey as keyof typeof entries];
     });
 
     const cfg: ClawdbotConfig = {
