@@ -106,6 +106,7 @@ vi.mock("../agents/openclaw-tools.js", () => {
           agentTo: lastCreateOpenClawToolsContext?.agentTo,
           agentThreadId: lastCreateOpenClawToolsContext?.agentThreadId,
         },
+        inheritedToolDenylist: lastCreateOpenClawToolsContext?.inheritedToolDenylist,
       }),
     },
     {
@@ -693,6 +694,34 @@ describe("POST /tools/invoke", () => {
       agentTo: "channel:24514",
       agentThreadId: "thread-24514",
     });
+  });
+
+  it("propagates owner-only HTTP denies into spawned session inheritance", async () => {
+    cfg = {
+      ...cfg,
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: { allow: ["sessions_spawn", "cron", "gateway", "nodes"] },
+          },
+        ],
+      },
+      gateway: { tools: { allow: ["sessions_spawn", "cron", "gateway", "nodes"] } },
+    };
+
+    const res = await invokeTool({
+      port: sharedPort,
+      headers: gatewayAuthHeaders(),
+      tool: "sessions_spawn",
+      sessionKey: "main",
+    });
+
+    const body = await expectOkInvokeResponse(res);
+    expect(body.result?.inheritedToolDenylist).toEqual(
+      expect.arrayContaining(["cron", "gateway", "nodes"]),
+    );
   });
 
   it("denies sessions_send via HTTP gateway", async () => {
