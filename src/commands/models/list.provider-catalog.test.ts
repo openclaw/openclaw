@@ -7,13 +7,22 @@ import {
 } from "./list.provider-catalog.js";
 
 const providerDiscoveryMocks = vi.hoisted(() => ({
+  buildAgentModelCatalogCacheKey: vi.fn(),
   loadPluginRegistrySnapshotWithMetadata: vi.fn(),
+  readCachedAgentModelCatalog: vi.fn(),
   resolvePluginContributionOwners: vi.fn(),
   resolveProviderOwners: vi.fn(),
   resolveBundledProviderCompatPluginIds: vi.fn(),
   resolveOwningPluginIdsForProvider: vi.fn(),
   resolveRuntimePluginDiscoveryProviders: vi.fn(),
   resolveProviderContractPluginIdsForProviderAlias: vi.fn(),
+  writeCachedAgentModelCatalog: vi.fn(),
+}));
+
+vi.mock("../../agents/model-catalog-state-cache.js", () => ({
+  buildAgentModelCatalogCacheKey: providerDiscoveryMocks.buildAgentModelCatalogCacheKey,
+  readCachedAgentModelCatalog: providerDiscoveryMocks.readCachedAgentModelCatalog,
+  writeCachedAgentModelCatalog: providerDiscoveryMocks.writeCachedAgentModelCatalog,
 }));
 
 vi.mock("../../plugins/plugin-registry.js", () => ({
@@ -197,6 +206,8 @@ function firstDiscoveryRequest(): {
 describe("loadProviderCatalogModelsForList", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    providerDiscoveryMocks.buildAgentModelCatalogCacheKey.mockReturnValue("provider-cache-key");
+    providerDiscoveryMocks.readCachedAgentModelCatalog.mockReturnValue(undefined);
     providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
       source: "persisted",
       snapshot: {
@@ -256,6 +267,38 @@ describe("loadProviderCatalogModelsForList", () => {
 
     expect(fetchMock).not.toHaveBeenCalled();
     expect(rows.map((row) => `${row.provider}/${row.id}`)).toContain("moonshot/kimi-k2.6");
+  });
+
+  it("reuses cached provider catalog rows before runtime provider discovery", async () => {
+    providerDiscoveryMocks.readCachedAgentModelCatalog.mockReturnValueOnce([
+      { provider: "moonshot", id: "cached-kimi", name: "Cached Kimi" },
+    ]);
+
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["moonshot/cached-kimi"]);
+    expect(providerDiscoveryMocks.readCachedAgentModelCatalog).toHaveBeenCalledWith({
+      agentDir: baseParams.agentDir,
+      catalogKey: "provider-cache-key",
+    });
+    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).not.toHaveBeenCalled();
+    expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("writes provider catalog rows to the state cache after runtime discovery", async () => {
+    const rows = await loadProviderCatalogModelsForList({
+      ...baseParams,
+      providerFilter: "moonshot",
+    });
+
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toStrictEqual(["moonshot/kimi-k2.6"]);
+    expect(providerDiscoveryMocks.writeCachedAgentModelCatalog).toHaveBeenCalledWith({
+      agentDir: baseParams.agentDir,
+      catalogKey: "provider-cache-key",
+      entries: rows,
+    });
   });
 
   it("requires complete discovery-entry coverage for static-only loads", async () => {

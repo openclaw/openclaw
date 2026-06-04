@@ -19,6 +19,9 @@ let ensureOpenClawModelsJsonMock: ReturnType<typeof vi.fn>;
 let currentPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let loadPluginMetadataSnapshotMock: ReturnType<typeof vi.fn<(...args: unknown[]) => unknown>>;
 let readFileMock: ReturnType<typeof vi.fn<(pathname: string) => Promise<string>>>;
+let buildAgentModelCatalogCacheKeyMock: ReturnType<typeof vi.fn>;
+let readCachedAgentModelCatalogMock: ReturnType<typeof vi.fn>;
+let writeCachedAgentModelCatalogMock: ReturnType<typeof vi.fn>;
 
 vi.mock("./model-suppression.runtime.js", () => ({
   shouldSuppressBuiltInModel: (params: { provider?: string; id?: string }) =>
@@ -246,6 +249,14 @@ describe("loadModelCatalog", () => {
     vi.doMock("./models-config.js", () => ({
       ensureOpenClawModelsJson: ensureOpenClawModelsJsonMock,
     }));
+    buildAgentModelCatalogCacheKeyMock = vi.fn(() => "test-cache-key");
+    readCachedAgentModelCatalogMock = vi.fn(() => undefined);
+    writeCachedAgentModelCatalogMock = vi.fn();
+    vi.doMock("./model-catalog-state-cache.js", () => ({
+      buildAgentModelCatalogCacheKey: buildAgentModelCatalogCacheKeyMock,
+      readCachedAgentModelCatalog: readCachedAgentModelCatalogMock,
+      writeCachedAgentModelCatalog: writeCachedAgentModelCatalogMock,
+    }));
     vi.doMock("./agent-scope.js", () => ({
       resolveAgentWorkspaceDir: (cfg: OpenClawConfig, agentId: string) => {
         const entry = cfg.agents?.list?.find((entryEntry) => entryEntry.id === agentId);
@@ -313,6 +324,10 @@ describe("loadModelCatalog", () => {
     currentPluginMetadataSnapshotMock.mockReturnValue(undefined);
     loadPluginMetadataSnapshotMock.mockReset();
     loadPluginMetadataSnapshotMock.mockReturnValue(emptyPluginMetadataSnapshot());
+    buildAgentModelCatalogCacheKeyMock.mockClear();
+    readCachedAgentModelCatalogMock.mockReset();
+    readCachedAgentModelCatalogMock.mockReturnValue(undefined);
+    writeCachedAgentModelCatalogMock.mockClear();
   });
 
   afterEach(() => {
@@ -324,6 +339,7 @@ describe("loadModelCatalog", () => {
   afterAll(() => {
     vi.doUnmock("node:fs/promises");
     vi.doUnmock("./models-config.js");
+    vi.doUnmock("./model-catalog-state-cache.js");
     vi.doUnmock("./agent-scope.js");
     vi.doUnmock("../plugins/provider-runtime.runtime.js");
     vi.doUnmock("../plugins/current-plugin-metadata-snapshot.js");
@@ -381,6 +397,58 @@ describe("loadModelCatalog", () => {
       "/tmp/openclaw",
       expect.objectContaining({ workspaceDir: "/tmp/workspace-agent" }),
     );
+  });
+
+  it("uses the state cached catalog before runtime discovery", async () => {
+    const cached = [{ id: "cached-fast", name: "Cached Fast", provider: "openai" }];
+    readCachedAgentModelCatalogMock.mockReturnValueOnce(cached);
+    const importAgentDiscoveryModule = vi.fn(async () => {
+      throw new Error("provider discovery should not load");
+    });
+    setModelCatalogImportForTest(
+      importAgentDiscoveryModule as unknown as () => Promise<AgentModelDiscoveryModule>,
+    );
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toEqual(cached);
+    expect(readCachedAgentModelCatalogMock).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key",
+    });
+    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(importAgentDiscoveryModule).not.toHaveBeenCalled();
+    expect(writeCachedAgentModelCatalogMock).not.toHaveBeenCalled();
+  });
+
+  it("bypasses the state cached catalog when a refresh is requested", async () => {
+    readCachedAgentModelCatalogMock.mockReturnValue([
+      { id: "cached-stale", name: "Cached Stale", provider: "openai" },
+    ]);
+    mockAgentDiscoveryModels([{ id: "fresh-fast", name: "Fresh Fast", provider: "openai" }]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig, useCache: false });
+
+    expect(result).toEqual([{ id: "fresh-fast", name: "Fresh Fast", provider: "openai" }]);
+    expect(readCachedAgentModelCatalogMock).not.toHaveBeenCalled();
+    expect(writeCachedAgentModelCatalogMock).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key",
+      entries: result,
+    });
+  });
+
+  it("writes runtime discovery results to the state catalog cache", async () => {
+    mockAgentDiscoveryModels([{ id: "runtime-fast", name: "Runtime Fast", provider: "openai" }]);
+
+    const result = await loadModelCatalog({ config: {} as OpenClawConfig });
+
+    expect(result).toEqual([{ id: "runtime-fast", name: "Runtime Fast", provider: "openai" }]);
+    expect(writeCachedAgentModelCatalogMock).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw",
+      catalogKey: "test-cache-key",
+      entries: result,
+    });
   });
 
   it("reloads dynamic registry entries after clearing the cache", async () => {

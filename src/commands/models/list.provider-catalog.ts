@@ -3,6 +3,11 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles/store.js";
 import {
+  buildAgentModelCatalogCacheKey,
+  readCachedAgentModelCatalog,
+  writeCachedAgentModelCatalog,
+} from "../../agents/model-catalog-state-cache.js";
+import {
   createProviderApiKeyResolver,
   createProviderAuthResolver,
 } from "../../agents/models-config.providers.secrets.js";
@@ -345,6 +350,25 @@ export async function loadProviderCatalogModelsForList(params: {
     return [];
   }
 
+  const catalogKey = buildAgentModelCatalogCacheKey({
+    agentDir: params.agentDir,
+    cacheScope: {
+      source: "models-list-provider-catalog",
+      providerFilter,
+      scopedPluginIds,
+      staticOnly: params.staticOnly === true,
+    },
+    config: params.cfg,
+    workspaceDir: params.metadataSnapshot?.workspaceDir,
+  });
+  const cached = readCachedAgentModelCatalog<Model>({
+    agentDir: params.agentDir,
+    catalogKey,
+  });
+  if (cached?.length) {
+    return cached;
+  }
+
   const providers = (
     await resolveRuntimePluginDiscoveryProviders({
       config: params.cfg,
@@ -408,11 +432,17 @@ export async function loadProviderCatalogModelsForList(params: {
     }
   }
 
-  return rows.toSorted((left, right) => {
+  const sorted = rows.toSorted((left, right) => {
     const provider = left.provider.localeCompare(right.provider);
     if (provider !== 0) {
       return provider;
     }
     return left.id.localeCompare(right.id);
   });
+  writeCachedAgentModelCatalog({
+    agentDir: params.agentDir,
+    catalogKey,
+    entries: sorted,
+  });
+  return sorted;
 }

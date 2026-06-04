@@ -24,6 +24,11 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "./auth-profiles.js";
 import { modelSupportsInput as modelCatalogEntrySupportsInput } from "./model-catalog-lookup.js";
+import {
+  buildAgentModelCatalogCacheKey,
+  readCachedAgentModelCatalog,
+  writeCachedAgentModelCatalog,
+} from "./model-catalog-state-cache.js";
 import type { ModelCatalogEntry, ModelInputType } from "./model-catalog.types.js";
 import { resolveModelWorkspaceDir } from "./model-discovery-context.js";
 import {
@@ -362,6 +367,17 @@ async function loadReadOnlyPersistedModelCatalog(params?: {
     manifestPlugins ??= getMetadataSnapshot().plugins;
     return manifestPlugins;
   };
+  const cached = readCachedAgentModelCatalog({
+    agentDir,
+    catalogKey: buildAgentModelCatalogCacheKey({
+      agentDir,
+      config: cfg,
+      workspaceDir,
+    }),
+  });
+  if (cached?.length) {
+    return cached;
+  }
   const providers = await loadReadOnlyPersistedProviderRows(agentDir, getMetadataSnapshot);
   for (const [providerRaw, providerConfig] of Object.entries(providers)) {
     if (!Array.isArray(providerConfig?.models)) {
@@ -523,6 +539,19 @@ export async function loadModelCatalog(params?: {
         manifestPlugins ??= getManifestMetadataSnapshot().plugins;
         return manifestPlugins;
       };
+      const agentDir = resolveDefaultAgentDir(cfg);
+      const catalogKey = buildAgentModelCatalogCacheKey({
+        agentDir,
+        config: cfg,
+        workspaceDir,
+      });
+      if (!readOnly && params?.useCache !== false) {
+        const cached = readCachedAgentModelCatalog({ agentDir, catalogKey });
+        if (cached?.length) {
+          logStage("state-cache-hit", `entries=${cached.length}`);
+          return cached;
+        }
+      }
       if (!readOnly) {
         await ensureOpenClawModelsJson(cfg);
         logStage("models-json-ready");
@@ -531,7 +560,6 @@ export async function loadModelCatalog(params?: {
       // the shared catalog cache until restart.
       const agentDiscovery = await importAgentDiscovery();
       logStage("agent-discovery-imported");
-      const agentDir = resolveDefaultAgentDir(cfg);
       const { buildShouldSuppressBuiltInModel } = await loadModelSuppression();
       logStage("catalog-deps-ready");
       const authStorage = agentDiscovery.discoverAuthStorage(
@@ -663,6 +691,13 @@ export async function loadModelCatalog(params?: {
       }
 
       const sorted = sortModels(models);
+      if (!readOnly) {
+        writeCachedAgentModelCatalog({
+          agentDir,
+          catalogKey,
+          entries: sorted,
+        });
+      }
       logStage("complete", `entries=${sorted.length}`);
       return sorted;
     } catch (error) {
