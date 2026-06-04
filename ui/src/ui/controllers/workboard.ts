@@ -606,6 +606,7 @@ export function workboardCardMatchesHealthKey(
     case "failedAttempts":
       return countCardFailedAttempts(card) > 0 || taskFailedTerminal(task);
   }
+  return false;
 }
 
 export function filterWorkboardCardsForPreset(params: {
@@ -641,6 +642,7 @@ export function filterWorkboardCardsForPreset(params: {
       case "recently_done":
         return cardRecentlyDone(card);
     }
+    return false;
   });
 }
 

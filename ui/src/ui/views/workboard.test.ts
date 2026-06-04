@@ -643,10 +643,10 @@ describe("renderWorkboard", () => {
     ];
     expect(selects).toHaveLength(3);
 
-    selects[0]!.open = true;
-    selects[0]!.dispatchEvent(new Event("toggle"));
-    selects[1]!.open = true;
-    selects[1]!.dispatchEvent(new Event("toggle"));
+    selects[0].open = true;
+    selects[0].dispatchEvent(new Event("toggle"));
+    selects[1].open = true;
+    selects[1].dispatchEvent(new Event("toggle"));
 
     expect(selects[0]?.open).toBe(false);
     expect(selects[1]?.open).toBe(true);

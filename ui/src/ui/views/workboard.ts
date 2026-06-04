@@ -665,7 +665,7 @@ function buildAgentFilterOptions(
         .map((card) => normalizeAgentOptionId(card.agentId))
         .filter((id) => id && !configuredIds.has(id)),
     ),
-  ].sort((left, right) => left.localeCompare(right));
+  ].toSorted((left, right) => left.localeCompare(right));
   const options: WorkboardAgentFilterOption[] = [
     { id: "all", label: t("workboard.allAgents") },
     {
@@ -823,13 +823,13 @@ function renderWorkboardSelect<Value extends string>(params: {
       </summary>
       <div class="workboard-select__menu" role="listbox" aria-label=${params.label}>
         ${params.options.map((option) => {
-          const selected = option.value === params.value;
+          const optionSelected = option.value === params.value;
           return html`
             <button
-              class="workboard-select__option ${selected ? "is-selected" : ""}"
+              class="workboard-select__option ${optionSelected ? "is-selected" : ""}"
               type="button"
               role="option"
-              aria-selected=${selected}
+              aria-selected=${optionSelected}
               aria-disabled=${option.disabled === true}
               ?disabled=${option.disabled}
               @click=${(event: Event) => {
@@ -845,7 +845,7 @@ function renderWorkboardSelect<Value extends string>(params: {
               }}
             >
               <span class="workboard-select__check" aria-hidden="true">
-                ${selected ? icons.check : nothing}
+                ${optionSelected ? icons.check : nothing}
               </span>
               <span class="workboard-select__copy">
                 <span class="workboard-select__label">${option.label}</span>
@@ -1069,19 +1069,18 @@ function renderCardModal(props: WorkboardProps) {
   const state = getWorkboardState(props.host);
   const agentOptions = buildAssignableAgentOptions(props.agentsList, state.draftAgentId);
   const sessions = props.sessions.filter(isWorkboardSessionChoice);
-  const statusOptions: Array<WorkboardSelectOption<WorkboardStatus>> = state.statuses.map(
-    (status) => ({ value: status, label: formatStatusLabel(status) }),
-  );
-  const priorityOptions: Array<WorkboardSelectOption<WorkboardPriority>> = WORKBOARD_PRIORITIES.map(
+  const statusOptions: WorkboardSelectOption<WorkboardStatus>[] = state.statuses.map((status) => ({
+    value: status,
+    label: formatStatusLabel(status),
+  }));
+  const priorityOptions: WorkboardSelectOption<WorkboardPriority>[] = WORKBOARD_PRIORITIES.map(
     (priority) => ({ value: priority, label: formatPriorityLabel(priority) }),
   );
-  const assignableAgentOptions: Array<WorkboardSelectOption<string>> = agentOptions.map(
-    (agent) => ({
-      value: agent.id,
-      label: agent.label,
-    }),
-  );
-  const sessionOptions: Array<WorkboardSelectOption<string>> = [
+  const assignableAgentOptions: WorkboardSelectOption[] = agentOptions.map((agent) => ({
+    value: agent.id,
+    label: agent.label,
+  }));
+  const sessionOptions: WorkboardSelectOption[] = [
     { value: "", label: t("workboard.noLinkedSession") },
     ...sessions.map((session) => ({
       value: session.key,
@@ -2370,12 +2369,16 @@ export function renderWorkboard(props: WorkboardProps) {
       label: formatPriorityLabel(priority),
     })),
   ];
-  const agentSelectOptions: Array<WorkboardSelectOption<WorkboardUiState["agentFilter"]>> =
-    agentOptions.map((agent) => ({
+  const agentSelectOptions: WorkboardSelectOption[] = agentOptions.map((agent) => {
+    const option: WorkboardSelectOption = {
       value: agent.id,
       label: agent.label,
-      ...(agent.description ? { description: agent.description } : {}),
-    }));
+    };
+    if (agent.description) {
+      option.description = agent.description;
+    }
+    return option;
+  });
   const dialogOpen = state.draftOpen || Boolean(getVisibleDetailCard(state));
 
   return html`
