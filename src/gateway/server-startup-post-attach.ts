@@ -438,6 +438,7 @@ async function cleanupStaleSessionLocks(params: {
   markRestartAbortedMainSessionsFromLocks?: MarkRestartAbortedMainSessionsFromLocks;
   markCrashedMainSessionsFromRemainingLocks?: MarkCrashedMainSessionsFromRemainingLocks;
   concurrency?: number;
+  startupMode?: boolean;
 }): Promise<void> {
   const concurrency = Math.max(
     1,
@@ -472,7 +473,7 @@ async function cleanupStaleSessionLocks(params: {
         sessionsDir,
         config: params.cfg,
         removeStale: true,
-        startupMode: true,
+        startupMode: params.startupMode,
         log: { warn: (message) => params.log.warn(message) },
       });
       if (result.cleaned.length > 0) {
@@ -787,6 +788,29 @@ export async function startGatewaySidecars(params: {
       }
     } catch (err) {
       params.logHooks.error(`failed to load hooks: ${String(err)}`);
+    }
+  });
+
+  // Startup-only crash recovery: run before channels/session writers can create
+  // new locks, so grace-window orphan locks are safely classified as crash residue.
+  await measureStartup(params.startupTrace, "sidecars.session-locks-startup", async () => {
+    try {
+      const [{ resolveAgentSessionDirs }, { cleanStaleLockFiles }] = await Promise.all([
+        import("../agents/session-dirs.js"),
+        import("../agents/session-write-lock.js"),
+      ]);
+      const stateDir = resolveStateDir(process.env);
+      const sessionDirs = await resolveAgentSessionDirs(stateDir);
+      await cleanupStaleSessionLocks({
+        sessionDirs,
+        cfg: params.cfg,
+        log: params.log,
+        isStopped: () => false,
+        cleanStaleLockFiles,
+        startupMode: true,
+      });
+    } catch (err) {
+      params.log.warn(`session lock startup recovery failed: ${String(err)}`);
     }
   });
 

@@ -918,6 +918,7 @@ describe("startGatewayPostAttachRuntime", () => {
       cleanStaleLockFiles: cleanStaleLockFiles as never,
       markRestartAbortedMainSessionsFromLocks: markRestartAbortedMainSessionsFromLocks as never,
       markCrashedMainSessionsFromRemainingLocks: markCrashedMainSessionsFromRemainingLocks as never,
+      startupMode: true,
     });
 
     expect(cleanStaleLockFiles).toHaveBeenCalledWith(
