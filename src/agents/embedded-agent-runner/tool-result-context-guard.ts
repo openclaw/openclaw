@@ -426,7 +426,10 @@ export function installContextEngineLoopHook(params: {
         tokenBudget,
         model: modelId,
       });
-      if (assembled && Array.isArray(assembled.messages)) {
+      if (
+        assembled &&
+        Array.isArray(assembled.messages)
+      ) {
         const repairedMessages =
           params.repairAssembledMessages?.(assembled.messages) ?? assembled.messages;
         if (repairedMessages !== providerMessages || assembled.messages !== providerMessages) {

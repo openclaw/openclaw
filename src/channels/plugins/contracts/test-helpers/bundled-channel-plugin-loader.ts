@@ -16,10 +16,7 @@ type ChannelDirectoryContractModule = Record<string, unknown>;
 
 const channelPluginCache = new Map<ChannelId, ChannelPlugin | null>();
 const channelPluginPromiseCache = new Map<ChannelId, Promise<ChannelPlugin | null>>();
-const channelDirectoryPluginCache = new Map<
-  ChannelId,
-  Pick<ChannelPlugin, "id" | "directory"> | null
->();
+const channelDirectoryPluginCache = new Map<ChannelId, Pick<ChannelPlugin, "id" | "directory"> | null>();
 const channelDirectoryPluginPromiseCache = new Map<
   ChannelId,
   Promise<Pick<ChannelPlugin, "id" | "directory"> | null>
@@ -175,8 +172,7 @@ async function importBundledChannelDirectoryContractSourceSurface(
 function isMissingBundledDirectoryContractArtifact(error: unknown, id: ChannelId): boolean {
   return (
     error instanceof Error &&
-    error.message ===
-      `Unable to resolve bundled plugin public surface ${id}/directory-contract-api.js`
+    error.message === `Unable to resolve bundled plugin public surface ${id}/directory-contract-api.js`
   );
 }
 

@@ -224,14 +224,11 @@ function handleParentSignal(signal) {
     terminateChildGroup("SIGKILL");
     rethrowParentSignal(signal);
   }, timeoutKillGraceMs);
-  parentSignalPollTimer = setInterval(
-    () => {
-      if (!childGroupExists()) {
-        rethrowParentSignal(signal);
-      }
-    },
-    Math.min(50, timeoutKillGraceMs),
-  );
+  parentSignalPollTimer = setInterval(() => {
+    if (!childGroupExists()) {
+      rethrowParentSignal(signal);
+    }
+  }, Math.min(50, timeoutKillGraceMs));
 }
 
 for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { testing } from "./live-cache-regression-runner.js";
+import { ProviderAuthError } from "./model-auth-runtime-shared.js";
 import {
   LiveCachePrerequisiteSkip,
   toLiveCachePrerequisiteSkip,
 } from "./live-cache-test-support.js";
-import { ProviderAuthError } from "./model-auth-runtime-shared.js";
 
 describe("live cache regression runner", () => {
   it("keeps OpenAI image cache floors observable without blocking release validation", () => {

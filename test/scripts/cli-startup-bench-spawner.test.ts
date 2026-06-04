@@ -172,7 +172,10 @@ describe("CLI startup benchmark script spawners", () => {
           exitBudgetMs: 1,
         },
       };
-      fs.writeFileSync(baselinePath, JSON.stringify({ primary: { cases: [slowResponseCase] } }));
+      fs.writeFileSync(
+        baselinePath,
+        JSON.stringify({ primary: { cases: [slowResponseCase] } }),
+      );
       fs.writeFileSync(reportPath, JSON.stringify({ primary: { cases: [slowResponseCase] } }));
       const responseBudgetResult = spawnSync(
         process.execPath,

@@ -91,9 +91,7 @@ export async function connectGatewayClient(params: {
       ...(params.connectChallengeTimeoutMs !== undefined
         ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
         : {}),
-      ...(params.requestTimeoutMs !== undefined
-        ? { requestTimeoutMs: params.requestTimeoutMs }
-        : {}),
+      ...(params.requestTimeoutMs !== undefined ? { requestTimeoutMs: params.requestTimeoutMs } : {}),
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",

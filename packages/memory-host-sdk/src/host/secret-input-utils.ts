@@ -52,7 +52,9 @@ function isLegacySecretRefWithoutProvider(
     return false;
   }
   return (
-    hasSecretRefSource(value.source) && hasNonEmptyString(value.id) && value.provider === undefined
+    hasSecretRefSource(value.source) &&
+    hasNonEmptyString(value.id) &&
+    value.provider === undefined
   );
 }
 

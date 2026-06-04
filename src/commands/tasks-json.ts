@@ -3,7 +3,10 @@ import { writeRuntimeJson } from "../runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { listTaskFlowAuditFindings } from "../tasks/task-flow-registry.audit.js";
 import { listTaskFlowRecords } from "../tasks/task-flow-runtime-internal.js";
-import { listTaskAuditFindings, summarizeTaskAuditFindings } from "../tasks/task-registry.audit.js";
+import {
+  listTaskAuditFindings,
+  summarizeTaskAuditFindings,
+} from "../tasks/task-registry.audit.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   buildTaskSystemAuditFindings,

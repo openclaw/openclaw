@@ -154,7 +154,9 @@ export {
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
 };
-export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult };
+export type {
+  AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult,
+};
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy

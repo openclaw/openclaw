@@ -3,7 +3,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -12,6 +11,7 @@ import {
   renderGroupedTestComparison,
   renderGroupedTestReport,
 } from "./lib/test-group-report.mjs";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 import { formatMs } from "./lib/vitest-report-cli-utils.mjs";
 import { resolveVitestNodeArgs } from "./run-vitest.mjs";
 import {
