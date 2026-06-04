@@ -440,7 +440,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
   protected assertRequiredProviderAvailable(operation: "search" | "sync"): void {
     if (this.isRequiredProviderUnavailable()) {
-      throw this.buildRequiredProviderUnavailableError(operation);
+      const error = this.buildRequiredProviderUnavailableError(operation);
+      this.resetProviderInitializationForRetry();
+      throw error;
     }
   }
 

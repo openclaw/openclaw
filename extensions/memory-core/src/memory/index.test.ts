@@ -1630,6 +1630,10 @@ describe("memory index", () => {
       await expect(manager.sync({ reason: "test" })).rejects.toThrow(
         /Memory sync unavailable: embedding provider "openai" is configured but unavailable\./,
       );
+      forceNoProvider = false;
+      await manager.sync({ reason: "test", force: true });
+      const results = await manager.search("Alpha");
+      expect(results.length).toBeGreaterThan(0);
     } finally {
       await manager.close?.();
     }
