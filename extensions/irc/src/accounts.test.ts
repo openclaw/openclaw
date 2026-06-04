@@ -2,6 +2,20 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fs.writeFileSync(tempFile, "temp");
+    fs.symlinkSync(tempFile, tempLink, "file");
+    fs.unlinkSync(tempLink);
+    fs.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 import { listIrcAccountIds, resolveDefaultIrcAccountId, resolveIrcAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
 
@@ -146,12 +160,12 @@ describe("resolveIrcAccount", () => {
     }
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinked password files", () => {
+  it.skipIf(!canCreateFileSymlinks)("rejects symlinked password files", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-irc-account-"));
     const passwordFile = path.join(dir, "password.txt");
     const passwordLink = path.join(dir, "password-link.txt");
     fs.writeFileSync(passwordFile, "secret-pass\n", "utf8");
-    fs.symlinkSync(passwordFile, passwordLink);
+    fs.symlinkSync(passwordFile, passwordLink, "file");
 
     const cfg = asConfig({
       channels: {
@@ -167,12 +181,12 @@ describe("resolveIrcAccount", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it.runIf(process.platform !== "win32")("rejects symlinked NickServ password files", () => {
+  it.skipIf(!canCreateFileSymlinks)("rejects symlinked NickServ password files", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-irc-nickserv-"));
     const passwordFile = path.join(dir, "nickserv-password.txt");
     const passwordLink = path.join(dir, "nickserv-password-link.txt");
     fs.writeFileSync(passwordFile, "nickserv-pass\n", "utf8");
-    fs.symlinkSync(passwordFile, passwordLink);
+    fs.symlinkSync(passwordFile, passwordLink, "file");
 
     const cfg = asConfig({
       channels: {
