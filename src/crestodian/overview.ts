@@ -1,4 +1,5 @@
 // Crestodian overview gathers config, agent, tool, docs, source, and gateway status.
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
 import {
   listAgentEntries,
   resolveAgentEffectiveModelPrimary,
@@ -82,6 +83,12 @@ type CrestodianOverviewDependencies = {
   resolveOpenClawReferencePaths?: typeof resolveOpenClawReferencePaths;
 };
 
+type GatewayProbe = typeof probeGatewayUrl;
+type GatewayProbeResult = Awaited<ReturnType<GatewayProbe>>;
+
+const CRESTODIAN_GATEWAY_STARTUP_RETRY_DELAY_MS = 1_000;
+const CRESTODIAN_GATEWAY_STARTUP_RETRY_TIMEOUT_MS = 1_500;
+
 function issueMessages(snapshot: ConfigFileSnapshot): string[] {
   return snapshot.issues.map((issue) => {
     const path = issue.path ? `${issue.path}: ` : "";
@@ -140,6 +147,43 @@ function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePat
   };
 }
 
+function isLoopbackGatewayUrl(url: string): boolean {
+  try {
+    const hostname = new URL(url).hostname.toLowerCase();
+    const unbracketed =
+      hostname.startsWith("[") && hostname.endsWith("]") ? hostname.slice(1, -1) : hostname;
+    return unbracketed === "localhost" || isLoopbackIpAddress(unbracketed);
+  } catch {
+    return false;
+  }
+}
+
+function isStartupRaceProbeFailure(result: GatewayProbeResult): boolean {
+  const error = result.error?.toLowerCase() ?? "";
+  return error.includes("abort") || error.includes("timeout") || error.includes("timed out");
+}
+
+async function waitForGatewayStartupRetryDelay(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, CRESTODIAN_GATEWAY_STARTUP_RETRY_DELAY_MS);
+  });
+}
+
+async function probeStartupGatewayUrl(
+  probe: GatewayProbe,
+  url: string,
+): Promise<GatewayProbeResult> {
+  const first = await probe(url);
+  if (first.reachable || !isLoopbackGatewayUrl(url) || !isStartupRaceProbeFailure(first)) {
+    return first;
+  }
+  await waitForGatewayStartupRetryDelay();
+  const second = await probe(url, {
+    timeoutMs: CRESTODIAN_GATEWAY_STARTUP_RETRY_TIMEOUT_MS,
+  });
+  return second.reachable ? second : first;
+}
+
 export async function loadCrestodianOverview(
   opts: { env?: NodeJS.ProcessEnv; deps?: CrestodianOverviewDependencies } = {},
 ): Promise<CrestodianOverview> {
@@ -169,11 +213,12 @@ export async function loadCrestodianOverview(
   }
   const resolveReferences = deps.resolveOpenClawReferencePaths ?? resolveOpenClawReferencePaths;
   const commandProbe = deps.probeLocalCommand ?? probeLocalCommand;
+  const gatewayProbe = deps.probeGatewayUrl ?? probeGatewayUrl;
   const [codex, claude, gateway, references] = await Promise.all([
     // Probes run in parallel; each individual probe is timeout-bounded in probes.ts.
     commandProbe("codex"),
     commandProbe("claude"),
-    (deps.probeGatewayUrl ?? probeGatewayUrl)(gatewayUrl),
+    probeStartupGatewayUrl(gatewayProbe, gatewayUrl),
     resolveFastTestReferences(env) ??
       resolveReferences({
         argv1: process.argv[1],
@@ -311,7 +356,7 @@ function formatStartupGatewayStatus(overview: CrestodianOverview): string {
   if (overview.gateway.reachable) {
     return `Gateway: reachable at ${overview.gateway.url}.`;
   }
-  return `Gateway: not reachable at ${overview.gateway.url}; I already did the first probe.`;
+  return `Gateway: not reachable at ${overview.gateway.url}; the startup probe did not reach it.`;
 }
 
 function formatStartupAction(overview: CrestodianOverview): string {
