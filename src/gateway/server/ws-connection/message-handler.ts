@@ -1614,18 +1614,31 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
         }
         if (role === "node") {
           let reconciliation: Awaited<ReturnType<typeof reconcileNodePairingOnConnect>>;
+          const pairedNode = await getPairedNode(
+            connectParams.device?.id ?? connectParams.client.id,
+          );
           try {
             reconciliation = await reconcileNodePairingOnConnect({
               cfg: getRuntimeConfig(),
               connectParams,
-              pairedNode: await getPairedNode(connectParams.device?.id ?? connectParams.client.id),
+              pairedNode,
               reportedClientIp,
-              requestPairing: async (input) =>
-                await requestNodePairingFromConnect({
-                  input,
-                  rateLimiter: authRateLimiter,
-                  clientIp: browserRateLimitClientIp,
-                }),
+              requestPairing: async (input) => {
+                try {
+                  return await requestNodePairingFromConnect({
+                    input,
+                    rateLimiter: authRateLimiter,
+                    clientIp: browserRateLimitClientIp,
+                  });
+                } catch (error) {
+                  if (error instanceof NodePairingRateLimitError && pairedNode) {
+                    // Paired upgrade reconnects can keep their approved surface;
+                    // only the fresh pending request is throttled here.
+                    return null;
+                  }
+                  throw error;
+                }
+              },
             });
           } catch (error) {
             if (error instanceof NodePairingRateLimitError) {

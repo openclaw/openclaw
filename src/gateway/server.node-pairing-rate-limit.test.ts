@@ -4,7 +4,8 @@ import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
-import { listNodePairing } from "../infra/node-pairing.js";
+import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
+import { approveNodePairing, listNodePairing, requestNodePairing } from "../infra/node-pairing.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import {
   connectReq,
@@ -56,6 +57,21 @@ async function attemptNodePairing(port: number, identityPath: string) {
   }
 }
 
+async function approveNodeIdentity(params: { identityPath: string; caps: string[] }) {
+  const identity = loadOrCreateDeviceIdentity(params.identityPath);
+  const request = await requestNodePairing({
+    nodeId: identity.deviceId,
+    platform: NODE_CLIENT.platform,
+    deviceFamily: NODE_CLIENT.deviceFamily,
+    caps: params.caps,
+  });
+  const approved = await approveNodePairing(request.request.requestId, {
+    callerScopes: ["operator.pairing"],
+  });
+  expect(approved && !("status" in approved)).toBe(true);
+  return identity;
+}
+
 describe("node pairing rate limit", () => {
   test("limits concurrent first-time node pairing requests before the pairing lock", async () => {
     testState.gatewayAuth = {
@@ -88,6 +104,59 @@ describe("node pairing rate limit", () => {
 
       expect(connected).toHaveLength(3);
       expect(rateLimited).toHaveLength(5);
+      expect((await listNodePairing()).pending).toHaveLength(3);
+    });
+  });
+
+  test("keeps paired reconnects on the approved surface when upgrade pairing is limited", async () => {
+    testState.gatewayAuth = {
+      mode: "token",
+      token: "secret",
+      rateLimit: {
+        maxAttempts: 3,
+        windowMs: 60_000,
+        lockoutMs: 60_000,
+        exemptLoopback: false,
+      },
+    };
+    await withGatewayServer(async ({ port }) => {
+      const identityPrefix = path.join(
+        os.tmpdir(),
+        `openclaw-node-pairing-upgrade-${randomUUID()}`,
+      );
+      const pairedIdentityPath = `${identityPrefix}-paired.json`;
+      await approveNodeIdentity({ identityPath: pairedIdentityPath, caps: ["camera"] });
+
+      const firstTimeResponses = await Promise.all(
+        Array.from(
+          { length: 3 },
+          async (_, index) => await attemptNodePairing(port, `${identityPrefix}-${index}.json`),
+        ),
+      );
+      expect(firstTimeResponses.filter((res) => res.ok)).toHaveLength(3);
+
+      const ws = await openWs(port);
+      try {
+        const reconnect = await connectReq(ws, {
+          token: "secret",
+          role: "node",
+          scopes: [],
+          client: NODE_CLIENT,
+          caps: ["camera", "screen"],
+          deviceIdentityPath: pairedIdentityPath,
+        });
+        expect(reconnect.ok).toBe(true);
+      } finally {
+        ws.close();
+        await new Promise<void>((resolve) => {
+          if (ws.readyState === WebSocket.CLOSED) {
+            resolve();
+            return;
+          }
+          ws.once("close", () => resolve());
+        });
+      }
+
       expect((await listNodePairing()).pending).toHaveLength(3);
     });
   });
