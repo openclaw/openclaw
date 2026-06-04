@@ -133,14 +133,16 @@ async function fetchHistoryMessages(
   params?: {
     limit?: number;
     maxChars?: number;
+    includeFamily?: boolean;
   },
 ): Promise<unknown[]> {
   const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
     sessionKey: "main",
     limit: params?.limit ?? 1000,
     ...(typeof params?.maxChars === "number" ? { maxChars: params.maxChars } : {}),
+    ...(params?.includeFamily === true ? { includeFamily: true } : {}),
   });
-  expect(historyRes.ok).toBe(true);
+  expect(historyRes, JSON.stringify(historyRes.error ?? null)).toMatchObject({ ok: true });
   return historyRes.payload?.messages ?? [];
 }
 
@@ -372,6 +374,59 @@ describe("gateway server chat", () => {
       expect(synthetic.payload?.sessionInfo?.modelProvider).toBeTruthy();
       expect(synthetic.payload?.sessionInfo?.model).toBeTruthy();
       expect(synthetic.payload?.sessionInfo?.contextTokens).toEqual(expect.any(Number));
+    });
+  });
+
+  test("chat.history can include reset ancestor transcripts from the session family", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const currentSessionId = "current-thread-session";
+      const ancestorSessionId = "ancestor-thread-session";
+      const startedAt = new Date("2026-01-18T05:00:00.000Z").getTime();
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: currentSessionId,
+            updatedAt: startedAt,
+            sessionStartedAt: startedAt,
+            usageFamilySessionIds: [ancestorSessionId, currentSessionId],
+          },
+        },
+      });
+      await fs.writeFile(
+        path.join(
+          sessionDir,
+          ancestorSessionId + "-topic-456.jsonl.reset.2026-01-18T04-00-00.000Z",
+        ),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "ancestor thread context" }],
+            timestamp: startedAt - 60_000,
+          },
+        }) + "\n",
+        "utf-8",
+      );
+      await fs.writeFile(
+        path.join(sessionDir, currentSessionId + ".jsonl"),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "current thread context" }],
+            timestamp: startedAt + 60_000,
+          },
+        }) + "\n",
+        "utf-8",
+      );
+
+      const defaultHistory = JSON.stringify(await fetchHistoryMessages(ws));
+      expect(defaultHistory).not.toContain("ancestor thread context");
+      expect(defaultHistory).toContain("current thread context");
+
+      const familyHistory = JSON.stringify(await fetchHistoryMessages(ws, { includeFamily: true }));
+      expect(familyHistory).toContain("ancestor thread context");
+      expect(familyHistory).toContain("current thread context");
     });
   });
 
