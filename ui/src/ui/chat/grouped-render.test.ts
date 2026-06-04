@@ -1582,6 +1582,57 @@ describe("grouped chat rendering", () => {
     vi.unstubAllGlobals();
   });
 
+  it("renders canonical inbound media refs through the Control UI media route", async () => {
+    resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      const mediaUrl = new URL(url, "http://control.test");
+      expect(mediaUrl.pathname).toBe("/openclaw/__openclaw__/assistant-media");
+      expect([...mediaUrl.searchParams.keys()].toSorted()).toEqual(["meta", "source"]);
+      expect(mediaUrl.searchParams.get("meta")).toBe("1");
+      expect(mediaUrl.searchParams.get("source")).toBe("media://inbound/telegram-photo.png");
+      const headers = init?.headers as Headers;
+      expect(headers.get("Authorization")).toBe("Bearer session-token");
+      return {
+        ok: true,
+        json: async () => mediaTicketPayload("ticket-inbound"),
+      };
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+    const container = document.createElement("div");
+    const renderMessage = () =>
+      renderGroupedMessage(
+        container,
+        {
+          id: "user-inbound-media-ref",
+          role: "user",
+          content: "",
+          MediaPath: "media://inbound/telegram-photo.png",
+          MediaType: "image/png",
+          timestamp: Date.now(),
+        },
+        "user",
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: [],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    await flushAssistantAttachmentAvailabilityChecks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(
+      container.querySelector<HTMLImageElement>(".chat-message-image")?.getAttribute("src"),
+    ).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=media%3A%2F%2Finbound%2Ftelegram-photo.png&mediaTicket=ticket-inbound",
+    );
+    vi.unstubAllGlobals();
+  });
+
   it("fetches managed chat images with auth and renders blob previews", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
     const managedChatImageUrl =
