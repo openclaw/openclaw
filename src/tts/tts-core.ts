@@ -80,31 +80,62 @@ const USER_SUMMARY_PROMPT_ECHO_RE = /^the user (?:wants|asks|asked|requested) me
 const SELF_SUMMARY_PROMPT_ECHO_RE =
   /^i (?:need|should|will|'ll) (?:to )?(?:summarize|include|keep|maintain|craft|write|produce)\b/i;
 const CRAFT_SUMMARY_PROMPT_ECHO_RE = /^let me (?:craft|write|produce|summarize)\b/i;
+const SUMMARY_PROMPT_META_RE =
+  /\b(?:summari[sz]e|summary|key points?|important information|original tone|tone and style|approximately|characters?|concise|audio|text to summarize)\b/i;
+const PROMPT_ECHO_SEPARATOR_RE = /\s*(?::|—|–|\s-\s)\s*/;
 
-function findFirstSentenceEnd(text: string): number {
+function findFirstSentenceEnd(text: string): { index: number; found: boolean } {
   const match = /^(.*?(?:[.!?](?=\s|$)|\r?\n+))/s.exec(text);
-  return match?.[0].length ?? text.length;
+  return { index: match?.[0].length ?? text.length, found: Boolean(match) };
+}
+
+function splitPromptEchoPrefix(text: string): { prefix: string; rest: string } | undefined {
+  const match = PROMPT_ECHO_SEPARATOR_RE.exec(text);
+  if (!match || match.index === 0) {
+    return undefined;
+  }
+  const restStart = match.index + match[0].length;
+  const rest = text.slice(restStart).trimStart();
+  if (!rest) {
+    return undefined;
+  }
+  return {
+    prefix: text.slice(0, match.index).trim(),
+    rest,
+  };
 }
 
 function isLeadingSummaryPromptEchoSentence(sentence: string): boolean {
-  return (
-    USER_SUMMARY_PROMPT_ECHO_RE.test(sentence) ||
-    SELF_SUMMARY_PROMPT_ECHO_RE.test(sentence) ||
-    CRAFT_SUMMARY_PROMPT_ECHO_RE.test(sentence)
-  );
+  if (USER_SUMMARY_PROMPT_ECHO_RE.test(sentence)) {
+    return true;
+  }
+  if (SELF_SUMMARY_PROMPT_ECHO_RE.test(sentence) || CRAFT_SUMMARY_PROMPT_ECHO_RE.test(sentence)) {
+    return SUMMARY_PROMPT_META_RE.test(sentence);
+  }
+  return false;
 }
 
 function stripLeadingSummaryPromptEcho(text: string): string {
   let remaining = text.trimStart();
   let stripped = false;
   while (remaining) {
+    const separated = splitPromptEchoPrefix(remaining);
+    if (separated && isLeadingSummaryPromptEchoSentence(separated.prefix)) {
+      stripped = true;
+      remaining = separated.rest;
+      continue;
+    }
+
     const sentenceEnd = findFirstSentenceEnd(remaining);
-    const sentence = remaining.slice(0, sentenceEnd).trim();
+    const sentence = remaining.slice(0, sentenceEnd.index).trim();
     if (!isLeadingSummaryPromptEchoSentence(sentence)) {
       break;
     }
+    if (!sentenceEnd.found) {
+      break;
+    }
     stripped = true;
-    remaining = remaining.slice(sentenceEnd).trimStart();
+    remaining = remaining.slice(sentenceEnd.index).trimStart();
   }
   return stripped ? remaining : text;
 }

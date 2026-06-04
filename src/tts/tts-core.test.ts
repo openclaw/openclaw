@@ -142,6 +142,54 @@ describe("TTS core", () => {
     expect(result.outputLength).toBe("Concise audible summary.".length);
   });
 
+  it("preserves valid leading first-person summary prose", async () => {
+    const { config, deps } = createSummarizeTextFixture([
+      {
+        type: "text",
+        text: "I need to keep taking my medicine every morning. My doctor also moved the appointment to Friday.",
+      },
+    ]);
+
+    const result = await summarizeText(
+      {
+        text: "Long text that should be summarized for speech.",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: 10_000,
+      },
+      deps,
+    );
+
+    expect(result.summary).toBe(
+      "I need to keep taking my medicine every morning. My doctor also moved the appointment to Friday.",
+    );
+    expect(result.outputLength).toBe(result.summary.length);
+  });
+
+  it("preserves summary content after colon-style prompt echoes", async () => {
+    const { config, deps } = createSummarizeTextFixture([
+      {
+        type: "text",
+        text: "The user asked me to summarize: deploy was delayed until Friday.",
+      },
+    ]);
+
+    const result = await summarizeText(
+      {
+        text: "Long text that should be summarized for speech.",
+        targetLength: 120,
+        cfg: {},
+        config,
+        timeoutMs: 10_000,
+      },
+      deps,
+    );
+
+    expect(result.summary).toBe("deploy was delayed until Friday.");
+    expect(result.outputLength).toBe(result.summary.length);
+  });
+
   it("caps overlong summaries at the requested speech length", async () => {
     const { config, deps } = createSummarizeTextFixture([
       {
