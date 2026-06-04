@@ -514,8 +514,9 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
-    (agentHarnessPolicy.runtime === "openclaw" && agentHarnessPolicy.runtimeSource !== "implicit"
-      ? "openclaw"
+    (agentHarnessPolicy.runtime !== "auto" &&
+    (agentHarnessPolicy.runtime !== "openclaw" || agentHarnessPolicy.runtimeSource !== "implicit")
+      ? agentHarnessPolicy.runtime
       : undefined);
   if (!isRawModelRun && isCliProvider(cliExecutionProvider, params.cfg)) {
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);

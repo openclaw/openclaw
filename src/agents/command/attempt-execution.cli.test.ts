@@ -1753,7 +1753,7 @@ describe("embedded attempt harness pinning", () => {
       sessionHasHistory: true,
     });
 
-    expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: undefined });
+    expectMockArgFields(runEmbeddedAgentMock, { agentHarnessId: "codex" });
   });
 
   it("auto-forwards OpenAI Codex auth profiles to default Codex harness runs", async () => {
@@ -1821,7 +1821,7 @@ describe("embedded attempt harness pinning", () => {
     }
 
     expectMockArgFields(runEmbeddedAgentMock, {
-      agentHarnessId: undefined,
+      agentHarnessId: "codex",
       authProfileId: "openai:work",
       authProfileIdSource: "auto",
     });
