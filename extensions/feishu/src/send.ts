@@ -378,6 +378,7 @@ function parseFeishuMessageItem(
     senderOpenId: item.sender?.id_type === "open_id" ? item.sender?.id : undefined,
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
+    rawContent,
     contentType: msgType,
     createTime: parseStrictNonNegativeInteger(item.create_time),
     threadId: item.thread_id || undefined,

@@ -1324,6 +1324,72 @@ describe("handleFeishuMessage command authorization", () => {
     expect(context.SupplementalContext?.quote?.body).toBe("quoted content");
   });
 
+  it("attaches media from quoted image messages", async () => {
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_parent_image",
+      chatId: "oc-dm",
+      content: "[image message]",
+      rawContent: JSON.stringify({ image_key: "img_parent_payload" }),
+      contentType: "image",
+    });
+    mockDownloadMessageResourceFeishu.mockResolvedValueOnce({
+      buffer: Buffer.from("quoted-image"),
+      contentType: "image/jpeg",
+      fileName: "quoted-image.jpg",
+    });
+    mockSaveMediaBuffer.mockResolvedValueOnce({
+      id: "quoted-image.jpg",
+      path: "/tmp/quoted-image.jpg",
+      size: Buffer.byteLength("quoted-image"),
+      contentType: "image/jpeg",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          enabled: true,
+          dmPolicy: "open",
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-replier",
+        },
+      },
+      message: {
+        message_id: "om_reply_image",
+        parent_id: "om_parent_image",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "describe the quoted image" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const downloadRequest = mockCallArg<{
+      fileKey?: string;
+      messageId?: string;
+      type?: string;
+    }>(mockDownloadMessageResourceFeishu, 0, 0);
+    expect(downloadRequest.messageId).toBe("om_parent_image");
+    expect(downloadRequest.fileKey).toBe("img_parent_payload");
+    expect(downloadRequest.type).toBe("image");
+
+    const finalized = mockCallArg<{
+      MediaPaths?: string[];
+      MediaTypes?: string[];
+      SupplementalContext?: { quote?: { body?: string } };
+    }>(mockFinalizeInboundContext, 0, 0);
+    expect(finalized.MediaPaths).toEqual(["/tmp/quoted-image.jpg"]);
+    expect(finalized.MediaTypes).toEqual(["image/jpeg"]);
+    expect(finalized.SupplementalContext?.quote?.body).toBe("[image message]");
+  });
+
   it("uses message create_time as Timestamp instead of Date.now()", async () => {
     mockShouldComputeCommandAuthorized.mockReturnValue(false);
 
