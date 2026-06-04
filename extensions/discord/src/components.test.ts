@@ -318,6 +318,27 @@ describe("discord component registry", () => {
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 
+  it("keeps component entries alive for 7 days by default", () => {
+    const now = 1_700_000_000_000;
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      registerDiscordComponentEntries({
+        entries: [{ id: "btn_default_ttl", kind: "button", label: "Default TTL" }],
+        modals: [],
+      });
+
+      dateNowSpy.mockReturnValue(now + 7 * 24 * 60 * 60 * 1000 - 1);
+      const entry = resolveDiscordComponentEntry({ id: "btn_default_ttl", consume: false });
+      expect(entry?.createdAt).toBe(now);
+      expect(entry?.expiresAt).toBe(now + 7 * 24 * 60 * 60 * 1000);
+
+      dateNowSpy.mockReturnValue(now + 7 * 24 * 60 * 60 * 1000 + 1);
+      expect(resolveDiscordComponentEntry({ id: "btn_default_ttl", consume: false })).toBeNull();
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
   it("consumes sibling entries from the same non-reusable component message", () => {
     const result = buildDiscordComponentMessage({
       spec: {

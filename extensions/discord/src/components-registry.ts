@@ -9,7 +9,7 @@ import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { DiscordComponentEntry, DiscordModalEntry } from "./components.js";
 import { getOptionalDiscordRuntime } from "./runtime.js";
 
-const DEFAULT_COMPONENT_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_COMPONENT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const PERSISTENT_COMPONENT_NAMESPACE = "discord.components";
 const PERSISTENT_MODAL_NAMESPACE = "discord.modals";
 const PERSISTENT_COMPONENT_MAX_ENTRIES = 500;
@@ -132,6 +132,7 @@ function getPersistentComponentStore(): DiscordRegistryStore<DiscordComponentEnt
       PersistedDiscordRegistryEntry<DiscordComponentEntry>
     >({
       namespace: PERSISTENT_COMPONENT_NAMESPACE,
+      // Keep durable callbacks count-bounded when long TTLs retain inactive Discord cards.
       maxEntries: PERSISTENT_COMPONENT_MAX_ENTRIES,
       defaultTtlMs: DEFAULT_COMPONENT_TTL_MS,
     });
@@ -158,6 +159,7 @@ function getPersistentModalStore(): DiscordRegistryStore<DiscordModalEntry> | un
       PersistedDiscordRegistryEntry<DiscordModalEntry>
     >({
       namespace: PERSISTENT_MODAL_NAMESPACE,
+      // Keep durable callbacks count-bounded when long TTLs retain inactive Discord cards.
       maxEntries: PERSISTENT_MODAL_MAX_ENTRIES,
       defaultTtlMs: DEFAULT_COMPONENT_TTL_MS,
     });

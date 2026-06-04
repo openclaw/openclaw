@@ -412,7 +412,7 @@ describe("discord config schema", () => {
   it("accepts agentComponents.ttlMs at channel and account scope", () => {
     const res = DiscordConfigSchema.safeParse({
       agentComponents: {
-        ttlMs: 86_400_000,
+        ttlMs: 2_592_000_000,
       },
       accounts: {
         work: {
@@ -427,7 +427,7 @@ describe("discord config schema", () => {
   });
 
   it("rejects invalid agentComponents.ttlMs values", () => {
-    for (const ttlMs of [0, -1, 1.5, 86_400_001]) {
+    for (const ttlMs of [0, -1, 1.5, 2_592_000_001]) {
       const res = DiscordConfigSchema.safeParse({
         agentComponents: {
           ttlMs,
