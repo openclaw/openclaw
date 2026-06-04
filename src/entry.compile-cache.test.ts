@@ -111,12 +111,12 @@ describe("entry compile cache", () => {
       args: ["--no-warnings", path.join(root, "dist", "entry.js"), "status", "--json"],
       env: {
         NODE_DISABLE_COMPILE_CACHE: "1",
-        OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+        OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
       },
     });
   });
 
-  it("does not respawn packaged installs when NODE_COMPILE_CACHE is configured", () => {
+  it("does not respawn unaffected packaged installs when NODE_COMPILE_CACHE is configured", () => {
     const root = makeTempDir(tempDirs, "openclaw-compile-cache-package-respawn-");
 
     expect(
@@ -126,6 +126,31 @@ describe("entry compile cache", () => {
         installRoot: root,
       }),
     ).toBeUndefined();
+  });
+
+  it("builds a no-cache respawn plan for affected Windows packaged installs", () => {
+    const root = makeTempDir(tempDirs, "openclaw-compile-cache-package-win24-");
+    const entryFile = path.join(root, "dist", "entry.js");
+
+    const plan = buildOpenClawCompileCacheRespawnPlan({
+      currentFile: entryFile,
+      env: { NODE_COMPILE_CACHE: "/tmp/openclaw-cache" },
+      execArgv: ["--no-warnings"],
+      execPath: "/usr/bin/node",
+      installRoot: root,
+      argv: ["/usr/bin/node", entryFile, "doctor", "--fix", "--non-interactive"],
+      nodeVersion: "24.1.0",
+      platform: "win32",
+    });
+
+    expect(plan).toEqual({
+      command: "/usr/bin/node",
+      args: ["--no-warnings", entryFile, "doctor", "--fix", "--non-interactive"],
+      env: {
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
+      },
+    });
   });
 
   it("does not respawn source checkouts twice", async () => {
@@ -138,7 +163,7 @@ describe("entry compile cache", () => {
         currentFile: path.join(root, "dist", "entry.js"),
         env: {
           NODE_COMPILE_CACHE: "/tmp/openclaw-cache",
-          OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+          OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
         },
         installRoot: root,
       }),
