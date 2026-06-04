@@ -6966,7 +6966,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         agentid: String? = nil,
         limit: Int?,
         maxchars: Int?,
-        includefamily: Bool?)
+        includefamily: Bool? = nil)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
