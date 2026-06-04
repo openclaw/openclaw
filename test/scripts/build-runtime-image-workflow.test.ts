@@ -5,6 +5,8 @@ import { parse } from "yaml";
 const WORKFLOW_PATH = ".github/workflows/build-runtime-image.yml";
 const DOCKERFILE_PATH = "Dockerfile.multitenant";
 const ROLLOUT_SCRIPT_PATH = "scripts/runtime-rollout.mjs";
+const REMOVED_PASSWORD_ENV = ["API", "PASSWORD"].join("_");
+const REMOVED_PASSWORD_SECRET = ["ROCKIELAB", REMOVED_PASSWORD_ENV].join("_");
 
 type WorkflowStep = {
   if?: string;
@@ -124,6 +126,7 @@ describe("build-runtime-image rollout workflow", () => {
       ROLLOUT_MAX_ATTEMPTS: "5",
       ROLLOUT_FALLBACK_AFTER_TRANSIENTS: "2",
     });
+    expect(job.env).not.toHaveProperty(REMOVED_PASSWORD_ENV);
 
     const run = readFileSync(ROLLOUT_SCRIPT_PATH, "utf8");
     expect(run).toContain("rollout-summary.md");
@@ -151,14 +154,26 @@ describe("build-runtime-image rollout workflow", () => {
     });
   });
 
-  it("falls back after Cloudflare 524s without changing tenant binary env", () => {
+  it("does not mention or require the removed password secret", () => {
+    const workflow = readFileSync(WORKFLOW_PATH, "utf8");
+
+    expect(workflow).not.toContain(REMOVED_PASSWORD_SECRET);
+    expect(workflow).not.toContain(REMOVED_PASSWORD_ENV);
+    expect(workflow).toContain("ROCKIELAB_ADMIN_TOKEN: sent as X-Admin-Token");
+    expect(workflow).toContain(
+      "FLY_API_TOKEN: used to enumerate tenant Fly apps for per-tenant fallback",
+    );
+  });
+
+  it("falls back after Cloudflare 524s through per-tenant admin rollout", () => {
     const run = readFileSync(ROLLOUT_SCRIPT_PATH, "utf8");
 
     expect(run).toContain("response_body");
     expect(run).toContain("succeeded-via-per-tenant-fallback");
     expect(run).toContain("superseded-by-newer-build");
-    expect(run).toContain("fly-app-list-plus-tenant-image-endpoint");
-    expect(run).toContain("tenantImageRequestBody(image)");
-    expect(run).toContain("no mode/binary fields");
+    expect(run).toContain("fly-app-list-plus-admin-tenant-rollout");
+    expect(run).toContain("adminTenantFallbackUrl");
+    expect(run).toContain("confirm=true");
+    expect(run).toContain("async=false");
   });
 });

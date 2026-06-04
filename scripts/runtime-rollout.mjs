@@ -28,33 +28,50 @@ export function tenantIdsFromFlyApps(body, prefix = TENANT_APP_PREFIX) {
   return [...tenantIds].toSorted((left, right) => left.localeCompare(right));
 }
 
-export function tenantImageRequestBody(image) {
-  return JSON.stringify({ image });
-}
-
-export function tenantImageRequestHeaders(apiPassword, adminToken, tenantDevToken = "") {
-  const headers = {
+export function adminRolloutRequestHeaders(adminToken) {
+  return {
     "X-Admin-Token": adminToken,
-    Authorization: `Bearer ${apiPassword}`,
     Accept: "application/json",
-    "Content-Type": "application/json",
   };
-  const trimmedTenantDevToken = tenantDevToken.trim();
-  if (trimmedTenantDevToken) {
-    headers["X-Tenant-Token"] = trimmedTenantDevToken;
-  }
-  return headers;
 }
 
-export function outcomeFromTenantImageResponse(response) {
-  if (!response || response.code !== "200") {
+export function adminRolloutPollRequestHeaders(adminToken) {
+  return adminRolloutRequestHeaders(adminToken);
+}
+
+export function adminTenantFallbackRequestHeaders(adminToken) {
+  return adminRolloutRequestHeaders(adminToken);
+}
+
+export function outcomeFromTenantAdminRolloutResponse(response) {
+  const body = parseJson(response?.body);
+  if (!response || !String(response.code).startsWith("2")) {
     return "failed";
   }
-  const body = parseJson(response.body);
+  if (body?.state === "aborted") {
+    return "failed";
+  }
+  if (Array.isArray(body?.failed) && body.failed.length > 0) {
+    return "failed";
+  }
   if (Array.isArray(body?.updated) && body.updated.length > 0) {
     return "updated";
   }
   return "skipped";
+}
+
+function errorDetailsFromTenantAdminRolloutResponse(response) {
+  const body = parseJson(response?.body);
+  if (!response || !String(response.code).startsWith("2")) {
+    return response?.body || response?.error || `HTTP ${response?.code ?? "000"}`;
+  }
+  if (body?.state === "aborted") {
+    return body?.error || body?.reason || response.body;
+  }
+  if (Array.isArray(body?.failed) && body.failed.length > 0) {
+    return body?.error_details || body.failed;
+  }
+  return response?.body || response?.error || "";
 }
 
 function parseJson(raw) {
@@ -182,7 +199,7 @@ export function validateAcknowledgedRolloutOptions(options, responseJson) {
 }
 
 export function adminRolloutUrl(base, image, options = {}) {
-  const params = new URLSearchParams({ image });
+  const params = new URLSearchParams({ image, confirm: "true" });
   if (options.tenantId) {
     params.set("tenant_id", options.tenantId);
   }
@@ -198,7 +215,9 @@ export function adminRolloutUrl(base, image, options = {}) {
   if (options.waveSize) {
     params.set("wave_size", options.waveSize);
   }
-  if (options.asyncMode !== false) {
+  if (options.asyncMode === false) {
+    params.set("async", "false");
+  } else {
     // Default to async mode (#1061). The admin endpoint's sync path
     // blocks for canary_wait_sec + wave_delay_sec inside the request,
     // which exceeds Cloudflare's ~100s proxy window for any fleet of
@@ -213,8 +232,14 @@ export function adminRolloutPollUrl(base, rolloutId) {
   return `${base}/api/admin/tenants/rollout/${encodeURIComponent(rolloutId)}`;
 }
 
-function tenantImageUrl(base, tenantId) {
-  return `${base}/api/tenants/${encodeURIComponent(tenantId)}/image`;
+export function adminTenantFallbackUrl(base, image, tenantId) {
+  return adminRolloutUrl(base, image, {
+    tenantId,
+    canaryCount: "0",
+    canaryWaitSec: "0",
+    waveDelaySec: "0",
+    asyncMode: false,
+  });
 }
 
 /**
@@ -233,7 +258,6 @@ async function pollAsyncRollout({
   base,
   rolloutId,
   adminToken,
-  apiPassword,
   attempts,
   pollIntervalMs = 5000,
   maxPolls = 360, // 30 minutes / 5s = 360 polls
@@ -243,11 +267,7 @@ async function pollAsyncRollout({
   for (let i = 0; i < maxPolls; i += 1) {
     const response = await request("GET", url, {
       timeoutMs,
-      headers: {
-        "X-Admin-Token": adminToken,
-        Authorization: `Bearer ${apiPassword}`,
-        Accept: "application/json",
-      },
+      headers: adminRolloutPollRequestHeaders(adminToken),
     });
     const body = response.body || response.error || "";
     const json = parseJson(body);
@@ -347,24 +367,14 @@ async function detectSuperseded() {
   };
 }
 
-async function rollTenantDirectly({
-  base,
-  tenantId,
-  image,
-  apiPassword,
-  adminToken,
-  tenantDevToken,
-  timeoutMs,
-  attempts,
-}) {
-  const response = await request("POST", tenantImageUrl(base, tenantId), {
+async function rollTenantDirectly({ base, tenantId, image, adminToken, timeoutMs, attempts }) {
+  const response = await request("POST", adminTenantFallbackUrl(base, image, tenantId), {
     timeoutMs,
-    headers: tenantImageRequestHeaders(apiPassword, adminToken, tenantDevToken),
-    body: tenantImageRequestBody(image),
+    headers: adminTenantFallbackRequestHeaders(adminToken),
   });
-  const outcome = outcomeFromTenantImageResponse(response);
+  const outcome = outcomeFromTenantAdminRolloutResponse(response);
   await appendAttempt(attempts, {
-    kind: "tenant-image",
+    kind: "admin-tenant-rollout",
     tenant_id: tenantId,
     response_code: response.code,
     retryable: isTransientRolloutCode(response.code),
@@ -375,15 +385,14 @@ async function rollTenantDirectly({
     response_code: response.code,
     outcome,
     response_body: response.body || response.error,
+    error_detail: outcome === "failed" ? errorDetailsFromTenantAdminRolloutResponse(response) : "",
   };
 }
 
 async function runPerTenantFallback({
   base,
   image,
-  apiPassword,
   adminToken,
-  tenantDevToken,
   flyToken,
   flyOrgSlug,
   flyApiBase,
@@ -421,9 +430,7 @@ async function runPerTenantFallback({
       base,
       tenantId,
       image,
-      apiPassword,
       adminToken,
-      tenantDevToken,
       timeoutMs,
       attempts,
     });
@@ -434,7 +441,7 @@ async function runPerTenantFallback({
       skipped.push(tenantId);
     } else {
       failed.push(tenantId);
-      errorDetails[tenantId] = result.response_body;
+      errorDetails[tenantId] = result.error_detail || result.response_body;
     }
   }
 
@@ -497,7 +504,7 @@ function renderMarkdown(summary) {
       "",
       `Triggered by: ${summary.fallback.trigger}`,
       `Tenant source: ${summary.fallback.tenant_source}`,
-      'Request body: `{ "image": "<target>" }` (no mode/binary fields, so subscription tenants keep their BINARY env).',
+      "Route: `/api/admin/tenants/rollout` with `tenant_id`, `confirm=true`, `async=false`, and zeroed canary/wave timing.",
     );
   }
 
@@ -550,14 +557,12 @@ async function writeArtifacts(dir, summary, attempts) {
 export async function runRollout() {
   const base = requireEnv("API_URL").replace(/\/+$/, "");
   const adminToken = requireEnv("ADMIN_TOKEN");
-  const apiPassword = requireEnv("API_PASSWORD");
   const image = requireEnv("IMAGE_TAG");
   const artifactDir = process.env.ROLLOUT_ARTIFACT_DIR || ".artifacts/runtime-rollout";
   const maxAttempts = envInt("ROLLOUT_MAX_ATTEMPTS", 5);
   const fallbackAfterTransients = envInt("ROLLOUT_FALLBACK_AFTER_TRANSIENTS", 2);
   const timeoutMs = envInt("ROLLOUT_CURL_MAX_TIME", 180) * 1000;
   const flyToken = process.env.FLY_API_TOKEN?.trim();
-  const tenantDevToken = process.env.ROCKIELAB_TENANT_DEV_TOKEN?.trim() || "";
   const flyOrgSlug = process.env.FLY_ORG_SLUG?.trim() || DEFAULT_FLY_ORG_SLUG;
   const flyApiBase = process.env.FLY_MACHINES_API?.trim() || DEFAULT_FLY_MACHINES_API;
   const rolloutOptions = rolloutOptionsFromEnv();
@@ -589,11 +594,7 @@ export async function runRollout() {
 
     const response = await request("POST", adminRolloutUrl(base, image, rolloutOptions), {
       timeoutMs,
-      headers: {
-        "X-Admin-Token": adminToken,
-        Authorization: `Bearer ${apiPassword}`,
-        Accept: "application/json",
-      },
+      headers: adminRolloutRequestHeaders(adminToken),
     });
     responseCodes.push(response.code);
     finalCode = response.code;
@@ -610,8 +611,8 @@ export async function runRollout() {
 
     console.log(`admin rollout attempt ${attempt} response code: ${response.code}`);
 
-    if (response.code === "200") {
-      // Async mode (#1061): the immediate 200 carries
+    if (String(response.code).startsWith("2")) {
+      // Async mode (#1061): the immediate 2xx carries
       // {state: "running", rollout_id, ...} — poll until terminal,
       // then drain the final result from the poll response. Skip
       // option-acknowledgement validation against the running
@@ -623,7 +624,6 @@ export async function runRollout() {
           base,
           rolloutId: asyncRolloutId,
           adminToken,
-          apiPassword,
           attempts,
           timeoutMs,
         });
@@ -659,9 +659,7 @@ export async function runRollout() {
               fallbackResult = await runPerTenantFallback({
                 base,
                 image,
-                apiPassword,
                 adminToken,
-                tenantDevToken,
                 flyToken,
                 flyOrgSlug,
                 flyApiBase,
@@ -725,6 +723,9 @@ export async function runRollout() {
       skipped = Array.isArray(finalJson?.skipped) ? finalJson.skipped : [];
       failed = Array.isArray(finalJson?.failed) ? finalJson.failed : [];
       errorDetails = finalJson?.error_details || {};
+      if (failed.length > 0) {
+        finalResult = "failed-tenants";
+      }
       break;
     }
 
@@ -742,9 +743,7 @@ export async function runRollout() {
         fallbackResult = await runPerTenantFallback({
           base,
           image,
-          apiPassword,
           adminToken,
-          tenantDevToken,
           flyToken,
           flyOrgSlug,
           flyApiBase,
@@ -761,7 +760,7 @@ export async function runRollout() {
       finalResult = fallbackResult.finalResult;
       supersededBy = fallbackResult.supersededBy;
       fallback = {
-        strategy: "fly-app-list-plus-tenant-image-endpoint",
+        strategy: "fly-app-list-plus-admin-tenant-rollout",
         trigger: `${attempt} transient admin rollout response(s)`,
         tenant_source: `${flyApiBase}/apps?org_slug=${flyOrgSlug}`,
         tenant_ids: fallbackResult.tenantIds,

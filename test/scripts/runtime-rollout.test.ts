@@ -1,17 +1,68 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import {
+  adminRolloutPollRequestHeaders,
   adminRolloutPollUrl,
+  adminRolloutRequestHeaders,
   adminRolloutUrl,
+  adminTenantFallbackRequestHeaders,
+  adminTenantFallbackUrl,
   expectedAcknowledgedRolloutOptions,
   hasScopedRolloutOptions,
   isTransientRolloutCode,
-  outcomeFromTenantImageResponse,
+  outcomeFromTenantAdminRolloutResponse,
+  runRollout,
   rolloutOptionsFromEnv,
   tenantIdsFromFlyApps,
-  tenantImageRequestBody,
-  tenantImageRequestHeaders,
   validateAcknowledgedRolloutOptions,
 } from "../../scripts/runtime-rollout.mjs";
+
+const ROLLOUT_ENV_NAMES = [
+  "API_URL",
+  "ADMIN_TOKEN",
+  "IMAGE_TAG",
+  "ROLLOUT_ARTIFACT_DIR",
+  "ROLLOUT_MAX_ATTEMPTS",
+  "ROLLOUT_FALLBACK_AFTER_TRANSIENTS",
+  "ROLLOUT_CURL_MAX_TIME",
+  "ROLLOUT_TENANT_ID",
+  "ROLLOUT_CANARY_COUNT",
+  "ROLLOUT_CANARY_WAIT_SEC",
+  "ROLLOUT_WAVE_DELAY_SEC",
+  "ROLLOUT_WAVE_SIZE",
+  "FLY_API_TOKEN",
+  "FLY_ORG_SLUG",
+  "FLY_MACHINES_API",
+  "GITHUB_TOKEN",
+  "GITHUB_REPOSITORY",
+  "GITHUB_RUN_NUMBER",
+  "API_PASSWORD",
+] as const;
+
+function snapshotEnv() {
+  return new Map(ROLLOUT_ENV_NAMES.map((name) => [name, process.env[name]]));
+}
+
+function restoreEnv(previous: Map<string, string | undefined>) {
+  for (const name of ROLLOUT_ENV_NAMES) {
+    const value = previous.get(name);
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+}
+
+async function readRolloutSummary(dir: string) {
+  return JSON.parse(await readFile(path.join(dir, "rollout-summary.json"), "utf8"));
+}
+
+function jsonResponse(status: number, body: unknown) {
+  return new Response(JSON.stringify(body), { status });
+}
 
 describe("scripts/runtime-rollout", () => {
   it("treats Cloudflare 524 and connection failures as transient rollout errors", () => {
@@ -34,51 +85,44 @@ describe("scripts/runtime-rollout", () => {
     ).toEqual(["t-alpha", "t-bravo"]);
   });
 
-  it("only sends image in direct tenant fallback requests", () => {
-    const body = JSON.parse(
-      tenantImageRequestBody(
-        "ghcr.io/saml212/rockielab-runtime-multitenant:e09f57bb7cdee9ebfeff457ad7e750f65539ec33",
-      ),
-    );
-
-    expect(body).toEqual({
-      image:
-        "ghcr.io/saml212/rockielab-runtime-multitenant:e09f57bb7cdee9ebfeff457ad7e750f65539ec33",
+  it("sends only X-Admin-Token on rollout POST, poll GET, and fallback POST", () => {
+    expect(adminRolloutRequestHeaders("admin-token")).toEqual({
+      "X-Admin-Token": "admin-token",
+      Accept: "application/json",
     });
-    expect(body).not.toHaveProperty("mode");
-    expect(body).not.toHaveProperty("binary");
+    expect(adminRolloutRequestHeaders("admin-token")).not.toHaveProperty("Authorization");
+    expect(adminRolloutPollRequestHeaders("admin-token")).not.toHaveProperty("Authorization");
+    expect(adminTenantFallbackRequestHeaders("admin-token")).not.toHaveProperty("Authorization");
   });
 
-  it("sends both admin auth gates and only adds tenant token when present", () => {
-    expect(tenantImageRequestHeaders("api-password", "admin-token")).toEqual({
-      "X-Admin-Token": "admin-token",
-      Authorization: "Bearer api-password",
-      Accept: "application/json",
-      "Content-Type": "application/json",
-    });
-    expect(tenantImageRequestHeaders("api-password", "admin-token", " tenant-dev-token ")).toEqual({
-      "X-Admin-Token": "admin-token",
-      Authorization: "Bearer api-password",
-      Accept: "application/json",
-      "Content-Type": "application/json",
-      "X-Tenant-Token": "tenant-dev-token",
-    });
-  });
-
-  it("buckets tenant image endpoint responses", () => {
+  it("buckets per-tenant admin rollout responses", () => {
     expect(
-      outcomeFromTenantImageResponse({
+      outcomeFromTenantAdminRolloutResponse({
         code: "200",
         body: JSON.stringify({ updated: [{ id: "machine-1" }], skipped: [] }),
       }),
     ).toBe("updated");
     expect(
-      outcomeFromTenantImageResponse({
+      outcomeFromTenantAdminRolloutResponse({
         code: "200",
         body: JSON.stringify({ updated: [], skipped: [{ id: "machine-1" }] }),
       }),
     ).toBe("skipped");
-    expect(outcomeFromTenantImageResponse({ code: "524", body: "error code: 524" })).toBe("failed");
+    expect(
+      outcomeFromTenantAdminRolloutResponse({
+        code: "200",
+        body: JSON.stringify({ state: "aborted" }),
+      }),
+    ).toBe("failed");
+    expect(
+      outcomeFromTenantAdminRolloutResponse({
+        code: "200",
+        body: JSON.stringify({ failed: [{ tenant_id: "t-demo" }] }),
+      }),
+    ).toBe("failed");
+    expect(outcomeFromTenantAdminRolloutResponse({ code: "524", body: "error code: 524" })).toBe(
+      "failed",
+    );
   });
 
   it("builds scoped admin rollout urls from manual rollout options", () => {
@@ -91,7 +135,13 @@ describe("scripts/runtime-rollout", () => {
     });
 
     expect(url).toBe(
-      "https://api.rockielab.com/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha&tenant_id=t-demo&canary_count=1&canary_wait_sec=30&wave_delay_sec=45&wave_size=2&async=true",
+      "https://api.rockielab.com/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha&confirm=true&tenant_id=t-demo&canary_count=1&canary_wait_sec=30&wave_delay_sec=45&wave_size=2&async=true",
+    );
+  });
+
+  it("builds initial admin rollout urls with confirm and async enabled", () => {
+    expect(adminRolloutUrl("https://api.rockielab.com", "ghcr.io/img:sha")).toBe(
+      "https://api.rockielab.com/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha&confirm=true&async=true",
     );
   });
 
@@ -103,7 +153,13 @@ describe("scripts/runtime-rollout", () => {
       asyncMode: false,
     });
     expect(url).toBe(
-      "https://api.rockielab.com/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha",
+      "https://api.rockielab.com/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha&confirm=true&async=false",
+    );
+  });
+
+  it("builds per-tenant fallback URLs against the admin rollout route", () => {
+    expect(adminTenantFallbackUrl("https://api.rockielab.com", "ghcr.io/img:sha", "t-demo")).toBe(
+      "https://api.rockielab.com/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha&confirm=true&tenant_id=t-demo&canary_count=0&canary_wait_sec=0&wave_delay_sec=0&async=false",
     );
   });
 
@@ -197,6 +253,139 @@ describe("scripts/runtime-rollout", () => {
           process.env[name] = value;
         }
       }
+    }
+  });
+
+  it("falls back per tenant after transient admin rollout responses without Authorization", async () => {
+    const previousEnv = snapshotEnv();
+    const artifactDir = await mkdtemp(path.join(tmpdir(), "runtime-rollout-"));
+    const fetchCalls: Array<{ url: string; init?: RequestInit }> = [];
+    try {
+      process.env.API_URL = "https://api.rockielab.test";
+      process.env.ADMIN_TOKEN = "admin-token";
+      process.env.IMAGE_TAG = "ghcr.io/img:sha";
+      process.env.ROLLOUT_ARTIFACT_DIR = artifactDir;
+      process.env.ROLLOUT_MAX_ATTEMPTS = "5";
+      process.env.ROLLOUT_FALLBACK_AFTER_TRANSIENTS = "2";
+      process.env.ROLLOUT_CURL_MAX_TIME = "1";
+      process.env.FLY_API_TOKEN = "fly-token";
+      process.env.FLY_ORG_SLUG = "test-org";
+      process.env.FLY_MACHINES_API = "https://api.machines.test/v1";
+      process.env.API_PASSWORD = "wrong-password";
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_REPOSITORY;
+      delete process.env.GITHUB_RUN_NUMBER;
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async (url: URL | RequestInfo, init?: RequestInit) => {
+          const requestUrl = String(url);
+          fetchCalls.push({ url: requestUrl, init });
+          const parsed = new URL(requestUrl);
+          if (
+            init?.method === "POST" &&
+            parsed.pathname === "/api/admin/tenants/rollout" &&
+            !parsed.searchParams.has("tenant_id")
+          ) {
+            return new Response("error code: 524", { status: 524 });
+          }
+          if (
+            init?.method === "GET" &&
+            requestUrl === "https://api.machines.test/v1/apps?org_slug=test-org"
+          ) {
+            return jsonResponse(200, {
+              apps: [{ name: "rockielab-tenant-t-alpha" }, { name: "rockielab-api" }],
+            });
+          }
+          if (
+            init?.method === "POST" &&
+            parsed.pathname === "/api/admin/tenants/rollout" &&
+            parsed.searchParams.get("tenant_id") === "t-alpha"
+          ) {
+            return jsonResponse(200, {
+              updated: [{ tenant_id: "t-alpha", machine_id: "machine-1" }],
+              skipped: [],
+              failed: [],
+            });
+          }
+          throw new Error(`unexpected fetch: ${init?.method ?? "GET"} ${requestUrl}`);
+        }),
+      );
+
+      await expect(runRollout()).resolves.toBe(0);
+
+      const initialAdminCalls = fetchCalls.filter((call) => {
+        const url = new URL(call.url);
+        return (
+          call.init?.method === "POST" &&
+          url.pathname === "/api/admin/tenants/rollout" &&
+          !url.searchParams.has("tenant_id")
+        );
+      });
+      expect(initialAdminCalls).toHaveLength(2);
+      const fallbackCall = fetchCalls.find((call) => call.url.includes("tenant_id=t-alpha"));
+      expect(fallbackCall, "expected per-tenant fallback request").toBeDefined();
+      expect(fallbackCall!.url).toBe(
+        "https://api.rockielab.test/api/admin/tenants/rollout?image=ghcr.io%2Fimg%3Asha&confirm=true&tenant_id=t-alpha&canary_count=0&canary_wait_sec=0&wave_delay_sec=0&async=false",
+      );
+      expect(fallbackCall!.init?.headers).toMatchObject({
+        "X-Admin-Token": "admin-token",
+      });
+      expect(fallbackCall!.init?.headers).not.toHaveProperty("Authorization");
+
+      const summary = await readRolloutSummary(artifactDir);
+      expect(summary.final_result).toBe("succeeded-via-per-tenant-fallback");
+      expect(summary.buckets).toMatchObject({ updated: 1, skipped: 0, failed: 0, total: 1 });
+      expect(summary.fallback).toMatchObject({
+        strategy: "fly-app-list-plus-admin-tenant-rollout",
+        tenant_ids: ["t-alpha"],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+      restoreEnv(previousEnv);
+      await rm(artifactDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns failure when a final successful admin response reports failed tenants", async () => {
+    const previousEnv = snapshotEnv();
+    const artifactDir = await mkdtemp(path.join(tmpdir(), "runtime-rollout-"));
+    try {
+      process.env.API_URL = "https://api.rockielab.test";
+      process.env.ADMIN_TOKEN = "admin-token";
+      process.env.IMAGE_TAG = "ghcr.io/img:sha";
+      process.env.ROLLOUT_ARTIFACT_DIR = artifactDir;
+      process.env.ROLLOUT_MAX_ATTEMPTS = "1";
+      process.env.ROLLOUT_CURL_MAX_TIME = "1";
+      delete process.env.FLY_API_TOKEN;
+      delete process.env.GITHUB_TOKEN;
+      delete process.env.GITHUB_REPOSITORY;
+      delete process.env.GITHUB_RUN_NUMBER;
+      delete process.env.API_PASSWORD;
+
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () =>
+          jsonResponse(200, {
+            updated: [{ tenant_id: "t-updated" }],
+            skipped: [{ tenant_id: "t-skipped" }],
+            failed: [{ tenant_id: "t-failed" }],
+            error_details: { "t-failed": "machine update failed" },
+          }),
+        ),
+      );
+
+      await expect(runRollout()).resolves.toBe(1);
+
+      const summary = await readRolloutSummary(artifactDir);
+      expect(summary.final_result).toBe("failed-tenants");
+      expect(summary.final_response_code).toBe("200");
+      expect(summary.buckets).toMatchObject({ updated: 1, skipped: 1, failed: 1, total: 3 });
+      expect(summary.error_details).toEqual({ "t-failed": "machine update failed" });
+    } finally {
+      vi.unstubAllGlobals();
+      restoreEnv(previousEnv);
+      await rm(artifactDir, { recursive: true, force: true });
     }
   });
 });
