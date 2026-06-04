@@ -571,6 +571,19 @@ export class WhatsAppConnectionController {
     };
   }
 
+  resolveSetupErrorDecision(error: unknown): WhatsAppConnectionCloseDecision | "aborted" | null {
+    const statusCode = getStatusCode(error);
+    if (typeof statusCode !== "number") {
+      return null;
+    }
+
+    return this.resolveCloseDecision({
+      status: statusCode,
+      isLoggedOut: statusCode === LOGGED_OUT_STATUS,
+      error,
+    });
+  }
+
   consumeReconnectAttempt(): WhatsAppReconnectAttemptDecision {
     this.reconnectAttempts += 1;
     if (
