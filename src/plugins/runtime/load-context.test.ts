@@ -117,7 +117,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
         demo: ["demo configured"],
       },
       workspaceDir: "/resolved-workspace",
-      env,
+      env: context.env,
       logger: context.logger,
       manifestRegistry,
       installRecords: {},
@@ -125,18 +125,18 @@ describe("resolvePluginRuntimeLoadContext", () => {
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledWith({
       allowWorkspaceScopedCurrent: true,
       config: rawConfig,
-      env,
+      env: context.env,
       workspaceDir: "/resolved-workspace",
     });
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: rawConfig,
-      env,
+      env: context.env,
       manifestRegistry,
     });
     expect(setCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(metadataSnapshot, {
       config: rawConfig,
       compatibleConfigs: [resolvedConfig, rawConfig],
-      env,
+      env: context.env,
       workspaceDir: "/resolved-workspace",
     });
     expect(resolveDefaultAgentIdMock).toHaveBeenCalledWith(resolvedConfig);
@@ -158,7 +158,7 @@ describe("resolvePluginRuntimeLoadContext", () => {
     expect(setCurrentPluginMetadataSnapshotMock).toHaveBeenCalledWith(derivedSnapshot, {
       config: { plugins: {} },
       compatibleConfigs: [{ plugins: {} }, { plugins: {} }],
-      env: { HOME: "/tmp/openclaw-home" },
+      env: expect.objectContaining({ HOME: "/tmp/openclaw-home" }),
       workspaceDir: "/resolved-workspace",
     });
     expect(clearCurrentPluginMetadataSnapshotMock).not.toHaveBeenCalled();
@@ -178,10 +178,10 @@ describe("resolvePluginRuntimeLoadContext", () => {
     const context = resolvePluginRuntimeLoadContext();
 
     expect(context.rawConfig).toBe(runtimeConfig);
-    expect(context.activationSourceConfig).toBe(sourceConfig);
+    expect(context.activationSourceConfig).toEqual(sourceConfig);
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({
       config: runtimeConfig,
-      env: process.env,
+      env: expect.objectContaining(process.env),
       manifestRegistry,
     });
   });
@@ -238,5 +238,43 @@ describe("resolvePluginRuntimeLoadContext", () => {
       activate: false,
       onlyPluginIds: ["demo"],
     });
+  });
+
+  it("resolves plugin config env placeholders through config env vars before runtime loads", () => {
+    const rawConfig = {
+      env: {
+        vars: {
+          PIONEER_API_KEY: "resolved-from-config",
+        },
+      },
+      plugins: {
+        entries: {
+          pioneer: {
+            enabled: true,
+            config: {
+              apiKey: "${PIONEER_API_KEY}",
+            },
+          },
+        },
+      },
+    };
+
+    applyPluginAutoEnableMock.mockImplementation((params) => ({
+      config: params.config ?? {},
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+
+    const context = resolvePluginRuntimeLoadContext({
+      config: rawConfig,
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    const options = buildPluginRuntimeLoadOptions(context);
+    expect(context.env.PIONEER_API_KEY).toBe("resolved-from-config");
+    expect(context.config.plugins?.entries?.pioneer?.config).toEqual({
+      apiKey: "resolved-from-config",
+    });
+    expect(options.resolveRawConfigEnvVars).toBeUndefined();
   });
 });

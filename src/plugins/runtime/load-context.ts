@@ -1,6 +1,8 @@
 // Plugin runtime load context helpers resolve agent and workspace facts for runtime activation.
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { resolveConfigEnvVars } from "../../config/env-substitution.js";
+import { createConfigRuntimeEnv } from "../../config/env-vars.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
@@ -69,10 +71,15 @@ export function createPluginRuntimeLoaderLogger(): PluginLogger {
 export function resolvePluginRuntimeLoadContext(
   options?: PluginRuntimeLoadContextOptions,
 ): PluginRuntimeLoadContext {
-  const env = options?.env ?? process.env;
+  const baseEnv = options?.env ?? process.env;
   const rawConfig = options?.config ?? getRuntimeConfig();
+  const env = createConfigRuntimeEnv(rawConfig, baseEnv);
+  const resolvedRawConfig = resolveConfigEnvVars(rawConfig, env, {
+    onMissing: () => undefined,
+  }) as OpenClawConfig;
   const rawWorkspaceDir =
-    options?.workspaceDir ?? resolveAgentWorkspaceDir(rawConfig, resolveDefaultAgentId(rawConfig));
+    options?.workspaceDir ??
+    resolveAgentWorkspaceDir(resolvedRawConfig, resolveDefaultAgentId(resolvedRawConfig));
   const metadataSnapshot = options?.manifestRegistry
     ? undefined
     : resolvePluginMetadataSnapshot({
@@ -85,12 +92,15 @@ export function resolvePluginRuntimeLoadContext(
   const installRecords = metadataSnapshot
     ? extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index)
     : undefined;
-  const activationSourceConfig = resolvePluginActivationSourceConfig({
+  const rawActivationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
   });
+  const activationSourceConfig = resolveConfigEnvVars(rawActivationSourceConfig, env, {
+    onMissing: () => undefined,
+  }) as OpenClawConfig;
   const autoEnabled = applyPluginAutoEnable({
-    config: rawConfig,
+    config: resolvedRawConfig,
     env,
     manifestRegistry,
     discovery: metadataSnapshot?.discovery,

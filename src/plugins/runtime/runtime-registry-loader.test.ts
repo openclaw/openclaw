@@ -194,12 +194,12 @@ describe("ensurePluginRegistryLoaded", () => {
     const channelOptions = configuredChannelOptions();
     expect(channelOptions.config).toEqual(resolvedConfig);
     expect(channelOptions.activationSourceConfig).toEqual({ plugins: { allow: ["demo-channel"] } });
-    expect(channelOptions.env).toBe(env);
+    expect(channelOptions.env).toEqual(env);
     expect(channelOptions.workspaceDir).toBe("/resolved-workspace");
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith(
       expect.objectContaining({
         config: rawConfig,
-        env,
+        env: expect.objectContaining(env),
       }),
     );
     const load = loadOptions();
@@ -224,6 +224,52 @@ describe("ensurePluginRegistryLoaded", () => {
     expect(load.workspaceDir).toBe("/resolved-workspace");
     expect(load.onlyPluginIds).toEqual(["demo-channel"]);
     expect(load.throwOnLoadError).toBe(true);
+    expect(load.resolveRawConfigEnvVars).toBeUndefined();
+  });
+
+  it("resolves configured plugin env placeholders before the runtime loader calls the plugin loader", () => {
+    const rawConfig = {
+      env: {
+        vars: {
+          PIONEER_API_KEY: "resolved-runtime-key",
+        },
+      },
+      plugins: {
+        entries: {
+          pioneer: {
+            enabled: true,
+            config: {
+              apiKey: "${PIONEER_API_KEY}",
+            },
+          },
+        },
+      },
+    };
+
+    mocks.applyPluginAutoEnable.mockImplementation((params) => ({
+      config: params.config as never,
+      changes: [],
+      autoEnabledReasons: {},
+    }));
+    mocks.resolveConfiguredChannelPluginIds.mockReturnValue(["pioneer"]);
+    mocks.resolveEffectivePluginIds.mockReturnValue(["pioneer"]);
+
+    ensurePluginRegistryLoaded({
+      scope: "configured-channels",
+      config: rawConfig as never,
+      env: { HOME: "/tmp/openclaw-home" } as NodeJS.ProcessEnv,
+    });
+
+    const load = loadOptions();
+    const loadConfig = requireRecord(load.config, "load config");
+    expect(pluginEntries(loadConfig).pioneer).toEqual({
+      enabled: true,
+      config: {
+        apiKey: "resolved-runtime-key",
+      },
+    });
+    expect(requireRecord(load.env, "load env").PIONEER_API_KEY).toBe("resolved-runtime-key");
+    expect(load.resolveRawConfigEnvVars).toBeUndefined();
   });
 
   it("temporarily activates configured-channel owners before loading them", () => {
@@ -277,7 +323,7 @@ describe("ensurePluginRegistryLoaded", () => {
     const channelConfig = requireRecord(channelOptions.config, "scoped channel config");
     expect(channelConfig.channels).toEqual(rawConfig.channels);
     expect(pluginEntries(channelConfig).demo).toEqual({ enabled: true });
-    expect(channelOptions.activationSourceConfig).toBe(rawConfig);
+    expect(channelOptions.activationSourceConfig).toEqual(rawConfig);
     expect(channelOptions.channelIds).toEqual(["external-chat"]);
     expect(channelOptions.workspaceDir).toBe("/resolved-workspace");
     const load = loadOptions();

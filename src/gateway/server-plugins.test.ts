@@ -446,6 +446,7 @@ describe("loadGatewayPlugins", () => {
     });
     expect(getLastPluginLoadOption("onlyPluginIds")).toEqual(["discord", "telegram"]);
     expect(getLastPluginLoadOption("preferBuiltPluginArtifacts")).toBe(true);
+    expect(getLastPluginLoadOption("resolveRawConfigEnvVars")).toBe(true);
   });
 
   test("routes plugin registration logs through the plugin logger", () => {
