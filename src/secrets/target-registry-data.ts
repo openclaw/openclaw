@@ -483,10 +483,12 @@ function loadSecretTargetRegistryFromPluginMetadata(params: {
   ];
 }
 
+/** Returns only core-owned secret target registry entries. */
 export function getCoreSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return CORE_SECRET_TARGET_REGISTRY;
 }
 
+/** Returns the process-cached registry including bundled plugin/channel metadata. */
 export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   if (cachedSecretTargetRegistry) {
     return cachedSecretTargetRegistry;
@@ -497,6 +499,7 @@ export function getSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return cachedSecretTargetRegistry;
 }
 
+/** Returns an uncached source-tree registry for docs/snapshot generation. */
 export function getSourceSecretTargetRegistry(): SecretTargetRegistryEntry[] {
   return loadSecretTargetRegistryFromPluginMetadata({
     env: {

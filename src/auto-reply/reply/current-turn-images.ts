@@ -22,6 +22,7 @@ function isGenericMediaType(mediaType: string | undefined): boolean {
   return normalized === "application/octet-stream" || normalized === "binary/octet-stream";
 }
 
+/** Resolves image media types from current-turn attachment metadata or filenames. */
 function resolveCurrentImageMediaType(pathValue: unknown, mediaType?: unknown): string | undefined {
   const mediaPath = normalizeOptionalString(pathValue);
   if (!mediaPath) {
@@ -86,6 +87,7 @@ function createUndescribedImageContext(
   };
 }
 
+/** Resolves current-turn image attachments that were not already described by media understanding. */
 export async function resolveCurrentTurnImages(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
@@ -112,6 +114,7 @@ export async function resolveCurrentTurnImages(params: {
   }
 
   try {
+    // Only send undescribed current images natively; described images already exist as text context.
     const resolved = await resolveAgentTurnAttachments({
       ctx: createUndescribedImageContext(params.ctx, undescribedImageAttachments),
       cfg: params.cfg,

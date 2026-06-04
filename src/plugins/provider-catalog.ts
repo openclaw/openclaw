@@ -18,6 +18,7 @@ function addApiKeyToProvider(
   }
 }
 
+/** Finds a provider catalog template entry by normalized provider and template id. */
 export function findCatalogTemplate(params: {
   entries: ReadonlyArray<{ provider: string; id: string }>;
   providerId: string;
@@ -34,6 +35,7 @@ export function findCatalogTemplate(params: {
     .find((entry) => entry !== undefined);
 }
 
+/** Builds a provider catalog result for providers that share one API key. */
 export async function buildSingleProviderApiKeyCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;
@@ -63,6 +65,7 @@ export async function buildSingleProviderApiKeyCatalog(params: {
   };
 }
 
+/** Builds a multi-provider catalog result backed by one provider API key. */
 export async function buildPairedProviderApiKeyCatalog(params: {
   ctx: ProviderCatalogContext;
   providerId: string;

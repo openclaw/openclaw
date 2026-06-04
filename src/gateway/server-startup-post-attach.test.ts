@@ -1,3 +1,6 @@
+/**
+ * Gateway post-attach startup task tests.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

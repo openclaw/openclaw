@@ -16,6 +16,7 @@ import { RuntimeCache, type CachedRuntimeState } from "./runtime-cache.js";
 import { normalizeText } from "./runtime-options.js";
 import type { SessionActorQueue } from "./session-actor-queue.js";
 
+/** Process-local cache of live ACP runtime handles keyed by canonical session actor. */
 export class ManagerRuntimeHandleCache {
   private readonly runtimeCache = new RuntimeCache();
   private evictedRuntimeCount = 0;
@@ -96,6 +97,7 @@ export class ManagerRuntimeHandleCache {
     }
 
     for (const candidate of candidates) {
+      // Evict under the same actor queue so turns cannot race with runtime close.
       await params.actorQueue.run(candidate.actorKey, async () => {
         if (params.activeTurnBySession.has(candidate.actorKey)) {
           return;

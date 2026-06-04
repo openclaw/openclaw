@@ -13,9 +13,12 @@ import type { PluginApprovalRequest, PluginApprovalResolved } from "./plugin-app
 
 export type { ChannelApprovalKind } from "./approval-types.js";
 
+/** Union of approval request events a native approval handler can receive. */
 export type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
+/** Union of approval resolution events a native approval handler can finalize. */
 export type ApprovalResolved = ExecApprovalResolved | PluginApprovalResolved;
 
+/** Shared context passed to channel-native approval hooks. */
 export type ChannelApprovalCapabilityHandlerContext = {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -23,12 +26,14 @@ export type ChannelApprovalCapabilityHandlerContext = {
   context?: unknown;
 };
 
+/** Result instruction for updating, deleting, clearing, or leaving a delivered approval entry. */
 export type ChannelApprovalNativeFinalAction<TPayload> =
   | { kind: "update"; payload: TPayload }
   | { kind: "delete" }
   | { kind: "clear-actions" }
   | { kind: "leave" };
 
+/** Availability gate for deciding whether a channel-native approval runtime can handle work. */
 export type ChannelApprovalNativeAvailabilityAdapter = {
   isConfigured: (params: ChannelApprovalCapabilityHandlerContext) => boolean;
   shouldHandle: (
@@ -36,6 +41,7 @@ export type ChannelApprovalNativeAvailabilityAdapter = {
   ) => boolean;
 };
 
+/** Builds channel-native payloads for pending, resolved, and expired approval views. */
 export type ChannelApprovalNativePresentationAdapter<
   TPendingPayload = unknown,
   TFinalPayload = unknown,
@@ -113,6 +119,7 @@ type ChannelApprovalNativeTransportAdapterForView<
   ) => Promise<void>;
 };
 
+/** Transport hooks for preparing, delivering, updating, and deleting native approval entries. */
 export type ChannelApprovalNativeTransportAdapter<
   TPreparedTarget = unknown,
   TPendingEntry = unknown,
@@ -163,6 +170,7 @@ type ChannelApprovalNativeInteractionAdapterForView<
   ) => Promise<void> | void;
 };
 
+/** Optional hooks for binding and clearing interactive approval controls. */
 export type ChannelApprovalNativeInteractionAdapter<
   TPendingEntry = unknown,
   TBinding = unknown,
@@ -207,12 +215,14 @@ type ChannelApprovalNativeObserveAdapterForView<
   ) => void;
 };
 
+/** Optional observer hooks for delivery errors, duplicates, and successful deliveries. */
 export type ChannelApprovalNativeObserveAdapter<
   TPreparedTarget = unknown,
   TPendingPayload = unknown,
   TPendingEntry = unknown,
 > = ChannelApprovalNativeObserveAdapterForView<TPreparedTarget, TPendingPayload, TPendingEntry>;
 
+/** Runtime adapter consumed by core after a plugin's strongly typed spec has been erased. */
 export type ChannelApprovalNativeRuntimeAdapter<
   TPendingPayload = unknown,
   TPreparedTarget = unknown,
@@ -234,6 +244,7 @@ export type ChannelApprovalNativeRuntimeAdapter<
   observe?: ChannelApprovalNativeObserveAdapter;
 };
 
+/** Strongly typed plugin spec used to build a channel-native approval runtime adapter. */
 export type ChannelApprovalNativeRuntimeSpec<
   TPendingPayload,
   TPreparedTarget,

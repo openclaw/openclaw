@@ -1,6 +1,9 @@
 import { expectChannelPluginContract } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeAll, describe, it } from "vitest";
-import { getBundledChannelPluginAsync } from "./bundled-channel-plugin-loader.js";
+import {
+  getBundledChannelDirectoryPluginAsync,
+  getBundledChannelPluginAsync,
+} from "./bundled-channel-plugin-loader.js";
 import { channelPluginSurfaceKeys } from "./manifest.js";
 import { getPluginContractRegistryShardRefs } from "./registry-plugin.js";
 import {
@@ -68,11 +71,14 @@ export function installDirectoryContractRegistryShard(params: ContractShardParam
     installEmptyShardSuite("directory contract registry shard");
     return;
   }
-  const pluginCache = new Map<string, Awaited<ReturnType<typeof getBundledChannelPluginAsync>>>();
+  const pluginCache = new Map<
+    string,
+    Awaited<ReturnType<typeof getBundledChannelDirectoryPluginAsync>>
+  >();
   beforeAll(async () => {
     await Promise.all(
       entries.map(async (entry) => {
-        pluginCache.set(entry.id, await getBundledChannelPluginAsync(entry.id));
+        pluginCache.set(entry.id, await getBundledChannelDirectoryPluginAsync(entry.id));
       }),
     );
   });

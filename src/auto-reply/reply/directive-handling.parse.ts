@@ -21,6 +21,7 @@ import {
 import { extractQueueDirective } from "./queue/directive.js";
 import type { QueueDropPolicy, QueueMode } from "./queue/types.js";
 
+/** Parsed inline directives removed from a user message before agent execution. */
 export type InlineDirectives = {
   cleaned: string;
   hasThinkDirective: boolean;
@@ -75,6 +76,7 @@ export type InlineDirectives = {
   hasQueueOptions: boolean;
 };
 
+/** Parses supported inline directives in the same order they are stripped from text. */
 export function parseInlineDirectives(
   body: string,
   options?: {
@@ -171,6 +173,7 @@ export function parseInlineDirectives(
     hasOptions: hasQueueOptions,
   } = extractQueueDirective(modelCleaned);
 
+  // Later directives see text cleaned by earlier directives; preserve that ordering.
   return {
     cleaned: queueCleaned,
     hasThinkDirective,

@@ -20,6 +20,7 @@ function resolveTypingIntervalMs(seconds: number | undefined): number {
   );
 }
 
+/** Controller for channel typing indicator lifecycle during a reply run. */
 export type TypingController = {
   onReplyStart: () => Promise<void>;
   startTypingLoop: () => Promise<void>;
@@ -31,6 +32,7 @@ export type TypingController = {
   cleanup: () => void;
 };
 
+/** Creates a typing controller that seals itself after run and dispatch completion. */
 export function createTypingController(params: {
   onReplyStart?: () => Promise<void> | void;
   onCleanup?: () => void;
@@ -220,6 +222,7 @@ export function createTypingController(params: {
     ) {
       return;
     }
+    // Visible text, not silent control tokens, is what should start typing.
     refreshTypingTtl();
     await startTypingLoop();
   };
@@ -231,6 +234,7 @@ export function createTypingController(params: {
     runComplete = true;
     maybeStopOnIdle();
     if (!sealed && !dispatchIdle) {
+      // Dispatcher idle is the normal cleanup signal; this fallback prevents leaked typing.
       dispatchIdleTimer = setTimeout(() => {
         if (!sealed && !dispatchIdle) {
           log?.("typing: dispatch idle not received after run complete; forcing cleanup");

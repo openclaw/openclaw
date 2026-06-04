@@ -17,6 +17,7 @@ import { classifyAcpToolApproval, type AcpApprovalClass } from "./approval-class
 
 type PermissionOption = RequestPermissionRequest["options"][number];
 
+// ACP permission resolution keeps readonly tool classes noninteractive and prompts for risky tools.
 type PermissionResolverDeps = {
   prompt?: (toolName: string | undefined, toolTitle?: string) => Promise<boolean>;
   log?: (line: string) => void;
@@ -153,6 +154,7 @@ type AcpClientSpawnEnvOptions = {
   stripKeys?: Iterable<string>;
 };
 
+/** Builds the sanitized environment used when spawning an ACP client process. */
 export function resolveAcpClientSpawnEnv(
   baseEnv: NodeJS.ProcessEnv = process.env,
   options: AcpClientSpawnEnvOptions = {},
