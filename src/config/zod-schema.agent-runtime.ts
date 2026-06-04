@@ -939,7 +939,7 @@ export const MemorySearchSchema = z
           .int()
           .nonnegative()
           .describe(
-            "Minutes between periodic memory sync ticks. Defaults to 30. Set to 0 to disable interval-based sync entirely (only watch/file-change sync will reindex memory).",
+            "Minutes between periodic memory sync ticks. Defaults to 30. Set to 0 to disable interval-based sync; other configured triggers such as onSessionStart, onSearch, and watch/file-change can still reindex memory.",
           )
           .optional(),
         embeddingBatchTimeoutSeconds: z.number().int().positive().optional(),

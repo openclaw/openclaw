@@ -295,8 +295,9 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
   changed content. This acts as a fallback when the filesystem watcher misses
   events.
 
-Set to `0` to disable the periodic interval entirely and rely solely on the
-filesystem watcher and trigger-based sync (`onSessionStart`, `onSearch`).
+Set to `0` to disable interval-based sync; other configured triggers such as
+`onSessionStart`, `onSearch`, and watch/file-change can still reindex
+memory.
 </ParamField>
 
 ### Inline embedding timeout
