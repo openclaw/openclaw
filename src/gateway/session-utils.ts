@@ -2155,6 +2155,7 @@ export function buildGatewaySessionRow(params: {
     chatType: entry?.chatType,
     origin,
     updatedAt,
+    sessionStartedAt: entry?.sessionStartedAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,
     abortedLastRun: entry?.abortedLastRun,
