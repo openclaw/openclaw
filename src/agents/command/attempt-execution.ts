@@ -672,7 +672,7 @@ export function runAgentAttempt(params: {
     cwd: params.cwd,
     config: params.cfg,
     agentHarnessId: embeddedAgentHarnessOverride,
-    agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
+    agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
     skillsSnapshot: params.skillsSnapshot,
     prompt: effectivePrompt,
     images: params.isFallbackRetry ? undefined : params.opts.images,

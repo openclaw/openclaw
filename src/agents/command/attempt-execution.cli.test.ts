@@ -1964,9 +1964,65 @@ describe("embedded attempt harness pinning", () => {
       provider: "openai",
       model: "gpt-5.4",
       agentHarnessId: "openclaw",
-      agentHarnessRuntimeOverride: "openclaw",
       authProfileId: "openai:work",
       authProfileIdSource: "user",
+    });
+    expect(firstEmbeddedAgentArg()?.agentHarnessRuntimeOverride).toBeUndefined();
+  });
+
+  it("preserves fallback-selected plugin runtime override for embedded attempts", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "fallback-codex-runtime-session",
+      updatedAt: Date.now(),
+    };
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      meta: { durationMs: 1 },
+    } satisfies EmbeddedAgentRunResult);
+
+    await runAgentAttempt({
+      providerOverride: "openai",
+      originalProvider: "openai",
+      modelOverride: "gpt-5.5",
+      agentHarnessRuntimeOverride: "codex",
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "openclaw" },
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionEntry,
+      sessionId: sessionEntry.sessionId,
+      sessionKey: "agent:main:main",
+      sessionAgentId: "main",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      workspaceDir: tmpDir,
+      body: "continue",
+      isFallbackRetry: false,
+      resolvedThinkLevel: "medium",
+      timeoutMs: 1_000,
+      runId: "run-openai-agent-codex-runtime-override",
+      opts: {} as Parameters<typeof runAgentAttempt>[0]["opts"],
+      runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
+      spawnedBy: undefined,
+      messageChannel: undefined,
+      skillsSnapshot: undefined,
+      resolvedVerboseLevel: undefined,
+      agentDir: tmpDir,
+      onAgentEvent: vi.fn(),
+      authProfileProvider: "openai",
+      sessionHasHistory: false,
+    });
+
+    expectMockArgFields(runEmbeddedAgentMock, {
+      provider: "openai",
+      model: "gpt-5.5",
+      agentHarnessId: "codex",
+      agentHarnessRuntimeOverride: "codex",
     });
   });
 
