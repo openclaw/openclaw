@@ -194,8 +194,13 @@ describe("buildOpenAIProvider", () => {
     expect(provider.models.map((model) => model.id)).not.toContain("not-in-manifest");
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.openai.com/v1/models");
-    expect(fetchParams?.init?.headers).toBeInstanceOf(Headers);
-    expect((fetchParams?.init?.headers as Headers).get("Authorization")).toBe("Bearer sk-openai");
+    const init = fetchParams?.init;
+    const headers = init?.headers;
+    expect(headers).toBeInstanceOf(Headers);
+    if (!(headers instanceof Headers)) {
+      throw new Error("expected fetch headers");
+    }
+    expect(headers.get("Authorization")).toBe("Bearer sk-openai");
     expect(release).toHaveBeenCalledOnce();
   });
 

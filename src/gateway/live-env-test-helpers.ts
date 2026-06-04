@@ -32,7 +32,8 @@ export function restoreLiveEnv(snapshot: LiveEnvSnapshot): void {
     if (value === undefined) {
       delete process.env[name];
     } else {
-      process.env[name] = value;
+      // Restores a test-captured live env snapshot, not skill/config host env overrides.
+      process.env[name] = value; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
     }
   }
 }

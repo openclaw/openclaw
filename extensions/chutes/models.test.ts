@@ -62,8 +62,7 @@ function readAuthorizationHeader(init?: { headers?: HeadersInit }): string {
   if (Array.isArray(headers)) {
     return headers.find(([key]) => key.toLowerCase() === "authorization")?.[1] ?? "";
   }
-  const record = headers as Record<string, string> | undefined;
-  return record?.Authorization ?? record?.authorization ?? "";
+  return headers?.Authorization ?? headers?.authorization ?? "";
 }
 
 function requireChutesModel(

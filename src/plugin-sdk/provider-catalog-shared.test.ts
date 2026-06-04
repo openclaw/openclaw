@@ -92,6 +92,36 @@ describe("provider-catalog-shared live catalog cache", () => {
     expect(load).toHaveBeenCalledTimes(2);
   });
 
+  it("evicts the oldest live catalog cache entry when the cache is full", async () => {
+    const load = vi.fn(async (id: number) => `value-${id}`);
+
+    for (let i = 0; i < 100; i += 1) {
+      await expect(
+        getCachedLiveCatalogValue({
+          keyParts: ["provider", "models", i],
+          load: () => load(i),
+          ttlMs: 60_000,
+        }),
+      ).resolves.toBe(`value-${i}`);
+    }
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", 100],
+        load: () => load(100),
+        ttlMs: 60_000,
+      }),
+    ).resolves.toBe("value-100");
+    await expect(
+      getCachedLiveCatalogValue({
+        keyParts: ["provider", "models", 0],
+        load: () => load(0),
+        ttlMs: 60_000,
+      }),
+    ).resolves.toBe("value-0");
+
+    expect(load).toHaveBeenCalledTimes(102);
+  });
+
   it("does not cache live catalog loads when the expiry would exceed Date range", async () => {
     const load = vi
       .fn<() => Promise<string>>()

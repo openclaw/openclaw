@@ -49,6 +49,7 @@ type LiveCatalogCacheEntry<T> = {
   value: Promise<T>;
 };
 
+const LIVE_CATALOG_CACHE_MAX_ENTRIES = 100;
 const liveCatalogCache = new Map<string, LiveCatalogCacheEntry<unknown>>();
 
 function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
@@ -81,6 +82,14 @@ export async function getCachedLiveCatalogValue<T>(params: {
   const value = params.load();
   const expiresAt = resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
   if (expiresAt !== undefined) {
+    // Auth-scoped live provider catalogs can vary by token; keep this
+    // process-local cache bounded so discovery cannot grow without limit.
+    if (liveCatalogCache.size >= LIVE_CATALOG_CACHE_MAX_ENTRIES) {
+      const oldestKey = liveCatalogCache.keys().next();
+      if (!oldestKey.done) {
+        liveCatalogCache.delete(oldestKey.value);
+      }
+    }
     liveCatalogCache.set(key, {
       expiresAt,
       value,
@@ -146,11 +155,11 @@ function buildManifestCatalogModelInput(model: ModelCatalogModel): ModelDefiniti
 function cloneManifestCatalogMediaInput(
   mediaInput?: ModelCatalogMediaInputConfig,
 ): ModelDefinitionConfig["mediaInput"] | undefined {
-  if (!mediaInput) {
+  if (!mediaInput?.image) {
     return undefined;
   }
   return {
-    ...(mediaInput.image ? { image: { ...mediaInput.image } } : {}),
+    image: { ...mediaInput.image },
   };
 }
 

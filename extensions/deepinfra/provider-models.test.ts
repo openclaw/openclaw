@@ -74,7 +74,8 @@ async function withFetchPathTest(
     if (value === undefined) {
       delete process.env[key];
     } else {
-      process.env[key] = value;
+      // Test-only provider env fixture; not skill/config-controlled host execution env.
+      process.env[key] = value; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
     }
   }
   vi.stubGlobal("fetch", mockFetch);
@@ -86,7 +87,8 @@ async function withFetchPathTest(
       if (env[key] === undefined) {
         delete process.env[key];
       } else {
-        process.env[key] = env[key];
+        // Restores the captured test env snapshot for keys this helper changed.
+        process.env[key] = env[key]; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
       }
     }
     if (env.NODE_ENV !== undefined) {

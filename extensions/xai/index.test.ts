@@ -106,7 +106,13 @@ describe("xai provider plugin", () => {
     expect(provider.models.map((model) => model.id)).not.toContain("not-in-manifest");
     const fetchParams = vi.mocked(fetchGuard).mock.calls[0]?.[0];
     expect(fetchParams?.url).toBe("https://api.x.ai/v1/models");
-    expect((fetchParams?.init?.headers as Headers).get("Authorization")).toBe("Bearer xai-key");
+    const init = fetchParams?.init;
+    const headers = init?.headers;
+    expect(headers).toBeInstanceOf(Headers);
+    if (!(headers instanceof Headers)) {
+      throw new Error("expected fetch headers");
+    }
+    expect(headers.get("Authorization")).toBe("Bearer xai-key");
     expect(release).toHaveBeenCalledOnce();
   });
 

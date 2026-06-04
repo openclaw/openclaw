@@ -48,7 +48,8 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       if (value === undefined) {
         delete process.env[key];
       } else {
-        process.env[key] = value;
+        // Restores fixed test env keys captured before this integration test mutates them.
+        process.env[key] = value; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
       }
     }
   });

@@ -165,8 +165,8 @@ async function fetchNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[] | nu
         if (!payload || typeof payload !== "object") {
           return [];
         }
-        const rows = (payload as { "featured-models"?: unknown })["featured-models"];
-        return Array.isArray(rows) ? rows : [];
+        const featuredRows = (payload as { "featured-models"?: unknown })["featured-models"];
+        return Array.isArray(featuredRows) ? featuredRows : [];
       },
     });
     return parseNvidiaFeaturedModels(rows);

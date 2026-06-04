@@ -14,7 +14,8 @@ export function captureEnv(keys: string[]) {
         if (value === undefined) {
           delete process.env[key];
         } else {
-          process.env[key] = value;
+          // Test helper restores explicitly captured env keys; callers own the scoped key list.
+          process.env[key] = value; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
         }
       }
     },
@@ -26,7 +27,8 @@ function applyEnvValues(env: Record<string, string | undefined>): void {
     if (value === undefined) {
       delete process.env[key];
     } else {
-      process.env[key] = value;
+      // Test helper applies explicit per-test env values, not skill/config host env overrides.
+      process.env[key] = value; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
     }
   }
 }
@@ -110,7 +112,8 @@ export function captureFullEnv() {
         if (value === undefined) {
           delete process.env[key];
         } else {
-          process.env[key] = value;
+          // Restores a full test env snapshot after deleting keys created during the test.
+          process.env[key] = value; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
         }
       }
     },
