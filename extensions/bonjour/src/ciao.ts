@@ -56,7 +56,7 @@ export function classifyCiaoProcessError(reason: unknown): CiaoProcessErrorClass
   return null;
 }
 
-/** Backward-compatible alias for unhandled-rejection classification. */
+/** @deprecated Backward-compatible alias for unhandled-rejection classification. */
 export const classifyCiaoUnhandledRejection = classifyCiaoProcessError;
 
 /** Return whether a ciao unhandled rejection is known and ignorable. */
