@@ -35,7 +35,7 @@ Core releases are staged by the release script:
 
 - [`scripts/polytropos-release.mjs`](../../scripts/polytropos-release.mjs)
 
-Usage (CI-only):
+Usage (tag-driven CI release staging):
 
 ```bash
 node scripts/polytropos-release.mjs release --tgz /path/to/openclaw-<ver>.tgz
@@ -43,6 +43,10 @@ node scripts/polytropos-release.mjs release --tgz /path/to/openclaw-<ver>.tgz
 
 What staging does:
 
+- requires the current branch to match `release/YYYY.MM.DD`
+- creates and pushes the next `v<ver>+poly.<N>` tag from that release branch
+- waits for the GitHub Actions release workflow triggered by the tag
+- downloads the built artifact from Actions
 - derives base upstream version `v<ver>` from the nearest reachable tag
 - computes next global build number `poly.N` and creates tag `v<ver>+poly.<N>`
 - validates the provided tarball (`package/package.json` name/version)
@@ -86,9 +90,11 @@ To exit dev mode, reinstall a released tarball (see release procedure above).
 
 ## Notes / guardrails
 
-### Important: releases must be cut from main
+### Important: releases must be cut from a release branch
 
-The release script refuses to run unless the current branch is `main`.
+The release script refuses to run unless the current branch matches `release/YYYY.MM.DD`.
+
+Polytropos release work should be performed from a dedicated `origin/release/YYYY.MM.DD` branch, not `main`.
 
 ### Release directory invariants (DO NOT VIOLATE)
 

@@ -3,6 +3,8 @@ name: Polytropos Build + Pack
 on:
   workflow_dispatch:
   push:
+    branches:
+      - "release/*"
     tags:
       - "v*poly.*"
 permissions:
@@ -17,6 +19,7 @@ env:
 
 jobs:
   build_pack:
+    if: startsWith(github.ref, 'refs/heads/release/') || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:

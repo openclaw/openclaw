@@ -332,6 +332,9 @@ banner(logStream, `GitHub repo: ${ghRepo}`);
 banner(logStream, `Workflow: ${wf}`);
 banner(logStream, `Release tag: ${releaseTag}`);
 
+  const releaseBranch = assertValidReleaseBranch();
+  banner(logStream, `Release branch: ${releaseBranch}`);
+
 // Ensure release store is consistent before we touch it
 const relRoot = releasesRoot();
 fs.mkdirSync(relRoot, { recursive: true });
@@ -479,4 +482,16 @@ banner(logStream, "Running Polytropos bundled plugin deps helper...");
 
 banner(logStream, "Activation required: restart the gateway to run the new code");
 banner(logStream, "Release staged (not activated).");
-logStream.end();
+logStream.end();function currentBranchName() {
+  return sh("git", ["branch", "--show-current"]);
+}
+
+function assertValidReleaseBranch() {
+  const branch = currentBranchName();
+  if (!/^release\/\d{4}\.\d{2}\.\d{2}$/.test(branch)) {
+    fail(`release script must run from a valid release branch (release/YYYY.MM.DD); current branch: ${branch}`);
+  }
+  return branch;
+}
+
+
