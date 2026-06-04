@@ -2925,6 +2925,54 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
+  it("repairs live multi-agent Codex upgrade configs and enables Codex through allowlists", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        plugins: {
+          allow: ["brave", "discord", "whatsapp"],
+          entries: {
+            brave: { enabled: true },
+            discord: { enabled: true },
+            whatsapp: { enabled: true },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+          },
+          list: [
+            { id: "main", model: "openai-codex/gpt-5.5" },
+            { id: "meimei", model: "openai-codex/gpt-5.5" },
+            { id: "youyou-cli", model: "openai-codex/gpt-5.5" },
+          ],
+        },
+      } as unknown as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(result.cfg.agents?.list?.map((agent) => agent.model)).toEqual([
+      "openai/gpt-5.5",
+      "openai/gpt-5.5",
+      "openai/gpt-5.5",
+    ]);
+    expect(result.cfg.agents?.defaults?.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({
+      id: "codex",
+    });
+    for (const agent of result.cfg.agents?.list ?? []) {
+      expect(agent.models?.["openai/gpt-5.5"]?.agentRuntime).toEqual({ id: "codex" });
+    }
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
+    expect(result.cfg.plugins?.allow).toEqual(["brave", "discord", "whatsapp", "codex"]);
+    expect(result.changes.join("\n")).toContain(
+      "agents.defaults.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
+    );
+    expect(result.changes.join("\n")).toContain(
+      "agents.list.main.model: openai-codex/gpt-5.5 -> openai/gpt-5.5.",
+    );
+  });
+
   it("keeps repaired OpenAI refs on Codex runtime even when the OpenAI provider is otherwise OpenClaw/API-key routed", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
