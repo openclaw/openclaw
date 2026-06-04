@@ -283,6 +283,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     { lastSize: number; pendingBytes: number; pendingMessages: number }
   >();
   private sessionWarm = new Set<string>();
+  // Captured before a full reindex swaps this.db to the temp build DB, so status()
+  // keeps reporting the stable durable index instead of the half-built temp one.
+  private stableStatusSnapshot: MemoryProviderStatus | null = null;
   private syncing: Promise<void> | null = null;
   private queuedSessionFiles = new Set<string>();
   private queuedSessionSync: Promise<void> | null = null;
@@ -595,6 +598,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
+    // Search entry reads aggregate/index state before the vector/FTS query helpers.
+    // Drain here so those preflight reads never observe the temp reindex DB.
+    await this.drainReindex();
     if (this.providerRequirement.mode === "required") {
       await this.ensureProviderInitialized();
       this.assertRequiredProviderAvailable("search");
@@ -629,6 +635,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         log.warn(`memory sync failed (search): ${String(err)}`);
       },
     });
+    // If on-search sync started a full reindex, wait before provider/identity
+    // checks so this search does not fail closed on transient temp metadata.
+    await this.drainReindex();
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
       this.assertRequiredProviderAvailable("search");
@@ -648,6 +657,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         });
       }
     }
+    // Provider/fallback setup can yield while another actor starts a full
+    // reindex. Drain again before identity and FTS reads touch manager state.
+    await this.drainReindex();
     const indexIdentity = this.refreshIndexIdentityDirty({
       providerKeyKnown: this.providerInitialized,
     });
@@ -863,26 +875,39 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return ftsRow?.found === 1;
   }
 
+  protected override captureReindexReadSnapshot(): void {
+    this.stableStatusSnapshot = this.status();
+  }
+
+  protected override clearReindexReadSnapshot(): void {
+    this.stableStatusSnapshot = null;
+  }
+
   private async searchVector(
     queryVec: number[],
     limit: number,
     sourceFilterList: MemorySource[],
   ): Promise<Array<MemorySearchResult & { id: string }>> {
+    // Never query the half-built temp DB a concurrent full reindex swapped in.
+    await this.drainReindex();
     // This method should never be called without a provider
     if (!this.provider) {
       return [];
     }
-    const results = await searchVector({
-      db: this.db,
-      vectorTable: VECTOR_TABLE,
-      providerModel: this.provider.model,
-      queryVec,
-      limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
-      ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
-      sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
-      sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
-    });
+    const providerModel = this.provider.model;
+    const results = await this.withIndexRead(() =>
+      searchVector({
+        db: this.db,
+        vectorTable: VECTOR_TABLE,
+        providerModel,
+        queryVec,
+        limit,
+        snippetMaxChars: SNIPPET_MAX_CHARS,
+        ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
+        sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
+        sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
+      }),
+    );
     return results.map((entry) => entry as MemorySearchResult & { id: string });
   }
 
@@ -896,22 +921,27 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     options?: { boostFallbackRanking?: boolean },
     sourceFilterList?: MemorySource[],
   ): Promise<Array<MemorySearchResult & { id: string; textScore: number }>> {
+    // Drain first: a full reindex zeroes this.fts.available while building temp,
+    // so checking it before the swap settles would falsely short-circuit to [].
+    await this.drainReindex();
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
     const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
-    const results = await searchKeyword({
-      db: this.db,
-      ftsTable: FTS_TABLE,
-      query,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-      limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
-      sourceFilter,
-      buildFtsQuery: (raw) => this.buildFtsQuery(raw),
-      bm25RankToScore,
-      boostFallbackRanking: options?.boostFallbackRanking,
-    });
+    const results = await this.withIndexRead(() =>
+      searchKeyword({
+        db: this.db,
+        ftsTable: FTS_TABLE,
+        query,
+        ftsTokenizer: this.settings.store.fts.tokenizer,
+        limit,
+        snippetMaxChars: SNIPPET_MAX_CHARS,
+        sourceFilter,
+        buildFtsQuery: (raw) => this.buildFtsQuery(raw),
+        bm25RankToScore,
+        boostFallbackRanking: options?.boostFallbackRanking,
+      }),
+    );
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
   }
 
@@ -1077,6 +1107,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   status(): MemoryProviderStatus {
+    // During a full reindex this.db points at the half-built temp DB; serve the
+    // pre-swap snapshot so callers see the valid durable index, not empty counts.
+    if (this.reindexing && this.stableStatusSnapshot) {
+      return this.stableStatusSnapshot;
+    }
     this.refreshIndexIdentityDirty({
       providerKeyKnown: this.providerInitialized,
     });
