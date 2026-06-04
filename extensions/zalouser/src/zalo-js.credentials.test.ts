@@ -434,7 +434,7 @@ describe("zalouser credential persistence", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32" ? !canCreateFileSymlinks : false)(
+  it.skipIf(!canCreateFileSymlinks)(
     "refuses to write credentials through a symlinked file",
     async () => {
       const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
