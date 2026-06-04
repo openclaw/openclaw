@@ -912,6 +912,7 @@ export const dispatchTelegramMessage = async ({
     replyQuoteText && !ctxPayload.ReplyToIsExternal
       ? resolveTelegramReplyId(ctxPayload.ReplyToId)
       : undefined;
+  const replyQuoteTargetsBotMessage = msg.reply_to_message?.from?.is_bot === true;
   const replyQuoteByMessageId: TelegramNativeQuoteCandidateByMessageId = {};
   if (replyToMode !== "off") {
     if (replyQuoteText && replyQuoteMessageId != null) {
@@ -957,7 +958,9 @@ export const dispatchTelegramMessage = async ({
     !isRoomEvent && streamReasoningDraft && !streamReasoningInProgressDraft;
   const draftReplyToMessageId =
     replyToMode !== "off" && typeof msg.message_id === "number"
-      ? (replyQuoteMessageId ?? msg.message_id)
+      ? replyQuoteTargetsBotMessage
+        ? msg.message_id
+        : (replyQuoteMessageId ?? msg.message_id)
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
@@ -1405,7 +1408,9 @@ export const dispatchTelegramMessage = async ({
   });
 
   const implicitQuoteReplyTargetId =
-    replyQuoteMessageId != null ? String(replyQuoteMessageId) : undefined;
+    !replyQuoteTargetsBotMessage && replyQuoteMessageId != null
+      ? String(replyQuoteMessageId)
+      : undefined;
   const currentMessageIdForQuoteReply =
     implicitQuoteReplyTargetId && ctxPayload.MessageSid ? ctxPayload.MessageSid : undefined;
   const replyQuotePosition =
