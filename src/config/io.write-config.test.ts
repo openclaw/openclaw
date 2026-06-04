@@ -180,6 +180,30 @@ describe("config io write", () => {
     };
   }
 
+  function withEditorSchemaWriteFailure(): typeof fsNode {
+    const writeFile = fsNode.promises.writeFile.bind(fsNode.promises);
+    return {
+      ...fsNode,
+      promises: {
+        ...fsNode.promises,
+        writeFile: async (target, data, options) => {
+          const targetPath =
+            typeof target === "string"
+              ? target
+              : target instanceof URL
+                ? target.href
+                : Buffer.isBuffer(target)
+                  ? target.toString("utf-8")
+                  : "";
+          if (targetPath.includes("openclaw.schema")) {
+            throw Object.assign(new Error("schema write failed"), { code: "EACCES" });
+          }
+          return await writeFile(target, data, options);
+        },
+      },
+    };
+  }
+
   it("logs health-state write failures through public config reads", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -595,6 +619,35 @@ describe("config io write", () => {
       expect(schema.properties?.$schema).toEqual({ type: "string" });
       expect(schema.properties?.gateway).toBeDefined();
       expect(schema.properties?.channels).toBeDefined();
+    });
+  });
+
+  it("does not block config writes when editor schema sidecar generation fails", async () => {
+    await withSuiteHome(async (home) => {
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const warn = vi.fn();
+      const io = createConfigIO({
+        configPath,
+        env: { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,
+        fs: withEditorSchemaWriteFailure(),
+        homedir: () => home,
+        logger: { warn, error: vi.fn() },
+      });
+
+      await io.writeConfigFile({ gateway: { mode: "local", port: 18789 } });
+
+      const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as {
+        $schema?: string;
+        gateway?: { mode?: string; port?: number };
+      };
+      expect(persisted.$schema).toBe("./openclaw.schema.json");
+      expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
+      await expect(
+        fs.access(path.join(path.dirname(configPath), "openclaw.schema.json")),
+      ).rejects.toThrow();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining(`Editor schema update skipped for ${configPath}`),
+      );
     });
   });
 

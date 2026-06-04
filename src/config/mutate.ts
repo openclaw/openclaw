@@ -82,6 +82,10 @@ export type ConfigReplaceResult = {
 export type ConfigMutationIO = {
   env?: NodeJS.ProcessEnv;
   readConfigFileSnapshotForWrite: typeof readConfigFileSnapshotForWrite;
+  writeEditorConfigArtifactsForIncludeMutation?: (params: {
+    snapshot: ConfigFileSnapshot;
+    pluginMetadataSnapshot?: ConfigWriteOptions["basePluginMetadataSnapshot"];
+  }) => Promise<{ committedRootSchemaRefHash: string | null }>;
   writeConfigFile: (
     cfg: OpenClawConfig,
     options?: ConfigWriteOptions,
@@ -340,6 +344,23 @@ async function stampRootEditorSchemaRef(params: {
   return { committedHash: hashFileRaw(committedRootRaw) };
 }
 
+async function tryWriteEditorConfigArtifactsForIncludeMutation(params: {
+  snapshot: ConfigFileSnapshot;
+  pluginMetadataSnapshot?: ConfigWriteOptions["basePluginMetadataSnapshot"];
+}): Promise<{ committedRootSchemaRefHash: string | null }> {
+  let committedRootSchemaRefHash: string | null = null;
+  await writeEditorConfigSchemaFile({
+    configPath: params.snapshot.path,
+    pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+  }).catch(() => {});
+  await stampRootEditorSchemaRef({ snapshot: params.snapshot })
+    .then((result) => {
+      committedRootSchemaRefHash = result?.committedHash ?? null;
+    })
+    .catch(() => {});
+  return { committedRootSchemaRefHash };
+}
+
 async function tryWriteSingleTopLevelIncludeMutation(params: {
   snapshot: ConfigFileSnapshot;
   nextConfig: OpenClawConfig;
@@ -397,12 +418,13 @@ async function tryWriteSingleTopLevelIncludeMutation(params: {
   const envBeforePostWriteRead = { ...writeEnv };
   let envAfterPostWriteRead = envBeforePostWriteRead;
   try {
-    await writeEditorConfigSchemaFile({
-      configPath: params.snapshot.path,
+    const writeEditorConfigArtifacts =
+      params.io?.writeEditorConfigArtifactsForIncludeMutation ??
+      tryWriteEditorConfigArtifactsForIncludeMutation;
+    ({ committedRootSchemaRefHash } = await writeEditorConfigArtifacts({
+      snapshot: params.snapshot,
       pluginMetadataSnapshot: params.writeOptions?.basePluginMetadataSnapshot,
-    });
-    committedRootSchemaRefHash =
-      (await stampRootEditorSchemaRef({ snapshot: params.snapshot }))?.committedHash ?? null;
+    }).catch(() => ({ committedRootSchemaRefHash: null })));
 
     if (
       params.writeOptions?.skipRuntimeSnapshotRefresh &&

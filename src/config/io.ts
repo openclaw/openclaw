@@ -2483,13 +2483,7 @@ export function createConfigIO(
 
     const pluginInstallConfigMigration =
       ensureShippedPluginInstallConfigRecordsMigratedForWrite(snapshot);
-    let configCommitted = false;
     try {
-      await writeEditorConfigSchemaFile({
-        configPath,
-        fsModule: deps.fs,
-        pluginMetadataSnapshot: snapshotRead.pluginMetadataSnapshot,
-      });
       const result = await replaceFileAtomic({
         filePath: configPath,
         content: json,
@@ -2504,7 +2498,6 @@ export function createConfigIO(
           }
         },
       });
-      configCommitted = true;
       logConfigOverwrite();
       logConfigWriteAnomalies();
       await appendWriteAudit(
@@ -2512,6 +2505,15 @@ export function createConfigIO(
         undefined,
         await deps.fs.promises.stat(configPath).catch(() => null),
       );
+      await writeEditorConfigSchemaFile({
+        configPath,
+        fsModule: deps.fs,
+        pluginMetadataSnapshot: snapshotRead.pluginMetadataSnapshot,
+      }).catch((err: unknown) => {
+        deps.logger.warn(
+          `Editor schema update skipped for ${configPath}: ${formatErrorMessage(err)}`,
+        );
+      });
       return {
         persistedHash: nextHash,
         persistedConfig: stampedOutputConfig,
@@ -2524,9 +2526,7 @@ export function createConfigIO(
           : {}),
       };
     } catch (err) {
-      if (!configCommitted) {
-        rollbackShippedPluginInstallConfigWriteMigration(pluginInstallConfigMigration);
-      }
+      rollbackShippedPluginInstallConfigWriteMigration(pluginInstallConfigMigration);
       await appendWriteAudit("failed", err);
       throw err;
     }

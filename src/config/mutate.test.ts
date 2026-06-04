@@ -746,6 +746,74 @@ describe("config mutate helpers", () => {
     expect(persistedPlugins.entries?.demo).toEqual({ enabled: true });
   });
 
+  it("keeps include-backed writes when editor schema artifacts cannot be written", async () => {
+    const home = await suiteRootTracker.make("include-editor-schema-failure");
+    const configDir = path.join(home, ".openclaw");
+    const configPath = path.join(configDir, "openclaw.json");
+    const pluginsPath = path.join(configDir, "config", "plugins.json5");
+    const writeEditorConfigArtifactsForIncludeMutation = vi.fn(async () => {
+      throw Object.assign(new Error("schema artifact write failed"), { code: "EACCES" });
+    });
+    const rootRaw = `{
+  // Keep plugin config separate.
+  "plugins": { "$include": "./config/plugins.json5" },
+}
+`;
+    await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
+    await fs.writeFile(configPath, rootRaw, "utf-8");
+    await fs.writeFile(pluginsPath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf-8");
+    const snapshot = createSnapshot({
+      hash: "hash-include-editor-schema-failure",
+      path: configPath,
+      raw: rootRaw,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: { plugins: { entries: {} } },
+    });
+    const refreshedSnapshot = createSnapshot({
+      hash: "hash-include-editor-schema-failure-refreshed",
+      path: configPath,
+      raw: rootRaw,
+      parsed: { plugins: { $include: "./config/plugins.json5" } },
+      sourceConfig: {
+        plugins: {
+          entries: {
+            demo: { enabled: true },
+          },
+        },
+      },
+    });
+    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+      snapshot: refreshedSnapshot,
+      writeOptions: { expectedConfigPath: configPath },
+    });
+
+    await replaceConfigFile({
+      baseHash: snapshot.hash,
+      snapshot,
+      writeOptions: { expectedConfigPath: snapshot.path },
+      io: {
+        ...ioMocks,
+        writeEditorConfigArtifactsForIncludeMutation,
+      },
+      nextConfig: {
+        plugins: {
+          entries: {
+            demo: { enabled: true },
+          },
+        },
+      },
+    });
+
+    expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
+    expect(writeEditorConfigArtifactsForIncludeMutation).toHaveBeenCalledOnce();
+    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+    await expect(fs.access(path.join(configDir, "openclaw.schema.json"))).rejects.toThrow();
+    const persistedPlugins = JSON.parse(await fs.readFile(pluginsPath, "utf-8")) as {
+      entries?: Record<string, unknown>;
+    };
+    expect(persistedPlugins.entries?.demo).toEqual({ enabled: true });
+  });
+
   it("replaces blank root schema refs for single-file top-level include writes", async () => {
     const home = await suiteRootTracker.make("include-blank-editor-schema");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
