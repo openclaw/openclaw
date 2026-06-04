@@ -5,12 +5,12 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "../../plugins/config-state.js";
 import { resolveDefaultPluginNpmDir } from "../../plugins/install-paths.js";
 import { listManagedPluginNpmRoots } from "../../plugins/npm-project-roots.js";
-import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
-import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import {
   resolveTrustedSourceLinkedOfficialClawHubSpec,
   resolveTrustedSourceLinkedOfficialNpmSpec,
-} from "../../plugins/update.js";
+} from "../../plugins/official-external-install-records.js";
+import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "../../plugins/plugin-peer-link.js";
+import { pruneStaleLocalBundledPluginInstallRecords } from "../../plugins/stale-local-bundled-plugin-install-records.js";
 import { VERSION } from "../../version.js";
 import {
   runPluginPayloadSmokeCheck,
@@ -85,8 +85,10 @@ async function repairManagedNpmOpenClawPeerLinks(params: {
 /**
  * Mandatory post-core convergence pass. Runs AFTER the core package files
  * are swapped and the in-update doctor pass has already returned, but BEFORE
- * the gateway is restarted. Failures here must block the restart so we
- * never restart with a configured plugin whose payload is unloadable.
+ * the gateway is restarted. Missing-plugin repair failures stay nonblocking:
+ * an external package fetch may be transient, and failing the core update
+ * would strand the user. Payload smoke failures still block the restart so we
+ * never restart with an installed active plugin whose payload is unloadable.
  */
 export async function runPostCorePluginConvergence(params: {
   cfg: OpenClawConfig;
@@ -155,7 +157,7 @@ export async function runPostCorePluginConvergence(params: {
       ...peerLinkRepair.changes,
     ],
     warnings,
-    errored: warnings.length > 0,
+    errored: smoke.failures.length > 0,
     smokeFailures: smoke.failures,
     installRecords: records,
   };
@@ -215,6 +217,8 @@ export function filterRecordsToActive(params: {
  *    warnings that name a `pluginId` produce per-plugin error outcomes; the
  *    rest are surfaced via `warnings`.
  *  - `errored` boolean that callers translate into `status: "error"`.
+ *    Repair warnings are nonblocking; smoke failures remain blocking
+ *    because they prove an active installed payload is unloadable.
  */
 export function convergenceWarningsToOutcomes(convergence: PostCoreConvergenceResult): {
   warnings: PostCoreConvergenceWarning[];

@@ -10,6 +10,7 @@ import {
   resolveImplicitCurrentMessageReplyAllowance,
 } from "./reply-threading.js";
 
+/** Adds the BTW question banner for channels that only accept plain text bodies. */
 export function formatBtwTextForExternalDelivery(payload: ReplyPayload): string | undefined {
   const text = normalizeOptionalString(payload.text);
   if (!text) {
@@ -48,6 +49,7 @@ function resolveReplyThreadingForPayload(params: {
           replyToId: implicitReplyToId,
         });
 
+  // Inline reply tags override implicit threading without losing payload metadata.
   if (typeof resolved.text === "string" && resolved.text.includes("[[")) {
     const { cleaned, replyToId, replyToCurrent, hasTag } = extractReplyToTag(
       resolved.text,
@@ -72,6 +74,7 @@ function resolveReplyThreadingForPayload(params: {
   return resolved;
 }
 
+/** Applies inline reply tags to a single payload. */
 export function applyReplyTagsToPayload(
   payload: ReplyPayload,
   currentMessageId?: string,
@@ -79,14 +82,17 @@ export function applyReplyTagsToPayload(
   return resolveReplyThreadingForPayload({ payload, currentMessageId });
 }
 
+/** True when a payload has visible or playable content for delivery. */
 export function isRenderablePayload(payload: ReplyPayload): boolean {
   return hasReplyPayloadContent(payload, { extraContent: payload.audioAsVoice });
 }
 
+/** True when a payload should stay internal as reasoning-only output. */
 export function shouldSuppressReasoningPayload(payload: ReplyPayload): boolean {
   return payload.isReasoning === true;
 }
 
+/** Applies threading policy and filters empty payloads before channel delivery. */
 export function applyReplyThreading(params: {
   payloads: ReplyPayload[];
   replyToMode: ReplyToMode;

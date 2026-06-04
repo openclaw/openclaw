@@ -182,23 +182,35 @@ setInterval(() => {}, 1000);
       args: [scriptPath, grandchildPidPath],
       command: process.execPath,
       cwd: root,
-      timeoutKillGraceMs: 25,
-      timeoutMs: 100,
+      timeoutKillGraceMs: 100,
+      timeoutMs: 500,
     });
+    const runResult = runPromise.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ error, ok: false as const }),
+    );
 
     try {
-      await waitFor(() => fs.existsSync(grandchildPidPath));
-      grandchildPid = Number.parseInt(fs.readFileSync(grandchildPidPath, "utf8"), 10);
+      await waitFor(() => {
+        if (!fs.existsSync(grandchildPidPath)) {
+          return false;
+        }
+        grandchildPid = Number.parseInt(fs.readFileSync(grandchildPidPath, "utf8"), 10);
+        return Number.isInteger(grandchildPid) && isProcessAlive(grandchildPid);
+      });
       expect(Number.isInteger(grandchildPid)).toBe(true);
-      expect(isProcessAlive(grandchildPid)).toBe(true);
 
-      await expect(runPromise).rejects.toMatchObject({
-        code: "ETIMEDOUT",
-        message: expect.stringContaining("timed out after 100ms"),
+      const result = await runResult;
+      expect(result).toMatchObject({
+        error: {
+          code: "ETIMEDOUT",
+          message: expect.stringContaining("timed out after 500ms"),
+        },
+        ok: false,
       });
       await waitFor(() => !isProcessAlive(grandchildPid));
     } finally {
-      await runPromise.catch(() => {});
+      await runResult.catch(() => {});
       if (grandchildPid && isProcessAlive(grandchildPid)) {
         process.kill(grandchildPid, "SIGKILL");
       }

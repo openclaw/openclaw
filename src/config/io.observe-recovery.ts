@@ -19,6 +19,7 @@ import {
 } from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
+/** Dependencies injected into config recovery observation for testable filesystem behavior. */
 export type ObserveRecoveryDeps = {
   fs: {
     promises: {
@@ -131,6 +132,8 @@ type ConfigReadRecoveryParams = {
   configPath: string;
   raw: string;
   parsed: unknown;
+  validateBackup?: (backup: { raw: string; parsed: unknown }) => Promise<boolean>;
+  validateBackupSync?: (backup: { raw: string; parsed: unknown }) => boolean;
 };
 
 type ConfigReadRecoveryResult = {
@@ -710,6 +713,12 @@ export async function maybeRecoverSuspiciousConfigRead(
   if (!backupParse) {
     return returnOriginalConfigRead(params);
   }
+  if (
+    params.validateBackup &&
+    !(await params.validateBackup({ raw: backupRaw, parsed: backupParse.parsed }))
+  ) {
+    return returnOriginalConfigRead(params);
+  }
   const backup = backupBaseline ?? (await readConfigFingerprintForPath(params.deps, backupPath));
   if (!backup?.gatewayMode) {
     return returnOriginalConfigRead(params);
@@ -809,6 +818,12 @@ export function maybeRecoverSuspiciousConfigReadSync(
   }
   const backupParse = parseBackupConfigRaw(params.deps, backupRaw);
   if (!backupParse) {
+    return returnOriginalConfigRead(params);
+  }
+  if (
+    params.validateBackupSync &&
+    !params.validateBackupSync({ raw: backupRaw, parsed: backupParse.parsed })
+  ) {
     return returnOriginalConfigRead(params);
   }
   const backup = backupBaseline ?? readConfigFingerprintForPathSync(params.deps, backupPath);

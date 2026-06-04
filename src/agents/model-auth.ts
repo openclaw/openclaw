@@ -58,7 +58,9 @@ export {
 } from "./auth-profiles.js";
 export {
   formatMissingAuthError,
+  isMissingProviderAuthError,
   isProviderAuthError,
+  MissingProviderAuthError,
   ProviderAuthError,
   requireApiKey,
   resolveAwsSdkEnvVarName,
@@ -1260,7 +1262,7 @@ export async function resolveApiKeyForProvider(params: {
       },
     });
     if (pluginMissingAuthMessage) {
-      throw new Error(pluginMissingAuthMessage);
+      throw new ProviderAuthError("missing-provider-auth", provider, pluginMissingAuthMessage);
     }
   }
 

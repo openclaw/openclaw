@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** Admin cancellation hook for ACP sessions owned by task records. */
 export type CancelAcpSessionAdmin = (params: {
   cfg: OpenClawConfig;
   sessionKey: string;

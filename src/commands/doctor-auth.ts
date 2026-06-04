@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
 import {
@@ -16,6 +15,7 @@ import {
   type AuthCredentialReasonCode,
   ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource,
+  hasLocalAuthProfileStoreSource,
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
@@ -25,16 +25,11 @@ import {
   classifyOAuthRefreshFailure,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import {
-  resolveAuthStatePath,
-  resolveAuthStorePath,
-  resolveLegacyAuthStorePath,
-} from "../agents/auth-profiles/paths.js";
+import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isRecord } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
-import { buildProviderAuthRecoveryHint } from "./provider-auth-guidance.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
@@ -145,14 +140,6 @@ type AuthProfileHealthTarget = {
   agentDir: string;
   isDefault: boolean;
 };
-
-function hasLocalAuthProfileStoreSource(agentDir: string): boolean {
-  return (
-    fs.existsSync(resolveAuthStorePath(agentDir)) ||
-    fs.existsSync(resolveAuthStatePath(agentDir)) ||
-    fs.existsSync(resolveLegacyAuthStorePath(agentDir))
-  );
-}
 
 function formatAgentNoteTitle(title: string, agentId: string, labelAgents: boolean): string {
   return labelAgents ? `${title} (agent: ${agentId})` : title;
@@ -312,6 +299,7 @@ async function noteAuthProfileHealthForTarget(params: {
     store,
     cfg: params.cfg,
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+    allowKeychainPrompt: params.allowKeychainPrompt,
   });
 
   const findIssues = () =>
@@ -367,6 +355,7 @@ async function noteAuthProfileHealthForTarget(params: {
       }),
       cfg: params.cfg,
       warnAfterMs: DEFAULT_OAUTH_WARN_MS,
+      allowKeychainPrompt: false,
     });
     issues = findIssues();
   }

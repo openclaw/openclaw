@@ -13,6 +13,7 @@ import {
 } from "../../routing/session-key.js";
 import type { AcpSessionResolution } from "./manager.types.js";
 
+/** Resolves the agent id encoded in an ACP session key. */
 export function resolveAcpAgentFromSessionKey(sessionKey: string, fallback = "main"): string {
   const parsed = parseAgentSessionKey(sessionKey);
   return normalizeAgentId(parsed?.agentId ?? fallback);

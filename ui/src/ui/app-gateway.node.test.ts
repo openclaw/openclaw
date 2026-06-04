@@ -1014,7 +1014,7 @@ describe("connectGateway", () => {
     } as GatewayHelloOk);
 
     await vi.waitFor(() => {
-      expect(loadChatHistoryMock).toHaveBeenCalledWith(host);
+      expect(loadChatHistoryMock).toHaveBeenCalledWith(host, { startup: false });
     });
     expect(host.sessionKey).toBe("agent:main:main");
     expect(host.settings.sessionKey).toBe("agent:main:main");

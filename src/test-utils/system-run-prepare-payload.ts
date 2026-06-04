@@ -8,6 +8,7 @@ type SystemRunPrepareInput = {
   sessionKey?: unknown;
 };
 
+/** Builds the normalized system-run prepare payload used by approval tests. */
 export function buildSystemRunPreparePayload(params: SystemRunPrepareInput) {
   const argv = Array.isArray(params.command) ? params.command.map(String) : [];
   const previewCommand =

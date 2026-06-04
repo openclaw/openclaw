@@ -26,6 +26,10 @@ type CollectPluginConfigContractMatches = (input: {
   root: Record<string, unknown>;
 }) => Iterable<PluginConfigContractMatch>;
 
+/**
+ * Plugin config contract data used to extend core dangerous-flag detection.
+ * Tests and snapshot callers can inject prepared contracts to avoid manifest discovery.
+ */
 export type DangerousConfigFlagContractInputs = {
   configContractsById?: ReadonlyMap<string, PluginConfigContractMetadata>;
   collectPluginConfigContractMatches?: CollectPluginConfigContractMatches;
@@ -54,9 +58,15 @@ function collectExactPluginConfigContractMatches({
   pathPattern: string;
   root: Record<string, unknown>;
 }): PluginConfigContractMatch[] {
+  // Core fallback only understands exact config keys; manifest-aware callers inject
+  // the shared matcher so path patterns keep one implementation.
   return Object.hasOwn(root, pathPattern) ? [{ path: pathPattern, value: root[pathPattern] }] : [];
 }
 
+/**
+ * Return every enabled dangerous flag from core config plus plugin config contracts.
+ * The returned strings are stable audit/report labels, not user-edited config paths.
+ */
 export function collectEnabledInsecureOrDangerousFlagsFromContracts(
   cfg: OpenClawConfig,
   inputs: DangerousConfigFlagContractInputs = {},

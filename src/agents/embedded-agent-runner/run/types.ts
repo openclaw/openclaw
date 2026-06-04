@@ -74,6 +74,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
+  beforeAgentFinalizeRevisionAttempts?: number;
+  maxBeforeAgentFinalizeRevisions?: number;
 };
 
 export type EmbeddedRunAttemptResult = {
@@ -141,6 +143,7 @@ export type EmbeddedRunAttemptResult = {
   systemPromptReport?: SessionSystemPromptReport;
   finalPromptText?: string;
   messagesSnapshot: AgentMessage[];
+  beforeAgentFinalizeRevisionReason?: string;
   assistantTexts: string[];
   toolMetas: Array<{
     toolName: string;
@@ -154,6 +157,7 @@ export type EmbeddedRunAttemptResult = {
   currentAttemptAssistant?: AssistantMessage | undefined;
   lastToolError?: ToolErrorSummary;
   didSendViaMessagingTool: boolean;
+  didDeliverSourceReplyViaMessageTool?: boolean;
   didSendDeterministicApprovalPrompt?: boolean;
   messagingToolSentTexts: string[];
   messagingToolSentMediaUrls: string[];

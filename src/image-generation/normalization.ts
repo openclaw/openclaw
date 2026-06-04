@@ -49,6 +49,8 @@ export function resolveImageGenerationOverrides(params: {
   inputImages?: ImageGenerationSourceImage[];
 }): ResolvedImageGenerationOverrides {
   const hasInputImages = (params.inputImages?.length ?? 0) > 0;
+  // Edit and generate modes can expose different knobs for the same provider,
+  // so normalize requested overrides against the active mode only.
   const modeCaps = hasInputImages
     ? params.provider.capabilities.edit
     : params.provider.capabilities.generate;
@@ -90,6 +92,8 @@ export function resolveImageGenerationOverrides(params: {
   if (!modeCaps.supportsSize && size) {
     let translated = false;
     if (modeCaps.supportsAspectRatio) {
+      // Prefer translating size into aspect ratio when the provider supports
+      // shape but not exact dimensions; otherwise report the size as ignored.
       const normalizedAspectRatio = resolveClosestAspectRatio({
         requestedAspectRatio: aspectRatio,
         requestedSize: size,
@@ -138,6 +142,8 @@ export function resolveImageGenerationOverrides(params: {
         : undefined;
     let translated = false;
     if (derivedSize) {
+      // Reverse translation lets size-only providers still honor common
+      // landscape/portrait requests when a supported size is close enough.
       size = derivedSize;
       normalization.size = {
         applied: derivedSize,
@@ -206,6 +212,8 @@ export function resolveImageGenerationOverrides(params: {
     aspectRatio &&
     ((!params.aspectRatio && params.size) || params.aspectRatio !== aspectRatio)
   ) {
+    // Record derived aspect ratios even when the applied value is already in
+    // place, otherwise callers cannot explain why a size became a shape.
     const entry: MediaNormalizationEntry<string> = {
       applied: aspectRatio,
       ...(params.aspectRatio ? { requested: params.aspectRatio } : {}),

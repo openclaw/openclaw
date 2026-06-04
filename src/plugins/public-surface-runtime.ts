@@ -12,6 +12,7 @@ export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
   ".cjs",
 ] as const;
 
+/** Normalizes a bundled public artifact subpath and rejects traversal/absolute paths. */
 export function normalizeBundledPluginArtifactSubpath(artifactBasename: string): string {
   if (
     path.posix.isAbsolute(artifactBasename) ||
@@ -39,6 +40,7 @@ export function normalizeBundledPluginArtifactSubpath(artifactBasename: string):
   return normalized;
 }
 
+/** Normalizes a bundled plugin directory name and rejects path-like values. */
 export function normalizeBundledPluginDirName(dirName: string): string {
   const normalized = dirName.trim();
   if (
@@ -54,6 +56,7 @@ export function normalizeBundledPluginDirName(dirName: string): string {
   return normalized;
 }
 
+/** Resolves a source-tree public surface artifact path for bundled plugin development. */
 export function resolveBundledPluginSourcePublicSurfacePath(params: {
   sourceRoot: string;
   dirName: string;
@@ -153,6 +156,7 @@ function resolvePublicSurfaceFromBundledDir(params: {
   );
 }
 
+/** Resolves a bundled plugin public surface artifact across source, dist, and package layouts. */
 export function resolveBundledPluginPublicSurfacePath(params: {
   rootDir: string;
   dirName: string;

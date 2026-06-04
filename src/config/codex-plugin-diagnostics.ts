@@ -187,6 +187,12 @@ function openAiDefaultRouteKeepsCodexUnavailable(cfg: OpenClawConfig): boolean {
   return !isOpenAiCodexDefaultRuntimeSelection({ cfg, raw: policy.id });
 }
 
+/**
+ * Reports whether the default OpenAI route intentionally avoids the Codex plugin.
+ *
+ * Route-specific Codex selections still win; this only answers the missing-plugin
+ * diagnostic question for OpenAI defaults and OpenAI-compatible proxy configs.
+ */
 export function configExplicitlyKeepsCodexUnavailableForOpenAi(cfg: OpenClawConfig): boolean {
   if (openAiHasCodexDefaultRuntimePolicy(cfg)) {
     return false;
@@ -194,6 +200,12 @@ export function configExplicitlyKeepsCodexUnavailableForOpenAi(cfg: OpenClawConf
   return openAiDefaultRouteKeepsCodexUnavailable(cfg);
 }
 
+/**
+ * Suppresses missing Codex plugin diagnostics when config makes Codex optional.
+ *
+ * Explicitly enabled entries still warn so operator intent is honored even when
+ * all default routes would otherwise stay on the OpenClaw runtime.
+ */
 export function shouldSuppressMissingCodexPluginDiagnostics(cfg: OpenClawConfig): boolean {
   const entryEnabled = codexPluginEntryEnabled(cfg);
   if (entryEnabled === true) {
