@@ -1114,25 +1114,14 @@ describe("codex plugin", () => {
       ),
     ).resolves.toEqual({ handled: true, reply: { text: "done" } });
 
-    expect(renderPresentation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        presentation: expect.objectContaining({
-          blocks: [
-            expect.objectContaining({
-              buttons: [expect.objectContaining({ label: "Plan" })],
-            }),
-          ],
-        }),
-      }),
-    );
     expect(sendPayload).toHaveBeenCalledWith(
       expect.objectContaining({
+        text: "Codex needs input:",
         payload: expect.objectContaining({
-          channelData: {
-            discord: {
-              presentationComponents: { blocks: [{ type: "actions" }] },
-            },
-          },
+          text: "Codex needs input:",
+          presentation: expect.objectContaining({
+            blocks: [expect.objectContaining({ buttons: [expect.objectContaining({ label: "Plan" })] })],
+          }),
         }),
       }),
     );

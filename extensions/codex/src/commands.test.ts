@@ -4029,6 +4029,53 @@ describe("codex command", () => {
     expect(prompt).not.toContain("<proposed_plan>");
   });
 
+  it("wires buildPlanApprovalProgressReply into runCodexBoundConversationPrompt.sendProgressReply", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const reply = buildCodexPlanDecisionReply({
+      text: "<proposed_plan>Run the focused tests.</proposed_plan>",
+      scope: {
+        sessionFile,
+        threadId: "thread-plan",
+        channel: "test",
+        senderId: "user-1",
+      },
+    });
+    const approveButton = readInteractiveButtons(reply).find((button) =>
+      button.value.includes(":approve"),
+    );
+    const token = approveButton?.value.split(":").at(-2) ?? "";
+    const setCodexConversationPlanMode = vi.fn(async () => "Plan mode disabled.");
+    const runCodexBoundConversationPrompt = vi.fn(async () => ({
+      reply: { text: "implemented" },
+    }));
+    const readCodexAppServerBinding = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      threadId: "thread-plan",
+      sessionFile,
+      cwd: "/repo",
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    }));
+    const buildPlanApprovalProgressReply = vi.fn(() => vi.fn(async () => {}));
+
+    await expect(
+      handleCodexCommand(createContext(`plan approve ${token}`, sessionFile), {
+        deps: createDeps({
+          readCodexAppServerBinding,
+          runCodexBoundConversationPrompt,
+          setCodexConversationPlanMode,
+          buildPlanApprovalProgressReply: buildPlanApprovalProgressReply as never,
+        }),
+      }),
+    ).resolves.toEqual({ text: "implemented" });
+
+    expect(buildPlanApprovalProgressReply).toHaveBeenCalledWith("test");
+    const runParams = mockArg(runCodexBoundConversationPrompt, 0, 0) as {
+      sendProgressReply?: unknown;
+    };
+    expect(typeof runParams.sendProgressReply).toBe("function");
+  });
+
   it("reports the active think effort from the new per-mode defaults on the binding status", async () => {
     // Regression: /codex binding used to format threadBinding.reasoningEffort
     // directly, but /codex think now stores into reasoningEffortDefaults

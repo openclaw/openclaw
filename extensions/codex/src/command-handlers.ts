@@ -72,6 +72,7 @@ import {
   resolveCodexDefaultWorkspaceDir,
   runCodexBoundConversationPrompt,
   startCodexConversationThread,
+  type SendCodexConversationProgressReply,
 } from "./conversation-binding.js";
 import {
   answerCodexUserInput,
@@ -129,6 +130,15 @@ export type CodexCommandDeps = {
   stopCodexConversationTurn: typeof stopCodexConversationTurn;
   listCodexCliSessionsOnNode: ListCodexCliSessionsOnNodeFn;
   resolveCodexCliSessionForBindingOnNode: ResolveCodexCliSessionForBindingOnNodeFn;
+  /**
+   * Build a sendProgressReply for `runCodexBoundConversationPrompt`
+   * call sites that are not initiated by an inbound_claim. The
+   * command-handlers that approve plans need a delivery path for
+   * follow-up turn progress and Codex request_user_input prompts,
+   * otherwise `runBoundTurn` returns empty answers and the user
+   * never sees the prompt.
+   */
+  buildPlanApprovalProgressReply?: (channel: string) => SendCodexConversationProgressReply | undefined;
   codexPluginsManagementIo?: CodexPluginsManagementIO;
 };
 
@@ -1204,6 +1214,7 @@ async function handleConversationPlanDecisionWithStatus(
         }),
         ctx: buildCommandInboundContext(ctx, pluginBinding),
         pluginConfig,
+        sendProgressReply: deps.buildPlanApprovalProgressReply?.(ctx.channel),
       })
     ).reply,
   };
@@ -1248,6 +1259,7 @@ async function approveConversationPlanWithCleanContext(
       }),
       ctx: buildCommandInboundContext(ctx, pluginBinding),
       pluginConfig,
+      sendProgressReply: deps.buildPlanApprovalProgressReply?.(ctx.channel),
     })
   ).reply;
 }

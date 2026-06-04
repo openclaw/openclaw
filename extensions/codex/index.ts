@@ -1,14 +1,7 @@
-import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
-import {
-  adaptMessagePresentationForChannel,
-  normalizeMessagePresentation,
-} from "openclaw/plugin-sdk/interactive-runtime";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { definePluginEntry, type PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { createCodexAppServerAgentHarness } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildCodexProvider } from "./provider.js";
@@ -22,6 +15,7 @@ import {
   answerCodexUserInputFreeform,
   resolveCodexUserInputCallback,
 } from "./src/conversation-chat-controls.js";
+import { buildCodexConversationProgressReply } from "./src/conversation-progress-reply.js";
 import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import {
   createCodexCliSessionNodeHostCommands,
@@ -55,6 +49,11 @@ export default definePluginEntry({
     registerCodexUserInputInteractiveHandlers(api, {
       resolveCurrentConfig,
       resolveCurrentPluginConfig,
+      loadChannelOutboundAdapter: (channel) => api.runtime.channel.outbound.loadAdapter(channel as never),
+      resolveRuntimeConfig: () =>
+        api.runtime.config?.current
+          ? (api.runtime.config.current() as OpenClawConfig)
+          : (api.config ?? ({} as OpenClawConfig)),
     });
     for (const command of createCodexCliSessionNodeHostCommands()) {
       api.registerNodeHostCommand(command);
@@ -66,6 +65,16 @@ export default definePluginEntry({
       createCodexCommand({
         pluginConfig: api.pluginConfig,
         deps: {
+          buildPlanApprovalProgressReply: (channel) =>
+            buildCodexConversationProgressReply(channel, {
+              loadAdapter: (ch) =>
+                api.runtime.channel.outbound.loadAdapter(ch as never),
+              resolveConfig: () =>
+                api.runtime.config?.current
+                  ? (api.runtime.config.current() as OpenClawConfig)
+                  : (api.config ?? ({} as OpenClawConfig)),
+              logWarn: (message, details) => console.warn(message, details),
+            }),
           listCodexCliSessionsOnNode: (params) =>
             listCodexCliSessionsOnNode({ runtime: api.runtime, ...params }),
           resolveCodexCliSessionForBindingOnNode: (params) =>
@@ -133,82 +142,15 @@ export default definePluginEntry({
         config: resolveCurrentConfig(),
         resumeCodexCliSessionOnNode: (params) =>
           resumeCodexCliSessionOnNode({ runtime: api.runtime, ...params }),
-        sendProgressReply: async ({ event: replyEvent, ctx: replyCtx, payload }) => {
-          const adapter = await api.runtime.channel.outbound.loadAdapter(
-            replyEvent.channel as never,
-          );
-          const to = resolveProgressReplyTarget(replyEvent, replyCtx);
-          if (!adapter || !to) {
-            return;
-          }
-          const cfg = api.runtime.config?.current
-            ? (api.runtime.config.current() as OpenClawConfig)
-            : api.config;
-          const threadId = replyEvent.threadId;
-          const accountId =
-            replyEvent.accountId ?? replyCtx.accountId ?? replyCtx.pluginBinding?.accountId;
-          if (adapter.sendPayload) {
-            const payloadContext = {
-              cfg,
-              to,
-              text: payload.text ?? "",
-              payload,
-              ...(accountId ? { accountId } : {}),
-              ...(threadId != null ? { threadId } : {}),
-            };
-            const renderedPayload = await renderCodexProgressReplyPayload({
-              adapter,
-              payload,
-              payloadContext,
-            });
-            const results = await adapter.sendPayload({
-              ...payloadContext,
-              text: renderedPayload.text ?? "",
-              payload: renderedPayload,
-            });
-            // Route through the adapter's after-delivery hook so the
-            // channel can register the delivered message id (Discord
-            // uses this to disable stale Codex user-input buttons when
-            // the freeform answer is processed). Best-effort: a
-            // successful platform send must not be converted into a
-            // delivery failure by a hook crash, matching the shared
-            // outbound pipeline.
-            if (results && adapter.afterDeliverPayload) {
-              try {
-                await adapter.afterDeliverPayload({
-                  cfg,
-                  target: {
-                    channel: replyEvent.channel,
-                    to,
-                    ...(accountId ? { accountId } : {}),
-                    ...(threadId != null ? { threadId } : {}),
-                  },
-                  payload: renderedPayload,
-                  results: [results],
-                });
-              } catch (err) {
-                console.warn(
-                  "Codex progress reply after-delivery hook failed.",
-                  {
-                    channel: replyEvent.channel,
-                    to,
-                    error: formatErrorMessage(err),
-                  },
-                );
-              }
-            }
-            return;
-          }
-          if (payload.text && adapter.sendText) {
-            await adapter.sendText({
-              cfg,
-              to,
-              text: payload.text,
-              ...(accountId ? { accountId } : {}),
-              ...(threadId != null ? { threadId } : {}),
-            });
-          }
-        },
+        sendProgressReply: buildCodexConversationProgressReply("telegram", {
+          loadAdapter: (channel) =>
+            api.runtime.channel.outbound.loadAdapter(channel as never),
+          resolveConfig: () =>
+            api.runtime.config?.current
+              ? (api.runtime.config.current() as OpenClawConfig)
+              : (api.config ?? ({} as OpenClawConfig)),
+          logWarn: (message, details) => console.warn(message, details),
+        }),
       }),
     );
     api.on("before_dispatch", (event, ctx) => {
@@ -238,40 +180,6 @@ export default definePluginEntry({
 type CodexInteractiveResult = {
   handled?: boolean;
 };
-
-type CodexProgressReplyPayloadContext = Parameters<
-  NonNullable<ChannelOutboundAdapter["sendPayload"]>
->[0];
-
-async function renderCodexProgressReplyPayload(params: {
-  adapter: Pick<ChannelOutboundAdapter, "presentationCapabilities" | "renderPresentation">;
-  payload: ReplyPayload;
-  payloadContext: CodexProgressReplyPayloadContext;
-}): Promise<ReplyPayload> {
-  const presentation = normalizeMessagePresentation(params.payload.presentation);
-  if (!presentation) {
-    return params.payload;
-  }
-  const adaptedPresentation = adaptMessagePresentationForChannel({
-    presentation,
-    capabilities: params.adapter.presentationCapabilities,
-  });
-  const adaptedPayload = { ...params.payload, presentation: adaptedPresentation };
-  const renderContext = {
-    ...params.payloadContext,
-    text: adaptedPayload.text ?? "",
-    payload: adaptedPayload,
-  };
-  return (
-    (params.adapter.renderPresentation
-      ? await params.adapter.renderPresentation({
-          payload: adaptedPayload,
-          presentation: adaptedPresentation,
-          ctx: renderContext,
-        })
-      : null) ?? adaptedPayload
-  );
-}
 
 type CodexInteractiveRegistration = {
   channel: "telegram" | "discord" | "slack";
@@ -356,6 +264,8 @@ function registerCodexUserInputInteractiveHandlers(
   options: {
     resolveCurrentConfig?: () => OpenClawConfig | undefined;
     resolveCurrentPluginConfig?: () => unknown;
+    loadChannelOutboundAdapter?: (channel: string) => Promise<import("openclaw/plugin-sdk/channel-send-result").ChannelOutboundAdapter | null | undefined>;
+    resolveRuntimeConfig?: () => OpenClawConfig;
   } = {},
 ): void {
   api.registerInteractiveHandler?.({
@@ -407,6 +317,14 @@ function registerCodexUserInputInteractiveHandlers(
         }),
         pluginConfig: options.resolveCurrentPluginConfig?.(),
         payload: ctx.callback.payload,
+        deps: {
+          buildPlanApprovalProgressReply: (channel) =>
+            buildCodexConversationProgressReply(channel, {
+              loadAdapter: async (ch) => options.loadChannelOutboundAdapter?.(ch),
+              resolveConfig: () => options.resolveRuntimeConfig?.() ?? {},
+              logWarn: (message, details) => console.warn(message, details),
+            }),
+        },
         onConsumed: async () => {
           acknowledgedConsumedPlan = true;
           await acknowledgeTelegramCodexControlConsumed(ctx.respond);
@@ -475,6 +393,14 @@ function registerCodexUserInputInteractiveHandlers(
         }),
         pluginConfig: options.resolveCurrentPluginConfig?.(),
         payload: ctx.interaction.payload,
+        deps: {
+          buildPlanApprovalProgressReply: (channel) =>
+            buildCodexConversationProgressReply(channel, {
+              loadAdapter: async (ch) => options.loadChannelOutboundAdapter?.(ch),
+              resolveConfig: () => options.resolveRuntimeConfig?.() ?? {},
+              logWarn: (message, details) => console.warn(message, details),
+            }),
+        },
         onConsumed: async () => {
           await acknowledgeDiscordCodexControlConsumed(ctx.respond);
         },
@@ -534,6 +460,14 @@ function registerCodexUserInputInteractiveHandlers(
         }),
         pluginConfig: options.resolveCurrentPluginConfig?.(),
         payload: ctx.interaction.payload,
+        deps: {
+          buildPlanApprovalProgressReply: (channel) =>
+            buildCodexConversationProgressReply(channel, {
+              loadAdapter: async (ch) => options.loadChannelOutboundAdapter?.(ch),
+              resolveConfig: () => options.resolveRuntimeConfig?.() ?? {},
+              logWarn: (message, details) => console.warn(message, details),
+            }),
+        },
         onConsumed: async () => {
           acknowledgedConsumedPlan = true;
           await acknowledgeSlackCodexControlConsumed(ctx.respond);
@@ -603,15 +537,13 @@ function buildCodexInteractiveCommandContext(params: {
   };
 }
 
-function resolveProgressReplyTarget(
+function resolveProgressReplyTarget_legacy(
   event: {
     conversationId?: string;
     metadata?: Record<string, unknown>;
   },
   ctx?: {
-    pluginBinding?: {
-      conversationId?: string;
-    };
+    pluginBinding?: { conversationId?: string };
   },
 ) {
   if (event.conversationId?.trim()) {
@@ -623,3 +555,4 @@ function resolveProgressReplyTarget(
   const to = event.metadata?.to;
   return typeof to === "string" && to.trim() ? to.trim() : undefined;
 }
+void resolveProgressReplyTarget_legacy;
