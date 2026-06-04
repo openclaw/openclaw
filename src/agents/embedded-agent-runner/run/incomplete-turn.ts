@@ -131,6 +131,10 @@ const SINGLE_ACTION_MULTI_STEP_PROMISE_RE =
   /\bi(?:'ll| will)\b(?=[^.!?]{0,160}\b(?:next|then|after(?:wards)?|once)\b)/i;
 const SINGLE_ACTION_RESULT_STYLE_RE =
   /\b(?:i(?:'ll| will)\s+(?:summarize|explain|share|show|report|describe|clarify|answer|recap)(?:\s+\w+){0,4}\s*:|(?:here(?:'s| is)|summary|result|answer|findings?|root cause)\s*:)/i;
+const POST_TOOL_DETAIL_CONTINUATION_RE =
+  /\b(?:now\s+)?(?:let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b.{0,120}\b(?:get|fetch|grab|open|check|look(?:\s+up|\s+at)?|pull|retrieve)\b.{0,120}\b(?:details?|sources?|results?|pages?|urls?|links?|brief|report)\b/i;
+const LOOKUP_PROMISE_ONLY_RE =
+  /\b(?:hold on|one sec(?:ond)?|let me|i(?:'ll| will)|i(?:'m| am)\s+going to)\b.{0,100}\b(?:look (?:that|this|it)?\s*up|search(?:\s+(?:for|the web))?|check(?:\s+(?:that|this|it|the current|latest))?)\b/i;
 const SINGLE_ACTION_RETRY_SAFE_TOOL_NAMES = new Set([
   "read",
   "search",
@@ -277,9 +281,17 @@ export function resolveIncompleteTurnPayloadText(params: {
   // turn check in that case — the final post-tool response was never
   // produced. (#76477)
   const toolUseTerminal = params.attempt.lastAssistant?.stopReason === "toolUse";
+  const assistant = params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant;
+  // Unsigned thinking payloads count toward payloadCount but carry no user-visible
+  // content; bypass the visible-text guard when unsigned thinking was the only output
+  // so that incomplete-turn stall detection fires below. (#89787)
+  const unsignedThinkingOnlyTerminal =
+    params.payloadCount !== 0 &&
+    !joinAssistantTexts(params.attempt.assistantTexts).length &&
+    isUnsignedThinkingOnlyAssistantTurn(assistant);
 
   if (
-    (params.payloadCount !== 0 && !toolUseTerminal) ||
+    (params.payloadCount !== 0 && !toolUseTerminal && !unsignedThinkingOnlyTerminal) ||
     (params.aborted && params.externalAbort) ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -311,9 +323,7 @@ export function resolveIncompleteTurnPayloadText(params: {
     hasAssistantVisibleText: params.payloadCount > 0,
     lastAssistant: params.attempt.lastAssistant,
   });
-  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
-    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
-  );
+  const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(assistant);
   const emptyResponseAssistant = isEmptyResponseAssistantTurn({
     payloadCount: params.payloadCount,
     attempt: params.attempt,
@@ -321,6 +331,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
+    !unsignedThinkingOnlyTerminal &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -531,6 +542,20 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
 }
 
+// Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
+// returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
+// so the content.length > 0 guard is required to distinguish the two cases.
+function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
+  if (message == null || typeof message !== "object") {
+    return false;
+  }
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content) || content.length === 0) {
+    return false;
+  }
+  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
+}
+
 function isEmptyResponseAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
@@ -666,7 +691,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   if (assistant?.stopReason === "error") {
     return null;
   }
-  if (!isReasoningOnlyAssistantTurn(assistant)) {
+  if (!isReasoningOnlyAssistantTurn(assistant) && !isUnsignedThinkingOnlyAssistantTurn(assistant)) {
     return null;
   }
 
@@ -814,6 +839,10 @@ function isLikelyActionableUserPrompt(text: string): boolean {
   return ACTIONABLE_PROMPT_DIRECTIVE_RE.test(trimmed) || ACTIONABLE_PROMPT_REQUEST_RE.test(trimmed);
 }
 
+function isLikelyAutomationPrompt(text: string): boolean {
+  return /^\s*\[(?:cron:[^\]]+|OpenClaw heartbeat poll)\]/i.test(text.trim());
+}
+
 /** Builds the fast-path execution instruction for short approval prompts like "go ahead". */
 export function resolveAckExecutionFastPathInstruction(params: {
   provider?: string;
@@ -924,6 +953,17 @@ function isSingleActionThenNarrativePattern(params: {
   );
 }
 
+function isActionPromiseOnlyPattern(assistantTexts?: readonly string[]): boolean {
+  const text = (assistantTexts ?? []).join("\n\n").trim();
+  if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT) {
+    return false;
+  }
+  if (SINGLE_ACTION_RESULT_STYLE_RE.test(text) || PLANNING_ONLY_COMPLETION_RE.test(text)) {
+    return false;
+  }
+  return POST_TOOL_DETAIL_CONTINUATION_RE.test(text) || LOOKUP_PROMISE_ONLY_RE.test(text);
+}
+
 /** Retry budget for plan-only recovery, higher for strict-agentic models. */
 export function resolvePlanningOnlyRetryLimit(
   executionContract?: EmbeddedAgentExecutionContract,
@@ -952,15 +992,23 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     toolMetas: params.attempt.toolMetas,
     assistantTexts: params.attempt.assistantTexts,
   });
+  const actionPromiseOnly = isActionPromiseOnlyPattern(params.attempt.assistantTexts);
   const allowSingleActionRetryBypass =
     singleActionNarrative && hasSingleRetrySafeNonPlanTool(params.attempt.toolMetas);
+  const allowActionPromiseRetryBypass =
+    actionPromiseOnly && !resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects;
+  const planningOnlyGuardApplies = shouldApplyPlanningOnlyRetryGuard({
+    provider: params.provider,
+    modelId: params.modelId,
+    executionContract: params.executionContract,
+  });
+  const promptRequiresAction =
+    typeof params.prompt !== "string" ||
+    isLikelyActionableUserPrompt(params.prompt) ||
+    isLikelyAutomationPrompt(params.prompt);
   if (
-    !shouldApplyPlanningOnlyRetryGuard({
-      provider: params.provider,
-      modelId: params.modelId,
-      executionContract: params.executionContract,
-    }) ||
-    (typeof params.prompt === "string" && !isLikelyActionableUserPrompt(params.prompt)) ||
+    (!planningOnlyGuardApplies && !allowActionPromiseRetryBypass) ||
+    !promptRequiresAction ||
     params.aborted ||
     params.timedOut ||
     params.attempt.clientToolCalls ||
@@ -968,9 +1016,12 @@ export function resolvePlanningOnlyRetryInstruction(params: {
     params.attempt.didSendDeterministicApprovalPrompt ||
     hasMessagingToolDeliveryEvidence(params.attempt) ||
     params.attempt.lastToolError ||
-    (hasNonPlanToolActivity(params.attempt.toolMetas) && !allowSingleActionRetryBypass) ||
+    (hasNonPlanToolActivity(params.attempt.toolMetas) &&
+      !allowSingleActionRetryBypass &&
+      !allowActionPromiseRetryBypass) ||
     ((params.attempt.itemLifecycle?.startedCount ?? 0) > planOnlyToolMetaCount &&
-      !allowSingleActionRetryBypass) ||
+      !allowSingleActionRetryBypass &&
+      !allowActionPromiseRetryBypass) ||
     resolveAttemptReplayMetadata(params.attempt).hadPotentialSideEffects
   ) {
     return null;
@@ -992,6 +1043,7 @@ export function resolvePlanningOnlyRetryInstruction(params: {
   if (
     !hasStructuredPlanningFormat &&
     !singleActionNarrative &&
+    !actionPromiseOnly &&
     !PLANNING_ONLY_ACTION_VERB_RE.test(text)
   ) {
     return null;
