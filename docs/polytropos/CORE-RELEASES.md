@@ -11,7 +11,7 @@ Maintain an **authoritative local release store** of runnable OpenClaw tarballs 
 
 ## Release store layout (authoritative)
 
-- `~/polytropos/releases/v<ver>+poly.<N>.tgz` — immutable versioned release tarballs
+- `~/polytropos/releases/v<version>+poly.<N> (e.g. v2026.4.1+poly.21).tgz` — immutable versioned release tarballs
 - `~/polytropos/releases/current.tgz` — symlink to the staged tarball
 - `~/polytropos/releases/previous.tgz` — symlink to the rollback tarball
 
@@ -44,13 +44,13 @@ node scripts/polytropos-release.mjs release --tgz /path/to/openclaw-<ver>.tgz
 What staging does:
 
 - requires the current branch to match `release/YYYY.M.D`
-- creates and pushes the next `v<ver>+poly.<N>` tag from that release branch
+- creates and pushes the next `v<version>+poly.<N> (e.g. v2026.4.1+poly.21)` tag from that release branch
 - waits for the GitHub Actions release workflow triggered by the tag
 - downloads the built artifact from Actions
 - derives base upstream version `v<ver>` from the nearest reachable tag
-- computes next global build number `poly.N` and creates tag `v<ver>+poly.<N>`
+- computes next global build number `poly.N` and creates tag `v<version>+poly.<N> (e.g. v2026.4.1+poly.21)`
 - validates the provided tarball (`package/package.json` name/version)
-- stages the tarball into `~/polytropos/releases/v<ver>+poly.<N>.tgz`
+- stages the tarball into `~/polytropos/releases/v<version>+poly.<N> (e.g. v2026.4.1+poly.21).tgz`
 - updates symlinks **in order**: `previous.tgz` then `current.tgz`
 - installs `current.tgz` globally into `/home/ec2-user/.npm-global`
 - runs the Polytropos bundled plugin deps helper from the installed package
@@ -94,12 +94,12 @@ To exit dev mode, reinstall a released tarball (see release procedure above).
 
 The release script refuses to run unless the current branch matches `release/YYYY.M.D`.
 
-Polytropos release work should be performed from a dedicated `origin/release/YYYY.M.D` branch, not `main`.
+Polytropos release work should be performed from a dedicated `origin/release/YYYY.M.D (matching the release version, e.g. origin/release/2026.4.1)` branch, not `main`.
 
 ### Release directory invariants (DO NOT VIOLATE)
 
 - `~/polytropos/releases/` is an **authoritative store** of runnable releases.
-- Versioned files `v<ver>+poly.<N>.tgz` are **immutable** once created. Never overwrite them.
+- Versioned files `v<version>+poly.<N> (e.g. v2026.4.1+poly.21).tgz` are **immutable** once created. Never overwrite them.
 - `current.tgz` and `previous.tgz` are **symlinks** to versioned tarballs.
 
 **Critical footgun:** do **not** use `cp` to write to `current.tgz` or `previous.tgz`.
@@ -113,7 +113,7 @@ If you must copy for any reason, use symlink-safe semantics (e.g. `cp -P` / `--n
 
 Before updating symlinks or installing anything globally, verify:
 
-- Each `v<ver>+poly.<N>.tgz` contains `package/package.json` with `version == <ver>`.
+- Each `v<version>+poly.<N> (e.g. v2026.4.1+poly.21).tgz` contains `package/package.json` with `version == <ver>`.
 - `current.tgz` points at the intended versioned tarball.
 
 ### Activation safety
