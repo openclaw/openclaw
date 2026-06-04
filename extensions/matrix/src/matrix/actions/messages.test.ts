@@ -64,6 +64,7 @@ function createMessagesClient(params: {
   hydratedChunk?: Array<Record<string, unknown>>;
   pollRoot?: Record<string, unknown>;
   pollRelations?: Array<Record<string, unknown>>;
+  threadRelations?: Array<Record<string, unknown>>;
 }) {
   const doRequest = vi.fn(async () => ({
     chunk: params.chunk,
@@ -74,9 +75,17 @@ function createMessagesClient(params: {
     async (_roomId: string, _events: Array<Record<string, unknown>>) =>
       (params.hydratedChunk ?? _events) as unknown,
   );
-  const getEvent = vi.fn(async () => params.pollRoot ?? null);
-  const getRelations = vi.fn(async () => ({
-    events: params.pollRelations ?? [],
+  const getEvent = vi.fn(async (_roomId: string, eventId: string) => {
+    if (params.pollRoot?.event_id === eventId) {
+      return params.pollRoot;
+    }
+    return null;
+  });
+  const getRelations = vi.fn(async (_roomId: string, _eventId: string, relType: string) => ({
+    events:
+      relType === "m.thread"
+        ? (params.threadRelations ?? params.pollRelations ?? [])
+        : (params.pollRelations ?? []),
     nextBatch: null,
     prevBatch: null,
   }));
@@ -434,6 +443,91 @@ describe("matrix message actions", () => {
     );
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
     expect(result.messages[0]?.body).toContain("1. Apple (1 vote)");
+  });
+
+  it("includes poll roots when reading the thread they start", async () => {
+    const { client, getEvent, getRelations } = createMessagesClient({
+      chunk: [],
+      pollRoot: createPollStartEvent({
+        includeDisclosedKind: true,
+        maxSelections: 1,
+        answers: [
+          { id: "a1", "m.text": "Apple" },
+          { id: "a2", "m.text": "Strawberry" },
+        ],
+      }),
+      pollRelations: [createPollResponseEvent()],
+      threadRelations: [
+        {
+          event_id: "$thread-reply",
+          sender: "@alice:example.org",
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "thread reply",
+            "m.relates_to": { rel_type: "m.thread", event_id: "$poll" },
+          },
+        },
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      threadId: "$poll",
+      limit: 5,
+    });
+
+    expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$poll");
+    expect(getRelations).toHaveBeenCalledWith(
+      "!room:example.org",
+      "$poll",
+      "m.reference",
+      undefined,
+      {
+        from: undefined,
+      },
+    );
+    expect(getRelations).toHaveBeenCalledWith("!room:example.org", "$poll", "m.thread", undefined, {
+      dir: "b",
+      from: undefined,
+      limit: 4,
+    });
+    expect(result.messages.map((message) => message.eventId)).toEqual(["$poll", "$thread-reply"]);
+    expect(result.messages[0]?.body).toContain("1. Apple (1 vote)");
+  });
+
+  it("does not summarize non-start poll events as thread roots", async () => {
+    const { client, getRelations } = createMessagesClient({
+      chunk: [],
+      pollRoot: createPollResponseEvent(),
+      threadRelations: [
+        {
+          event_id: "$thread-reply",
+          sender: "@alice:example.org",
+          type: "m.room.message",
+          origin_server_ts: 20,
+          content: {
+            msgtype: "m.text",
+            body: "thread reply",
+            "m.relates_to": { rel_type: "m.thread", event_id: "$vote" },
+          },
+        },
+      ],
+    });
+
+    const result = await readMatrixMessages("room:!room:example.org", {
+      client,
+      threadId: "$vote",
+      limit: 5,
+    });
+
+    expect(getRelations).toHaveBeenCalledWith("!room:example.org", "$vote", "m.thread", undefined, {
+      dir: "b",
+      from: undefined,
+      limit: 5,
+    });
+    expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
   });
 
   it("counts the thread root toward the requested first-page limit", async () => {

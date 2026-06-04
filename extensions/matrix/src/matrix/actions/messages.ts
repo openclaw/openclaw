@@ -1,7 +1,7 @@
 import type { Direction } from "matrix-js-sdk/lib/models/event-timeline.js";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchMatrixPollMessageSummary, resolveMatrixPollRootEventId } from "../poll-summary.js";
-import { isPollEventType } from "../poll-types.js";
+import { isPollEventType, isPollStartType } from "../poll-types.js";
 import { editMessageMatrix, sendMessageMatrix } from "../send.js";
 import { withResolvedRoomAction } from "./client.js";
 import { resolveMatrixActionLimit } from "./limits.js";
@@ -105,6 +105,10 @@ export async function readMatrixMessages(
     const rootFillsThreadPage = rootCountsTowardLimit && limit === 1;
     const relationLimit = rootCountsTowardLimit ? Math.max(limit - 1, 1) : limit;
     const seenPollRoots = new Set<string>();
+    const threadRootEventId = normalizeOptionalString(threadRootSummary?.eventId);
+    if (threadRootEventId) {
+      seenPollRoots.add(threadRootEventId);
+    }
     const relationPage =
       threadId && relationLimit > 0
         ? await client.getRelations(resolvedRoom, threadId, "m.thread", undefined, {
@@ -217,14 +221,16 @@ async function fetchDisplayableThreadRootSummary(
     return undefined;
   }
   const rootEvent = (await client.hydrateEvents(resolvedRoom, [rawRootEvent]))[0];
-  if (
-    !rootEvent ||
-    rootEvent.unsigned?.redacted_because ||
-    rootEvent.type !== EventType.RoomMessage
-  ) {
+  if (!rootEvent || rootEvent.unsigned?.redacted_because) {
     return undefined;
   }
-  return summarizeMatrixRawEvent(rootEvent);
+  if (rootEvent.type === EventType.RoomMessage) {
+    return summarizeMatrixRawEvent(rootEvent);
+  }
+  if (isPollStartType(rootEvent.type)) {
+    return (await fetchMatrixPollMessageSummary(client, resolvedRoom, rootEvent)) ?? undefined;
+  }
+  return undefined;
 }
 
 function isMatrixThreadEvent(event: MatrixRawEvent): boolean {
