@@ -101,7 +101,9 @@ describe("before_tool_call loop detection behavior", () => {
   function createWrappedTool(
     name: string,
     execute: ReturnType<typeof vi.fn>,
-    loopDetectionContext = enabledLoopDetectionContext,
+    loopDetectionContext: Parameters<
+      typeof wrapToolWithBeforeToolCallHook
+    >[1] = enabledLoopDetectionContext,
   ) {
     return wrapToolWithBeforeToolCallHook(
       { name, execute } as unknown as AnyAgentTool,
@@ -203,13 +205,17 @@ describe("before_tool_call loop detection behavior", () => {
     }
   }
 
-  function createGenericReadRepeatFixture() {
+  function createGenericReadRepeatFixture(
+    loopDetectionContext: Parameters<
+      typeof wrapToolWithBeforeToolCallHook
+    >[1] = enabledLoopDetectionContext,
+  ) {
     const execute = vi.fn().mockResolvedValue({
       content: [{ type: "text", text: "same output" }],
       details: { ok: true },
     });
     return {
-      tool: createWrappedTool("read", execute),
+      tool: createWrappedTool("read", execute, loopDetectionContext),
       params: { path: "/tmp/file" },
     };
   }
@@ -385,6 +391,26 @@ describe("before_tool_call loop detection behavior", () => {
       expect(genericEvents.map((evt) => [evt.level, evt.count])).toEqual([
         ["warning", 10],
         ["critical", 20],
+      ]);
+    });
+  });
+
+  it("emits info diagnostics for isolated cron repeat warnings", async () => {
+    await withToolLoopEvents(async (emitted) => {
+      const { tool, params } = createGenericReadRepeatFixture({
+        ...enabledLoopDetectionContext,
+        trigger: "cron",
+        cronSessionTarget: "isolated",
+        cronSessionIsNew: true,
+      });
+
+      for (let i = 0; i < 11; i += 1) {
+        await tool.execute(`read-cron-${i}`, params, undefined, undefined);
+      }
+
+      const genericEvents = emitted.filter((evt) => evt.detector === "generic_repeat");
+      expect(genericEvents.map((evt) => [evt.level, evt.action, evt.count])).toEqual([
+        ["info", "warn", 10],
       ]);
     });
   });

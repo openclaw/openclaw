@@ -355,7 +355,7 @@ export type DiagnosticToolLoopEvent = DiagnosticBaseEvent & {
   sessionKey?: string;
   sessionId?: string;
   toolName: string;
-  level: "warning" | "critical";
+  level: "info" | "warning" | "critical";
   action: "warn" | "block";
   detector:
     | "generic_repeat"

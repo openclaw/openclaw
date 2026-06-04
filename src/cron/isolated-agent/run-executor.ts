@@ -275,6 +275,8 @@ export function createCronPromptExecutor(params: {
           agentId: params.agentId,
           trigger: "cron",
           jobId: params.job.id,
+          cronSessionTarget: params.job.sessionTarget,
+          cronSessionIsNew: params.cronSession.isNewSession,
           cleanupBundleMcpOnRunEnd: params.job.sessionTarget === "isolated",
           allowGatewaySubagentBinding: true,
           messageChannel,

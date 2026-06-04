@@ -412,6 +412,10 @@ export function createOpenClawCodingTools(options?: {
   trigger?: string;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
+  /** Cron session target for cron-triggered runs. */
+  cronSessionTarget?: string;
+  /** True when this cron-triggered run rolled into a fresh isolated session. */
+  cronSessionIsNew?: boolean;
   /** Relative workspace path that memory-triggered writes may append to. */
   memoryFlushWritePath?: string;
   agentDir?: string;
@@ -1149,6 +1153,10 @@ export function createOpenClawCodingTools(options?: {
         sessionKey: options?.sessionKey,
         sessionId: options?.sessionId,
         runId: options?.runId,
+        trigger: options?.trigger,
+        jobId: options?.jobId,
+        cronSessionTarget: options?.cronSessionTarget,
+        cronSessionIsNew: options?.cronSessionIsNew,
         channelId: options?.hookChannelId ?? options?.currentChannelId,
         ...(options?.trace ? { trace: options.trace } : {}),
         loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),

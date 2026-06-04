@@ -92,6 +92,10 @@ export type HookContext = {
   /** Ephemeral session UUID — regenerated on /new and /reset. */
   sessionId?: string;
   runId?: string;
+  trigger?: string;
+  jobId?: string;
+  cronSessionTarget?: string;
+  cronSessionIsNew?: boolean;
   trace?: DiagnosticTraceContext;
   channelId?: string;
   loopDetection?: ToolLoopDetectionConfig;
@@ -732,6 +736,14 @@ function shouldEmitLoopWarning(state: SessionState, warningKey: string, count: n
   return true;
 }
 
+function resolveLoopWarningDiagnosticLevel(ctx?: HookContext): "info" | "warning" {
+  return ctx?.trigger === "cron" &&
+    ctx.cronSessionTarget === "isolated" &&
+    ctx.cronSessionIsNew === true
+    ? "info"
+    : "warning";
+}
+
 async function recordLoopOutcome(args: {
   ctx?: HookContext;
   toolName: string;
@@ -829,12 +841,18 @@ export async function runBeforeToolCallHook(args: {
       const baseWarningKey = loopResult.warningKey ?? `${loopResult.detector}:${toolName}`;
       const warningKey = args.ctx.runId ? `${args.ctx.runId}:${baseWarningKey}` : baseWarningKey;
       if (shouldEmitLoopWarning(sessionState, warningKey, loopResult.count)) {
-        log.warn(`Loop warning for ${toolName}: ${loopResult.message}`);
+        const warningLevel = resolveLoopWarningDiagnosticLevel(args.ctx);
+        const loopWarningMessage = `Loop warning for ${toolName}: ${loopResult.message}`;
+        if (warningLevel === "info") {
+          log.info(loopWarningMessage);
+        } else {
+          log.warn(loopWarningMessage);
+        }
         logToolLoopAction({
           sessionKey: args.ctx.sessionKey,
           sessionId: args.ctx.sessionId,
           toolName,
-          level: "warning",
+          level: warningLevel,
           action: "warn",
           detector: loopResult.detector,
           count: loopResult.count,

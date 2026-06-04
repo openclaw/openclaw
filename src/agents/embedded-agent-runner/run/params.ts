@@ -52,6 +52,10 @@ export type RunEmbeddedAgentParams = {
   trigger?: EmbeddedRunTrigger;
   /** Stable cron job identifier populated for cron-triggered runs. */
   jobId?: string;
+  /** Cron session target for cron-triggered runs. */
+  cronSessionTarget?: string;
+  /** True when this cron-triggered run rolled into a fresh isolated session. */
+  cronSessionIsNew?: boolean;
   /** Relative workspace path that memory-triggered writes are allowed to append to. */
   memoryFlushWritePath?: string;
   /** Delivery target for topic/thread routing. */

@@ -1100,7 +1100,7 @@ export function logRunAttempt(params: SessionRef & { runId: string; attempt: num
 export function logToolLoopAction(
   params: SessionRef & {
     toolName: string;
-    level: "warning" | "critical";
+    level: "info" | "warning" | "critical";
     action: "warn" | "block";
     detector:
       | "generic_repeat"
@@ -1123,8 +1123,10 @@ export function logToolLoopAction(
   } count=${params.count}${params.pairedToolName ? ` pairedTool=${params.pairedToolName}` : ""} message="${params.message}"`;
   if (params.level === "critical") {
     diag.error(payload);
-  } else {
+  } else if (params.level === "warning") {
     diag.warn(payload);
+  } else {
+    diag.info(payload);
   }
   emitDiagnosticEvent({
     type: "tool.loop",

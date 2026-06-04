@@ -10,12 +10,16 @@ import type { EmbeddedRunTrigger } from "./params.js";
 export function buildEmbeddedAttemptToolRunContext(params: {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
+  cronSessionTarget?: string;
+  cronSessionIsNew?: boolean;
   memoryFlushWritePath?: string;
   toolsAllow?: string[];
   trace?: DiagnosticTraceContext;
 }): {
   trigger?: EmbeddedRunTrigger;
   jobId?: string;
+  cronSessionTarget?: string;
+  cronSessionIsNew?: boolean;
   memoryFlushWritePath?: string;
   runtimeToolAllowlist?: string[];
   trace?: DiagnosticTraceContext;
@@ -23,6 +27,8 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   return {
     trigger: params.trigger,
     jobId: params.jobId,
+    cronSessionTarget: params.cronSessionTarget,
+    cronSessionIsNew: params.cronSessionIsNew,
     memoryFlushWritePath: params.memoryFlushWritePath,
     ...(params.toolsAllow ? { runtimeToolAllowlist: params.toolsAllow } : {}),
     // Freeze trace metadata at the attempt boundary so later mutable diagnostic updates do not
