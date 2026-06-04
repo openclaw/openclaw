@@ -1,3 +1,4 @@
+// Plugin uninstall command implementation and confirmation-driven removal plan execution.
 import os from "node:os";
 import path from "node:path";
 import { theme } from "../../packages/terminal-core/src/theme.js";
@@ -32,6 +33,7 @@ export async function runPluginUninstallCommand(
   opts: PluginUninstallOptions = {},
   runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
+  // Uninstall mutates config/install records and optionally managed files, so guard write mode first.
   assertConfigWriteAllowedInCurrentMode();
 
   const {
