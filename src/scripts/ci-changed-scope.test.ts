@@ -703,7 +703,7 @@ describe("detectChangedScope", () => {
       })
         .trim()
         .split("\n")
-        .sort(),
+        .toSorted(),
     ).toEqual(["src/main-only.ts", "src/pr.ts"]);
 
     expect(listChangedPaths(staleBase, "HEAD", repoDir, true)).toEqual(["src/pr.ts"]);
