@@ -98,7 +98,7 @@ Available groups:
 - `group:automation`: `heartbeat_respond`, `cron`, `gateway`
 - `group:messaging`: `message`
 - `group:nodes`: `nodes`
-- `group:agents`: `agents_list`, `update_plan`
+- `group:agents`: `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`
 - `group:media`: `image`, `image_generate`, `music_generate`, `video_generate`, `tts`
 - `group:openclaw`: all built-in OpenClaw tools (excludes provider plugins)
 - `group:plugins`: all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`
