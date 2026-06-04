@@ -611,7 +611,7 @@ export async function runRollout() {
 
     console.log(`admin rollout attempt ${attempt} response code: ${response.code}`);
 
-    if (String(response.code).startsWith("2")) {
+    if (response.code.startsWith("2")) {
       // Async mode (#1061): the immediate 2xx carries
       // {state: "running", rollout_id, ...} — poll until terminal,
       // then drain the final result from the poll response. Skip
