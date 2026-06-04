@@ -265,7 +265,8 @@ async function writeUsageCostCacheLockAtomically(
     } catch (linkErr) {
       // Hard links are unsupported on some filesystems (SMB, NFS, virtiofs, FUSE).
       // Fall back to exclusive create which works everywhere.
-      if ((linkErr as NodeJS.ErrnoException).code === "ENOTSUP") {
+      const code = (linkErr as NodeJS.ErrnoException).code;
+      if (code === "ENOTSUP" || code === "EPERM" || code === "EOPNOTSUPP") {
         await fs.promises.writeFile(lockPath, payload, { flag: "wx" });
       } else {
         throw linkErr;
