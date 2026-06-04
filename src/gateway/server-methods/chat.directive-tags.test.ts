@@ -4681,6 +4681,57 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     ]);
   });
 
+  it("passes sandbox-oversized managed inbound PDFs through instead of rejecting them (#90097)", async () => {
+    createTranscriptFixture("openclaw-chat-send-managed-pdf-oversize-");
+    mockState.finalText = "ok";
+    mockState.sessionEntry = {
+      modelProvider: "test-provider",
+      model: "vision-model",
+    };
+    mockState.modelCatalog = [
+      {
+        provider: "test-provider",
+        id: "vision-model",
+        name: "Vision model",
+        input: ["text", "image"],
+      },
+    ];
+    const managedPath = "/home/user/.openclaw/media/inbound/huge.pdf";
+    mockState.savedMediaResults = [{ path: managedPath, contentType: "application/pdf" }];
+    mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
+    mockState.managedInboundPaths = [managedPath];
+    const respond = vi.fn();
+    const context = createChatContext();
+    const oversized = Buffer.alloc(6 * 1024 * 1024);
+    oversized.set(Buffer.from("%PDF-1.4\n"), 0);
+
+    await runNonStreamingChatSend({
+      context,
+      respond,
+      idempotencyKey: "idem-managed-pdf-oversize",
+      message: "read this",
+      requestParams: {
+        attachments: [
+          {
+            type: "file",
+            mimeType: "application/pdf",
+            fileName: "huge.pdf",
+            content: oversized.toString("base64"),
+          },
+        ],
+      },
+      expectBroadcast: false,
+    });
+
+    expect(mockState.deleteMediaBufferCalls).toEqual([]);
+    expect(mockState.lastDispatchCtx?.MediaPath).toBe(managedPath);
+    expect(mockState.lastDispatchCtx?.MediaPaths).toEqual([managedPath]);
+    expect(mockState.lastDispatchCtx?.MediaType).toBe("application/pdf");
+    expect(mockState.lastDispatchCtx?.MediaTypes).toEqual(["application/pdf"]);
+    expect(mockState.lastDispatchCtx?.MediaWorkspaceDir).toBeUndefined();
+    expect(mockState.lastDispatchCtx?.MediaStaged).toBe(true);
+  });
+
   it("rejects sandbox-oversized non-image attachments as 4xx before staging", async () => {
     // Regression: resolveChatAttachmentMaxBytes defaults to 20MB, but
     // stageSandboxMedia caps each file at STAGED_MEDIA_MAX_BYTES (5MB) and
@@ -4703,15 +4754,18 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       },
     ];
     mockState.savedMediaResults = [
-      { path: "/home/user/.openclaw/media/inbound/huge.pdf", contentType: "application/pdf" },
+      {
+        path: "/home/user/.openclaw/media/inbound/huge.bin",
+        contentType: "application/octet-stream",
+      },
     ];
     mockState.sandboxWorkspace = { workspaceDir: "/sandbox/workspace" };
     const respond = vi.fn();
     const context = createChatContext();
     // 6MB buffer — above STAGED_MEDIA_MAX_BYTES (5MB) but below the 20MB parse cap.
     const oversized = Buffer.alloc(6 * 1024 * 1024);
-    oversized.set(Buffer.from("%PDF-1.4\n"), 0);
-    const pdf = oversized.toString("base64");
+    oversized.set(Buffer.from("OPENCLAW-BINARY\n"), 0);
+    const oversizedPayload = oversized.toString("base64");
 
     await runNonStreamingChatSend({
       context,
@@ -4720,7 +4774,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       message: "read this",
       requestParams: {
         attachments: [
-          { type: "file", mimeType: "application/pdf", fileName: "huge.pdf", content: pdf },
+          {
+            type: "file",
+            mimeType: "application/octet-stream",
+            fileName: "huge.bin",
+            content: oversizedPayload,
+          },
         ],
       },
       expectBroadcast: false,

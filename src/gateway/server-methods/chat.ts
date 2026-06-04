@@ -1277,9 +1277,14 @@ async function prestageMediaPathOffloads(params: {
     // (resolveChatAttachmentMaxBytes, default 20MB) is higher, so a sandboxed
     // session receiving a file between the two caps would otherwise
     // pass parse, fail staging, and surface as a retryable 5xx even though
-    // retry cannot succeed. Reject here as a client-side 4xx instead.
+    // retry cannot succeed. Managed inbound PDFs are already host-readable, so
+    // let the managed-PDF fallback handle them before rejecting everything else.
     const oversizedForSandbox = mediaPathRefs.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
     if (oversizedForSandbox.length > 0) {
+      const managedPdfFallback = await resolveManagedInboundPdfFallback(mediaPathRefs);
+      if (managedPdfFallback) {
+        return managedPdfFallback;
+      }
       const details = oversizedForSandbox
         .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
         .join(", ");
