@@ -672,6 +672,13 @@ function isCheckpointSessionTranscriptPath(absolutePath: string): boolean {
   return SESSION_CHECKPOINT_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
 }
 
+const SESSION_ARCHIVE_TRANSCRIPT_FILENAME_RE =
+  /\.jsonl\.(?:reset|deleted)\.\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z$/;
+
+function isSessionArchiveTranscriptPath(absolutePath: string): boolean {
+  return SESSION_ARCHIVE_TRANSCRIPT_FILENAME_RE.test(path.basename(absolutePath));
+}
+
 function buildSessionRenderedLine(params: {
   agentId: string;
   sessionPath: string;
@@ -802,6 +809,9 @@ async function collectSessionIngestionBatches(params: {
           };
     for (const absolutePath of files) {
       if (isCheckpointSessionTranscriptPath(absolutePath)) {
+        continue;
+      }
+      if (isSessionArchiveTranscriptPath(absolutePath)) {
         continue;
       }
       const normalizedPath = normalizeSessionTranscriptPathForComparison(absolutePath);
