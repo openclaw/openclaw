@@ -1,5 +1,6 @@
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import {
   adaptMessagePresentationForChannel,
@@ -168,18 +169,34 @@ export default definePluginEntry({
             // Route through the adapter's after-delivery hook so the
             // channel can register the delivered message id (Discord
             // uses this to disable stale Codex user-input buttons when
-            // the freeform answer is processed).
-            await adapter.afterDeliverPayload?.({
-              cfg,
-              target: {
-                channel: replyEvent.channel,
-                to,
-                ...(accountId ? { accountId } : {}),
-                ...(threadId != null ? { threadId } : {}),
-              },
-              payload: renderedPayload,
-              results: results ? [results] : [],
-            });
+            // the freeform answer is processed). Best-effort: a
+            // successful platform send must not be converted into a
+            // delivery failure by a hook crash, matching the shared
+            // outbound pipeline.
+            if (results && adapter.afterDeliverPayload) {
+              try {
+                await adapter.afterDeliverPayload({
+                  cfg,
+                  target: {
+                    channel: replyEvent.channel,
+                    to,
+                    ...(accountId ? { accountId } : {}),
+                    ...(threadId != null ? { threadId } : {}),
+                  },
+                  payload: renderedPayload,
+                  results: [results],
+                });
+              } catch (err) {
+                console.warn(
+                  "Codex progress reply after-delivery hook failed.",
+                  {
+                    channel: replyEvent.channel,
+                    to,
+                    error: formatErrorMessage(err),
+                  },
+                );
+              }
+            }
             return;
           }
           if (payload.text && adapter.sendText) {
