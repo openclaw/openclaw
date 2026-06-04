@@ -303,6 +303,9 @@ export function resolveIncompleteTurnPayloadText(params: {
   const reasoningOnlyAssistant = isReasoningOnlyAssistantTurn(
     params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
   );
+  const unsignedThinkingOnlyAssistant = isUnsignedThinkingOnlyAssistantTurn(
+    params.attempt.currentAttemptAssistant ?? params.attempt.lastAssistant,
+  );
   const emptyResponseAssistant = isEmptyResponseAssistantTurn({
     payloadCount: params.payloadCount,
     attempt: params.attempt,
@@ -310,6 +313,7 @@ export function resolveIncompleteTurnPayloadText(params: {
   if (
     !incompleteTerminalAssistant &&
     !reasoningOnlyAssistant &&
+    !unsignedThinkingOnlyAssistant &&
     !emptyResponseAssistant &&
     stopReason !== "error"
   ) {
@@ -508,6 +512,18 @@ function isReasoningOnlyAssistantTurn(message: unknown): boolean {
   return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
 }
 
+function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const agentMessage = message as AgentMessage;
+  // Check for non-empty content array with unsigned thinking only
+  if (!agentMessage.content || agentMessage.content.length === 0) {
+    return false;
+  }
+  return assessLastAssistantMessage(agentMessage) === "incomplete-thinking";
+}
+
 function isEmptyResponseAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
@@ -638,7 +654,7 @@ export function resolveReasoningOnlyRetryInstruction(params: {
   if (assistant?.stopReason === "error") {
     return null;
   }
-  if (!isReasoningOnlyAssistantTurn(assistant)) {
+  if (!isReasoningOnlyAssistantTurn(assistant) && !isUnsignedThinkingOnlyAssistantTurn(assistant)) {
     return null;
   }
 
