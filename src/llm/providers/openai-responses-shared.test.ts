@@ -122,6 +122,53 @@ describe("convertResponsesTools", () => {
       convertResponsesTools([zeta, alpha]).map((tool) => expectResponsesFunctionTool(tool).name),
     ).toEqual(["alpha", "zeta"]);
   });
+
+  it("skips unreadable tool schemas while preserving healthy strict tools", () => {
+    const unreadableSchemaTool = {
+      name: "bad_schema",
+      description: "Bad schema",
+      get parameters(): never {
+        throw new Error("parameters getter exploded");
+      },
+    } satisfies Tool;
+    const unreadableNestedSchemaTool = {
+      name: "bad_nested_schema",
+      description: "Bad nested schema",
+      parameters: {
+        type: "object",
+        get properties(): never {
+          throw new Error("properties getter exploded");
+        },
+      },
+    } satisfies Tool;
+    const healthyTool = {
+      name: "lookup_weather",
+      description: "Get forecast",
+      parameters: {},
+    } satisfies Tool;
+
+    const converted = convertResponsesTools(
+      [unreadableSchemaTool, unreadableNestedSchemaTool, healthyTool],
+      {
+        model: nativeOpenAIModel,
+      },
+    );
+
+    expect(converted).toEqual([
+      {
+        type: "function",
+        name: "lookup_weather",
+        description: "Get forecast",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
+  });
 });
 
 describe("convertResponsesMessages", () => {

@@ -24,6 +24,11 @@ type ResponsesFunctionTool = {
   parameters: Record<string, unknown>;
   strict?: boolean | null;
 };
+type ResponsesToolInput = {
+  name: string;
+  description?: string;
+  parameters: unknown;
+};
 
 // Converts OpenClaw tool schemas to OpenAI Responses tools, including strict-mode compatibility.
 const log = createSubsystemLogger("llm/openai-responses");
@@ -35,25 +40,56 @@ export function convertResponsesTools(
   tools: Tool[],
   options?: ConvertResponsesToolsOptions,
 ): OpenAITool[] {
+  const readableTools = snapshotResponsesToolInputs(tools);
   const strictSetting = resolveResponsesStrictToolSetting(options);
-  const strict = resolveResponsesStrictToolFlag(tools, strictSetting, options?.model);
+  const strict = resolveResponsesStrictToolFlag(readableTools, strictSetting, options?.model);
   // Sort tools before request construction so prompt-cache bytes stay deterministic.
-  return sortResponsesToolsByName(tools).map((tool) => {
-    const result: ResponsesFunctionTool = {
-      type: "function",
-      name: tool.name,
-      description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(
-        tool.parameters,
-        strict === true,
-        options?.model?.compat as OpenAIToolSchemaCompat,
-      ) as Record<string, unknown>,
-    };
-    if (strict !== undefined) {
-      result.strict = strict;
+  return sortResponsesToolsByName(readableTools).flatMap((tool) => {
+    try {
+      const result: ResponsesFunctionTool = {
+        type: "function",
+        name: tool.name,
+        description: tool.description,
+        parameters: normalizeOpenAIStrictToolParameters(
+          tool.parameters,
+          strict === true,
+          options?.model?.compat as OpenAIToolSchemaCompat,
+        ) as Record<string, unknown>,
+      };
+      if (strict !== undefined) {
+        result.strict = strict;
+      }
+      return [result as OpenAITool];
+    } catch {
+      return [];
     }
-    return result as OpenAITool;
   });
+}
+
+function snapshotResponsesToolInputs(tools: readonly Tool[]): ResponsesToolInput[] {
+  return tools.flatMap((tool) => {
+    try {
+      const description = tool.description;
+      const parameters = materializeResponsesToolParameters(tool.parameters);
+      return [
+        {
+          name: tool.name,
+          ...(description !== undefined ? { description } : {}),
+          parameters,
+        },
+      ];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function materializeResponsesToolParameters(parameters: unknown): unknown {
+  const encoded = JSON.stringify(parameters ?? {});
+  if (encoded === undefined) {
+    throw new Error("OpenAI Responses tool parameters are not JSON serializable");
+  }
+  return JSON.parse(encoded) as unknown;
 }
 
 function resolveResponsesStrictToolSetting(
@@ -72,13 +108,18 @@ function resolveResponsesStrictToolSetting(
 }
 
 function resolveResponsesStrictToolFlag(
-  tools: Tool[],
+  tools: readonly { name?: unknown; parameters: unknown }[],
   strictSetting: boolean | null | undefined,
   model: Model | undefined,
 ): boolean | undefined {
-  const strict = resolveOpenAIStrictToolFlagForInventory(tools, strictSetting);
+  let strict: boolean | undefined;
+  try {
+    strict = resolveOpenAIStrictToolFlagForInventory(tools, strictSetting);
+  } catch {
+    strict = strictSetting === true ? false : strictSetting === false ? false : undefined;
+  }
   if (strictSetting === true && strict === false && model && log.isEnabled("debug", "any")) {
-    const diagnostics = findOpenAIStrictToolSchemaDiagnostics(tools);
+    const diagnostics = readResponsesStrictToolSchemaDiagnostics(tools);
     if (shouldLogStrictToolDowngradeDiagnostic(diagnostics, model)) {
       const sample = diagnostics.slice(0, 5).map((entry) => ({
         tool: entry.toolName ?? `tool[${entry.toolIndex}]`,
@@ -98,6 +139,16 @@ function resolveResponsesStrictToolFlag(
     }
   }
   return strict;
+}
+
+function readResponsesStrictToolSchemaDiagnostics(
+  tools: readonly { name?: unknown; parameters: unknown }[],
+): ReturnType<typeof findOpenAIStrictToolSchemaDiagnostics> {
+  try {
+    return findOpenAIStrictToolSchemaDiagnostics(tools);
+  } catch {
+    return [];
+  }
 }
 
 function shouldLogStrictToolDowngradeDiagnostic(
