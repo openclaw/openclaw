@@ -303,6 +303,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     status: "missing",
     reason: "index metadata is missing",
   };
+  private stableStatusSnapshot: MemoryProviderStatus | null = null;
 
   private static async loadProviderResult(params: {
     cfg: OpenClawConfig;
@@ -624,11 +625,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     },
   ): Promise<MemorySearchResult[]> {
     opts?.onDebug?.({ backend: "builtin" });
+    await this.drainReindex();
     if (this.providerRequirement.mode === "required") {
       await this.ensureProviderInitialized();
       this.assertRequiredProviderAvailable("search");
     }
-    let hasIndexedContent = this.hasIndexedContent();
+    let hasIndexedContent = await this.hasIndexedContentForSearch();
     if (!hasIndexedContent) {
       try {
         // A fresh process can receive its first search before background watch/session
@@ -638,7 +640,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       } catch (err) {
         log.warn(`memory sync failed (search-bootstrap): ${String(err)}`);
       }
-      hasIndexedContent = this.hasIndexedContent();
+      hasIndexedContent = await this.hasIndexedContentForSearch();
     }
     const preflight = resolveMemorySearchPreflight({
       query,
@@ -658,6 +660,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         log.warn(`memory sync failed (search): ${String(err)}`);
       },
     });
+    await this.drainReindex();
     if (preflight.shouldInitializeProvider) {
       await this.ensureProviderInitialized();
       this.assertRequiredProviderAvailable("search");
@@ -672,14 +675,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         return false;
       });
       if (activatedFallback) {
-        this.refreshIndexIdentityDirty({
-          providerKeyKnown: this.providerInitialized,
-        });
+        await this.refreshSearchIndexIdentityDirty();
       }
     }
-    const indexIdentity = this.refreshIndexIdentityDirty({
-      providerKeyKnown: this.providerInitialized,
-    });
+    const indexIdentity = await this.refreshSearchIndexIdentityDirty();
     if (indexIdentity.status !== "valid") {
       return [];
     }
@@ -706,11 +705,6 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // FTS-only mode: no embedding provider available
     if (!this.provider) {
       this.assertRequiredProviderAvailable("search");
-      if (!this.fts.enabled || !this.fts.available) {
-        log.warn("memory search: no provider and FTS unavailable");
-        return [];
-      }
-
       const keywordResults = await this.searchKeywordWithFallback(
         cleaned,
         candidates,
@@ -734,7 +728,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
 
     // If FTS isn't available, hybrid mode cannot use keyword search; degrade to vector-only.
     const loadKeywordResults = async () =>
-      hybrid.enabled && this.fts.enabled && this.fts.available
+      hybrid.enabled
         ? await this.searchKeywordWithFallback(
             cleaned,
             candidates,
@@ -766,16 +760,12 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
           })
         : false;
       if (activatedFallback) {
-        if (
-          this.refreshIndexIdentityDirty({
-            providerKeyKnown: this.providerInitialized,
-          }).status !== "valid"
-        ) {
+        if ((await this.refreshSearchIndexIdentityDirty()).status !== "valid") {
           return [];
         }
         keywordResults = await loadKeywordResults();
         queryVec = await this.embedQueryWithRetry(cleaned, opts?.signal);
-      } else if (!this.provider && this.fts.enabled && this.fts.available) {
+      } else if (!this.provider && (await this.hasKeywordSearchAvailable())) {
         log.warn(`memory search: embeddings unavailable; using keyword-only results: ${message}`);
         return this.selectScoredResults(keywordResults, maxResults, minScore, 0);
       } else {
@@ -790,7 +780,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         })
       : [];
 
-    if (!hybrid.enabled || !this.fts.enabled || !this.fts.available) {
+    if (!hybrid.enabled) {
       return vectorResults.filter((entry) => entry.score >= minScore).slice(0, maxResults);
     }
 
@@ -859,6 +849,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return ftsRow?.found === 1;
   }
 
+  private async hasIndexedContentForSearch(): Promise<boolean> {
+    return await this.withIndexRead(async () => this.hasIndexedContent());
+  }
+
+  private async refreshSearchIndexIdentityDirty(): Promise<MemoryIndexIdentityState> {
+    return await this.withIndexRead(async () =>
+      this.refreshIndexIdentityDirty({
+        providerKeyKnown: this.providerInitialized,
+      }),
+    );
+  }
+
+  private async hasKeywordSearchAvailable(): Promise<boolean> {
+    return await this.withIndexRead(async () => this.fts.enabled && this.fts.available);
+  }
+
   private async searchVector(
     queryVec: number[],
     limit: number,
@@ -868,20 +874,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.provider) {
       return [];
     }
-    const results = await searchVector({
-      db: this.db,
-      vectorTable: VECTOR_TABLE,
-      providerModel: this.provider.model,
-      providerModelAliases: this.resolveProviderIndexIdentities()
-        .slice(1)
-        .map((identity) => identity.model),
-      queryVec,
-      limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
-      ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
-      sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
-      sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
-    });
+    const provider = this.provider;
+    const results = await this.withIndexRead(() =>
+      searchVector({
+        db: this.db,
+        vectorTable: VECTOR_TABLE,
+        providerModel: provider.model,
+        providerModelAliases: this.resolveProviderIndexIdentities()
+          .slice(1)
+          .map((identity) => identity.model),
+        queryVec,
+        limit,
+        snippetMaxChars: SNIPPET_MAX_CHARS,
+        ensureVectorReady: async (dimensions) => await this.ensureVectorReady(dimensions),
+        sourceFilterVec: this.buildSourceFilter("c", sourceFilterList),
+        sourceFilterChunks: this.buildSourceFilter(undefined, sourceFilterList),
+      }),
+    );
     return results.map((entry) => entry as MemorySearchResult & { id: string });
   }
 
@@ -895,21 +904,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     options?: { boostFallbackRanking?: boolean },
     sourceFilterList?: MemorySource[],
   ): Promise<KeywordSearchHit[]> {
-    if (!this.fts.enabled || !this.fts.available) {
-      return [];
-    }
-    const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
-    const results = await searchKeyword({
-      db: this.db,
-      ftsTable: FTS_TABLE,
-      query,
-      ftsTokenizer: this.settings.store.fts.tokenizer,
-      limit,
-      snippetMaxChars: SNIPPET_MAX_CHARS,
-      sourceFilter,
-      buildFtsQuery: (raw) => this.buildFtsQuery(raw),
-      bm25RankToScore,
-      boostFallbackRanking: options?.boostFallbackRanking,
+    const results = await this.withIndexRead(async () => {
+      if (!this.fts.enabled || !this.fts.available) {
+        return [];
+      }
+      const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
+      return await searchKeyword({
+        db: this.db,
+        ftsTable: FTS_TABLE,
+        query,
+        ftsTokenizer: this.settings.store.fts.tokenizer,
+        limit,
+        snippetMaxChars: SNIPPET_MAX_CHARS,
+        sourceFilter,
+        buildFtsQuery: (raw) => this.buildFtsQuery(raw),
+        bm25RankToScore,
+        boostFallbackRanking: options?.boostFallbackRanking,
+      });
     });
     return results.map((entry) => entry as KeywordSearchHit);
   }
@@ -1110,6 +1121,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     await runMemorySyncWithReadonlyRecovery(state, params);
   }
 
+  protected override captureReindexReadSnapshot(): void {
+    this.stableStatusSnapshot = this.status();
+  }
+
+  protected override clearReindexReadSnapshot(): void {
+    this.stableStatusSnapshot = null;
+  }
+
   async readFile(params: {
     relPath: string;
     from?: number;
@@ -1125,6 +1144,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   status(): MemoryProviderStatus {
+    if (this.reindexing && this.stableStatusSnapshot) {
+      return this.stableStatusSnapshot;
+    }
     this.refreshIndexIdentityDirty({
       providerKeyKnown: this.providerInitialized,
     });
