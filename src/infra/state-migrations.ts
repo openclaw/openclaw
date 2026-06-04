@@ -64,7 +64,9 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
+import { compareOpenClawReleaseVersions, parseRegistryNpmSpec } from "./npm-registry-spec.js";
 import { isWithinDir } from "./path-safety.js";
+import { compareComparableSemver, parseComparableSemver } from "./semver-compare.js";
 import {
   ensureDir,
   existsDir,
@@ -403,12 +405,94 @@ function legacyInstallRecordHasCurrentResolvedIdentity(params: {
   return Boolean(legacyResolvedSpec && currentResolvedSpec === legacyResolvedSpec);
 }
 
+function readNpmInstallRecordPackageName(
+  record: InstalledPluginIndex["installRecords"][string],
+): string | undefined {
+  const resolvedName = readInstallRecordStringField(record, "resolvedName")?.trim();
+  if (resolvedName) {
+    return resolvedName;
+  }
+  for (const key of ["resolvedSpec", "spec"]) {
+    const spec = readInstallRecordStringField(record, key);
+    if (!spec) {
+      continue;
+    }
+    const parsed = parseRegistryNpmSpec(spec);
+    if (parsed?.name) {
+      return parsed.name;
+    }
+  }
+  return undefined;
+}
+
+function readNpmInstallRecordVersion(
+  record: InstalledPluginIndex["installRecords"][string],
+): string | undefined {
+  const resolvedVersion = readInstallRecordStringField(record, "resolvedVersion")?.trim();
+  if (resolvedVersion) {
+    return resolvedVersion;
+  }
+  const version = readInstallRecordStringField(record, "version")?.trim();
+  if (version) {
+    return version;
+  }
+  for (const key of ["resolvedSpec", "spec"]) {
+    const spec = readInstallRecordStringField(record, key);
+    const parsed = spec ? parseRegistryNpmSpec(spec) : null;
+    if (parsed?.selectorKind === "exact-version" && parsed.selector) {
+      return parsed.selector;
+    }
+  }
+  return undefined;
+}
+
+function compareInstallRecordVersions(
+  currentVersion: string,
+  legacyVersion: string,
+): number | null {
+  const openClawVersionComparison = compareOpenClawReleaseVersions(currentVersion, legacyVersion);
+  if (openClawVersionComparison !== null) {
+    return openClawVersionComparison;
+  }
+  return compareComparableSemver(
+    parseComparableSemver(currentVersion, { normalizeLegacyDotBeta: true }),
+    parseComparableSemver(legacyVersion, { normalizeLegacyDotBeta: true }),
+  );
+}
+
+function legacyNpmInstallRecordSupersededByCurrent(params: {
+  currentRecord: InstalledPluginIndex["installRecords"][string];
+  legacyRecord: InstalledPluginIndex["installRecords"][string];
+}): boolean {
+  const { currentRecord, legacyRecord } = params;
+  if (currentRecord.source !== "npm" || legacyRecord.source !== "npm") {
+    return false;
+  }
+  const currentPackageName = readNpmInstallRecordPackageName(currentRecord);
+  const legacyPackageName = readNpmInstallRecordPackageName(legacyRecord);
+  if (!currentPackageName || currentPackageName !== legacyPackageName) {
+    return false;
+  }
+  if (!readInstallRecordStringField(currentRecord, "installPath")) {
+    return false;
+  }
+  const currentVersion = readNpmInstallRecordVersion(currentRecord);
+  const legacyVersion = readNpmInstallRecordVersion(legacyRecord);
+  if (!currentVersion || !legacyVersion) {
+    return false;
+  }
+  return compareInstallRecordVersions(currentVersion, legacyVersion) === 1;
+}
+
 function legacyInstallRecordCoveredByCurrent(
   currentRecord: InstalledPluginIndex["installRecords"][string],
   legacyRecord: InstalledPluginIndex["installRecords"][string],
 ): boolean {
   if (currentRecord.source !== legacyRecord.source) {
     return false;
+  }
+  if (legacyNpmInstallRecordSupersededByCurrent({ currentRecord, legacyRecord })) {
+    return true;
   }
   for (const key of Object.keys(legacyRecord).toSorted()) {
     const currentValue = readInstallRecordField(currentRecord, key);

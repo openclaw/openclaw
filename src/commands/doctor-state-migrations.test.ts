@@ -1408,6 +1408,83 @@ describe("doctor legacy state migrations", () => {
     });
   });
 
+  it("archives legacy plugin install index when current npm records supersede older records", async () => {
+    const root = await makeTempRoot();
+    await writeExistingPluginInstallIndex(root, {
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex",
+        installPath: "/state/npm/projects/openclaw-codex-current",
+        resolvedName: "@openclaw/codex",
+        resolvedVersion: "2026.6.1",
+        resolvedSpec: "@openclaw/codex@2026.6.1",
+        installedAt: "2026-06-01T21:04:35.000Z",
+      },
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord",
+        installPath: "/state/npm/projects/openclaw-discord-current",
+        resolvedName: "@openclaw/discord",
+        resolvedVersion: "2026.6.1",
+        resolvedSpec: "@openclaw/discord@2026.6.1",
+        installedAt: "2026-06-01T21:04:36.000Z",
+      },
+    });
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex@2026.5.18",
+        version: "2026.5.18",
+      },
+      discord: {
+        source: "npm",
+        spec: "@openclaw/discord@2026.5.18",
+        version: "2026.5.18",
+      },
+    });
+
+    const result = await runLegacyStateMigrationsForRoot(root);
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
+    await expect(readPersistedInstalledPluginIndex({ stateDir: root })).resolves.toMatchObject({
+      installRecords: {
+        codex: { resolvedVersion: "2026.6.1" },
+        discord: { resolvedVersion: "2026.6.1" },
+      },
+    });
+  });
+
+  it("keeps legacy plugin install index when npm records would replace newer metadata", async () => {
+    const root = await makeTempRoot();
+    await writeExistingPluginInstallIndex(root, {
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex",
+        installPath: "/state/npm/projects/openclaw-codex-current",
+        resolvedName: "@openclaw/codex",
+        resolvedVersion: "2026.5.18",
+        resolvedSpec: "@openclaw/codex@2026.5.18",
+      },
+    });
+    const sourcePath = writeLegacyPluginInstallIndex(root, {
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex@2026.6.1",
+        version: "2026.6.1",
+      },
+    });
+
+    const result = await runLegacyStateMigrationsForRoot(root);
+
+    expect(result.warnings).toStrictEqual([
+      "Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: codex",
+    ]);
+    expect(fs.existsSync(sourcePath)).toBe(true);
+    expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(false);
+  });
+
   for (const fixture of [
     {
       label: "name different packages",
