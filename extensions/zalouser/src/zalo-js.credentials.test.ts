@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import {
   lstat,
   mkdir,
@@ -16,6 +17,21 @@ import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { API, Credentials, LoginQRCallbackEvent } from "./zca-client.js";
 import { LoginQRCallbackEventType } from "./zca-constants.js";
+
+const canCreateFileSymlinks = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-zalo-symlink-probe-"));
+  const targetFile = path.join(probeDir, "target.txt");
+  const linkFile = path.join(probeDir, "link.txt");
+  try {
+    fs.writeFileSync(targetFile, "content");
+    fs.symlinkSync(targetFile, linkFile);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
 
 const createZaloMock = vi.hoisted(() => vi.fn());
 const ISO_TIMESTAMP_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u;
@@ -389,7 +405,7 @@ describe("zalouser credential persistence", () => {
     }
   });
 
-  it.skipIf(process.platform === "win32")(
+  it(
     "writes credentials with private permissions",
     async () => {
       const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
@@ -425,10 +441,17 @@ describe("zalouser credential persistence", () => {
           expect(loginResult.connected).toBe(true);
 
           const filePath = credentialPath(stateDir, profile);
-          const dirMode = (await stat(path.dirname(filePath))).mode & 0o777;
-          const fileMode = (await stat(filePath)).mode & 0o777;
-          expect(dirMode).toBe(0o700);
-          expect(fileMode).toBe(0o600);
+          if (process.platform !== "win32") {
+            const dirMode = (await stat(path.dirname(filePath))).mode & 0o777;
+            const fileMode = (await stat(filePath)).mode & 0o777;
+            expect(dirMode).toBe(0o700);
+            expect(fileMode).toBe(0o600);
+          } else {
+            const dirStat = await stat(path.dirname(filePath));
+            const fileStat = await stat(filePath);
+            expect(dirStat.isDirectory()).toBe(true);
+            expect(fileStat.isFile()).toBe(true);
+          }
         });
       } finally {
         await rm(stateDir, { recursive: true, force: true });
@@ -436,7 +459,7 @@ describe("zalouser credential persistence", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "refuses to write credentials through a symlinked file",
     async () => {
       const stateDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-zalouser-credentials-"));
