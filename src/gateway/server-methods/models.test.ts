@@ -53,7 +53,7 @@ describe("models.list", () => {
       },
     } as unknown as OpenClawConfig;
 
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const { request, respond } = requestModelsList({
         view: "configured",
@@ -63,6 +63,7 @@ describe("models.list", () => {
       });
 
       await vi.advanceTimersByTimeAsync(800);
+      await vi.runOnlyPendingTimersAsync();
       await request;
 
       expect(respond).toHaveBeenCalledWith(
@@ -73,6 +74,7 @@ describe("models.list", () => {
               id: "gpt-test",
               name: "GPT Test",
               provider: "openai",
+              available: false,
             },
           ],
         },
@@ -84,11 +86,60 @@ describe("models.list", () => {
     }
   });
 
+  it("keeps SecretRef configured fallback rows unknown when catalog discovery times out", async () => {
+    const catalog = createDeferred<never>();
+    const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
+    const runtimeConfig = {
+      models: {
+        providers: {
+          vllm: {
+            apiKey: {
+              source: "file",
+              provider: "mounted-json",
+              id: "/providers/vllm/apiKey",
+            },
+            models: [{ id: "llama-secure", name: "Llama Secure" }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const { request, respond } = requestModelsList({
+        view: "configured",
+        runtimeConfig,
+        loadGatewayModelCatalog,
+        reqId: "req-models-list-secretref-timeout",
+      });
+
+      await vi.advanceTimersByTimeAsync(800);
+      await vi.runOnlyPendingTimersAsync();
+      await request;
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        {
+          models: [
+            {
+              id: "llama-secure",
+              name: "Llama Secure",
+              provider: "vllm",
+            },
+          ],
+        },
+        undefined,
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps the all view exact instead of timing out to a partial catalog", async () => {
     const catalog = createDeferred<[{ id: string; name: string; provider: string }]>();
     const loadGatewayModelCatalog = vi.fn(() => catalog.promise);
 
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const { request, respond } = requestModelsList({
         view: "all",
@@ -100,11 +151,12 @@ describe("models.list", () => {
       expect(respond).not.toHaveBeenCalled();
 
       catalog.resolve([{ id: "gpt-test", name: "GPT Test", provider: "openai" }]);
+      await vi.runAllTimersAsync();
       await request;
 
       expect(respond).toHaveBeenCalledWith(
         true,
-        { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai" }] },
+        { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: false }] },
         undefined,
       );
       expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
@@ -132,7 +184,7 @@ describe("models.list", () => {
 
     expect(respond).toHaveBeenCalledWith(
       true,
-      { models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm" }] },
+      { models: [{ id: "qwen-local", name: "Qwen Local", provider: "vllm", available: false }] },
       undefined,
     );
   });
@@ -175,10 +227,10 @@ describe("models.list", () => {
       true,
       {
         models: [
-          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai" },
-          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai" },
-          { id: "llama-local", name: "Llama Local", provider: "vllm" },
-          { id: "qwen-local", name: "Qwen Local", provider: "vllm" },
+          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai", available: true },
+          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+          { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
+          { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
         ],
       },
       undefined,
@@ -193,7 +245,91 @@ describe("models.list", () => {
     });
     await allRequest;
 
-    expect(allRespond).toHaveBeenCalledWith(true, { models: catalog }, undefined);
+    expect(allRespond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [
+          { id: "claude-test", name: "Claude Test", provider: "anthropic", available: false },
+          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai", available: true },
+          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+          { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
+          { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
+        ],
+      },
+      undefined,
+    );
+  });
+
+  it("keeps file SecretRef provider availability unknown instead of forcing unavailable", async () => {
+    const catalog = [{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }];
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/*": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            apiKey: {
+              source: "file",
+              provider: "mounted-json",
+              id: "/providers/vllm/apiKey",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const { request, respond } = requestModelsList({
+      view: "all",
+      runtimeConfig: cfg,
+      loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+      reqId: "req-models-list-secretref-file",
+    });
+    await request;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { models: [{ id: "llama-secure", name: "Llama Secure", provider: "vllm" }] },
+      undefined,
+    );
+  });
+
+  it("keeps managed SecretRef provider availability unknown instead of forcing unavailable", async () => {
+    const catalog = [{ id: "llama-managed", name: "Llama Managed", provider: "vllm" }];
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "vllm/*": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          vllm: {
+            apiKey: "secretref-managed",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const { request, respond } = requestModelsList({
+      view: "all",
+      runtimeConfig: cfg,
+      loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+      reqId: "req-models-list-secretref-managed",
+    });
+    await request;
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { models: [{ id: "llama-managed", name: "Llama Managed", provider: "vllm" }] },
+      undefined,
+    );
   });
 
   it("preserves catalog load errors before the timeout fallback wins", async () => {

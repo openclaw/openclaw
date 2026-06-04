@@ -1,5 +1,6 @@
 // Model list result building resolves visible model catalogs for an agent and
 // strips runtime-only provider params before sending the browse API payload.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentWorkspaceDir,
@@ -7,15 +8,24 @@ import {
 } from "../../agents/agent-scope.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
-  loadModelCatalogForBrowse,
+  loadModelCatalogForBrowseWithState,
   type ModelCatalogBrowseView,
 } from "../../agents/model-catalog-browse.js";
-import { resolveVisibleModelCatalog } from "../../agents/model-catalog-visibility.js";
+import {
+  modelCatalogEntryHasProviderAuth,
+  type ProviderAuthChecker,
+  resolveVisibleModelCatalog,
+} from "../../agents/model-catalog-visibility.js";
+import { NON_ENV_SECRETREF_MARKER } from "../../agents/model-auth-markers.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
+import { isSecretRef } from "../../config/types.secrets.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import type { GatewayRequestContext } from "./types.js";
 
 type ModelsListView = ModelCatalogBrowseView;
+type ModelsListEntry = ModelCatalogEntry & { available?: boolean };
 
 let loggedSlowModelsListCatalog = false;
 
@@ -34,20 +44,88 @@ function omitRuntimeModelParams(entry: ModelCatalogEntry): ModelCatalogEntry {
   return rest;
 }
 
-function omitRuntimeModelParamsFromCatalog(catalog: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  return catalog.map(omitRuntimeModelParams);
+function modelCatalogEntryHasUnknownSecretRefAvailability(
+  cfg: OpenClawConfig,
+  entry: ModelCatalogEntry,
+): boolean {
+  const providerId = normalizeProviderId(entry.provider);
+  const provider = Object.entries(cfg.models?.providers ?? {}).find(
+    ([id]) => normalizeProviderId(id) === providerId,
+  )?.[1];
+  const apiKey = provider?.apiKey;
+  return apiKey === NON_ENV_SECRETREF_MARKER || (isSecretRef(apiKey) && apiKey.source !== "env");
+}
+
+function createInFlightProviderAuthChecker(
+  providerAuthChecker: ProviderAuthChecker,
+): ProviderAuthChecker {
+  const pending = new Map<string, Promise<boolean>>();
+  return (provider, modelApi) => {
+    const key = `${normalizeProviderId(provider)}\0${modelApi ?? ""}`;
+    const cached = pending.get(key);
+    if (cached) {
+      return cached;
+    }
+    const next = Promise.resolve(providerAuthChecker(provider, modelApi));
+    pending.set(key, next);
+    return next;
+  };
+}
+
+async function buildPublicModelsListEntry(params: {
+  entry: ModelCatalogEntry;
+  cfg: OpenClawConfig;
+  providerAuthChecker?: ProviderAuthChecker;
+}): Promise<ModelsListEntry> {
+  const publicEntry = omitRuntimeModelParams(params.entry);
+  if (modelCatalogEntryHasUnknownSecretRefAvailability(params.cfg, params.entry)) {
+    return publicEntry;
+  }
+  if (!params.providerAuthChecker) {
+    return publicEntry;
+  }
+  return {
+    ...publicEntry,
+    available: await modelCatalogEntryHasProviderAuth(params.providerAuthChecker, params.entry),
+  };
+}
+
+async function buildPublicModelsListEntries(params: {
+  catalog: ModelCatalogEntry[];
+  cfg: OpenClawConfig;
+  agentId: string;
+  workspaceDir: string;
+}): Promise<ModelsListEntry[]> {
+  const inFlightProviderAuthChecker = createInFlightProviderAuthChecker(
+    createProviderAuthChecker({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      workspaceDir: params.workspaceDir,
+      allowPluginSyntheticAuth: false,
+      discoverExternalCliAuth: false,
+    }),
+  );
+  return await Promise.all(
+    params.catalog.map((entry) =>
+      buildPublicModelsListEntry({
+        entry,
+        cfg: params.cfg,
+        providerAuthChecker: inFlightProviderAuthChecker,
+      }),
+    ),
+  );
 }
 
 export async function buildModelsListResult(params: {
   context: GatewayRequestContext;
   agentId?: string;
   params: Record<string, unknown>;
-}): Promise<{ models: ModelCatalogEntry[] }> {
+}): Promise<{ models: ModelsListEntry[] }> {
   const cfg = params.context.getRuntimeConfig();
   const agentId = params.agentId ?? resolveDefaultAgentId(cfg);
   const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId) ?? resolveDefaultAgentWorkspaceDir();
   const view = resolveModelsListView(params.params);
-  const catalog = await loadModelCatalogForBrowse({
+  const { catalog } = await loadModelCatalogForBrowseWithState({
     cfg,
     view,
     loadCatalog: params.context.loadGatewayModelCatalog,
@@ -62,7 +140,9 @@ export async function buildModelsListResult(params: {
     },
   });
   if (view === "all") {
-    return { models: omitRuntimeModelParamsFromCatalog(catalog) };
+    return {
+      models: await buildPublicModelsListEntries({ catalog, cfg, agentId, workspaceDir }),
+    };
   }
   const models = await resolveVisibleModelCatalog({
     cfg,
@@ -74,5 +154,12 @@ export async function buildModelsListResult(params: {
     view,
     runtimeAuthDiscovery: false,
   });
-  return { models: omitRuntimeModelParamsFromCatalog(models) };
+  return {
+    models: await buildPublicModelsListEntries({
+      catalog: models,
+      cfg,
+      agentId,
+      workspaceDir,
+    }),
+  };
 }

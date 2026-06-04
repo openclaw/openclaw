@@ -304,8 +304,10 @@ private fun providerCommandSubtitle(
   models: List<GatewayModelSummary>,
 ): String {
   if (!isConnected) return "Connect Gateway to load models"
-  val readyProviderCount = providers.count { modelProviderReady(it.status) }
+  val readyProviderCount = readyModelProviderCount(providers, models)
   if (readyProviderCount > 0) return "$readyProviderCount providers ready"
+  val expiringProviderCount = expiringModelProviderCount(providers)
+  if (expiringProviderCount > 0) return "$expiringProviderCount providers expiring"
   if (models.isNotEmpty()) return "${models.size} models available"
   return "Configure model access"
 }

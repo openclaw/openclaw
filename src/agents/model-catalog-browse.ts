@@ -44,20 +44,20 @@ function resolveModelCatalogBrowseTimeoutMs(value: number | undefined): number {
 }
 
 /** Loads catalog entries for browse views, using read-only discovery unless full catalog is required. */
-export async function loadModelCatalogForBrowse(params: {
+export async function loadModelCatalogForBrowseWithState(params: {
   cfg: OpenClawConfig;
   view?: ModelCatalogBrowseView;
   loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogEntry[]>;
   timeoutMs?: number;
   onTimeout?: (timeoutMs: number) => void;
-}): Promise<ModelCatalogEntry[]> {
+}): Promise<{ catalog: ModelCatalogEntry[]; timedOut: boolean }> {
   const view = params.view ?? "default";
   if (view === "all") {
-    return await params.loadCatalog({ readOnly: false });
+    return { catalog: await params.loadCatalog({ readOnly: false }), timedOut: false };
   }
   if (parseConfiguredModelVisibilityEntries({ cfg: params.cfg }).providerWildcards.size > 0) {
     // Wildcards depend on provider discovery; read-only cached entries can hide matching models.
-    return await params.loadCatalog({ readOnly: false });
+    return { catalog: await params.loadCatalog({ readOnly: false }), timedOut: false };
   }
 
   let timeout: NodeJS.Timeout | undefined;
@@ -75,12 +75,23 @@ export async function loadModelCatalogForBrowse(params: {
       // The browse path may return partial/empty results; keep late catalog failures off stderr.
       catalogPromise.catch(() => undefined);
       params.onTimeout?.(timeoutMs);
-      return [];
+      return { catalog: [], timedOut: true };
     }
-    return result;
+    return { catalog: result, timedOut: false };
   } finally {
     if (timeout) {
       modelCatalogBrowseDeps.clearTimeout(timeout);
     }
   }
+}
+
+/** Loads catalog entries for browse views, using read-only discovery unless full catalog is required. */
+export async function loadModelCatalogForBrowse(params: {
+  cfg: OpenClawConfig;
+  view?: ModelCatalogBrowseView;
+  loadCatalog: (params: { readOnly: boolean }) => Promise<ModelCatalogEntry[]>;
+  timeoutMs?: number;
+  onTimeout?: (timeoutMs: number) => void;
+}): Promise<ModelCatalogEntry[]> {
+  return (await loadModelCatalogForBrowseWithState(params)).catalog;
 }

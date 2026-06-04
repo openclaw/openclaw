@@ -14,7 +14,7 @@ import {
 } from "./model-visibility-policy.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
-type ProviderAuthChecker = (provider: string, modelApi?: string) => boolean | Promise<boolean>;
+export type ProviderAuthChecker = (provider: string, modelApi?: string) => boolean | Promise<boolean>;
 const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
@@ -52,7 +52,7 @@ async function resolveProviderAuthCheck(
   return isPromiseLike(result) ? await result : result;
 }
 
-async function providerHasAuth(
+export async function modelCatalogEntryHasProviderAuth(
   providerAuthChecker: ProviderAuthChecker,
   entry: ModelCatalogEntry,
 ): Promise<boolean> {
@@ -130,7 +130,7 @@ export async function resolveVisibleModelCatalog(params: {
       });
     const authBackedCatalog: ModelCatalogEntry[] = [];
     for (const entry of params.catalog) {
-      if (await providerHasAuth(hasAuth, entry)) {
+      if (await modelCatalogEntryHasProviderAuth(hasAuth, entry)) {
         authBackedCatalog.push(entry);
       }
     }

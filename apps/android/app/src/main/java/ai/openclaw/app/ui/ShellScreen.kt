@@ -103,7 +103,10 @@ private val shellNavTabs = listOf(Tab.Overview, Tab.Chat, Tab.Voice, Tab.Setting
 private val shellContentInsets: WindowInsets
   @Composable get() = WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal)
 
-internal fun shellBottomNavVisible(keyboardVisible: Boolean, commandOpen: Boolean): Boolean = !keyboardVisible && !commandOpen
+internal fun shellBottomNavVisible(
+  keyboardVisible: Boolean,
+  commandOpen: Boolean,
+): Boolean = !keyboardVisible && !commandOpen
 
 /** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
@@ -342,7 +345,8 @@ private fun OverviewScreen(
   val cronStatus by viewModel.cronStatus.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
   val channelsSummary by viewModel.channelsSummary.collectAsState()
-  val readyProviderCount = providers.count { modelProviderReady(it.status) }
+  val readyProviderCount = readyModelProviderCount(providers, models)
+  val expiringProviderCount = expiringModelProviderCount(providers)
   val attentionRows =
     homeAttentionRows(
       isConnected = isConnected,
@@ -350,6 +354,7 @@ private fun OverviewScreen(
       channelsSummary = channelsSummary,
       nodesDevicesSummary = nodesDevicesSummary,
       readyProviderCount = readyProviderCount,
+      expiringProviderCount = expiringProviderCount,
     )
 
   LaunchedEffect(isConnected) {
@@ -460,6 +465,7 @@ private fun OverviewScreen(
                     when {
                       !isConnected -> "Offline"
                       readyProviderCount > 0 -> "$readyProviderCount ready"
+                      expiringProviderCount > 0 -> "$expiringProviderCount expiring"
                       models.isNotEmpty() -> "${models.size} models"
                       else -> "Setup"
                     },
@@ -541,6 +547,7 @@ internal fun homeAttentionRows(
   channelsSummary: GatewayChannelsSummary,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
+  expiringProviderCount: Int = 0,
 ): List<HomeAttentionRow> =
   listOfNotNull(
     if (!isConnected) {
@@ -563,7 +570,12 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (isConnected && readyProviderCount == 0) {
+    if (isConnected && expiringProviderCount > 0) {
+      HomeAttentionRow("Providers", "Provider auth expires soon", Icons.Outlined.Inventory2, Tab.ProvidersModels)
+    } else {
+      null
+    },
+    if (isConnected && readyProviderCount == 0 && expiringProviderCount == 0) {
       HomeAttentionRow("Providers", "No ready providers", Icons.Outlined.Inventory2, Tab.ProvidersModels)
     } else {
       null
