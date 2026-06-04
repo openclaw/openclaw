@@ -173,7 +173,17 @@ describe("models.list", () => {
 
         expect(respond).toHaveBeenCalledWith(
           true,
-          { models: [{ id: "gpt-test", name: "GPT Test", provider: "openai", available: false }] },
+          {
+            models: [
+              {
+                id: "gpt-test",
+                name: "GPT Test",
+                provider: "openai",
+                available: false,
+                agentRuntime: { id: "codex", label: "OpenAI Codex", source: "implicit" },
+              },
+            ],
+          },
           undefined,
         );
         expect(loadGatewayModelCatalog).toHaveBeenCalledWith({ readOnly: false });
@@ -245,8 +255,20 @@ describe("models.list", () => {
       true,
       {
         models: [
-          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai", available: true },
-          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+          {
+            id: "gpt-5.4-codex",
+            name: "GPT-5.4 Codex",
+            provider: "openai",
+            available: true,
+            agentRuntime: { id: "codex", label: "OpenAI Codex", source: "implicit" },
+          },
+          {
+            id: "gpt-codex-test",
+            name: "GPT Codex Test",
+            provider: "openai",
+            available: true,
+            agentRuntime: { id: "codex", label: "OpenAI Codex", source: "implicit" },
+          },
           { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
           { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
         ],
@@ -268,8 +290,20 @@ describe("models.list", () => {
       {
         models: [
           { id: "claude-test", name: "Claude Test", provider: "anthropic", available: false },
-          { id: "gpt-5.4-codex", name: "GPT-5.4 Codex", provider: "openai", available: true },
-          { id: "gpt-codex-test", name: "GPT Codex Test", provider: "openai", available: true },
+          {
+            id: "gpt-5.4-codex",
+            name: "GPT-5.4 Codex",
+            provider: "openai",
+            available: true,
+            agentRuntime: { id: "codex", label: "OpenAI Codex", source: "implicit" },
+          },
+          {
+            id: "gpt-codex-test",
+            name: "GPT Codex Test",
+            provider: "openai",
+            available: true,
+            agentRuntime: { id: "codex", label: "OpenAI Codex", source: "implicit" },
+          },
           { id: "llama-local", name: "Llama Local", provider: "vllm", available: true },
           { id: "qwen-local", name: "Qwen Local", provider: "vllm", available: true },
         ],
