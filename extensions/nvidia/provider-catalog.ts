@@ -94,9 +94,7 @@ export async function buildLiveNvidiaProvider(): Promise<ModelProviderConfig> {
   }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(
-      mergeBundledDefaultModel(provider.models ?? [], featuredModels),
-    ),
+    models: applyNvidiaModelDefaults(featuredModels),
   };
 }
 
@@ -111,9 +109,7 @@ export async function buildSelectableLiveNvidiaProvider(): Promise<ModelProvider
   }
   return {
     ...provider,
-    models: applyNvidiaModelDefaults(
-      mergeBundledDefaultModel(provider.models ?? [], featuredModels),
-    ),
+    models: applyNvidiaModelDefaults(featuredModels),
   };
 }
 
@@ -190,19 +186,6 @@ function parseNvidiaFeaturedModels(payload: unknown): ModelDefinitionConfig[] | 
     .map(parseNvidiaFeaturedModel)
     .filter((model) => model !== null);
   return models.length > 0 ? models : null;
-}
-
-function mergeBundledDefaultModel(
-  bundledModels: ModelDefinitionConfig[],
-  featuredModels: ModelDefinitionConfig[],
-): ModelDefinitionConfig[] {
-  if (featuredModels.some((model) => model.id === NVIDIA_DEFAULT_MODEL_ID)) {
-    return featuredModels;
-  }
-  const defaultModel = bundledModels.find((model) => model.id === NVIDIA_DEFAULT_MODEL_ID);
-  // NVIDIA's featured feed can lag the build page. Keep the bundled default
-  // selectable so authenticated setup does not hide the documented default.
-  return defaultModel ? [defaultModel, ...featuredModels] : featuredModels;
 }
 
 function applyNvidiaModelDefaults(models: ModelDefinitionConfig[]): ModelDefinitionConfig[] {

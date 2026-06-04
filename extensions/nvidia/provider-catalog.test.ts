@@ -84,23 +84,10 @@ describe("nvidia provider catalog", () => {
     const provider = await buildLiveNvidiaProvider();
 
     expect(provider.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
       "z-ai/glm-5.1",
       "nvidia/nemotron-3-super-120b-a12b",
     ]);
     expect(provider.models[0]).toMatchObject({
-      name: "NVIDIA Nemotron 3 Ultra 550B",
-      contextWindow: 1_000_000,
-      maxTokens: 16_384,
-      params: {
-        chat_template_kwargs: {
-          enable_thinking: false,
-          force_nonempty_content: true,
-        },
-      },
-      compat: { requiresStringContent: true },
-    });
-    expect(provider.models[1]).toMatchObject({
       name: "GLM 5.1",
       contextWindow: 202752,
       maxTokens: 8192,
@@ -162,7 +149,6 @@ describe("nvidia provider catalog", () => {
     const provider = await buildSelectableLiveNvidiaProvider();
 
     expect(provider.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
       "z-ai/glm-5.1",
       "nvidia/nemotron-3-super-120b-a12b",
     ]);
@@ -202,10 +188,7 @@ describe("nvidia provider catalog", () => {
 
     const provider = await buildLiveNvidiaProvider();
 
-    expect(provider.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "minimaxai/minimax-m2.7",
-    ]);
+    expect(provider.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m2.7"]);
   });
 
   it("caches the featured catalog for repeated provider builds", async () => {
@@ -252,18 +235,12 @@ describe("nvidia provider catalog", () => {
     const first = await buildLiveNvidiaProvider();
     const second = await buildLiveNvidiaProvider();
 
-    expect(first.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "minimaxai/minimax-m2.7",
-    ]);
-    expect(second.models.map((model) => model.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "z-ai/glm-5.1",
-    ]);
+    expect(first.models.map((model) => model.id)).toEqual(["minimaxai/minimax-m2.7"]);
+    expect(second.models.map((model) => model.id)).toEqual(["z-ai/glm-5.1"]);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
 
-  it("does not duplicate the bundled default when featured catalog returns it", async () => {
+  it("applies bundled Ultra defaults when featured catalog returns Ultra", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {

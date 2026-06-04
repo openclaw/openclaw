@@ -72,8 +72,7 @@ try NVIDIA's public featured-model catalog from
 `https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` and
 caches the ranked result for 24 hours. New featured models from build.nvidia.com
 therefore appear in setup and model-selection surfaces without waiting for an
-OpenClaw release. OpenClaw also keeps the bundled NVIDIA default selectable if
-the featured feed has not yet listed the model.
+OpenClaw release.
 
 The fetch uses a fixed HTTPS host policy for `assets.ngc.nvidia.com`. If no
 NVIDIA API key is configured, or if that public catalog is unavailable or
@@ -98,7 +97,7 @@ visible answer instead of exposing reasoning text.
 
 | Model ref                                  | Name                         | Context   | Max output | Notes                             |
 | ------------------------------------------ | ---------------------------- | --------- | ---------- | --------------------------------- |
-| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA Nemotron 3 Ultra 550B | 1,000,000 | 16,384     | Default; featured-feed supplement |
+| `nvidia/nvidia/nemotron-3-ultra-550b-a55b` | NVIDIA Nemotron 3 Ultra 550B | 1,000,000 | 16,384     | Default                           |
 | `nvidia/nvidia/nemotron-3-super-120b-a12b` | NVIDIA Nemotron 3 Super 120B | 262,144   | 8,192      | Featured fallback                 |
 | `nvidia/moonshotai/kimi-k2.5`              | Kimi K2.5                    | 262,144   | 8,192      | Featured fallback                 |
 | `nvidia/minimaxai/minimax-m2.7`            | Minimax M2.7                 | 196,608   | 8,192      | Featured fallback                 |
@@ -117,10 +116,9 @@ visible answer instead of exposing reasoning text.
   <Accordion title="Catalog and pricing">
     OpenClaw prefers NVIDIA's public featured-model catalog when NVIDIA auth is
     configured and caches it for 24 hours. The bundled fallback catalog is static
-    and keeps deprecated shipped refs for upgrade compatibility. The bundled
-    default is prepended to live featured rows when NVIDIA's public feed has not
-    caught up with the build page. Costs default to `0` in source since NVIDIA
-    currently offers free API access for the listed models.
+    and keeps deprecated shipped refs for upgrade compatibility. Costs default
+    to `0` in source since NVIDIA currently offers free API access for the
+    listed models.
   </Accordion>
 
   <Accordion title="OpenAI-compatible endpoint">

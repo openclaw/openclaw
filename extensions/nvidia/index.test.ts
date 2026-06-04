@@ -247,10 +247,7 @@ describe("nvidia provider hooks", () => {
 
     const entries = await provider.augmentModelCatalog?.(buildAugmentCatalogContext("nvapi-test"));
 
-    expect(entries?.map((entry) => entry.id)).toEqual([
-      "nvidia/nemotron-3-ultra-550b-a55b",
-      "minimaxai/minimax-m2.7",
-    ]);
+    expect(entries?.map((entry) => entry.id)).toEqual(["minimaxai/minimax-m2.7"]);
   });
 
   it("opts into literal provider-prefix preservation", async () => {
@@ -305,7 +302,6 @@ describe("nvidia provider hooks", () => {
 
     const liveRows = await catalogProvider?.liveCatalog?.(buildCatalogContext("nvapi-test"));
     expect(liveRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
-      "live:nvidia/nvidia/nemotron-3-ultra-550b-a55b",
       "live:nvidia/minimaxai/minimax-m2.7",
     ]);
   });
