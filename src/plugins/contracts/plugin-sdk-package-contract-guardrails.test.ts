@@ -513,12 +513,26 @@ function collectDeprecatedTestBarrelImports(): string[] {
 }
 
 function collectDeprecatedPackageTestingBridgeDrift(): string[] {
-  const source = fs
-    .readFileSync(resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"), "utf8")
-    .trim();
-  const lines = source.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
-  return lines.length === 1 &&
-    /^export\s+\*\s+from\s+["'][^"']*src\/plugin-sdk\/testing(?:\.js)?["'];?$/.test(lines[0] ?? "")
+  const source = fs.readFileSync(
+    resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"),
+    "utf8",
+  );
+  const lines = source
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const exportLines = lines.filter((line) => /^export\s+\*/.test(line));
+  const nonCommentLines = lines.filter((line) => !line.startsWith("//"));
+  if (
+    nonCommentLines.length !== 1 ||
+    exportLines.length !== 1 ||
+    exportLines[0] !== nonCommentLines[0]
+  ) {
+    return ["packages/plugin-sdk/src/testing.ts"];
+  }
+  return /^export\s+\*\s+from\s+["'][^"']*src\/plugin-sdk\/testing(?:\.js)?["'];?$/.test(
+    exportLines[0] ?? "",
+  )
     ? []
     : ["packages/plugin-sdk/src/testing.ts"];
 }
