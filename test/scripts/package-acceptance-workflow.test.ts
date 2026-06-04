@@ -1544,8 +1544,10 @@ describe("package artifact reuse", () => {
     const job = workflowJob(TUI_PTY_WORKFLOW, "tui-pty");
     const step = workflowStep(job, "Run TUI PTY tests");
 
+    expect(job.env?.OPENCLAW_TUI_PTY_INCLUDE_LOCAL).toBe("1");
+    expect(job["timeout-minutes"]).toBe(8);
     expect(step.run).toBe(
-      "timeout --kill-after=30s 120s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts",
+      "timeout --kill-after=30s 240s node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts",
     );
   });
 });
