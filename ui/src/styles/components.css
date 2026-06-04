@@ -2751,6 +2751,22 @@
   white-space: nowrap;
 }
 
+.sessions-table .session-label-col {
+  min-width: calc(8ch + 24px);
+  width: clamp(calc(8ch + 24px), 12vw, calc(16ch + 24px));
+}
+
+.sessions-table .session-label-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: calc(8ch + 20px);
+  max-width: calc(16ch + 20px);
+  padding: 6px 10px;
+  font-size: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
 .data-table th {
   position: sticky;
   top: 0;
