@@ -66,9 +66,9 @@ Verify your setup with `openclaw security audit`.
 
 Sessions are reused until they expire:
 
-- **Daily reset** (default) -- new session at 4:00 AM local time on the gateway
-  host. Daily freshness is based on when the current `sessionId` started, not
-  on later metadata writes.
+- **Daily reset** (default for direct and group sessions) -- new session at
+  4:00 AM local time on the gateway host. Daily freshness is based on when the
+  current `sessionId` started, not on later metadata writes.
 - **Idle reset** (optional) -- new session after a period of inactivity. Set
   `session.reset.idleMinutes`. Idle freshness is based on the last real
   user/channel interaction, so heartbeat, cron, and exec system events do not
@@ -82,6 +82,12 @@ but those writes do not extend daily or idle reset freshness. When a reset
 rolls the session, queued system-event notices for the old session are
 discarded so stale background updates are not prepended to the first prompt in
 the new session.
+
+Thread-scoped sessions default to `idle` reset without an inactivity expiry
+when no `session.reset`, `session.resetByType`, or legacy
+`session.idleMinutes` is configured, so topic/thread continuity is preserved
+across the daily boundary. Configure `session.resetByType.thread` to make
+thread sessions rotate on a timer.
 
 Sessions with an active provider-owned CLI session are not cut by the implicit
 daily default. Use `/reset` or configure `session.reset` explicitly when those
@@ -112,12 +118,6 @@ writes.
 OpenClaw automatically bounds session storage over time. By default, it runs
 in `enforce` mode and applies cleanup during maintenance. Set
 `session.maintenance.mode` to `"warn"` to report what would be cleaned without mutating the store/files:
-
-Session reset defaults are scoped by conversation type. Direct and group
-sessions use a daily reset at 04:00 unless configured otherwise. Thread-scoped
-sessions default to `idle` reset without an inactivity expiry when no
-`session.reset`, `session.resetByType`, or legacy `session.idleMinutes` is
-configured, so topic/thread continuity is preserved across the daily boundary.
 
 ```json5
 {
