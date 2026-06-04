@@ -105,6 +105,12 @@ type AgentCatalogFixtureEntry = {
   contextWindow?: number;
 };
 
+const implicitOpenAiCodexRuntime = {
+  id: "codex",
+  label: "OpenAI Codex",
+  source: "implicit" as const,
+};
+
 const buildAgentCatalogFixture = (): AgentCatalogFixtureEntry[] => [
   { id: "gpt-test-z", provider: "openai", contextWindow: 0 },
   {
@@ -148,12 +154,14 @@ const expectedSortedCatalog = (): ModelCatalogRpcEntry[] => [
     provider: "openai",
     available: false,
     contextWindow: 8000,
+    agentRuntime: implicitOpenAiCodexRuntime,
   },
   {
     id: "gpt-test-z",
     name: "gpt-test-z",
     provider: "openai",
     available: false,
+    agentRuntime: implicitOpenAiCodexRuntime,
   },
 ];
 
@@ -669,6 +677,7 @@ describe("gateway server models + voicewake", () => {
             name: "gpt-test-z",
             provider: "openai",
             available: false,
+            agentRuntime: implicitOpenAiCodexRuntime,
           },
         ]);
       },
@@ -715,6 +724,7 @@ describe("gateway server models + voicewake", () => {
           name: "gpt-test-z",
           provider: "openai",
           available: false,
+          agentRuntime: implicitOpenAiCodexRuntime,
         },
       ],
     });
@@ -732,6 +742,7 @@ describe("gateway server models + voicewake", () => {
           name: "not-in-catalog",
           provider: "openai",
           available: false,
+          agentRuntime: implicitOpenAiCodexRuntime,
         },
       ],
     });
