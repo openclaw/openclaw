@@ -324,7 +324,9 @@ describe("createMatrixRoomMessageHandler audio preflight", () => {
         info: { mimetype: "audio/ogg", size: 12345 },
       }),
     );
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 0);
+    });
 
     await handler(
       "!room:example.org",
@@ -351,7 +353,10 @@ describe("createMatrixRoomMessageHandler audio preflight", () => {
     const voiceCall = vi
       .mocked(recordInboundSession)
       .mock.calls.map((call) => call[0] as { ctx?: Record<string, unknown> })
-      .find((call) => String(call.ctx?.BodyForAgent ?? "").includes("bot voice request"));
+      .find((call) => {
+        const bodyForAgent = call.ctx?.BodyForAgent;
+        return typeof bodyForAgent === "string" && bodyForAgent.includes("bot voice request");
+      });
     const voiceHistory = voiceCall?.ctx?.InboundHistory as Array<{ body?: string }> | undefined;
     expect(voiceHistory?.map((entry) => entry.body) ?? []).not.toContain("bot text after audio");
   });

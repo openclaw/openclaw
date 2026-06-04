@@ -339,8 +339,9 @@ describe("matrix message actions", () => {
 
   it("filters threaded poll roots out of main-room reads", async () => {
     const threadedPollRoot = createPollStartEvent();
+    const threadedPollContent = threadedPollRoot.content as Record<string, unknown>;
     threadedPollRoot.content = {
-      ...threadedPollRoot.content,
+      ...threadedPollContent,
       "m.relates_to": { rel_type: "m.thread", event_id: "$thread-root" },
     };
     const { client, getEvent } = createMessagesClient({
@@ -405,7 +406,7 @@ describe("matrix message actions", () => {
   });
 
   it("includes poll snapshots from threaded reads", async () => {
-    const { client, doRequest, getEvent, getRelations } = createMessagesClient({
+    const { client, getEvent, getRelations } = createMessagesClient({
       chunk: [],
       pollRoot: createPollStartEvent({
         includeDisclosedKind: true,
