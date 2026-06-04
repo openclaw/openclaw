@@ -3743,6 +3743,51 @@ describe("handleFeishuMessage command authorization", () => {
     // No reply should be dispatched: empty message is silently skipped
     expect(mockDispatchReplyFromConfig).not.toHaveBeenCalled();
   });
+
+  it("does not drop empty-text message when it quotes a parent message (#90177)", async () => {
+    // A Feishu reply containing only @bot (no additional text) was being
+    // dropped before the quoted message content was fetched. The handler
+    // should fetch quoted content first and only skip if all of current
+    // text, media, and quoted content are empty.
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "om_quoted_001",
+      chatId: "oc-dm",
+      content: "quoted message content from parent",
+      contentType: "text",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-reply-only-bot",
+        },
+      },
+      message: {
+        message_id: "msg-empty-with-quote",
+        parent_id: "om_quoted_001",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        // Empty text — only @bot mention, no additional content
+        content: JSON.stringify({ text: "" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    // A reply should be dispatched because quoted content provides context
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("createFeishuMessageReceiveHandler media dedupe", () => {
