@@ -223,10 +223,15 @@ describe("buildGatewayReloadPlan", () => {
   });
 
   it("restarts the channel when a per-account config field changes (more specific configPrefix wins over the broad noop prefix)", () => {
-    const plan = buildGatewayReloadPlan(["channels.whatsapp.accounts.default.enabled"]);
+    const changedPaths = [
+      "channels.whatsapp.accounts.default.enabled",
+      "channels.whatsapp.accounts.default.authDir",
+    ];
+    const plan = buildGatewayReloadPlan(changedPaths);
     expect(plan.restartGateway).toBe(false);
     expect(plan.restartChannels).toEqual(new Set(["whatsapp"]));
-    expect(plan.noopPaths).not.toContain("channels.whatsapp.accounts.default.enabled");
+    expect(plan.hotReasons).toEqual(changedPaths);
+    expect(plan.noopPaths).toStrictEqual([]);
   });
 
   it("keeps other channels.whatsapp.* changes as hot no-ops", () => {
