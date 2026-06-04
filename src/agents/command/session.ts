@@ -9,7 +9,10 @@ import {
   type ThinkLevel,
   type VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
+import {
+  hasTerminalMainSessionTranscriptNewerThanRegistrySync,
+  resolveSessionLifecycleTimestamps,
+} from "../../config/sessions/lifecycle.js";
 import {
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
@@ -52,6 +55,23 @@ type SessionKeyResolution = {
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
 };
+
+function clearRotatedTerminalMainSessionMetadata(
+  entry: SessionEntry | undefined,
+): SessionEntry | undefined {
+  if (!entry) {
+    return undefined;
+  }
+  return {
+    ...entry,
+    sessionFile: undefined,
+    status: undefined,
+    startedAt: undefined,
+    endedAt: undefined,
+    runtimeMs: undefined,
+    abortedLastRun: undefined,
+  };
+}
 
 type SessionIdMatchSet = {
   matches: Array<[string, SessionEntry]>;
@@ -328,6 +348,9 @@ export function resolveSession(opts: {
   const now = Date.now();
 
   const sessionEntry = sessionKey ? sessionStore[sessionKey] : undefined;
+  const sessionAgentId = opts.agentId?.trim()
+    ? normalizeAgentId(opts.agentId)
+    : resolveAgentIdFromSessionKey(sessionKey);
 
   const resetType = resolveSessionResetType({ sessionKey });
   const channelReset = resolveChannelResetConfig({
@@ -339,12 +362,23 @@ export function resolveSession(opts: {
     resetType,
     resetOverride: channelReset,
   });
+  const terminalMainTranscriptNewerThanRegistry = sessionEntry
+    ? hasTerminalMainSessionTranscriptNewerThanRegistrySync({
+        entry: sessionEntry,
+        sessionScope: sessionCfg?.scope,
+        sessionKey,
+        agentId: sessionAgentId,
+        mainKey: sessionCfg?.mainKey,
+        storePath,
+      })
+    : false;
   const fresh = sessionEntry
-    ? evaluateSessionFreshness({
+    ? !terminalMainTranscriptNewerThanRegistry &&
+      evaluateSessionFreshness({
         updatedAt: sessionEntry.updatedAt,
         ...resolveSessionLifecycleTimestamps({
           entry: sessionEntry,
-          agentId: opts.agentId,
+          agentId: sessionAgentId,
           storePath,
         }),
         now,
@@ -354,6 +388,9 @@ export function resolveSession(opts: {
   const sessionId =
     opts.sessionId?.trim() || (fresh ? sessionEntry?.sessionId : undefined) || crypto.randomUUID();
   const isNewSession = !fresh && !opts.sessionId;
+  const resolvedSessionEntry = terminalMainTranscriptNewerThanRegistry
+    ? clearRotatedTerminalMainSessionMetadata(sessionEntry)
+    : sessionEntry;
 
   clearBootstrapSnapshotOnSessionRollover({
     sessionKey,
@@ -372,7 +409,7 @@ export function resolveSession(opts: {
   return {
     sessionId,
     sessionKey,
-    sessionEntry,
+    sessionEntry: resolvedSessionEntry,
     sessionStore,
     storePath,
     isNewSession,

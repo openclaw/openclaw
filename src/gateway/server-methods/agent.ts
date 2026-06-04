@@ -51,7 +51,9 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { agentCommandFromIngress } from "../../commands/agent.js";
 import {
   evaluateSessionFreshness,
+  hasTerminalMainSessionTranscriptNewerThanRegistry,
   mergeSessionEntry,
+  resolveTerminalMainSessionTranscriptRegistryCheck,
   resolveChannelResetConfig,
   resolveAgentIdFromSessionKey,
   resolveExplicitAgentSessionKey,
@@ -1656,10 +1658,38 @@ export const agentHandlers: GatewayRequestHandlers = {
             failedSessionTranscriptMissing = true;
           }
         }
+        const mainSessionKeyForRequest = resolveAgentMainSessionKey({
+          cfg: cfgLocal,
+          agentId: canonicalSessionAgentId,
+        });
+        const isSystemGatewayRun =
+          request.bootstrapContextRunKind === "cron" ||
+          request.bootstrapContextRunKind === "heartbeat";
+        const terminalMainTranscriptCheck = isSystemGatewayRun
+              ? undefined
+              : resolveTerminalMainSessionTranscriptRegistryCheck({
+                  entry,
+                  sessionScope: cfgLocal.session?.scope,
+                  sessionKey: canonicalKey,
+                  agentId: canonicalSessionAgentId,
+                  mainKey: cfgLocal.session?.mainKey,
+                  storePath,
+                });
+        const terminalMainTranscriptNewerThanRegistry = terminalMainTranscriptCheck
+          ? await hasTerminalMainSessionTranscriptNewerThanRegistry({
+              entry,
+              sessionScope: cfgLocal.session?.scope,
+              sessionKey: canonicalKey,
+              agentId: canonicalSessionAgentId,
+              mainKey: cfgLocal.session?.mainKey,
+              storePath,
+            })
+          : false;
         const canReuseSession =
           Boolean(entry?.sessionId) &&
           (freshness?.fresh ?? false) &&
-          !failedSessionTranscriptMissing;
+          !failedSessionTranscriptMissing &&
+          !terminalMainTranscriptNewerThanRegistry;
         const usableRequestedSessionId =
           requestedSessionId && (!entry?.sessionId || canReuseSession)
             ? requestedSessionId
@@ -1672,10 +1702,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           (!canReuseSession && !usableRequestedSessionId) ||
           Boolean(usableRequestedSessionId && entry?.sessionId !== usableRequestedSessionId);
         const rotatedSessionId = Boolean(entry?.sessionId && entry.sessionId !== sessionId);
-        const touchInteraction =
-          request.bootstrapContextRunKind !== "cron" &&
-          request.bootstrapContextRunKind !== "heartbeat" &&
-          !request.internalEvents?.length;
+        const touchInteraction = !isSystemGatewayRun && !request.internalEvents?.length;
         const sessionAgent = canonicalSessionAgentId;
         type AgentSessionPatchBuild = {
           patch: Partial<SessionEntry>;
@@ -1831,10 +1858,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         resolvedSessionKey = canonicalSessionKey;
         const sessionAgentId = canonicalSessionAgentId;
         resolvedSessionAgentId = sessionAgentId;
-        const mainSessionKey = resolveAgentMainSessionKey({
-          cfg: cfgLocal,
-          agentId: sessionAgentId,
-        });
+        const mainSessionKey = mainSessionKeyForRequest;
         // Legacy stores may lack sessionStartedAt entirely. Pre-compute a
         // JSONL-transcript-derived candidate outside the store lock; the
         // updater below only writes it when the freshly-loaded store still
