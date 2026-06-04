@@ -27,7 +27,6 @@ import {
 import { renderQrTerminal } from "./qr-terminal.js";
 import { getStatusCode } from "./session-errors.js";
 import {
-  DisconnectReason,
   fetchLatestBaileysVersion,
   makeCacheableSignalKeyStore,
   makeWASocket,
@@ -63,7 +62,7 @@ export {
 } from "./creds-persistence.js";
 export type { CredsQueueWaitResult } from "./creds-persistence.js";
 
-const LOGGED_OUT_STATUS = DisconnectReason?.loggedOut ?? 401;
+const LOGGED_OUT_STATUS = 401;
 const WHATSAPP_WEBSOCKET_PROXY_TARGET = "https://mmg.whatsapp.net/";
 const CREDS_FLUSH_TIMEOUT_MESSAGE =
   "Queued WhatsApp creds save did not finish before auth bootstrap; skipping repair and continuing with primary creds.";
@@ -390,7 +389,7 @@ function createConnectionTimeoutError(timeoutMs: number): Error {
   const error = new Error(`WhatsApp connection timed out after ${timeoutMs}ms`);
   Object.assign(error, {
     output: {
-      statusCode: DisconnectReason?.timedOut ?? 408,
+      statusCode: 408,
     },
   });
   return error;
