@@ -3,6 +3,7 @@ import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../auto-reply/toke
 import { routeFromConversationRef, routeToDeliveryFields } from "../channels/route-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ConversationRef } from "../infra/outbound/session-binding-service.js";
+import { enqueueSystemEvent } from "../infra/system-events.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
@@ -992,11 +993,56 @@ async function sendSubagentAnnounceDirectly(params: {
         expectedMediaUrls.length === 0 &&
         !requiresMessageToolDelivery
       ) {
-        return {
-          delivered: false,
-          path: "direct",
-          error: "completion agent handoff is still pending",
-        };
+        // Durable-inbox fallback. The direct agent-call handoff returned a
+        // non-terminal `accepted/started/in_flight` status, which means the
+        // requester session is registered as active but is currently
+        // non-streaming (mid-turn, queued behind work, in compaction prep,
+        // in tool-result truncation, or yielded). Without this fallback,
+        // the announce retry budget exhausts and the child completion is
+        // recorded as `delivery_failed` even though the run itself
+        // succeeded — the parent then has no path to receive the result
+        // except manual disk recovery.
+        //
+        // Instead, enqueue the trigger message into the requester's
+        // in-process durable system-event inbox keyed by the announce's
+        // direct idempotency key (which uniquely identifies this child
+        // announce). The inbox is drained on the requester's next
+        // turn-start (the same path used by jobs, hooks, restart
+        // sentinels, ACP child spawns, monitor events, and the
+        // group/channel completion path in task-registry). Idempotent on
+        // (text, contextKey, deliveryContext) — duplicate calls (e.g. if
+        // the agent dispatch later succeeds and wakes the parent before
+        // the queue is drained) are silently dropped by
+        // `enqueueSystemEvent`.
+        //
+        // If `enqueueSystemEvent` itself throws, surface the original
+        // pending-handoff error so existing retry/give-up bookkeeping
+        // remains the safety net of last resort.
+        try {
+          const durableContextKey = `subagent-announce:${params.directIdempotencyKey}`;
+          const durableDeliveryContext =
+            requesterSessionOrigin ?? completionExternalFallbackOrigin ?? directOrigin;
+          enqueueSystemEvent(params.triggerMessage, {
+            sessionKey: canonicalRequesterSessionKey,
+            contextKey: durableContextKey,
+            deliveryContext: durableDeliveryContext,
+          });
+          return {
+            delivered: true,
+            path: "durable_queue",
+          };
+        } catch (err) {
+          defaultRuntime.log(
+            `[warn] Subagent completion durable-queue fallback failed; surfacing pending-handoff error: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          );
+          return {
+            delivered: false,
+            path: "direct",
+            error: "completion agent handoff is still pending",
+          };
+        }
       }
       return {
         delivered: true,

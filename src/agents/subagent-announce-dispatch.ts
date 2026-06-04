@@ -1,4 +1,13 @@
-type SubagentDeliveryPath = "steered" | "direct" | "none";
+type SubagentDeliveryPath = "steered" | "direct" | "durable_queue" | "none";
+
+// `durable_queue` indicates the announce flow fell back to enqueueing the
+// trigger message into the requester's durable in-process system-event
+// inbox after the direct agent-call handoff returned a non-terminal
+// `agent run pending` status. The parent drains the inbox at the start of
+// its next turn, so the completion is not lost when the requester session
+// is mid-turn, queued behind work, in compaction prep, in tool-result
+// truncation, or yielded. See `subagent-announce-delivery.ts` for the
+// branch that produces this path.
 
 type SubagentAnnounceSteerOutcome =
   | { status: "steered"; deliveredAt?: number; enqueuedAt?: number }

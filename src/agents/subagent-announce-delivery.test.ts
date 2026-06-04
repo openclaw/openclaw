@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing as sessionBindingServiceTesting,
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
+import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type {
   EmbeddedPiQueueFailureReason,
@@ -2994,5 +2995,211 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       threadId: "171.222",
       bestEffortDeliver: true,
     });
+  });
+});
+
+describe("durable-queue fallback when direct handoff is pending", () => {
+  // These tests cover the lane-busy / non-streaming requester case where
+  // the direct agent-call dispatch returns a non-terminal
+  // `accepted/started/in_flight` status. The patch enqueues the trigger
+  // message into the requester's durable in-process system-event inbox
+  // instead of returning a delivery failure. The parent drains the inbox
+  // on next turn-start.
+
+  const REQ_KEY = "agent:main:discord:channel:durable-queue-test";
+  const ORIGIN = {
+    channel: "discord",
+    to: "channel:durable-queue-test",
+    accountId: "acct-test",
+  } as const;
+
+  beforeEach(() => {
+    resetSystemEventsForTest();
+  });
+
+  afterEach(() => {
+    resetSystemEventsForTest();
+  });
+
+  function pendingHandoffArgs(
+    overrides: Partial<Parameters<typeof deliverSubagentAnnouncement>[0]> = {},
+  ): Parameters<typeof deliverSubagentAnnouncement>[0] {
+    return {
+      requesterSessionKey: REQ_KEY,
+      targetRequesterSessionKey: REQ_KEY,
+      triggerMessage: "child cipher:abc done: APPROVE",
+      steerMessage: "child cipher:abc done: APPROVE",
+      requesterOrigin: ORIGIN,
+      requesterSessionOrigin: ORIGIN,
+      completionDirectOrigin: ORIGIN,
+      directOrigin: ORIGIN,
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "durable-queue-test-idem",
+      sourceTool: "sessions_spawn",
+      ...overrides,
+    } as Parameters<typeof deliverSubagentAnnouncement>[0];
+  }
+
+  it("enqueues into durable inbox when handoff is pending and parent is non-streaming", async () => {
+    const callGateway = createGatewayMock({
+      runId: "agent:main:run:pending-1",
+      status: "accepted", // non-terminal -> isGatewayAgentRunPending=true
+      acceptedAt: Date.now(),
+    });
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "main-session-id",
+        isActive: false, // skips steered path; goes straight to direct
+      }),
+    });
+
+    const result = await deliverSubagentAnnouncement(pendingHandoffArgs());
+
+    expect(result.delivered).toBe(true);
+    expect(result.path).toBe("durable_queue");
+    expect(result.error).toBeUndefined();
+
+    const inbox = peekSystemEvents(REQ_KEY);
+    expect(inbox).toEqual(["child cipher:abc done: APPROVE"]);
+  });
+
+  it("is idempotent on duplicate fallback fires for the same idempotency key", async () => {
+    const callGateway = createGatewayMock({
+      runId: "agent:main:run:pending-2",
+      status: "accepted",
+      acceptedAt: Date.now(),
+    });
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "main-session-id",
+        isActive: false,
+      }),
+    });
+
+    const args = pendingHandoffArgs({
+      directIdempotencyKey: "durable-queue-test-dup",
+    });
+    const r1 = await deliverSubagentAnnouncement(args);
+    const r2 = await deliverSubagentAnnouncement(args);
+
+    expect(r1.delivered).toBe(true);
+    expect(r2.delivered).toBe(true);
+    expect(r1.path).toBe("durable_queue");
+    expect(r2.path).toBe("durable_queue");
+
+    // dedupe on (text, contextKey, deliveryContext) -> only one entry
+    const inbox = peekSystemEvents(REQ_KEY);
+    expect(inbox).toEqual(["child cipher:abc done: APPROVE"]);
+  });
+
+  it("does not invoke durable fallback when parent is active-streaming (steered path wins)", async () => {
+    const queueMock = vi.fn(
+      async () =>
+        ({
+          queued: true,
+          sessionId: "main-session-id",
+          enqueuedAtMs: Date.now(),
+          deliveredAtMs: Date.now(),
+        }) as EmbeddedPiQueueMessageOutcome,
+    );
+    const callGateway = createGatewayMock({});
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "main-session-id",
+        isActive: true,
+      }),
+      queueEmbeddedPiMessageWithOutcome: queueMock,
+    });
+
+    const result = await deliverSubagentAnnouncement(pendingHandoffArgs());
+
+    expect(result.delivered).toBe(true);
+    expect(result.path).toBe("steered");
+    expect(queueMock).toHaveBeenCalledOnce();
+
+    // No durable enqueue on happy path
+    const inbox = peekSystemEvents(REQ_KEY);
+    expect(inbox).toEqual([]);
+  });
+
+  it("does NOT redirect to durable fallback when expectedMediaUrls is non-empty", async () => {
+    // Media-bearing announces preserve their existing direct-path semantics.
+    // The direct-path branch returns delivered:true for media when pending
+    // but only when we don't enter the expectsCompletionMessage block.
+    const callGateway = createGatewayMock({
+      runId: "agent:main:run:pending-media",
+      status: "accepted",
+      acceptedAt: Date.now(),
+    });
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "main-session-id",
+        isActive: false,
+      }),
+    });
+
+    const args = pendingHandoffArgs({
+      directIdempotencyKey: "durable-queue-test-media",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "image_generation",
+          childSessionKey: "image_generate:task-test",
+          childSessionId: "task-test",
+          announceType: "image generation task",
+          taskLabel: "test image",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "Generated.\nMEDIA:/tmp/generated-test.png",
+          mediaUrls: ["/tmp/generated-test.png"],
+          replyInstruction: "Deliver the generated image.",
+        },
+      ],
+    });
+
+    const result = await deliverSubagentAnnouncement(args);
+
+    // Expect: NOT durable_queue; either steered, direct, or media-specific path.
+    expect(result.path).not.toBe("durable_queue");
+    const inbox = peekSystemEvents(REQ_KEY);
+    expect(inbox).toEqual([]);
+  });
+
+  it("records the result envelope shape consumers can route on", async () => {
+    // Ensures the new `path` value flows through the existing typed surface
+    // without a phases array (this is sendSubagentAnnounceDirectly’s direct
+    // return; phases are only added by the dispatch wrapper).
+    const callGateway = createGatewayMock({
+      runId: "agent:main:run:pending-shape",
+      status: "started",
+      acceptedAt: Date.now(),
+    });
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "main-session-id",
+        isActive: false,
+      }),
+    });
+
+    const result = await deliverSubagentAnnouncement(
+      pendingHandoffArgs({
+        directIdempotencyKey: "durable-queue-test-shape",
+      }),
+    );
+
+    expect(result).toMatchObject({
+      delivered: true,
+      path: "durable_queue",
+    });
+    expect(result.deliveredAt).toBeUndefined();
+    expect(result.enqueuedAt).toBeUndefined();
+    expect(result.error).toBeUndefined();
   });
 });

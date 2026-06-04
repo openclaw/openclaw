@@ -198,4 +198,25 @@ describe("agent-harness-task-runtime", () => {
       }),
     ).toBe(false);
   });
+
+  it("treats durable-queue path as a durable delivery", () => {
+    // The durable in-process system-event inbox is idempotent and bounded;
+    // the parent drains it on next turn-start. Once the announce flow
+    // commits to this path, monitor retry would just churn (the inbox
+    // dedupes duplicates but bookkeeping is wasted).
+    expect(
+      isDurableAgentHarnessCompletionDelivery({
+        delivered: true,
+        path: "durable_queue",
+      }),
+    ).toBe(true);
+    // delivered:false should still fail-fast even if the path field is
+    // unexpectedly "durable_queue" (defensive).
+    expect(
+      isDurableAgentHarnessCompletionDelivery({
+        delivered: false,
+        path: "durable_queue",
+      } as Parameters<typeof isDurableAgentHarnessCompletionDelivery>[0]),
+    ).toBe(false);
+  });
 });
