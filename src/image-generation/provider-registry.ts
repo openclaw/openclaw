@@ -4,6 +4,8 @@ import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import * as capabilityProviderRuntime from "../plugins/capability-provider-runtime.js";
 import type { ImageGenerationProviderPlugin } from "../plugins/types.js";
 
+// Image-generation providers come from plugin capability registration. The
+// registry keeps aliases separate from canonical ids for user config lookups.
 const BUILTIN_IMAGE_GENERATION_PROVIDERS: readonly ImageGenerationProviderPlugin[] = [];
 const UNSAFE_PROVIDER_IDS = new Set(["__proto__", "constructor", "prototype"]);
 
@@ -39,6 +41,8 @@ function buildProviderMaps(cfg?: OpenClawConfig): {
     if (!isSafeImageGenerationProviderId(id)) {
       return;
     }
+    // Canonical list output is one entry per provider; aliases only affect
+    // lookup so duplicate aliases cannot duplicate providers in UI/config.
     canonical.set(id, provider);
     aliases.set(id, provider);
     for (const alias of provider.aliases ?? []) {

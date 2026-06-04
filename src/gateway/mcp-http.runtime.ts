@@ -8,6 +8,9 @@ import {
 } from "./mcp-http.schema.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
+// MCP loopback runtime scopes gateway tools to the current session/channel
+// context and caches the expensive schema projection for short bursts of tool
+// list/call traffic from the same MCP client.
 const TOOL_CACHE_TTL_MS = 30_000;
 const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
 
@@ -26,15 +29,18 @@ type McpLoopbackScopeParams = {
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
   currentMessageId: string | number | undefined;
+  currentInboundAudio: boolean | undefined;
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
   senderIsOwner: boolean | undefined;
 };
 
-export function resolveMcpLoopbackScopedTools(
-  params: McpLoopbackScopeParams,
-): { agentId: string | undefined; tools: McpLoopbackTool[] } {
+/** Resolves loopback-visible tools after applying gateway scope and native-tool exclusions. */
+export function resolveMcpLoopbackScopedTools(params: McpLoopbackScopeParams): {
+  agentId: string | undefined;
+  tools: McpLoopbackTool[];
+} {
   const scoped = resolveGatewayScopedTools({
     ...params,
     surface: "loopback",
@@ -46,6 +52,7 @@ export function resolveMcpLoopbackScopedTools(
   };
 }
 
+/** Short-lived cache for loopback tool lists keyed by session/channel context. */
 export class McpLoopbackToolCache {
   #entries = new Map<string, CachedScopedTools>();
 
@@ -56,6 +63,7 @@ export class McpLoopbackToolCache {
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
       params.currentMessageId != null ? String(params.currentMessageId) : "",
+      params.currentInboundAudio === true ? "audio" : "no-audio",
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
@@ -63,6 +71,8 @@ export class McpLoopbackToolCache {
     ].join("\u0000");
     const now = Date.now();
     const cached = this.#entries.get(cacheKey);
+    // Config object identity is part of the cache contract so explicit gateway
+    // reloads invalidate tool scope and schema without filesystem polling.
     if (cached && cached.configRef === params.cfg && now - cached.time < TOOL_CACHE_TTL_MS) {
       return cached;
     }

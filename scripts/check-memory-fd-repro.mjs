@@ -28,6 +28,7 @@ const DEFAULT_FILE_COUNT = 512;
 const DEFAULT_MAX_WORKSPACE_REG_FDS = process.platform === "darwin" ? 8 : 64;
 export const GATEWAY_READY_OUTPUT_MAX_CHARS = 128 * 1024;
 export const MEMORY_SEARCH_RESPONSE_MAX_BYTES = 256 * 1024;
+export const MEMORY_SEARCH_PROBE_QUERY = "Top-level memory file";
 
 const SKIP_GATEWAY_ENV = {
   NODE_ENV: "test",
@@ -277,15 +278,22 @@ function writeSyntheticWorkspace(workspaceDir, fileCount) {
   }
 }
 
-function writeConfig({ homeDir, workspaceDir, port, token }) {
+export function writeConfig({ homeDir, workspaceDir, port, token }) {
   const configDir = path.join(homeDir, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
   const configPath = path.join(configDir, "openclaw.json");
+  const indexPath = path.join(configDir, "memory", "main.sqlite");
   const config = {
     agents: {
       defaults: {
         workspace: workspaceDir,
         memorySearch: {
+          provider: "none",
+          model: "",
+          store: {
+            path: indexPath,
+            vector: { enabled: false },
+          },
           sync: {
             watch: true,
             onSessionStart: false,
@@ -311,6 +319,37 @@ function writeConfig({ homeDir, workspaceDir, port, token }) {
   };
   fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
   return configPath;
+}
+
+function formatTail(text, maxChars = 4096) {
+  return text.length > maxChars ? text.slice(-maxChars) : text;
+}
+
+function preindexSyntheticMemory(env) {
+  logStep("preindex start");
+  const result = spawnSync(
+    process.execPath,
+    ["scripts/run-node.mjs", "memory", "index", "--force", "--agent", "main"],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+      env,
+      maxBuffer: 10 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      [
+        `memory preindex failed with exit ${result.status ?? result.signal}`,
+        formatTail(result.stdout || ""),
+        formatTail(result.stderr || ""),
+      ]
+        .filter(Boolean)
+        .join("\n"),
+    );
+  }
+  logStep("preindex complete");
 }
 
 export function updateGatewayReadyOutputState(
@@ -430,19 +469,16 @@ export async function stopGateway({ child, port }) {
 
 export async function stopGatewayWithRuntime({
   child,
+  childExitPollIntervalMs = 100,
+  childExitPolls = 50,
   port,
   findGatewayPidFn,
   killProcess,
   listenerSettleDelayMs = 500,
 }) {
   if (!hasChildExited(child)) {
-    child.kill("SIGINT");
-    for (let i = 0; i < 50; i += 1) {
-      if (hasChildExited(child)) {
-        break;
-      }
-      await sleep(100);
-    }
+    signalChild(child, "SIGINT");
+    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
   }
   const listenerPid = findGatewayPidFn(port);
   if (listenerPid) {
@@ -457,9 +493,29 @@ export async function stopGatewayWithRuntime({
       } catch {}
     }
   }
+  if (!hasChildExited(child)) {
+    signalChild(child, "SIGKILL");
+    await waitForChildExit(child, { intervalMs: childExitPollIntervalMs, polls: childExitPolls });
+  }
 }
 
 export { readBoundedResponseText };
+
+function signalChild(child, signal) {
+  try {
+    child.kill(signal);
+  } catch {}
+}
+
+async function waitForChildExit(child, { intervalMs, polls }) {
+  for (let i = 0; i < polls; i += 1) {
+    if (hasChildExited(child)) {
+      return true;
+    }
+    await sleep(intervalMs);
+  }
+  return hasChildExited(child);
+}
 
 function parseJsonValue(text) {
   try {
@@ -591,7 +647,7 @@ async function invokeMemorySearch({ port, token, timeoutMs }) {
       body: JSON.stringify({
         tool: "memory_search",
         args: {
-          query: "FD-leak-probe-sentinel-xyzzy-nomatch",
+          query: MEMORY_SEARCH_PROBE_QUERY,
           maxResults: 1,
           corpus: "memory",
         },
@@ -673,24 +729,7 @@ async function main() {
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_GATEWAY_TOKEN: token,
   };
-  const child = spawn(
-    process.execPath,
-    [
-      "scripts/run-node.mjs",
-      "gateway",
-      "run",
-      "--port",
-      String(port),
-      "--auth",
-      "token",
-      "--token",
-      token,
-      "--bind",
-      "loopback",
-      "--allow-unconfigured",
-    ],
-    { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] },
-  );
+  let child;
 
   const summary = {
     generatedAt: new Date().toISOString(),
@@ -709,6 +748,25 @@ async function main() {
   };
 
   try {
+    preindexSyntheticMemory(env);
+    child = spawn(
+      process.execPath,
+      [
+        "scripts/run-node.mjs",
+        "gateway",
+        "run",
+        "--port",
+        String(port),
+        "--auth",
+        "token",
+        "--token",
+        token,
+        "--bind",
+        "loopback",
+        "--allow-unconfigured",
+      ],
+      { cwd: process.cwd(), env, stdio: ["ignore", "pipe", "pipe"] },
+    );
     logStep(`workspace=${workspaceDir}`);
     logStep(`files=${options.fileCount} mode=${options.mode} port=${port}`);
     await waitForGatewayReady({ child, port, logPath, timeoutMs: 60_000 });
@@ -746,7 +804,9 @@ async function main() {
       throw new Error(summary.failure);
     }
   } finally {
-    await stopGateway({ child, port });
+    if (child) {
+      await stopGateway({ child, port });
+    }
     if (!options.keep) {
       fs.rmSync(rootDir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     } else {

@@ -1,3 +1,4 @@
+/** Runs queued follow-up agent turns and routes their delivery payloads. */
 import crypto from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
@@ -231,6 +232,7 @@ async function forwardFollowupProgressEvent(params: {
   }
 }
 
+/** Creates the function that drains one queued follow-up run. */
 export function createFollowupRunner(params: {
   opts?: GetReplyOptions;
   typing: TypingController;
@@ -809,6 +811,7 @@ export function createFollowupRunner(params: {
                     userTurnTranscriptRecorder,
                     onUserMessagePersisted: notifyUserMessagePersisted,
                     currentInboundEventKind: queued.currentInboundEventKind,
+                    currentInboundAudio: queued.currentInboundAudio,
                     currentInboundContext: queued.currentInboundContext,
                     inputProvenance: run.inputProvenance,
                     provider: cliExecutionProvider,
@@ -906,6 +909,7 @@ export function createFollowupRunner(params: {
                 transcriptPrompt: queued.transcriptPrompt,
                 userTurnTranscriptRecorder,
                 currentInboundEventKind: queued.currentInboundEventKind,
+                currentInboundAudio: queued.currentInboundAudio,
                 currentInboundContext: queued.currentInboundContext,
                 extraSystemPrompt: run.extraSystemPrompt,
                 silentReplyPromptMode: run.silentReplyPromptMode,

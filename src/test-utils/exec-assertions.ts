@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
 
+// macOS exposes /tmp through /private/var; normalize both spellings for assertions.
 function normalizeDarwinTmpPath(filePath: string): string {
   return process.platform === "darwin" && filePath.startsWith("/private/var/")
     ? filePath.slice("/private".length)
@@ -17,6 +18,7 @@ function canonicalizeComparableDir(dirPath: string): string {
   }
 }
 
+/** Verifies secure npm install staging uses ignore-scripts and the expected target parent. */
 export function expectSingleNpmInstallIgnoreScriptsCall(params: {
   calls: Array<[unknown, { cwd?: string } | undefined]>;
   expectedTargetDir: string;

@@ -53,6 +53,8 @@ import {
   toError,
 } from "./types.js";
 
+// CoreAgentHarness coordinates session state, resources, tools, compaction, and
+// streaming callbacks around the lower-level agent loop.
 function createUserMessage(text: string, images?: ImageContent[]): UserMessage {
   const content: Array<{ type: "text"; text: string } | ImageContent> = [{ type: "text", text }];
   if (images) {
@@ -209,7 +211,8 @@ interface AgentHarnessTurnState<
   activeTools: TTool[];
 }
 
-export class AgentHarness<
+/** Stateful harness for running, steering, compacting, and navigating sessions. */
+export class CoreAgentHarness<
   TSkill extends Skill = Skill,
   TPromptTemplate extends PromptTemplate = PromptTemplate,
   TTool extends AgentTool = AgentTool,
@@ -1187,6 +1190,8 @@ export class AgentHarness<
     return () => handlers.delete(handler as AgentHarnessHandler);
   }
 }
+
+export { CoreAgentHarness as AgentHarness };
 
 function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {

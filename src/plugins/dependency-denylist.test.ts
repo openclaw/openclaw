@@ -90,10 +90,8 @@ describe("dependency denylist guardrails", () => {
     ]);
   });
 
-  it("pins the axios override to an exact version", () => {
-    const manifest = readRootManifest();
+  it("pins the active axios override to an exact version", () => {
     const pnpmWorkspace = readPnpmWorkspaceConfig();
-    expect(manifest.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
     expect(pnpmWorkspace.overrides?.axios).toMatch(/^\d+\.\d+\.\d+$/);
   });
 

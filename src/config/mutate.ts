@@ -38,6 +38,7 @@ import {
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 import { validateConfigObjectWithPlugins } from "./validation.js";
 
+/** Selects whether a mutation starts from runtime or source config shape. */
 export type ConfigMutationBase = "runtime" | "source";
 
 const CONFIG_MUTATION_LOCK_OPTIONS = {
@@ -55,6 +56,7 @@ const DEFAULT_CONFIG_MUTATION_RETRY_ATTEMPTS = 5;
 const activeConfigMutationLocks = new AsyncLocalStorage<Set<string>>();
 const configMutationQueueTails = new Map<string, Promise<void>>();
 
+/** Raised when a config write loses an optimistic hash race. */
 export class ConfigMutationConflictError extends Error {
   readonly currentHash: string | null;
 

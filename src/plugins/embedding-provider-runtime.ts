@@ -16,10 +16,12 @@ const OPENAI_COMPATIBLE_MODEL_APIS = new Set(["openai-completions", "openai-resp
 
 export { listRegisteredEmbeddingProviders };
 
+/** Lists embedding provider adapters registered directly with the process registry. */
 export function listRegisteredEmbeddingProviderAdapters(): EmbeddingProviderAdapter[] {
   return listRegisteredEmbeddingProviders().map((entry) => entry.adapter);
 }
 
+/** Lists embedding providers from registered adapters and plugin capabilities. */
 export function listEmbeddingProviders(cfg?: OpenClawConfig): EmbeddingProviderAdapter[] {
   return listRuntimeEmbeddingProviderAdapters({
     key: "embeddingProviders",
@@ -52,6 +54,7 @@ function resolveEmbeddingProviderLookupIds(id: string, cfg?: OpenClawConfig): st
   });
 }
 
+/** Resolves one embedding provider adapter by id, including configured API aliases. */
 export function getEmbeddingProvider(
   id: string,
   cfg?: OpenClawConfig,

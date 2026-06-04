@@ -104,6 +104,7 @@ export function createSubscriptionMock(): SubscriptionMock {
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
+    waitForPendingEvents: async () => {},
     getAcceptedSessionSpawns: () => [],
     getMessagingToolSentTexts: () => [] as string[],
     getMessagingToolSentMediaUrls: () => [] as string[],
@@ -681,6 +682,7 @@ vi.mock("../../tool-policy.js", async (importOriginal) => {
 vi.mock("../../transcript-policy.js", () => ({
   resolveTranscriptPolicy: () => ({
     allowSyntheticToolResults: false,
+    repairToolUseResultPairing: true,
   }),
   shouldAllowProviderOwnedThinkingReplay: () => false,
 }));

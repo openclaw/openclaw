@@ -11,6 +11,7 @@ import type {
   WriteManagerSessionMeta,
 } from "./manager.types.js";
 
+/** Detects acpx exits that are safe to retry with a fresh runtime handle. */
 export function isRecoverableManagerAcpxExitError(message: string): boolean {
   return /^acpx exited with (code \d+|signal [a-z0-9]+)/i.test(message.trim());
 }

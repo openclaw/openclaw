@@ -27,6 +27,7 @@ const moduleWithResolver = Module as typeof Module & {
   }) => { deregister: () => void };
 };
 
+/** True for file extensions Node can load through the native JS module loader. */
 export function isJavaScriptModulePath(modulePath: string): boolean {
   return [".js", ".mjs", ".cjs"].includes(path.extname(modulePath).toLowerCase());
 }
@@ -55,6 +56,7 @@ function isSourceTransformFallbackError(error: unknown, modulePath: string): boo
   );
 }
 
+/** Attempts native require before falling back to source transform paths. */
 export function tryNativeRequireJavaScriptModule(
   modulePath: string,
   options: {
@@ -87,6 +89,7 @@ export function tryNativeRequireJavaScriptModule(
   }
 }
 
+/** Clears a native-loaded module and dependency subtree under the plugin dependency root. */
 export function clearNativeRequireJavaScriptModuleCache(
   modulePath: string,
   options: { dependencyRoot?: string } = {},
@@ -146,6 +149,7 @@ function requireWithOptionalAliases(
   return withNativeRequireAliases(aliasMap, () => nodeRequire(modulePath));
 }
 
+/** Runs a native require block with temporary CJS/ESM alias hooks and restores both afterward. */
 export function withNativeRequireAliases<T>(
   aliasMap: Record<string, string> | undefined,
   run: () => T,

@@ -13,6 +13,7 @@ import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/ma
 import type { PluginManifestSecretProviderIntegration } from "../plugins/manifest.js";
 import { isValidSecretProviderAlias } from "./ref-contract.js";
 
+/** Secret provider preset exposed by an active trusted plugin integration. */
 export type SecretProviderIntegrationPreset = {
   id: string;
   pluginId: string;
@@ -22,6 +23,7 @@ export type SecretProviderIntegrationPreset = {
   providerConfig: PluginIntegrationSecretProviderConfig;
 };
 
+/** Result of materializing a plugin integration into a manual exec provider config. */
 export type SecretProviderIntegrationResolution =
   | {
       ok: true;
@@ -60,6 +62,8 @@ function resolveArg(arg: string, pluginRoot: string): string | undefined {
 }
 
 function withNodeCommandTrustedDir(command: string, pluginRoot: string): string[] {
+  // The ${node} placeholder executes the current Node binary with a plugin-owned entrypoint.
+  // Trust both the Node binary dir and plugin root so resolver path checks accept that shape.
   return command === NODE_COMMAND_PLACEHOLDER
     ? [...new Set([path.dirname(process.execPath), pluginRoot])]
     : [pluginRoot];
@@ -112,6 +116,8 @@ function isSecurePluginEntrypointPath(params: {
     return false;
   }
 
+  // Validate both lexical and realpath parent chains. The lexical chain catches symlink tricks
+  // inside the plugin tree; the realpath chain catches world-writable resolved directories.
   let originalDir = path.resolve(params.pluginRoot);
   for (const [index, segment] of ["", ...originalSegments].entries()) {
     if (segment) {
@@ -292,6 +298,7 @@ function isValidPluginIntegrationProviderId(value: string): boolean {
   return value.length > 0 && value.length <= PLUGIN_INTEGRATION_PROVIDER_ID_MAX_LENGTH;
 }
 
+/** Narrows a secret provider config to the plugin-integration exec shape. */
 export function isPluginIntegrationSecretProviderConfig(
   value: unknown,
 ): value is PluginIntegrationSecretProviderConfig {
@@ -312,6 +319,7 @@ export function isPluginIntegrationSecretProviderConfig(
   );
 }
 
+/** Materializes an active trusted plugin secret-provider integration into an exec provider. */
 export function resolveSecretProviderIntegrationConfig(params: {
   manifestRegistry: Pick<PluginManifestRegistry, "plugins">;
   providerAlias: string;
@@ -362,6 +370,7 @@ export function resolveSecretProviderIntegrationConfig(params: {
   };
 }
 
+/** Lists plugin secret-provider presets available to interactive configure flows. */
 export function listSecretProviderIntegrationPresets(params: {
   manifestRegistry: Pick<PluginManifestRegistry, "plugins">;
   config?: OpenClawConfig;

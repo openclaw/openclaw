@@ -19,6 +19,7 @@ const MAX_BACKEND_OPTION_VALUE_LENGTH = 512;
 const MAX_BACKEND_EXTRAS = 32;
 
 const SAFE_OPTION_KEY_RE = /^[a-z0-9][a-z0-9._:-]*$/i;
+// User-facing config aliases accepted by ACP clients and normalized to session runtime options.
 const RUNTIME_CONFIG_OPTION_ALIASES = {
   model: ["model"],
   thinking: ["thinking", "effort", "reasoning_effort", "thought_level"],

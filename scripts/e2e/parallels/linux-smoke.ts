@@ -10,6 +10,7 @@ import {
   parseBoolEnv,
   parseMode,
   parseProvider,
+  readPositiveIntEnv,
   modelProviderConfigBatchJson,
   posixProviderOnlyPluginIsolationScript,
   repoRoot,
@@ -21,6 +22,7 @@ import {
   say,
   shellQuote,
   warn,
+  withProgressOnStderr,
   writeJson,
   writeSummaryMarkdown,
   type Mode,
@@ -234,6 +236,10 @@ function stripLeadingPackageManagerSeparator(argv: string[]): string[] {
 class LinuxSmoke extends SmokeRunController<LinuxOptions> {
   private auth: ProviderAuth;
   private disableBonjour = parseBoolEnv(process.env.OPENCLAW_PARALLELS_LINUX_DISABLE_BONJOUR);
+  private agentTimeoutSeconds = readPositiveIntEnv(
+    "OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S",
+    1500,
+  );
   private artifact: PackageArtifact | null = null;
   private latestVersion = "";
   private snapshot!: SnapshotInfo;
@@ -320,10 +326,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     await this.phase("fresh.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.freshGateway = "pass";
-    await this.phase(
-      "fresh.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
-      () => this.verifyLocalTurn(),
+    await this.phase("fresh.first-local-agent-turn", this.agentTimeoutSeconds, () =>
+      this.verifyLocalTurn(),
     );
     this.status.freshAgent = "pass";
   }
@@ -352,10 +356,8 @@ class LinuxSmoke extends SmokeRunController<LinuxOptions> {
     );
     await this.phase("upgrade.gateway-status", 240, () => this.verifyGatewayStatus());
     this.status.upgradeGateway = "pass";
-    await this.phase(
-      "upgrade.first-local-agent-turn",
-      Number(process.env.OPENCLAW_PARALLELS_LINUX_AGENT_TIMEOUT_S || 1500),
-      () => this.verifyLocalTurn(),
+    await this.phase("upgrade.first-local-agent-turn", this.agentTimeoutSeconds, () =>
+      this.verifyLocalTurn(),
     );
     this.status.upgradeAgent = "pass";
   }
@@ -827,5 +829,6 @@ fi`,
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
   const options = parseArgs(process.argv.slice(2));
   await mkdir(repoRoot, { recursive: true });
-  await new LinuxSmoke(options).run();
+  const runSmoke = () => new LinuxSmoke(options).run();
+  await (options.json ? withProgressOnStderr(runSmoke) : runSmoke());
 }

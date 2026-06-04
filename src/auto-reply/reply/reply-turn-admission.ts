@@ -6,8 +6,10 @@ import {
   type ReplyOperation,
 } from "./reply-run-registry.js";
 
+/** Kinds of turns that compete for one reply run slot per session. */
 export type ReplyTurnKind = "visible" | "heartbeat" | "queued_followup" | "control_abort";
 
+/** Admission result for a reply turn attempting to own the session run slot. */
 export type ReplyTurnAdmission =
   | { status: "owned"; operation: ReplyOperation }
   | {
@@ -20,6 +22,7 @@ function isAbortSignalAborted(signal: AbortSignal | undefined): boolean {
   return signal?.aborted === true;
 }
 
+/** Waits for or claims the per-session reply run slot. */
 export async function admitReplyTurn(params: {
   sessionKey: string;
   sessionId: string;
@@ -54,6 +57,7 @@ export async function admitReplyTurn(params: {
       if (params.kind === "heartbeat" || params.kind === "control_abort") {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
+      // Visible and queued turns may wait for active runs; control turns must stay immediate.
       if (params.waitForActive === false) {
         return { status: "skipped", reason: "active-run", activeOperation };
       }
@@ -77,6 +81,7 @@ export async function admitReplyTurn(params: {
   }
 }
 
+/** Resolves the default turn kind from reply options. */
 export function resolveReplyTurnKind(opts?: { isHeartbeat?: boolean }): ReplyTurnKind {
   return opts?.isHeartbeat === true ? "heartbeat" : "visible";
 }
