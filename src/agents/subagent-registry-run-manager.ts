@@ -153,6 +153,7 @@ export type RegisterSubagentRunParams = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  completionSource?: "gateway_dispatch";
 };
 
 export function createSubagentRunManager(params: {
@@ -704,7 +705,9 @@ export function createSubagentRunManager(params: {
     params.startSweeper();
     // Wait for subagent completion via gateway RPC (cross-process).
     // The in-process lifecycle listener is a fallback for embedded runs.
-    void waitForSubagentCompletion(runId, waitTimeoutMs, entry);
+    if (registerParams.completionSource !== "gateway_dispatch") {
+      void waitForSubagentCompletion(runId, waitTimeoutMs, entry);
+    }
   };
 
   const releaseSubagentRun = (runId: string) => {

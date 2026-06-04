@@ -231,7 +231,7 @@ function buildDeliveryState(
     };
   }
   return {
-    status: typeof entry.endedAt === "number" ? "pending" : "not_required",
+    status: "pending",
     enqueuedAt: legacy.completionEnqueuedAt,
     deliveredAt: legacy.completionDeliveredAt,
     lastAttemptAt: legacy.lastAnnounceRetryAt,

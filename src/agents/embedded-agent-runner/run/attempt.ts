@@ -211,13 +211,17 @@ import {
   createToolSearchCatalogRef,
   projectToolSearchTargetTranscriptMessages,
   resolveToolSearchConfig,
-  type ToolSearchCatalogRef,
-  type ToolSearchCatalogToolExecutor,
-  type ToolSearchTargetTranscriptProjection,
+} from "../../tool-search.js";
+import type {
+  ToolSearchCatalogRef,
+  ToolSearchCatalogToolExecutor,
+  ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
-import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
-import { DEFAULT_BOOTSTRAP_FILENAME, type WorkspaceBootstrapFile } from "../../workspace.js";
+import type { NormalizedUsage } from "../../usage.js";
+import { normalizeUsage } from "../../usage.js";
+import type { WorkspaceBootstrapFile } from "../../workspace.js";
+import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
 import { isRunnerAbortError } from "../abort.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "../cache-ttl.js";
 import { resolveCompactionTimeoutMs } from "../compaction-safety-timeout.js";
@@ -2073,6 +2077,7 @@ export async function runEmbeddedAttempt(
       // that must be passed to the resource loader for the safeguard to be active.
       const extensionFactories = buildEmbeddedExtensionFactories({
         cfg: params.config,
+        agentId: sessionAgentId,
         sessionManager,
         provider: params.provider,
         modelId: params.modelId,

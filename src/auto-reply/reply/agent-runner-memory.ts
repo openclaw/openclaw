@@ -55,7 +55,8 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { readPostCompactionContext } from "./post-compaction-context.js";
-import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
+import type { FollowupRun } from "./queue.js";
+import { refreshQueuedFollowupSession } from "./queue.js";
 import { isRenderablePayload } from "./reply-payloads-base.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
@@ -737,7 +738,10 @@ export async function runPreflightCompactionIfNeeded(params: {
     modelId: params.followupRun.run.model ?? params.defaultModel,
     agentCfgContextTokens: params.agentCfgContextTokens,
   });
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const memoryFlushPlan = resolveMemoryFlushPlan({
+    cfg: params.cfg,
+    agentId: params.followupRun.run.agentId,
+  });
   const reserveTokensFloor =
     memoryFlushPlan?.reserveTokensFloor ??
     params.cfg.agents?.defaults?.compaction?.reserveTokensFloor ??
@@ -969,7 +973,10 @@ export async function runMemoryFlushIfNeeded(params: {
   replyOperation: ReplyOperation;
   onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<SessionEntry | undefined> {
-  const memoryFlushPlan = resolveMemoryFlushPlan({ cfg: params.cfg });
+  const memoryFlushPlan = resolveMemoryFlushPlan({
+    cfg: params.cfg,
+    agentId: params.followupRun.run.agentId,
+  });
   if (!memoryFlushPlan) {
     return params.sessionEntry;
   }
@@ -1185,6 +1192,7 @@ export async function runMemoryFlushIfNeeded(params: {
   const activeMemoryFlushPlan =
     resolveMemoryFlushPlan({
       cfg: params.cfg,
+      agentId: params.followupRun.run.agentId,
       nowMs: memoryFlushNowMs,
     }) ?? memoryFlushPlan;
   const memoryFlushWritePath = activeMemoryFlushPlan.relativePath;

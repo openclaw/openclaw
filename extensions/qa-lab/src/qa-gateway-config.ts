@@ -129,7 +129,7 @@ export function buildQaGatewayConfig(params: {
     plugins: {
       allow: allowedPlugins,
       slots: {
-        memory: "memory-core",
+        "memory.recall": "memory-core",
       },
       entries: {
         acpx: {

@@ -303,6 +303,18 @@ const PluginEntrySchema = z
   })
   .strict();
 
+const PluginSlotsSchema = z
+  .object({
+    memory: z.string().optional(),
+    "memory.recall": z.string().optional(),
+    "memory.compaction": z.string().optional(),
+    "memory.capture": z.string().optional(),
+    "memory.dreaming": z.string().optional(),
+    "memory.userModel": z.string().optional(),
+    contextEngine: z.string().optional(),
+  })
+  .strict();
+
 const TalkProviderEntrySchema = z
   .object({
     apiKey: SecretInputSchema.optional().register(sensitive),
@@ -1277,13 +1289,7 @@ export const OpenClawSchema = z
           })
           .strict()
           .optional(),
-        slots: z
-          .object({
-            memory: z.string().optional(),
-            contextEngine: z.string().optional(),
-          })
-          .strict()
-          .optional(),
+        slots: PluginSlotsSchema.optional(),
         entries: z.record(z.string(), PluginEntrySchema).optional(),
         bundledDiscovery: z.enum(["compat", "allowlist"]).optional(),
       })

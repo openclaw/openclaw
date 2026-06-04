@@ -1,6 +1,7 @@
 import type { CompactEmbeddedAgentSessionDirect } from "../agents/embedded-agent-runner/compact.runtime.types.js";
 import { normalizeStructuredPromptSection } from "../agents/prompt-cache-stability.js";
 import type { MemoryCitationsMode } from "../config/types.memory.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildMemoryPromptSection } from "../plugins/memory-state.js";
 import type { ContextEngine, CompactResult, ContextEngineRuntimeContext } from "./types.js";
 
@@ -90,10 +91,14 @@ export async function delegateCompactionToRuntime(
 export function buildMemorySystemPromptAddition(params: {
   availableTools: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  cfg?: OpenClawConfig;
+  agentId?: string;
 }): string | undefined {
   const lines = buildMemoryPromptSection({
     availableTools: params.availableTools,
     citationsMode: params.citationsMode,
+    cfg: params.cfg,
+    agentId: params.agentId,
   });
   if (lines.length === 0) {
     return undefined;
