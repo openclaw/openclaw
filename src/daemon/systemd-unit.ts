@@ -1,6 +1,7 @@
 /** Renders and parses systemd unit snippets for managed gateway services. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS } from "./service-stop-timeout.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
 const SYSTEMD_LINE_BREAKS = /[\r\n]/;
@@ -78,7 +79,7 @@ export function buildSystemdUnit({
     "Restart=always",
     "RestartSec=5",
     "RestartPreventExitStatus=78",
-    "TimeoutStopSec=330",
+    `TimeoutStopSec=${GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS}`,
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
     // Let the gateway drain active runs before systemd terminates child

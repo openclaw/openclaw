@@ -1,5 +1,6 @@
 // Systemd unit tests cover generated systemd unit files.
 import { describe, expect, it } from "vitest";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS } from "./service-stop-timeout.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 
 describe("buildSystemdUnit", () => {
@@ -20,7 +21,7 @@ describe("buildSystemdUnit", () => {
       environment: {},
     });
     expect(unit).toContain("KillMode=mixed");
-    expect(unit).toContain("TimeoutStopSec=330");
+    expect(unit).toContain(`TimeoutStopSec=${GATEWAY_SERVICE_STOP_TIMEOUT_SECONDS}`);
     expect(unit).toContain("TimeoutStartSec=30");
     expect(unit).toContain("SuccessExitStatus=0 143");
     expect(unit).toContain("StartLimitBurst=5");
