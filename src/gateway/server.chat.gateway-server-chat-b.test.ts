@@ -784,7 +784,7 @@ describe("gateway server chat", () => {
     },
   );
 
-  test("chat.send reuses an active internal run for duplicate WebChat text sends", async () => {
+  test("chat.send reuses only active WebChat text sends with the same system context", async () => {
     const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
     const dispatchRelease = createDeferred<void>();
     try {
@@ -827,7 +827,7 @@ describe("gateway server chat", () => {
       dispatchInboundMessageMock.mockImplementation(async () => dispatchRelease.promise);
 
       const { chatHandlers } = await import("./server-methods/chat.js");
-      const callSend = (id: string, idempotencyKey: string) =>
+      const callSend = (id: string, idempotencyKey: string, systemProvenanceReceipt?: string) =>
         chatHandlers["chat.send"]({
           req: {
             type: "req",
@@ -837,12 +837,14 @@ describe("gateway server chat", () => {
               sessionKey: "main",
               message: "?",
               idempotencyKey,
+              ...(systemProvenanceReceipt ? { systemProvenanceReceipt } : {}),
             },
           },
           params: {
             sessionKey: "main",
             message: "?",
             idempotencyKey,
+            ...(systemProvenanceReceipt ? { systemProvenanceReceipt } : {}),
           },
           client: {
             connect: {
@@ -850,7 +852,7 @@ describe("gateway server chat", () => {
                 id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
                 mode: GATEWAY_CLIENT_MODES.WEBCHAT,
               },
-              scopes: ["operator.write"],
+              scopes: ["operator.write", "operator.admin"],
             },
           } as never,
           isWebchatConnect: () => true,
@@ -908,10 +910,56 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
 
+      const withSystemContext = Promise.resolve(
+        callSend("system-context", "idem-active-c", "proposal=support-file-sampler-b"),
+      );
+
+      await vi.waitFor(
+        () => {
+          expect(responses).toEqual([
+            {
+              id: "first",
+              ok: true,
+              payload: expect.objectContaining({
+                runId: "idem-active-a",
+                status: "started",
+                serverTiming: {
+                  receivedToAckMs: expect.any(Number),
+                  loadSessionMs: expect.any(Number),
+                },
+              }),
+              error: undefined,
+            },
+            {
+              id: "duplicate",
+              ok: true,
+              payload: { runId: "idem-active-a", status: "in_flight" },
+              error: undefined,
+            },
+            {
+              id: "system-context",
+              ok: true,
+              payload: expect.objectContaining({
+                runId: "idem-active-c",
+                status: "started",
+                serverTiming: {
+                  receivedToAckMs: expect.any(Number),
+                  loadSessionMs: expect.any(Number),
+                },
+              }),
+              error: undefined,
+            },
+          ]);
+        },
+        { timeout: 2_000, interval: 5 },
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
+      expect(context.addChatRun).toHaveBeenCalledTimes(2);
+
       dispatchRelease.resolve();
-      await first;
+      await Promise.all([first, withSystemContext]);
       await vi.waitFor(() => {
-        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+        expect(context.removeChatRun).toHaveBeenCalledTimes(2);
       }, FAST_WAIT_OPTS);
     } finally {
       dispatchRelease.resolve();

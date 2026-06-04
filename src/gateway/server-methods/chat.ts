@@ -521,6 +521,7 @@ function buildActiveChatSendDedupeKey(params: {
   message: string;
   originatingChannel: string;
   sessionKey: string;
+  systemScope?: string;
 }): string | null {
   const message = params.message.trim();
   if (
@@ -532,8 +533,11 @@ function buildActiveChatSendDedupeKey(params: {
   ) {
     return null;
   }
+  const dedupeParts = params.systemScope?.trim()
+    ? [params.sessionKey, message, params.systemScope.trim()]
+    : [params.sessionKey, message];
   const digest = createHash("sha256")
-    .update(JSON.stringify([params.sessionKey, message]))
+    .update(JSON.stringify(dedupeParts))
     .digest("hex")
     .slice(0, 32);
   return `${ACTIVE_CHAT_SEND_DEDUPE_PREFIX}:${digest}`;
@@ -3116,6 +3120,10 @@ export const chatHandlers: GatewayRequestHandlers = {
     const inboundMessage = sanitizedMessageResult.message;
     const systemInputProvenance = normalizeInputProvenance(p.systemInputProvenance);
     const systemProvenanceReceipt = systemReceiptResult.receipt;
+    const systemDedupeScope =
+      systemInputProvenance || systemProvenanceReceipt
+        ? JSON.stringify([systemProvenanceReceipt ?? null, systemInputProvenance ?? null])
+        : undefined;
     const stopCommand = isChatStopCommandText(inboundMessage);
     const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(p.attachments);
     const rawMessage = inboundMessage.trim();
@@ -3284,6 +3292,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       message: rawMessage,
       originatingChannel: originatingRoute.originatingChannel,
       sessionKey: activeRunScopeKey,
+      systemScope: systemDedupeScope,
     });
     if (activeChatSendDedupeKey) {
       const activeRunId = resolveActiveChatSendRunId(
