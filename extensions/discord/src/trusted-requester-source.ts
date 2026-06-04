@@ -26,8 +26,15 @@ export function requiresDiscordTrustedRequesterForAction(action: string): boolea
 }
 
 export function isDiscordTrustedRequesterSource(
-  toolContext: { currentChannelProvider?: string | null } | undefined,
+  toolContext:
+    | {
+        currentChannelProvider?: string | null;
+        requesterSourceProvider?: string | null;
+      }
+    | undefined,
 ): boolean {
-  const provider = normalizeOptionalString(toolContext?.currentChannelProvider)?.toLowerCase();
+  const provider = normalizeOptionalString(
+    toolContext?.requesterSourceProvider ?? toolContext?.currentChannelProvider,
+  )?.toLowerCase();
   return provider ? trustedRequesterProviders.has(provider) : false;
 }

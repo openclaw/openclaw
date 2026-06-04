@@ -494,6 +494,7 @@ describe("runMessageAction plugin dispatch", () => {
         inboundEventKind: "room_event",
         toolContext: {
           currentChannelProvider: "gatewaychat",
+          requesterSourceProvider: "gatewaychat-voice",
           currentMessageId: "wamid.1",
         },
         gateway: {
@@ -528,6 +529,7 @@ describe("runMessageAction plugin dispatch", () => {
         readRecordField(gatewayParams, "toolContext", "gateway tool context"),
         {
           currentChannelProvider: "gatewaychat",
+          requesterSourceProvider: "gatewaychat-voice",
           currentMessageId: "wamid.1",
         },
         "gateway tool context",

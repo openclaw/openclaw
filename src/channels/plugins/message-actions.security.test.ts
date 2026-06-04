@@ -69,7 +69,10 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
       ]),
     );
 
-    for (const currentChannelProvider of ["discord", "discord-voice"] as const) {
+    for (const toolContext of [
+      { currentChannelProvider: "discord" },
+      { currentChannelProvider: "discord", requesterSourceProvider: "discord-voice" },
+    ] as const) {
       for (const action of ["timeout", "kick", "ban"] as const) {
         await expect(
           dispatchChannelMessageAction({
@@ -84,7 +87,7 @@ describe("dispatchChannelMessageAction trusted sender guard", () => {
               },
             } as OpenClawConfig,
             params: { guildId: "g1", userId: "u1" },
-            toolContext: { currentChannelProvider },
+            toolContext,
           }),
         ).rejects.toThrow(`Trusted sender identity is required for discord:${action}`);
       }

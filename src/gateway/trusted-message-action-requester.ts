@@ -17,7 +17,7 @@ function signPayload(encodedPayload: string): string {
 
 function encodePayload(params: {
   requesterSenderId?: string;
-  currentChannelProvider?: string;
+  requesterSourceProvider?: string;
   senderIsOwner: boolean;
 }) {
   return Buffer.from(JSON.stringify({ v: 1, ...params }), "utf8").toString("base64url");
@@ -25,7 +25,7 @@ function encodePayload(params: {
 
 function readPayload(encodedPayload: string): {
   requesterSenderId: string | undefined;
-  currentChannelProvider: string | undefined;
+  requesterSourceProvider: string | undefined;
   senderIsOwner: boolean;
 } | null {
   try {
@@ -36,34 +36,45 @@ function readPayload(encodedPayload: string): {
     const requesterSenderId = normalizeOptionalString(
       (decoded as { requesterSenderId?: unknown }).requesterSenderId as string | undefined,
     );
-    const currentChannelProvider = normalizeOptionalLowercaseString(
-      (decoded as { currentChannelProvider?: unknown }).currentChannelProvider as
+    const requesterSourceProvider = normalizeOptionalLowercaseString(
+      (decoded as { requesterSourceProvider?: unknown }).requesterSourceProvider as
         | string
         | undefined,
     );
     const senderIsOwner = (decoded as { senderIsOwner?: unknown }).senderIsOwner === true;
-    return (requesterSenderId && currentChannelProvider) || senderIsOwner
-      ? { requesterSenderId, currentChannelProvider, senderIsOwner }
+    return (requesterSenderId && requesterSourceProvider) || senderIsOwner
+      ? { requesterSenderId, requesterSourceProvider, senderIsOwner }
       : null;
   } catch {
     return null;
   }
 }
 
+function resolveRequesterSourceProvider(params: {
+  requesterSourceProvider?: string | null;
+  currentChannelProvider?: string | null;
+}): string | undefined {
+  return (
+    normalizeOptionalLowercaseString(params.requesterSourceProvider) ??
+    normalizeOptionalLowercaseString(params.currentChannelProvider)
+  );
+}
+
 export function createTrustedMessageActionRequesterToken(params: {
   requesterSenderId?: string | null;
+  requesterSourceProvider?: string | null;
   currentChannelProvider?: string | null;
   senderIsOwner?: boolean;
 }): string | undefined {
   const requesterSenderId = normalizeOptionalString(params.requesterSenderId);
-  const currentChannelProvider = normalizeOptionalLowercaseString(params.currentChannelProvider);
+  const requesterSourceProvider = resolveRequesterSourceProvider(params);
   const senderIsOwner = params.senderIsOwner === true;
-  if ((!requesterSenderId || !currentChannelProvider) && !senderIsOwner) {
+  if ((!requesterSenderId || !requesterSourceProvider) && !senderIsOwner) {
     return undefined;
   }
   const encodedPayload = encodePayload({
-    ...(requesterSenderId && currentChannelProvider
-      ? { requesterSenderId, currentChannelProvider }
+    ...(requesterSenderId && requesterSourceProvider
+      ? { requesterSenderId, requesterSourceProvider }
       : {}),
     senderIsOwner,
   });
@@ -92,6 +103,7 @@ function readVerifiedPayload(token?: string | null): ReturnType<typeof readPaylo
 export function verifyTrustedMessageActionRequesterToken(params: {
   token?: string | null;
   requesterSenderId?: string | null;
+  requesterSourceProvider?: string | null;
   currentChannelProvider?: string | null;
 }): boolean {
   const payload = readVerifiedPayload(params.token);
@@ -100,8 +112,7 @@ export function verifyTrustedMessageActionRequesterToken(params: {
   }
   return (
     payload.requesterSenderId === normalizeOptionalString(params.requesterSenderId) &&
-    payload.currentChannelProvider ===
-      normalizeOptionalLowercaseString(params.currentChannelProvider)
+    payload.requesterSourceProvider === resolveRequesterSourceProvider(params)
   );
 }
 

@@ -710,6 +710,7 @@ async function runGatewayPluginMessageActionOrNull(params: {
       requesterSenderId: params.input.requesterSenderId ?? undefined,
       trustedRequesterToken: createTrustedMessageActionRequesterToken({
         requesterSenderId: params.input.requesterSenderId,
+        requesterSourceProvider: params.input.toolContext?.requesterSourceProvider,
         currentChannelProvider: params.input.toolContext?.currentChannelProvider,
         senderIsOwner: params.input.senderIsOwner,
       }),

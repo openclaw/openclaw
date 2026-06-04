@@ -73,6 +73,9 @@ export const MessageActionToolContextSchema = Type.Object(
     currentChannelId: Type.Optional(Type.String()),
     currentGraphChannelId: Type.Optional(Type.String()),
     currentChannelProvider: Type.Optional(Type.String()),
+    // Inbound requester source provider when it differs from the deliverable
+    // channel provider. Routing continues to use currentChannelProvider.
+    requesterSourceProvider: Type.Optional(Type.String()),
     currentThreadTs: Type.Optional(Type.String()),
     currentMessageId: Type.Optional(Type.Union([Type.String(), Type.Number()])),
     replyToMode: Type.Optional(

@@ -828,6 +828,7 @@ type MessageToolOptions = {
   runMessageAction?: typeof runMessageAction;
   currentChannelId?: string;
   currentChannelProvider?: string;
+  requesterSourceProvider?: string;
   currentThreadTs?: string;
   agentThreadId?: string | number;
   currentMessageId?: string | number;
@@ -1360,10 +1361,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         hasCurrentMessageId ||
         replyToMode ||
         options?.hasRepliedRef ||
-        options?.sameChannelThreadRequired
+        options?.sameChannelThreadRequired ||
+        options?.requesterSourceProvider
           ? {
               currentChannelId: effectiveCurrentChannel.currentChannelId,
               currentChannelProvider: effectiveCurrentChannel.currentChannelProvider,
+              requesterSourceProvider: options?.requesterSourceProvider,
               currentThreadTs,
               currentMessageId: options?.currentMessageId,
               replyToMode,

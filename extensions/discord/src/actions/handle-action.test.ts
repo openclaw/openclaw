@@ -91,7 +91,10 @@ describe("handleDiscordMessageAction", () => {
       },
       cfg,
       requesterSenderId: "voice-speaker-id",
-      toolContext: { currentChannelProvider: "discord-voice" },
+      toolContext: {
+        currentChannelProvider: "discord",
+        requesterSourceProvider: "discord-voice",
+      },
     });
 
     expectDiscordActionCall({

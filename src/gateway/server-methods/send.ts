@@ -472,6 +472,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       toolContext?: {
         currentChannelId?: string;
         currentChannelProvider?: string;
+        requesterSourceProvider?: string;
         currentThreadTs?: string;
         currentMessageId?: string | number;
       };
@@ -518,6 +519,7 @@ export const sendHandlers: GatewayRequestHandlers = {
         const trustedRequester = verifyTrustedMessageActionRequesterToken({
           token: request.trustedRequesterToken,
           requesterSenderId,
+          requesterSourceProvider: request.toolContext?.requesterSourceProvider,
           currentChannelProvider: request.toolContext?.currentChannelProvider,
         });
         const trustedOwner = verifyTrustedMessageActionOwnerToken({

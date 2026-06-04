@@ -141,12 +141,15 @@ describe("discordMessageActions", () => {
   });
 
   it("requires trusted requester sender for privileged guild admin actions only from Discord-owned turns", () => {
-    for (const currentChannelProvider of ["discord", "discord-voice"] as const) {
+    for (const toolContext of [
+      { currentChannelProvider: "discord" },
+      { currentChannelProvider: "discord", requesterSourceProvider: "discord-voice" },
+    ] as const) {
       for (const action of ["timeout", "kick", "ban"] as const) {
         expect(
           discordMessageActions.requiresTrustedRequesterSender?.({
             action,
-            toolContext: { currentChannelProvider },
+            toolContext,
           }),
         ).toBe(true);
       }
@@ -154,7 +157,10 @@ describe("discordMessageActions", () => {
     expect(
       discordMessageActions.requiresTrustedRequesterSender?.({
         action: "channel-delete",
-        toolContext: { currentChannelProvider: "discord-voice" },
+        toolContext: {
+          currentChannelProvider: "discord",
+          requesterSourceProvider: "discord-voice",
+        },
       }),
     ).toBe(true);
     expect(

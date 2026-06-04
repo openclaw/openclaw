@@ -123,6 +123,7 @@ type RunMessageActionInput = {
   toolContext?: {
     currentChannelId?: string;
     currentChannelProvider?: string;
+    requesterSourceProvider?: string;
     currentThreadTs?: string;
     replyToMode?: string;
   };
@@ -526,7 +527,8 @@ describe("message tool secret scoping", () => {
 
     const call = firstRunMessageActionInput();
     expect(call?.requesterSenderId).toBe("voice-speaker-id");
-    expect(call?.toolContext?.currentChannelProvider).toBe("discord-voice");
+    expect(call?.toolContext?.currentChannelProvider).toBe("discord");
+    expect(call?.toolContext?.requesterSourceProvider).toBe("discord-voice");
     expect(call?.toolContext?.currentChannelId).toBe("channel:voice-control");
   });
 

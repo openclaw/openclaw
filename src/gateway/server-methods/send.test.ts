@@ -1591,10 +1591,12 @@ describe("gateway send mirroring", () => {
         senderIsOwner: true,
         trustedRequesterToken: createTrustedMessageActionRequesterToken({
           requesterSenderId: "trusted-user",
+          requesterSourceProvider: "whatsapp-voice",
           currentChannelProvider: "whatsapp",
         }),
         toolContext: {
           currentChannelProvider: "whatsapp",
+          requesterSourceProvider: "whatsapp-voice",
         },
         idempotencyKey: "idem-message-action-backend",
       },

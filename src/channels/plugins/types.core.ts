@@ -492,6 +492,11 @@ export type ChannelThreadingToolContext = {
   currentChannelId?: string;
   currentGraphChannelId?: string;
   currentChannelProvider?: ChannelId;
+  /**
+   * Inbound requester source provider when it differs from the deliverable channel provider.
+   * This is context for trust checks only; routing continues to use currentChannelProvider.
+   */
+  requesterSourceProvider?: string;
   currentThreadTs?: string;
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
