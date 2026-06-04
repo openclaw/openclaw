@@ -1,6 +1,35 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+
+const canCreateFileSymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-file-test-${Math.random().toString(36).substring(2)}`);
+    const tempFile = path.join(os.tmpdir(), `symlink-file-target-${Math.random().toString(36).substring(2)}`);
+    fsSync.writeFileSync(tempFile, "temp");
+    fsSync.symlinkSync(tempFile, tempLink, "file");
+    fsSync.unlinkSync(tempLink);
+    fsSync.unlinkSync(tempFile);
+    return true;
+  } catch {
+    return false;
+  }
+})();
+
+const canCreateDirectorySymlinks = (() => {
+  try {
+    const tempLink = path.join(os.tmpdir(), `symlink-dir-test-${Math.random().toString(36).substring(2)}`);
+    const tempDir = path.join(os.tmpdir(), `symlink-dir-target-${Math.random().toString(36).substring(2)}`);
+    fsSync.mkdirSync(tempDir);
+    fsSync.symlinkSync(tempDir, tempLink, process.platform === "win32" ? "junction" : "dir");
+    fsSync.unlinkSync(tempLink);
+    fsSync.rmdirSync(tempDir);
+    return true;
+  } catch {
+    return false;
+  }
+})();
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getWebAuthAgeMs,
@@ -114,20 +143,20 @@ describe("auth-store", () => {
     });
   });
 
-  it("refuses to restore creds from a symlinked backup path", async () => {
+  it.skipIf(!canCreateFileSymlinks)("refuses to restore creds from a symlinked backup path", async () => {
     const authDir = createTempAuthDir("openclaw-wa-auth-restore-symlink");
     const targetPath = path.join(authDir, "backup-target.json");
     const backupPath = path.join(authDir, "creds.json.bak");
     const credsPath = path.join(authDir, "creds.json");
     fsSync.writeFileSync(targetPath, JSON.stringify({ me: { id: "123@s.whatsapp.net" } }), "utf-8");
-    fsSync.symlinkSync(targetPath, backupPath);
+    fsSync.symlinkSync(targetPath, backupPath, "file");
     fsSync.writeFileSync(credsPath, "{", "utf-8");
 
     await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(false);
     expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{");
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "does not restore backup over a symlinked creds path",
     async () => {
       const authDir = createTempAuthDir("openclaw-wa-auth-restore-target-symlink");
@@ -135,7 +164,7 @@ describe("auth-store", () => {
       const credsPath = path.join(authDir, "creds.json");
       const backupPath = path.join(authDir, "creds.json.bak");
       fsSync.writeFileSync(targetPath, "{", "utf-8");
-      fsSync.symlinkSync(targetPath, credsPath);
+      fsSync.symlinkSync(targetPath, credsPath, "file");
       fsSync.writeFileSync(
         backupPath,
         JSON.stringify({ me: { id: "123@s.whatsapp.net" } }),
@@ -171,7 +200,7 @@ describe("auth-store", () => {
     });
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateFileSymlinks)(
     "treats symlinked creds as missing across auth readers",
     async () => {
       const authDir = createTempAuthDir("openclaw-wa-auth-symlink-read");
@@ -182,7 +211,7 @@ describe("auth-store", () => {
         JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
         "utf-8",
       );
-      fsSync.symlinkSync(targetPath, credsPath);
+      fsSync.symlinkSync(targetPath, credsPath, "file");
 
       expect(fsSync.lstatSync(credsPath).isSymbolicLink()).toBe(true);
       expect(fsSync.statSync(credsPath).isFile()).toBe(true);
@@ -205,7 +234,7 @@ describe("auth-store", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "treats creds under a symlinked auth directory as missing",
     async () => {
       const rootDir = createTempAuthDir("openclaw-wa-auth-symlink-parent");
@@ -217,7 +246,7 @@ describe("auth-store", () => {
         JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
         "utf-8",
       );
-      fsSync.symlinkSync(targetAuthDir, authDir, "dir");
+      fsSync.symlinkSync(targetAuthDir, authDir, process.platform === "win32" ? "junction" : "dir");
       const credsPath = path.join(authDir, "creds.json");
 
       expect(fsSync.lstatSync(authDir).isSymbolicLink()).toBe(true);
@@ -339,7 +368,7 @@ describe("auth-store", () => {
     expect(fsSync.existsSync(path.join(nestedDir, "session-abc.json"))).toBe(true);
   });
 
-  it("does not clear auth files through a symlinked owned auth directory", async () => {
+  it.skipIf(!canCreateDirectorySymlinks)("does not clear auth files through a symlinked owned auth directory", async () => {
     const previousOAuthDir = hoisted.oauthDir;
     const oauthDir = createTempAuthDir("openclaw-wa-auth-symlink-oauth");
     const externalDir = createTempAuthDir("openclaw-wa-auth-symlink-target");
@@ -348,7 +377,7 @@ describe("auth-store", () => {
       fsSync.mkdirSync(path.dirname(authDir), { recursive: true });
       fsSync.writeFileSync(path.join(externalDir, "creds.json"), "{}", "utf-8");
       fsSync.writeFileSync(path.join(externalDir, "notes.txt"), "keep me", "utf-8");
-      fsSync.symlinkSync(externalDir, authDir, "dir");
+      fsSync.symlinkSync(externalDir, authDir, process.platform === "win32" ? "junction" : "dir");
       hoisted.oauthDir = oauthDir;
       const runtime = {
         log: vi.fn(),
@@ -367,7 +396,7 @@ describe("auth-store", () => {
     }
   });
 
-  it("does not clear auth files through an intermediate symlink in the owned auth tree", async () => {
+  it.skipIf(!canCreateDirectorySymlinks)("does not clear auth files through an intermediate symlink in the owned auth tree", async () => {
     const previousOAuthDir = hoisted.oauthDir;
     const oauthDir = createTempAuthDir("openclaw-wa-auth-symlink-parent-oauth");
     const externalRoot = createTempAuthDir("openclaw-wa-auth-symlink-parent-target");
@@ -379,7 +408,7 @@ describe("auth-store", () => {
       fsSync.mkdirSync(externalAuthDir, { recursive: true });
       fsSync.writeFileSync(path.join(externalAuthDir, "creds.json"), "{}", "utf-8");
       fsSync.writeFileSync(path.join(externalAuthDir, "notes.txt"), "keep me", "utf-8");
-      fsSync.symlinkSync(externalRoot, linkedParent, "dir");
+      fsSync.symlinkSync(externalRoot, linkedParent, process.platform === "win32" ? "junction" : "dir");
       hoisted.oauthDir = oauthDir;
       const runtime = {
         log: vi.fn(),
