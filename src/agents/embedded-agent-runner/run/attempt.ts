@@ -4067,6 +4067,12 @@ export async function runEmbeddedAttempt(
             promptForRuntimeContextSplit,
             params.inputProvenance,
           );
+          // Runtime self-context is wrapped in internal-context delimiters that the split only
+          // strips back out when a transcript prompt exists (resolveRuntimeContextPromptParts gates
+          // extraction on transcriptPrompt !== undefined; see the "does not extract no-transcript
+          // delimiter text" case in runtime-context-prompt.test.ts). Appending without one would
+          // leak the raw block into the model and persisted transcript, so only inject when the
+          // split will actually hide it.
           if (transcriptPromptForRuntimeSplit !== undefined) {
             promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
               prompt: promptForRuntimeContextSplit,
