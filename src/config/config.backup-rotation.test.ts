@@ -72,7 +72,7 @@ describe("config backup rotation", () => {
   });
 
   // chmod is a no-op on Windows — 0o600 can never be observed there.
-  it.skipIf(IS_WINDOWS)("hardenBackupPermissions sets 0o600 on all backup files", async () => {
+  it("hardenBackupPermissions sets 0o600 on all backup files", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
 
