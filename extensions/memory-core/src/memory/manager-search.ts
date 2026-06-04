@@ -328,10 +328,9 @@ export async function searchKeyword(params: {
     return [];
   }
 
-  // Lexical FTS is model-agnostic (issue #48300): keyword hits must survive
-  // embedding provider/model changes. Vector search remains model-scoped.
-  const modelClause = "";
-  const modelParams: never[] = [];
+  // Lexical FTS is model-agnostic (issue #48300), but old databases may
+  // already contain orphaned FTS rows from prior model-scoped cleanup.
+  const liveChunkClause = ` AND EXISTS (SELECT 1 FROM chunks c WHERE c.id = ${params.ftsTable}.id)`;
   const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
 
@@ -353,14 +352,13 @@ export async function searchKeyword(params: {
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       bm25(${params.ftsTable}) AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
             ` ORDER BY rank ASC\n` +
             ` LIMIT ?`,
         )
         .all(
           plan.matchQuery,
           ...substringParams,
-          ...modelParams,
           ...params.sourceFilter.params,
           params.limit,
         ) as typeof rows;
@@ -380,12 +378,11 @@ export async function searchKeyword(params: {
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       0 AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE 1=1${fallbackLikeClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` WHERE 1=1${fallbackLikeClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
             ` LIMIT ?`,
         )
         .all(
           ...fallbackLikeParams,
-          ...modelParams,
           ...params.sourceFilter.params,
           params.limit,
         ) as typeof rows;
@@ -396,12 +393,11 @@ export async function searchKeyword(params: {
         `SELECT id, path, source, start_line, end_line, text,\n` +
           `       0 AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
-          ` WHERE 1=1${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+          ` WHERE 1=1${substringClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
           ` LIMIT ?`,
       )
       .all(
         ...substringParams,
-        ...modelParams,
         ...params.sourceFilter.params,
         params.limit,
       ) as typeof rows;
