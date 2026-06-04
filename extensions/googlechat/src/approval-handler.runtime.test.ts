@@ -96,7 +96,59 @@ function createPendingView(): PendingApprovalView {
   };
 }
 
+function createDeferred<T>(): {
+  promise: Promise<T>;
+  reject: (reason?: unknown) => void;
+  resolve: (value: T) => void;
+} {
+  let resolve: (value: T) => void = () => {};
+  let reject: (reason?: unknown) => void = () => {};
+  const promise = new Promise<T>((innerResolve, innerReject) => {
+    resolve = innerResolve;
+    reject = innerReject;
+  });
+  return { promise, reject, resolve };
+}
+
 describe("googleChatApprovalNativeRuntime", () => {
+  async function preparePendingDelivery(view = createPendingView()) {
+    const nowMs = Date.now();
+    const request = {
+      id: view.approvalId,
+      request: { command: view.commandText },
+      createdAtMs: nowMs,
+      expiresAtMs: view.expiresAtMs,
+    };
+    const pendingPayload = await googleChatApprovalNativeRuntime.presentation.buildPendingPayload({
+      cfg,
+      accountId: "default",
+      context: { account },
+      request,
+      approvalKind: "exec",
+      nowMs,
+      view,
+    });
+    const plannedTarget = {
+      surface: "origin" as const,
+      target: { to: "spaces/AAA", threadId: "threads/T1" },
+      reason: "preferred" as const,
+    };
+    const prepared = await googleChatApprovalNativeRuntime.transport.prepareTarget({
+      cfg,
+      accountId: "default",
+      context: { account },
+      plannedTarget,
+      request,
+      approvalKind: "exec",
+      view,
+      pendingPayload,
+    });
+    if (!prepared) {
+      throw new Error("Expected prepared target");
+    }
+    return { pendingPayload, plannedTarget, prepared, request, view };
+  }
+
   it("sends pending cards and updates the delivered message without buttons", async () => {
     sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/msg-1" });
     updateGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/msg-1" });
@@ -231,6 +283,62 @@ describe("googleChatApprovalNativeRuntime", () => {
     });
     expect(updateGoogleChatMessage.mock.calls[0]?.[0]).not.toHaveProperty("text");
     expect(JSON.stringify(final.payload)).not.toContain("buttonList");
+  });
+
+  it("suppresses manual approval follow-ups while the native card send is in flight", async () => {
+    const deferred = createDeferred<{ messageName: string }>();
+    sendGoogleChatMessage.mockReturnValue(deferred.promise);
+    const { pendingPayload, plannedTarget, prepared, request, view } =
+      await preparePendingDelivery();
+
+    const deliveryPromise = googleChatApprovalNativeRuntime.transport.deliverPending({
+      cfg,
+      accountId: "default",
+      context: { account },
+      plannedTarget,
+      preparedTarget: prepared.target,
+      request,
+      approvalKind: "exec",
+      view,
+      pendingPayload,
+    });
+
+    await vi.waitFor(() => expect(sendGoogleChatMessage).toHaveBeenCalled());
+    expect(
+      shouldSuppressGoogleChatManualExecApprovalFollowupText(
+        "Please reply with:\n`/approve approval-1 allow-once`",
+      ),
+    ).toBe(true);
+
+    deferred.resolve({ messageName: "spaces/AAA/messages/msg-1" });
+    await expect(deliveryPromise).resolves.toEqual(
+      expect.objectContaining({ messageName: "spaces/AAA/messages/msg-1" }),
+    );
+  });
+
+  it("restores manual approval follow-ups when the native card send fails", async () => {
+    sendGoogleChatMessage.mockRejectedValue(new Error("send failed"));
+    const { pendingPayload, plannedTarget, prepared, request, view } =
+      await preparePendingDelivery();
+
+    await expect(
+      googleChatApprovalNativeRuntime.transport.deliverPending({
+        cfg,
+        accountId: "default",
+        context: { account },
+        plannedTarget,
+        preparedTarget: prepared.target,
+        request,
+        approvalKind: "exec",
+        view,
+        pendingPayload,
+      }),
+    ).rejects.toThrow("send failed");
+    expect(
+      shouldSuppressGoogleChatManualExecApprovalFollowupText(
+        "Please reply with:\n`/approve approval-1 allow-once`",
+      ),
+    ).toBe(false);
   });
 
   it("uses the named Chat action when app-url add-on principal binding is absent", async () => {

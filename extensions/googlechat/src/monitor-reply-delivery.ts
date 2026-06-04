@@ -11,7 +11,6 @@ import {
   updateGoogleChatMessage,
   uploadGoogleChatAttachment,
 } from "./api.js";
-import { shouldSuppressGoogleChatManualExecApprovalFollowupPayload } from "./approval-card-actions.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
 
 export async function deliverGoogleChatReply(params: {
@@ -20,12 +19,6 @@ export async function deliverGoogleChatReply(params: {
     mediaUrls?: string[];
     mediaUrl?: string;
     replyToId?: string;
-    channelData?: unknown;
-    presentation?: unknown;
-    interactive?: unknown;
-    btw?: unknown;
-    spokenText?: unknown;
-    ttsSupplement?: unknown;
   };
   account: ResolvedGoogleChatAccount;
   spaceId: string;
@@ -39,19 +32,6 @@ export async function deliverGoogleChatReply(params: {
   // Clear this whenever the typing message is deleted or unavailable; otherwise
   // text delivery can keep retrying a dead message and drop content.
   let typingMessageName = params.typingMessageName;
-  if (shouldSuppressGoogleChatManualExecApprovalFollowupPayload(payload)) {
-    if (typingMessageName) {
-      try {
-        await deleteGoogleChatMessage({
-          account,
-          messageName: typingMessageName,
-        });
-      } catch (err) {
-        runtime.error?.(`Google Chat typing cleanup failed: ${String(err)}`);
-      }
-    }
-    return;
-  }
   const reply = resolveSendableOutboundReplyParts(payload);
   const mediaCount = reply.mediaCount;
   const hasMedia = reply.hasMedia;

@@ -296,6 +296,7 @@ describe("googlechat monitor webhook", () => {
     );
     expect(res.statusCode).toBe(200);
     expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("normalizes add-on card-click payloads for approval actions", async () => {
@@ -371,6 +372,8 @@ describe("googlechat monitor webhook", () => {
       target,
     );
     expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("logs WARN with reason when verification fails (missing token)", async () => {
@@ -508,6 +511,8 @@ describe("googlechat monitor webhook", () => {
 
     expect(logFn).not.toHaveBeenCalled();
     expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("does not log failed candidate targets when another target verifies", async () => {
@@ -574,6 +579,8 @@ describe("googlechat monitor webhook", () => {
       targetB,
     );
     expect(res.statusCode).toBe(200);
+    expect(res.headers["Content-Type"]).toBe("application/json");
+    expect(res.body).toBe("{}");
   });
 
   it("rejects missing add-on bearer tokens before dispatch", async () => {

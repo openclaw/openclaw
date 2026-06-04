@@ -160,7 +160,7 @@ export function registerGoogleChatManualApprovalFollowupSuppression(
   return true;
 }
 
-function unregisterGoogleChatManualApprovalFollowupSuppression(approvalId: string): void {
+export function unregisterGoogleChatManualApprovalFollowupSuppression(approvalId: string): void {
   const key = manualApprovalFollowupSuppressionKey(approvalId);
   if (key) {
     manualApprovalFollowupSuppressions.delete(key);

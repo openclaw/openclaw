@@ -201,7 +201,7 @@ Use these identifiers for delivery and allowlists:
         },
       },
       actions: { reactions: true },
-      typingIndicator: "message",
+      typingIndicator: "none",
       mediaMaxMb: 20,
     },
   },
@@ -217,7 +217,7 @@ Notes:
 - Reactions are available via the `reactions` tool and `channels action` when `actions.reactions` is enabled.
 - Native approval cards use Google Chat `cardsV2` button clicks, not reaction events. Approvers come from `dm.allowFrom` or `defaultTo` and must be stable numeric `users/<id>` values.
 - Message actions expose `send` for text and `upload-file` for explicit attachment sends. `upload-file` accepts `media` / `filePath` / `path` plus optional `message`, `filename`, and thread targeting.
-- `typingIndicator` supports `none`, `message` (default), and `reaction` (reaction requires user OAuth).
+- `typingIndicator` supports `none` (default), `message`, and `reaction` (reaction requires user OAuth).
 - Attachments are downloaded through the Chat API and stored in the media pipeline (size capped by `mediaMaxMb`).
 - Bot-authored Google Chat messages are ignored by default. If you intentionally set `allowBots: true`, accepted bot-authored messages use shared [bot loop protection](/channels/bot-loop-protection). Configure `channels.defaults.botLoopProtection`, then override with `channels.googlechat.botLoopProtection` or `channels.googlechat.groups.<space>.botLoopProtection` when one space needs a different budget.
 

@@ -17,6 +17,7 @@ import {
   GOOGLECHAT_APPROVAL_ACTION,
   registerGoogleChatApprovalCardBinding,
   registerGoogleChatManualApprovalFollowupSuppression,
+  unregisterGoogleChatManualApprovalFollowupSuppression,
   unregisterGoogleChatApprovalCardBindings,
 } from "./approval-card-actions.js";
 import {
@@ -329,21 +330,30 @@ export const googleChatApprovalNativeRuntime = createChannelApprovalNativeRuntim
         account,
         target: preparedTarget.to,
       });
-      const sent = await sendGoogleChatMessage({
-        account,
-        space: spaceName,
-        cardsV2: pendingPayload.cardsV2,
-        thread: preparedTarget.threadName,
-      });
-      if (!sent?.messageName) {
-        return null;
-      }
+      // Native delivery can race the model's message tool follow-up; register before
+      // the send awaits so the channel-local outbound filter can suppress duplicates.
       registerGoogleChatManualApprovalFollowupSuppression({
         approvalId: pendingPayload.approvalId,
         approvalKind: pendingPayload.approvalKind,
         allowedDecisions: pendingPayload.allowedDecisions,
         expiresAtMs: pendingPayload.expiresAtMs,
       });
+      let sent: Awaited<ReturnType<typeof sendGoogleChatMessage>>;
+      try {
+        sent = await sendGoogleChatMessage({
+          account,
+          space: spaceName,
+          cardsV2: pendingPayload.cardsV2,
+          thread: preparedTarget.threadName,
+        });
+      } catch (error) {
+        unregisterGoogleChatManualApprovalFollowupSuppression(pendingPayload.approvalId);
+        throw error;
+      }
+      if (!sent?.messageName) {
+        unregisterGoogleChatManualApprovalFollowupSuppression(pendingPayload.approvalId);
+        return null;
+      }
       return {
         accountId: account.accountId,
         spaceName,
