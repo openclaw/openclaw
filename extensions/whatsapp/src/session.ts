@@ -320,7 +320,7 @@ export type WhatsAppConnectionWaitOptions =
 
 export async function waitForWaConnection(
   sock: ReturnType<typeof makeWASocket>,
-  options: WhatsAppConnectionWaitOptions,
+  options: WhatsAppConnectionWaitOptions = { timeout: "none" },
 ) {
   return new Promise<void>((resolve, reject) => {
     type OffCapable = {
