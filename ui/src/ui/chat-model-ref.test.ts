@@ -91,6 +91,27 @@ describe("chat-model-ref helpers", () => {
     );
   });
 
+  it("surfaces explicit OpenClaw runtime overrides in picker labels", () => {
+    const openclawModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      provider: "openai",
+      agentRuntime: {
+        id: "openclaw",
+        label: "OpenClaw Default",
+        source: "model" as const,
+      },
+    };
+
+    expect(buildChatModelOption(openclawModel, [openclawModel])).toEqual({
+      value: "openai/gpt-5.5",
+      label: "GPT-5.5 · OpenClaw Default",
+    });
+    expect(formatCatalogChatModelDisplay("openai/gpt-5.5", [openclawModel])).toBe(
+      "GPT-5.5 · OpenClaw Default",
+    );
+  });
+
   it("uses friendly catalog names for qualified nested model ids", () => {
     const nestedModel = {
       id: "moonshotai/kimi-k2.5",

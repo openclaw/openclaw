@@ -168,7 +168,11 @@ export function formatChatModelDisplay(value: string): string {
 function formatAgentRuntimeSuffix(entry: ModelCatalogEntry): string {
   const id = entry.agentRuntime?.id?.trim().toLowerCase();
   const label = entry.agentRuntime?.label?.trim();
-  if (!id || id === "openclaw" || id === "auto" || id === "default" || !label) {
+  const source = entry.agentRuntime?.source;
+  if (!id || id === "auto" || id === "default" || !label) {
+    return "";
+  }
+  if (id === "openclaw" && source === "implicit") {
     return "";
   }
   return ` · ${label}`;

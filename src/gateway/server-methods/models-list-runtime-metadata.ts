@@ -15,7 +15,12 @@ export function addConfiguredAgentRuntimeMetadata<T extends ModelCatalogEntry>(p
       provider: entry.provider,
       model: entry.id,
     });
-    if (agentRuntime.source === "implicit") {
+    if (
+      agentRuntime.source === "implicit" &&
+      (agentRuntime.id === "openclaw" ||
+        agentRuntime.id === "auto" ||
+        agentRuntime.id === "default")
+    ) {
       return entry;
     }
     return {
