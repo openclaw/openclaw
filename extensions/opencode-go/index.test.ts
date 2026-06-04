@@ -8,6 +8,7 @@ import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-cata
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildOpencodeGoLiveProviderConfig } from "./provider-catalog.js";
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -198,6 +199,10 @@ describe("opencode-go provider plugin", () => {
     expect(compat.supportsUsageInStreaming).toBe(true);
     expect(compat.supportsReasoningEffort).toBe(true);
     expect(compat.maxTokensField).toBe("max_tokens");
+  });
+
+  it("loads OpenCode Go model discovery through the provider runtime", () => {
+    expect(manifest.modelCatalog.discovery["opencode-go"]).toBe("runtime");
   });
 
   it("skips live OpenCode Go catalog discovery when no shared key is configured", async () => {
