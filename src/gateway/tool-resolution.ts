@@ -117,7 +117,9 @@ export function resolveGatewayScopedTools(params: {
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
       : [];
   const ownerOnlyGatewayDeny =
-    surface === "http" && params.senderIsOwner !== true ? GATEWAY_HTTP_OWNER_ONLY_CORE_TOOLS : [];
+    surface === "http" && params.senderIsOwner !== true
+      ? [...GATEWAY_HTTP_OWNER_ONLY_CORE_TOOLS]
+      : [];
   // HTTP callers start with a stricter denylist than loopback callers because they cross auth only.
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,
