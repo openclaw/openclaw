@@ -177,6 +177,55 @@ describe("dropThinkingBlocks", () => {
       { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
     ]);
   });
+
+  it("uses omitted-reasoning text when an older assistant turn contains only thinking and empty text", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "old" },
+          { type: "text", text: "" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "latest text" }],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const oldAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(oldAssistant.content).toEqual([
+      { type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT },
+    ]);
+  });
+
+  it("preserves meaningful text when an older assistant turn has thinking and whitespace-only text alongside real text", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "old" },
+          { type: "text", text: "   " },
+          { type: "text", text: "real answer" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [{ type: "text", text: "latest text" }],
+      }),
+    ];
+
+    const result = dropThinkingBlocks(messages);
+    const oldAssistant = result[1] as Extract<AgentMessage, { role: "assistant" }>;
+
+    expect(oldAssistant.content).toEqual([{ type: "text", text: "real answer" }]);
+  });
 });
 
 describe("dropReasoningFromHistory", () => {
@@ -267,6 +316,45 @@ describe("dropReasoningFromHistory", () => {
     expect(assistant.content).toEqual([
       { type: "toolCall", id: "call123456", name: "lookup", arguments: {} },
     ]);
+  });
+
+  it("uses omitted-reasoning text when a completed assistant turn contains only thinking and empty text", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private" },
+          { type: "text", text: "" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+    ];
+
+    const result = dropReasoningFromHistory(messages);
+    const assistant = result[1] as AssistantMessage;
+
+    expect(assistant.content).toEqual([{ type: "text", text: OMITTED_ASSISTANT_REASONING_TEXT }]);
+  });
+
+  it("preserves meaningful text when a completed assistant turn has thinking and whitespace-only text alongside real text", () => {
+    const messages: AgentMessage[] = [
+      castAgentMessage({ role: "user", content: "first" }),
+      castAgentMessage({
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private" },
+          { type: "text", text: "   " },
+          { type: "text", text: "visible" },
+        ],
+      }),
+      castAgentMessage({ role: "user", content: "second" }),
+    ];
+
+    const result = dropReasoningFromHistory(messages);
+    const assistant = result[1] as AssistantMessage;
+
+    expect(assistant.content).toEqual([{ type: "text", text: "visible" }]);
   });
 });
 

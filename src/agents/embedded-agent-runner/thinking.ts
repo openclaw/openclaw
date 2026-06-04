@@ -342,6 +342,10 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
         changed = true;
         continue;
       }
+      if ((block as { type?: unknown }).type === "text" && !hasMeaningfulText(block)) {
+        changed = true;
+        continue;
+      }
       nextContent.push(block);
     }
     if (!changed) {
@@ -426,7 +430,11 @@ function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
       continue;
     }
 
-    const nextContent = message.content.filter((block) => !isThinkingBlock(block));
+    const nextContent = message.content.filter(
+      (block) =>
+        !isThinkingBlock(block) &&
+        ((block as { type?: unknown }).type !== "text" || hasMeaningfulText(block)),
+    );
     if (nextContent.length === message.content.length) {
       out.push(message);
       continue;
@@ -463,7 +471,11 @@ export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage
       continue;
     }
 
-    const nextContent = message.content.filter((block) => !isThinkingBlock(block));
+    const nextContent = message.content.filter(
+      (block) =>
+        !isThinkingBlock(block) &&
+        ((block as { type?: unknown }).type !== "text" || hasMeaningfulText(block)),
+    );
     if (nextContent.length === message.content.length) {
       out.push(message);
       continue;
