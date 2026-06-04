@@ -610,6 +610,80 @@ describe("slack prepareSlackMessage inbound contract", () => {
   });
 });
 
+describe("prepareSlackMessage allowBotsFrom", () => {
+  function createBotCtx(slackConfig: Partial<OpenClawConfig["channels"]["slack"]> = {}) {
+    return createInboundSlackCtx({
+      cfg: {
+        channels: { slack: { enabled: true, ...slackConfig } },
+      } as OpenClawConfig,
+    });
+  }
+
+  function createBotAccount(
+    config: Partial<ResolvedSlackAccount["config"]> = {},
+  ): ResolvedSlackAccount {
+    return {
+      accountId: "default",
+      enabled: true,
+      botTokenSource: "config",
+      appTokenSource: "config",
+      config,
+    };
+  }
+
+  function makeBotMessage(botId: string): SlackMessageEvent {
+    return createSlackMessage({
+      channel: "C123",
+      channel_type: "channel",
+      bot_id: botId,
+      user: undefined,
+    });
+  }
+
+  it("drops bot message when allowBots=false and allowBotsFrom is empty (default)", async () => {
+    const ctx = createBotCtx({ allowBots: false });
+    const account = createBotAccount();
+    const msg = makeBotMessage("B_HERMES");
+    const result = await prepareMessageWith(ctx, account, msg);
+    expect(result).toBeNull();
+  });
+
+  it("allows bot message when bot_id is in top-level allowBotsFrom", async () => {
+    const ctx = createBotCtx({ allowBots: false, allowBotsFrom: ["B_HERMES"] });
+    const account = createBotAccount();
+    const msg = makeBotMessage("B_HERMES");
+    const result = await prepareMessageWith(ctx, account, msg);
+    expect(result).not.toBeNull();
+  });
+
+  it("drops bot message when bot_id is NOT in allowBotsFrom", async () => {
+    const ctx = createBotCtx({ allowBots: false, allowBotsFrom: ["B_OTHER"] });
+    const account = createBotAccount();
+    const msg = makeBotMessage("B_HERMES");
+    const result = await prepareMessageWith(ctx, account, msg);
+    expect(result).toBeNull();
+  });
+
+  it("allows bot when allowBots=true regardless of allowBotsFrom", async () => {
+    const ctx = createBotCtx({ allowBots: true });
+    const account = createBotAccount();
+    const msg = makeBotMessage("B_ANY");
+    const result = await prepareMessageWith(ctx, account, msg);
+    expect(result).not.toBeNull();
+  });
+
+  it("merges account-level allowBotsFrom with top-level list", async () => {
+    const ctx = createBotCtx({ allowBots: false, allowBotsFrom: ["B_TOP"] });
+    const account = createBotAccount({ allowBotsFrom: ["B_ACCOUNT"] });
+    const msgTop = makeBotMessage("B_TOP");
+    const msgAccount = makeBotMessage("B_ACCOUNT");
+    const msgOther = makeBotMessage("B_OTHER");
+    expect(await prepareMessageWith(ctx, account, msgTop)).not.toBeNull();
+    expect(await prepareMessageWith(ctx, account, msgAccount)).not.toBeNull();
+    expect(await prepareMessageWith(ctx, account, msgOther)).toBeNull();
+  });
+});
+
 describe("prepareSlackMessage sender prefix", () => {
   function createSenderPrefixCtx(params: {
     channels: Record<string, unknown>;

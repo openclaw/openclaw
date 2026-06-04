@@ -36,6 +36,14 @@ export type SlackChannelConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
+  /**
+   * Allowlist of specific bot_ids (Slack bot user IDs, e.g. "B012AB3CD") whose
+   * messages are allowed to trigger replies even when `allowBots` is false.
+   * Useful for trusted partner-agent deployments where you want to receive
+   * messages from a specific known bot without enabling all bot traffic.
+   * When `allowBots` is true this list has no additional effect.
+   */
+  allowBotsFrom?: string[];
   /** Allowlist of users that can invoke the bot in this channel. */
   users?: Array<string | number>;
   /** Optional skill filter for this channel. */
@@ -105,6 +113,14 @@ export type SlackAccountConfig = {
   userTokenReadOnly?: boolean;
   /** Allow bot-authored messages to trigger replies (default: false). */
   allowBots?: boolean;
+  /**
+   * Allowlist of specific bot_ids (Slack bot user IDs, e.g. "B012AB3CD") whose
+   * messages are allowed to trigger replies even when `allowBots` is false.
+   * Useful for trusted partner-agent deployments where you want to receive
+   * messages from a specific known bot without enabling all bot traffic.
+   * When `allowBots` is true this list has no additional effect.
+   */
+  allowBotsFrom?: string[];
   /**
    * Break-glass override: allow mutable identity matching (name/slug) in allowlists.
    * Default behavior is ID-only matching.

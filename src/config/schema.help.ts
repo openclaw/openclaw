@@ -664,6 +664,8 @@ export const FIELD_HELP: Record<string, string> = {
   auth: "Authentication profile root used for multi-profile provider credentials and cooldown-based failover ordering. Keep profiles minimal and explicit so automatic failover behavior stays auditable.",
   "channels.slack.allowBots":
     "Allow bot-authored messages to trigger Slack replies (default: false).",
+  "channels.slack.allowBotsFrom":
+    'Allowlist of specific Slack bot_ids (e.g. "B012AB3CD") whose messages are allowed to trigger replies even when allowBots is false. Useful for trusted partner-agent deployments (for example, two OpenClaw instances sharing the same Slack workspace) where you want to receive messages from a specific known bot without opening up to all bot traffic. Channel-level and account-level lists are merged with the top-level list.',
   "channels.slack.thread.historyScope":
     'Scope for Slack thread history context ("thread" isolates per thread; "channel" reuses channel history).',
   "channels.slack.thread.inheritParent":

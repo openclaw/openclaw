@@ -92,14 +92,29 @@ export async function prepareSlackMessage(params: {
     cfg.channels?.slack?.allowBots ??
     false;
 
+  const allowBotsFrom: string[] = [
+    ...(channelConfig?.allowBotsFrom ?? []),
+    ...(account.config?.allowBotsFrom ?? []),
+    ...(cfg.channels?.slack?.allowBotsFrom ?? []),
+  ];
+
   const isBotMessage = Boolean(message.bot_id);
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
       return null;
     }
     if (!allowBots) {
-      logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
-      return null;
+      const botId = message.bot_id ?? "";
+      const isAllowlisted = allowBotsFrom.length > 0 && botId && allowBotsFrom.includes(botId);
+      if (!isAllowlisted) {
+        logVerbose(
+          `slack: drop bot message ${botId || "unknown"} (allowBots=false${
+            allowBotsFrom.length > 0 ? ", not in allowBotsFrom" : ""
+          })`,
+        );
+        return null;
+      }
+      logVerbose(`slack: allow bot message ${botId} (allowBotsFrom allowlist match)`);
     }
   }
 
