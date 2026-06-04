@@ -86,6 +86,7 @@ describe("ModelRegistry models.json auth", () => {
     await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
       ok: true,
       apiKey: undefined,
+      auth: "aws-sdk",
       headers: undefined,
     });
     expect(registry.getProviderAuthStatus("amazon-bedrock")).toEqual({

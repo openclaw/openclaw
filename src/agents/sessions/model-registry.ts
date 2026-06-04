@@ -234,6 +234,7 @@ export type ResolvedRequestAuth =
   | {
       ok: true;
       apiKey?: string;
+      auth?: ProviderAuthMode;
       headers?: Record<string, string>;
     }
   | {
@@ -721,6 +722,7 @@ export class ModelRegistry {
       return {
         ok: true,
         apiKey,
+        auth: usesAwsSdkAuth ? "aws-sdk" : undefined,
         headers: headers && Object.keys(headers).length > 0 ? headers : undefined,
       };
     } catch (error) {

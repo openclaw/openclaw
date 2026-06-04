@@ -293,6 +293,7 @@ type ResolvedRequestAuth =
   | {
       ok: true;
       apiKey?: string;
+      auth?: string;
       headers?: Record<string, string>;
     }
   | {
@@ -337,13 +338,15 @@ async function resolveModelAuth(
     };
   }
   if (!requestAuth.apiKey && !requestAuth.headers) {
-    log.warn(
-      "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
-    );
-    return {
-      ok: false,
-      reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
-    };
+    if (requestAuth.auth !== "aws-sdk") {
+      log.warn(
+        "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
+      );
+      return {
+        ok: false,
+        reason: `Compaction safeguard could not resolve request credentials for ${model.provider}/${model.id}.`,
+      };
+    }
   }
   return { ok: true, apiKey: requestAuth.apiKey, headers: requestAuth.headers };
 }
