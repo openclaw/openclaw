@@ -265,6 +265,116 @@ describe("harness parity", () => {
     ).toBe("tool-description");
   });
 
+  it("keeps unreadable tool schemas from crashing parity hashing", () => {
+    const unreadableSchema: Record<string, unknown> = {};
+    Object.defineProperty(unreadableSchema, "properties", {
+      enumerable: true,
+      get() {
+        throw new Error("schema getter exploded");
+      },
+    });
+    const left = buildHarnessParityCell({
+      variant: LEFT,
+      cell: makeCell("openclaw", {
+        systemPromptReport: {
+          ...BASE_PROMPT_REPORT,
+          tools: {
+            ...BASE_PROMPT_REPORT.tools,
+            entries: [
+              {
+                ...BASE_PROMPT_REPORT.tools.entries[0],
+                schema: { properties: null },
+              },
+            ],
+          },
+        },
+      }),
+      tokenUsageSource: "live-usage",
+    });
+    const right = buildHarnessParityCell({
+      variant: RIGHT,
+      cell: makeCell("openclaw", {
+        systemPromptReport: {
+          ...BASE_PROMPT_REPORT,
+          tools: {
+            ...BASE_PROMPT_REPORT.tools,
+            entries: [
+              {
+                ...BASE_PROMPT_REPORT.tools.entries[0],
+                schema: unreadableSchema,
+              },
+            ],
+          },
+        },
+      }),
+      tokenUsageSource: "live-usage",
+    });
+
+    expect(
+      buildHarnessParityResult({
+        scenarioId: "scenario",
+        left,
+        right,
+      }).drift,
+    ).toBe("tool-schema");
+  });
+
+  it("keeps unreadable array tool schema fields from crashing parity hashing", () => {
+    const unreadableRequired = ["query"];
+    Object.defineProperty(unreadableRequired, "0", {
+      enumerable: true,
+      get() {
+        throw new Error("required getter exploded");
+      },
+    });
+    const cyclicAnyOf: unknown[] = [];
+    cyclicAnyOf.push(cyclicAnyOf);
+    const left = buildHarnessParityCell({
+      variant: LEFT,
+      cell: makeCell("openclaw", {
+        systemPromptReport: {
+          ...BASE_PROMPT_REPORT,
+          tools: {
+            ...BASE_PROMPT_REPORT.tools,
+            entries: [
+              {
+                ...BASE_PROMPT_REPORT.tools.entries[0],
+                schema: { anyOf: [null], required: [null] },
+              },
+            ],
+          },
+        },
+      }),
+      tokenUsageSource: "live-usage",
+    });
+    const right = buildHarnessParityCell({
+      variant: RIGHT,
+      cell: makeCell("openclaw", {
+        systemPromptReport: {
+          ...BASE_PROMPT_REPORT,
+          tools: {
+            ...BASE_PROMPT_REPORT.tools,
+            entries: [
+              {
+                ...BASE_PROMPT_REPORT.tools.entries[0],
+                schema: { anyOf: cyclicAnyOf, required: unreadableRequired },
+              },
+            ],
+          },
+        },
+      }),
+      tokenUsageSource: "live-usage",
+    });
+
+    expect(
+      buildHarnessParityResult({
+        scenarioId: "scenario",
+        left,
+        right,
+      }).drift,
+    ).toBe("tool-schema");
+  });
+
   it("labels mock token estimates separately from live usage", () => {
     const sourceCell = makeCell("openclaw", {
       usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },

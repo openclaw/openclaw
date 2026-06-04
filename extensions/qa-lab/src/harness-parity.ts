@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type {
   RuntimeId,
   RuntimeParityCell,
@@ -7,6 +6,7 @@ import type {
   RuntimeParityUsage,
 } from "./runtime-parity.js";
 import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
+import { stableHash } from "./stable-hash.js";
 
 export type HarnessVariant = {
   id: string;
@@ -107,10 +107,6 @@ export type HarnessParityReport = {
   failures: string[];
 };
 
-function sha256(value: string) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function countComparableTranscriptRecords(transcriptBytes: string) {
   let count = 0;
   for (const line of transcriptBytes.split(/\r?\n/u)) {
@@ -134,25 +130,6 @@ function countComparableTranscriptRecords(transcriptBytes: string) {
     }
   }
   return count;
-}
-
-function normalizeForStableHash(value: unknown): unknown {
-  if (Array.isArray(value)) {
-    return value.map((entry) => normalizeForStableHash(entry));
-  }
-  if (value && typeof value === "object") {
-    const record = value as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.keys(record)
-        .toSorted((left, right) => left.localeCompare(right))
-        .map((key) => [key, normalizeForStableHash(record[key])]),
-    );
-  }
-  return value;
-}
-
-function stableHash(value: unknown) {
-  return sha256(JSON.stringify(normalizeForStableHash(value)) ?? "null");
 }
 
 function readPositiveNumber(value: unknown) {
