@@ -88,7 +88,23 @@ function compareFindings(a: HealthFinding, b: HealthFinding): number {
   if (idDelta !== 0) {
     return idDelta;
   }
-  return (a.path ?? "").localeCompare(b.path ?? "");
+  const pathDelta = (a.path ?? "").localeCompare(b.path ?? "");
+  if (pathDelta !== 0) {
+    return pathDelta;
+  }
+  const lineDelta = (a.line ?? -1) - (b.line ?? -1);
+  if (lineDelta !== 0) {
+    return lineDelta;
+  }
+  const columnDelta = (a.column ?? -1) - (b.column ?? -1);
+  if (columnDelta !== 0) {
+    return columnDelta;
+  }
+  const messageDelta = a.message.localeCompare(b.message);
+  if (messageDelta !== 0) {
+    return messageDelta;
+  }
+  return (a.fixHint ?? "").localeCompare(b.fixHint ?? "");
 }
 
 /** Converts findings to a process exit code using the requested minimum severity. */
