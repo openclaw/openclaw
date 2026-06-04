@@ -367,10 +367,8 @@ describe("session accessor file-backed seam", () => {
       storePath,
     };
     const event = {
-      id: "msg-1",
-      message: { role: "user", content: "hello" },
-      parentId: null,
-      type: "message",
+      payload: { value: "hello" },
+      type: "metadata",
     };
 
     await appendTranscriptEvent(scope, { type: "session", sessionId: "session-1" });
@@ -383,16 +381,33 @@ describe("session accessor file-backed seam", () => {
     expect(fs.statSync(transcriptPath).mode & 0o777).toBe(0o600);
   });
 
+  it("rejects raw message transcript events", async () => {
+    const scope = {
+      sessionFile: transcriptPath,
+      sessionId: "session-1",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await expect(
+      appendTranscriptEvent(scope, {
+        id: "msg-1",
+        message: { role: "user", content: "hello" },
+        parentId: null,
+        type: "message",
+      }),
+    ).rejects.toThrow(/appendTranscriptMessage/);
+    expect(fs.existsSync(transcriptPath)).toBe(false);
+  });
+
   it("loads transcript events without a session key when the read target is explicit", async () => {
     const scope = {
       sessionFile: transcriptPath,
       sessionId: "session-1",
     };
     const event = {
-      id: "msg-1",
-      message: { role: "user", content: "hello" },
-      parentId: null,
-      type: "message",
+      payload: { value: "hello" },
+      type: "metadata",
     };
 
     await appendTranscriptEvent(
@@ -409,10 +424,8 @@ describe("session accessor file-backed seam", () => {
 
   it("loads transcript events from a generated read target without a session key", async () => {
     const event = {
-      id: "msg-1",
-      message: { role: "user", content: "hello" },
-      parentId: null,
-      type: "message",
+      payload: { value: "hello" },
+      type: "metadata",
     };
 
     fs.writeFileSync(path.join(tempDir, "session-1.jsonl"), `${JSON.stringify(event)}\n`, "utf-8");
@@ -502,10 +515,8 @@ describe("session accessor file-backed seam", () => {
       storePath,
     };
     const event = {
-      id: "msg-1",
-      message: { role: "user", content: "hello" },
-      parentId: null,
-      type: "message",
+      payload: { value: "hello" },
+      type: "metadata",
     };
 
     await upsertSessionEntry(scope, {
@@ -541,7 +552,7 @@ describe("session accessor file-backed seam", () => {
         sessionKey: "AGENT:MAIN:MAIN",
         storePath,
       },
-      { id: "msg-1", type: "message" },
+      { id: "event-1", type: "metadata" },
     );
 
     expect(listSessionEntries({ storePath }).map((entry) => entry.sessionKey)).toEqual([

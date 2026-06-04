@@ -243,11 +243,25 @@ export async function appendTranscriptEvent(
   scope: SessionTranscriptAccessScope,
   event: TranscriptEvent,
 ): Promise<void> {
+  assertNonMessageTranscriptEvent(event);
   const transcript = await resolveTranscriptAccess(scope);
   await appendSessionTranscriptEvent({
     event,
     transcriptPath: transcript.sessionFile,
   });
+}
+
+function assertNonMessageTranscriptEvent(event: TranscriptEvent): void {
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    return;
+  }
+  // Message records require parent-link, idempotency, and redaction handling
+  // from appendTranscriptMessage; raw event writes would bypass those invariants.
+  if ((event as { type?: unknown }).type === "message") {
+    throw new Error(
+      "appendTranscriptEvent cannot write message transcript records; use appendTranscriptMessage instead.",
+    );
+  }
 }
 
 /** Appends one transcript message through the storage-neutral writer seam. */
