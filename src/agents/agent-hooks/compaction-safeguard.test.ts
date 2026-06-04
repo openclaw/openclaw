@@ -141,6 +141,7 @@ const createCompactionContext = (params: {
   sessionManager: ExtensionContext["sessionManager"];
   getApiKeyAndHeadersMock?: ReturnType<typeof vi.fn>;
   getApiKeyMock?: ReturnType<typeof vi.fn>;
+  getProviderAuthStatusMock?: ReturnType<typeof vi.fn>;
 }) =>
   ({
     model: undefined,
@@ -155,6 +156,8 @@ const createCompactionContext = (params: {
           const apiKey = await legacyGetApiKey?.(model);
           return apiKey !== undefined ? { ok: true, apiKey } : { ok: false, error: "missing auth" };
         }),
+      getProviderAuthStatus:
+        params.getProviderAuthStatusMock ?? vi.fn(() => ({ configured: false })),
     },
   }) as unknown as Partial<ExtensionContext>;
 
@@ -162,6 +165,7 @@ async function runCompactionScenario(params: {
   sessionManager: ExtensionContext["sessionManager"];
   event: unknown;
   apiKey: string | null;
+  providerAuthLabel?: string;
 }) {
   const compactionHandler = createCompactionHandler();
   const getApiKeyAndHeadersMock = vi
@@ -169,11 +173,17 @@ async function runCompactionScenario(params: {
     .mockResolvedValue(
       params.apiKey !== null
         ? { ok: true, apiKey: params.apiKey }
-        : { ok: false, error: "missing auth" },
+        : { ok: true, apiKey: undefined, headers: undefined },
     );
+  const getProviderAuthStatusMock = vi.fn(() =>
+    params.providerAuthLabel
+      ? { configured: true, source: "models_json_key" as const, label: params.providerAuthLabel }
+      : { configured: false },
+  );
   const mockContext = createCompactionContext({
     sessionManager: params.sessionManager,
     getApiKeyAndHeadersMock,
+    getProviderAuthStatusMock,
   });
   const result = (await compactionHandler(params.event, mockContext)) as {
     cancel?: boolean;
@@ -183,7 +193,7 @@ async function runCompactionScenario(params: {
       tokensBefore: number;
     };
   };
-  return { result, getApiKeyAndHeadersMock };
+  return { result, getApiKeyAndHeadersMock, getProviderAuthStatusMock };
 }
 
 function expectCompactionResult(result: {
@@ -1990,6 +2000,35 @@ describe("compaction-safeguard extension model fallback", () => {
 
     // Verify early return: request auth should NOT have been resolved when both models are missing.
     expect(getApiKeyAndHeadersMock).not.toHaveBeenCalled();
+  });
+
+  it("allows compaction for aws-sdk auth without apiKey or headers", async () => {
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, { model });
+
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("aws-sdk compaction summary");
+
+    const mockEvent = createCompactionEvent({
+      messageText: "test message",
+      tokensBefore: 1000,
+    });
+    (mockEvent.preparation as { settings?: { reserveTokens: number } }).settings = {
+      reserveTokens: 4000,
+    };
+    const { result, getApiKeyAndHeadersMock, getProviderAuthStatusMock } =
+      await runCompactionScenario({
+        sessionManager,
+        event: mockEvent,
+        apiKey: null,
+        providerAuthLabel: "aws-sdk",
+      });
+
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction).toBeDefined();
+    expect(getApiKeyAndHeadersMock).toHaveBeenCalledWith(model);
+    expect(getProviderAuthStatusMock).toHaveBeenCalledWith(model.provider);
   });
 });
 

@@ -339,6 +339,15 @@ async function resolveModelAuth(
     };
   }
   if (!requestAuth.apiKey && !requestAuth.headers) {
+    const providerAuthStatus = (
+      ctx.modelRegistry as unknown as {
+        getProviderAuthStatus?: (provider: string) => { configured: boolean; label?: string };
+      }
+    ).getProviderAuthStatus?.(model.provider);
+    if (providerAuthStatus?.label === "aws-sdk") {
+      return { ok: true };
+    }
+
     log.warn(
       "Compaction safeguard: no request credentials available; cancelling compaction to preserve history.",
     );
