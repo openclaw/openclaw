@@ -2782,7 +2782,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       dispatcherOptions.onSkip?.({ text: "NO_REPLY" }, { kind: "final", reason: "silent" });
       dispatcherOptions.onSkip?.(
         { text: "automatic final suppressed" },
-        { kind: "final", reason: "cancelled" },
+        { kind: "final", reason: "empty" },
       );
       return {
         queuedFinal: false,
