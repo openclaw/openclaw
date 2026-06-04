@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openclaw://schemas/validation_result.schema.json",
+  "title": "ValidationResult",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "validator_id",
+    "status",
+    "checked_at"
+  ],
+  "properties": {
+    "validator_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "contract_id": {
+      "type": "string"
+    },
+    "workflow_id": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "PASS",
+        "WARN",
+        "FAIL",
+        "BLOCKED"
+      ]
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "severity",
+          "message"
+        ],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "error",
+              "blocked"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "type": "string"
+          }
+        }
+      },
+      "default": []
+    },
+    "checked_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

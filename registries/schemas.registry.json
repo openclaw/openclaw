@@ -1,0 +1,39 @@
+{
+  "schemas": [
+    {
+      "id": "workflow_run",
+      "version": "v1.0.0",
+      "status": "active",
+      "path": "schemas/workflow_run.schema.json",
+      "owner": "local_operator"
+    },
+    {
+      "id": "queue_item",
+      "version": "v1.0.0",
+      "status": "active",
+      "path": "schemas/queue_item.schema.json",
+      "owner": "local_operator"
+    },
+    {
+      "id": "artifact_manifest",
+      "version": "v1.0.0",
+      "status": "active",
+      "path": "schemas/artifact_manifest.schema.json",
+      "owner": "local_operator"
+    },
+    {
+      "id": "validation_result",
+      "version": "v1.0.0",
+      "status": "active",
+      "path": "schemas/validation_result.schema.json",
+      "owner": "local_operator"
+    },
+    {
+      "id": "policy_decision",
+      "version": "v1.0.0",
+      "status": "active",
+      "path": "schemas/policy_decision.schema.json",
+      "owner": "local_operator"
+    }
+  ]
+}

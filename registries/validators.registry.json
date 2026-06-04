@@ -1,0 +1,12 @@
+{
+  "validators": [
+    {
+      "id": "openclaw_control_plane",
+      "version": "v1.0.0",
+      "status": "active",
+      "path": "scripts/validate_openclaw_control_plane.cjs",
+      "type": "control_plane",
+      "owner": "local_operator"
+    }
+  ]
+}

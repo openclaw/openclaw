@@ -1,0 +1,22 @@
+{
+  "contracts": [
+    {
+      "id": "openclaw_ecosystem_control_plane",
+      "version": "v1.0.0",
+      "status": "active",
+      "owner": "local_operator",
+      "path": "docs/contracts/OPENCLAW_ECOSYSTEM_CONTROL_PLANE_CONTRACT.md",
+      "validator": "scripts/validate_openclaw_control_plane.cjs",
+      "last_validated_at": null
+    },
+    {
+      "id": "openclaw_operational_gate",
+      "version": "v1.0.0",
+      "status": "active",
+      "owner": "local_operator",
+      "path": "docs/contracts/OPENCLAW_OPERATIONAL_GATE_CONTRACT.md",
+      "validator": "scripts/validate_openclaw_control_plane.cjs",
+      "last_validated_at": null
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openclaw://schemas/queue_item.schema.json",
+  "title": "QueueItem",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "job_id",
+    "workflow",
+    "task",
+    "status",
+    "attempts",
+    "priority",
+    "created_at",
+    "updated_at",
+    "runner",
+    "artifact_uri",
+    "blocking_reason"
+  ],
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflow": {
+      "type": "string",
+      "minLength": 1
+    },
+    "task": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "processing",
+        "retry",
+        "review",
+        "blocked",
+        "complete",
+        "dead_letter"
+      ]
+    },
+    "attempts": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "critical"
+      ]
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "runner": {
+      "type": "string",
+      "enum": [
+        "local",
+        "self_hosted",
+        "cloud",
+        "manual"
+      ]
+    },
+    "artifact_uri": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "blocking_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  }
+}

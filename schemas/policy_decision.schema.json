@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openclaw://schemas/policy_decision.schema.json",
+  "title": "PolicyDecision",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "decision",
+    "reason",
+    "policy_id"
+  ],
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": [
+        "allow",
+        "deny",
+        "review_required"
+      ]
+    },
+    "reason": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policy_id": {
+      "type": "string",
+      "minLength": 1
+    }
+  }
+}

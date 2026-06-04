@@ -1,0 +1,67 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openclaw://schemas/artifact_manifest.schema.json",
+  "title": "ArtifactManifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "artifact_id",
+    "workflow",
+    "created_at",
+    "path",
+    "sha256",
+    "contract",
+    "schema",
+    "validator",
+    "status"
+  ],
+  "properties": {
+    "artifact_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflow": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-fA-F0-9]{64}$"
+    },
+    "contract": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "validator": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "validated",
+        "reviewed",
+        "approved",
+        "published",
+        "archived"
+      ]
+    }
+  }
+}

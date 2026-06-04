@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "openclaw://schemas/workflow_run.schema.json",
+  "title": "WorkflowRun",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "run_id",
+    "workflow",
+    "status",
+    "runner",
+    "created_at",
+    "updated_at"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "workflow": {
+      "type": "string",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "processing",
+        "retry",
+        "review",
+        "blocked",
+        "complete",
+        "dead_letter"
+      ]
+    },
+    "runner": {
+      "type": "string",
+      "enum": [
+        "local",
+        "self_hosted",
+        "cloud",
+        "manual"
+      ]
+    },
+    "contract_id": {
+      "type": "string"
+    },
+    "contract_version": {
+      "type": "string"
+    },
+    "validator_id": {
+      "type": "string"
+    },
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "blocking_reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

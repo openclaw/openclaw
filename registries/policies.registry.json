@@ -1,0 +1,74 @@
+{
+  "policies": [
+    {
+      "id": "no_phi_storage",
+      "version": "v1.0.0",
+      "status": "active",
+      "decision": "deny",
+      "applies_to": [
+        "artifacts",
+        "ledgers",
+        "logs",
+        "dashboards",
+        "queues"
+      ],
+      "reason": "PHI must not be stored in automation outputs."
+    },
+    {
+      "id": "no_secret_logging",
+      "version": "v1.0.0",
+      "status": "active",
+      "decision": "deny",
+      "applies_to": [
+        "stdout",
+        "stderr",
+        "logs",
+        "artifacts",
+        "LLM_prompts"
+      ],
+      "reason": "Secrets must not be printed or persisted."
+    },
+    {
+      "id": "force_repair_manual_only",
+      "version": "v1.0.0",
+      "status": "active",
+      "decision": "review_required",
+      "applies_to": [
+        "openclaw_doctor_force_repair"
+      ],
+      "reason": "Force repair may overwrite custom service configuration."
+    },
+    {
+      "id": "promotion_requires_validation",
+      "version": "v1.0.0",
+      "status": "active",
+      "decision": "deny",
+      "applies_to": [
+        "promotion"
+      ],
+      "reason": "Promotion requires passing validators and artifact evidence."
+    },
+    {
+      "id": "unbounded_polling_denied",
+      "version": "v1.0.0",
+      "status": "active",
+      "decision": "deny",
+      "applies_to": [
+        "ci_polling",
+        "doctor_polling",
+        "github_polling"
+      ],
+      "reason": "Polling must have bounded attempts and stop conditions."
+    },
+    {
+      "id": "dry_run_no_paid_api",
+      "version": "v1.0.0",
+      "status": "active",
+      "decision": "deny",
+      "applies_to": [
+        "dry_run"
+      ],
+      "reason": "Dry-run mode must not call paid APIs unless explicitly approved."
+    }
+  ]
+}

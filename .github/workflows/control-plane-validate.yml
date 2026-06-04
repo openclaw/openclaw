@@ -1,0 +1,18 @@
+name: Control Plane Validation
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+jobs:
+  validate-control-plane:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Validate control plane
+        run: node scripts/validate_openclaw_control_plane.cjs
