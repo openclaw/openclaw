@@ -2671,7 +2671,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
         agentId: abortAgentId,
         defaultAgentId,
-        abortOrigin: abortOrigin,
+        abortOrigin,
         stopReason: abortStopReason,
         requester,
       });
