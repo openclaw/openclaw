@@ -2170,6 +2170,7 @@ async function abortWorkboardSessionRun(params: {
   let abortResult = await params.client.request("chat.abort", {
     sessionKey: params.sessionKey,
     ...(params.runId ? { runId: params.runId } : {}),
+    origin: "user-stop",
   });
   let aborted =
     isRecord(abortResult) &&
@@ -2178,6 +2179,7 @@ async function abortWorkboardSessionRun(params: {
   if (!aborted && params.runId) {
     abortResult = await params.client.request("chat.abort", {
       sessionKey: params.sessionKey,
+      origin: "user-stop",
     });
     aborted =
       isRecord(abortResult) &&

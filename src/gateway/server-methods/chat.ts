@@ -2623,7 +2623,10 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionKey: string;
       agentId?: string;
       runId?: string;
+      origin?: string;
     };
+    const abortOrigin = (params as { origin?: string }).origin ?? "rpc";
+    const abortStopReason = abortOrigin === "user-stop" ? "stop" : "rpc";
     const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
     const abortCfg = context.getRuntimeConfig();
     const defaultAgentId = resolveDefaultAgentId(abortCfg);
@@ -2667,8 +2670,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKeyAliases: canonicalAbortSessionKey === rawSessionKey ? undefined : [rawSessionKey],
         agentId: abortAgentId,
         defaultAgentId,
-        abortOrigin: "rpc",
-        stopReason: "rpc",
+        abortOrigin: abortOrigin,
+        stopReason: abortStopReason,
         requester,
       });
       if (res.unauthorized) {
@@ -2719,7 +2722,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           runId,
           sessionKey: pendingAgentMatch.sessionKey,
           payload: pendingAgentPayload,
-          stopReason: "rpc",
+          stopReason: abortStopReason,
         });
         respond(true, { ok: true, aborted: true, runIds: [runId] });
         return;
@@ -2760,7 +2763,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     const res = abortChatRunById(ops, {
       runId,
       sessionKey: active.sessionKey,
-      stopReason: "rpc",
+      stopReason: abortStopReason,
     });
     if (res.aborted && active.controlUiVisible !== false && partialText && partialText.trim()) {
       await persistAbortedPartials({

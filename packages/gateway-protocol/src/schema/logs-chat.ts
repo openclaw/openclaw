@@ -103,6 +103,7 @@ export const ChatAbortParamsSchema = Type.Object(
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
+    origin: Type.Optional(Type.Union([Type.Literal("user-stop"), Type.Literal("rpc")])),
   },
   { additionalProperties: false },
 );
