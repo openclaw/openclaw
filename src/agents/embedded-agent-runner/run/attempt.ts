@@ -4221,9 +4221,13 @@ export async function runEmbeddedAttempt(
             if (googlePromptCacheStreamFn) {
               activeSession.agent.streamFn = googlePromptCacheStreamFn;
             }
-            // Default to disabling SDK-level retries inside the embedded prompt lock window;
-            // an explicit settings.retry.provider.maxRetries still wins (see helper comment).
-            installEmbeddedPromptRetryDefault(activeSession);
+            // Inject the configured provider retry as the default for SDK calls in the
+            // embedded prompt lock window; explicit per-call options still override it, and
+            // an unset config falls back to 0 to keep SDK retries out of the lock-release
+            // window (see helper comment).
+            installEmbeddedPromptRetryDefault(activeSession, {
+              maxRetries: settingsManager.getProviderRetrySettings().maxRetries,
+            });
             installPromptSubmissionLockRelease({
               session: activeSession,
               waitForSessionEvents: (sessionToDrain) =>
