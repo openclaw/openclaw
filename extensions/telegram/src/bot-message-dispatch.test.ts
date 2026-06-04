@@ -3504,6 +3504,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(sendMessageTelegram).not.toHaveBeenCalled();
   });
 
+  it("does not send failure fallback when source delivery is message-tool-only and reply lane is non-silently skipped", async () => {
+    setupDraftStreams({ answerMessageId: 2001, reasoningMessageId: 3001 });
+    // Simulate a group turn where config sets message_tool delivery (not a room_event), the
+    // message tool sends the visible reply, and the main reply lane is skipped as "empty".
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      dispatcherOptions.onSkip?.({ text: "", isError: false }, { kind: "final", reason: "empty" });
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        sourceReplyDeliveryMode: "message_tool_only",
+      };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        isGroup: true,
+        ctxPayload: {
+          SessionKey: "agent:main:telegram:group:-100456",
+          ChatType: "group",
+        } as unknown as TelegramMessageContext["ctxPayload"],
+        msg: {
+          chat: { id: -100456, type: "supergroup" },
+          message_id: 789,
+        } as unknown as TelegramMessageContext["msg"],
+        chatId: -100456,
+        threadSpec: { id: undefined, scope: "none" },
+      }),
+    });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+    expect(editMessageTelegram).not.toHaveBeenCalled();
+    expect(sendMessageTelegram).not.toHaveBeenCalled();
+  });
+
   it("runs ambient room events as tool-only invisible turns", async () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([
