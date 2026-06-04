@@ -3,7 +3,12 @@ import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { CompactionEntry, SessionEntry, SessionHeader } from "../sessions/index.js";
+import type {
+  CompactionEntry,
+  SessionEntry,
+  SessionHeader,
+  SessionMessageEntry,
+} from "../sessions/index.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
 import {
   readTranscriptFileState,
@@ -104,6 +109,70 @@ function findLatestCompactionIndex(entries: SessionEntry[]): number {
   return -1;
 }
 
+const THINKING_SIGNATURE_FIELDS = ["signature", "thinkingSignature", "thought_signature"] as const;
+
+/**
+ * Strip thinking signatures from all assistant message entries.
+ *
+ * After compaction, the conversation prefix changes so all pre-existing
+ * Anthropic thinking signatures become cryptographically invalid. Keeping
+ * them causes permanent `Invalid signature in thinking block` failures.
+ */
+function stripThinkingSignaturesFromEntries(entries: SessionEntry[]): SessionEntry[] {
+  let touched = false;
+  const out: SessionEntry[] = [];
+
+  for (const entry of entries) {
+    if (entry.type !== "message") {
+      out.push(entry);
+      continue;
+    }
+
+    const msgEntry = entry as SessionMessageEntry;
+    const { message } = msgEntry;
+    if (message.role !== "assistant" || !Array.isArray(message.content)) {
+      out.push(entry);
+      continue;
+    }
+
+    let contentChanged = false;
+    const cleanedContent = message.content.map((block) => {
+      if (!block || typeof block !== "object") {
+        return block;
+      }
+      const blockType = (block as { type?: unknown }).type;
+      if (blockType !== "thinking" && blockType !== "redacted_thinking") {
+        return block;
+      }
+      // Check if any signature field is present
+      const record = block as unknown as Record<string, unknown>;
+      const hasSignature = THINKING_SIGNATURE_FIELDS.some((field) => record[field] != null);
+      if (!hasSignature) {
+        return block;
+      }
+      contentChanged = true;
+      const cleaned = { ...record };
+      for (const field of THINKING_SIGNATURE_FIELDS) {
+        delete cleaned[field];
+      }
+      return cleaned;
+    });
+
+    if (!contentChanged) {
+      out.push(entry);
+      continue;
+    }
+
+    touched = true;
+    out.push({
+      ...msgEntry,
+      message: { ...message, content: cleanedContent },
+    } as SessionMessageEntry);
+  }
+
+  return touched ? out : entries;
+}
+
 function buildSuccessorEntries(params: {
   allEntries: SessionEntry[];
   branch: SessionEntry[];
@@ -176,11 +245,13 @@ function buildSuccessorEntries(params: {
     );
   }
 
-  return orderSuccessorEntries({
+  const ordered = orderSuccessorEntries({
     entries: keptEntries,
     activeBranchIds,
     originalIndexById,
   });
+
+  return stripThinkingSignaturesFromEntries(ordered);
 }
 
 function collectLatestStateEntryIds(entries: SessionEntry[]): Set<string> {
