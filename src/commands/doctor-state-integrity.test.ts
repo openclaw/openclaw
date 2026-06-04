@@ -16,6 +16,21 @@ import {
 } from "./doctor-heartbeat-main-session-repair.js";
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
 
+const canCreateDirectorySymlinks = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-symlink-probe-"));
+  const targetDir = path.join(probeDir, "target");
+  const linkDir = path.join(probeDir, "link");
+  try {
+    fs.mkdirSync(targetDir);
+    fs.symlinkSync(targetDir, linkDir, process.platform === "win32" ? "junction" : "dir");
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
   listBundledChannelPluginIds: () => ["matrix", "whatsapp"],
@@ -459,7 +474,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(archivedOrphanTranscripts).toStrictEqual([]);
   });
 
-  it.skipIf(process.platform === "win32")(
+  it.skipIf(process.platform === "win32" ? !canCreateDirectorySymlinks : false)(
     "does not archive referenced transcripts when the state dir path resolves through a symlink",
     async () => {
       const cfg: OpenClawConfig = {};
@@ -468,7 +483,7 @@ describe("doctor state integrity oauth dir checks", () => {
         path.dirname(originalHome),
         `${path.basename(originalHome)}-link`,
       );
-      fs.symlinkSync(originalHome, symlinkHome, "dir");
+      fs.symlinkSync(originalHome, symlinkHome, process.platform === "win32" ? "junction" : "dir");
       try {
         process.env.HOME = symlinkHome;
         process.env.OPENCLAW_HOME = symlinkHome;
