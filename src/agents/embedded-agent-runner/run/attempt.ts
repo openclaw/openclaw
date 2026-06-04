@@ -1076,7 +1076,7 @@ export async function runEmbeddedAttempt(
               config: params.config,
               sessionFile: params.sessionFile,
               sessionKey: params.sessionKey,
-            })
+            });
           },
         });
 
@@ -3650,9 +3650,11 @@ export async function runEmbeddedAttempt(
           }
         }
         // Apply skill router result to prompt (narrowed match or full fallback).
+        let skillRoutePromptInjected = false;
         if (skillRoute && typeof skillRoute === "object") {
           if ("xml" in skillRoute && !isRawModelRun) {
             effectivePrompt = skillRoute.xml + "\n\n" + effectivePrompt;
+            skillRoutePromptInjected = true;
             log.debug(`skill router: injected ${skillRoute.mode} match`);
           } else if ("error" in skillRoute) {
             log.warn(`skill router: ${skillRoute.reason}, falling back to full catalog`);
@@ -3857,9 +3859,10 @@ export async function runEmbeddedAttempt(
           const promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt: promptForRuntimeContextSplit,
             transcriptPrompt: transcriptPromptForRuntimeSplit,
-            modelPrompt: hasPromptBuildContext
-              ? promptForModelBeforeRuntimeContextSplit
-              : undefined,
+            modelPrompt:
+              hasPromptBuildContext || skillRoutePromptInjected
+                ? promptForModelBeforeRuntimeContextSplit
+                : undefined,
             emptyTranscriptMode: params.suppressNextUserMessagePersistence
               ? "model-prompt"
               : "runtime-event",

@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { registerSkillRouter, resolveSkillRouter } from "../skills/loading/router-registry.js";
 import { getCompactionProvider, registerCompactionProvider } from "./compaction-provider.js";
 import { getEmbeddingProvider, registerEmbeddingProvider } from "./embedding-providers.js";
 import {
@@ -767,6 +768,10 @@ describe("clearPluginLoaderCache", () => {
         },
       },
     });
+    registerSkillRouter("stale-router", () => ({
+      name: "stale-router",
+      route: async () => ({ mode: "nomatch" }),
+    }));
     expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([
       "stale memory section",
       "stale wiki supplement",
@@ -778,6 +783,7 @@ describe("clearPluginLoaderCache", () => {
     ).toEqual({ backend: "builtin" });
     expect(getEmbeddingProvider("stale-embedding")?.id).toBe("stale-embedding");
     expect(requireMemoryEmbeddingProvider("stale").id).toBe("stale");
+    expect(resolveSkillRouter("stale-router")?.name).toBe("stale-router");
 
     clearPluginLoaderCache();
 
@@ -787,6 +793,7 @@ describe("clearPluginLoaderCache", () => {
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale")).toBeUndefined();
+    expect(resolveSkillRouter("stale-router")).toBeNull();
   });
 });
 
@@ -805,12 +812,17 @@ describe("loadOpenClawPlugins active runtime clearing", () => {
       id: "stale-memory",
       create: async () => ({ provider: null }),
     });
+    registerSkillRouter("stale-router", () => ({
+      name: "stale-router",
+      route: async () => ({ mode: "nomatch" }),
+    }));
 
     loadOpenClawPlugins({ onlyPluginIds: [] });
 
     expect(getEmbeddingProvider("stale-embedding")).toBeUndefined();
     expect(getCompactionProvider("stale-compaction")).toBeUndefined();
     expect(getMemoryEmbeddingProvider("stale-memory")).toBeUndefined();
+    expect(resolveSkillRouter("stale-router")).toBeNull();
   });
 });
 

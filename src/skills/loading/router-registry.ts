@@ -4,6 +4,8 @@ type SkillRouterFactory = (config: Record<string, unknown>) => SkillRouter;
 
 const registry = new Map<string, SkillRouterFactory>();
 
+export type SkillRouterRegistrySnapshot = Array<readonly [string, SkillRouterFactory]>;
+
 /**
  * Register a skill router implementation.
  * Plugins call this at install time to declare which router they provide.
@@ -13,6 +15,21 @@ const registry = new Map<string, SkillRouterFactory>();
  */
 export function registerSkillRouter(name: string, factory: SkillRouterFactory): void {
   registry.set(name, factory);
+}
+
+export function clearSkillRouterRegistry(): void {
+  registry.clear();
+}
+
+export function snapshotSkillRouterRegistry(): SkillRouterRegistrySnapshot {
+  return Array.from(registry.entries());
+}
+
+export function restoreSkillRouterRegistry(snapshot: SkillRouterRegistrySnapshot): void {
+  registry.clear();
+  for (const [name, factory] of snapshot) {
+    registry.set(name, factory);
+  }
 }
 
 /**
