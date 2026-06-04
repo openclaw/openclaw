@@ -1499,14 +1499,26 @@ export async function updateNpmInstalledPlugins(params: {
               pinResolvedRegistrySpec: true,
             });
             if (nextRecordSpec !== record.spec) {
-              next = recordPluginInstall(next, {
-                pluginId,
-                source: "npm",
-                spec: nextRecordSpec,
-                installPath,
-                version: currentVersion,
-                ...buildNpmResolutionInstallFields(metadataResult.metadata),
-              });
+              const resolutionFields = buildNpmResolutionInstallFields(metadataResult.metadata);
+              next = {
+                ...next,
+                plugins: {
+                  ...next.plugins,
+                  installs: {
+                    ...next.plugins?.installs,
+                    [pluginId]: {
+                      ...record,
+                      spec: nextRecordSpec,
+                      resolvedName: resolutionFields.resolvedName ?? record.resolvedName,
+                      resolvedVersion: resolutionFields.resolvedVersion ?? record.resolvedVersion,
+                      resolvedSpec: resolutionFields.resolvedSpec ?? record.resolvedSpec,
+                      integrity: resolutionFields.integrity ?? record.integrity,
+                      shasum: resolutionFields.shasum ?? record.shasum,
+                      resolvedAt: resolutionFields.resolvedAt ?? record.resolvedAt,
+                    },
+                  },
+                },
+              };
               changed = true;
             }
           }

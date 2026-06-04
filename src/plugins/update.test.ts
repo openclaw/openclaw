@@ -142,6 +142,8 @@ function createNpmInstallConfig(params: {
   resolvedName?: string;
   resolvedSpec?: string;
   resolvedVersion?: string;
+  installedAt?: string;
+  resolvedAt?: string;
 }) {
   return {
     plugins: {
@@ -155,6 +157,8 @@ function createNpmInstallConfig(params: {
           ...(params.resolvedName ? { resolvedName: params.resolvedName } : {}),
           ...(params.resolvedSpec ? { resolvedSpec: params.resolvedSpec } : {}),
           ...(params.resolvedVersion ? { resolvedVersion: params.resolvedVersion } : {}),
+          ...(params.installedAt ? { installedAt: params.installedAt } : {}),
+          ...(params.resolvedAt ? { resolvedAt: params.resolvedAt } : {}),
         },
       },
     },
@@ -656,6 +660,8 @@ describe("updateNpmInstalledPlugins", () => {
         resolvedSpec: "@openclaw/acpx@2026.5.2",
         resolvedVersion: "2026.5.2",
         integrity: "sha512-old",
+        installedAt: "2026-05-01T00:00:00.000Z",
+        resolvedAt: "2026-05-01T00:00:01.000Z",
       }),
       pluginIds: ["acpx"],
       syncOfficialPluginInstalls: true,
@@ -664,6 +670,8 @@ describe("updateNpmInstalledPlugins", () => {
     expect(result.changed).toBe(true);
     expect(result.outcomes[0]?.status).toBe("unchanged");
     expect(result.config.plugins?.installs?.acpx?.spec).toBe("@openclaw/acpx@2026.5.2");
+    expect(result.config.plugins?.installs?.acpx?.installedAt).toBe("2026-05-01T00:00:00.000Z");
+    expect(result.config.plugins?.installs?.acpx?.resolvedAt).toBe("2026-05-01T00:00:01.000Z");
     expect(npmInstallCall()).toBeUndefined();
   });
 
