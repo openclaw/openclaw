@@ -129,6 +129,25 @@ function responseStreamChunks(chunks: string[]): ReadableStream<Uint8Array> {
   });
 }
 
+function openResponseStreamText(text: string): {
+  close: () => void;
+  stream: ReadableStream<Uint8Array>;
+} {
+  const encoder = new TextEncoder();
+  let streamController: ReadableStreamDefaultController<Uint8Array> | undefined;
+  return {
+    close() {
+      streamController?.close();
+    },
+    stream: new ReadableStream({
+      start(controller) {
+        streamController = controller;
+        controller.enqueue(encoder.encode(text));
+      },
+    }),
+  };
+}
+
 describe("buildGuardedModelFetch", () => {
   beforeEach(() => {
     managedStreamCleanupRegistrations.length = 0;
@@ -240,6 +259,47 @@ describe("buildGuardedModelFetch", () => {
         body: JSON.stringify({ model: "gpt-5.5", stream: true }),
       },
     );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("returns promptly for missing content-type SSE streams that remain open", async () => {
+    const source = openResponseStreamText('data: {"ok": true}\n\n');
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(source.stream),
+      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openclaw-openai-responses-transport",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as unknown as Model<"openai-responses">;
+
+    const responsePromise = buildGuardedModelFetch(model)(
+      "https://chatgpt.com/backend-api/codex/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+    const timeout = Symbol("timeout");
+    const result = await Promise.race<Response | typeof timeout>([
+      responsePromise,
+      new Promise<typeof timeout>((resolve) => {
+        setTimeout(() => resolve(timeout), 100);
+      }),
+    ]);
+    source.close();
+
+    expect(result).not.toBe(timeout);
+    const response = result as Response;
     const items = [];
     for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
       items.push(item);
