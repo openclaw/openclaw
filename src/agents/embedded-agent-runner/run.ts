@@ -15,6 +15,7 @@ import { emitAgentPlanEvent, registerAgentRunContext } from "../../infra/agent-e
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
@@ -202,6 +203,7 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
+const log = createSubsystemLogger("agent/embedded");
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
@@ -685,6 +687,13 @@ export async function runEmbeddedAgent(
         agentHarnessId: params.agentHarnessId,
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
+      log.info(
+        `selected agent harness: provider=${sanitizeForLog(provider)} model=${sanitizeForLog(
+          modelId,
+        )} harness=${sanitizeForLog(agentHarness.id)} requested=${sanitizeForLog(
+          params.agentHarnessId ?? "-",
+        )} runtimeOverride=${sanitizeForLog(params.agentHarnessRuntimeOverride ?? "-")}`,
+      );
       const pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
       const modelConfigProvider = provider;
       const selectedRuntimeProvider = resolveSelectedOpenAIRuntimeProvider({
