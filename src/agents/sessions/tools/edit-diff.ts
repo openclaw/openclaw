@@ -197,9 +197,14 @@ function getNoChangeError(path: string, totalEdits: number): Error {
  * Map a character offset within a single line from its position in the
  * fuzzy-normalized form back to the corresponding position in the original
  * line. NFKC normalization can expand compatibility characters (e.g.,
- * U+FB03 "ﬃ" becomes "ffi"), shifting all subsequent positions on that
+ * U+FB03 "ﬃ" becomes "ffi") and compose adjacent code points (e.g.,
+ * e + U+0301 combining acute → é), shifting subsequent positions on that
  * line. The other fuzzy normalizations (trimEnd, smart quotes, dashes,
  * special spaces) are same-length replacements that do not shift positions.
+ *
+ * This function groups each base character with its following combining marks
+ * and normalizes the complete segment, so cross-code-point NFKC composition
+ * is handled correctly.
  */
 function mapLineOffsetThroughNfkc(origLine: string, normOffset: number): number {
   const nfkcLine = origLine.normalize("NFKC");
@@ -208,21 +213,40 @@ function mapLineOffsetThroughNfkc(origLine: string, normOffset: number): number 
     return Math.min(normOffset, origLine.length);
   }
 
-  // Walk through original code points, tracking how many NFKC code units
-  // each one produces, until we reach or pass the target offset.
-  let origCodeUnitPos = 0;
-  let normCodeUnitPos = 0;
+  // Walk through original code points, grouping each base character with its
+  // following combining marks. Normalize each complete group with NFKC to
+  // find how many normalized code units it produces.
+  let origPos = 0;
+  let nfkcPos = 0;
+  const codePoints = [...origLine];
+  let i = 0;
 
-  for (const codePoint of origLine) {
-    if (normCodeUnitPos >= normOffset) {
-      return origCodeUnitPos;
+  while (i < codePoints.length) {
+    if (nfkcPos >= normOffset) {
+      return origPos;
     }
-    const nfkc = codePoint.normalize("NFKC");
-    origCodeUnitPos += codePoint.length;
-    normCodeUnitPos += nfkc.length;
+
+    // Collect base code point + any following combining marks as one segment.
+    let segment = codePoints[i];
+    let segOrigLen = codePoints[i].length;
+    i++;
+    while (i < codePoints.length && /^\p{M}/u.test(codePoints[i])) {
+      segment += codePoints[i];
+      segOrigLen += codePoints[i].length;
+      i++;
+    }
+
+    const segNfkc = segment.normalize("NFKC");
+    // Target falls inside this segment: map to segment start in original.
+    if (nfkcPos + segNfkc.length > normOffset) {
+      return origPos;
+    }
+
+    origPos += segOrigLen;
+    nfkcPos += segNfkc.length;
   }
 
-  return origCodeUnitPos;
+  return origPos;
 }
 
 /**
