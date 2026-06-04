@@ -116,4 +116,48 @@ describe("generateSlugViaLLM", () => {
     expect(options.provider).toBe("openai");
     expect(options.model).toBe("gpt-5.5");
   });
+
+  it("splits provider-qualified hook model override (regression #89551)", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {} as OpenClawConfig,
+      model: "anthropic/claude-sonnet-4-6",
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const options = requireFirstRunOptions();
+    expect(options.provider).toBe("anthropic");
+    expect(options.model).toBe("claude-sonnet-4-6");
+  });
+
+  it("uses hook model as model-only ref when no provider prefix (regression #89551)", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {} as OpenClawConfig,
+      model: "gpt-5.5",
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const options = requireFirstRunOptions();
+    expect(options.provider).toBeUndefined();
+    expect(options.model).toBe("gpt-5.5");
+  });
+
+  it("falls back to agent default when no hook model is provided (regression #89551)", async () => {
+    await generateSlugViaLLM({
+      sessionContent: "hello",
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "deepseek/deepseek-v4" },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    const options = requireFirstRunOptions();
+    expect(options.provider).toBe("deepseek");
+    expect(options.model).toBe("deepseek-v4");
+  });
 });
