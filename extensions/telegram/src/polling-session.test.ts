@@ -23,7 +23,15 @@ const computeBackoffMock = vi.hoisted(() =>
   vi.fn((_policy: { initialMs: number }, _attempt: number) => 0),
 );
 const sleepWithAbortMock = vi.hoisted(() => vi.fn(async () => undefined));
-const drainPendingDeliveriesMock = vi.hoisted(() => vi.fn(async (_opts: unknown) => undefined));
+const drainPendingDeliveriesWithResultMock = vi.hoisted(() =>
+  vi.fn(async (_opts: unknown) => ({
+    matched: 0,
+    drained: 0,
+    skippedInProgress: 0,
+    skippedEntryIds: [] as string[],
+  })),
+);
+const isRecoveryEntryInProgressMock = vi.hoisted(() => vi.fn((_entryId: string) => false));
 
 vi.mock("@grammyjs/runner", () => ({
   run: runMock,
@@ -38,7 +46,8 @@ vi.mock("./network-errors.js", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/delivery-queue-runtime", () => ({
-  drainPendingDeliveries: drainPendingDeliveriesMock,
+  drainPendingDeliveriesWithResult: drainPendingDeliveriesWithResultMock,
+  isRecoveryEntryInProgress: isRecoveryEntryInProgressMock,
 }));
 
 vi.mock("./api-logging.js", () => ({
@@ -283,7 +292,7 @@ function expectTelegramBotTransportSequence(firstTransport: unknown, secondTrans
 }
 
 function expectDrainPendingDeliveriesCall(index = 0): DrainPendingDeliveriesCall {
-  const call = drainPendingDeliveriesMock.mock.calls[index]?.[0];
+  const call = drainPendingDeliveriesWithResultMock.mock.calls[index]?.[0];
   if (!call || typeof call !== "object") {
     throw new Error(`Expected drainPendingDeliveries call ${index}`);
   }
@@ -624,7 +633,10 @@ describe("TelegramPollingSession", () => {
     isRecoverableTelegramNetworkErrorMock.mockReset().mockReturnValue(true);
     computeBackoffMock.mockReset().mockReturnValue(0);
     sleepWithAbortMock.mockReset().mockResolvedValue(undefined);
-    drainPendingDeliveriesMock.mockReset().mockResolvedValue(undefined);
+    drainPendingDeliveriesWithResultMock
+      .mockReset()
+      .mockResolvedValue({ matched: 0, drained: 0, skippedInProgress: 0, skippedEntryIds: [] });
+    isRecoveryEntryInProgressMock.mockReset().mockReturnValue(false);
     resetTelegramReplyFenceForTests();
     installTelegramIngressQueueRuntime(() =>
       path.join(os.tmpdir(), "openclaw-telegram-test-state"),
@@ -1009,7 +1021,7 @@ describe("TelegramPollingSession", () => {
     await vi.waitFor(() => expect(init).toHaveBeenCalledTimes(1));
     onMessage?.({ type: "poll-success", finishedAt: Date.now(), count: 0 });
 
-    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
 
     abort.abort();
     await runPromise;
@@ -3388,7 +3400,7 @@ describe("TelegramPollingSession", () => {
       { offset: 1 },
     );
 
-    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
     const drain = expectDrainPendingDeliveriesCall();
     expect(drain.drainKey).toBe("telegram:default");
     expect(drain.logLabel).toBe("Telegram reconnect drain");
@@ -3443,13 +3455,272 @@ describe("TelegramPollingSession", () => {
       { offset: 2 },
     );
 
-    await vi.waitFor(() => expect(drainPendingDeliveriesMock).toHaveBeenCalledTimes(2));
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(2));
 
     abort.abort();
     resolveFirstTask();
     await runPromise;
   });
 
+  it("suppresses reconnect drain re-entry when all entries are already being recovered", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    // Simulate all entries already claimed by an in-flight live send.
+    drainPendingDeliveriesWithResultMock.mockResolvedValue({
+      matched: 1,
+      drained: 0,
+      skippedInProgress: 1,
+      skippedEntryIds: ["entry-1"],
+    });
+    // The skipped entry is still in-flight.
+    isRecoveryEntryInProgressMock.mockReturnValue(true);
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    const runPromise = session.runUntilAbort();
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+
+    // First poll-success triggers drain; drain finds 1 entry already recovering.
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 1 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+
+    // Second poll-success should NOT trigger a new drain (claim still active).
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 2 },
+    );
+
+    // Allow microtasks to settle.
+    await new Promise<void>((r) => {
+      setTimeout(r, 10);
+    });
+
+    // Drain should still have been called only once.
+    expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1);
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+  });
+
+  it("still suppresses drain after one long-poll interval when entries remain in-flight", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const abort = new AbortController();
+      const botStop = vi.fn(async () => undefined);
+      const runnerStop = vi.fn(async () => undefined);
+      const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+      const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+      // All entries already claimed by an in-flight live send.
+      drainPendingDeliveriesWithResultMock.mockResolvedValue({
+        matched: 1,
+        drained: 0,
+        skippedInProgress: 1,
+        skippedEntryIds: ["entry-1"],
+      });
+      // The claim is still active.
+      isRecoveryEntryInProgressMock.mockReturnValue(true);
+
+      const session = createPollingSession({
+        abortSignal: abort.signal,
+      });
+
+      const runPromise = session.runUntilAbort();
+      const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+
+      // First poll-success triggers drain; claim-based suppression activates.
+      await apiMiddleware(
+        vi.fn(async () => []),
+        "getUpdates",
+        { offset: 1 },
+      );
+      await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+
+      // Advance past one normal Telegram long-poll interval (30s).
+      // Claim is still active so drain stays suppressed regardless of time.
+      await vi.advanceTimersByTimeAsync(35_000);
+
+      // Delayed poll-success arrives after 35s.
+      await apiMiddleware(
+        vi.fn(async () => []),
+        "getUpdates",
+        { offset: 2 },
+      );
+
+      // Allow microtasks to settle.
+      await vi.advanceTimersByTimeAsync(100);
+
+      // Drain must still be suppressed (claim still held).
+      expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1);
+
+      abort.abort();
+      resolveFirstTask();
+      await runPromise;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("resumes drain once the active delivery claim is released", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    drainPendingDeliveriesWithResultMock
+      .mockResolvedValueOnce({
+        matched: 1,
+        drained: 0,
+        skippedInProgress: 1,
+        skippedEntryIds: ["entry-1"],
+      })
+      .mockResolvedValueOnce({ matched: 1, drained: 1, skippedInProgress: 0, skippedEntryIds: [] });
+    // Claim is initially active.
+    isRecoveryEntryInProgressMock.mockReturnValue(true);
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    const runPromise = session.runUntilAbort();
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+
+    // First poll-success triggers drain; claim-based suppression activates.
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 1 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+
+    // Second poll while claim is still active: drain suppressed.
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 2 },
+    );
+    await new Promise<void>((r) => {
+      setTimeout(r, 10);
+    });
+    expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1);
+
+    // Simulate claim release (delivery completed or failed).
+    isRecoveryEntryInProgressMock.mockReturnValue(false);
+
+    // Third poll after claim released: drain fires again.
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 3 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(2));
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+  });
+
+  it("does not suppress drain when entries were actually drained", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    // Simulate a successful drain (entry recovered, no in-progress skips).
+    drainPendingDeliveriesWithResultMock.mockResolvedValue({
+      matched: 1,
+      drained: 1,
+      skippedInProgress: 0,
+      skippedEntryIds: [],
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    const runPromise = session.runUntilAbort();
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 1 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 2 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(2));
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+  });
+
+  it("does not suppress drain when some entries were successfully drained", async () => {
+    const abort = new AbortController();
+    const botStop = vi.fn(async () => undefined);
+    const runnerStop = vi.fn(async () => undefined);
+    const getApiMiddleware = mockBotCapturingApiMiddleware(botStop);
+    const resolveFirstTask = mockLongRunningPollingCycle(runnerStop);
+
+    // Mixed result: 3 matched, 1 in-progress, 1 drained.
+    // Suppression should NOT activate because at least one entry was drained.
+    drainPendingDeliveriesWithResultMock.mockResolvedValue({
+      matched: 3,
+      drained: 1,
+      skippedInProgress: 1,
+      skippedEntryIds: ["entry-2"],
+    });
+
+    const session = createPollingSession({
+      abortSignal: abort.signal,
+    });
+
+    const runPromise = session.runUntilAbort();
+    const apiMiddleware = await waitForApiMiddleware(getApiMiddleware);
+
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 1 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(1));
+
+    // Let the drain promise .then()/.finally() chain settle so the
+    // in-flight flag clears before the next poll-success.
+    await new Promise<void>((r) => {
+      setTimeout(r, 10);
+    });
+
+    await apiMiddleware(
+      vi.fn(async () => []),
+      "getUpdates",
+      { offset: 2 },
+    );
+    await vi.waitFor(() => expect(drainPendingDeliveriesWithResultMock).toHaveBeenCalledTimes(2));
+
+    abort.abort();
+    resolveFirstTask();
+    await runPromise;
+  });
   it("keeps polling marked connected across recoverable restart cycles", async () => {
     const abort = new AbortController();
     const recoverableError = new Error("recoverable polling error");

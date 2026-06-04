@@ -489,6 +489,19 @@ async function drainQueuedEntry(opts: {
   }
 }
 
+export type ReconnectDrainResult = {
+  matched: number;
+  drained: number;
+  skippedInProgress: number;
+  /** IDs of entries that were skipped because another path holds an active claim. */
+  skippedEntryIds: string[];
+};
+
+/** Check whether a recovery entry is currently claimed by an in-flight delivery. */
+export function isRecoveryEntryInProgress(entryId: string): boolean {
+  return entriesInProgress.has(entryId);
+}
+
 export async function drainPendingDeliveries(opts: {
   drainKey: string;
   logLabel: string;
@@ -497,10 +510,16 @@ export async function drainPendingDeliveries(opts: {
   stateDir?: string;
   deliver: DeliverFn;
   selectEntry: (entry: QueuedDelivery, now: number) => PendingDeliveryDrainDecision;
-}): Promise<void> {
+}): Promise<ReconnectDrainResult> {
+  const emptyResult: ReconnectDrainResult = {
+    matched: 0,
+    drained: 0,
+    skippedInProgress: 0,
+    skippedEntryIds: [],
+  };
   if (drainInProgress.get(opts.drainKey)) {
     opts.log.info(`${opts.logLabel}: already in progress for ${opts.drainKey}, skipping`);
-    return;
+    return emptyResult;
   }
 
   drainInProgress.set(opts.drainKey, true);
@@ -512,15 +531,24 @@ export async function drainPendingDeliveries(opts: {
       .toSorted((a, b) => a.enqueuedAt - b.enqueuedAt);
 
     if (matchingEntries.length === 0) {
-      return;
+      return emptyResult;
     }
 
     opts.log.info(
       `${opts.logLabel}: ${matchingEntries.length} pending message(s) matched ${opts.drainKey}`,
     );
 
+    const result: ReconnectDrainResult = {
+      matched: matchingEntries.length,
+      drained: 0,
+      skippedInProgress: 0,
+      skippedEntryIds: [],
+    };
+
     for (const entry of matchingEntries) {
       if (!claimRecoveryEntry(entry.id)) {
+        result.skippedInProgress += 1;
+        result.skippedEntryIds.push(entry.id);
         opts.log.info(`${opts.logLabel}: entry ${entry.id} is already being recovered`);
         continue;
       }
@@ -567,7 +595,7 @@ export async function drainPendingDeliveries(opts: {
           }
         }
 
-        const result = await drainQueuedEntry({
+        const drainOutcome = await drainQueuedEntry({
           entry: currentEntry,
           cfg: opts.cfg,
           deliver,
@@ -583,7 +611,8 @@ export async function drainPendingDeliveries(opts: {
             opts.log.warn(`${opts.logLabel}: retry failed for entry ${failedEntry.id}: ${errMsg}`);
           },
         });
-        if (result === "recovered") {
+        if (drainOutcome === "recovered") {
+          result.drained += 1;
           opts.log.info(
             `${opts.logLabel}: drained delivery ${currentEntry.id} on ${currentEntry.channel}`,
           );
@@ -592,6 +621,7 @@ export async function drainPendingDeliveries(opts: {
         releaseRecoveryEntry(entry.id);
       }
     }
+    return result;
   } finally {
     drainInProgress.delete(opts.drainKey);
   }

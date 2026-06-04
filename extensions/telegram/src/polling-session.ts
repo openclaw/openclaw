@@ -1,7 +1,10 @@
 import { type RunOptions, run } from "@grammyjs/runner";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
-import { drainPendingDeliveries } from "openclaw/plugin-sdk/delivery-queue-runtime";
+import {
+  drainPendingDeliveriesWithResult,
+  isRecoveryEntryInProgress,
+} from "openclaw/plugin-sdk/delivery-queue-runtime";
 import {
   collectErrorGraphCandidates,
   formatErrorMessage,
@@ -122,6 +125,7 @@ const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 1
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
+// No time-based cooldown: suppression is tied to the active delivery claim lifecycle.
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
 
@@ -304,6 +308,8 @@ export class TelegramPollingSession {
   #spooledUpdateHandlerTimeoutMs: number;
   #spooledUpdateHandlerAbortGraceMs: number;
   #deliveryDrainInFlight = false;
+  /** Entry IDs that were skipped because a live delivery holds their claim. */
+  #deliveryDrainSkippedEntryIds: string[] = [];
 
   constructor(private readonly opts: TelegramPollingSessionOpts) {
     this.#transportState = new TelegramPollingTransportState({
@@ -415,13 +421,24 @@ export class TelegramPollingSession {
     if (this.#deliveryDrainInFlight) {
       return;
     }
+    // Suppress drain while every previously-skipped entry still has an
+    // active delivery claim.  This ties suppression to the claim lifecycle
+    // instead of an arbitrary time-based cooldown, preventing the repeated
+    // "already being recovered" log noise reported in openclaw#89953.
+    if (
+      this.#deliveryDrainSkippedEntryIds.length > 0 &&
+      this.#deliveryDrainSkippedEntryIds.every(isRecoveryEntryInProgress)
+    ) {
+      return;
+    }
+    this.#deliveryDrainSkippedEntryIds = [];
     if (!this.opts.config) {
       return;
     }
     this.#deliveryDrainInFlight = true;
     const accountId = normalizeTelegramAccountId(this.opts.accountId);
     const cfg = this.opts.config;
-    void drainPendingDeliveries({
+    void drainPendingDeliveriesWithResult({
       drainKey: `telegram:${accountId}`,
       logLabel: "Telegram reconnect drain",
       cfg,
@@ -436,9 +453,16 @@ export class TelegramPollingSession {
         bypassBackoff: false,
       }),
     })
-      .catch((err: unknown) => {
-        this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
-      })
+      .then(
+        (drainResult) => {
+          if (drainResult.skippedInProgress > 0 && drainResult.drained === 0) {
+            this.#deliveryDrainSkippedEntryIds = drainResult.skippedEntryIds;
+          }
+        },
+        (err: unknown) => {
+          this.opts.log(`[telegram] reconnect delivery drain failed: ${formatErrorMessage(err)}`);
+        },
+      )
       .finally(() => {
         this.#deliveryDrainInFlight = false;
       });
