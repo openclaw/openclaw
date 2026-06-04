@@ -1,17 +1,19 @@
 /** Parse an argument string using simple shell-style single and double quotes. */
 export function parseCommandArgs(argsString: string): string[] {
   const args: string[] = [];
+  const chars = Array.from(argsString);
   let current = "";
   let inQuote: string | null = null;
 
-  for (const char of argsString) {
+  for (let i = 0; i < chars.length; i++) {
+    const char = chars[i];
     if (inQuote) {
       if (char === inQuote) {
         inQuote = null;
       } else {
         current += char;
       }
-    } else if (char === '"' || char === "'") {
+    } else if ((char === '"' || char === "'") && chars.includes(char, i + 1)) {
       inQuote = char;
     } else if (/\s/.test(char)) {
       if (current) {

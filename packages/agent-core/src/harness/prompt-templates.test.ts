@@ -11,6 +11,30 @@ describe("prompt template argument substitution", () => {
     ]);
   });
 
+  it("keeps apostrophes in prose instead of dropping them", () => {
+    expect(parseCommandArgs("fix the user's login bug")).toEqual([
+      "fix",
+      "the",
+      "user's",
+      "login",
+      "bug",
+    ]);
+    expect(parseCommandArgs("it's broken now")).toEqual(["it's", "broken", "now"]);
+  });
+
+  it("preserves apostrophes through $ARGUMENTS and positional placeholders", () => {
+    const args = parseCommandArgs("fix the user's login bug");
+    expect(substituteArgs("Please address: $ARGUMENTS", args)).toBe(
+      "Please address: fix the user's login bug",
+    );
+    const positional = parseCommandArgs("it's broken now");
+    expect(substituteArgs("[$1][$2]", positional)).toBe("[it's][broken]");
+  });
+
+  it("treats an unbalanced quote as a literal but still honors balanced quotes", () => {
+    expect(parseCommandArgs(`don't "quote this"`)).toEqual(["don't", "quote this"]);
+  });
+
   it("rejects unsafe positional placeholders", () => {
     expect(substituteArgs("$9007199254740992", ["first", "second"])).toBe("");
   });
