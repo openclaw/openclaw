@@ -260,7 +260,13 @@ describe("Hermes migration secret items", () => {
     ]);
     expect(result.summary.conflicts).toBe(1);
     const authStore = readAuthProfileStore(agentDir);
-    expect(authStore.profiles?.["openai:hermes-import"]?.key).toBe("sk-late");
+    expect(authStore.profiles?.["openai:hermes-import"]).toEqual(
+      expect.objectContaining({
+        type: "api_key",
+        provider: "openai",
+        key: "sk-late",
+      }),
+    );
   });
 
   it("reports API key config auth profile conflicts during planning", async () => {
