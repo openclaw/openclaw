@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
+import type { SkillSnapshot } from "../skills/types.js";
 
 /** Source bucket for an effective agent tool inventory entry. */
 export type EffectiveToolSource = "core" | "plugin" | "channel" | "mcp";
@@ -67,4 +68,5 @@ export type ResolveEffectiveToolInventoryParams = {
   modelHasVision?: boolean;
   requireExplicitMessageTarget?: boolean;
   disableMessageTool?: boolean;
+  skillsSnapshot?: SkillSnapshot;
 };

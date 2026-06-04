@@ -43,7 +43,10 @@ const {
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
     prompt: "",
     skills: [] as unknown[],
-    metaSkillCatalog: { plans: [], diagnostics: [] },
+    metaSkillCatalog: {
+      plans: [] as MetaSkillCatalog["plans"],
+      diagnostics: [] as MetaSkillCatalog["diagnostics"],
+    },
     resolvedSkills: [] as unknown[],
   })),
   ensureSkillsWatcherMock: vi.fn(),

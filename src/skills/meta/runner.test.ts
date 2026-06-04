@@ -140,14 +140,24 @@ describe("runMetaPlan", () => {
       },
     });
 
-    expect(result.status).toBe("succeeded");
-    expect(result.steps.draft).toMatchObject({
+    if (result.status !== "succeeded") {
+      throw new Error(`expected succeeded, got ${result.status}`);
+    }
+    const draftStep = result.steps.draft;
+    if (draftStep.status !== "succeeded") {
+      throw new Error(`expected draft succeeded, got ${draftStep.status}`);
+    }
+    const finalStep = result.steps.final;
+    if (finalStep.status !== "succeeded") {
+      throw new Error(`expected final succeeded, got ${finalStep.status}`);
+    }
+    expect(draftStep).toMatchObject({
       status: "succeeded",
       recovery: "substitute",
       output: { text: "Fallback draft" },
       error: "draft failed",
     });
-    expect(result.steps.final.output).toEqual({ text: "Finalize Fallback draft" });
+    expect(finalStep.output).toEqual({ text: "Finalize Fallback draft" });
     expect(result.finalText).toBe("Finalize Fallback draft");
   });
 

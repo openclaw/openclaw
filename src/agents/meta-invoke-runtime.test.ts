@@ -4,6 +4,7 @@ import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import {
   createAgentMetaInvokePlanRunner,
   filterMetaInvokeTargetTools,
+  type MetaInvokeToolExecutor,
   type MetaInvokeToolExecutorRef,
   type MetaInvokeToolRef,
 } from "./meta-invoke-runtime.js";
@@ -90,7 +91,7 @@ describe("createAgentMetaInvokePlanRunner", () => {
   });
 
   it("fails tool_call steps when the lifecycle executor is unavailable", async () => {
-    const execute = vi.fn(async () => textResult("read contents"));
+    const execute = vi.fn(async () => textResult("read contents", {}));
     const toolsRef: MetaInvokeToolRef = {
       current: [tool("read", execute)],
     };
@@ -246,7 +247,9 @@ describe("createAgentMetaInvokePlanRunner", () => {
     const toolsRef: MetaInvokeToolRef = {
       current: [tool("read", vi.fn())],
     };
-    const executeTool = vi.fn(async () => textResult("read contents", { status: "ok" }));
+    const executeTool = vi.fn<MetaInvokeToolExecutor>(async () =>
+      textResult("read contents", { status: "ok" }),
+    );
     const runner = createAgentMetaInvokePlanRunner({
       toolsRef,
       toolExecutorRef: { current: executeTool },
