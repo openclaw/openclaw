@@ -41,6 +41,7 @@ function patchUnhandledStopReasonInAssistantMessage(message: unknown): void {
 function buildUnhandledStopReasonErrorStream(
   model: Parameters<StreamFn>[0],
   errorMessage: string,
+  isModelInitError: boolean = true,
 ): MutableAssistantMessageEventStream {
   const stream = createAssistantMessageEventStream();
   queueMicrotask(() => {
@@ -54,6 +55,7 @@ function buildUnhandledStopReasonErrorStream(
           id: model.id,
         },
         errorMessage,
+        isModelInitError,
       }),
     });
     stream.end();
@@ -83,6 +85,10 @@ function wrapStreamHandleUnhandledStopReason(
           id: model.id,
         },
         errorMessage: normalizedMessage,
+        // If we're catching an error in result(), it means the stream was created
+        // successfully but failed during execution - this is an assistant execution error,
+        // not a model initialization error.
+        isModelInitError: false,
       });
     }
   };
@@ -127,6 +133,10 @@ function wrapStreamHandleUnhandledStopReason(
                     id: model.id,
                   },
                   errorMessage: normalizedMessage,
+                  // If we're catching an error during stream iteration, it means the
+                  // stream was created successfully but failed during execution - this
+                  // is an assistant execution error, not a model initialization error.
+                  isModelInitError: false,
                 }),
               },
             };
@@ -142,6 +152,10 @@ function wrapStreamHandleUnhandledStopReason(
  * Wraps provider streams so raw "Unhandled stop reason" failures are rewritten
  * into stable error messages. Recovery covers synchronous creation failures,
  * async stream creation failures, iterator errors, and `result()` errors.
+ *
+ * Distinguishes between model initialization errors (stream creation failures)
+ * and assistant execution errors (stream iteration/result failures) by setting
+ * isModelInitError appropriately.
  */
 export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamFn {
   return (model, context, options) => {
@@ -155,7 +169,8 @@ export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamF
             if (!normalizedMessage) {
               throw err;
             }
-            return buildUnhandledStopReasonErrorStream(model, normalizedMessage);
+            // Stream creation failed - this is a model initialization error
+            return buildUnhandledStopReasonErrorStream(model, normalizedMessage, true);
           },
         );
       }
@@ -165,7 +180,8 @@ export function wrapStreamFnHandleSensitiveStopReason(baseFn: StreamFn): StreamF
       if (!normalizedMessage) {
         throw err;
       }
-      return buildUnhandledStopReasonErrorStream(model, normalizedMessage);
+      // Synchronous stream creation failed - this is a model initialization error
+      return buildUnhandledStopReasonErrorStream(model, normalizedMessage, true);
     }
   };
 }
