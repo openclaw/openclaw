@@ -3,7 +3,9 @@ import type { MetaSkillCatalog } from "../skills/meta/catalog.js";
 import type { MetaPlan } from "../skills/meta/types.js";
 import { stubTool } from "./test-helpers/fast-tool-stubs.js";
 
-const resolveOpenClawPluginToolsForOptions = vi.fn(() => [stubTool("plugin_tool")]);
+const { resolveOpenClawPluginToolsForOptions } = vi.hoisted(() => ({
+  resolveOpenClawPluginToolsForOptions: vi.fn(() => [stubTool("plugin_tool")]),
+}));
 
 vi.mock("./openclaw-plugin-tools.js", () => ({
   resolveOpenClawPluginToolsForOptions,
