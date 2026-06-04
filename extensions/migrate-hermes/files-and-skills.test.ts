@@ -147,8 +147,13 @@ describe("Hermes migration file and skill items", () => {
     process.env.OPENCLAW_AGENT_DIR = agentDir;
     try {
       const authStore = loadAuthProfileStoreWithoutExternalProfiles(agentDir);
-      expect(authStore.profiles?.["openai:hermes-import"]?.provider).toBe("openai");
-      expect(authStore.profiles?.["openai:hermes-import"]?.key).toBe("sk-hermes");
+      expect(authStore.profiles?.["openai:hermes-import"]).toEqual(
+        expect.objectContaining({
+          type: "api_key",
+          provider: "openai",
+          key: "sk-hermes",
+        }),
+      );
     } finally {
       if (previousStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
