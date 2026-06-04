@@ -64,8 +64,8 @@ function resolveNativeUserHomeDir(): string | undefined {
 }
 
 function resolveCompactHomePrefixes(): string[] {
-  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter(
-    (home): home is string => Boolean(home),
+  const homes = [resolveUserHomeDir(), resolveNativeUserHomeDir()].filter((home): home is string =>
+    Boolean(home),
   );
   const resolvedHomes = homes.map((home) => path.resolve(home));
   const realHomes = resolvedHomes
@@ -111,15 +111,15 @@ function resolvePromptTildeRoots(): string[] {
     return [];
   }
   const realNativeHome = tryRealpath(resolvedNativeHome);
-  return uniqueStrings([
-    resolvedNativeHome,
-    ...(realNativeHome ? [realNativeHome] : []),
-  ]);
+  return uniqueStrings([resolvedNativeHome, ...(realNativeHome ? [realNativeHome] : [])]);
 }
 
 function isContainerStateHomeWherePromptTildeEscapes(home: string): boolean {
   const configDir = path.resolve(resolveConfigDir());
-  return home === "/data" && (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir));
+  return (
+    home === "/data" &&
+    (configDir === "/data/.openclaw" || isPathInside("/data/.openclaw", configDir))
+  );
 }
 
 function shouldPreservePromptSkillPath(
@@ -168,12 +168,12 @@ function compactPathForConsoleMessage(filePath: string): string {
 
 export function isSkillVisibleInAvailableSkillsPrompt(entry: SkillEntry): boolean {
   if (entry.exposure) {
-    return entry.exposure.includeInAvailableSkillsPrompt !== false;
+    return entry.exposure.includeInAvailableSkillsPrompt ?? true;
   }
   if (entry.invocation) {
-    return entry.invocation.disableModelInvocation !== true;
+    return !entry.invocation.disableModelInvocation;
   }
-  return entry.skill.disableModelInvocation !== true;
+  return !entry.skill.disableModelInvocation;
 }
 
 function filterSkillEntries(
@@ -1527,6 +1527,7 @@ export function resolveSkillsPromptStateForRun(params: {
   config?: OpenClawConfig;
   workspaceDir: string;
   agentId?: string;
+  eligibility?: SkillEligibilityContext;
 }): { prompt: string; resolvedSkills: Skill[] } {
   const snapshotPrompt = params.skillsSnapshot?.prompt?.trim() ?? "";
   const snapshotResolvedSkills = params.skillsSnapshot?.resolvedSkills;

@@ -2383,6 +2383,52 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(routeParams.recentMessages()).toStrictEqual([]);
   });
 
+  it("sends routed skill XML to the provider prompt without persisting it as user text", async () => {
+    const runLlmInput = vi.fn(async () => {});
+    hoisted.getGlobalHookRunnerMock.mockReturnValue({
+      hasHooks: vi.fn((name: string) => name === "llm_input"),
+      runLlmInput,
+    });
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills><skill><name>full-catalog</name></skill></available_skills>",
+      resolvedSkills: [
+        {
+          name: "routed-skill",
+          description: "Can be routed",
+          filePath: "/tmp/skills/routed-skill/SKILL.md",
+        },
+      ],
+    });
+    hoisted.resolveSkillRouteMock.mockResolvedValue({
+      xml: "<available_skills><skill><name>routed-skill</name></skill></available_skills>",
+      mode: "direct",
+    });
+    const seen: { prompt?: string } = {};
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
+      },
+      sessionPrompt: async (_session, prompt) => {
+        seen.prompt = prompt;
+      },
+    });
+
+    expect(seen.prompt).toBe("hello");
+    expect(hoisted.systemPromptTexts.at(-1) ?? "").not.toContain("full-catalog");
+    const llmInput = mockParams(runLlmInput, 0, "llm input params");
+    expect(llmInput.prompt).toContain("<available_skills>");
+    expect(llmInput.prompt).toContain("routed-skill");
+    expect(llmInput.prompt).toContain("hello");
+  });
+
   it("passes recent session text into skill routing queries", async () => {
     hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
       prompt: "<available_skills></available_skills>",

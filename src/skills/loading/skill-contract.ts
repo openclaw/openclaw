@@ -25,7 +25,7 @@ function escapeXml(str: string): string {
     .replace(/'/g, "&apos;");
 }
 
-export type SkillForPrompt = Pick<Skill, "name" | "description" | "filePath">;
+export type SkillForPrompt = Pick<Skill, "name" | "description" | "filePath" | "promptVersion">;
 
 /**
  * Keep this formatter's XML layout byte-for-byte aligned with the upstream
