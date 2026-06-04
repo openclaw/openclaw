@@ -4,6 +4,7 @@ import type { MsgContext } from "../templating.js";
 import {
   buildInboundDedupeKey,
   resetInboundDedupe,
+  shouldSkipDuplicateInbound,
   type InboundDedupeClaimResult,
 } from "./inbound-dedupe.js";
 
@@ -65,6 +66,30 @@ describe("inbound dedupe", () => {
         MessageThreadId: "77",
       }),
     );
+  });
+
+  it("uses the route-key JSON shape for idless content fallbacks", () => {
+    const providerKey = buildInboundDedupeKey({
+      ...sharedInboundContext,
+      MessageThreadId: 77,
+    });
+    const idlessKey = buildInboundDedupeKey({
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      MessageThreadId: 77,
+      Body: "hello from webchat",
+      Timestamp: 1777207291784,
+    });
+
+    expect(providerKey).not.toBeNull();
+    expect(idlessKey).not.toBeNull();
+
+    const providerParts = JSON.parse(providerKey ?? "[]") as unknown[];
+    const idlessParts = JSON.parse(idlessKey ?? "[]") as unknown[];
+
+    expect(idlessParts).toHaveLength(3);
+    expect(idlessParts.slice(0, 2)).toEqual(providerParts.slice(0, 2));
+    expect(idlessParts[2]).toMatch(/^content:[a-f0-9]{32}$/);
   });
 
   it("shares claim/release state across distinct module instances", async () => {
@@ -131,5 +156,116 @@ describe("inbound dedupe", () => {
       inboundA.resetInboundDedupe();
       inboundB.resetInboundDedupe();
     }
+  });
+
+  it("dedupes retries without provider message ids by content and timestamp", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "hello from webchat",
+      Timestamp: 1777207291784,
+    };
+    const retry = {
+      ...first,
+      BodyForAgent: "Sender metadata\n\nhello from webchat",
+    };
+
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(true);
+  });
+
+  it("does not collapse distinct same-body messages with different timestamps", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "repeatable text",
+      Timestamp: 1777207291784,
+    };
+    const later = {
+      ...first,
+      Timestamp: 1777207299999,
+    };
+
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(later)).toBe(false);
+  });
+
+  it("does not create a fallback key for idless messages without timestamps", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "repeatable text",
+      Timestamp: undefined,
+    };
+    const retry = {
+      ...first,
+      BodyForAgent: "Sender metadata\n\nrepeatable text",
+    };
+
+    expect(buildInboundDedupeKey(first)).toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(false);
+  });
+
+  it("does not dedupe attachment-only idless retries without text content", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "",
+      RawBody: "",
+      CommandBody: "",
+      BodyForAgent: "MEDIA:/tmp/openclaw-attachment.png",
+      Timestamp: 1777207291784,
+    };
+    const retry = { ...first };
+
+    expect(buildInboundDedupeKey(first)).toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(false);
+  });
+
+  it("does not dedupe idless media-placeholder retries with MediaPath", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "<media:image>",
+      MediaPath: "/tmp/openclaw-image.png",
+      Timestamp: 1777207291784,
+    };
+    const retry = { ...first };
+
+    expect(buildInboundDedupeKey(first)).toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(false);
+  });
+
+  it("does not dedupe idless media-placeholder retries with MediaPaths", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      CommandBody: "<media:audio> (1 audio)",
+      MediaPaths: ["/tmp/openclaw-voice.ogg"],
+      Timestamp: 1777207291784,
+    };
+    const retry = { ...first };
+
+    expect(buildInboundDedupeKey(first)).toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(false);
+  });
+
+  it("still dedupes idless media turns with real text captions", () => {
+    const first = {
+      ...sharedInboundContext,
+      MessageSid: undefined,
+      Body: "caption for attached image",
+      MediaPath: "/tmp/openclaw-image.png",
+      Timestamp: 1777207291784,
+    };
+    const retry = { ...first };
+
+    expect(buildInboundDedupeKey(first)).not.toBeNull();
+    expect(shouldSkipDuplicateInbound(first)).toBe(false);
+    expect(shouldSkipDuplicateInbound(retry)).toBe(true);
   });
 });
