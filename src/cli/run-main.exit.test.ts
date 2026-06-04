@@ -59,6 +59,7 @@ const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const enableConsoleCaptureMock = vi.hoisted(() => vi.fn());
+const ensureCliExecutionBootstrapMock = vi.hoisted(() => vi.fn(async () => {}));
 const progressDoneMock = vi.hoisted(() => vi.fn());
 const createCliProgressMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -135,6 +136,10 @@ vi.mock("./banner.js", () => ({
 vi.mock("../logging.js", async () => ({
   ...(await vi.importActual<typeof import("../logging.js")>("../logging.js")),
   enableConsoleCapture: enableConsoleCaptureMock,
+}));
+
+vi.mock("./command-execution-startup.js", () => ({
+  ensureCliExecutionBootstrap: ensureCliExecutionBootstrapMock,
 }));
 
 vi.mock("./container-target.js", () => ({
@@ -455,12 +460,30 @@ describe("runCli exit behavior", () => {
   it("installs console capture before parsing the gateway foreground fast path", async () => {
     await runCli(["node", "openclaw", "gateway", "--force"]);
 
+    expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledWith({
+      runtime: expect.any(Object),
+      commandPath: ["gateway"],
+      startupPolicy: expect.objectContaining({ skipConfigGuard: false }),
+    });
     expect(enableConsoleCaptureMock).toHaveBeenCalledTimes(1);
     expect(commanderParseAsyncMock).toHaveBeenCalledTimes(1);
+    const bootstrapOrder = ensureCliExecutionBootstrapMock.mock.invocationCallOrder[0] ?? 0;
     const captureOrder = enableConsoleCaptureMock.mock.invocationCallOrder[0] ?? 0;
     const parseOrder = commanderParseAsyncMock.mock.invocationCallOrder[0] ?? 0;
+    expect(bootstrapOrder).toBeGreaterThan(0);
     expect(captureOrder).toBeGreaterThan(0);
+    expect(captureOrder).toBeGreaterThan(bootstrapOrder);
     expect(parseOrder).toBeGreaterThan(captureOrder);
+  });
+
+  it("uses the explicit gateway run command path for fast-path bootstrap", async () => {
+    await runCli(["node", "openclaw", "gateway", "run", "--force"]);
+
+    expect(ensureCliExecutionBootstrapMock).toHaveBeenCalledWith({
+      runtime: expect.any(Object),
+      commandPath: ["gateway", "run"],
+      startupPolicy: expect.objectContaining({ skipConfigGuard: false }),
+    });
   });
 
   it("honors banner suppression on the gateway foreground fast path", async () => {
