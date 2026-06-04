@@ -1,4 +1,5 @@
 import {
+  embeddedAgentLog,
   formatErrorMessage,
   resolveSandboxContext,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -289,6 +290,28 @@ export async function handleCodexConversationInboundClaim(
     }
   }
   if (event.commandAuthorized !== true) {
+    // Diagnostic: only log when the inbound_claim is about to silently
+    // drop a typed freeform reply to a pending Codex request_user_input
+    // control. The most likely cause is a scope mismatch (channel /
+    // senderId / sessionKey / messageThreadId differ between the
+    // pending that was queued by sendProgressReply and the inbound
+    // ctx for the typed reply). Gated to the silent-fallthrough case
+    // to avoid logging the content of authorized conversation
+    // prompts (which can include secrets or private data).
+    embeddedAgentLog.warn("codex bound conversation typed freeform reply did not match a pending input", {
+      inbound: {
+        channel: event.channel,
+        senderId: event.senderId ?? ctx.senderId,
+        accountId: event.accountId ?? ctx.accountId,
+        sessionKey: event.sessionKey ?? ctx.sessionKey,
+        messageThreadId: event.threadId,
+        commandAuthorized: event.commandAuthorized,
+      },
+      binding: {
+        kind: data.kind,
+        sessionFile: data.kind === "codex-app-server-session" ? data.sessionFile : undefined,
+      },
+    });
     return { handled: true };
   }
   const nativeExecutionBlock =
