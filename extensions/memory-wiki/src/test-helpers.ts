@@ -68,7 +68,9 @@ export function createMemoryWikiTestHarness() {
     return { rootDir, config };
   }
 
-  function createPluginApi(): MemoryWikiPluginApiHarness {
+  function createPluginApi(options?: {
+    pluginConfig?: MemoryWikiPluginConfig;
+  }): MemoryWikiPluginApiHarness {
     const registerCli = vi.fn();
     const registerGatewayMethod = vi.fn();
     const registerMemoryCorpusSupplement = vi.fn();
@@ -79,6 +81,7 @@ export function createMemoryWikiTestHarness() {
       name: "Memory Wiki",
       source: "test",
       config: {},
+      pluginConfig: options?.pluginConfig,
       runtime: {} as OpenClawPluginApi["runtime"],
       registerCli,
       registerGatewayMethod,
