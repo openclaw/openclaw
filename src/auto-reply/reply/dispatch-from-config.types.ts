@@ -11,6 +11,7 @@ export type DispatchFromConfigResult = {
   failedCounts?: Partial<Record<ReplyDispatchKind, number>>;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sendPolicyDenied?: boolean;
+  observedReplyDelivery?: boolean;
   noVisibleReplyFallbackEligible?: boolean;
   beforeAgentRunBlocked?: boolean;
 };

@@ -2268,9 +2268,13 @@ export async function runEmbeddedAttempt(
         applySystemPromptToSession(activeSession, nextSystemPrompt);
       };
       setActiveSessionSystemPrompt(systemPromptText);
+      let didDeliverSourceReplyViaMessageTool = false;
       installMessageToolOnlyTerminalHook({
         agent: activeSession.agent,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        onDeliveredSourceReply: () => {
+          didDeliverSourceReplyViaMessageTool = true;
+        },
       });
       prepStages.mark("agent-session");
       if (isRawModelRun) {
@@ -5130,6 +5134,7 @@ export async function runEmbeddedAttempt(
         currentAttemptAssistant,
         lastToolError,
         didSendViaMessagingTool: didSendViaMessagingTool(),
+        didDeliverSourceReplyViaMessageTool,
         didSendDeterministicApprovalPrompt: didSendDeterministicApprovalPromptNow,
         messagingToolSentTexts: getMessagingToolSentTexts(),
         messagingToolSentMediaUrls: getMessagingToolSentMediaUrls(),

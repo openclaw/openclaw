@@ -197,6 +197,8 @@ export type GetReplyOptions = {
   queuedFollowupLifecycle?: QueuedReplyLifecycle;
   /** Allow channel-owned progress UI while final/source reply delivery remains message-tool-only. */
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+  /** Called when a suppressed source reply mode observes visible delivery through another path. */
+  onObservedReplyDelivery?: () => Promise<void> | void;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;
