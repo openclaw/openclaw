@@ -516,9 +516,9 @@ function collectDeprecatedPackageTestingBridgeDrift(): string[] {
   const source = fs
     .readFileSync(resolve(REPO_ROOT, "packages/plugin-sdk/src/testing.ts"), "utf8")
     .trim();
-  return /^export\s+\*\s+from\s+["']\.\.\/\.\.\/\.\.\/src\/plugin-sdk\/testing\.js["'];?$/.test(
-    source,
-  )
+  const lines = source.split(/\r?\n/u).map((line) => line.trim()).filter(Boolean);
+  return lines.length === 1 &&
+    /^export\s+\*\s+from\s+["'][^"']*src\/plugin-sdk\/testing(?:\.js)?["'];?$/.test(lines[0] ?? "")
     ? []
     : ["packages/plugin-sdk/src/testing.ts"];
 }
