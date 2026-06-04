@@ -199,6 +199,21 @@ function livePluginToolLane() {
   );
 }
 
+function channelPluginTrustLane() {
+  return lane(
+    "channel-plugin-trust",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:channel-plugin-trust",
+    {
+      e2eImageKind: "functional",
+      estimateSeconds: 180,
+      resources: ["npm"],
+      stateScenario: "minimal",
+      timeoutMs: 10 * 60 * 1000,
+      weight: 2,
+    },
+  );
+}
+
 function liveOpenAiChatToolsLane() {
   return liveLane(
     "openai-chat-tools",
@@ -448,6 +463,7 @@ export const mainLanes = [
     stateScenario: "empty",
     weight: 6,
   }),
+  channelPluginTrustLane(),
   lane("kitchen-sink-plugin", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-plugin", {
     resources: ["npm"],
     stateScenario: "empty",
@@ -667,6 +683,7 @@ const releasePathPluginRuntimePluginLanes = [
     stateScenario: "empty",
     weight: 6,
   }),
+  channelPluginTrustLane(),
 ];
 
 const releasePathPluginRuntimeServiceLanes = [
