@@ -191,16 +191,6 @@ function openTerminalFailureCooldown(
   });
 }
 
-function resolveExtractionSessionFile(agentId: string, runId: string): string {
-  return path.join(
-    resolveStateDir(),
-    "commitments",
-    "extractor-sessions",
-    agentId,
-    `${runId}.jsonl`,
-  );
-}
-
 function joinPayloadText(result: EmbeddedAgentPayloadResult): string {
   return (
     result.payloads
@@ -208,6 +198,16 @@ function joinPayloadText(result: EmbeddedAgentPayloadResult): string {
       .filter((text): text is string => Boolean(text?.trim()))
       .join("\n")
       .trim() ?? ""
+  );
+}
+
+function resolveExtractionSessionStore(agentId: string): string {
+  return path.join(
+    resolveStateDir(),
+    "commitments",
+    "extractor-sessions",
+    agentId,
+    "sessions.json",
   );
 }
 
@@ -234,15 +234,21 @@ async function defaultExtractBatch(params: {
   const resolved = resolveCommitmentsConfig(cfg);
   const runId = `commitments-${randomUUID()}`;
   const modelRef = await resolveDefaultModel({ cfg, agentId: first.agentId });
+  const helperConfig = {
+    ...cfg,
+    session: {
+      ...cfg.session,
+      store: resolveExtractionSessionStore(first.agentId),
+    },
+  } as OpenClawConfig;
   const { runEmbeddedAgent } = await import("../agents/embedded-agent.js");
   const result = await runEmbeddedAgent({
     sessionId: runId,
     sessionKey: `agent:${first.agentId}:commitments:${runId}`,
     agentId: first.agentId,
     trigger: "manual",
-    sessionFile: resolveExtractionSessionFile(first.agentId, runId),
     workspaceDir: resolveAgentWorkspaceDir(cfg, first.agentId),
-    config: cfg,
+    config: helperConfig,
     provider: modelRef.provider,
     model: modelRef.model,
     prompt: buildCommitmentExtractionPrompt({ cfg, items: params.items }),

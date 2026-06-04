@@ -6,6 +6,7 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 import { resolveStorePath, updateSessionStoreEntry } from "../../config/sessions.js";
+import { updateSqliteSessionEntry } from "../../config/sessions/session-accessor.sqlite.js";
 import { ensureContextEnginesInitialized } from "../../context-engine/init.js";
 import {
   resolveContextEngine,
@@ -94,6 +95,12 @@ import {
 } from "../openai-routing.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
+import {
+  applyAgentRunSessionTargetIdentity,
+  persistAgentRunSessionTargetIdentity,
+  resolveAgentRunSessionTarget,
+  type ResolvedAgentRunSessionTarget,
+} from "../run-session-target.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -201,6 +208,7 @@ import type {
 import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accumulator.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
+type RunEmbeddedAgentParamsWithSessionFile = RunEmbeddedAgentParams & { sessionFile: string };
 
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
@@ -227,27 +235,51 @@ async function resetNoRealConversationTokenSnapshot(params: {
   config?: RunEmbeddedAgentParams["config"];
   sessionKey?: string;
   agentId?: string;
+  runSessionTarget?: ResolvedAgentRunSessionTarget;
 }): Promise<void> {
   if (!params.sessionKey) {
     return;
   }
-  const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+  const resetPatch = () => ({
+    totalTokens: 0,
+    totalTokensFresh: true,
+    inputTokens: undefined,
+    outputTokens: undefined,
+    cacheRead: undefined,
+    cacheWrite: undefined,
+    contextBudgetStatus: undefined,
+    updatedAt: Date.now(),
+  });
   try {
+    if (params.runSessionTarget?.storageKind === "sqlite") {
+      await updateSqliteSessionEntry(
+        {
+          agentId: params.runSessionTarget.agentId,
+          storePath: params.runSessionTarget.sqlitePath,
+          sessionKey: params.sessionKey,
+        },
+        async () => resetPatch(),
+      );
+      return;
+    }
+    const storePath = resolveStorePath(params.config?.session?.store, { agentId: params.agentId });
+    if (storePath.trim().toLowerCase().endsWith(".sqlite")) {
+      await updateSqliteSessionEntry(
+        {
+          ...(params.agentId ? { agentId: params.agentId } : {}),
+          storePath,
+          sessionKey: params.sessionKey,
+        },
+        async () => resetPatch(),
+      );
+      return;
+    }
     await updateSessionStoreEntry({
       storePath,
       sessionKey: params.sessionKey,
       skipMaintenance: true,
       takeCacheOwnership: true,
-      update: async () => ({
-        totalTokens: 0,
-        totalTokensFresh: true,
-        inputTokens: undefined,
-        outputTokens: undefined,
-        cacheRead: undefined,
-        cacheWrite: undefined,
-        contextBudgetStatus: undefined,
-        updatedAt: Date.now(),
-      }),
+      update: async () => resetPatch(),
     });
   } catch (err) {
     log.warn(
@@ -458,18 +490,36 @@ function buildHandledReplyPayloads(reply?: ReplyPayload) {
 export async function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
 ): Promise<EmbeddedAgentRunResult> {
-  let params = paramsInput;
+  let paramsBase = applyAgentRunSessionTargetIdentity(paramsInput);
   // Resolve sessionKey early so all downstream consumers (hooks, LCM, compaction)
   // receive a non-null key even when callers omit it. See #60552.
   const effectiveSessionKey = backfillSessionKey({
-    config: params.config,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    agentId: params.agentId,
+    config: paramsBase.config,
+    sessionId: paramsBase.sessionId,
+    sessionKey: paramsBase.sessionKey,
+    agentId: paramsBase.agentId,
   });
-  if (effectiveSessionKey !== params.sessionKey) {
-    params = { ...params, sessionKey: effectiveSessionKey };
+  if (effectiveSessionKey !== paramsBase.sessionKey) {
+    paramsBase = { ...paramsBase, sessionKey: effectiveSessionKey };
   }
+  const runSessionTarget = await resolveAgentRunSessionTarget(paramsBase);
+  const params: RunEmbeddedAgentParamsWithSessionFile = {
+    ...paramsBase,
+    agentId: paramsBase.agentId ?? runSessionTarget.agentId,
+    sessionId: runSessionTarget.sessionId,
+    sessionKey: paramsBase.sessionKey ?? runSessionTarget.sessionKey,
+    sessionFile: runSessionTarget.sessionFile,
+  };
+  const persistActiveRunSessionTarget = async (identity: {
+    sessionFile: string;
+    sessionId: string;
+  }) => {
+    await persistAgentRunSessionTargetIdentity({
+      target: runSessionTarget,
+      sessionFile: identity.sessionFile,
+      sessionId: identity.sessionId,
+    });
+  };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const sessionQueuePriority = resolveEmbeddedRunSessionQueuePriority(params.trigger);
@@ -1347,8 +1397,10 @@ export async function runEmbeddedAgent(
         ) => {
           const nextSessionId = compactResult.result?.sessionId;
           const nextSessionFile = compactResult.result?.sessionFile;
+          let changed = false;
           if (nextSessionId && nextSessionId !== activeSessionId) {
             activeSessionId = nextSessionId;
+            changed = true;
             // Keep the run context's sessionId tracking the live session so
             // lifecycle persistence isn't treated as stale after a legitimate
             // mid-run compaction rotation (#88538).
@@ -1356,7 +1408,9 @@ export async function runEmbeddedAgent(
           }
           if (nextSessionFile && nextSessionFile !== activeSessionFile) {
             activeSessionFile = nextSessionFile;
+            changed = true;
           }
+          return changed;
         };
         const onCompactionHookMessages = async (payload: {
           phase: "before" | "after";
@@ -1709,13 +1763,22 @@ export async function runEmbeddedAgent(
             currentAttemptAssistant,
           } = attempt;
           const timedOutDuringToolExecution = attempt.timedOutDuringToolExecution ?? false;
+          let activeTargetChanged = false;
           if (sessionIdUsed && sessionIdUsed !== activeSessionId) {
             activeSessionId = sessionIdUsed;
+            activeTargetChanged = true;
             // Track the live session for lifecycle persistence identity (#88538).
             registerAgentRunContext(params.runId, { sessionId: activeSessionId });
           }
           if (sessionFileUsed && sessionFileUsed !== activeSessionFile) {
             activeSessionFile = sessionFileUsed;
+            activeTargetChanged = true;
+          }
+          if (activeTargetChanged) {
+            await persistActiveRunSessionTarget({
+              sessionFile: activeSessionFile,
+              sessionId: activeSessionId,
+            });
           }
           bootstrapPromptWarningSignaturesSeen =
             attempt.bootstrapPromptWarningSignaturesSeen ??
@@ -1978,7 +2041,12 @@ export async function runEmbeddedAgent(
                 };
               }
               if (timeoutCompactResult.compacted) {
-                adoptCompactionTranscript(timeoutCompactResult);
+                if (adoptCompactionTranscript(timeoutCompactResult)) {
+                  await persistActiveRunSessionTarget({
+                    sessionFile: activeSessionFile,
+                    sessionId: activeSessionId,
+                  });
+                }
               }
               await runOwnsCompactionAfterHook("timeout recovery", timeoutCompactResult);
               if (timeoutCompactResult.compacted) {
@@ -2165,7 +2233,12 @@ export async function runEmbeddedAgent(
                   params.abortSignal,
                 );
                 if (compactResult.ok && compactResult.compacted) {
-                  adoptCompactionTranscript(compactResult);
+                  if (adoptCompactionTranscript(compactResult)) {
+                    await persistActiveRunSessionTarget({
+                      sessionFile: activeSessionFile,
+                      sessionId: activeSessionId,
+                    });
+                  }
                   await runContextEngineMaintenance({
                     contextEngine,
                     sessionId: activeSessionId,
@@ -2195,6 +2268,7 @@ export async function runEmbeddedAgent(
                   config: params.config,
                   sessionKey: params.sessionKey,
                   agentId: sessionAgentId,
+                  runSessionTarget,
                 });
                 log.info(
                   `[context-overflow-precheck] stale token state had no real conversation messages for ` +
@@ -2206,7 +2280,12 @@ export async function runEmbeddedAgent(
                 continue;
               }
               if (compactResult.compacted) {
-                adoptCompactionTranscript(compactResult);
+                if (adoptCompactionTranscript(compactResult)) {
+                  await persistActiveRunSessionTarget({
+                    sessionFile: activeSessionFile,
+                    sessionId: activeSessionId,
+                  });
+                }
                 if (
                   typeof compactResult.result?.tokensAfter === "number" &&
                   Number.isFinite(compactResult.result.tokensAfter) &&

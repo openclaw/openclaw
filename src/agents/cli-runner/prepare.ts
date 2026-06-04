@@ -76,7 +76,11 @@ import {
   loadCliSessionReseedMessages,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import type { CliReusableSession, PreparedCliRunContext, RunCliAgentParams } from "./types.js";
+import type {
+  CliReusableSession,
+  PreparedCliRunContext,
+  PreparedRunCliAgentParams,
+} from "./types.js";
 
 const prepareDeps = {
   makeBootstrapWarn: makeBootstrapWarnImpl,
@@ -132,7 +136,7 @@ export function shouldSkipLocalCliCredentialEpoch(params: {
 }
 
 export async function prepareCliRunContext(
-  params: RunCliAgentParams,
+  params: PreparedRunCliAgentParams,
 ): Promise<PreparedCliRunContext> {
   const started = Date.now();
   const workspaceResolution = resolveRunWorkspaceDir({
@@ -638,7 +642,7 @@ export async function prepareCliRunContext(
       config: contextEngineConfig,
     });
     const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
-    const preparedParams: RunCliAgentParams = {
+    const preparedParams: PreparedRunCliAgentParams = {
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,

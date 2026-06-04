@@ -29,8 +29,15 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
-  "provider" | "model" | "authProfileId" | "authProfileIdSource" | "thinkLevel" | "lane" | "enqueue"
->;
+  | "provider"
+  | "model"
+  | "authProfileId"
+  | "authProfileIdSource"
+  | "thinkLevel"
+  | "lane"
+  | "enqueue"
+  | "sessionFile"
+> & { sessionFile: string };
 
 export type EmbeddedRunContextWindowInfo = {
   tokens: number;

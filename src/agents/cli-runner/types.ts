@@ -24,15 +24,19 @@ import type {
   CurrentInboundPromptContext,
   EmbeddedRunTrigger,
 } from "../embedded-agent-runner/run/params.js";
+import type { AgentRunSessionTarget } from "../run-session-target.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
 
 export type RunCliAgentParams = {
   sessionId: string;
   sessionKey?: string;
+  /** Storage-neutral transcript/session target. Defaults to sessionId/sessionKey/agentId. */
+  sessionTarget?: AgentRunSessionTarget;
   sessionEntry?: SessionEntry;
   agentId?: string;
   trigger?: EmbeddedRunTrigger;
-  sessionFile: string;
+  /** @deprecated Use sessionTarget plus sessionId/sessionKey/agentId for runtime identity. */
+  sessionFile?: string;
   workspaceDir: string;
   /** Task working directory for CLI execution. Defaults to workspaceDir. */
   cwd?: string;
@@ -130,8 +134,10 @@ export type CliReusableSession = {
     | "orphaned-tool-use";
 };
 
+export type PreparedRunCliAgentParams = RunCliAgentParams & { sessionFile: string };
+
 export type PreparedCliRunContext = {
-  params: RunCliAgentParams;
+  params: PreparedRunCliAgentParams;
   effectiveAuthProfileId?: string;
   started: number;
   workspaceDir: string;

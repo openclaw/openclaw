@@ -87,6 +87,16 @@ export type TranscriptMessageAppendResult<TMessage> = {
 
 export type TranscriptUpdatePayload = Omit<SessionTranscriptUpdate, "sessionFile">;
 
+/** Active transcript target resolved from storage-neutral runtime identity. */
+export type SessionTranscriptRuntimeTarget = {
+  agentId: string;
+  sessionFile: string;
+  sessionId: string;
+  sessionKey: string;
+  storageKind: "file";
+  targetKind: "active-session-file" | "runtime-session";
+};
+
 export type SessionEntryUpdateOptions = {
   skipMaintenance?: boolean;
   takeCacheOwnership?: boolean;
@@ -293,6 +303,21 @@ export async function publishTranscriptUpdate(
     ...update,
     sessionFile: transcript.sessionFile,
   });
+}
+
+/** Resolves the current file-backed transcript artifact for a runtime session scope. */
+export async function resolveSessionTranscriptRuntimeTarget(
+  scope: SessionTranscriptAccessScope,
+): Promise<SessionTranscriptRuntimeTarget> {
+  const transcript = await resolveTranscriptAccess(scope);
+  return {
+    agentId: scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey) ?? "",
+    sessionFile: transcript.sessionFile,
+    sessionId: scope.sessionId,
+    sessionKey: scope.sessionKey,
+    storageKind: "file",
+    targetKind: "runtime-session",
+  };
 }
 
 function createFallbackSessionEntry(patch: Partial<SessionEntry>): SessionEntry {

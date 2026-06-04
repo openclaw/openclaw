@@ -2,6 +2,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  loadSqliteSessionEntry,
+  patchSqliteSessionEntry,
+} from "../../config/sessions/session-accessor.sqlite.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import type { AgentHarness } from "../harness/types.js";
 import type { AgentInternalEvent } from "../internal-events.js";
 import type { AgentRuntimePlan } from "../runtime-plan/types.js";
@@ -1976,6 +1981,130 @@ describe("runEmbeddedAgent overflow compaction trigger routing", () => {
       expect(stored.cacheWrite).toBeUndefined();
       expect(stored.contextBudgetStatus).toBeUndefined();
     } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers empty-transcript preflight compaction through a forced SQLite target", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-empty-preflight-sqlite-"));
+    const storePath = path.join(dir, "state", "agents", "helper", "sessions", "sessions.json");
+    const sqlitePath = path.join(
+      dir,
+      "state",
+      "agents",
+      "helper",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "test-key": {
+          sessionId: "test-session",
+          updatedAt: 1,
+          totalTokens: 1_500_000,
+          totalTokensFresh: true,
+          contextBudgetStatus: { stale: true },
+        },
+      }),
+      "utf8",
+    );
+    await patchSqliteSessionEntry(
+      { agentId: "helper", sessionKey: "test-key", storePath: sqlitePath },
+      () => ({
+        contextBudgetStatus: {
+          schemaVersion: 1,
+          source: "pre-prompt-estimate",
+          updatedAt: 1,
+          provider: "claude-cli",
+          model: "claude-opus-4-7",
+          route: "compact_only",
+          shouldCompact: true,
+          estimatedPromptTokens: 1_794_391,
+          contextTokenBudget: 1_048_576,
+          promptBudgetBeforeReserve: 1_044_480,
+          reserveTokens: 4_096,
+          effectiveReserveTokens: 4_096,
+          remainingPromptBudgetTokens: 0,
+          overflowTokens: 749_911,
+          toolResultReducibleChars: 0,
+          messageCount: 0,
+          unwindowedMessageCount: 0,
+        },
+        sessionId: "test-session",
+        totalTokens: 1_500_000,
+        totalTokensFresh: true,
+        updatedAt: 1,
+      }),
+      {
+        fallbackEntry: {
+          sessionId: "test-session",
+          updatedAt: 1,
+        },
+      },
+    );
+
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: makeOverflowError(),
+          promptErrorSource: "precheck",
+          preflightRecovery: { route: "compact_only" },
+          contextBudgetStatus: {
+            schemaVersion: 1,
+            source: "pre-prompt-estimate",
+            updatedAt: 1,
+            provider: "claude-cli",
+            model: "claude-opus-4-7",
+            route: "compact_only",
+            shouldCompact: true,
+            estimatedPromptTokens: 1_794_391,
+            contextTokenBudget: 1_048_576,
+            promptBudgetBeforeReserve: 1_044_480,
+            reserveTokens: 4_096,
+            effectiveReserveTokens: 4_096,
+            remainingPromptBudgetTokens: 0,
+            overflowTokens: 749_911,
+            toolResultReducibleChars: 0,
+            messageCount: 0,
+            unwindowedMessageCount: 0,
+          },
+          assistantTexts: [],
+        }),
+      )
+      .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+    mockedCompactDirect.mockResolvedValueOnce({
+      ok: true,
+      compacted: false,
+      reason: "no real conversation messages",
+    });
+
+    try {
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        agentId: "helper",
+        config: {
+          session: {
+            store: storePath,
+          },
+        } as RunEmbeddedAgentParams["config"],
+        sessionFile: undefined,
+        sessionTarget: { storageKind: "sqlite" },
+      });
+
+      const sqliteEntry = loadSqliteSessionEntry({
+        agentId: "helper",
+        sessionKey: "test-key",
+        storePath: sqlitePath,
+      });
+      expect(sqliteEntry?.totalTokens).toBe(0);
+      expect(sqliteEntry?.totalTokensFresh).toBe(true);
+      expect(sqliteEntry?.contextBudgetStatus).toBeUndefined();
+      const jsonEntry = JSON.parse(await fs.readFile(storePath, "utf8"))["test-key"];
+      expect(jsonEntry.totalTokens).toBe(1_500_000);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
       await fs.rm(dir, { recursive: true, force: true });
     }
   });

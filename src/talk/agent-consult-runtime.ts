@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import {
   forkSessionFromParent,
@@ -81,7 +80,8 @@ function resolveDeliverySessionFields(context?: DeliveryContext): Partial<Sessio
 
 function resolveRealtimeVoiceAgentDeliveryContext(params: {
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
-  storePath: string;
+  agentId: string;
+  cfg: OpenClawConfig;
   sessionKey: string;
   spawnedBy?: string | null;
 }): DeliveryContext | undefined {
@@ -96,8 +96,10 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
     }
     candidates.push(params.sessionKey);
     for (const key of candidates) {
+      const parsed = parseAgentSessionKey(key);
       const entry = params.agentRuntime.session.getSessionEntry({
-        storePath: params.storePath,
+        agentId: parsed?.agentId ?? params.agentId,
+        config: params.cfg,
         sessionKey: key,
       });
       const context = deliveryContextFromSession(entry);
@@ -113,11 +115,11 @@ function resolveRealtimeVoiceAgentDeliveryContext(params: {
 
 async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   agentId: string;
+  cfg: OpenClawConfig;
   sessionKey: string;
   spawnedBy?: string | null;
   contextMode?: RealtimeVoiceAgentConsultContextMode;
   deliveryContext?: DeliveryContext;
-  storePath: string;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
   logger: Pick<RuntimeLogger, "warn">;
 }): Promise<SessionEntry> {
@@ -125,14 +127,13 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   const deliveryFields = resolveDeliverySessionFields(params.deliveryContext);
   const requesterSessionKey = params.spawnedBy?.trim();
   const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
-  const shouldFork =
-    params.contextMode === "fork" &&
-    requesterSessionKey &&
-    (!requesterAgentId || requesterAgentId === params.agentId);
+  const parentAgentId = requesterAgentId ?? params.agentId;
+  const shouldFork = params.contextMode === "fork" && requesterSessionKey;
   let forkDecisionWarning: string | undefined;
 
   const patched = await params.agentRuntime.session.patchSessionEntry({
-    storePath: params.storePath,
+    agentId: params.agentId,
+    config: params.cfg,
     sessionKey: params.sessionKey,
     fallbackEntry: {
       sessionId: "",
@@ -144,24 +145,28 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
       }
       if (shouldFork) {
         const parentEntry = params.agentRuntime.session.getSessionEntry({
-          storePath: params.storePath,
+          agentId: parentAgentId,
+          config: params.cfg,
           sessionKey: requesterSessionKey,
         });
         if (parentEntry?.sessionId?.trim()) {
           const decision = await realtimeVoiceAgentConsultDeps.resolveParentForkDecision({
             parentEntry,
-            storePath: params.storePath,
+            agentId: parentAgentId,
+            config: params.cfg,
           });
           if (decision.status === "fork") {
             const fork = await realtimeVoiceAgentConsultDeps.forkSessionFromParent({
               parentEntry,
-              agentId: params.agentId,
-              sessionsDir: path.dirname(params.storePath),
+              agentId: parentAgentId,
+              config: params.cfg,
             });
             if (fork) {
               return {
                 ...deliveryFields,
                 sessionId: fork.sessionId,
+                // Current fork storage is file-backed; persist the artifact on
+                // the entry so the run target resolver reuses the forked branch.
                 sessionFile: fork.sessionFile,
                 spawnedBy: requesterSessionKey,
                 forkedFromParent: true,
@@ -221,35 +226,39 @@ export async function consultRealtimeVoiceAgent(params: {
   const workspaceDir = params.agentRuntime.resolveAgentWorkspaceDir(params.cfg, agentId);
   await params.agentRuntime.ensureAgentWorkspace({ dir: workspaceDir });
 
-  const storePath = params.agentRuntime.session.resolveStorePath(params.cfg.session?.store, {
-    agentId,
-  });
   const resolvedDeliveryContext = resolveRealtimeVoiceAgentDeliveryContext({
     agentRuntime: params.agentRuntime,
-    storePath,
+    agentId,
+    cfg: params.cfg,
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
   });
   const sessionEntry = await resolveRealtimeVoiceAgentConsultSessionEntry({
     agentId,
+    cfg: params.cfg,
     sessionKey: params.sessionKey,
     spawnedBy: params.spawnedBy,
     contextMode: params.contextMode,
     deliveryContext: resolvedDeliveryContext,
-    storePath,
     agentRuntime: params.agentRuntime,
     logger: params.logger,
   });
   const consultDeliveryContext =
     resolvedDeliveryContext ?? deliveryContextFromSession(sessionEntry);
   const sessionId = sessionEntry.sessionId;
+  const requesterAgentId = parseAgentSessionKey(params.spawnedBy?.trim())?.agentId;
+  const crossAgentForkSessionFile =
+    sessionEntry.forkedFromParent && requesterAgentId && requesterAgentId !== agentId
+      ? sessionEntry.sessionFile?.trim()
+      : undefined;
 
-  const sessionFile = params.agentRuntime.session.resolveSessionFilePath(sessionId, sessionEntry, {
-    agentId,
-  });
   const result = await params.agentRuntime.runEmbeddedAgent({
     sessionId,
     sessionKey: params.sessionKey,
+    // Cross-agent forks are file-backed active artifacts in the requester store.
+    // Passing the artifact keeps the consult run on the forked branch until
+    // consult forking moves to a storage-neutral parent/child target contract.
+    ...(crossAgentForkSessionFile ? { sessionFile: crossAgentForkSessionFile } : {}),
     sandboxSessionKey: resolveRealtimeVoiceAgentSandboxSessionKey(agentId, params.sessionKey),
     agentId,
     spawnedBy: params.spawnedBy,
@@ -262,7 +271,6 @@ export async function consultRealtimeVoiceAgent(params: {
       consultDeliveryContext?.threadId != null
         ? String(consultDeliveryContext.threadId)
         : undefined,
-    sessionFile,
     workspaceDir,
     config: params.cfg,
     prompt: buildRealtimeVoiceAgentConsultPrompt({

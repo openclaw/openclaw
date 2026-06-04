@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import type { Selectable } from "kysely";
@@ -21,6 +22,7 @@ import {
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
+import { validateSessionId } from "./paths.js";
 import type {
   ExactSessionEntry,
   SessionAccessScope,
@@ -32,6 +34,7 @@ import type {
   SessionEntryUpdateOptions,
   SessionTranscriptAccessScope,
   SessionTranscriptReadScope,
+  SessionTranscriptRuntimeTarget,
   SessionTranscriptWriteScope,
   TranscriptEvent,
   TranscriptMessageAppendOptions,
@@ -80,6 +83,17 @@ type ResolvedTranscriptReadScope = ResolvedSqliteReadScope & {
 type ResolvedSqliteStoreTarget = {
   agentId?: string;
   path?: string;
+};
+
+export type SqliteSessionTranscriptRuntimeTarget = Omit<
+  SessionTranscriptRuntimeTarget,
+  "storageKind" | "targetKind"
+> & {
+  /** Current embedded-run internals still need one lock/fence/session-manager file. */
+  activeArtifactKind: "embedded-run-session-file";
+  sqlitePath: string;
+  storageKind: "sqlite";
+  targetKind: "sqlite-runtime-session";
 };
 
 const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
@@ -399,8 +413,85 @@ export async function publishSqliteTranscriptUpdate(
   });
 }
 
+/** Resolves SQLite runtime identity plus the active artifact used by current runners. */
+export async function resolveSqliteSessionTranscriptRuntimeTarget(
+  scope: SessionTranscriptAccessScope,
+): Promise<SqliteSessionTranscriptRuntimeTarget> {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  const sqlitePath = resolveOpenClawAgentSqlitePath(toDatabaseOptions(resolved));
+  const defaultSessionFile = resolveSqliteEmbeddedRunSessionFile(sqlitePath, resolved.sessionId);
+  const now = Date.now();
+  const entry = await patchSqliteSessionEntry(
+    scope,
+    (current) => {
+      const currentSessionFile = resolveCurrentSqliteEmbeddedRunSessionFile(
+        sqlitePath,
+        current.sessionFile,
+      );
+      const sessionFile =
+        current.sessionId?.trim() === resolved.sessionId && currentSessionFile
+          ? currentSessionFile
+          : defaultSessionFile;
+
+      // Current embedded-run internals still rotate a file-backed active artifact
+      // after compaction. Persist that pointer in SQLite so the next run reopens
+      // the live branch instead of reconstructing the pre-rotation path.
+      return { sessionFile, sessionId: resolved.sessionId, updatedAt: now };
+    },
+    {
+      fallbackEntry: {
+        sessionFile: defaultSessionFile,
+        sessionId: resolved.sessionId,
+        updatedAt: now,
+      },
+    },
+  );
+  const sessionId = entry?.sessionId?.trim() || resolved.sessionId;
+  const sessionFile =
+    resolveCurrentSqliteEmbeddedRunSessionFile(sqlitePath, entry?.sessionFile) ??
+    resolveSqliteEmbeddedRunSessionFile(sqlitePath, sessionId);
+  await fs.mkdir(path.dirname(sessionFile), { recursive: true, mode: 0o700 });
+  return {
+    activeArtifactKind: "embedded-run-session-file",
+    agentId: resolved.agentId,
+    sessionFile,
+    sessionId,
+    sessionKey: resolved.sessionKey,
+    sqlitePath,
+    storageKind: "sqlite",
+    targetKind: "sqlite-runtime-session",
+  };
+}
+
 function getSessionKysely(database: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<SessionSqliteDatabase>(database);
+}
+
+function resolveSqliteEmbeddedRunSessionFile(sqlitePath: string, sessionId: string): string {
+  return path.join(
+    resolveSqliteEmbeddedRunSessionFileDir(sqlitePath),
+    `${validateSessionId(sessionId)}.jsonl`,
+  );
+}
+
+function resolveSqliteEmbeddedRunSessionFileDir(sqlitePath: string): string {
+  return path.join(path.dirname(sqlitePath), "embedded-run-session-files");
+}
+
+function resolveCurrentSqliteEmbeddedRunSessionFile(
+  sqlitePath: string,
+  sessionFile: string | undefined,
+): string | undefined {
+  const trimmed = sessionFile?.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const artifactDir = path.resolve(resolveSqliteEmbeddedRunSessionFileDir(sqlitePath));
+  const candidate = path.resolve(trimmed);
+  const relative = path.relative(artifactDir, candidate);
+  return relative.length > 0 && !relative.startsWith("..") && !path.isAbsolute(relative)
+    ? trimmed
+    : undefined;
 }
 
 async function runExclusiveSqliteSessionWrite<T>(

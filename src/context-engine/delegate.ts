@@ -41,8 +41,9 @@ export async function delegateCompactionToRuntime(
   // runtimeContext carries the full CompactEmbeddedAgentSessionParams fields set
   // by runtime callers. We spread them and override the fields that come from
   // the public ContextEngine compact() signature directly.
-  const runtimeContext = (params.runtimeContext ?? {}) as ContextEngineRuntimeContext &
+  const runtimeContextWithFile = (params.runtimeContext ?? {}) as ContextEngineRuntimeContext &
     Partial<RuntimeCompactionParams>;
+  const { sessionFile: _runtimeSessionFile, ...runtimeContext } = runtimeContextWithFile;
   const currentTokenCount =
     params.currentTokenCount ??
     (typeof runtimeContext.currentTokenCount === "number" &&
@@ -50,11 +51,21 @@ export async function delegateCompactionToRuntime(
     runtimeContext.currentTokenCount > 0
       ? Math.floor(runtimeContext.currentTokenCount)
       : undefined);
+  const runtimeSessionKey =
+    typeof runtimeContext.sessionKey === "string" && runtimeContext.sessionKey.trim()
+      ? runtimeContext.sessionKey.trim()
+      : undefined;
+  const sessionKey = params.sessionKey ?? runtimeSessionKey;
+  const agentId =
+    typeof runtimeContext.agentId === "string" && runtimeContext.agentId.trim()
+      ? runtimeContext.agentId.trim()
+      : undefined;
 
   const result = await compactEmbeddedAgentSessionDirect({
     ...runtimeContext,
     sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
+    ...(sessionKey ? { sessionKey } : { sessionFile: params.sessionFile }),
+    ...(agentId ? { agentId } : {}),
     tokenBudget: params.tokenBudget,
     ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     force: params.force,

@@ -294,13 +294,21 @@ describe("realtime voice agent consult runtime", () => {
 
     expect(resolveParentForkDecision).toHaveBeenCalledWith({
       parentEntry: sessionStore["agent:main:main"],
-      storePath: "/tmp/sessions.json",
+      agentId: "main",
+      config: {},
     });
     expect(forkSessionFromParent).toHaveBeenCalledWith({
       parentEntry: sessionStore["agent:main:main"],
       agentId: "main",
-      sessionsDir: "/tmp",
+      config: {},
     });
+    expect(runtime.session.patchSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "main",
+        config: {},
+        sessionKey: "agent:main:subagent:google-meet:meet-1",
+      }),
+    );
     const forkedEntry = sessionStore["agent:main:subagent:google-meet:meet-1"];
     if (!forkedEntry) {
       throw new Error("Expected forked consult session entry");
@@ -315,8 +323,68 @@ describe("realtime voice agent consult runtime", () => {
     expectPositiveTimestamp(forkedEntry.updatedAt);
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call.sessionId).toBe("forked-session");
-    expect(call.sessionFile).toBe("/tmp/forked.jsonl");
+    expect(call.sessionFile).toBeUndefined();
     expect(call.spawnedBy).toBe("agent:main:main");
+  });
+
+  it("forks cross-agent requester context from the requester agent store", async () => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime();
+    sessionStore["agent:main:main"] = {
+      sessionId: "parent-session",
+      sessionFile: "relative-parent.jsonl",
+      totalTokens: 100,
+      updatedAt: 1,
+    };
+    const resolveParentForkDecision = vi.fn(async () => ({
+      status: "fork" as const,
+      maxTokens: 100_000,
+      parentTokens: 100,
+    }));
+    const forkSessionFromParent = vi.fn(async () => ({
+      sessionId: "forked-session",
+      sessionFile: "/tmp/forked.jsonl",
+    }));
+    setRealtimeVoiceAgentConsultDepsForTest({
+      resolveParentForkDecision,
+      forkSessionFromParent,
+    });
+
+    await consultRealtimeVoiceAgent({
+      cfg: {} as never,
+      agentRuntime: runtime as never,
+      logger: { warn: vi.fn() },
+      agentId: "voice-agent",
+      sessionKey: "agent:voice-agent:google-meet:meet-1",
+      spawnedBy: "agent:main:main",
+      contextMode: "fork",
+      messageProvider: "google-meet",
+      lane: "google-meet",
+      runIdPrefix: "google-meet:meet-1",
+      args: { question: "What should I say?" },
+      transcript: [],
+      surface: "a private Google Meet",
+      userLabel: "Participant",
+    });
+
+    expect(resolveParentForkDecision).toHaveBeenCalledWith({
+      parentEntry: sessionStore["agent:main:main"],
+      agentId: "main",
+      config: {},
+    });
+    expect(forkSessionFromParent).toHaveBeenCalledWith({
+      parentEntry: sessionStore["agent:main:main"],
+      agentId: "main",
+      config: {},
+    });
+    expect(runtime.session.patchSessionEntry).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentId: "voice-agent",
+        config: {},
+        sessionKey: "agent:voice-agent:google-meet:meet-1",
+      }),
+    );
+    const call = requireEmbeddedAgentCall(runEmbeddedAgent);
+    expect(call.sessionFile).toBe("/tmp/forked.jsonl");
   });
 
   it("inherits requester message routing for forked consult sessions", async () => {

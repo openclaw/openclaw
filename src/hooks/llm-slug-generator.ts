@@ -2,6 +2,7 @@
  * LLM-based slug generator for session memory filenames
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -35,16 +36,20 @@ export async function generateSlugViaLLM(params: {
   sessionContent: string;
   cfg: OpenClawConfig;
 }): Promise<string | null> {
-  let tempSessionFile: string | null = null;
-
+  let tempDir: string | undefined;
   try {
     const agentId = resolveDefaultAgentId(params.cfg);
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
     const agentDir = resolveAgentDir(params.cfg, agentId);
-
-    // Create a temporary session file for this one-off LLM call
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-slug-"));
-    tempSessionFile = path.join(tempDir, "session.jsonl");
+    const sessionId = `slug-generator-${randomUUID()}`;
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-slug-"));
+    const helperConfig = {
+      ...params.cfg,
+      session: {
+        ...params.cfg.session,
+        store: path.join(tempDir, "sessions.json"),
+      },
+    } as OpenClawConfig;
 
     const prompt = `Based on this conversation, generate a short 1-2 word filename slug (lowercase, hyphen-separated, no file extension).
 
@@ -60,13 +65,12 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
     const result = await runEmbeddedAgent({
-      sessionId: `slug-generator-${Date.now()}`,
+      sessionId,
       sessionKey: "temp:slug-generator",
       agentId,
-      sessionFile: tempSessionFile,
       workspaceDir,
       agentDir,
-      config: params.cfg,
+      config: helperConfig,
       prompt,
       provider,
       model,
@@ -99,12 +103,11 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     log.error(`Failed to generate slug: ${message}`);
     return null;
   } finally {
-    // Clean up temporary session file
-    if (tempSessionFile) {
+    if (tempDir) {
       try {
-        await fs.rm(path.dirname(tempSessionFile), { recursive: true, force: true });
+        await fs.rm(tempDir, { recursive: true, force: true });
       } catch {
-        // Ignore cleanup errors
+        // Ignore cleanup errors for one-off helper storage.
       }
     }
   }

@@ -149,8 +149,10 @@ describe("Crestodian assistant", () => {
     expect(firstCliCall.model).toBe("claude-opus-4-8");
     expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
     const firstCliConfig = requireRecord(firstCliCall.config);
+    const firstCliSession = requireRecord(firstCliConfig.session);
     const firstCliAgents = requireRecord(firstCliConfig.agents);
     const firstCliDefaults = requireRecord(firstCliAgents.defaults);
+    expect(firstCliSession.store).toBe("/tmp/crestodian-planner/sessions.json");
     expect(firstCliDefaults.cliBackends).toBeUndefined();
     expect(firstCliCall.extraSystemPrompt).toBeTypeOf("string");
     expect(firstCliCall.extraSystemPrompt).toContain("Do not use tools, shell commands");
@@ -225,12 +227,14 @@ describe("Crestodian assistant", () => {
     expect(firstEmbeddedCall.disableTools).toBe(true);
     expect(firstEmbeddedCall.toolsAllow).toEqual([]);
     const embeddedConfig = requireRecord(firstEmbeddedCall.config);
+    const embeddedSession = requireRecord(embeddedConfig.session);
     const embeddedAgents = requireRecord(embeddedConfig.agents);
     const embeddedDefaults = requireRecord(embeddedAgents.defaults);
     const embeddedModel = requireRecord(embeddedDefaults.model);
     const embeddedPlugins = requireRecord(embeddedConfig.plugins);
     const embeddedEntries = requireRecord(embeddedPlugins.entries);
     const embeddedCodexEntry = requireRecord(embeddedEntries.codex);
+    expect(embeddedSession.store).toBe("/tmp/crestodian-planner/sessions.json");
     expect(embeddedModel.primary).toBe("openai/gpt-5.5");
     expect(embeddedCodexEntry.enabled).toBe(true);
   });
