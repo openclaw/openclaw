@@ -7,7 +7,9 @@ describe("qqbot outbound sanitizeText", () => {
   it("strips reasoning/thinking tags before delivery", () => {
     const sanitize = qqbotPlugin.outbound?.sanitizeText;
     expect(sanitize).toBeDefined();
-    if (!sanitize) return;
+    if (!sanitize) {
+      return;
+    }
 
     const input1 = "<thinking>internal reasoning</thinking>final answer";
     expect(sanitize({ text: input1, payload: { text: input1 } })).toBe("final answer");
