@@ -11,6 +11,22 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
 const workspaceSourceAliases = [
   {
+    find: "../logging/redact.js",
+    replacement: path.resolve(here, "src/ui/browser-redact.ts"),
+  },
+  {
+    find: "openclaw/plugin-sdk/test-fixtures",
+    replacement: path.resolve(repoRoot, "src/plugin-sdk/test-fixtures.ts"),
+  },
+  {
+    find: /^@openclaw\/model-catalog-core\/(.+)$/u,
+    replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/$1.ts"),
+  },
+  {
+    find: "@openclaw/model-catalog-core",
+    replacement: path.resolve(repoRoot, "packages/model-catalog-core/src/index.ts"),
+  },
+  {
     find: /^@openclaw\/normalization-core\/(.+)$/u,
     replacement: path.resolve(repoRoot, "packages/normalization-core/src/$1"),
   },

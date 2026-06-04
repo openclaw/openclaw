@@ -2,7 +2,10 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
-const indexHtmlPath = path.resolve(process.cwd(), "ui/index.html");
+const indexHtmlPath = path.resolve(
+  process.cwd(),
+  path.basename(process.cwd()) === "ui" ? "index.html" : "ui/index.html",
+);
 type TestWindow = Window & typeof globalThis;
 
 async function readIndexHtmlWithDelay(delayMs: number): Promise<string> {

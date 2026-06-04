@@ -1,3 +1,8 @@
+/**
+ * Guarded provider fetch transport utilities.
+ *
+ * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
+ */
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,

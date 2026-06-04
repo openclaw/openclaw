@@ -178,6 +178,10 @@ export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   });
 }
 
+function normalizeViteImporterPath(importer: string): string {
+  return path.normalize(importer.replace(/[?#].*$/u, ""));
+}
+
 export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   const browserRedactPath = path.join(here, "src/ui/browser-redact.ts");
   const sharedRedactImporters = new Set([
@@ -192,7 +196,7 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
       if (
         source === "../logging/redact.js" &&
         importer &&
-        sharedRedactImporters.has(path.normalize(importer))
+        sharedRedactImporters.has(normalizeViteImporterPath(importer))
       ) {
         return browserRedactPath;
       }
