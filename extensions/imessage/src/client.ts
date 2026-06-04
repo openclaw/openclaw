@@ -1,4 +1,5 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -67,6 +68,7 @@ export class IMessageRpcClient {
   private closedResolve: (() => void) | null = null;
   private child: ChildProcessWithoutNullStreams | null = null;
   private stdoutBuffer = "";
+  private decoder: StringDecoder | null = null;
   private nextId = 1;
   private publicProcessError: string | null = null;
 
@@ -96,10 +98,11 @@ export class IMessageRpcClient {
     });
     this.child = child;
 
-    // Split on \n only — not U+2028/U+2029 — so valid JSON strings containing
-    // Unicode line/paragraph separators survive as a single line. (#89830)
+    // Split on \n only (not U+2028/U+2029) and use StringDecoder so multi-byte
+    // UTF-8 characters split across chunks are reassembled correctly. (#89830, #89883)
+    this.decoder = new StringDecoder("utf-8");
     child.stdout.on("data", (chunk: Buffer) => {
-      this.stdoutBuffer += chunk.toString("utf-8");
+      this.stdoutBuffer += this.decoder!.write(chunk);
       let idx: number;
       while ((idx = this.stdoutBuffer.indexOf("\n")) !== -1) {
         const line = this.stdoutBuffer.slice(0, idx);
@@ -145,6 +148,7 @@ export class IMessageRpcClient {
       return;
     }
     this.stdoutBuffer = "";
+    this.decoder = null;
     this.child.stdin?.end();
     const child = this.child;
     this.child = null;

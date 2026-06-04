@@ -1,26 +1,29 @@
+import { StringDecoder } from "node:string_decoder";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { IMessageRpcClient } from "./client.js";
 
-// U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR
-// Written as escape sequences to avoid oxlint no-multi-str on literal line/paragraph breaks.
 const LINE_SEP = "\u2028";
 const PARA_SEP = "\u2029";
 
-// Replicates the LF-only framing logic from IMessageRpcClient.start()
-// so tests exercise the same path the production data handler uses.
-function feedLines(client: IMessageRpcClient, data: string): void {
+function feedChunks(client: IMessageRpcClient, ...chunks: Buffer[]): void {
   const internals = client as unknown as {
     stdoutBuffer: string;
+    decoder: StringDecoder | null;
     handleLine: (line: string) => void;
   };
-  internals.stdoutBuffer += data;
-  let idx: number;
-  while ((idx = internals.stdoutBuffer.indexOf("\n")) !== -1) {
-    const line = internals.stdoutBuffer.slice(0, idx);
-    internals.stdoutBuffer = internals.stdoutBuffer.slice(idx + 1);
-    const trimmed = line.trim();
-    if (trimmed) {
-      internals.handleLine(trimmed);
+  if (!internals.decoder) {
+    internals.decoder = new StringDecoder("utf-8");
+  }
+  for (const chunk of chunks) {
+    internals.stdoutBuffer += internals.decoder.write(chunk);
+    let idx: number;
+    while ((idx = internals.stdoutBuffer.indexOf("\n")) !== -1) {
+      const line = internals.stdoutBuffer.slice(0, idx);
+      internals.stdoutBuffer = internals.stdoutBuffer.slice(idx + 1);
+      const trimmed = line.trim();
+      if (trimmed) {
+        internals.handleLine(trimmed);
+      }
     }
   }
 }
@@ -49,7 +52,7 @@ describe("IMessageRpcClient stdout framing", () => {
       const textWithLineSep = "line one" + LINE_SEP + "line two";
       const response = '{"jsonrpc":"2.0","id":1,"result":{"text":"' + textWithLineSep + '"}}\n';
 
-      feedLines(client, response);
+      feedChunks(client, Buffer.from(response, "utf-8"));
 
       expect(handleLineSpy).toHaveBeenCalledTimes(1);
       const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
@@ -66,7 +69,7 @@ describe("IMessageRpcClient stdout framing", () => {
       const textWithParaSep = "para one" + PARA_SEP + "para two";
       const response = '{"jsonrpc":"2.0","id":2,"result":{"text":"' + textWithParaSep + '"}}\n';
 
-      feedLines(client, response);
+      feedChunks(client, Buffer.from(response, "utf-8"));
 
       expect(handleLineSpy).toHaveBeenCalledTimes(1);
       const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
@@ -83,7 +86,7 @@ describe("IMessageRpcClient stdout framing", () => {
       const textMixed = "a" + LINE_SEP + "b" + PARA_SEP + "c" + LINE_SEP + "d";
       const response = '{"jsonrpc":"2.0","id":3,"result":{"text":"' + textMixed + '"}}\n';
 
-      feedLines(client, response);
+      feedChunks(client, Buffer.from(response, "utf-8"));
 
       expect(handleLineSpy).toHaveBeenCalledTimes(1);
       const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
@@ -101,7 +104,7 @@ describe("IMessageRpcClient stdout framing", () => {
 
       const r1 = '{"jsonrpc":"2.0","id":1,"result":"a"}';
       const r2 = '{"jsonrpc":"2.0","id":2,"result":"b"}';
-      feedLines(client, r1 + "\n" + r2 + "\n");
+      feedChunks(client, Buffer.from(r1 + "\n" + r2 + "\n", "utf-8"));
 
       expect(handleLineSpy).toHaveBeenCalledTimes(2);
       expect(handleLineSpy).toHaveBeenNthCalledWith(1, r1);
@@ -110,7 +113,6 @@ describe("IMessageRpcClient stdout framing", () => {
 
     it("buffers incomplete lines across chunks", () => {
       const client = new IMessageRpcClient();
-      const internals = client as unknown as { stdoutBuffer: string };
       const handleLineSpy = vi.spyOn(
         client as unknown as { handleLine: (line: string) => void },
         "handleLine",
@@ -120,11 +122,8 @@ describe("IMessageRpcClient stdout framing", () => {
       const chunk1 = fullLine.slice(0, 20);
       const chunk2 = fullLine.slice(20);
 
-      internals.stdoutBuffer = "";
-      feedLines(client, chunk1);
-      expect(handleLineSpy).not.toHaveBeenCalled();
+      feedChunks(client, Buffer.from(chunk1, "utf-8"), Buffer.from(chunk2, "utf-8"));
 
-      feedLines(client, chunk2);
       expect(handleLineSpy).toHaveBeenCalledTimes(1);
       expect(handleLineSpy).toHaveBeenCalledWith('{"jsonrpc":"2.0","id":1,"result":"done"}');
     });
@@ -136,12 +135,121 @@ describe("IMessageRpcClient stdout framing", () => {
         "handleLine",
       );
 
-      feedLines(
+      feedChunks(
         client,
-        '{"jsonrpc":"2.0","id":1,"result":"x"}\n\n\n{"jsonrpc":"2.0","id":2,"result":"y"}\n',
+        Buffer.from(
+          '{"jsonrpc":"2.0","id":1,"result":"x"}\n\n\n{"jsonrpc":"2.0","id":2,"result":"y"}\n',
+          "utf-8",
+        ),
       );
 
       expect(handleLineSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe("UTF-8 multi-byte split across chunks (#89883)", () => {
+    it("reassembles emoji split across chunk boundaries", () => {
+      const client = new IMessageRpcClient();
+      const handleLineSpy = vi.spyOn(
+        client as unknown as { handleLine: (line: string) => void },
+        "handleLine",
+      );
+
+      const emoji = "🎉";
+      const fullBuf = Buffer.from(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, result: { text: emoji } }) + "\n",
+        "utf-8",
+      );
+      // Split inside the 4-byte UTF-8 sequence
+      const splitAt = fullBuf.indexOf(Buffer.from(emoji, "utf-8")) + 2;
+      feedChunks(client, fullBuf.subarray(0, splitAt), fullBuf.subarray(splitAt));
+
+      expect(handleLineSpy).toHaveBeenCalledTimes(1);
+      const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
+      expect(parsed.result.text).toBe(emoji);
+    });
+
+    it("reassembles U+2028 split across chunk boundaries", () => {
+      const client = new IMessageRpcClient();
+      const handleLineSpy = vi.spyOn(
+        client as unknown as { handleLine: (line: string) => void },
+        "handleLine",
+      );
+
+      const textWithLineSep = "before" + LINE_SEP + "after";
+      const fullBuf = Buffer.from(
+        JSON.stringify({ jsonrpc: "2.0", id: 2, result: { text: textWithLineSep } }) + "\n",
+        "utf-8",
+      );
+      // Split inside the 3-byte UTF-8 sequence
+      const splitAt = fullBuf.indexOf(Buffer.from(LINE_SEP, "utf-8")) + 1;
+      feedChunks(client, fullBuf.subarray(0, splitAt), fullBuf.subarray(splitAt));
+
+      expect(handleLineSpy).toHaveBeenCalledTimes(1);
+      const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
+      expect(parsed.result.text).toBe(textWithLineSep);
+    });
+
+    it("reassembles CJK character split across chunk boundaries", () => {
+      const client = new IMessageRpcClient();
+      const handleLineSpy = vi.spyOn(
+        client as unknown as { handleLine: (line: string) => void },
+        "handleLine",
+      );
+
+      const cjk = "中";
+      const fullBuf = Buffer.from(
+        JSON.stringify({ jsonrpc: "2.0", id: 3, result: { text: cjk } }) + "\n",
+        "utf-8",
+      );
+      // Split inside the 3-byte UTF-8 sequence
+      const splitAt = fullBuf.indexOf(Buffer.from(cjk, "utf-8")) + 1;
+      feedChunks(client, fullBuf.subarray(0, splitAt), fullBuf.subarray(splitAt));
+
+      expect(handleLineSpy).toHaveBeenCalledTimes(1);
+      const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
+      expect(parsed.result.text).toBe(cjk);
+    });
+
+    it("handles multiple multi-byte splits in sequence", () => {
+      const client = new IMessageRpcClient();
+      const handleLineSpy = vi.spyOn(
+        client as unknown as { handleLine: (line: string) => void },
+        "handleLine",
+      );
+
+      const text = "Hello 🌍世界" + LINE_SEP + "end";
+      const fullBuf = Buffer.from(
+        JSON.stringify({ jsonrpc: "2.0", id: 4, result: { text } }) + "\n",
+        "utf-8",
+      );
+      const third = Math.floor(fullBuf.length / 3);
+      feedChunks(
+        client,
+        fullBuf.subarray(0, third),
+        fullBuf.subarray(third, third * 2),
+        fullBuf.subarray(third * 2),
+      );
+
+      expect(handleLineSpy).toHaveBeenCalledTimes(1);
+      const parsed = JSON.parse(handleLineSpy.mock.calls[0][0]);
+      expect(parsed.result.text).toBe(text);
+    });
+
+    it("produces replacement characters with naive toString but not StringDecoder", () => {
+      const emoji = "🎉";
+      const emojiBuf = Buffer.from(emoji, "utf-8");
+      expect(emojiBuf.length).toBe(4);
+
+      const naiveResult =
+        emojiBuf.subarray(0, 2).toString("utf-8") + emojiBuf.subarray(2).toString("utf-8");
+      expect(naiveResult).not.toBe(emoji);
+      expect(naiveResult).toContain("�");
+
+      const decoder = new StringDecoder("utf-8");
+      const decoderResult =
+        decoder.write(emojiBuf.subarray(0, 2)) + decoder.write(emojiBuf.subarray(2));
+      expect(decoderResult).toBe(emoji);
     });
   });
 
@@ -220,13 +328,9 @@ describe("IMessageRpcClient stdout framing", () => {
         },
         { id: 101, text: "Normal message", is_from_me: true },
       ];
-      const response = JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        result: { messages },
-      });
+      const response = JSON.stringify({ jsonrpc: "2.0", id: 1, result: { messages } }) + "\n";
 
-      feedLines(client, response + "\n");
+      feedChunks(client, Buffer.from(response, "utf-8"));
 
       expect(resolveSpy).toHaveBeenCalledWith({ messages });
       expect(runtime.error).not.toHaveBeenCalled();
