@@ -572,7 +572,7 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(archivedOrphanTranscripts).toStrictEqual([]);
   });
 
-  it.skipIf(process.platform === "win32" ? !canCreateDirectorySymlinks : false)(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "does not archive referenced transcripts when the state dir path resolves through a symlink",
     async () => {
       const cfg: OpenClawConfig = {};
