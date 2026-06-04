@@ -60,6 +60,32 @@ describe("thinking-free history contract", () => {
       expect(result).toBe(messages);
     },
   );
+
+  it.each(noThinkingReferenceCases)(
+    "$name preserves blank no-thinking assistant turns unchanged",
+    ({ drop }) => {
+      const messages: AgentMessage[] = [
+        castAgentMessage({ role: "user", content: "hello" }),
+        castAgentMessage({ role: "assistant", content: [{ type: "text", text: "" }] }),
+      ];
+
+      const result = drop(messages);
+      expect(result).toBe(messages);
+    },
+  );
+
+  it.each(noThinkingReferenceCases)(
+    "$name preserves whitespace-only no-thinking assistant turns unchanged",
+    ({ drop }) => {
+      const messages: AgentMessage[] = [
+        castAgentMessage({ role: "user", content: "hello" }),
+        castAgentMessage({ role: "assistant", content: [{ type: "text", text: "   " }] }),
+      ];
+
+      const result = drop(messages);
+      expect(result).toBe(messages);
+    },
+  );
 });
 
 describe("isAssistantMessageWithContent", () => {

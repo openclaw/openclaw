@@ -336,13 +336,19 @@ export function dropThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
     }
     const nextContent: AssistantContentBlock[] = [];
     let changed = false;
+    let hadThinkingRemoved = false;
     for (const block of msg.content) {
       if (isThinkingBlock(block)) {
         touched = true;
         changed = true;
+        hadThinkingRemoved = true;
         continue;
       }
-      if ((block as { type?: unknown }).type === "text" && !hasMeaningfulText(block)) {
+      if (
+        hadThinkingRemoved &&
+        (block as { type?: unknown }).type === "text" &&
+        !hasMeaningfulText(block)
+      ) {
         changed = true;
         continue;
       }
@@ -430,10 +436,11 @@ function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
       continue;
     }
 
+    const hadThinking = message.content.some((block) => isThinkingBlock(block));
     const nextContent = message.content.filter(
       (block) =>
         !isThinkingBlock(block) &&
-        ((block as { type?: unknown }).type !== "text" || hasMeaningfulText(block)),
+        (!hadThinking || (block as { type?: unknown }).type !== "text" || hasMeaningfulText(block)),
     );
     if (nextContent.length === message.content.length) {
       out.push(message);
@@ -471,10 +478,11 @@ export function dropReasoningFromHistory(messages: AgentMessage[]): AgentMessage
       continue;
     }
 
+    const hadThinking = message.content.some((block) => isThinkingBlock(block));
     const nextContent = message.content.filter(
       (block) =>
         !isThinkingBlock(block) &&
-        ((block as { type?: unknown }).type !== "text" || hasMeaningfulText(block)),
+        (!hadThinking || (block as { type?: unknown }).type !== "text" || hasMeaningfulText(block)),
     );
     if (nextContent.length === message.content.length) {
       out.push(message);
