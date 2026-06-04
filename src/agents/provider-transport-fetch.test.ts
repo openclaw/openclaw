@@ -203,6 +203,47 @@ describe("buildGuardedModelFetch", () => {
     expect(release).toHaveBeenCalled();
   });
 
+  it("accepts successful streamed responses with a missing content-type (ChatGPT Codex endpoint)", async () => {
+    const release = vi.fn(async () => undefined);
+    const encoder = new TextEncoder();
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openai-chatgpt-responses",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+    } as unknown as Model<"openai-chatgpt-responses">;
+    // chatgpt.com/backend-api/codex/responses streams a valid SSE body but sends NO
+    // content-type header; this must not be rejected as invalid_provider_content_type.
+    // A string body would auto-set content-type: text/plain, so stream raw bytes to
+    // faithfully reproduce the endpoint's missing content-type header.
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode('event: response.created\ndata: {"type":"response.created"}\n\n'),
+            );
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      ),
+      finalUrl: "https://chatgpt.com/backend-api/codex/responses",
+      release,
+    });
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://chatgpt.com/backend-api/codex/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+
+    expect(response.status).toBe(200);
+  });
+
   it("ensures configured local services before the model request", async () => {
     const release = vi.fn();
     ensureModelProviderLocalServiceMock.mockResolvedValue({ release });

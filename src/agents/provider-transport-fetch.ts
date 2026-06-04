@@ -235,7 +235,20 @@ async function assertOpenAISdkStreamContentType(params: {
   localServiceLease?: ProviderLocalServiceLease;
 }): Promise<void> {
   const contentType = params.response.headers.get("content-type") ?? "";
-  if (!params.response.ok || !params.response.body || isOpenAISdkStreamContentType(contentType)) {
+  // The ChatGPT-subscription Codex endpoint (chatgpt.com/backend-api/codex/responses)
+  // streams a valid SSE body but sends NO content-type header. A missing/empty
+  // content-type on an OK streamed response is not a misconfiguration signal: the
+  // OpenAI SDK stream parser reads the SSE body without requiring a content-type
+  // header (sanitizeOpenAISdkSseResponse leaves empty-content-type responses
+  // unchanged). Only a present, non-stream content-type (e.g. a text/html proxy/
+  // login page) is rejected below.
+  // See https://github.com/openclaw/openclaw/issues/90083.
+  if (
+    !params.response.ok ||
+    !params.response.body ||
+    !contentType ||
+    isOpenAISdkStreamContentType(contentType)
+  ) {
     return;
   }
   const body = await readResponseTextLimited(params.response).catch(() => "");
