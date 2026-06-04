@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { completeSimple } from "../llm/stream.js";
 import type { TextContent } from "../llm/types.js";
 import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { sanitizeAssistantVisibleText } from "../shared/text/assistant-visible-text.js";
 import type { ResolvedTtsConfig } from "./tts-types.js";
 export {
   normalizeApplyTextNormalization,
@@ -71,6 +72,62 @@ function resolveSummaryModelRef(
 
 function isTextContentBlock(block: { type: string }): block is TextContent {
   return block.type === "text";
+}
+
+const TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE =
+  /<\s*text_to_summarize\b[^>]*>[\s\S]*?<\s*\/\s*text_to_summarize\s*>/gi;
+const USER_SUMMARY_PROMPT_ECHO_RE = /^the user (?:wants|asks|asked|requested) me to summarize\b/i;
+const SELF_SUMMARY_PROMPT_ECHO_RE =
+  /^i (?:need|should|will|'ll) (?:to )?(?:summarize|include|keep|maintain|craft|write|produce)\b/i;
+const CRAFT_SUMMARY_PROMPT_ECHO_RE = /^let me (?:craft|write|produce|summarize)\b/i;
+
+function findFirstSentenceEnd(text: string): number {
+  const match = /^(.*?(?:[.!?](?=\s|$)|\r?\n+))/s.exec(text);
+  return match?.[0].length ?? text.length;
+}
+
+function isLeadingSummaryPromptEchoSentence(sentence: string): boolean {
+  return (
+    USER_SUMMARY_PROMPT_ECHO_RE.test(sentence) ||
+    SELF_SUMMARY_PROMPT_ECHO_RE.test(sentence) ||
+    CRAFT_SUMMARY_PROMPT_ECHO_RE.test(sentence)
+  );
+}
+
+function stripLeadingSummaryPromptEcho(text: string): string {
+  let remaining = text.trimStart();
+  let stripped = false;
+  while (remaining) {
+    const sentenceEnd = findFirstSentenceEnd(remaining);
+    const sentence = remaining.slice(0, sentenceEnd).trim();
+    if (!isLeadingSummaryPromptEchoSentence(sentence)) {
+      break;
+    }
+    stripped = true;
+    remaining = remaining.slice(sentenceEnd).trimStart();
+  }
+  return stripped ? remaining : text;
+}
+
+function truncateSummaryToTargetLength(text: string, targetLength: number): string {
+  if (text.length <= targetLength) {
+    return text;
+  }
+  const truncated = text.slice(0, targetLength - 3).trimEnd();
+  const wordBoundary = truncated.lastIndexOf(" ");
+  const minimumBoundary = Math.floor(targetLength * 0.6);
+  const body =
+    wordBoundary >= minimumBoundary ? truncated.slice(0, wordBoundary).trimEnd() : truncated;
+  return `${body}...`;
+}
+
+function sanitizeSummaryForSpeech(summary: string, targetLength: number): string {
+  const withoutAssistantScaffolding = sanitizeAssistantVisibleText(summary).trim();
+  const withoutPromptBlock = withoutAssistantScaffolding
+    .replace(TEXT_TO_SUMMARIZE_PROMPT_BLOCK_RE, "")
+    .trim();
+  const withoutPromptEcho = stripLeadingSummaryPromptEcho(withoutPromptBlock).trim();
+  return truncateSummaryToTargetLength(withoutPromptEcho, targetLength).trim();
 }
 
 /** Summarize long text before synthesis using the configured summary model. */
@@ -141,16 +198,17 @@ export async function summarizeText(
         .filter(Boolean)
         .join(" ")
         .trim();
+      const sanitizedSummary = sanitizeSummaryForSpeech(summary, targetLength);
 
-      if (!summary) {
+      if (!sanitizedSummary) {
         throw new Error("No summary returned");
       }
 
       return {
-        summary,
+        summary: sanitizedSummary,
         latencyMs: Date.now() - startTime,
         inputLength: text.length,
-        outputLength: summary.length,
+        outputLength: sanitizedSummary.length,
       };
     } finally {
       clearTimeout(timeout);
