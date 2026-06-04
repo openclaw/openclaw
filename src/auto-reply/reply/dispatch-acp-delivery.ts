@@ -161,6 +161,7 @@ type AcpDispatchDeliveryState = {
   cleanBlockTtsDirectiveText?: ReturnType<typeof createTtsDirectiveTextStreamCleaner>;
   blockCount: number;
   deliveredFinalReply: boolean;
+  deliveredFinalReplyToUser: boolean;
   deliveredFinalTtsMedia: boolean;
   deliveredVisibleText: boolean;
   failedVisibleTextDelivery: boolean;
@@ -185,6 +186,7 @@ export type AcpDispatchDeliveryCoordinator = {
   getAccumulatedFinalText: () => string;
   settleVisibleText: () => Promise<void>;
   hasDeliveredFinalReply: () => boolean;
+  hasDeliveredFinalReplyToUser: () => boolean;
   hasDeliveredFinalTtsMedia: () => boolean;
   hasDeliveredVisibleText: () => boolean;
   hasFailedVisibleTextDelivery: () => boolean;
@@ -254,6 +256,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       : undefined,
     blockCount: 0,
     deliveredFinalReply: false,
+    deliveredFinalReplyToUser: false,
     deliveredFinalTtsMedia: false,
     deliveredVisibleText: false,
     failedVisibleTextDelivery: false,
@@ -525,6 +528,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
       }
       if (kind === "final") {
         state.deliveredFinalReply = true;
+        // Genuine (non-suppressed) routed final actually reached the user, so the
+        // text fallback must not double-send. Suppression above leaves this false.
+        state.deliveredFinalReplyToUser = true;
         if (hasFinalMedia) {
           state.deliveredFinalTtsMedia = true;
         }
@@ -554,6 +560,9 @@ export function createAcpDispatchDeliveryCoordinator(params: {
           : params.dispatcher.sendFinalReply(ttsPayload);
     if (kind === "final" && delivered) {
       state.deliveredFinalReply = true;
+      // Direct dispatcher accepted the final, so it reached the user. Drives the
+      // text fallback gate; suppression never takes this branch.
+      state.deliveredFinalReplyToUser = true;
       if (hasFinalMedia) {
         state.deliveredFinalTtsMedia = true;
       }
@@ -580,6 +589,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     getAccumulatedFinalText: () => state.accumulatedFinalText,
     settleVisibleText: settleDirectVisibleText,
     hasDeliveredFinalReply: () => state.deliveredFinalReply,
+    hasDeliveredFinalReplyToUser: () => state.deliveredFinalReplyToUser,
     hasDeliveredFinalTtsMedia: () => state.deliveredFinalTtsMedia,
     hasDeliveredVisibleText: () => state.deliveredVisibleText,
     hasFailedVisibleTextDelivery: () => state.failedVisibleTextDelivery,
