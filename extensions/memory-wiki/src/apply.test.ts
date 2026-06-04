@@ -117,6 +117,26 @@ describe("applyMemoryWikiMutation", () => {
     );
   });
 
+  it("accepts CLI alias op 'synthesis' and normalizes to 'create_synthesis'", () => {
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "synthesis",
+        title: "Alias Synthesis",
+        body: "Alias summary body.",
+        sourceIds: ["source.alias"],
+      }),
+    ).toMatchObject({ op: "create_synthesis", title: "Alias Synthesis" });
+  });
+
+  it("accepts CLI alias op 'metadata' and normalizes to 'update_metadata'", () => {
+    expect(
+      normalizeMemoryWikiMutationInput({
+        op: "metadata",
+        lookup: "entity.alias",
+      }),
+    ).toMatchObject({ op: "update_metadata", lookup: "entity.alias" });
+  });
+
   it("updates page metadata without overwriting existing human notes", async () => {
     const { rootDir, config } = await createVault({
       prefix: "memory-wiki-apply-",

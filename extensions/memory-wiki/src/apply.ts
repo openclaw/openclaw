@@ -97,7 +97,14 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     confidence?: number | null;
     status?: string;
   };
-  if (params.op === "create_synthesis") {
+  // Normalize CLI aliases to internal op names so agents can pass "synthesis"/"metadata".
+  const op: ApplyMemoryWikiMutation["op"] =
+    params.op === "synthesis"
+      ? "create_synthesis"
+      : params.op === "metadata"
+        ? "update_metadata"
+        : params.op;
+  if (op === "create_synthesis") {
     if (!params.title?.trim()) {
       throw new Error("wiki mutation requires title for create_synthesis.");
     }
