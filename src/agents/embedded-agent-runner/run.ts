@@ -203,7 +203,7 @@ import { createUsageAccumulator, mergeUsageIntoAccumulator } from "./usage-accum
 
 type ApiKeyInfo = ResolvedProviderAuth;
 
-const log = createSubsystemLogger("agent/embedded");
+const embeddedRunLog = createSubsystemLogger("agent/embedded");
 const MAX_SAME_MODEL_IDLE_TIMEOUT_RETRIES = 1;
 const EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS = 30_000;
 const MID_TURN_PRECHECK_CONTINUATION_PROMPT =
@@ -687,7 +687,7 @@ export async function runEmbeddedAgent(
         agentHarnessId: params.agentHarnessId,
         agentHarnessRuntimeOverride: params.agentHarnessRuntimeOverride,
       });
-      log.info(
+      embeddedRunLog.info(
         `selected agent harness: provider=${sanitizeForLog(provider)} model=${sanitizeForLog(
           modelId,
         )} harness=${sanitizeForLog(agentHarness.id)} requested=${sanitizeForLog(
