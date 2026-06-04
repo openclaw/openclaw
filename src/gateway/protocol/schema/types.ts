@@ -1,4 +1,13 @@
 import type { Static } from "@sinclair/typebox";
+import {
+  SkillsDbListParamsSchema,
+  SkillsDbGetParamsSchema,
+  SkillsDbCreateParamsSchema,
+  SkillsDbUpdateParamsSchema,
+  SkillsDbDeleteParamsSchema,
+  SkillsUpdateParamsSchema,
+} from "./agents-models-skills.js";
+import { CronJobSchema } from "./cron.js";
 import { ProtocolSchemas } from "./protocol-schemas.js";
 
 type ProtocolSchemaName = keyof typeof ProtocolSchemas;
@@ -126,8 +135,13 @@ export type SkillsSearchResult = SchemaType<"SkillsSearchResult">;
 export type SkillsDetailParams = SchemaType<"SkillsDetailParams">;
 export type SkillsDetailResult = SchemaType<"SkillsDetailResult">;
 export type SkillsInstallParams = SchemaType<"SkillsInstallParams">;
-export type SkillsUpdateParams = SchemaType<"SkillsUpdateParams">;
-export type CronJob = SchemaType<"CronJob">;
+export type SkillsUpdateParams = Static<typeof SkillsUpdateParamsSchema>;
+export type SkillsDbListParams = Static<typeof SkillsDbListParamsSchema>;
+export type SkillsDbGetParams = Static<typeof SkillsDbGetParamsSchema>;
+export type SkillsDbCreateParams = Static<typeof SkillsDbCreateParamsSchema>;
+export type SkillsDbUpdateParams = Static<typeof SkillsDbUpdateParamsSchema>;
+export type SkillsDbDeleteParams = Static<typeof SkillsDbDeleteParamsSchema>;
+export type CronJob = Static<typeof CronJobSchema>;
 export type CronListParams = SchemaType<"CronListParams">;
 export type CronStatusParams = SchemaType<"CronStatusParams">;
 export type CronAddParams = SchemaType<"CronAddParams">;

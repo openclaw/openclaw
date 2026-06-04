@@ -1,6 +1,6 @@
 import amqplib from "amqplib";
-import type { RabbitMqConfig } from "./types.js";
 import type { PluginLogger } from "../api.js";
+import type { RabbitMqConfig } from "./types.js";
 
 type MessageHandler = (msg: amqplib.ConsumeMessage) => Promise<void>;
 
@@ -15,16 +15,12 @@ export class RabbitMqClient {
   private readonly logger: PluginLogger;
   private readonly handler: MessageHandler;
 
-  private connection: amqplib.Connection | null = null;
+  private connection: amqplib.ChannelModel | null = null;
   private channel: amqplib.Channel | null = null;
   private consuming = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
-  constructor(
-    config: RabbitMqConfig,
-    logger: PluginLogger,
-    handler: MessageHandler,
-  ) {
+  constructor(config: RabbitMqConfig, logger: PluginLogger, handler: MessageHandler) {
     this.config = config;
     this.logger = logger;
     this.handler = handler;
@@ -49,7 +45,7 @@ export class RabbitMqClient {
   }
 
   private async consumeLoop(): Promise<void> {
-    let retryDelay = 5_000;       // 5 seconds initial
+    let retryDelay = 5_000; // 5 seconds initial
     const maxRetryDelay = 300_000; // 5 minutes max
 
     while (this.consuming) {
@@ -63,7 +59,10 @@ export class RabbitMqClient {
         if (this.channel) {
           await new Promise<void>((resolve) => {
             const ch = this.channel;
-            if (!ch) { resolve(); return; }
+            if (!ch) {
+              resolve();
+              return;
+            }
 
             ch.on("close", () => {
               this.logger.info("[RABBITMQ] Channel closed");
@@ -77,12 +76,14 @@ export class RabbitMqClient {
           });
         }
       } catch (error) {
-        this.logger.error(`[RABBITMQ] Connection error: ${error}`);
+        this.logger.error(`[RABBITMQ] Connection error: ${String(error)}`);
       }
 
       await this.cleanupConnection();
 
-      if (!this.consuming) break;
+      if (!this.consuming) {
+        break;
+      }
 
       // Exponential backoff (interruptible via stop())
       this.logger.info(`[RABBITMQ] Reconnecting in ${retryDelay / 1000}s...`);
@@ -113,13 +114,15 @@ export class RabbitMqClient {
     this.logger.info(`[RABBITMQ] Started consuming from queue: ${this.config.queue}`);
 
     await this.channel.consume(this.config.queue, async (msg) => {
-      if (!msg) return;
+      if (!msg) {
+        return;
+      }
 
       try {
         await this.handler(msg);
         this.channel?.ack(msg);
       } catch (error) {
-        this.logger.error(`[RABBITMQ] Message handler error: ${error}`);
+        this.logger.error(`[RABBITMQ] Message handler error: ${String(error)}`);
         this.channel?.nack(msg, false, false);
       }
     });
@@ -130,13 +133,17 @@ export class RabbitMqClient {
       if (this.channel) {
         await this.channel.close().catch(() => {});
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     try {
       if (this.connection) {
         await this.connection.close().catch(() => {});
       }
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
 
     this.channel = null;
     this.connection = null;

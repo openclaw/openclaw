@@ -14,11 +14,24 @@
           "port": { "type": "number" },
           "user": { "type": "string" },
           "password": { "type": "string" },
-          "queue": { "type": "string" }
+          "queue": { "type": "string" },
+          "reportTaskQueue": { "type": "string", "default": "ReportTask" }
         },
         "required": ["host", "user", "password"]
       },
       "historyDb": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "host": { "type": "string" },
+          "port": { "type": "number" },
+          "user": { "type": "string" },
+          "password": { "type": "string" },
+          "database": { "type": "string" }
+        },
+        "required": ["host", "user", "password", "database"]
+      },
+      "writerDb": {
         "type": "object",
         "additionalProperties": false,
         "properties": {

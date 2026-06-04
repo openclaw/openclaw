@@ -23,9 +23,7 @@ export class MercurePusher {
     const encoder = new TextEncoder();
 
     const header = encoder.encode(JSON.stringify({ alg: "HS256", typ: "JWT" }));
-    const payload = encoder.encode(
-      JSON.stringify({ mercure: { publish: ["*"] } }),
-    );
+    const payload = encoder.encode(JSON.stringify({ mercure: { publish: ["*"] } }));
 
     const headerB64 = this.base64UrlEncode(header);
     const payloadB64 = this.base64UrlEncode(payload);
@@ -64,15 +62,21 @@ export class MercurePusher {
     return this.sendToMercure(topic, { type: "done" });
   }
 
+  /**
+   * Announce a queued report task so the frontend can render a placeholder
+   * card immediately; later `report_text`/`report`/`report_done` events from
+   * the report-generator carry the same taskId and update that card in place.
+   */
+  async pushReportCreated(topic: string, taskId: number): Promise<boolean> {
+    return this.sendToMercure(topic, { type: "report_created", taskId });
+  }
+
   /** Push an error signal */
   async pushError(topic: string, error: string): Promise<boolean> {
     return this.sendToMercure(topic, { type: "error", error });
   }
 
-  private async sendToMercure(
-    topic: string,
-    data: Record<string, unknown>,
-  ): Promise<boolean> {
+  private async sendToMercure(topic: string, data: Record<string, unknown>): Promise<boolean> {
     try {
       const token = await this.generatePublisherJwt();
 
@@ -94,6 +98,83 @@ export class MercurePusher {
       return response.ok;
     } catch {
       return false;
+    }
+  }
+}
+
+/**
+ * Buffered streaming pusher that collects small text chunks and flushes
+ * them as batched Mercure pushes, creating a typewriter effect.
+ *
+ * Mirrors the Python `_stream_response_with_mercure` pattern:
+ * each LLM delta is forwarded to the frontend in near-real-time.
+ */
+export class StreamingMercurePusher {
+  private readonly pusher: MercurePusher;
+  private readonly topic: string;
+  private readonly flushIntervalMs: number;
+  private buffer = "";
+  private timer: ReturnType<typeof setTimeout> | null = null;
+  private fullText = "";
+
+  constructor(pusher: MercurePusher, topic: string, flushIntervalMs = 80) {
+    this.pusher = pusher;
+    this.topic = topic;
+    this.flushIntervalMs = flushIntervalMs;
+  }
+
+  /** Append a text delta from the LLM stream. */
+  appendDelta(delta: string): void {
+    if (!delta) {
+      return;
+    }
+    this.buffer += delta;
+    this.fullText += delta;
+    this.scheduleFlush();
+  }
+
+  /** Get all accumulated text so far. */
+  getFullText(): string {
+    return this.fullText;
+  }
+
+  /** Flush any buffered text immediately. */
+  async flush(): Promise<void> {
+    this.cancelTimer();
+    const chunk = this.buffer;
+    this.buffer = "";
+    if (chunk) {
+      await this.pusher.pushText(this.topic, chunk);
+    }
+  }
+
+  /** Signal that the stream is done: flush remaining buffer + push done event. */
+  async finish(): Promise<void> {
+    await this.flush();
+    await this.pusher.pushDone(this.topic);
+  }
+
+  /** Push an error and finish. */
+  async pushError(error: string): Promise<void> {
+    this.cancelTimer();
+    this.buffer = "";
+    await this.pusher.pushError(this.topic, error);
+  }
+
+  private scheduleFlush(): void {
+    if (this.timer) {
+      return;
+    }
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      void this.flush();
+    }, this.flushIntervalMs);
+  }
+
+  private cancelTimer(): void {
+    if (this.timer) {
+      clearTimeout(this.timer);
+      this.timer = null;
     }
   }
 }

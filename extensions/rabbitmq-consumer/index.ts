@@ -1,9 +1,13 @@
 import { definePluginEntry, type OpenClawPluginApi } from "./api.js";
-import { RabbitMqClient } from "./src/rabbitmq-client.js";
+import { processChatMessage } from "./src/chat-pipeline.js";
+import { DownloadManager } from "./src/download-manager.js";
+import { FeedCounter } from "./src/feed-counter.js";
 import { HistoryManager } from "./src/history-manager.js";
 import { parseMessage } from "./src/message-handler.js";
-import { processChatMessage } from "./src/chat-pipeline.js";
-import type { HistoryDbConfig, MercureConfig, RabbitMqPluginConfig } from "./src/types.js";
+import { RabbitMqClient } from "./src/rabbitmq-client.js";
+import { ReportTaskPublisher } from "./src/report-task-publisher.js";
+import { TopicResolver } from "./src/topic-resolver.js";
+import type { RabbitMqPluginConfig, WriterDbConfig } from "./src/types.js";
 
 /**
  * Resolve plugin config from the plugin config object, with env var fallbacks.
@@ -20,13 +24,18 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown>): RabbitMqPlu
       user: (rabbitmq?.user as string) ?? process.env.RABBITMQ_USER ?? "",
       password: (rabbitmq?.password as string) ?? process.env.RABBITMQ_PASSWORD ?? "",
       queue: (rabbitmq?.queue as string) ?? process.env.RABBITMQ_QUEUE ?? "MessageProxy",
+      reportTaskQueue:
+        (rabbitmq?.reportTaskQueue as string) ??
+        process.env.RABBITMQ_REPORT_TASK_QUEUE ??
+        "ReportTask",
     },
     historyDb: {
       host: (historyDb?.host as string) ?? process.env.HISTORY_MYSQL_HOST ?? "127.0.0.1",
       port: Number(historyDb?.port ?? process.env.HISTORY_MYSQL_PORT ?? 3306),
       user: (historyDb?.user as string) ?? process.env.HISTORY_MYSQL_USER ?? "",
       password: (historyDb?.password as string) ?? process.env.HISTORY_MYSQL_PASSWORD ?? "",
-      database: (historyDb?.database as string) ?? process.env.HISTORY_MYSQL_DATABASE ?? "superworker",
+      database:
+        (historyDb?.database as string) ?? process.env.HISTORY_MYSQL_DATABASE ?? "superworker",
     },
     mercure: {
       hubUrl: (mercure?.hubUrl as string) ?? process.env.MERCURE_HUB_URL ?? "",
@@ -35,9 +44,43 @@ function resolvePluginConfig(pluginConfig: Record<string, unknown>): RabbitMqPlu
   };
 }
 
+/**
+ * Resolve writer DB config from the plugin config object, with env var fallbacks.
+ * Returns undefined when no dedicated writer is configured (falls back to reader).
+ */
+function resolveWriterConfig(pluginConfig: Record<string, unknown>): WriterDbConfig | undefined {
+  const writerDb = pluginConfig.writerDb as Record<string, unknown> | undefined;
+  const envUser = process.env.WRITER_MYSQL_USER;
+  const envPassword = process.env.WRITER_MYSQL_PASSWORD;
+  if (!writerDb && !envUser && !envPassword) {
+    return undefined;
+  }
+  return {
+    host:
+      (writerDb?.host as string) ??
+      process.env.WRITER_MYSQL_HOST ??
+      process.env.HISTORY_MYSQL_HOST ??
+      "127.0.0.1",
+    port: Number(
+      writerDb?.port ?? process.env.WRITER_MYSQL_PORT ?? process.env.HISTORY_MYSQL_PORT ?? 3306,
+    ),
+    user: (writerDb?.user as string) ?? envUser ?? "",
+    password: (writerDb?.password as string) ?? envPassword ?? "",
+    database:
+      (writerDb?.database as string) ??
+      process.env.WRITER_MYSQL_DATABASE ??
+      process.env.HISTORY_MYSQL_DATABASE ??
+      "superworker",
+  };
+}
+
 /** Module-level references for service lifecycle management (avoids mutating the api object). */
 let clientRef: RabbitMqClient | undefined;
 let historyRef: HistoryManager | undefined;
+let downloadRef: DownloadManager | undefined;
+let topicResolverRef: TopicResolver | undefined;
+let feedCounterRef: FeedCounter | undefined;
+let reportPublisherRef: ReportTaskPublisher | undefined;
 
 export default definePluginEntry({
   id: "rabbitmq-consumer",
@@ -64,32 +107,46 @@ export default definePluginEntry({
         }
 
         // Shared HistoryManager across messages (pool reuse)
-        historyRef = new HistoryManager(pluginConfig.historyDb);
-
-        const client = new RabbitMqClient(
-          pluginConfig.rabbitmq,
-          ctx.logger,
-          async (msg) => {
-            const chatMsg = parseMessage(msg.content);
-            if (!chatMsg) {
-              ctx.logger.error("[RABBITMQ_CONSUMER] Failed to parse message");
-              return;
-            }
-
-            ctx.logger.info(
-              `[RABBITMQ_CONSUMER] Received message: historyId=${chatMsg.historyId}, ` +
-                `userId=${chatMsg.userId}`,
-            );
-
-            await processChatMessage(
-              chatMsg,
-              historyRef!,
-              pluginConfig.mercure,
-              api.runtime,
-              ctx.logger,
-            );
+        const writerConfig = resolveWriterConfig(api.pluginConfig as Record<string, unknown>);
+        historyRef = new HistoryManager(pluginConfig.historyDb, writerConfig);
+        downloadRef = new DownloadManager(pluginConfig.historyDb, writerConfig);
+        topicResolverRef = new TopicResolver(pluginConfig.historyDb);
+        feedCounterRef = new FeedCounter(pluginConfig.historyDb);
+        reportPublisherRef = new ReportTaskPublisher(
+          {
+            host: pluginConfig.rabbitmq.host,
+            port: pluginConfig.rabbitmq.port,
+            user: pluginConfig.rabbitmq.user,
+            password: pluginConfig.rabbitmq.password,
+            queue: pluginConfig.rabbitmq.reportTaskQueue,
           },
+          ctx.logger,
         );
+
+        const client = new RabbitMqClient(pluginConfig.rabbitmq, ctx.logger, async (msg) => {
+          const chatMsg = parseMessage(msg.content);
+          if (!chatMsg) {
+            ctx.logger.error("[RABBITMQ_CONSUMER] Failed to parse message");
+            return;
+          }
+
+          ctx.logger.info(
+            `[RABBITMQ_CONSUMER] Received message: historyId=${chatMsg.historyId}, ` +
+              `userId=${chatMsg.userId}`,
+          );
+
+          await processChatMessage(
+            chatMsg,
+            historyRef!,
+            pluginConfig.mercure,
+            api.runtime,
+            ctx.logger,
+            downloadRef,
+            topicResolverRef,
+            feedCounterRef,
+            reportPublisherRef,
+          );
+        });
 
         clientRef = client;
 
@@ -106,6 +163,22 @@ export default definePluginEntry({
         if (historyRef) {
           await historyRef.close();
           historyRef = undefined;
+        }
+        if (downloadRef) {
+          await downloadRef.close();
+          downloadRef = undefined;
+        }
+        if (topicResolverRef) {
+          await topicResolverRef.close();
+          topicResolverRef = undefined;
+        }
+        if (feedCounterRef) {
+          await feedCounterRef.close();
+          feedCounterRef = undefined;
+        }
+        if (reportPublisherRef) {
+          await reportPublisherRef.close();
+          reportPublisherRef = undefined;
         }
         ctx.logger.info("[RABBITMQ_CONSUMER] Service stopped");
       },

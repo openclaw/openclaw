@@ -5,10 +5,21 @@ export interface RabbitMqConfig {
   user: string;
   password: string;
   queue: string;
+  /** Queue used to notify the report-generator plugin of new report tasks. */
+  reportTaskQueue: string;
 }
 
 /** History database MySQL config */
 export interface HistoryDbConfig {
+  host: string;
+  port: number;
+  user: string;
+  password: string;
+  database: string;
+}
+
+/** Writer database MySQL config (falls back to HistoryDbConfig if absent) */
+export interface WriterDbConfig {
   host: string;
   port: number;
   user: string;

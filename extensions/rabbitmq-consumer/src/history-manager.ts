@@ -1,42 +1,55 @@
 import mysql from "mysql2/promise";
-import type { HistoryDbConfig, HistoryRecord } from "./types.js";
+import type { HistoryDbConfig, WriterDbConfig, HistoryRecord } from "./types.js";
 
 /**
  * Manages read/write access to the history_messages MySQL table.
- * Each operation gets its own connection from a pool.
+ * Uses separate connection pools: reader for SELECT, writer for UPDATE/INSERT.
+ * Falls back to the reader pool for writes when no writer config is provided.
  */
 export class HistoryManager {
-  private readonly config: HistoryDbConfig;
-  private pool: mysql.Pool | null = null;
+  private readonly readerConfig: HistoryDbConfig;
+  private readonly writerConfig: WriterDbConfig | null;
+  private readerPool: mysql.Pool | null = null;
+  private writerPool: mysql.Pool | null = null;
 
-  constructor(config: HistoryDbConfig) {
-    this.config = config;
+  constructor(readerConfig: HistoryDbConfig, writerConfig?: WriterDbConfig) {
+    this.readerConfig = readerConfig;
+    this.writerConfig = writerConfig ?? null;
   }
 
-  private getPool(): mysql.Pool {
-    if (this.pool) {
-      return this.pool;
-    }
-    this.pool = mysql.createPool({
-      host: this.config.host,
-      port: this.config.port,
-      user: this.config.user,
-      password: this.config.password,
-      database: this.config.database,
+  private createPool(config: HistoryDbConfig | WriterDbConfig): mysql.Pool {
+    return mysql.createPool({
+      host: config.host,
+      port: config.port,
+      user: config.user,
+      password: config.password,
+      database: config.database,
       connectionLimit: 3,
       waitForConnections: true,
       charset: "utf8mb4",
       timezone: "+08:00",
     });
-    return this.pool;
+  }
+
+  private getReaderPool(): mysql.Pool {
+    if (!this.readerPool) {
+      this.readerPool = this.createPool(this.readerConfig);
+    }
+    return this.readerPool;
+  }
+
+  private getWriterPool(): mysql.Pool {
+    if (!this.writerPool && this.writerConfig) {
+      this.writerPool = this.createPool(this.writerConfig);
+    }
+    // Fallback to reader pool when no dedicated writer is configured.
+    return this.writerPool ?? this.getReaderPool();
   }
 
   /** Fetch a history record by ID. Returns null if not found. */
   async getRecord(historyId: number): Promise<HistoryRecord | null> {
-    const pool = this.getPool();
-    const [rows] = await pool.execute<
-      mysql.RowDataPacket[]
-    >(
+    const pool = this.getReaderPool();
+    const [rows] = await pool.execute<mysql.RowDataPacket[]>(
       `SELECT id, session_id, user_id, message, response, tools_used, metadata, created_at
        FROM history_messages WHERE id = ?`,
       [historyId],
@@ -61,18 +74,22 @@ export class HistoryManager {
 
   /** Update the response field for a history record. */
   async updateResponse(historyId: number, response: string): Promise<void> {
-    const pool = this.getPool();
-    await pool.execute(
-      "UPDATE history_messages SET response = ? WHERE id = ?",
-      [response, historyId],
-    );
+    const pool = this.getWriterPool();
+    await pool.execute("UPDATE history_messages SET response = ? WHERE id = ?", [
+      response,
+      historyId,
+    ]);
   }
 
-  /** Close the connection pool. */
+  /** Close all connection pools. */
   async close(): Promise<void> {
-    if (this.pool) {
-      await this.pool.end();
-      this.pool = null;
+    if (this.readerPool) {
+      await this.readerPool.end();
+      this.readerPool = null;
+    }
+    if (this.writerPool) {
+      await this.writerPool.end();
+      this.writerPool = null;
     }
   }
 }

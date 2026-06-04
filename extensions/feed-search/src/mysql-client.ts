@@ -52,9 +52,9 @@ export async function closePool(): Promise<void> {
 export async function executeQuery<T extends mysql.RowDataPacket[]>(
   config: MySqlConfig,
   sql: string,
-  params?: unknown[],
+  params?: mysql.ExecuteValues[],
 ): Promise<T> {
   const p = getPool(config);
-  const [rows] = await p.execute<T>(sql, params);
+  const [rows] = await p.execute<T>(sql, params ?? []);
   return rows;
 }

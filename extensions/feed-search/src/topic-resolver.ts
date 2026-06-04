@@ -1,5 +1,12 @@
+import mysql from "mysql2/promise";
 import { executeQuery } from "./mysql-client.js";
+import { logSqlQuery } from "./sql-logger.js";
 import type { MySqlConfig, TopicResolution } from "./types.js";
+
+/** TopicIds in range 328-349 use slaveId. */
+const SLAVE_TOPIC_RANGE = new Set(
+  Array.from({ length: 22 }, (_, i) => 328 + i), // 328-349
+);
 
 /**
  * Look up topicId and useSlaveTopic for a given userId + optional projectName.
@@ -16,7 +23,7 @@ export async function getTopicIdsByUser(
 
   try {
     let sql: string;
-    let params: unknown[];
+    let params: mysql.ExecuteValues[];
 
     if (projectName) {
       sql =
@@ -27,9 +34,18 @@ export async function getTopicIdsByUser(
       params = [userId];
     }
 
-    const rows = await executeQuery<
-      Array<{ topicId: number; masterId: number | null; slaveId: number | null }>
-    >(config, sql, params);
+    const startTime = Date.now();
+    const rows = await executeQuery<mysql.RowDataPacket[]>(config, sql, params);
+    const durationMs = Date.now() - startTime;
+
+    await logSqlQuery({
+      tool: "getTopicIdsByUser",
+      sql,
+      params,
+      userId,
+      rowCount: rows.length,
+      durationMs,
+    });
 
     if (!rows || rows.length === 0) {
       return { topicId: null, useSlaveTopic: false };
@@ -37,12 +53,19 @@ export async function getTopicIdsByUser(
 
     const row = rows[0];
     const topicId = Number(row.topicId);
-    const useSlaveTopic =
-      (row.masterId != null && String(row.masterId) !== "0") ||
-      (row.slaveId != null && String(row.slaveId) !== "0");
+    const useSlaveTopic = SLAVE_TOPIC_RANGE.has(topicId);
 
     return { topicId, useSlaveTopic };
   } catch (error) {
-    throw new Error(`Failed to look up topicId for user ${userId}: ${error}`);
+    await logSqlQuery({
+      tool: "getTopicIdsByUser",
+      sql: "",
+      params: [],
+      userId,
+      error: String(error),
+    });
+    throw new Error(`Failed to look up topicId for user ${userId}: ${String(error)}`, {
+      cause: error,
+    });
   }
 }

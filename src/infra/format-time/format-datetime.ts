@@ -47,6 +47,25 @@ export function formatUtcTimestamp(date: Date, options?: FormatTimestampOptions)
 }
 
 /**
+ * Format date as YYYY-MM-DD HH:mm:ss in UTC+8 (China Standard Time).
+ */
+export function formatDateTime(date: Date): string {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(date);
+
+  const pick = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${pick("year")}-${pick("month")}-${pick("day")} ${pick("hour")}:${pick("minute")}:${pick("second")}`;
+}
+
+/**
  * Format a Date with timezone display using Intl.DateTimeFormat.
  *
  * Without seconds: `2024-01-15 14:30 EST`

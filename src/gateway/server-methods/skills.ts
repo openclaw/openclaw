@@ -17,6 +17,13 @@ import { loadConfig, writeConfigFile } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  createSkill,
+  deleteSkill,
+  getSkillById,
+  listSkills,
+  updateSkill,
+} from "../../infra/skills-mysql.js";
 import { getRemoteSkillEligibility } from "../../infra/skills-remote.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -26,6 +33,11 @@ import {
   errorShape,
   formatValidationErrors,
   validateSkillsBinsParams,
+  validateSkillsDbCreateParams,
+  validateSkillsDbDeleteParams,
+  validateSkillsDbGetParams,
+  validateSkillsDbListParams,
+  validateSkillsDbUpdateParams,
   validateSkillsDetailParams,
   validateSkillsInstallParams,
   validateSkillsSearchParams,
@@ -342,5 +354,162 @@ export const skillsHandlers: GatewayRequestHandlers = {
     };
     await writeConfigFile(nextConfig);
     respond(true, { ok: true, skillKey: p.skillKey, config: current }, undefined);
+  },
+  "skills.db.list": async ({ params, respond }) => {
+    if (!validateSkillsDbListParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.db.list params: ${formatValidationErrors(validateSkillsDbListParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as { userId: number; limit?: number; offset?: number };
+    try {
+      const result = await listSkills(p.userId, { limit: p.limit, offset: p.offset });
+      respond(
+        true,
+        {
+          skills: result.skills,
+          total: result.total,
+          limit: p.limit ?? 50,
+          offset: p.offset ?? 0,
+        },
+        undefined,
+      );
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+  "skills.db.get": async ({ params, respond }) => {
+    if (!validateSkillsDbGetParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.db.get params: ${formatValidationErrors(validateSkillsDbGetParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as { userId: number; id: number };
+    try {
+      const skill = await getSkillById(p.id, p.userId);
+      if (!skill) {
+        respond(false, undefined, errorShape(ErrorCodes.NOT_FOUND, "skill not found"));
+        return;
+      }
+      respond(true, { skill }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+  "skills.db.create": async ({ params, respond }) => {
+    if (!validateSkillsDbCreateParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.db.create params: ${formatValidationErrors(validateSkillsDbCreateParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as {
+      userId: number;
+      name: string;
+      description?: string;
+      content?: string;
+      source?: string;
+      category?: string;
+    };
+    try {
+      const skill = await createSkill(
+        {
+          name: p.name,
+          description: p.description,
+          content: p.content,
+          source: p.source,
+          category: p.category,
+        },
+        p.userId,
+      );
+      respond(true, { skill }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+  "skills.db.update": async ({ params, respond }) => {
+    if (!validateSkillsDbUpdateParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.db.update params: ${formatValidationErrors(validateSkillsDbUpdateParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as {
+      userId: number;
+      id: number;
+      name?: string;
+      description?: string;
+      content?: string;
+      source?: string;
+      category?: string;
+      is_enable?: number;
+    };
+    try {
+      const skill = await updateSkill(
+        p.id,
+        {
+          name: p.name,
+          description: p.description,
+          content: p.content,
+          source: p.source,
+          category: p.category,
+          is_enable: p.is_enable,
+        },
+        p.userId,
+      );
+      if (!skill) {
+        respond(false, undefined, errorShape(ErrorCodes.NOT_FOUND, "skill not found"));
+        return;
+      }
+      respond(true, { skill }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
+  },
+  "skills.db.delete": async ({ params, respond }) => {
+    if (!validateSkillsDbDeleteParams(params)) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          `invalid skills.db.delete params: ${formatValidationErrors(validateSkillsDbDeleteParams.errors)}`,
+        ),
+      );
+      return;
+    }
+    const p = params as { userId: number; id: number };
+    try {
+      const deleted = await deleteSkill(p.id, p.userId);
+      if (!deleted) {
+        respond(false, undefined, errorShape(ErrorCodes.NOT_FOUND, "skill not found"));
+        return;
+      }
+      respond(true, { ok: true, id: p.id }, undefined);
+    } catch (err) {
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(err)));
+    }
   },
 };

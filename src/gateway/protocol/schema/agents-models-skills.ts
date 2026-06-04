@@ -437,3 +437,166 @@ export const ToolsEffectiveResultSchema = Type.Object(
   },
   { additionalProperties: false },
 );
+
+// SkillsDb CRUD Schemas
+export const SkillsDbListParamsSchema = Type.Object(
+  {
+    userId: Type.Integer(),
+    limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+    offset: Type.Optional(Type.Integer({ minimum: 0 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDbListResultSchema = Type.Object(
+  {
+    skills: Type.Array(
+      Type.Object(
+        {
+          id: Type.Integer(),
+          user_id: Type.Union([Type.Integer(), Type.Null()]),
+          name: Type.String(),
+          description: Type.Union([Type.String(), Type.Null()]),
+          content: Type.Union([Type.String(), Type.Null()]),
+          source: Type.String(),
+          category: Type.Union([Type.String(), Type.Null()]),
+          is_enable: Type.Integer(),
+          references: Type.Union([Type.String(), Type.Null()]),
+          scripts: Type.Union([Type.String(), Type.Null()]),
+          created_at: Type.String(),
+          updated_at: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+    ),
+    total: Type.Integer(),
+    limit: Type.Integer(),
+    offset: Type.Integer(),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDbGetParamsSchema = Type.Object(
+  {
+    userId: Type.Integer(),
+    id: Type.Integer(),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDbGetResultSchema = Type.Object(
+  {
+    skill: Type.Union([
+      Type.Object(
+        {
+          id: Type.Integer(),
+          user_id: Type.Union([Type.Integer(), Type.Null()]),
+          name: Type.String(),
+          description: Type.Union([Type.String(), Type.Null()]),
+          content: Type.Union([Type.String(), Type.Null()]),
+          source: Type.String(),
+          category: Type.Union([Type.String(), Type.Null()]),
+          is_enable: Type.Integer(),
+          references: Type.Union([Type.String(), Type.Null()]),
+          scripts: Type.Union([Type.String(), Type.Null()]),
+          created_at: Type.String(),
+          updated_at: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+      Type.Null(),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDbCreateParamsSchema = Type.Object(
+  {
+    userId: Type.Integer(),
+    name: NonEmptyString,
+    description: Type.Optional(Type.String()),
+    content: Type.Optional(Type.String()),
+    source: Type.Optional(NonEmptyString),
+    category: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDbCreateResultSchema = Type.Object(
+  {
+    skill: Type.Object(
+      {
+        id: Type.Integer(),
+        user_id: Type.Union([Type.Integer(), Type.Null()]),
+        name: Type.String(),
+        description: Type.Union([Type.String(), Type.Null()]),
+        content: Type.Union([Type.String(), Type.Null()]),
+        source: Type.String(),
+        category: Type.Union([Type.String(), Type.Null()]),
+        is_enable: Type.Integer(),
+        references: Type.Union([Type.String(), Type.Null()]),
+        scripts: Type.Union([Type.String(), Type.Null()]),
+        created_at: Type.String(),
+        updated_at: Type.String(),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDbUpdateParamsSchema = Type.Object(
+  {
+    userId: Type.Integer(),
+    id: Type.Integer(),
+    name: Type.Optional(NonEmptyString),
+    description: Type.Optional(Type.String()),
+    content: Type.Optional(Type.String()),
+    source: Type.Optional(NonEmptyString),
+    category: Type.Optional(NonEmptyString),
+    is_enable: Type.Optional(Type.Integer({ minimum: 0, maximum: 1 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDbUpdateResultSchema = Type.Object(
+  {
+    skill: Type.Union([
+      Type.Object(
+        {
+          id: Type.Integer(),
+          user_id: Type.Union([Type.Integer(), Type.Null()]),
+          name: Type.String(),
+          description: Type.Union([Type.String(), Type.Null()]),
+          content: Type.Union([Type.String(), Type.Null()]),
+          source: Type.String(),
+          category: Type.Union([Type.String(), Type.Null()]),
+          is_enable: Type.Integer(),
+          references: Type.Union([Type.String(), Type.Null()]),
+          scripts: Type.Union([Type.String(), Type.Null()]),
+          created_at: Type.String(),
+          updated_at: Type.String(),
+        },
+        { additionalProperties: false },
+      ),
+      Type.Null(),
+    ]),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDbDeleteParamsSchema = Type.Object(
+  {
+    userId: Type.Integer(),
+    id: Type.Integer(),
+  },
+  { additionalProperties: false },
+);
+
+export const SkillsDbDeleteResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    id: Type.Integer(),
+  },
+  { additionalProperties: false },
+);

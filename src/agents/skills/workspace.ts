@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { loadSkillEntriesFromDb } from "../../infra/skills-db-cache.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { CONFIG_DIR, resolveHomeDir, resolveUserPath } from "../../utils.js";
@@ -345,7 +346,8 @@ function unwrapLoadedSkills(loaded: unknown): Skill[] {
   return [];
 }
 
-function loadSkillEntries(
+// Original filesystem-based loader, kept as fallback for tests/dev
+function loadSkillEntriesFromFilesystem(
   workspaceDir: string,
   opts?: {
     config?: OpenClawConfig;
@@ -373,7 +375,6 @@ function loadSkillEntries(
       return [];
     }
 
-    // If the root itself is a skill directory, just load it directly (but enforce size cap).
     const rootSkillMd = path.join(baseDir, "SKILL.md");
     if (fs.existsSync(rootSkillMd)) {
       const rootSkillRealPath = resolveContainedSkillPath({
@@ -438,7 +439,6 @@ function loadSkillEntries(
 
     const loadedSkills: Skill[] = [];
 
-    // Only consider immediate subfolders that look like skills (have SKILL.md) and are under size cap.
     for (const name of limitedChildren) {
       const skillDir = path.join(baseDir, name);
       const skillDirRealPath = resolveContainedSkillPath({
@@ -554,7 +554,6 @@ function loadSkillEntries(
   });
 
   const merged = new Map<string, Skill>();
-  // Precedence: extra < bundled < managed < agents-skills-personal < agents-skills-project < workspace
   for (const skill of extraSkills) {
     merged.set(skill.name, skill);
   }
@@ -591,15 +590,38 @@ function loadSkillEntries(
         invocation,
         exposure: {
           includeInRuntimeRegistry: true,
-          // Freshly loaded entries preserve the documented disable-model-invocation
-          // contract, while legacy entries without exposure metadata still use the
-          // fallback in isSkillVisibleInAvailableSkillsPrompt().
           includeInAvailableSkillsPrompt: invocation.disableModelInvocation !== true,
           userInvocable: invocation.userInvocable !== false,
         },
       };
     });
   return skillEntries;
+}
+
+function loadSkillEntries(
+  workspaceDir: string,
+  opts?: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    managedSkillsDir?: string;
+    bundledSkillsDir?: string;
+    entries?: SkillEntry[];
+    userId?: string;
+  },
+): SkillEntry[] {
+  // Allow tests to pass entries directly via opts.entries
+  if (opts?.entries && opts.entries.length > 0) {
+    return opts.entries;
+  }
+
+  const dbEntries = loadSkillEntriesFromDb(opts?.userId);
+
+  // Fall back to filesystem only when no userId AND no DB entries (tests/dev)
+  if (dbEntries.length === 0 && !opts?.userId) {
+    return loadSkillEntriesFromFilesystem(workspaceDir, opts);
+  }
+
+  return dbEntries;
 }
 
 function escapeXml(str: string): string {
@@ -725,6 +747,8 @@ type WorkspaceSkillBuildOptions = {
   /** If provided, only include skills with these names */
   skillFilter?: string[];
   eligibility?: SkillEligibilityContext;
+  /** User ID to scope skills query in MySQL */
+  userId?: string;
 };
 
 function resolveEffectiveWorkspaceSkillFilter(

@@ -1,47 +1,94 @@
+# TOOLS.md - 工具与环境配置
+
+技能文件定义工具的**使用方法**，这个文件记录的是**你这套环境的具体配置**。
+
 ---
-title: "TOOLS.md Template"
-summary: "Workspace template for TOOLS.md"
-read_when:
-  - Bootstrapping a workspace manually
----
 
-# TOOLS.md - Local Notes
+## 舆情数据源
 
-Skills define _how_ tools work. This file is for _your_ specifics — the stuff that's unique to your setup.
-
-## What Goes Here
-
-Things like:
-
-- Camera names and locations
-- SSH hosts and aliases
-- Preferred voices for TTS
-- Speaker/room names
-- Device nicknames
-- Anything environment-specific
-
-## Examples
+_记录已接入的数据平台、API 端点和凭证别名_
 
 ```markdown
-### Cameras
+### 社交媒体
 
-- living-room → Main area, 180° wide angle
-- front-door → Entrance, motion-triggered
+- 微博 → API 别名: weibo-api，覆盖：热搜、关键词流
+- 微信公众号 → API 别名: wechat-mp，每日批量抓取
+- 抖音评论 → 状态: 待接入
 
-### SSH
+### 新闻/资讯
 
-- home-server → 192.168.1.100, user: admin
+- 百度新闻 RSS → 已接入
+- 今日头条 → 状态: 待接入
+- 人民日报/新华社 → 已接入
 
-### TTS
+### 论坛/社区
 
-- Preferred voice: "Nova" (warm, slightly British)
-- Default speaker: Kitchen HomePod
+- 知乎 → 已接入
+- 百度贴吧 → 状态: 待确认
+- 小红书 → 状态: 待接入
 ```
-
-## Why Separate?
-
-Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
 
 ---
 
-Add whatever helps you do your job. This is your cheat sheet.
+## 推送渠道
+
+```markdown
+### 企业内部
+
+- 企业微信 Webhook → URL: [在此填写]
+- 钉钉机器人 → Token: [在此填写]
+
+### 客户交付
+
+- 邮件 SMTP → 服务器: [在此填写]
+- 飞书 Webhook → [在此填写]
+```
+
+---
+
+## 分析工具
+
+```markdown
+### 情感分析
+
+- 主模型: [qwen3.6-plus]
+- 备用: Claude claude-sonnet-4-20250514
+
+### 关键词提取
+
+- 工具: [在此填写]
+
+### 可视化
+
+- 图表生成: [在此填写]
+- 报告模板路径: templates/
+```
+
+---
+
+## SSH / 服务器
+
+```markdown
+- 数据处理服务器 → [在此填写]
+- 报告存储 → [在此填写]
+```
+
+---
+
+## TTS（语音播报，可选）
+
+```markdown
+- 服务: ElevenLabs / 其他
+- 偏好声音: [在此填写]
+- 默认播放设备: [在此填写]
+```
+
+---
+
+## 其他注意事项
+
+_任何帮助你完成工作的特殊配置或注意事项_
+
+---
+
+技能是通用的，你的配置是你独有的。保持分离，方便维护。

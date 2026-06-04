@@ -1,24 +1,46 @@
----
-title: "USER Template"
-summary: "User profile record"
-read_when:
-  - Bootstrapping a workspace manually
----
+# USER.md - 关于你的用户
 
-# USER.md - About Your Human
-
-_Learn about the person you're helping. Update this as you go._
-
-- **Name:**
-- **What to call them:**
-- **Pronouns:** _(optional)_
-- **Timezone:**
-- **Notes:**
-
-## Context
-
-_(What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time.)_
+_了解你在服务的人。随时更新这份文件。_
 
 ---
 
-The more you know, the better you can help. But remember — you're learning about a person, not building a dossier. Respect the difference.
+- **姓名：**
+- **称呼：**
+- **角色：** _（ibtai 内部员工？企业客户？政府用户？）_
+- **所属机构：**
+- **时区：**
+- **联系方式：** _（偏好哪个渠道？）_
+
+---
+
+## 关注议题
+
+_他们最关心哪个行业、品牌或议题的舆情？_
+
+- 监控对象：
+- 核心关键词：
+- 敏感话题/竞争对手：
+
+---
+
+## 工作偏好
+
+- **报告风格：** 详细报告 / 执行摘要 / 实时提醒
+- **推送频率：** 实时 / 每小时 / 每日早报 + 晚报 / 按需
+- **风险阈值：** _（什么情况下需要立即告知？）_
+
+---
+
+## 背景与上下文
+
+_他们关心什么？有哪些历史事件值得记住？什么事情会让他们紧张？什么会让他们放心？_
+
+---
+
+## 重要历史事件
+
+_记录重大舆情事件、危机处置经过、值得参考的判断案例。_
+
+---
+
+了解越多，服务越好。但你是在认识一个人，不是在建立档案——请记住这个区别。

@@ -12,6 +12,7 @@ import type {
   SkillExposure,
 } from "../agents/skills/types.js";
 import { loadConfig } from "../config/config.js";
+import { getSkillsDbCachedUserId, setSkillsDbCache } from "./skills-db-cache.js";
 
 export interface SkillRow {
   id: number;
@@ -161,16 +162,7 @@ function rowToSkillEntry(
 export async function preloadSkillsCache(userId?: string): Promise<void> {
   const numericUserId = userId ? Number(userId) : undefined;
   await refreshSkillsCache(numericUserId);
-  syncCache = cachedEntries;
-  cachedUserId = numericUserId;
-}
-
-// Sync version for loadSkillEntriesFromDb caller
-let syncCache: SkillEntry[] | null = null;
-let cachedUserId: number | undefined = undefined;
-
-export function loadSkillEntriesFromDb(_userId?: string): SkillEntry[] {
-  return syncCache ?? [];
+  setSkillsDbCache(cachedEntries, numericUserId);
 }
 
 export async function loadSkillEntriesFromDbAsync(userId?: string): Promise<SkillEntry[]> {
@@ -178,11 +170,10 @@ export async function loadSkillEntriesFromDbAsync(userId?: string): Promise<Skil
   if (
     !cachedEntries ||
     Date.now() - cacheLoadTime > CACHE_TTL_MS ||
-    cachedUserId !== numericUserId
+    getSkillsDbCachedUserId() !== numericUserId
   ) {
     await refreshSkillsCache(numericUserId);
-    syncCache = cachedEntries;
-    cachedUserId = numericUserId;
+    setSkillsDbCache(cachedEntries, numericUserId);
   }
   return cachedEntries ?? [];
 }
@@ -496,8 +487,7 @@ async function doMaterializeSkills(
   }
 
   cachedEntries = entries;
-  syncCache = entries;
-  cachedUserId = numericUserId;
+  setSkillsDbCache(entries, numericUserId);
   cacheLoadTime = Date.now();
   materializedKey = key;
   materializedAt = Date.now();

@@ -98,7 +98,7 @@ describe("createContextCaptureLogger", () => {
     await driveOnce(logger as ContextCaptureLogger, makeFakeStreamFn());
 
     expect(lines).toHaveLength(1);
-    const rec = JSON.parse(lines[0] as string);
+    const rec = JSON.parse(lines[0]);
 
     expect(rec.stage).toBe("turn");
     expect(rec.requestSource).toBe("wire-payload");
@@ -130,7 +130,7 @@ describe("createContextCaptureLogger", () => {
       writer: makeWriter(lines),
     });
     await driveOnce(logger as ContextCaptureLogger, makeFakeStreamFn());
-    const rec = JSON.parse(lines[0] as string);
+    const rec = JSON.parse(lines[0]);
     expect(rec.request.apiKey).toBe("sk-super-secret");
   });
 
@@ -142,7 +142,7 @@ describe("createContextCaptureLogger", () => {
       writer: makeWriter(lines),
     });
     await driveOnce(logger as ContextCaptureLogger, makeFakeStreamFn({ skipPayload: true }));
-    const rec = JSON.parse(lines[0] as string);
+    const rec = JSON.parse(lines[0]);
     expect(rec.requestSource).toBe("context-fallback");
     expect(rec.request.systemPrompt).toBe("SYSTEM PROMPT TEXT");
     expect(rec.response.content.some((b: { type?: string }) => b.type === "thinking")).toBe(true);
@@ -170,7 +170,7 @@ describe("createContextCaptureLogger", () => {
       result: () => Promise<AgentMessage>;
     };
     await expect(stream.result()).rejects.toThrow("boom");
-    const rec = JSON.parse(lines[0] as string);
+    const rec = JSON.parse(lines[0]);
     expect(rec.error).toBe("boom");
     expect(rec.response).toBeUndefined();
   });

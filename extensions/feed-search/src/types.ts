@@ -34,18 +34,18 @@ export interface FeedRecord {
 
 /** MySQL row tuple from feed query (positional columns) */
 export type FeedRow = [
-  number,           // id
-  string | null,    // author
-  string | null,    // reporter
-  string | null,    // title
-  string | null,    // titleClean
-  string | null,    // content
-  string | null,    // label
-  string | null,    // keywords
-  string | null,    // keySentences
-  string | null,    // summary
-  string | null,    // result (JSON string)
-  Date | null,      // eventDate
+  number, // id
+  string | null, // author
+  string | null, // reporter
+  string | null, // title
+  string | null, // titleClean
+  string | null, // content
+  string | null, // label
+  string | null, // keywords
+  string | null, // keySentences
+  string | null, // summary
+  string | null, // result (JSON string)
+  Date | null, // eventDate
 ];
 
 /** Topic resolution result */

@@ -256,6 +256,16 @@ import {
   SkillsStatusParamsSchema,
   type SkillsUpdateParams,
   SkillsUpdateParamsSchema,
+  type SkillsDbListParams,
+  SkillsDbListParamsSchema,
+  type SkillsDbGetParams,
+  SkillsDbGetParamsSchema,
+  type SkillsDbCreateParams,
+  SkillsDbCreateParamsSchema,
+  type SkillsDbUpdateParams,
+  SkillsDbUpdateParamsSchema,
+  type SkillsDbDeleteParams,
+  SkillsDbDeleteParamsSchema,
   type ToolsCatalogParams,
   ToolsCatalogParamsSchema,
   type ToolsCatalogResult,
@@ -446,6 +456,17 @@ export const validateSkillsInstallParams =
 export const validateSkillsUpdateParams = ajv.compile<SkillsUpdateParams>(SkillsUpdateParamsSchema);
 export const validateSkillsSearchParams = ajv.compile<SkillsSearchParams>(SkillsSearchParamsSchema);
 export const validateSkillsDetailParams = ajv.compile<SkillsDetailParams>(SkillsDetailParamsSchema);
+export const validateSkillsDbListParams = ajv.compile<SkillsDbListParams>(SkillsDbListParamsSchema);
+export const validateSkillsDbGetParams = ajv.compile<SkillsDbGetParams>(SkillsDbGetParamsSchema);
+export const validateSkillsDbCreateParams = ajv.compile<SkillsDbCreateParams>(
+  SkillsDbCreateParamsSchema,
+);
+export const validateSkillsDbUpdateParams = ajv.compile<SkillsDbUpdateParams>(
+  SkillsDbUpdateParamsSchema,
+);
+export const validateSkillsDbDeleteParams = ajv.compile<SkillsDbDeleteParams>(
+  SkillsDbDeleteParamsSchema,
+);
 export const validateCronListParams = ajv.compile<CronListParams>(CronListParamsSchema);
 export const validateCronStatusParams = ajv.compile<CronStatusParams>(CronStatusParamsSchema);
 export const validateCronAddParams = ajv.compile<CronAddParams>(CronAddParamsSchema);
