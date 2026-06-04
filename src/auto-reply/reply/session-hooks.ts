@@ -6,6 +6,7 @@ import type {
   PluginHookSessionStartEvent,
 } from "../../plugins/hook-types.js";
 
+/** Session identity attached to plugin session hook payloads. */
 export type SessionHookContext = {
   sessionId: string;
   sessionKey: string;
@@ -24,6 +25,7 @@ function buildSessionHookContext(params: {
   };
 }
 
+/** Builds the payload for plugin session-start hooks. */
 export function buildSessionStartHookPayload(params: {
   sessionId: string;
   sessionKey: string;
@@ -47,6 +49,7 @@ export function buildSessionStartHookPayload(params: {
   };
 }
 
+/** Builds the payload for plugin session-end hooks. */
 export function buildSessionEndHookPayload(params: {
   sessionId: string;
   sessionKey: string;

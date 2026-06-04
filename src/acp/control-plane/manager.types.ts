@@ -22,6 +22,7 @@ import {
   upsertAcpSessionMeta,
 } from "../runtime/session-meta.js";
 
+/** Result of resolving persisted ACP metadata for a session key. */
 export type AcpSessionResolution =
   | {
       kind: "none";

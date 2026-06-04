@@ -7,6 +7,7 @@ import { normalizeChatChannelId } from "../channels/ids.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
+/** Canonical plugin config shape consumed by runtime policy and loaders. */
 export type NormalizedPluginsConfig = {
   enabled: boolean;
   allow: string[];
@@ -42,8 +43,10 @@ export type NormalizedPluginsConfig = {
   >;
 };
 
+/** Plugin id normalizer used while loading aliases or raw config. */
 export type NormalizePluginId = (id: string) => string;
 
+/** Default plugin id normalizer for already-canonical ids. */
 export const identityNormalizePluginId: NormalizePluginId = (id) => id.trim();
 
 function normalizeList(value: unknown, normalizePluginId: NormalizePluginId): string[] {
@@ -220,6 +223,7 @@ function normalizePluginEntries(
   return normalized;
 }
 
+/** Normalizes plugin config while allowing callers to resolve aliases first. */
 export function normalizePluginsConfigWithResolver(
   config?: OpenClawConfig["plugins"],
   normalizePluginId: NormalizePluginId = identityNormalizePluginId,

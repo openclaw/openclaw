@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 
+/** Minimal ServerResponse double for route tests that inspect headers and body. */
 export function createMockServerResponse(): ServerResponse & { body?: string } {
   const headers: Record<string, string> = {};
   const res: {

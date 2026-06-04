@@ -6,6 +6,7 @@ import {
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
+/** Resolves the denial message for config writes attempted from a channel. */
 export function resolveConfigWriteDeniedText(params: {
   cfg: OpenClawConfig;
   channel?: string | null;

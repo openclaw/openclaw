@@ -153,6 +153,10 @@ const OMITTED_QA_EXTENSION_PREFIXES = [
 ];
 export const CROSS_OS_DASHBOARD_SMOKE_TIMEOUT_MS = 120_000;
 export const CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS = 10_000;
+export const CROSS_OS_DISCORD_FETCH_TIMEOUT_MS = parsePositiveIntegerEnv(
+  "OPENCLAW_CROSS_OS_DISCORD_FETCH_TIMEOUT_MS",
+  10_000,
+);
 export const CROSS_OS_FETCH_BODY_MAX_CHARS = 1024 * 1024;
 export const CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS = 30_000;
 export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
@@ -2561,15 +2565,18 @@ export async function readBoundedCrossOsResponseText(
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
-    const response = await fetch(
-      `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
-      {
-        headers: {
-          Authorization: `Bot ${params.token}`,
-        },
-      },
-    );
-    const text = await readBoundedCrossOsResponseText(response);
+    let response;
+    let text;
+    try {
+      response = await fetch(
+        `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
+        buildDiscordFetchInit(params.token),
+      );
+      text = await readBoundedCrossOsResponseText(response);
+    } catch {
+      await sleep(2_000);
+      continue;
+    }
     if (!response.ok) {
       await sleep(2_000);
       continue;
@@ -2582,20 +2589,30 @@ async function waitForDiscordMessage(params) {
   throw new Error(`Discord host-side visibility check timed out for ${params.needle}.`);
 }
 
+export function buildDiscordFetchInit(token, init = {}) {
+  return {
+    ...init,
+    signal: init.signal ?? AbortSignal.timeout(CROSS_OS_DISCORD_FETCH_TIMEOUT_MS),
+    headers: {
+      ...init.headers,
+      Authorization: `Bot ${token}`,
+    },
+  };
+}
+
 async function postDiscordMessage(params) {
   const response = await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages`,
-    {
+    buildDiscordFetchInit(params.token, {
       method: "POST",
       headers: {
-        Authorization: `Bot ${params.token}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
         content: params.content,
         flags: 4096,
       }),
-    },
+    }),
   );
   const text = await readBoundedCrossOsResponseText(response);
   if (!response.ok) {
@@ -2614,12 +2631,9 @@ async function deleteDiscordMessage(params) {
   }
   await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
-    {
+    buildDiscordFetchInit(params.token, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bot ${params.token}`,
-      },
-    },
+    }),
   ).catch(() => undefined);
 }
 

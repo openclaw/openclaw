@@ -19,6 +19,7 @@ import {
 } from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
+/** Dependencies injected into config recovery observation for testable filesystem behavior. */
 export type ObserveRecoveryDeps = {
   fs: {
     promises: {

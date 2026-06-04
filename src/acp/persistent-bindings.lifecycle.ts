@@ -13,6 +13,7 @@ import {
 } from "./persistent-bindings.types.js";
 import { readAcpSessionEntry } from "./runtime/session-meta.js";
 
+// Binding lifecycle keeps configured channel conversations attached to matching ACP sessions.
 function sessionMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;

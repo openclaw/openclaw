@@ -3,6 +3,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { parseRegistryNpmSpec, type ParsedRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 import type { PluginPackageInstall } from "./manifest.js";
 
+/** Warning emitted while describing plugin package install source metadata. */
 export type PluginInstallSourceWarning =
   | "invalid-clawhub-spec"
   | "invalid-npm-spec"
@@ -14,12 +15,14 @@ export type PluginInstallSourceWarning =
   | "npm-spec-missing-integrity"
   | "npm-spec-package-name-mismatch";
 
+/** Pinning state for npm plugin install metadata. */
 export type PluginInstallNpmPinState =
   | "exact-with-integrity"
   | "exact-without-integrity"
   | "floating-with-integrity"
   | "floating-without-integrity";
 
+/** Parsed npm install source metadata for a plugin package. */
 export type PluginInstallNpmSourceInfo = {
   spec: string;
   packageName: string;
@@ -31,10 +34,12 @@ export type PluginInstallNpmSourceInfo = {
   pinState: PluginInstallNpmPinState;
 };
 
+/** Parsed local install source metadata for a plugin package. */
 export type PluginInstallLocalSourceInfo = {
   path: string;
 };
 
+/** Parsed ClawHub install source metadata for a plugin package. */
 export type PluginInstallClawHubSourceInfo = {
   spec: string;
   packageName: string;
@@ -42,6 +47,7 @@ export type PluginInstallClawHubSourceInfo = {
   exactVersion: boolean;
 };
 
+/** Parsed plugin install sources plus validation warnings. */
 export type PluginInstallSourceInfo = {
   defaultChoice?: PluginPackageInstall["defaultChoice"];
   clawhub?: PluginInstallClawHubSourceInfo;
@@ -50,6 +56,7 @@ export type PluginInstallSourceInfo = {
   warnings: readonly PluginInstallSourceWarning[];
 };
 
+/** Options for describing expected plugin install source metadata. */
 export type DescribePluginInstallSourceOptions = {
   expectedPackageName?: string | null;
 };
@@ -76,6 +83,7 @@ function normalizeExpectedPackageName(value: string | null | undefined): string 
   return parseRegistryNpmSpec(expected)?.name ?? expected;
 }
 
+/** Describes plugin install source metadata and warnings without mutating manifests. */
 export function describePluginInstallSource(
   install: PluginPackageInstall,
   options?: DescribePluginInstallSourceOptions,

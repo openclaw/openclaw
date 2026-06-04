@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -165,6 +166,7 @@ import {
 import { loadOptionalServerMethodModelCatalog } from "./optional-model-catalog.js";
 import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import type {
+  GatewayClient,
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
   GatewayRequestHandlers,
@@ -211,6 +213,86 @@ type PreRegisteredAgentRun = {
 };
 
 type ChatHistoryMethod = "chat.history" | "chat.startup";
+
+type ChatSendAckServerTiming = {
+  receivedToAckMs: number;
+  loadSessionMs: number;
+  prepareAttachmentsMs?: number;
+};
+
+type ChatSendServerTimingPhase =
+  | "dispatch-started"
+  | "model-selected"
+  | "agent-run-started"
+  | "dispatch-completed"
+  | "post-dispatch-completed";
+
+function roundedChatSendTimingMs(value: number): number {
+  return Math.max(0, Math.round(value * 1000) / 1000);
+}
+
+function chatSendAckServerTimingAttributes(
+  timing: ChatSendAckServerTiming | undefined,
+): Record<string, number> {
+  if (!timing) {
+    return {};
+  }
+  return {
+    serverReceivedToAckMs: timing.receivedToAckMs,
+    serverLoadSessionMs: timing.loadSessionMs,
+    ...(timing.prepareAttachmentsMs !== undefined
+      ? { serverPrepareAttachmentsMs: timing.prepareAttachmentsMs }
+      : {}),
+  };
+}
+
+function shouldIncludeChatSendAckServerTiming(client?: {
+  id?: string | null;
+  mode?: string | null;
+}): boolean {
+  return isOperatorUiClient(client);
+}
+
+function emitOperatorChatSendServerTiming(params: {
+  context: Pick<GatewayRequestContext, "broadcastToConnIds">;
+  client?: GatewayClient | null;
+  phase: ChatSendServerTimingPhase;
+  runId: string;
+  sessionKey: string;
+  agentId?: string;
+  receivedAtMs: number;
+  ackedAtMs: number;
+  dispatchStartedAtMs?: number;
+  extra?: Record<string, string | number>;
+}) {
+  const connId =
+    typeof params.client?.connId === "string" && params.client.connId.trim()
+      ? params.client.connId.trim()
+      : undefined;
+  if (!connId || !isOperatorUiClient(params.client?.connect?.client)) {
+    return;
+  }
+  const nowMs = performance.now();
+  params.context.broadcastToConnIds(
+    "chat.send_timing",
+    {
+      phase: params.phase,
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      ackToPhaseMs: roundedChatSendTimingMs(nowMs - params.ackedAtMs),
+      receivedToPhaseMs: roundedChatSendTimingMs(nowMs - params.receivedAtMs),
+      ...(params.dispatchStartedAtMs !== undefined
+        ? {
+            dispatchStartedToPhaseMs: roundedChatSendTimingMs(nowMs - params.dispatchStartedAtMs),
+          }
+        : {}),
+      ...params.extra,
+    },
+    new Set([connId]),
+    { dropIfSlow: true },
+  );
+}
 
 async function handleChatMetadataRequest({
   params,
@@ -331,6 +413,28 @@ function buildMediaOnlyTtsSupplementTranscriptMarker(
     return undefined;
   }
   return buildTtsSupplementTranscriptMarker(payload);
+}
+
+function resolveWebchatPromptCacheKey(params: {
+  agentId: string;
+  model: string;
+  provider: string;
+  sessionKey: string;
+}): string {
+  const digest = createHash("sha256")
+    .update(
+      [
+        "v1",
+        params.provider.trim().toLowerCase(),
+        params.model.trim(),
+        normalizeAgentId(params.agentId),
+        params.sessionKey,
+      ].join("\0"),
+      "utf8",
+    )
+    .digest("hex")
+    .slice(0, 32);
+  return `openclaw-webchat-${digest}`;
 }
 
 async function buildWebchatAssistantMediaMessage(
@@ -2518,6 +2622,14 @@ async function handleChatHistoryRequest({
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, selectedAgent.error));
     return;
   }
+  const modelCatalogPromise = measureDiagnosticsTimelineSpan(
+    `gateway.${method}.model_catalog`,
+    () => loadOptionalServerMethodModelCatalog(context, method),
+    {
+      config: cfg,
+      phase: method,
+    },
+  );
   const sessionId = entry?.sessionId;
   const sessionAgentId = resolveSessionAgentId({
     sessionKey,
@@ -2598,14 +2710,7 @@ async function handleChatHistoryRequest({
       `chat.history omitted oversized payloads placeholders=${placeholderCount} total=${chatHistoryPlaceholderEmitCount}`,
     );
   }
-  const modelCatalog = await measureDiagnosticsTimelineSpan(
-    `gateway.${method}.model_catalog`,
-    () => loadOptionalServerMethodModelCatalog(context, method),
-    {
-      config: cfg,
-      phase: method,
-    },
-  );
+  const modelCatalog = await modelCatalogPromise;
   const sessionInfo = buildGatewaySessionInfo({
     cfg,
     storePath,
@@ -2933,6 +3038,7 @@ export const chatHandlers: GatewayRequestHandlers = {
     });
   },
   "chat.send": async ({ params, respond, context, client }) => {
+    const chatSendReceivedAtMs = performance.now();
     if (!validateChatSendParams(params)) {
       respond(
         false,
@@ -3030,11 +3136,8 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId: agentIdOverride,
     });
     const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
-    const {
-      cfg,
-      entry,
-      canonicalKey: sessionKey,
-    } = measureDiagnosticsTimelineSpanSync(
+    const sessionLoadStartedAtMs = performance.now();
+    const sessionLoadResult = measureDiagnosticsTimelineSpanSync(
       "gateway.chat_send.load_session",
       () => loadSessionEntry(rawSessionKey, sessionLoadOptions),
       {
@@ -3046,6 +3149,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       },
     );
+    const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
+    const { cfg, entry, canonicalKey: sessionKey } = sessionLoadResult;
     const selectedAgent = validateChatSelectedAgent({
       cfg,
       requestedSessionKey: rawSessionKey,
@@ -3195,7 +3300,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const explicitOriginTargetsPlugin = explicitOriginTargetsPluginBinding(
       explicitOriginResult.value,
     );
+    let prepareAttachmentsMs: number | undefined;
     if (normalizedAttachments.length > 0) {
+      const prepareAttachmentsStartedAtMs = performance.now();
       try {
         await measureDiagnosticsTimelineSpan(
           "gateway.chat_send.prepare_attachments",
@@ -3257,6 +3364,9 @@ export const chatHandlers: GatewayRequestHandlers = {
             },
           },
         );
+        prepareAttachmentsMs = roundedChatSendTimingMs(
+          performance.now() - prepareAttachmentsStartedAtMs,
+        );
       } catch (err) {
         logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
         respond(
@@ -3305,9 +3415,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         agentId: selectedAgent.agentId,
         clientRunId,
       });
+      const serverTiming = shouldIncludeChatSendAckServerTiming(clientInfo)
+        ? {
+            receivedToAckMs: roundedChatSendTimingMs(performance.now() - chatSendReceivedAtMs),
+            loadSessionMs: sessionLoadMs,
+            ...(prepareAttachmentsMs !== undefined ? { prepareAttachmentsMs } : {}),
+          }
+        : undefined;
       const ackPayload = {
         runId: clientRunId,
         status: "started" as const,
+        ...(serverTiming ? { serverTiming } : {}),
       };
       emitDiagnosticsTimelineEvent(
         {
@@ -3317,11 +3435,13 @@ export const chatHandlers: GatewayRequestHandlers = {
           attributes: {
             ...chatSendTraceAttributes,
             ackStatus: ackPayload.status,
+            ...chatSendAckServerTimingAttributes(serverTiming),
           },
         },
         { config: cfg },
       );
       respond(true, ackPayload, undefined, { runId: clientRunId });
+      const chatSendAckedAtMs = performance.now();
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,
@@ -3623,6 +3743,26 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       });
 
+      const emitServerTiming = (
+        phase: ChatSendServerTimingPhase,
+        extra?: Record<string, string | number>,
+        dispatchStartedAtMs?: number,
+      ) => {
+        emitOperatorChatSendServerTiming({
+          context,
+          client,
+          phase,
+          runId: clientRunId,
+          sessionKey,
+          agentId,
+          receivedAtMs: chatSendReceivedAtMs,
+          ackedAtMs: chatSendAckedAtMs,
+          dispatchStartedAtMs,
+          extra,
+        });
+      };
+      const dispatchStartedAtMs = performance.now();
+      emitServerTiming("dispatch-started");
       void measureDiagnosticsTimelineSpan(
         "gateway.chat_send.dispatch_inbound",
         async () => {
@@ -3633,6 +3773,16 @@ export const chatHandlers: GatewayRequestHandlers = {
             dispatcher,
             replyOptions: {
               runId: clientRunId,
+              ...(isOperatorUiClient(clientInfo)
+                ? {
+                    promptCacheKey: resolveWebchatPromptCacheKey({
+                      agentId,
+                      provider: resolvedSessionModel.provider,
+                      model: resolvedSessionModel.model,
+                      sessionKey: activeRunScopeKey,
+                    }),
+                  }
+                : {}),
               abortSignal: activeRunAbort.controller.signal,
               images: replyOptionImages,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
@@ -3641,6 +3791,11 @@ export const chatHandlers: GatewayRequestHandlers = {
               userTurnTranscriptRecorder: userTurnRecorder,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
+                emitServerTiming(
+                  "agent-run-started",
+                  runId !== clientRunId ? { agentRunId: runId } : undefined,
+                  dispatchStartedAtMs,
+                );
                 const connId = typeof client?.connId === "string" ? client.connId : undefined;
                 const wantsToolEvents = hasGatewayClientCap(
                   client?.connect?.caps,
@@ -3681,6 +3836,14 @@ export const chatHandlers: GatewayRequestHandlers = {
                   }),
                 });
                 onModelSelected(modelSelection);
+                emitServerTiming(
+                  "model-selected",
+                  {
+                    provider: modelSelection.provider,
+                    model: modelSelection.model,
+                  },
+                  dispatchStartedAtMs,
+                );
               },
             },
           });
@@ -3696,6 +3859,8 @@ export const chatHandlers: GatewayRequestHandlers = {
         },
       )
         .then(async () => {
+          emitServerTiming("dispatch-completed", undefined, dispatchStartedAtMs);
+          const postDispatchStartedAtMs = performance.now();
           await measureDiagnosticsTimelineSpan(
             "gateway.chat_send.post_dispatch",
             async () => {
@@ -4281,6 +4446,13 @@ export const chatHandlers: GatewayRequestHandlers = {
               config: cfg,
               attributes: chatSendTraceAttributes,
             },
+          );
+          emitServerTiming(
+            "post-dispatch-completed",
+            {
+              postDispatchMs: roundedChatSendTimingMs(performance.now() - postDispatchStartedAtMs),
+            },
+            dispatchStartedAtMs,
           );
         })
         .catch(async (err: unknown) => {

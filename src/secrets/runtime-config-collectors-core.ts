@@ -378,6 +378,8 @@ function collectProviderRequestAssignments(params: {
   };
 
   if (params.collectTransportSecrets !== false) {
+    // Transport credentials can live below direct TLS or proxy TLS config; model-provider
+    // request surfaces opt out when those nested transport secrets are owned elsewhere.
     collectTlsAssignments(
       isRecord(params.request.tls) ? params.request.tls : undefined,
       `${params.pathPrefix}.tls`,
@@ -440,6 +442,8 @@ function collectMediaRequestAssignments(params: {
   collectModelAssignments(media.models, "tools.media.models", (rawModel) => {
     const entry = rawModel as MediaUnderstandingModelConfig;
     const configuredCapabilities = resolveConfiguredMediaEntryCapabilities(entry);
+    // Shared models are active only for enabled capabilities; when the config omits explicit
+    // capabilities, provider metadata is the contract for which media sections can use it.
     const capabilities =
       configuredCapabilities ??
       resolveEffectiveMediaEntryCapabilities({
@@ -605,6 +609,7 @@ function collectSandboxSshAssignments(params: {
           },
         });
       } else if (active) {
+        // Defaults are active when at least one enabled SSH agent inherits this material.
         inheritedDefaultsUsage[key] = true;
       }
     }
@@ -635,6 +640,7 @@ function collectSandboxSshAssignments(params: {
   }
 }
 
+/** Collects SecretRef assignments from core-owned config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;

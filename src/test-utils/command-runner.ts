@@ -1,5 +1,6 @@
 import { Command } from "commander";
 
+/** Runs a CLI registrar against Commander using user-style argv. */
 export async function runRegisteredCli(params: {
   register: (program: Command) => void;
   argv: string[];

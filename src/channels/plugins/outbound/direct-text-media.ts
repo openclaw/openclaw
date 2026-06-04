@@ -7,6 +7,10 @@ import type { OutboundMediaAccess } from "../../../media/load-options.js";
 import { resolveChannelMediaMaxBytes } from "../media-limits.js";
 import type { ChannelOutboundAdapter } from "../types.adapters.js";
 
+/**
+ * Shared direct text/media outbound adapter factory for SDK-backed channels.
+ */
+
 type DirectSendOptions = {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -46,6 +50,9 @@ export {
   sendTextMediaPayload,
 } from "openclaw/plugin-sdk/reply-payload";
 
+/**
+ * Resolves an account-scoped channel media byte limit.
+ */
 export function resolveScopedChannelMediaMaxBytes(params: {
   cfg: OpenClawConfig;
   accountId?: string | null;
@@ -58,6 +65,9 @@ export function resolveScopedChannelMediaMaxBytes(params: {
   });
 }
 
+/**
+ * Builds a media byte-limit resolver for channels with `mediaMaxMb` config.
+ */
 export function createScopedChannelMediaMaxBytesResolver(channel: string) {
   return (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
     resolveScopedChannelMediaMaxBytes({
@@ -74,6 +84,9 @@ export function createScopedChannelMediaMaxBytesResolver(channel: string) {
     });
 }
 
+/**
+ * Creates a channel outbound adapter backed by direct text/media send functions.
+ */
 export function createDirectTextMediaOutbound<
   TOpts extends Record<string, unknown>,
   TResult extends DirectSendResult,
@@ -160,6 +173,8 @@ export function createDirectTextMediaOutbound<
         to,
         text,
         mediaUrl,
+        // Older callers pass local media access as split roots/readFile fields;
+        // normalize them into the newer mediaAccess object before option building.
         mediaAccess:
           mediaAccess ??
           (mediaLocalRoots || mediaReadFile
