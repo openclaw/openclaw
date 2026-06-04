@@ -51,7 +51,7 @@ describe("resolvePreferredNodePath", () => {
   const linuxSystemNode = "/usr/bin/node";
   const nvmNode = "/home/test/.nvm/versions/node/v24.14.1/bin/node";
 
-  it("prefers supported system node over version-manager execPath", async () => {
+  it("prefers currently active version-manager node over system node (regression #89376)", async () => {
     mockNodePathPresent(darwinNode);
 
     const execFile = vi
@@ -67,11 +67,11 @@ describe("resolvePreferredNodePath", () => {
       execPath: fnmNode,
     });
 
-    expect(result).toBe(darwinNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(result).toBe(fnmNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it("uses system node for Linux service installs instead of nvm execPath", async () => {
+  it("prefers currently active nvm node over system node on Linux (regression #89376)", async () => {
     mockNodePathPresent(linuxSystemNode);
 
     const execFile = vi
@@ -87,11 +87,11 @@ describe("resolvePreferredNodePath", () => {
       execPath: nvmNode,
     });
 
-    expect(result).toBe(linuxSystemNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(result).toBe(nvmNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it("uses system node for Linux service installs instead of default fnm execPath", async () => {
+  it("prefers currently active fnm node over system node on Linux (regression #89376)", async () => {
     const linuxFnmNode = "/home/test/.local/share/fnm/aliases/default/bin/node";
     mockNodePathPresent(linuxSystemNode);
 
@@ -108,11 +108,11 @@ describe("resolvePreferredNodePath", () => {
       execPath: linuxFnmNode,
     });
 
-    expect(result).toBe(linuxSystemNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(result).toBe(linuxFnmNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
   });
 
-  it("uses system node for macOS service installs instead of default fnm execPath", async () => {
+  it("prefers currently active fnm node over system node on macOS (regression #89376)", async () => {
     const darwinFnmNode = "/Users/test/Library/Application Support/fnm/aliases/default/bin/node";
     mockNodePathPresent(darwinNode);
 
@@ -129,8 +129,8 @@ describe("resolvePreferredNodePath", () => {
       execPath: darwinFnmNode,
     });
 
-    expect(result).toBe(darwinNode);
-    expect(execFile).toHaveBeenCalledTimes(2);
+    expect(result).toBe(darwinFnmNode);
+    expect(execFile).toHaveBeenCalledTimes(1);
   });
 
   it("uses Homebrew opt Node when a version-manager execPath is active", async () => {
