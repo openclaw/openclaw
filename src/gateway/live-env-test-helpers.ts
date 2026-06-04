@@ -1,6 +1,8 @@
 /**
  * Environment snapshot helpers for live gateway tests.
  */
+import { setTestEnvValue } from "../test-utils/env.js";
+
 const COMMON_LIVE_ENV_NAMES = [
   "OPENCLAW_AGENT_RUNTIME",
   "OPENCLAW_CONFIG_PATH",
@@ -32,8 +34,7 @@ export function restoreLiveEnv(snapshot: LiveEnvSnapshot): void {
     if (value === undefined) {
       delete process.env[name];
     } else {
-      // Restores a test-captured live env snapshot, not skill/config host env overrides.
-      process.env[name] = value; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
+      setTestEnvValue(name, value);
     }
   }
 }

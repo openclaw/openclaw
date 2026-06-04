@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { setTestEnvValue } from "../test-utils/env.js";
 import * as activationCheckRuntime from "./facade-activation-check.runtime.js";
 import {
   testing as facadeRuntimeTesting,
@@ -48,8 +49,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       if (value === undefined) {
         delete process.env[key];
       } else {
-        // Restores fixed test env keys captured before this integration test mutates them.
-        process.env[key] = value; // nosemgrep: security.opengrep.ghsa-82g8-464f-2mv7.openclaw-skill-env-host-injection
+        setTestEnvValue(key, value);
       }
     }
   });
