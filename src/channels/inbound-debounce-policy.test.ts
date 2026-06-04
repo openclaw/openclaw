@@ -21,6 +21,13 @@ describe("shouldDebounceTextInbound", () => {
         cfg,
       }),
     ).toBe(false);
+    expect(
+      shouldDebounceTextInbound({
+        text: "Ich habe sie manuell eingeschaltet.",
+        chatType: "group",
+        cfg,
+      }),
+    ).toBe(true);
   });
 
   it("accepts normal text when debounce is allowed", () => {

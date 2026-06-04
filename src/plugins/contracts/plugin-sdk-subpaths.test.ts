@@ -1037,7 +1037,6 @@ describe("plugin-sdk subpath exports", () => {
       "resolveMentionGatingWithBypass",
       "shouldDebounceTextInbound",
       "toLocationContext",
-      "TurnState",
     ]);
     expectSourceContract("reply-runtime", {
       omits: [

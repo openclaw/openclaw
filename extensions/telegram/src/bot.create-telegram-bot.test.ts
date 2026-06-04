@@ -759,8 +759,7 @@ describe("createTelegramBot", () => {
     }
   });
 
-  it("lets private Telegram DMs in interrupt queue mode reach the runtime while a DM is active", async () => {
-    const DEBOUNCE_MS = 4321;
+  it("lets private Telegram control DMs in interrupt queue mode reach the runtime while a DM is active", async () => {
     loadConfig.mockReturnValue({
       agents: {
         defaults: {
@@ -768,9 +767,6 @@ describe("createTelegramBot", () => {
         },
       },
       messages: {
-        inbound: {
-          debounceMs: DEBOUNCE_MS,
-        },
         queue: {
           byChannel: {
             telegram: "interrupt",
@@ -832,20 +828,111 @@ describe("createTelegramBot", () => {
     expect(startedBodies[0]).toContain("long task");
 
     await runTelegramMiddlewareChain({
-      ctx: privateMessageCtx(202, "I switched it on manually"),
+      ctx: privateMessageCtx(202, "Ich habe sie manuell eingeschaltet."),
       finalHandler: messageHandler,
     });
 
     expect(startedBodies).toHaveLength(2);
-    expect(startedBodies[1]).toContain("I switched it on manually");
+    expect(startedBodies[1]).toContain("Ich habe sie manuell eingeschaltet.");
     expect(sendMessageSpy).toHaveBeenCalledTimes(1);
-    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain("I switched it on manually");
+    expect(String(sendMessageSpy.mock.calls[0]?.[1])).toContain(
+      "Ich habe sie manuell eingeschaltet.",
+    );
 
     if (!releaseFirstRun) {
       throw new Error("Expected first Telegram run release callback to be initialized");
     }
     releaseFirstRun();
     await firstPromise;
+    expect(sendMessageSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps ordinary private Telegram DMs keyed in interrupt queue mode while a DM is active", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        queue: {
+          byChannel: {
+            telegram: "interrupt",
+          },
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+
+    const startedBodies: string[] = [];
+    let releaseFirstRun: (() => void) | undefined;
+    const firstRunGate = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+
+    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      const body = ctx.Body ?? "";
+      startedBodies.push(body);
+      if (body.includes("long task")) {
+        await firstRunGate;
+      }
+      return { text: `reply:${body}` };
+    });
+
+    const privateMessageCtx = (messageId: number, text: string): TelegramMiddlewareTestContext => ({
+      update: { update_id: messageId },
+      message: {
+        chat: { id: 7, type: "private" },
+        text,
+        date: 1736380800 + messageId,
+        message_id: messageId,
+        from: { id: 42, first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({}),
+    });
+
+    createTelegramBot({ token: "tok" });
+    const messageHandler = getOnHandler("message") as (
+      ctx: TelegramMiddlewareTestContext,
+    ) => Promise<void>;
+
+    const firstPromise = runTelegramMiddlewareChain({
+      ctx: privateMessageCtx(201, "long task"),
+      finalHandler: messageHandler,
+    });
+
+    await vi.waitFor(
+      () => {
+        expect(startedBodies).toHaveLength(1);
+      },
+      { interval: 1, timeout: 500 },
+    );
+
+    const secondPromise = runTelegramMiddlewareChain({
+      ctx: privateMessageCtx(202, "ordinary follow-up"),
+      finalHandler: messageHandler,
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(startedBodies).toHaveLength(1);
+    expect(startedBodies[0]).toContain("long task");
+    expect(sendMessageSpy).toHaveBeenCalledTimes(0);
+
+    if (!releaseFirstRun) {
+      throw new Error("Expected first Telegram run release callback to be initialized");
+    }
+    releaseFirstRun();
+    await Promise.all([firstPromise, secondPromise]);
+
+    expect(startedBodies).toHaveLength(2);
+    expect(startedBodies[0]).toContain("long task");
+    expect(startedBodies[1]).toContain("ordinary follow-up");
     expect(sendMessageSpy).toHaveBeenCalledTimes(2);
   });
 

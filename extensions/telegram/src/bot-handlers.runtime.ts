@@ -31,7 +31,6 @@ import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
 import { applyModelOverrideToSessionEntry } from "openclaw/plugin-sdk/model-session-runtime";
 import { formatModelsAvailableHeader } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { resolveQueueSettings } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, warn } from "openclaw/plugin-sdk/runtime-env";
@@ -244,9 +243,35 @@ export const registerTelegramHandlers = ({
 
   const debounceMs = resolveInboundDebounceMs({ cfg, channel: "telegram" });
   const FORWARD_BURST_DEBOUNCE_MS = 80;
-  const shouldBypassInboundDebounceForPrivateInterruptDm = (msg: Message): boolean =>
-    msg.chat.type === "private" &&
-    resolveQueueSettings({ cfg, channel: "telegram" }).mode === "interrupt";
+  const resolveTelegramInboundPolicyChatType = (msg: Message): "direct" | "group" | "channel" => {
+    if (msg.chat.type === "private") {
+      return "direct";
+    }
+    if (msg.chat.type === "group" || msg.chat.type === "supergroup") {
+      return "group";
+    }
+    return "channel";
+  };
+  const shouldBypassInboundDebounceForPrivateControlDm = (params: {
+    msg: Message;
+    botUsername?: string;
+    hasMedia?: boolean;
+  }): boolean => {
+    if (params.msg.chat.type !== "private") {
+      return false;
+    }
+    const text = getTelegramTextParts(params.msg).text;
+    if (!text.trim()) {
+      return false;
+    }
+    return !shouldDebounceTextInbound({
+      text,
+      cfg,
+      chatType: "direct",
+      hasMedia: params.hasMedia,
+      commandOptions: { botUsername: params.botUsername },
+    });
+  };
   type TelegramDebounceLane = "default" | "forward";
   type TelegramDebounceEntry = {
     ctx: TelegramContext;
@@ -493,6 +518,7 @@ export const registerTelegramHandlers = ({
       const hasDebounceableText = shouldDebounceTextInbound({
         text,
         cfg,
+        chatType: resolveTelegramInboundPolicyChatType(entry.msg),
         commandOptions: { botUsername: entry.botUsername },
       });
       if (entry.debounceLane === "forward") {
@@ -1947,7 +1973,12 @@ export const registerTelegramHandlers = ({
       storeAllowFrom,
       receivedAtMs: Date.now(),
       debounceKey:
-        isAbortControlMessage || shouldBypassInboundDebounceForPrivateInterruptDm(msg)
+        isAbortControlMessage ||
+        shouldBypassInboundDebounceForPrivateControlDm({
+          msg,
+          botUsername,
+          hasMedia: allMedia.length > 0,
+        })
           ? null
           : debounceKey,
       debounceLane,

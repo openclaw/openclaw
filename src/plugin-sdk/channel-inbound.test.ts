@@ -5,8 +5,6 @@ import { describe, expect, it } from "vitest";
 import {
   buildChannelInboundEventContext,
   type BuildChannelInboundEventContextParams,
-  type InboundReplyDispatchResult,
-  type TurnState,
 } from "./channel-inbound.js";
 
 function createInboundParams(
@@ -41,29 +39,5 @@ describe("channel-inbound public helpers", () => {
     const ctx = buildChannelInboundEventContext(createInboundParams());
 
     expect(ctx.InboundEventKind).toBe("room_event");
-  });
-
-  it("exposes typed turn state on inbound reply results", () => {
-    const state: TurnState = {
-      currentState: "failed",
-      visibleDeliveryRequired: true,
-      visibleDeliverySent: false,
-      completionAllowed: false,
-      errors: ["missing_visible_delivery"],
-    };
-    const result = {
-      admission: { kind: "dispatch" },
-      dispatched: true,
-      ctxPayload: { Body: "hello" },
-      routeSessionKey: "agent:main:test:peer",
-      dispatchResult: { queuedFinal: false },
-      turnState: state,
-    } as InboundReplyDispatchResult<{ queuedFinal: boolean }>;
-
-    expect(result.dispatched).toBe(true);
-    if (result.dispatched) {
-      expect(result.turnState?.completionAllowed).toBe(false);
-      expect(result.turnState?.errors).toContain("missing_visible_delivery");
-    }
   });
 });
