@@ -1,7 +1,6 @@
 export { getMemorySearchManager, MemoryIndexManager } from "./src/memory/index.js";
 export { memoryRuntime } from "./src/runtime-provider.js";
 export {
-  DEFAULT_LOCAL_MODEL,
   getBuiltinMemoryEmbeddingProviderDoctorMetadata,
   listBuiltinAutoSelectMemoryEmbeddingProviderDoctorMetadata,
   registerBuiltInMemoryEmbeddingProviders,

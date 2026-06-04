@@ -301,6 +301,12 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-lancedb/**"
+"extensions: llama-cpp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llama-cpp/**"
+          - "docs/plugins/llama-cpp.md"
+          - "docs/plugins/reference/llama-cpp.md"
 "extensions: memory-wiki":
   - changed-files:
       - any-glob-to-any-file:

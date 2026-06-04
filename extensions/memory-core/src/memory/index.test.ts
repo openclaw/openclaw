@@ -2,11 +2,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import {
-  clearMemoryEmbeddingProviders as clearRegistry,
-  listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
-  registerMemoryEmbeddingProvider as registerAdapter,
-} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { clearMemoryEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
@@ -15,10 +11,7 @@ import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js
 import { LOCAL_EMBEDDING_WORKER_ERROR_CODES } from "./manager-local-worker-errors.js";
 import type { MemoryIndexMeta } from "./manager-reindex-state.js";
 import { closeMemoryIndexManagersForAgent, EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
-import {
-  DEFAULT_LOCAL_MODEL,
-  registerBuiltInMemoryEmbeddingProviders,
-} from "./provider-adapters.js";
+import { registerBuiltInMemoryEmbeddingProviders } from "./provider-adapters.js";
 
 // This suite performs real sqlite/media indexing and can exceed the global
 // timeout when it shares a packed CI extension shard.
@@ -170,20 +163,14 @@ describe("memory embedding provider registration", () => {
     clearRegistry();
   });
 
-  it("registers the builtin local embedding provider", () => {
+  it("does not register local embeddings from memory-core", () => {
     clearRegistry();
-    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
+    const registered: string[] = [];
+    registerBuiltInMemoryEmbeddingProviders({
+      registerMemoryEmbeddingProvider: (adapter) => registered.push(adapter.id),
+    });
 
-    const adapter = listRegisteredAdapters().find((entry) => entry.id === "local");
-
-    if (!adapter) {
-      throw new Error("expected local embedding provider adapter to be registered");
-    }
-    expect(adapter.id).toBe("local");
-    expect(adapter.defaultModel).toBe(DEFAULT_LOCAL_MODEL);
-    expect(adapter.transport).toBe("local");
-    expect(adapter.authProviderId).toBeUndefined();
-    expect(adapter.autoSelectPriority).toBe(10);
+    expect(registered).toEqual([]);
   });
 });
 
@@ -225,7 +212,6 @@ describe("memory index", () => {
     // Keep atomic reindex tests on the safe path.
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
     clearRegistry();
-    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
     embedBatchInputCalls = 0;
     providerCloseCalls = 0;

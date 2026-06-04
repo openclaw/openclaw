@@ -203,6 +203,29 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         cliBackends: [],
       },
       {
+        id: "llama-cpp",
+        channels: [],
+        origin: "global",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          embeddingProviders: ["local"],
+          memoryEmbeddingProviders: ["local"],
+        },
+      },
+      {
+        id: "legacy-memory-embedding",
+        channels: [],
+        origin: "bundled",
+        enabledByDefault: true,
+        providers: [],
+        cliBackends: [],
+        contracts: {
+          memoryEmbeddingProviders: ["legacy-memory"],
+        },
+      },
+      {
         id: "brave",
         channels: [],
         origin: "global",
@@ -928,6 +951,20 @@ describe("resolveGatewayStartupPluginIds", () => {
       ["browser", "memory-core"],
     ],
     [
+      "includes legacy memory embedding providers configured by memory search defaults",
+      {
+        channels: {},
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "legacy-memory",
+            },
+          },
+        },
+      } as OpenClawConfig,
+      ["browser", "legacy-memory-embedding", "memory-core"],
+    ],
+    [
       "includes explicitly selected external web search providers at startup",
       {
         channels: {},
@@ -1092,6 +1129,119 @@ describe("resolveGatewayStartupPluginIds", () => {
       config: effectiveConfig,
       activationSourceConfig: rawConfig,
       expected: ["browser", "brave"],
+    });
+  });
+
+  it("includes auto-enabled memory embedding providers at startup", () => {
+    const rawConfig = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local",
+          },
+        },
+      },
+      channels: {},
+      plugins: {
+        allow: ["browser"],
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    } as OpenClawConfig;
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        allow: ["browser", "llama-cpp"],
+        entries: {
+          "llama-cpp": {
+            enabled: true,
+          },
+        },
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["browser", "llama-cpp", "memory-core"],
+    });
+  });
+
+  it("includes memory embedding provider alias owners at startup", () => {
+    const rawConfig = {
+      agents: {
+        defaults: {
+          memorySearch: {
+            provider: "local-gpu",
+          },
+        },
+      },
+      channels: {},
+      models: {
+        providers: {
+          "local-gpu": {
+            api: "local",
+            models: [],
+          },
+        },
+      },
+      plugins: {
+        allow: ["browser"],
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    } as OpenClawConfig;
+    const effectiveConfig = {
+      ...rawConfig,
+      plugins: {
+        allow: ["browser", "llama-cpp"],
+        entries: {
+          "llama-cpp": {
+            enabled: true,
+          },
+        },
+        slots: {
+          memory: "memory-core",
+        },
+      },
+    } as OpenClawConfig;
+
+    expectStartupPluginIdsCase({
+      config: effectiveConfig,
+      activationSourceConfig: rawConfig,
+      expected: ["browser", "llama-cpp", "memory-core"],
+    });
+  });
+
+  it("honors explicit plugin disablement for configured memory embedding providers", () => {
+    expectStartupPluginIdsCase({
+      config: {
+        agents: {
+          defaults: {
+            memorySearch: {
+              provider: "local",
+            },
+          },
+        },
+        channels: {},
+        plugins: {
+          allow: ["browser", "llama-cpp"],
+          entries: {
+            "llama-cpp": {
+              enabled: false,
+            },
+          },
+          slots: {
+            memory: "memory-core",
+          },
+        },
+      } as OpenClawConfig,
+      expected: ["browser", "memory-core"],
     });
   });
 
@@ -1541,6 +1691,34 @@ describe("resolveGatewayStartupPluginIds", () => {
         index,
       }),
     ).toEqual(["amazon-bedrock", "browser"]);
+  });
+
+  it("keeps configured memory embedding providers in restrictive startup metadata scopes", () => {
+    const registry = createManifestRegistryFixture();
+    const index = createInstalledPluginIndexFixture(registry);
+
+    expect(
+      resolveGatewayStartupMetadataPluginIds({
+        config: {
+          agents: {
+            defaults: {
+              memorySearch: {
+                provider: "local",
+              },
+            },
+          },
+          channels: {},
+          plugins: {
+            allow: ["browser"],
+            slots: {
+              memory: "memory-core",
+            },
+          },
+        } as OpenClawConfig,
+        env: createPluginPlanningTestEnv(),
+        index,
+      }),
+    ).toEqual(["browser", "llama-cpp", "memory-core"]);
   });
 
   it("uses installed-index model support for restrictive startup shorthand model scopes", () => {

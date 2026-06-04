@@ -1242,6 +1242,7 @@
                   "plugins/voice-call",
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",
+                  "plugins/llama-cpp",
                   "plugins/oc-path",
                   "plugins/zalouser"
                 ]

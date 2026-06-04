@@ -38,6 +38,6 @@ export type NodeLlamaCppModule = {
 
 const NODE_LLAMA_CPP_MODULE = "node-llama-cpp";
 
-export async function importNodeLlamaCpp() {
-  return import(NODE_LLAMA_CPP_MODULE) as Promise<NodeLlamaCppModule>;
+export async function importNodeLlamaCpp(moduleSpecifier = NODE_LLAMA_CPP_MODULE) {
+  return import(moduleSpecifier) as Promise<NodeLlamaCppModule>;
 }

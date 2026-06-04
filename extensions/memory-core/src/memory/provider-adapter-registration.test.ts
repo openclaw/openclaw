@@ -4,18 +4,11 @@ import { filterUnregisteredMemoryEmbeddingProviderAdapters } from "./provider-ad
 describe("filterUnregisteredMemoryEmbeddingProviderAdapters", () => {
   it("keeps builtin adapters that are not already registered", () => {
     const adapters = filterUnregisteredMemoryEmbeddingProviderAdapters({
-      builtinAdapters: [
-        { id: "local" },
-        { id: "openai" },
-        { id: "gemini" },
-        { id: "voyage" },
-        { id: "mistral" },
-      ],
+      builtinAdapters: [{ id: "openai" }, { id: "gemini" }, { id: "voyage" }, { id: "mistral" }],
       registeredAdapters: [],
     });
 
     expect(adapters.map((adapter) => adapter.id)).toEqual([
-      "local",
       "openai",
       "gemini",
       "voyage",
@@ -25,14 +18,8 @@ describe("filterUnregisteredMemoryEmbeddingProviderAdapters", () => {
 
   it("skips builtin adapters that are already registered", () => {
     const adapters = filterUnregisteredMemoryEmbeddingProviderAdapters({
-      builtinAdapters: [
-        { id: "local" },
-        { id: "openai" },
-        { id: "gemini" },
-        { id: "voyage" },
-        { id: "mistral" },
-      ],
-      registeredAdapters: [{ id: "local" }, { id: "gemini" }],
+      builtinAdapters: [{ id: "openai" }, { id: "gemini" }, { id: "voyage" }, { id: "mistral" }],
+      registeredAdapters: [{ id: "gemini" }],
     });
 
     expect(adapters.map((adapter) => adapter.id)).toEqual(["openai", "voyage", "mistral"]);

@@ -306,6 +306,22 @@ function manifestOwnsConfiguredWebSearchProvider(params: {
   });
 }
 
+function manifestOwnsConfiguredMemoryEmbeddingProvider(params: {
+  manifest: PluginManifestRecord | undefined;
+  configuredMemoryEmbeddingProviderIds: ReadonlySet<string>;
+}): boolean {
+  if (params.configuredMemoryEmbeddingProviderIds.size === 0) {
+    return false;
+  }
+  return [
+    ...(params.manifest?.contracts?.embeddingProviders ?? []),
+    ...(params.manifest?.contracts?.memoryEmbeddingProviders ?? []),
+  ].some((providerId) => {
+    const normalized = normalizeOptionalLowercaseString(providerId);
+    return normalized ? params.configuredMemoryEmbeddingProviderIds.has(normalized) : false;
+  });
+}
+
 function listModelProviderRefs(value: unknown): string[] {
   if (typeof value === "string") {
     return [value];
@@ -591,6 +607,52 @@ function collectConfiguredProviderIds(config: OpenClawConfig): string[] {
   ]);
 }
 
+function collectConfiguredMemoryEmbeddingProviderIds(config: OpenClawConfig): string[] {
+  const providerIds: string[] = [];
+  const pushProviderId = (value: unknown) => {
+    if (typeof value !== "string") {
+      return;
+    }
+    const normalized = normalizeOptionalLowercaseString(value);
+    if (normalized && normalized !== "auto" && normalized !== "none") {
+      providerIds.push(normalized);
+      const aliasedProviderId = resolveConfiguredMemoryEmbeddingProviderAliasId(normalized, config);
+      if (aliasedProviderId) {
+        providerIds.push(aliasedProviderId);
+      }
+    }
+  };
+  pushProviderId(config.agents?.defaults?.memorySearch?.provider);
+  pushProviderId(config.agents?.defaults?.memorySearch?.fallback);
+  for (const agent of config.agents?.list ?? []) {
+    pushProviderId(agent?.memorySearch?.provider);
+    pushProviderId(agent?.memorySearch?.fallback);
+  }
+  return sortUniquePluginIds(providerIds);
+}
+
+function resolveConfiguredMemoryEmbeddingProviderAliasId(
+  providerId: string,
+  config: OpenClawConfig,
+): string | undefined {
+  const providers = config.models?.providers;
+  if (!providers) {
+    return undefined;
+  }
+  const normalizedProviderId = normalizeProviderId(providerId);
+  const providerConfig =
+    providers[providerId] ??
+    Object.entries(providers).find(
+      ([candidateId]) => normalizeProviderId(candidateId) === normalizedProviderId,
+    )?.[1];
+  const api = providerConfig?.api?.trim();
+  if (!api) {
+    return undefined;
+  }
+  const normalizedApi = normalizeOptionalLowercaseString(api);
+  return normalizedApi && normalizedApi !== normalizedProviderId ? normalizedApi : undefined;
+}
+
 function collectValidationConfiguredProviderIds(config: OpenClawConfig): string[] {
   const providerIds: string[] = [];
   const pushProviderId = (value: unknown) => {
@@ -744,6 +806,15 @@ export function resolveGatewayStartupMetadataPluginIds(params: {
   }
   lookup.addDirectProviderOwners(scope, configuredProviderIds);
 
+  const configuredMemoryEmbeddingProviderIds = sortUniquePluginIds([
+    ...collectConfiguredMemoryEmbeddingProviderIds(params.config),
+    ...collectConfiguredMemoryEmbeddingProviderIds(activationSourceConfig),
+  ]);
+  if (!lookup.hasProviderContributionOwners(configuredMemoryEmbeddingProviderIds)) {
+    return undefined;
+  }
+  lookup.addProviderContributionOwners(scope, configuredMemoryEmbeddingProviderIds);
+
   const configuredShorthandModelIds = sortUniquePluginIds([
     ...collectValidationConfiguredShorthandModelIds(params.config),
     ...collectValidationConfiguredShorthandModelIds(activationSourceConfig),
@@ -890,6 +961,14 @@ export function resolveConfigValidationMetadataPluginIds(params: {
     return undefined;
   }
   lookup.addProviderContributionOwners(scope, configuredProviderIds);
+
+  const configuredMemoryEmbeddingProviderIds = collectConfiguredMemoryEmbeddingProviderIds(
+    params.config,
+  );
+  if (!lookup.hasProviderContributionOwners(configuredMemoryEmbeddingProviderIds)) {
+    return undefined;
+  }
+  lookup.addProviderContributionOwners(scope, configuredMemoryEmbeddingProviderIds);
 
   const configuredShorthandModelIds = collectValidationConfiguredShorthandModelIds(params.config);
   if (!lookup.hasShorthandModelOwners(configuredShorthandModelIds)) {
@@ -1309,6 +1388,52 @@ function canStartConfiguredWebSearchProviderPlugin(params: {
   return activationState.enabled;
 }
 
+function canStartConfiguredMemoryEmbeddingProviderPlugin(params: {
+  plugin: InstalledPluginIndexRecord;
+  manifest: PluginManifestRecord | undefined;
+  config: OpenClawConfig;
+  pluginsConfig: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+  activationSource: {
+    plugins: ReturnType<typeof normalizePluginsConfigWithRegistry>;
+    rootConfig?: OpenClawConfig;
+  };
+  configuredMemoryEmbeddingProviderIds: ReadonlySet<string>;
+  platform?: NodeJS.Platform;
+}): boolean {
+  if (
+    !manifestOwnsConfiguredMemoryEmbeddingProvider({
+      manifest: params.manifest,
+      configuredMemoryEmbeddingProviderIds: params.configuredMemoryEmbeddingProviderIds,
+    })
+  ) {
+    return false;
+  }
+  if (!params.pluginsConfig.enabled || !params.activationSource.plugins.enabled) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.deny.includes(params.plugin.pluginId) ||
+    params.activationSource.plugins.deny.includes(params.plugin.pluginId)
+  ) {
+    return false;
+  }
+  if (
+    params.pluginsConfig.entries[params.plugin.pluginId]?.enabled === false ||
+    params.activationSource.plugins.entries[params.plugin.pluginId]?.enabled === false
+  ) {
+    return false;
+  }
+  const activationState = resolveEffectivePluginActivationState({
+    id: params.plugin.pluginId,
+    origin: params.plugin.origin,
+    config: params.pluginsConfig,
+    rootConfig: params.config,
+    enabledByDefault: isPluginEnabledByDefaultForPlatform(params.plugin, params.platform),
+    activationSource: params.activationSource,
+  });
+  return activationState.enabled;
+}
+
 function canStartConfiguredRootPlugin(params: {
   plugin: InstalledPluginIndexRecord;
   manifest: PluginManifestRecord | undefined;
@@ -1596,6 +1721,9 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   const configuredGenerationProviderIds =
     collectConfiguredGenerationProviderIds(activationSourceConfig);
   const configuredVoiceProviderIds = collectConfiguredVoiceProviderIds(activationSourceConfig);
+  const configuredMemoryEmbeddingProviderIds = new Set(
+    collectConfiguredMemoryEmbeddingProviderIds(activationSourceConfig),
+  );
   const normalizePluginId = createPluginRegistryIdNormalizer(params.index, {
     manifestRegistry: params.manifestRegistry,
   });
@@ -1682,6 +1810,20 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
         pluginsConfig,
         activationSource,
         configuredWebSearchProviderIds,
+        platform: params.platform,
+      })
+    ) {
+      pluginIds.push(plugin.pluginId);
+      continue;
+    }
+    if (
+      canStartConfiguredMemoryEmbeddingProviderPlugin({
+        plugin,
+        manifest,
+        config: params.config,
+        pluginsConfig,
+        activationSource,
+        configuredMemoryEmbeddingProviderIds,
         platform: params.platform,
       })
     ) {

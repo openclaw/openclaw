@@ -73,13 +73,19 @@ function resolveDefaultWorkerScriptPath(): string {
 
 function serializeLocalEmbeddingOptions(
   options: EmbeddingProviderOptions,
+  runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): EmbeddingProviderOptions {
   return {
     config: {},
     provider: "local",
     model: options.model,
     fallback: "none",
-    local: options.local,
+    local: {
+      ...options.local,
+      ...(runtimeOptions?.nodeLlamaCppImportUrl
+        ? { nodeLlamaCppImportUrl: runtimeOptions.nodeLlamaCppImportUrl }
+        : {}),
+    } as EmbeddingProviderOptions["local"],
   };
 }
 
@@ -329,7 +335,7 @@ export async function createLocalEmbeddingWorkerProvider(
   runtimeOptions?: LocalEmbeddingProviderRuntimeOptions,
 ): Promise<EmbeddingProvider> {
   const modelPath = normalizeOptionalString(options.local?.modelPath) || DEFAULT_LOCAL_MODEL;
-  const workerOptions = serializeLocalEmbeddingOptions(options);
+  const workerOptions = serializeLocalEmbeddingOptions(options, runtimeOptions);
   const client = new LocalEmbeddingWorkerClient(
     runtimeOptions?.workerScriptPath ?? resolveDefaultWorkerScriptPath(),
   );
