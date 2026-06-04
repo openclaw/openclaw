@@ -209,8 +209,8 @@ export function setPluginRunContext(params: {
   return true;
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
 /** Reads previously stored plugin run context for one run/plugin/namespace tuple. */
+// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
 export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>(params: {
   pluginId: string;
   get: PluginRunContextGetParams;
