@@ -100,7 +100,10 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
 
 4. Decide what Telegram message, mock model response, command, callback, button,
    media, or sequence best proves the PR. Use `MANTIS_INSTRUCTIONS` as extra
-   maintainer guidance, not as a replacement for reading the PR.
+   maintainer guidance, not as a replacement for reading the PR. For PRs whose
+   Telegram-visible delta is a duplicate generic fallback after a final answer
+   and later dispatch/cleanup error, use the proof runner with
+   `--proof-scenario late-dispatch-after-final` for both baseline and candidate.
 5. Create detached worktrees under
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/baseline` and
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/candidate`, then

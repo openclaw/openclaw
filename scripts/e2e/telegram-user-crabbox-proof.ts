@@ -23,6 +23,9 @@ type GatewaySpawnSpec = {
 type JsonObject = Record<string, unknown>;
 
 type PreviewCrop = "telegram-window";
+type ProofScenario = "late-dispatch-after-final";
+
+const TELEGRAM_LATE_DISPATCH_AFTER_FINAL_SCENARIO: ProofScenario = "late-dispatch-after-final";
 
 type CrabboxInspect = {
   host?: string;
@@ -63,6 +66,7 @@ type Options = {
   previewFps: number;
   previewCropWidth: number;
   previewWidth: number;
+  proofScenario?: ProofScenario;
   provider: string;
   publishFullArtifacts: boolean;
   publishPr?: number;
@@ -194,6 +198,7 @@ function usageText() {
     "  --preview-crop-width <pixels>  Cropped preview GIF width. Default: 430.",
     "  --preview-fps <fps>            Motion GIF frames per second. Default: 24.",
     "  --preview-width <pixels>       Motion GIF width. Default: 1920.",
+    "  --proof-scenario <name>        QA proof scenario. Supported: late-dispatch-after-final.",
     "  --pr <number>                 Pull request number for publish.",
     "  --record-fps <fps>             Desktop recording frames per second. Default: 24.",
     "  --record-seconds <seconds>    Desktop video duration. Default: 35.",
@@ -234,7 +239,7 @@ function parsePositiveInteger(value: string, label: string) {
   return parsed;
 }
 
-function parseArgs(argvInput: string[]): Options {
+export function parseArgs(argvInput: string[]): Options {
   let argv = argvInput;
   argv = argv[0] === "--" ? argv.slice(1) : argv;
   const commands = new Set([
@@ -340,6 +345,12 @@ function parseArgs(argvInput: string[]): Options {
       opts.previewFps = parsePositiveInteger(readValue(), "--preview-fps");
     } else if (arg === "--preview-width") {
       opts.previewWidth = parsePositiveInteger(readValue(), "--preview-width");
+    } else if (arg === "--proof-scenario") {
+      const value = readValue();
+      if (value !== TELEGRAM_LATE_DISPATCH_AFTER_FINAL_SCENARIO) {
+        throw new Error(`Unsupported --proof-scenario: ${value}`);
+      }
+      opts.proofScenario = value;
     } else if (arg === "--provider") {
       opts.provider = readValue();
     } else if (arg === "--pr") {
@@ -479,13 +490,21 @@ function mockServerEnv(params: { mockPort: number; mockResponseText: string; req
   };
 }
 
-function gatewayEnv(params: { configPath: string; stateDir: string; sutToken: string }) {
+function gatewayEnv(params: {
+  configPath: string;
+  proofScenario?: ProofScenario;
+  stateDir: string;
+  sutToken: string;
+}) {
   return {
     ...childProcessBaseEnv(),
     OPENAI_API_KEY: "sk-openclaw-e2e-mock",
     OPENCLAW_CONFIG_PATH: params.configPath,
     OPENCLAW_STATE_DIR: params.stateDir,
     TELEGRAM_BOT_TOKEN: params.sutToken,
+    ...(params.proofScenario === TELEGRAM_LATE_DISPATCH_AFTER_FINAL_SCENARIO
+      ? { OPENCLAW_TELEGRAM_QA_DISPATCH_FAULT: params.proofScenario }
+      : {}),
   };
 }
 
@@ -1039,6 +1058,7 @@ export async function startLocalSut(
     mockResponseText: string;
     mockPort: number;
     outputDir: string;
+    proofScenario?: ProofScenario;
     sutToken: string;
     testerId: string;
     repoRoot: string;
@@ -1068,7 +1088,11 @@ export async function startLocalSut(
       10_000,
     );
     const gatewaySpec = createGatewaySpawnSpec({
-      env: gatewayEnv({ ...config, sutToken: params.sutToken }),
+      env: gatewayEnv({
+        ...config,
+        proofScenario: params.proofScenario,
+        sutToken: params.sutToken,
+      }),
       gatewayPort: params.gatewayPort,
       repoRoot: params.repoRoot,
     });
@@ -1148,6 +1172,7 @@ async function startLocalSutDaemon(params: {
   mockResponseText: string;
   mockPort: number;
   outputDir: string;
+  proofScenario?: ProofScenario;
   sutToken: string;
   testerId: string;
   repoRoot: string;
@@ -1172,7 +1197,11 @@ async function startLocalSutDaemon(params: {
     }
     await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
 
-    const gatewayEnvVars = gatewayEnv({ ...config, sutToken: params.sutToken });
+    const gatewayEnvVars = gatewayEnv({
+      ...config,
+      proofScenario: params.proofScenario,
+      sutToken: params.sutToken,
+    });
     const gatewaySpec = createOpenClawGatewaySpawnSpec({
       env: gatewayEnvVars,
       gatewayPort: params.gatewayPort,
@@ -2028,6 +2057,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
       mockResponseText: opts.mockResponseText,
       mockPort: opts.mockPort,
       outputDir,
+      proofScenario: opts.proofScenario,
       repoRoot: root,
       sutToken: credential.sutToken,
       testerId: credential.testerUserId,
@@ -2581,6 +2611,7 @@ async function main() {
       mockResponseText: opts.mockResponseText,
       mockPort: opts.mockPort,
       outputDir,
+      proofScenario: opts.proofScenario,
       repoRoot: root,
       sutToken: credential.sutToken,
       testerId: credential.testerUserId,

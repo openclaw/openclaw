@@ -142,7 +142,16 @@ export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 export { getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests };
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
+const TELEGRAM_QA_LATE_DISPATCH_AFTER_FINAL = "late-dispatch-after-final";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
+
+function shouldForceQaLateDispatchErrorAfterFinal(): boolean {
+  return (
+    process.env.OPENCLAW_BUILD_PRIVATE_QA === "1" &&
+    process.env.OPENCLAW_ENABLE_PRIVATE_QA_CLI === "1" &&
+    process.env.OPENCLAW_TELEGRAM_QA_DISPATCH_FAULT === TELEGRAM_QA_LATE_DISPATCH_AFTER_FINAL
+  );
+}
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -1302,6 +1311,23 @@ export const dispatchTelegramMessage = async ({
   let hadErrorReplyFailureOrSkip = false;
   let isFirstTurnInSession = false;
   let dispatchError: unknown;
+  const forceQaLateDispatchErrorAfterFinal = shouldForceQaLateDispatchErrorAfterFinal();
+  let forcedQaLateDispatchError = false;
+  const maybeForceQaLateDispatchErrorAfterFinal = (params: {
+    delivered: boolean;
+    kind: string;
+  }) => {
+    if (
+      !forceQaLateDispatchErrorAfterFinal ||
+      forcedQaLateDispatchError ||
+      params.kind !== "final" ||
+      !params.delivered
+    ) {
+      return;
+    }
+    forcedQaLateDispatchError = true;
+    throw new Error("telegram qa forced late dispatch error after final delivery");
+  };
 
   try {
     const sticker = ctxPayload.Sticker;
@@ -1837,7 +1863,12 @@ export const dispatchTelegramMessage = async ({
                       if (info.kind === "final") {
                         await emitPreviewFinalizedHook(result);
                       }
-                      blockDelivered = blockDelivered || result.kind !== "skipped";
+                      const delivered = result.kind !== "skipped";
+                      blockDelivered = blockDelivered || delivered;
+                      maybeForceQaLateDispatchErrorAfterFinal({
+                        delivered,
+                        kind: info.kind,
+                      });
                       if (segment.lane === "reasoning") {
                         if (result.kind !== "skipped") {
                           reasoningStepState.noteReasoningDelivered();
@@ -1879,6 +1910,10 @@ export const dispatchTelegramMessage = async ({
                         await flushBufferedFinalAnswer();
                       }
                       trackBlockMedia(delivered);
+                      maybeForceQaLateDispatchErrorAfterFinal({
+                        delivered,
+                        kind: info.kind,
+                      });
                       return;
                     }
 
@@ -1905,6 +1940,10 @@ export const dispatchTelegramMessage = async ({
                       await flushBufferedFinalAnswer();
                     }
                     trackBlockMedia(delivered);
+                    maybeForceQaLateDispatchErrorAfterFinal({
+                      delivered,
+                      kind: info.kind,
+                    });
                   },
                   onSkip: (payload, info) => {
                     if (payload.isError === true) {

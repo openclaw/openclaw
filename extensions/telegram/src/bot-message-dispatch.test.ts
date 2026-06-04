@@ -337,6 +337,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
   afterEach(() => {
     clearTelegramRuntime();
     resetPluginStateStoreForTests();
+    vi.unstubAllEnvs();
   });
 
   const createDraftStream = (messageId?: number) => createTestDraftStream({ messageId });
@@ -513,6 +514,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     telegramDeps?: TelegramBotDeps;
     bot?: Bot;
     replyToMode?: Parameters<typeof dispatchTelegramMessage>[0]["replyToMode"];
+    runtime?: Parameters<typeof dispatchTelegramMessage>[0]["runtime"];
     textLimit?: number;
   }) {
     const bot = params.bot ?? createBot();
@@ -520,7 +522,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
       context: params.context,
       bot,
       cfg: params.cfg ?? {},
-      runtime: createRuntime(),
+      runtime: params.runtime ?? createRuntime(),
       replyToMode: params.replyToMode ?? "first",
       streamMode: params.streamMode ?? "partial",
       textLimit: params.textLimit ?? 4096,
@@ -4154,6 +4156,30 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
 
     expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
+  it("can force a QA late dispatch error after visible final delivery", async () => {
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
+    vi.stubEnv("OPENCLAW_TELEGRAM_QA_DISPATCH_FAULT", "late-dispatch-after-final");
+    const runtime = createRuntime();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Visible answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: createDirectSessionPayload(),
+      }),
+      runtime,
+      streamMode: "off",
+    });
+
+    expectDeliveredReply(0, { text: "Visible answer" });
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("telegram qa forced late dispatch error after final delivery"),
+    );
   });
 
   it("does not emit a silent-reply fallback for no-response DM turns", async () => {

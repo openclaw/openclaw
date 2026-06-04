@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   COMMAND_TIMEOUT_MS,
   createOpenClawGatewaySpawnSpec,
+  parseArgs,
   readLogTail,
   readTelegramUserProofLogTailBytes,
   recordProbeVideo,
@@ -50,6 +51,7 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { force: true, recursive: true });
   }
@@ -79,6 +81,15 @@ describe("telegram user Crabbox proof log polling", () => {
   it("allows cold remote setup to outlive ordinary command timeouts", () => {
     expect(REMOTE_SETUP_COMMAND_TIMEOUT_MS).toBeGreaterThan(COMMAND_TIMEOUT_MS);
     expect(REMOTE_SETUP_COMMAND_TIMEOUT_MS).toBeGreaterThanOrEqual(90 * 60 * 1000);
+  });
+
+  it("accepts only the late dispatch proof scenario", () => {
+    expect(
+      parseArgs(["start", "--proof-scenario", "late-dispatch-after-final"]).proofScenario,
+    ).toBe("late-dispatch-after-final");
+    expect(() => parseArgs(["start", "--proof-scenario", "other"])).toThrow(
+      "Unsupported --proof-scenario: other",
+    );
   });
 
   it("rejects loose numeric log tail limits instead of parsing prefixes", () => {
@@ -225,6 +236,9 @@ setInterval(() => {}, 1000);
     const mockPidPath = path.join(root, "mock.pid");
     const mockTermPath = path.join(root, "mock.term");
     fs.mkdirSync(path.dirname(mockScript), { recursive: true });
+    let gatewayEnv: NodeJS.ProcessEnv | undefined;
+    vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", "1");
+    vi.stubEnv("OPENCLAW_ENABLE_PRIVATE_QA_CLI", "1");
     writeExecutable(
       mockScript,
       `
@@ -255,16 +269,20 @@ process.exit(2);
           mockPort: 19043,
           mockResponseText: "ok",
           outputDir,
+          proofScenario: "late-dispatch-after-final",
           repoRoot: root,
           sutToken: "token",
           testerId: "tester",
         },
         {
-          createGatewaySpawnSpec: () => ({
-            args: [gatewayScript],
-            command: process.execPath,
-            options: { cwd: root, env: process.env },
-          }),
+          createGatewaySpawnSpec: ({ env }) => {
+            gatewayEnv = env;
+            return {
+              args: [gatewayScript],
+              command: process.execPath,
+              options: { cwd: root, env: process.env },
+            };
+          },
           drainUpdates: async () => ({
             drained: 0,
             webhookUrlSet: false,
@@ -273,6 +291,9 @@ process.exit(2);
       ),
     ).rejects.toThrow("gateway exited before ready");
 
+    expect(gatewayEnv?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+    expect(gatewayEnv?.OPENCLAW_ENABLE_PRIVATE_QA_CLI).toBe("1");
+    expect(gatewayEnv?.OPENCLAW_TELEGRAM_QA_DISPATCH_FAULT).toBe("late-dispatch-after-final");
     await waitFor(() => fs.existsSync(mockTermPath));
     const mockPid = Number.parseInt(fs.readFileSync(mockPidPath, "utf8"), 10);
     await waitFor(() => !isProcessAlive(mockPid));
