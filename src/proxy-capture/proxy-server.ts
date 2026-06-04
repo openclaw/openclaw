@@ -210,6 +210,17 @@ export async function startDebugProxyServer(params: {
             });
             res.end();
           });
+          upstreamRes.on("error", (error) => {
+            recordTargetEvent({
+              direction: "inbound",
+              kind: "error",
+              errorText: error.message,
+            });
+            if (!res.headersSent) {
+              res.statusCode = 502;
+            }
+            res.end(error.message);
+          });
           res.writeHead(upstreamRes.statusCode ?? 502, upstreamRes.headers);
         },
       );
@@ -219,7 +230,9 @@ export async function startDebugProxyServer(params: {
           kind: "error",
           errorText: error.message,
         });
-        res.statusCode = 502;
+        if (!res.headersSent) {
+          res.statusCode = 502;
+        }
         res.end(error.message);
       });
       if (body.byteLength > 0) {
