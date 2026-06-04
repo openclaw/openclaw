@@ -107,7 +107,7 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
           .join("; ")}.`,
       );
     }
-    const recentPreDeliverySlow = channelTurns.tools.recentPreDeliverySlow.slice(-3).reverse();
+    const recentPreDeliverySlow = channelTurns.tools.recentPreDeliverySlow.slice(-3).toReversed();
     if (recentPreDeliverySlow.length > 0) {
       lines.push("Recent slow pre-delivery tools:");
       for (const slow of recentPreDeliverySlow) {
@@ -128,7 +128,7 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
     lines.push(`  Guidance: ${issue.guidance}`);
   }
 
-  const recentSlow = channelTurns.latency?.recentSlow.slice(-3).reverse() ?? [];
+  const recentSlow = channelTurns.latency?.recentSlow.slice(-3).toReversed() ?? [];
   if (recentSlow.length > 0) {
     lines.push("Recent slow turns:");
     for (const slow of recentSlow) {
@@ -142,7 +142,7 @@ export function buildGatewayChannelTurnHealthDoctorNote(params: {
     }
   }
 
-  const recentFailures = channelTurns.recentFailures.slice(-3).reverse();
+  const recentFailures = channelTurns.recentFailures.slice(-3).toReversed();
   if (recentFailures.length > 0) {
     lines.push("Recent failures:");
     for (const failure of recentFailures) {
@@ -195,7 +195,7 @@ export function buildGatewaySessionAttentionDoctorNote(params: {
     lines.push(`Active work: ${activeWork}.`);
   }
 
-  const recent = attention.recent.slice(-5).reverse();
+  const recent = attention.recent.slice(-5).toReversed();
   if (recent.length > 0) {
     lines.push("Recent session attention:");
     for (const event of recent) {
@@ -269,7 +269,7 @@ export function buildGatewayQueueHealthDoctorNote(params: {
     );
   }
 
-  const recentSlow = queues.recentSlow.slice(-5).reverse();
+  const recentSlow = queues.recentSlow.slice(-5).toReversed();
   if (recentSlow.length > 0) {
     lines.push("Recent slow queue waits:");
     for (const slow of recentSlow) {

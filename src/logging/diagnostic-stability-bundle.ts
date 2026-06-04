@@ -775,7 +775,9 @@ function readOptionalChannelTurnLatencySummary(
           entry,
           `snapshot.summary.channelTurns.latency.recentSlow[${index}]`,
         );
-        return {
+        const parsed: NonNullable<
+          NonNullable<DiagnosticStabilitySnapshot["summary"]["channelTurns"]>["latency"]
+        >["recentSlow"][number] = {
           seq: readNumber(
             slow.seq,
             `snapshot.summary.channelTurns.latency.recentSlow[${index}].seq`,
@@ -784,30 +786,6 @@ function readOptionalChannelTurnLatencySummary(
             slow.ts,
             `snapshot.summary.channelTurns.latency.recentSlow[${index}].ts`,
           ),
-          ...(slow.channel !== undefined
-            ? {
-                channel: readOptionalCodeString(
-                  slow.channel,
-                  `snapshot.summary.channelTurns.latency.recentSlow[${index}].channel`,
-                ),
-              }
-            : {}),
-          ...(slow.turnId !== undefined
-            ? {
-                turnId: readOptionalCodeString(
-                  slow.turnId,
-                  `snapshot.summary.channelTurns.latency.recentSlow[${index}].turnId`,
-                ),
-              }
-            : {}),
-          ...(slow.messageId !== undefined
-            ? {
-                messageId: readOptionalCodeString(
-                  slow.messageId,
-                  `snapshot.summary.channelTurns.latency.recentSlow[${index}].messageId`,
-                ),
-              }
-            : {}),
           metric: readCodeString(
             slow.metric,
             `snapshot.summary.channelTurns.latency.recentSlow[${index}].metric`,
@@ -817,6 +795,25 @@ function readOptionalChannelTurnLatencySummary(
             `snapshot.summary.channelTurns.latency.recentSlow[${index}].valueMs`,
           ),
         };
+        if (slow.channel !== undefined) {
+          parsed.channel = readOptionalCodeString(
+            slow.channel,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].channel`,
+          );
+        }
+        if (slow.turnId !== undefined) {
+          parsed.turnId = readOptionalCodeString(
+            slow.turnId,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].turnId`,
+          );
+        }
+        if (slow.messageId !== undefined) {
+          parsed.messageId = readOptionalCodeString(
+            slow.messageId,
+            `snapshot.summary.channelTurns.latency.recentSlow[${index}].messageId`,
+          );
+        }
+        return parsed;
       })
     : [];
   return {
@@ -889,7 +886,9 @@ function readChannelTurnHealth(
           `Invalid stability bundle: snapshot.summary.channelTurns.health.issues[${index}].level`,
         );
       }
-      return {
+      const parsed: NonNullable<
+        DiagnosticStabilitySnapshot["summary"]["channelTurns"]
+      >["health"]["issues"][number] = {
         code: readCodeString(
           issue.code,
           `snapshot.summary.channelTurns.health.issues[${index}].code`,
@@ -903,30 +902,6 @@ function readChannelTurnHealth(
             `snapshot.summary.channelTurns.health.issues[${index}].message`,
           ),
         ),
-        ...(issue.metric !== undefined
-          ? {
-              metric: readCodeString(
-                issue.metric,
-                `snapshot.summary.channelTurns.health.issues[${index}].metric`,
-              ),
-            }
-          : {}),
-        ...(issue.valueMs !== undefined
-          ? {
-              valueMs: readNumber(
-                issue.valueMs,
-                `snapshot.summary.channelTurns.health.issues[${index}].valueMs`,
-              ),
-            }
-          : {}),
-        ...(issue.count !== undefined
-          ? {
-              count: readNumber(
-                issue.count,
-                `snapshot.summary.channelTurns.health.issues[${index}].count`,
-              ),
-            }
-          : {}),
         guidance: redactSensitiveText(
           readString(
             issue.guidance,
@@ -934,6 +909,25 @@ function readChannelTurnHealth(
           ),
         ),
       };
+      if (issue.metric !== undefined) {
+        parsed.metric = readCodeString(
+          issue.metric,
+          `snapshot.summary.channelTurns.health.issues[${index}].metric`,
+        );
+      }
+      if (issue.valueMs !== undefined) {
+        parsed.valueMs = readNumber(
+          issue.valueMs,
+          `snapshot.summary.channelTurns.health.issues[${index}].valueMs`,
+        );
+      }
+      if (issue.count !== undefined) {
+        parsed.count = readNumber(
+          issue.count,
+          `snapshot.summary.channelTurns.health.issues[${index}].count`,
+        );
+      }
+      return parsed;
     }),
   };
 }
@@ -1118,7 +1112,9 @@ function readOptionalChannelTurnsSummary(
   const recentFailures = Array.isArray(recentFailuresRaw)
     ? recentFailuresRaw.map((entry, index) => {
         const failure = readObject(entry, `snapshot.summary.channelTurns.recentFailures[${index}]`);
-        return {
+        const parsed: NonNullable<
+          DiagnosticStabilitySnapshot["summary"]["channelTurns"]
+        >["recentFailures"][number] = {
           seq: readNumber(
             failure.seq,
             `snapshot.summary.channelTurns.recentFailures[${index}].seq`,
@@ -1127,47 +1123,38 @@ function readOptionalChannelTurnsSummary(
             failure.ts,
             `snapshot.summary.channelTurns.recentFailures[${index}].ts`,
           ),
-          ...(failure.channel !== undefined
-            ? {
-                channel: readOptionalCodeString(
-                  failure.channel,
-                  `snapshot.summary.channelTurns.recentFailures[${index}].channel`,
-                ),
-              }
-            : {}),
-          ...(failure.turnId !== undefined
-            ? {
-                turnId: readOptionalCodeString(
-                  failure.turnId,
-                  `snapshot.summary.channelTurns.recentFailures[${index}].turnId`,
-                ),
-              }
-            : {}),
-          ...(failure.sessionKey !== undefined
-            ? {
-                sessionKey: readOptionalCodeString(
-                  failure.sessionKey,
-                  `snapshot.summary.channelTurns.recentFailures[${index}].sessionKey`,
-                ),
-              }
-            : {}),
-          ...(failure.messageId !== undefined
-            ? {
-                messageId: readOptionalCodeString(
-                  failure.messageId,
-                  `snapshot.summary.channelTurns.recentFailures[${index}].messageId`,
-                ),
-              }
-            : {}),
-          ...(failure.reason !== undefined
-            ? {
-                reason: readOptionalCodeString(
-                  failure.reason,
-                  `snapshot.summary.channelTurns.recentFailures[${index}].reason`,
-                ),
-              }
-            : {}),
         };
+        if (failure.channel !== undefined) {
+          parsed.channel = readOptionalCodeString(
+            failure.channel,
+            `snapshot.summary.channelTurns.recentFailures[${index}].channel`,
+          );
+        }
+        if (failure.turnId !== undefined) {
+          parsed.turnId = readOptionalCodeString(
+            failure.turnId,
+            `snapshot.summary.channelTurns.recentFailures[${index}].turnId`,
+          );
+        }
+        if (failure.sessionKey !== undefined) {
+          parsed.sessionKey = readOptionalCodeString(
+            failure.sessionKey,
+            `snapshot.summary.channelTurns.recentFailures[${index}].sessionKey`,
+          );
+        }
+        if (failure.messageId !== undefined) {
+          parsed.messageId = readOptionalCodeString(
+            failure.messageId,
+            `snapshot.summary.channelTurns.recentFailures[${index}].messageId`,
+          );
+        }
+        if (failure.reason !== undefined) {
+          parsed.reason = readOptionalCodeString(
+            failure.reason,
+            `snapshot.summary.channelTurns.recentFailures[${index}].reason`,
+          );
+        }
+        return parsed;
       })
     : [];
   return {
@@ -1219,78 +1206,65 @@ function readOptionalSessionAttentionSummary(
   const recent = Array.isArray(recentRaw)
     ? recentRaw.map((entry, index) => {
         const item = readObject(entry, `snapshot.summary.sessions.attention.recent[${index}]`);
-        return {
+        const parsed: NonNullable<
+          DiagnosticStabilitySnapshot["summary"]["sessions"]
+        >["attention"]["recent"][number] = {
           seq: readNumber(item.seq, `snapshot.summary.sessions.attention.recent[${index}].seq`),
           ts: readTimestampMs(item.ts, `snapshot.summary.sessions.attention.recent[${index}].ts`),
           type: readCodeString(
             item.type,
             `snapshot.summary.sessions.attention.recent[${index}].type`,
           ),
-          ...(item.sessionKey !== undefined
-            ? {
-                sessionKey: readOptionalCodeString(
-                  item.sessionKey,
-                  `snapshot.summary.sessions.attention.recent[${index}].sessionKey`,
-                ),
-              }
-            : {}),
-          ...(item.state !== undefined
-            ? {
-                state: readOptionalCodeString(
-                  item.state,
-                  `snapshot.summary.sessions.attention.recent[${index}].state`,
-                ),
-              }
-            : {}),
-          ...(item.reason !== undefined
-            ? {
-                reason: readOptionalCodeString(
-                  item.reason,
-                  `snapshot.summary.sessions.attention.recent[${index}].reason`,
-                ),
-              }
-            : {}),
-          ...(item.classification !== undefined
-            ? {
-                classification: readOptionalCodeString(
-                  item.classification,
-                  `snapshot.summary.sessions.attention.recent[${index}].classification`,
-                ),
-              }
-            : {}),
-          ...(item.activeWorkKind !== undefined
-            ? {
-                activeWorkKind: readOptionalCodeString(
-                  item.activeWorkKind,
-                  `snapshot.summary.sessions.attention.recent[${index}].activeWorkKind`,
-                ),
-              }
-            : {}),
-          ...(item.toolName !== undefined
-            ? {
-                toolName: readOptionalCodeString(
-                  item.toolName,
-                  `snapshot.summary.sessions.attention.recent[${index}].toolName`,
-                ),
-              }
-            : {}),
-          ...(item.ageMs !== undefined
-            ? {
-                ageMs: readNumber(
-                  item.ageMs,
-                  `snapshot.summary.sessions.attention.recent[${index}].ageMs`,
-                ),
-              }
-            : {}),
-          ...(item.queueDepth !== undefined
-            ? {
-                queueDepth: readNumber(
-                  item.queueDepth,
-                  `snapshot.summary.sessions.attention.recent[${index}].queueDepth`,
-                ),
-              }
-            : {}),
         };
+        if (item.sessionKey !== undefined) {
+          parsed.sessionKey = readOptionalCodeString(
+            item.sessionKey,
+            `snapshot.summary.sessions.attention.recent[${index}].sessionKey`,
+          );
+        }
+        if (item.state !== undefined) {
+          parsed.state = readOptionalCodeString(
+            item.state,
+            `snapshot.summary.sessions.attention.recent[${index}].state`,
+          );
+        }
+        if (item.reason !== undefined) {
+          parsed.reason = readOptionalCodeString(
+            item.reason,
+            `snapshot.summary.sessions.attention.recent[${index}].reason`,
+          );
+        }
+        if (item.classification !== undefined) {
+          parsed.classification = readOptionalCodeString(
+            item.classification,
+            `snapshot.summary.sessions.attention.recent[${index}].classification`,
+          );
+        }
+        if (item.activeWorkKind !== undefined) {
+          parsed.activeWorkKind = readOptionalCodeString(
+            item.activeWorkKind,
+            `snapshot.summary.sessions.attention.recent[${index}].activeWorkKind`,
+          );
+        }
+        if (item.toolName !== undefined) {
+          parsed.toolName = readOptionalCodeString(
+            item.toolName,
+            `snapshot.summary.sessions.attention.recent[${index}].toolName`,
+          );
+        }
+        if (item.ageMs !== undefined) {
+          parsed.ageMs = readNumber(
+            item.ageMs,
+            `snapshot.summary.sessions.attention.recent[${index}].ageMs`,
+          );
+        }
+        if (item.queueDepth !== undefined) {
+          parsed.queueDepth = readNumber(
+            item.queueDepth,
+            `snapshot.summary.sessions.attention.recent[${index}].queueDepth`,
+          );
+        }
+        return parsed;
       })
     : [];
   return {
@@ -1365,20 +1339,21 @@ function readOptionalQueueSummary(
   const recentSlow = Array.isArray(recentRaw)
     ? recentRaw.map((entry, index) => {
         const item = readObject(entry, `snapshot.summary.queues.recentSlow[${index}]`);
-        return {
+        const parsed: NonNullable<
+          DiagnosticStabilitySnapshot["summary"]["queues"]
+        >["recentSlow"][number] = {
           seq: readNumber(item.seq, `snapshot.summary.queues.recentSlow[${index}].seq`),
           ts: readTimestampMs(item.ts, `snapshot.summary.queues.recentSlow[${index}].ts`),
           lane: readCodeString(item.lane, `snapshot.summary.queues.recentSlow[${index}].lane`),
           waitMs: readNumber(item.waitMs, `snapshot.summary.queues.recentSlow[${index}].waitMs`),
-          ...(item.queueSize !== undefined
-            ? {
-                queueSize: readNumber(
-                  item.queueSize,
-                  `snapshot.summary.queues.recentSlow[${index}].queueSize`,
-                ),
-              }
-            : {}),
         };
+        if (item.queueSize !== undefined) {
+          parsed.queueSize = readNumber(
+            item.queueSize,
+            `snapshot.summary.queues.recentSlow[${index}].queueSize`,
+          );
+        }
+        return parsed;
       })
     : [];
   return {

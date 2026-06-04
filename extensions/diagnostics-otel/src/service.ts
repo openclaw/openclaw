@@ -3367,6 +3367,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "session.long_running":
             case "session.stalled":
+            case "channel.turn.event":
               return;
             case "session.turn.created":
               recordSessionTurnCreated(evt);

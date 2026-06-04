@@ -526,7 +526,7 @@ function formatRuntimeRecommendations(
   recommendations: NonNullable<DiagnosticStabilitySnapshot["summary"]["recommendations"]>,
   rich: boolean,
 ): string[] {
-  const lines = [`${colorize(rich, theme.muted, "Runtime recommendations:")}`];
+  const lines = [colorize(rich, theme.muted, "Runtime recommendations:")];
   for (const recommendation of recommendations.slice(0, 5)) {
     const parts = [
       `${recommendation.priority}:${recommendation.code}`,

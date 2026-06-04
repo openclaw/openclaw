@@ -1318,7 +1318,7 @@ function summarizeRecords(
     }
     const latency = channelTurns.latency;
     channelTurnLatencySamples[metric].push(valueMs);
-    const current = latency[metric] as DiagnosticStabilityLatencyMetric | undefined;
+    const current = latency[metric];
     const slow = valueMs >= CHANNEL_TURN_SLOW_LATENCY_WARN_MS;
     latency[metric] = {
       count: (current?.count ?? 0) + 1,
@@ -1346,7 +1346,7 @@ function summarizeRecords(
     if (values.length === 0) {
       return undefined;
     }
-    const sorted = [...values].sort((a, b) => a - b);
+    const sorted = values.toSorted((a, b) => a - b);
     const index = Math.ceil((percentile / 100) * sorted.length) - 1;
     return sorted[Math.max(0, Math.min(sorted.length - 1, index))];
   }
@@ -1363,6 +1363,8 @@ function summarizeRecords(
         return "visible_delivery";
       case "startToCompletionMs":
         return "completion";
+      default:
+        return metric satisfies never;
     }
   }
 

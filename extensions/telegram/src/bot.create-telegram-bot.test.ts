@@ -919,7 +919,9 @@ describe("createTelegramBot", () => {
       finalHandler: messageHandler,
     });
 
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
     expect(startedBodies).toHaveLength(1);
     expect(startedBodies[0]).toContain("long task");
     expect(sendMessageSpy).toHaveBeenCalledTimes(0);
@@ -1036,7 +1038,9 @@ describe("createTelegramBot", () => {
         secondResolved = true;
       });
 
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
       expect(secondResolved).toBe(false);
       expect(startedBodies).toHaveLength(1);
       expect(startedBodies[0]).toContain("long task");

@@ -35,7 +35,7 @@ export type TurnEvent = {
   actor: string;
   channel: string;
   target?: string;
-  status?: TurnEventStatus | string;
+  status?: TurnEventStatus;
   metadata?: TurnEventMetadata;
 };
 

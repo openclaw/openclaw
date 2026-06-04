@@ -65,7 +65,6 @@ import type {
   ChannelTurnHistoryFinalizeOptions,
   ChannelTurnLogEvent,
   ChannelTurnResolved,
-  ChannelTurnTimingFacts,
   ChannelTurnResult,
   DispatchedChannelTurnResult,
   NormalizedTurnInput,
