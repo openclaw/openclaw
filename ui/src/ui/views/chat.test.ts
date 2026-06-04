@@ -3388,3 +3388,43 @@ describe("chat session controls", () => {
     expect(thinkingSelect.title).toContain("Adaptive");
   });
 });
+
+describe("abort UI live guard (regression #87387)", () => {
+  it("hides Stop button when canAbort is true but isBusy is false", () => {
+    // Simulates the bug: stale session-list state keeps canAbort true after
+    // response completes (stream is null, sending is false).
+    const container = renderChatView({
+      canAbort: true,
+      sending: false,
+      stream: null,
+      runStatus: null,
+    });
+
+    // Stop button should NOT be visible when there's no active send/stream
+    expect(container.querySelector(".chat-send-btn--stop")).toBeNull();
+  });
+
+  it("shows Stop button when canAbort is true and isBusy is true", () => {
+    const container = renderChatView({
+      canAbort: true,
+      sending: false,
+      stream: "data",
+      runStatus: null,
+    });
+
+    // Stop button SHOULD be visible when there's an active stream
+    expect(container.querySelector(".chat-send-btn--stop")).not.toBeNull();
+  });
+
+  it("shows Stop button when sending is true", () => {
+    const container = renderChatView({
+      canAbort: true,
+      sending: true,
+      stream: null,
+      runStatus: null,
+    });
+
+    // Stop button SHOULD be visible when sending is in progress
+    expect(container.querySelector(".chat-send-btn--stop")).not.toBeNull();
+  });
+});
