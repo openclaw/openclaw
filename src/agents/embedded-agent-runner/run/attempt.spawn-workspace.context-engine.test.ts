@@ -2335,7 +2335,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     });
 
     expect(hoisted.resolveSkillsPromptStateForRunMock).toHaveBeenCalled();
-    expect(hoisted.systemPromptOverrideTexts.at(-1) ?? "").not.toContain("<available_skills>");
+    expect(hoisted.systemPromptTexts.at(-1) ?? "").not.toContain("<available_skills>");
     expect(hoisted.resolveSkillRouteMock).not.toHaveBeenCalled();
   });
 
@@ -2377,7 +2377,105 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         },
       ],
       query: "hello",
+      recentMessages: expect.any(Function),
     });
+    const routeParams = mockParams(hoisted.resolveSkillRouteMock, 0, "skill route params");
+    expect(routeParams.recentMessages()).toStrictEqual([]);
+  });
+
+  it("passes recent session text into skill routing queries", async () => {
+    hoisted.resolveSkillsPromptStateForRunMock.mockReturnValue({
+      prompt: "<available_skills></available_skills>",
+      resolvedSkills: [
+        {
+          name: "github-skill",
+          description: "GitHub PR work",
+          filePath: "/tmp/skills/github-skill/SKILL.md",
+        },
+      ],
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths,
+      sessionFileEntries: [
+        {
+          type: "session",
+          version: 1,
+          id: "session-with-router-context",
+          timestamp: "2026-05-29T00:00:00.000Z",
+          cwd: "/tmp/openclaw",
+        },
+        {
+          type: "message",
+          id: "u1",
+          parentId: null,
+          timestamp: "2026-05-29T00:00:01.000Z",
+          message: {
+            role: "user",
+            content: "I need to review a GitHub pull request.",
+            timestamp: 1,
+          },
+        },
+        {
+          type: "message",
+          id: "a1",
+          parentId: "u1",
+          timestamp: "2026-05-29T00:00:02.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Use the GitHub workflow for that review." }],
+            api: "test",
+            provider: "test",
+            model: "test",
+            stopReason: "stop",
+            timestamp: 2,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              total: 0,
+            },
+          },
+        },
+      ],
+      attemptOverrides: {
+        prompt: "do that",
+        config: {
+          skills: {
+            router: { name: "test-router" },
+          },
+        },
+      },
+    });
+
+    const routeParams = mockParams(hoisted.resolveSkillRouteMock, 0, "skill route params");
+    expect(routeParams.query).toBe("do that");
+    expect(routeParams.recentMessages()).toStrictEqual([
+      {
+        role: "user",
+        content: "I need to review a GitHub pull request.",
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Use the GitHub workflow for that review." }],
+        api: "test",
+        provider: "test",
+        model: "test",
+        stopReason: "stop",
+        timestamp: 2,
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+    ]);
   });
 
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {

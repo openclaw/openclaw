@@ -85,6 +85,8 @@ type AttemptSpawnWorkspaceHoisted = {
   resolveEmbeddedRunSkillEntriesMock: UnknownMock;
   resolveSkillsPromptStateForRunMock: UnknownMock;
   resolveSkillRouteMock: UnknownMock;
+  loadEntriesFromFileMock: UnknownMock;
+  buildSessionContextFromEntriesMock: UnknownMock;
   supportsModelToolsMock: Mock<(model?: unknown) => boolean>;
   getGlobalHookRunnerMock: Mock<() => unknown>;
   initializeGlobalHookRunnerMock: UnknownMock;
@@ -184,6 +186,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   }));
   const resolveSkillsPromptStateForRunMock = vi.fn(() => ({ prompt: "", resolvedSkills: [] }));
   const resolveSkillRouteMock = vi.fn(async () => undefined);
+  const loadEntriesFromFileMock = vi.fn(() => []);
+  const buildSessionContextFromEntriesMock = vi.fn(() => ({ messages: [] }));
   const supportsModelToolsMock = vi.fn<(model?: unknown) => boolean>(() => true);
   const getGlobalHookRunnerMock = vi.fn<() => unknown>(() => undefined);
   const initializeGlobalHookRunnerMock = vi.fn();
@@ -237,6 +241,8 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     resolveEmbeddedRunSkillEntriesMock,
     resolveSkillsPromptStateForRunMock,
     resolveSkillRouteMock,
+    loadEntriesFromFileMock,
+    buildSessionContextFromEntriesMock,
     supportsModelToolsMock,
     getGlobalHookRunnerMock,
     initializeGlobalHookRunnerMock,
@@ -320,10 +326,13 @@ vi.mock("../../sessions/index.js", () => {
 
   return {
     AuthStorage,
+    buildSessionContext: (...args: unknown[]) =>
+      hoisted.buildSessionContextFromEntriesMock(...args),
     createAgentSession: (...args: unknown[]) => hoisted.createAgentSessionMock(...args),
     DefaultResourceLoader,
     estimateTokens,
     generateSummary: async () => "",
+    loadEntriesFromFile: (...args: unknown[]) => hoisted.loadEntriesFromFileMock(...args),
     ModelRegistry,
     SessionManager: {
       open: (...args: unknown[]) => hoisted.sessionManagerOpenMock(...args),
@@ -1021,6 +1030,8 @@ export function resetEmbeddedAttemptHarness(
     .mockReset()
     .mockReturnValue({ prompt: "", resolvedSkills: [] });
   hoisted.resolveSkillRouteMock.mockReset().mockResolvedValue(undefined);
+  hoisted.loadEntriesFromFileMock.mockReset().mockReturnValue([]);
+  hoisted.buildSessionContextFromEntriesMock.mockReset().mockReturnValue({ messages: [] });
   hoisted.supportsModelToolsMock.mockReset().mockReturnValue(true);
   hoisted.getGlobalHookRunnerMock.mockReset().mockReturnValue(undefined);
   hoisted.runContextEngineMaintenanceMock.mockReset().mockResolvedValue(undefined);
@@ -1223,6 +1234,7 @@ export async function createContextEngineAttemptRunner(params: {
   attemptOverrides?: Partial<Parameters<Awaited<ReturnType<typeof loadRunEmbeddedAttempt>>>[0]>;
   createSession?: () => MutableSession;
   sessionMessages?: AgentMessage[];
+  sessionFileEntries?: Array<Record<string, unknown>>;
   sessionPrompt?: SessionPromptOverride;
   sessionKey: string;
   tempPaths: string[];
@@ -1233,9 +1245,28 @@ export async function createContextEngineAttemptRunner(params: {
   const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-ctx-engine-agent-"));
   const sessionFile = path.join(workspaceDir, "session.jsonl");
   params.tempPaths.push(workspaceDir, agentDir);
-  await fs.writeFile(sessionFile, "", "utf8");
+  await fs.writeFile(
+    sessionFile,
+    params.sessionFileEntries?.length
+      ? `${params.sessionFileEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`
+      : "",
+    "utf8",
+  );
   const seedMessages: AgentMessage[] =
     params.sessionMessages ?? ([{ role: "user", content: "seed", timestamp: 1 }] as AgentMessage[]);
+  hoisted.loadEntriesFromFileMock.mockImplementation((target: unknown) =>
+    target === sessionFile ? (params.sessionFileEntries ?? []) : [],
+  );
+  hoisted.buildSessionContextFromEntriesMock.mockImplementation((entries: unknown) => ({
+    messages: Array.isArray(entries)
+      ? entries
+          .filter(
+            (entry): entry is { type: "message"; message: AgentMessage } =>
+              entry?.type === "message",
+          )
+          .map((entry) => entry.message)
+      : [],
+  }));
   const infoId = params.contextEngine.info?.id ?? "test-context-engine";
   const infoName = params.contextEngine.info?.name ?? "Test Context Engine";
   const infoVersion = params.contextEngine.info?.version ?? "0.0.1";
