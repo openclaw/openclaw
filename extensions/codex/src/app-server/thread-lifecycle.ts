@@ -574,6 +574,12 @@ export async function startOrResumeThread(params: {
               modelProvider: response.modelProvider ?? fallbackModelProvider,
               collaborationMode: binding.collaborationMode,
               reasoningEffort: binding.reasoningEffort,
+              // Carry the per-binding preferences introduced by the
+              // chat plan controls work forward. Without this, a later
+              // app-server resume on the same session would silently
+              // drop think defaults and live progress.
+              reasoningEffortDefaults: binding.reasoningEffortDefaults,
+              liveProgress: binding.liveProgress,
               dynamicToolsFingerprint,
               dynamicToolsContainDeferred,
               userMcpServersFingerprint,
