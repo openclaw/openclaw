@@ -2,13 +2,19 @@ function isWordCharacter(char: string | undefined): boolean {
   return char !== undefined && /[\p{L}\p{N}_]/u.test(char);
 }
 
+function isInWordApostrophe(chars: string[], index: number): boolean {
+  return (
+    chars[index] === "'" && isWordCharacter(chars[index - 1]) && isWordCharacter(chars[index + 1])
+  );
+}
+
 function opensQuotedSpan(chars: string[], index: number): boolean {
   const quote = chars[index];
-  if (quote === "'" && isWordCharacter(chars[index - 1])) {
+  if (isInWordApostrophe(chars, index)) {
     return false;
   }
   for (let j = index + 1; j < chars.length; j++) {
-    if (chars[j] === quote) {
+    if (chars[j] === quote && !isInWordApostrophe(chars, j)) {
       return true;
     }
   }
