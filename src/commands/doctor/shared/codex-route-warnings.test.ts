@@ -3832,7 +3832,7 @@ describe("collectCodexRouteWarnings", () => {
 
   it("repairs Telegram direct session routes while preserving canonical OpenAI auth pins", () => {
     const store: Record<string, SessionEntry> = {
-      "agent:main:telegram:default:direct:8589344021": {
+      "agent:main:telegram:default:direct:5550100999": {
         sessionId: "s-telegram",
         updatedAt: 1,
         modelProvider: "openai-codex",
@@ -3851,11 +3851,11 @@ describe("collectCodexRouteWarnings", () => {
       store,
       now: 123,
     });
-    const entry = store["agent:main:telegram:default:direct:8589344021"];
+    const entry = store["agent:main:telegram:default:direct:5550100999"];
 
     expect(result).toEqual({
       changed: true,
-      sessionKeys: ["agent:main:telegram:default:direct:8589344021"],
+      sessionKeys: ["agent:main:telegram:default:direct:5550100999"],
     });
     expect(entry.updatedAt).toBe(123);
     expect(entry.modelProvider).toBe("openai");
