@@ -81,6 +81,25 @@ function requireToolPolicyParams(mock: ReturnType<typeof vi.fn>) {
   return params;
 }
 
+function createPluginToolWithUnreadableField(
+  field: "description" | "parameters",
+  params: { name: string; execute: ReturnType<typeof vi.fn> },
+): AnyAgentTool {
+  const tool = {
+    name: params.name,
+    description: "Unreadable plugin tool.",
+    parameters: { type: "object", properties: {} },
+    execute: params.execute,
+  };
+  Object.defineProperty(tool, field, {
+    enumerable: true,
+    get() {
+      throw new Error(`${field} getter exploded`);
+    },
+  });
+  return tool as unknown as AnyAgentTool;
+}
+
 describe("plugin tools MCP server", () => {
   it("routes logs to stderr before resolving tools for stdio", async () => {
     const { servePluginToolsMcp } = await import("./plugin-tools-serve.js");
@@ -172,6 +191,173 @@ describe("plugin tools MCP server", () => {
     expect(executeCall[2]).toBeUndefined();
     expect(executeCall[3]).toBeUndefined();
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
+  });
+
+  it("quarantines unreadable plugin tool descriptors before MCP listing and wrapping", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const healthyExecute = vi.fn().mockResolvedValue({ content: "healthy" });
+    const unreadableParametersExecute = vi.fn();
+    const unreadableDescriptionExecute = vi.fn();
+    const handlers = createPluginToolsMcpHandlers([
+      {
+        name: "memory_recall",
+        description: "Recall stored memory",
+        parameters: { type: "object", properties: {} },
+        execute: healthyExecute,
+      } as unknown as AnyAgentTool,
+      createPluginToolWithUnreadableField("parameters", {
+        name: "bad_parameters",
+        execute: unreadableParametersExecute,
+      }),
+      createPluginToolWithUnreadableField("description", {
+        name: "bad_description",
+        execute: unreadableDescriptionExecute,
+      }),
+    ]);
+
+    const listed = await handlers.listTools();
+    expect(listed.tools.map((tool) => tool.name)).toEqual(["memory_recall"]);
+    expect(stderr).toHaveBeenCalledWith(
+      expect.stringContaining("bad_parameters.parameters is unreadable"),
+    );
+    expect(stderr).toHaveBeenCalledWith(
+      expect.stringContaining("bad_description.description is unreadable"),
+    );
+
+    const healthy = await handlers.callTool({ name: "memory_recall", arguments: {} });
+    expect(healthy.content).toEqual([{ type: "text", text: "healthy" }]);
+    expect(healthyExecute).toHaveBeenCalledTimes(1);
+    expect(unreadableParametersExecute).not.toHaveBeenCalled();
+    expect(unreadableDescriptionExecute).not.toHaveBeenCalled();
+  });
+
+  it("quarantines unreadable plugin tool entries while keeping healthy siblings", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const hiddenExecute = vi.fn();
+    const tools = [
+      {
+        name: "memory_recall",
+        description: "Recall stored memory",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      } as unknown as AnyAgentTool,
+      {
+        name: "hidden_bad_tool",
+        description: "Hidden bad tool",
+        parameters: { type: "object", properties: {} },
+        execute: hiddenExecute,
+      } as unknown as AnyAgentTool,
+    ];
+    Object.defineProperty(tools, "1", {
+      configurable: true,
+      get() {
+        throw new Error("tool entry getter exploded");
+      },
+    });
+
+    const handlers = createPluginToolsMcpHandlers(tools);
+    const listed = await handlers.listTools();
+
+    expect(listed.tools.map((tool) => tool.name)).toEqual(["memory_recall"]);
+    expect(stderr).toHaveBeenCalledWith(expect.stringContaining("tool[1] is unreadable"));
+    expect(hiddenExecute).not.toHaveBeenCalled();
+  });
+
+  it("quarantines runtime-incompatible plugin tool schemas before MCP listing", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const badExecute = vi.fn();
+    const handlers = createPluginToolsMcpHandlers([
+      {
+        name: "memory_recall",
+        description: "Recall stored memory",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(),
+      } as unknown as AnyAgentTool,
+      {
+        name: "dofbot_move_angles",
+        description: "Move Dofbot angles",
+        parameters: { type: "array", items: { type: "number" } },
+        execute: badExecute,
+      } as unknown as AnyAgentTool,
+    ]);
+
+    const listed = await handlers.listTools();
+    expect(listed.tools.map((tool) => tool.name)).toEqual(["memory_recall"]);
+    expect(stderr).toHaveBeenCalledWith(
+      expect.stringContaining('dofbot_move_angles.parameters.type must be "object"'),
+    );
+
+    const result = await handlers.callTool({ name: "dofbot_move_angles", arguments: {} });
+    expect(result.isError).toBe(true);
+    expect(result.content).toEqual([{ type: "text", text: "Unknown tool: dofbot_move_angles" }]);
+    expect(badExecute).not.toHaveBeenCalled();
+  });
+
+  it("sanitizes quarantined plugin tool diagnostics before writing stderr", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const badName = "bad_tool\n\u001b]0;pwned\u0007";
+
+    createPluginToolsMcpHandlers([
+      {
+        name: badName,
+        description: "Terminal escape fixture",
+        parameters: { type: "array", items: { type: "string" } },
+        execute: vi.fn(),
+      } as unknown as AnyAgentTool,
+    ]);
+
+    const rawMessage = String(stderr.mock.calls[0]?.[0] ?? "");
+    expect(rawMessage.endsWith("\n")).toBe(true);
+    const body = rawMessage.slice(0, -1);
+    expect(body).not.toContain("\n");
+    expect(body).not.toContain("\u001b");
+    expect(body).not.toContain("\u0007");
+    expect(body).toContain("bad_tool");
+    expect(body).toContain('bad_tool.parameters.type must be "object"');
+  });
+
+  it("keeps parameter-free plugin tools as empty-object MCP schemas", async () => {
+    const tool = {
+      name: "memory_ping",
+      description: "Ping memory",
+      execute: vi.fn(),
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const listed = await handlers.listTools();
+
+    expect(listed.tools).toEqual([
+      {
+        name: "memory_ping",
+        description: "Ping memory",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ]);
+  });
+
+  it("adds the MCP-required object root type to accepted typeless schemas", async () => {
+    const tool = {
+      name: "memory_search",
+      description: "Search memory",
+      parameters: {
+        properties: {
+          query: { type: "string" },
+        },
+        required: ["query"],
+      },
+      execute: vi.fn(),
+    } as unknown as AnyAgentTool;
+
+    const handlers = createPluginToolsMcpHandlers([tool]);
+    const listed = await handlers.listTools();
+
+    expect(listed.tools[0]?.inputSchema).toEqual({
+      type: "object",
+      properties: {
+        query: { type: "string" },
+      },
+      required: ["query"],
+    });
   });
 
   it("serializes plugin tool results that do not use the MCP content envelope", async () => {
