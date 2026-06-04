@@ -2625,8 +2625,9 @@ export const chatHandlers: GatewayRequestHandlers = {
       runId?: string;
       origin?: string;
     };
-    const abortOrigin = (params as { origin?: string }).origin ?? "rpc";
-    const abortStopReason = abortOrigin === "user-stop" ? "stop" : "rpc";
+    const abortOrigin: AbortOrigin =
+      (params as { origin?: string }).origin === "user-stop" ? "stop-command" : "rpc";
+    const abortStopReason = abortOrigin === "stop-command" ? "stop" : "rpc";
     const agentIdOverride = normalizeOptionalText((params as { agentId?: string }).agentId);
     const abortCfg = context.getRuntimeConfig();
     const defaultAgentId = resolveDefaultAgentId(abortCfg);
