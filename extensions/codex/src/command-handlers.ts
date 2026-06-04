@@ -14,6 +14,7 @@ import {
   type CodexComputerUseSetupParams,
 } from "./app-server/computer-use.js";
 import { isCodexFastServiceTier, type CodexComputerUseConfig } from "./app-server/config.js";
+import { readCodexPluginConfig } from "./app-server/config.js";
 import { listAllCodexAppServerModels } from "./app-server/models.js";
 import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
@@ -2666,7 +2667,9 @@ function formatActiveReasoningEffort(
     mode: binding.collaborationMode,
     bindingDefaults: binding.reasoningEffortDefaults,
     legacyReasoningEffort: binding.reasoningEffort,
-    configDefaults: readCodexAppServerConversationReasoningDefaults(pluginConfig),
+    configDefaults: readCodexAppServerConversationReasoningDefaults(
+      readCodexPluginConfig(pluginConfig).appServer?.conversationReasoningDefaults,
+    ),
   });
   return formatReasoningEffort(current);
 }

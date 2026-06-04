@@ -4071,6 +4071,52 @@ describe("codex command", () => {
     expect(result.text).toContain("- Think: xhigh");
   });
 
+  it("reports the configured think default on the binding status when no per-binding override is set", async () => {
+    // Regression: readCodexAppServerConversationReasoningDefaults only
+    // reads `{ execute, plan }` from its input. The plugin config has
+    // these defaults nested under `appServer.conversationReasoningDefaults`,
+    // so /codex binding must unwrap to that shape before resolving.
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    await fs.writeFile(
+      `${sessionFile}.codex-app-server.json`,
+      JSON.stringify({
+        schemaVersion: 1,
+        threadId: "thread-config-think",
+        cwd: tempDir,
+        model: "gpt-5.5",
+        collaborationMode: "plan",
+        // No per-binding reasoningEffortDefaults; the configured
+        // default is the source of truth.
+      }),
+    );
+    const pluginConfig = {
+      appServer: {
+        conversationReasoningDefaults: { execute: "medium", plan: "low" },
+      },
+    };
+    const result = await handleCodexCommand(
+      createContext("binding", sessionFile, {
+        getCurrentConversationBinding: async () => ({
+          bindingId: "binding-1",
+          pluginId: "codex",
+          pluginRoot: "/plugin",
+          channel: "test",
+          accountId: "default",
+          conversationId: "conversation",
+          boundAt: 1,
+          data: {
+            kind: "codex-app-server-session",
+            version: 1,
+            sessionFile,
+            workspaceDir: tempDir,
+          },
+        }),
+      }),
+      { deps: createDeps(), pluginConfig },
+    );
+    expect(result.text).toContain("- Think: low");
+  });
+
   it("notifies plan callback consumption before clean-context execution starts", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const reply = buildCodexPlanDecisionReply({
