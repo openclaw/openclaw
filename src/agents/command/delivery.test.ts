@@ -1,4 +1,5 @@
 // Covers agent-command reply normalization and outbound delivery status.
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.js";
@@ -38,6 +39,21 @@ type MediaNormalizerOptions = {
   workspaceDir?: unknown;
   messageProvider?: unknown;
 };
+type OutboundDeliveryArgs = {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  payloads: ReplyPayload[];
+  bestEffort?: boolean;
+  queuePolicy?: string;
+  replyPayloadSendingHook?: {
+    kind?: unknown;
+    channel?: unknown;
+    sessionKey?: unknown;
+    runId?: unknown;
+    context?: Record<string, unknown>;
+  };
+};
 
 const slackOutboundForTest: ChannelOutboundAdapter = {
   deliveryMode: "direct",
@@ -46,6 +62,7 @@ const slackOutboundForTest: ChannelOutboundAdapter = {
     messageId: `${to}:${text}`,
   }),
 };
+const expectedAgentWorkspaceDir = path.resolve("/tmp/agent-workspace");
 
 // Two registries let tests switch between no-channel and Slack-capable delivery
 // without loading the full plugin runtime.
@@ -105,26 +122,12 @@ function latestNormalizerOptions(): MediaNormalizerOptions {
   return options as MediaNormalizerOptions;
 }
 
-function latestOutboundDeliveryArgs(): {
-  channel?: string;
-  to?: string;
-  accountId?: string;
-  payloads: ReplyPayload[];
-  bestEffort?: boolean;
-  queuePolicy?: string;
-} {
+function latestOutboundDeliveryArgs(): OutboundDeliveryArgs {
   const args = lastMockArg(deliverOutboundPayloadsMock, "outbound delivery arguments");
   if (!args || typeof args !== "object") {
     throw new Error("expected outbound delivery arguments");
   }
-  return args as {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    payloads: ReplyPayload[];
-    bestEffort?: boolean;
-    queuePolicy?: string;
-  };
+  return args as OutboundDeliveryArgs;
 }
 
 type DeliveryStatusLike = {
@@ -316,7 +319,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     const normalizerOptions = latestNormalizerOptions();
     expect(normalizerOptions.sessionKey).toBe("agent:tester:slack:direct:alice");
     expect(normalizerOptions.agentId).toBe("tester");
-    expect(normalizerOptions.workspaceDir).toBe("/tmp/agent-workspace");
+    expect(normalizerOptions.workspaceDir).toBe(expectedAgentWorkspaceDir);
     expect(normalizerOptions.messageProvider).toBe("slack");
 
     const normalizedInput = normalizerFn.mock.calls[0]?.[0];
@@ -343,6 +346,54 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       status: "suppressed",
       succeeded: true,
       reason: "no_visible_result",
+    });
+  });
+
+  it("passes reply payload hook metadata through durable final delivery", async () => {
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "slack", messageId: "msg-1" }]);
+
+    await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+        replyAccountId: "workspace-1",
+        threadId: "thread-1",
+        runId: "run-1",
+      } as AgentCommandOpts,
+      outboundSession: {
+        key: "agent:tester:slack:direct:alice",
+        agentId: "tester",
+      } as never,
+      sessionEntry: {
+        sessionId: "session-1",
+        updatedAt: 1,
+      },
+      payloads: [{ text: "final answer" }],
+      result: createResult(),
+    });
+
+    const deliverArgs = latestOutboundDeliveryArgs();
+    expect(deliverArgs.replyPayloadSendingHook).toEqual({
+      kind: "final",
+      channel: "slack",
+      sessionKey: "agent:tester:slack:direct:alice",
+      runId: "run-1",
+      context: {
+        channelId: "slack",
+        accountId: "workspace-1",
+        conversationId: "#general",
+        sessionKey: "agent:tester:slack:direct:alice",
+        runId: "run-1",
+      },
     });
   });
 
@@ -538,7 +589,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     const normalizerOptions = latestNormalizerOptions();
     expect(normalizerOptions.agentId).toBe("tester");
     expect(normalizerOptions.sessionKey).toBeUndefined();
-    expect(normalizerOptions.workspaceDir).toBe("/tmp/agent-workspace");
+    expect(normalizerOptions.workspaceDir).toBe(expectedAgentWorkspaceDir);
   });
 
   it("keeps LINE directive-only replies intact for local preview when delivery is disabled", async () => {
