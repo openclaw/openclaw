@@ -486,6 +486,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.chunking.overlap": "Memory Chunk Overlap Tokens",
   "agents.defaults.memorySearch.sync.onSessionStart": "Index on Session Start",
   "agents.defaults.memorySearch.sync.onSearch": "Index on Search (Lazy)",
+  "agents.defaults.memorySearch.sync.intervalMinutes": "Periodic Sync Interval (min)",
   "agents.defaults.memorySearch.sync.watch": "Watch Memory Files",
   "agents.defaults.memorySearch.sync.watchDebounceMs": "Memory Watch Debounce (ms)",
   "agents.defaults.memorySearch.sync.embeddingBatchTimeoutSeconds": "Embedding Batch Timeout (s)",

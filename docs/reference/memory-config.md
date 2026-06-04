@@ -288,6 +288,17 @@ Use `provider: "openai-compatible"` for a generic OpenAI-compatible
   </Accordion>
 </AccordionGroup>
 
+### Periodic sync interval
+
+<ParamField path="sync.intervalMinutes" type="number" default="30">
+  How often the memory sync interval fires to rescan memory files and reindex
+  changed content. This acts as a fallback when the filesystem watcher misses
+  events.
+
+Set to `0` to disable the periodic interval entirely and rely solely on the
+filesystem watcher and trigger-based sync (`onSessionStart`, `onSearch`).
+</ParamField>
+
 ### Inline embedding timeout
 
 <ParamField path="sync.embeddingBatchTimeoutSeconds" type="number">
