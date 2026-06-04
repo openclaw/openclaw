@@ -1,3 +1,4 @@
+/** Tests ACP child-to-parent stream relay notices, routing, and log path resolution. */
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { mergeMockedModule } from "../test-utils/vitest-module-mocks.js";
 

@@ -1,3 +1,4 @@
+/** Tests agent scope config, model selection, fallbacks, and workspace resolution. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

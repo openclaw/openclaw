@@ -1,5 +1,7 @@
+// Defines Telegram channel configuration types.
 import type {
   ChannelPreviewStreamingConfig,
+  ChannelStreamingProgressConfig,
   ChannelStreamingPreviewConfig,
   ContextVisibilityMode,
   DmPolicy,
@@ -76,6 +78,12 @@ export type TelegramStreamingPreviewConfig = ChannelStreamingPreviewConfig & {
 
 export type TelegramPreviewStreamingConfig = Omit<ChannelPreviewStreamingConfig, "preview"> & {
   preview?: TelegramStreamingPreviewConfig;
+  progress?: TelegramStreamingProgressConfig;
+};
+
+export type TelegramStreamingProgressConfig = ChannelStreamingProgressConfig & {
+  /** Include assistant commentary/preamble text in the progress draft. Default: false. */
+  commentary?: boolean;
 };
 
 export type TelegramExecApprovalConfig = {
