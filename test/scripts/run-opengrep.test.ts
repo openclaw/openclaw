@@ -57,4 +57,60 @@ describe("run-opengrep.sh", () => {
     const args = fs.readFileSync(path.join(repo, "opengrep-args.txt"), "utf8");
     expect(args).toContain("security/opengrep/precise.yml");
   });
+
+  it("scans PR files instead of main-only files when the payload base is stale", () => {
+    const repo = createTempDir("openclaw-run-opengrep-merge-");
+    git(repo, "init", "-q", "--initial-branch=main");
+    git(repo, "config", "user.email", "test@example.com");
+    git(repo, "config", "user.name", "Test User");
+
+    const scriptSource = path.resolve("scripts/run-opengrep.sh");
+    writeFile(path.join(repo, "scripts/run-opengrep.sh"), fs.readFileSync(scriptSource, "utf8"));
+    fs.chmodSync(path.join(repo, "scripts/run-opengrep.sh"), 0o755);
+    writeFile(path.join(repo, "security/opengrep/precise.yml"), "rules: []\n");
+    writeFile(path.join(repo, "README.md"), "base\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-qm", "base");
+    const staleBase = git(repo, "rev-parse", "HEAD");
+
+    git(repo, "switch", "-q", "-c", "feature");
+    writeFile(path.join(repo, "src/pr.ts"), "export const pr = true;\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-qm", "feature");
+
+    git(repo, "switch", "-q", "main");
+    writeFile(path.join(repo, "src/main-only.ts"), "export const mainOnly = true;\n");
+    git(repo, "add", ".");
+    git(repo, "commit", "-qm", "main only");
+    git(repo, "merge", "--no-ff", "feature", "-m", "synthetic merge");
+
+    const argsPath = path.join(repo, "opengrep-args.txt");
+    const binDir = path.join(repo, "bin");
+    fs.mkdirSync(binDir);
+    writeFile(
+      path.join(binDir, "opengrep"),
+      [
+        "#!/usr/bin/env bash",
+        `printf '%s\\n' "$@" > ${JSON.stringify(argsPath)}`,
+        "exit 0",
+        "",
+      ].join("\n"),
+    );
+    fs.chmodSync(path.join(binDir, "opengrep"), 0o755);
+
+    execFileSync("bash", ["scripts/run-opengrep.sh", "--changed"], {
+      cwd: repo,
+      env: {
+        ...process.env,
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+        OPENCLAW_OPENGREP_BASE_REF: `${staleBase}...HEAD`,
+        OPENCLAW_OPENGREP_MERGE_HEAD_FIRST_PARENT: "1",
+      },
+      encoding: "utf8",
+    });
+
+    const args = fs.readFileSync(argsPath, "utf8");
+    expect(args).toContain("src/pr.ts");
+    expect(args).not.toContain("src/main-only.ts");
+  });
 });
