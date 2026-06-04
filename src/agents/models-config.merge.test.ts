@@ -261,6 +261,17 @@ describe("models-config merge helpers", () => {
             }),
           ],
         } as ExistingProviderConfig,
+        "ollama-sidecar": {
+          baseUrl: "http://ollama-sidecar:11434",
+          api: "ollama",
+          apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+          models: [
+            createModel({
+              id: "qwen3.5:8b",
+              name: "Qwen 3.5 8B",
+            }),
+          ],
+        } as ExistingProviderConfig,
         "lmstudio-local": {
           baseUrl: "http://localhost:1234/v1",
           api: "openai-completions",
@@ -307,6 +318,7 @@ describe("models-config merge helpers", () => {
     expect(merged["stale-oauth-marker"]).toBeUndefined();
     expect(merged["ollama-local"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
     expect(merged["ollama-docker"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+    expect(merged["ollama-sidecar"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
     expect(merged["lmstudio-local"]?.apiKey).toBe("lmstudio-local");
     expect(merged["custom-local"]?.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
     expect(merged["remote-local-marker"]).toBeUndefined();

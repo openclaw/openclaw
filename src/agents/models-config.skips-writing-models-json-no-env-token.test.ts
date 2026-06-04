@@ -289,6 +289,12 @@ describe("models-config", () => {
                 models: [createImplicitModelEntry()],
                 apiKey: OLLAMA_LOCAL_AUTH_MARKER,
               },
+              "ollama-sidecar": {
+                baseUrl: "http://ollama-sidecar:11434",
+                api: "ollama",
+                models: [createImplicitModelEntry()],
+                apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+              },
               "lmstudio-local": {
                 baseUrl: "http://localhost:1234/v1",
                 api: "openai-completions",
@@ -331,6 +337,7 @@ describe("models-config", () => {
         expect(providers["chutes"]?.apiKey).toBe(resolveOAuthApiKeyMarker("chutes"));
         expect(providers["responses-local"]?.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
         expect(providers["ollama-docker"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+        expect(providers["ollama-sidecar"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
         expect(providers["lmstudio-local"]?.apiKey).toBe("lmstudio-local");
         expect(providers["single-label-custom-local-marker"]).toBeUndefined();
         expect(providers["remote-local-marker"]).toBeUndefined();

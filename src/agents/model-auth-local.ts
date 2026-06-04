@@ -84,7 +84,7 @@ function isOllamaServiceAliasBaseUrl(baseUrl: string): boolean {
     if (host.startsWith("[") && host.endsWith("]")) {
       host = host.slice(1, -1);
     }
-    return host === "ollama";
+    return Boolean(host) && !host.includes(".") && !host.includes(":");
   } catch {
     return false;
   }
