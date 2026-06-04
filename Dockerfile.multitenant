@@ -252,6 +252,19 @@ RUN --mount=type=cache,target=/root/.npm,sharing=locked \
 # Verify both binaries resolved (cheap fail-fast at build time).
 RUN command -v claude && command -v codex
 
+# Kill the in-machine binary self-updater (#1222 S4 — controlled rollout).
+# The version a tenant runs is owned CENTRALLY (bumped via the image SHA and
+# pushed by the fleet rollout), NOT self-updated per machine. Per-machine
+# self-update fires unpredictably and can hang `claude --version` on a cold
+# start, which strands the broker's first spawn.
+#   - DISABLE_AUTOUPDATER=1: claude/codex skip their on-launch update check.
+#   - CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1: suppress version pings /
+#     telemetry that can block startup behind a slow network call.
+# Baked into the image so every tenant machine inherits them; the entrypoint
+# warm-step relies on these so the warm `--version` can't trigger an update.
+ENV DISABLE_AUTOUPDATER=1
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
+
 WORKDIR /app
 
 # Bring in OpenClaw runtime artifacts from the build stages.

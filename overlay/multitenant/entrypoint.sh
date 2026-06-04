@@ -223,6 +223,44 @@ render_settings_json() {
 # BYOK / open-weights tenant is unaffected. See the credential-helper block
 # in Dockerfile.multitenant.
 
+# Warm the subscription binary at machine start so the first user-facing
+# call isn't a cold-start (#1222 S4). Runs ONE `--version` in the
+# background, best-effort: never blocks broker startup, never fails the
+# container. DISABLE_AUTOUPDATER / CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC
+# are baked into the image (Dockerfile.multitenant), so this warm call
+# cannot trigger a self-update or hang on a version ping. A short timeout
+# guards against a wedged binary. Version is owned CENTRALLY via the image,
+# never self-updated per machine.
+warm_subscription_binary() {
+  # Pick the binary the tenant actually uses; default to claude.
+  local bin="${BINARY:-claude}"
+  case "$bin" in
+    claude|codex) : ;;
+    *) bin="claude" ;;
+  esac
+  if ! command -v "$bin" >/dev/null 2>&1; then
+    log "warm: ${bin} not on PATH; skipping warm-up"
+    return 0
+  fi
+  # Belt-and-suspenders: export the autoupdater-off vars in case the image
+  # ENV was overridden by per-machine Fly env, so the warm call can never
+  # itself fire an update.
+  export DISABLE_AUTOUPDATER="${DISABLE_AUTOUPDATER:-1}"
+  export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}"
+  log "warm: warming ${bin} --version in background (autoupdater disabled)"
+  (
+    if command -v timeout >/dev/null 2>&1; then
+      timeout 20 "$bin" --version >/dev/null 2>&1 \
+        && log "warm: ${bin} warmed" \
+        || log "warm: ${bin} warm-up exited non-zero (non-fatal)"
+    else
+      "$bin" --version >/dev/null 2>&1 \
+        && log "warm: ${bin} warmed" \
+        || log "warm: ${bin} warm-up exited non-zero (non-fatal)"
+    fi
+  ) &
+}
+
 # If the caller passed a command (e.g. `docker run image claude --version`),
 # just run it. The mode router only kicks in when no command is given.
 if [ "$#" -gt 0 ]; then
@@ -282,6 +320,8 @@ case "$MODE" in
   subscription)
     log "MODE=subscription; tenant uses official claude/codex CLIs via OAuth."
     log "Available binaries: $(command -v claude || echo 'claude MISSING') / $(command -v codex || echo 'codex MISSING')"
+    # Warm the chosen binary so the first user-facing spawn isn't cold (#1222 S4).
+    warm_subscription_binary
     # The broker is the only foreground process; wait -n so SIGTERM kills it.
     if [ -n "${BROKER_PID:-}" ]; then
       wait -n "$BROKER_PID"
