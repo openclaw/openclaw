@@ -1,3 +1,4 @@
+/** Stores plugin host-hook run context, scheduler jobs, and pending event cleanup state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -168,6 +169,7 @@ function getPluginRunContextNamespaces(params: {
   return namespaces;
 }
 
+/** Stores JSON-compatible plugin run context for one run/plugin/namespace tuple. */
 export function setPluginRunContext(params: {
   pluginId: string;
   patch: PluginRunContextPatch;
@@ -207,11 +209,11 @@ export function setPluginRunContext(params: {
   return true;
 }
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
-export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>(params: {
+/** Reads previously stored plugin run context for one run/plugin/namespace tuple. */
+export function getPluginRunContext(params: {
   pluginId: string;
   get: PluginRunContextGetParams;
-}): T | undefined {
+}): PluginJsonValue | undefined {
   const runId = normalizeOptionalString(params.get.runId);
   const namespace = normalizeNamespace(params.get.namespace);
   if (!runId || !namespace) {
@@ -221,7 +223,7 @@ export function getPluginRunContext<T extends PluginJsonValue = PluginJsonValue>
     runId,
     pluginId: params.pluginId,
   })?.get(namespace);
-  return value === undefined ? undefined : (copyJsonValue(value) as T);
+  return value === undefined ? undefined : copyJsonValue(value);
 }
 
 export function clearPluginRunContext(params: {
@@ -306,7 +308,7 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     const ctx = {
       // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Run-context JSON reads are caller-typed by namespace.
       getRunContext: <T extends PluginJsonValue = PluginJsonValue>(namespace: string) =>
-        getPluginRunContext<T>({ pluginId, get: { runId, namespace } }),
+        getPluginRunContext({ pluginId, get: { runId, namespace } }) as T | undefined,
       setRunContext: (namespace: string, value: PluginJsonValue) => {
         setPluginRunContext({
           pluginId,

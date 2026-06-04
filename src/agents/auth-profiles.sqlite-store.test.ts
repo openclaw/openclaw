@@ -1,3 +1,8 @@
+/**
+ * SQLite auth-profile store integration tests.
+ * Verifies secrets/state persistence, runtime overlays, and legacy JSON
+ * migration boundaries in temporary agent directories.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

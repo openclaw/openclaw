@@ -1,3 +1,4 @@
+/** Resolves SecretRef values from env, file, and exec secret providers. */
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -69,6 +70,7 @@ type ResolutionLimits = {
 type ProviderResolutionOutput = Map<string, unknown>;
 
 /** Error for failures that affect an entire configured secret provider. */
+/** Error emitted when a configured secret provider cannot resolve a ref. */
 export class SecretProviderResolutionError extends Error {
   readonly scope = "provider" as const;
   readonly source: SecretRefSource;
@@ -969,6 +971,7 @@ export async function resolveSecretRefValues(
 }
 
 /** Resolves one SecretRef, using the optional shared runtime cache. */
+/** Resolves one SecretRef to an unknown value using configured provider state. */
 export async function resolveSecretRefValue(
   ref: SecretRef,
   options: ResolveSecretRefOptions,

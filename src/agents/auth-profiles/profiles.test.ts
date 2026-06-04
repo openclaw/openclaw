@@ -1,3 +1,8 @@
+/**
+ * Tests auth profile mutation helpers.
+ * Covers locked upserts, order promotion, last-good clearing, legacy OAuth file
+ * imports, and credential normalization.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

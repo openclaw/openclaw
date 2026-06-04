@@ -1,3 +1,4 @@
+/** Builds the interactive `openclaw secrets configure` target list and apply plan. */
 import { isDeepStrictEqual } from "node:util";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

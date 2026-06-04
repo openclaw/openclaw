@@ -1,3 +1,4 @@
+/** Validation and normalization for ACP session runtime options and config controls. */
 import { isAbsolute } from "node:path";
 import { normalizeText } from "@openclaw/acp-core/normalize-text";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

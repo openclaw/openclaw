@@ -1,3 +1,8 @@
+/**
+ * Tests OAuth manager store and refresh behavior.
+ * Covers identity safety, main-store adoption, refresh persistence, fallback
+ * recovery, and external profile overlays.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
