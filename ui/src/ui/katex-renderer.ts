@@ -525,7 +525,7 @@ export function loadKatexCss(): void {
       document.head.appendChild(link);
     })
     .catch((_err: unknown) => {
-      console.warn("[katex] Failed to resolve CSS URL:", err);
+      console.warn("[katex] Failed to resolve CSS URL:", _err);
       cssLoaded = false;
     });
 }

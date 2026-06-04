@@ -5,7 +5,11 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml, toSanitizedMarkdownHtmlWithKatex, toStreamingMarkdownHtml } from "../markdown.ts";
+import {
+  toSanitizedMarkdownHtml,
+  toSanitizedMarkdownHtmlWithKatex,
+  toStreamingMarkdownHtml,
+} from "../markdown.ts";
 import type { MarkdownRenderOptions } from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
@@ -1859,7 +1863,12 @@ function renderGroupedMessage(
                             <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                           </details>`
                         : markdown
-                          ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, opts.mathRendering)
+                          ? renderMarkdownText(
+                              markdown,
+                              opts.isStreaming,
+                              markdownRenderOptions,
+                              opts.mathRendering,
+                            )
                           : nothing}
                       ${hasToolCards
                         ? singleToolCard && !markdown && !hasImages
@@ -1924,7 +1933,12 @@ function renderGroupedMessage(
                   <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                 </details>`
               : markdown
-                ? renderMarkdownText(markdown, opts.isStreaming, markdownRenderOptions, opts.mathRendering)
+                ? renderMarkdownText(
+                    markdown,
+                    opts.isStreaming,
+                    markdownRenderOptions,
+                    opts.mathRendering,
+                  )
                 : nothing}
             ${hasToolCards
               ? renderInlineToolCards(toolCards, {
@@ -1969,13 +1983,17 @@ function renderMarkdownText(
   if (mathRendering === "katex") {
     return html`
       <div class="chat-text" dir="${detectTextDirection(markdown)}">
-        ${unsafeHTML(toSanitizedMarkdownHtmlWithKatex(markdown, { ...markdownRenderOptions, mathRendering }))}
+        ${unsafeHTML(
+          toSanitizedMarkdownHtmlWithKatex(markdown, { ...markdownRenderOptions, mathRendering }),
+        )}
       </div>
     `;
   }
   return html`
     <div class="chat-text" dir="${detectTextDirection(markdown)}">
-      ${unsafeHTML(toSanitizedMarkdownHtml(markdown, markdownRenderOptions))}
+      ${unsafeHTML(
+        toSanitizedMarkdownHtmlWithKatex(markdown, { ...markdownRenderOptions, mathRendering }),
+      )}
     </div>
   `;
 }

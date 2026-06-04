@@ -606,9 +606,9 @@ describe("grouped chat rendering", () => {
       "user",
     );
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+    expect(markdownWithKatexRenderMock).toHaveBeenCalledWith(markdown, {
       codeBlockChrome: "none",
-      mathRendering: undefined,
+      mathRendering: "off",
     });
   });
 
@@ -622,7 +622,7 @@ describe("grouped chat rendering", () => {
       timestamp: 1000,
     });
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, { mathRendering: undefined });
+    expect(markdownWithKatexRenderMock).toHaveBeenCalledWith(markdown, { mathRendering: "off" });
   });
 
   it("positions delete confirm by message side", () => {

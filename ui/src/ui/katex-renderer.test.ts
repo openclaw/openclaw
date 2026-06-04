@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   escapeHtml,
   findInlineMathEnd,
@@ -276,7 +276,8 @@ describe("extractMathBlocks", () => {
   // ── Bug 1 regression: $1,2$ rejected by findInlineMathEnd, cascading to extractMathBlocks ──
 
   it("extracts $1,2$ and $\\alpha_1$ without cascading misalignment", () => {
-    const { mathBlocks, protectedText } = extractMathBlocks("$1,2$ and $\\alpha_1$");
+    const { mathBlocks, protectedText: _protectedText } =
+      extractMathBlocks("$1,2$ and $\\alpha_1$");
     expect(mathBlocks.size).toBe(2);
     const entries = [...mathBlocks.entries()];
     expect(entries[0][1].tex).toBe("1,2");
@@ -286,7 +287,7 @@ describe("extractMathBlocks", () => {
   it("extracts pure numeric math in CJK context: 主元列 $1,2$，", () => {
     const { mathBlocks } = extractMathBlocks("主元列 $1,2$，");
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("1,2");
     expect(info.displayMode).toBe(false);
   });
@@ -307,7 +308,7 @@ describe("extractMathBlocks", () => {
   it("extracts inline math followed by fullwidth comma: $E=mc^2$\uff0c", () => {
     const { mathBlocks } = extractMathBlocks(`\u8d28\u80fd\u65b9\u7a0b $E=mc^2$\uff0c\u4ee5\u53ca`);
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("E=mc^2");
     expect(info.displayMode).toBe(false);
   });
@@ -315,7 +316,7 @@ describe("extractMathBlocks", () => {
   it("extracts inline math followed by CJK ideograph: $x^2$\u7684\u503c", () => {
     const { mathBlocks } = extractMathBlocks(`\u8ba1\u7b97 $x^2$ \u7684\u503c`);
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("x^2");
     expect(info.displayMode).toBe(false);
   });
@@ -334,7 +335,7 @@ describe("inline math with Markdown formatting boundaries", () => {
   it("extracts $2^{m \\times n}$ inside **bold** — exact bug report", () => {
     const { mathBlocks } = extractMathBlocks("**$2^{m \\times n}$**");
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("2^{m \\times n}");
     expect(info.displayMode).toBe(false);
   });
@@ -342,7 +343,7 @@ describe("inline math with Markdown formatting boundaries", () => {
   it("extracts $x^2$ inside **bold** (simple)", () => {
     const { mathBlocks } = extractMathBlocks("**$x^2$**");
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("x^2");
     expect(info.displayMode).toBe(false);
   });
@@ -350,7 +351,7 @@ describe("inline math with Markdown formatting boundaries", () => {
   it("extracts $y$ inside *italic* (asterisk)", () => {
     const { mathBlocks } = extractMathBlocks("*$y$*");
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("y");
     expect(info.displayMode).toBe(false);
   });
@@ -358,7 +359,7 @@ describe("inline math with Markdown formatting boundaries", () => {
   it("extracts $y$ inside _italic_ (underscore)", () => {
     const { mathBlocks } = extractMathBlocks("_$y$_");
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("y");
     expect(info.displayMode).toBe(false);
   });
@@ -366,7 +367,7 @@ describe("inline math with Markdown formatting boundaries", () => {
   it("extracts $x = 5$ inside ~~strikethrough~~", () => {
     const { mathBlocks } = extractMathBlocks("~~$x = 5$~~");
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("x = 5");
     expect(info.displayMode).toBe(false);
   });
@@ -374,7 +375,7 @@ describe("inline math with Markdown formatting boundaries", () => {
   it("extracts $z$ inside ***bold+italic***", () => {
     const { mathBlocks } = extractMathBlocks("***$z$***");
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("z");
     expect(info.displayMode).toBe(false);
   });
@@ -402,7 +403,7 @@ describe("inline math with Markdown formatting boundaries", () => {
   it("extracts $2^{m \\times n}$ inside **bold** with CJK context (原 bug 上下文)", () => {
     const { mathBlocks } = extractMathBlocks("定义 **$2^{m \\times n}$** 个不同的二元关系");
     expect(mathBlocks.size).toBe(1);
-    const [ph, info] = mathBlocks.entries().next().value!;
+    const [_ph, info] = mathBlocks.entries().next().value!;
     expect(info.tex).toBe("2^{m \\times n}");
     expect(info.displayMode).toBe(false);
   });
