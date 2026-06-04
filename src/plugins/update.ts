@@ -389,9 +389,14 @@ async function expectedIntegrityForNpmFallback(params: {
       timeoutMs: params.timeoutMs,
     },
   );
+  const expectedIntegrityMetadata =
+    trustedPrereleaseFallback?.metadata ?? fallbackMetadata.metadata;
+  if (!isNpmMetadataCompatibleWithCurrentHost(expectedIntegrityMetadata)) {
+    return undefined;
+  }
   return expectedIntegrityForNpmUpdate({
     effectiveSpec: params.fallbackSpec,
-    metadata: trustedPrereleaseFallback?.metadata ?? fallbackMetadata.metadata,
+    metadata: expectedIntegrityMetadata,
     record: params.record,
     trustedSourceLinkedOfficialInstall: true,
   });
