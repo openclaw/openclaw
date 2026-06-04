@@ -1,3 +1,5 @@
+// Image tool tests cover model routing, provider auth, path safety, inbound
+// media refs, data URLs, response validation, and compression policy.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -23,6 +25,8 @@ import { testing, createImageTool, resolveImageModelConfigForTool } from "./imag
 import { resolveMediaToolInboundRoots } from "./media-tool-shared.js";
 
 function jsonRoundTrip<T>(value: T): T {
+  // Anthropic rejects union-heavy schemas, so schema snapshots must survive the
+  // same JSON serialization path used for model-facing tool definitions.
   const serialized = JSON.stringify(value);
   return JSON.parse(serialized) as T;
 }
@@ -305,6 +309,8 @@ function createLargeColorBlockPng(size: number): Buffer {
 }
 
 function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
+  // The tests inspect JPEG SOF markers directly so resize assertions do not
+  // depend on an external decoder.
   let offset = 2;
   while (offset + 9 < buffer.length) {
     if (buffer[offset] !== 0xff) {
@@ -1978,6 +1984,46 @@ describe("image tool implicit imageModel config", () => {
       const [input, init] = fetchCallAt(fetch, 0);
       expect(input).toBe("http://198.18.0.153/reference.png");
       expect(typeof init).toBe("object");
+    });
+  });
+
+  it("passes the shared remote read idle timeout when loading remote image references", async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ content: "ok", base_resp: { status_code: 0, status_msg: "" } }),
+        ),
+    );
+    global.fetch = withFetchPreconnect(fetch);
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-test");
+    const loadWebMedia = vi.fn(async () => ({
+      buffer: Buffer.from(ONE_PIXEL_PNG_B64, "base64"),
+      contentType: "image/png",
+      kind: "image" as const,
+    }));
+    installImageUnderstandingProviderDeps([minimaxProvider, moonshotProvider], {
+      loadImageWebMediaRuntime: async () => ({
+        loadWebMedia,
+        optimizeImageBufferForWebMedia: async ({ buffer, contentType, fileName }) => ({
+          buffer,
+          contentType: contentType ?? "image/png",
+          kind: "image",
+          fileName,
+        }),
+      }),
+    });
+
+    await withTempAgentDir(async (agentDir) => {
+      const tool = createRequiredImageTool({
+        config: createMinimaxImageConfig(),
+        agentDir,
+      });
+
+      await expectImageToolExecOk(tool, "https://example.test/reference.png");
+
+      expect(loadWebMedia).toHaveBeenCalledTimes(1);
+      const [, options] = fetchCallAt(loadWebMedia, 0);
+      expect((options as { readIdleTimeoutMs?: number }).readIdleTimeoutMs).toBe(120_000);
     });
   });
 

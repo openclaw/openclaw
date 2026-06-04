@@ -1,3 +1,6 @@
+/**
+ * Resolves model extra parameters and transport overrides for embedded agents.
+ */
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGoogleThinkingPayloadWrapper } from "../../llm/providers/stream-wrappers/google.js";
@@ -813,7 +816,10 @@ function applyPrePluginStreamWrappers(ctx: ApplyExtraParamsContext): void {
 function applyPostPluginStreamWrappers(
   ctx: ApplyExtraParamsContext & { providerWrapperHandled: boolean },
 ): void {
-  ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn);
+  const streamParams = ctx.override
+    ? { ...ctx.effectiveExtraParams, ...ctx.override }
+    : ctx.effectiveExtraParams;
+  ctx.agent.streamFn = createOpenRouterSystemCacheWrapper(ctx.agent.streamFn, streamParams);
   ctx.agent.streamFn = createOpenAIStringContentWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAICompletionsStrictMessageKeysWrapper(ctx.agent.streamFn);
   ctx.agent.streamFn = createOpenAICompletionsToolsCompatWrapper(ctx.agent.streamFn);

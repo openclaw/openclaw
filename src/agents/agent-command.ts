@@ -1,3 +1,4 @@
+/** Main agent command orchestration for sessions, model selection, delivery, and attempts. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveInlineAgentImageAttachments } from "../auto-reply/reply/agent-turn-attachments.js";
@@ -10,6 +11,7 @@ import {
   resolveSupportedThinkingLevel,
   type VerboseLevel,
 } from "../auto-reply/thinking.js";
+import { resolveChannelModelOverride } from "../channels/model-overrides.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -105,12 +107,13 @@ import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js
 import type { ModelManifestNormalizationContext } from "./model-selection-normalize.js";
 import {
   buildConfiguredModelCatalog,
+  buildModelAliasIndex,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
-  parseModelRef,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
+  resolveModelRefFromString,
   resolveThinkingDefault,
 } from "./model-selection.js";
 import {
@@ -201,10 +204,19 @@ function parseAgentCommandModelRef(
   defaultProvider: string,
   modelManifestContext: ModelManifestNormalizationContext,
 ) {
-  const parsed = parseModelRef(raw, defaultProvider, {
+  const parsed = resolveModelRefFromString({
+    cfg,
+    raw,
+    defaultProvider,
+    aliasIndex: buildModelAliasIndex({
+      cfg,
+      defaultProvider,
+      ...modelManifestContext,
+      allowPluginNormalization: false,
+    }),
     ...modelManifestContext,
     allowPluginNormalization: false,
-  });
+  })?.ref;
   return parsed
     ? normalizeAgentCommandModelRef(cfg, parsed.provider, parsed.model, modelManifestContext)
     : null;
@@ -1181,6 +1193,7 @@ async function agentCommandInternal(
       allowPluginNormalization: pluginsEnabled,
       ...modelManifestContext,
     });
+    const runContext = resolveAgentRunContext(opts);
     const { provider: defaultProvider, model: defaultModel } = normalizeAgentCommandDefaultModelRef(
       cfg,
       configuredDefaultRef.provider,
@@ -1309,6 +1322,47 @@ async function agentCommandInternal(
     let storedModelOverride = hasLegacyAutoFallbackOverrideWithoutOrigin
       ? undefined
       : sessionEntry?.modelOverride?.trim();
+    const currentRunModelChannel = [
+      runContext.messageChannel,
+      opts.replyChannel,
+      opts.channel,
+    ].find((channel): channel is string =>
+      Boolean(channel && isDeliverableMessageChannel(channel)),
+    );
+    const channelOverrideGroupId = currentRunModelChannel
+      ? (runContext.groupId ?? sessionEntry?.groupId ?? runContext.currentChannelId)
+      : (sessionEntry?.groupId ?? runContext.groupId ?? runContext.currentChannelId);
+    const channelModelOverride =
+      cfg.channels?.modelByChannel && !hasExplicitRunOverride
+        ? resolveChannelModelOverride({
+            cfg,
+            channel:
+              currentRunModelChannel ??
+              sessionEntry?.channel ??
+              sessionEntry?.lastChannel ??
+              sessionEntry?.origin?.provider,
+            groupId: channelOverrideGroupId,
+            groupChatType: sessionEntry?.chatType ?? sessionEntry?.origin?.chatType,
+            groupChannel: runContext.groupChannel ?? sessionEntry?.groupChannel,
+            groupSubject: sessionEntry?.subject,
+            parentSessionKey: sessionEntry?.parentSessionKey ?? sessionKey,
+          })
+        : null;
+    const normalizedChannelOverride = channelModelOverride
+      ? parseAgentCommandModelRef(
+          cfg,
+          channelModelOverride.model,
+          defaultProvider,
+          modelManifestContext,
+        )
+      : null;
+    const primaryProvider = normalizedChannelOverride?.provider ?? defaultProvider;
+    const primaryModel = normalizedChannelOverride?.model ?? defaultModel;
+    const hasEffectiveStoredOverride = Boolean(storedProviderOverride || storedModelOverride);
+    if (normalizedChannelOverride && !hasEffectiveStoredOverride) {
+      provider = normalizedChannelOverride.provider;
+      model = normalizedChannelOverride.model;
+    }
     if (storedModelOverride) {
       const candidateProvider = storedProviderOverride || defaultProvider;
       const normalizedStored = normalizeAgentCommandModelRef(
@@ -1327,8 +1381,8 @@ async function agentCommandInternal(
       ? resolveAutoFallbackPrimaryProbe({
           entry: sessionEntry,
           sessionKey,
-          primaryProvider: defaultProvider,
-          primaryModel: defaultModel,
+          primaryProvider,
+          primaryModel,
         })
       : undefined;
     let autoFallbackPrimaryProbeSessionEntry: SessionEntry | undefined;
@@ -1497,25 +1551,9 @@ async function agentCommandInternal(
         catalog: thinkingCatalog,
       });
       if (fallbackThinkLevel !== resolvedThinkLevel) {
-        const previousThinkLevel = resolvedThinkLevel;
+        // Execution fallbacks are turn-local; directive/model persistence owns
+        // durable thinking remaps so explicit session overrides survive runs.
         resolvedThinkLevel = fallbackThinkLevel;
-        if (
-          sessionEntry &&
-          sessionStore &&
-          sessionKey &&
-          sessionEntry.thinkingLevel === previousThinkLevel &&
-          !suppressVisibleSessionEffects
-        ) {
-          const entry = sessionEntry;
-          entry.thinkingLevel = fallbackThinkLevel;
-          entry.updatedAt = Date.now();
-          await persistSessionEntry({
-            sessionStore,
-            sessionKey,
-            storePath,
-            entry,
-          });
-        }
       }
     }
     const { resolveSessionTranscriptFile } = await loadTranscriptResolveRuntime();
@@ -1617,7 +1655,6 @@ async function agentCommandInternal(
       });
     };
     const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
-    const runContext = resolveAgentRunContext(opts);
     const messageChannel = resolveMessageChannel(
       runContext.messageChannel,
       opts.replyChannel ?? opts.channel,
@@ -2179,6 +2216,7 @@ async function agentCommandInternal(
   }
 }
 
+/** Runs an agent turn from CLI/runtime options against the resolved session and model policy. */
 export async function agentCommand(
   opts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
@@ -2207,6 +2245,7 @@ export async function agentCommand(
   );
 }
 
+/** Runs an agent turn from an inbound channel/gateway ingress context. */
 export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
   runtime: RuntimeEnv = defaultRuntime,

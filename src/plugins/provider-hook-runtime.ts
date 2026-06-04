@@ -1,4 +1,8 @@
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+// Runtime bridge for invoking provider hooks supplied by plugins.
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -189,6 +193,15 @@ function findProviderRuntimePluginInRegistry(params: {
     });
 }
 
+function hasConfiguredModelProvider(params: {
+  provider: string;
+  config?: OpenClawConfig;
+}): boolean {
+  return (
+    findNormalizedProviderValue(params.config?.models?.providers, params.provider) !== undefined
+  );
+}
+
 export function resolveProviderPluginsForHooks(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -306,18 +319,23 @@ export function resolveLoadedProviderRuntimePlugin(
 
 export function resolveProviderHookPlugin(params: {
   provider: string;
+  modelId?: string | null;
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): ProviderPlugin | undefined {
-  return (
-    resolveProviderRuntimePlugin(params) ??
-    resolveProviderPluginsForHooks({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      env: params.env,
-    }).find((candidate) => matchesProviderId(candidate, params.provider))
-  );
+  const runtimePlugin = resolveProviderRuntimePlugin(params);
+  if (runtimePlugin) {
+    return runtimePlugin;
+  }
+  if (hasConfiguredModelProvider(params)) {
+    return undefined;
+  }
+  return resolveProviderPluginsForHooks({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env,
+  }).find((candidate) => matchesProviderId(candidate, params.provider));
 }
 
 export function resolveProviderRuntimePluginHandle(

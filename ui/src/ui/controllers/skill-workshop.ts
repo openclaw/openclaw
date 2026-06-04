@@ -2,7 +2,9 @@ import type { GatewayBrowserClient } from "../gateway.ts";
 import type {
   SkillWorkshopAction,
   SkillWorkshopActionNotice,
+  SkillWorkshopMode,
   SkillWorkshopProposal,
+  SkillWorkshopStatusFilter,
 } from "../views/skill-workshop.ts";
 
 const SKILL_WORKSHOP_NOTICE_MS = 2800;
@@ -84,6 +86,13 @@ export type SkillWorkshopState = {
   skillWorkshopActionNoticeTimer?: ReturnType<typeof globalThis.setTimeout> | number | null;
   skillWorkshopRevisionKey: string | null;
   skillWorkshopRevisionDraft: string;
+  skillWorkshopStatusFilter: SkillWorkshopStatusFilter;
+  skillWorkshopQuery: string;
+  skillWorkshopFilePreviewKey: string | null;
+  skillWorkshopFilePreviewQuery: string;
+  skillWorkshopQueueWidth: number;
+  skillWorkshopMode: SkillWorkshopMode;
+  skillWorkshopUseCurrentChatForRevisions: boolean;
 };
 
 function getErrorMessage(err: unknown): string {
@@ -381,22 +390,10 @@ export async function runSkillWorkshopLifecycleAction(
   }
 }
 
-function buildRevisionRequest(proposal: SkillWorkshopProposal, instructions: string): string {
-  return [
-    `Revise Skill Workshop proposal \`${proposal.key}\` (${proposal.slug}).`,
-    "",
-    "Use `skill_workshop` with `action=inspect` first, then `action=revise` for that pending proposal.",
-    "Do not apply, approve, reject, or install the proposal.",
-    "",
-    "Requested changes:",
-    instructions.trim(),
-  ].join("\n");
-}
-
 export async function requestSkillWorkshopRevision(
   state: SkillWorkshopState,
   proposalId: string,
-  sendRevisionRequest: (message: string, proposal: SkillWorkshopProposal) => Promise<void>,
+  sendRevisionRequest: (instructions: string, proposal: SkillWorkshopProposal) => Promise<void>,
 ): Promise<boolean> {
   if (state.skillWorkshopActionBusy) {
     return false;
@@ -413,7 +410,7 @@ export async function requestSkillWorkshopRevision(
     await loadSkillWorkshopProposalDetail(state, proposalId);
     const currentProposal =
       state.skillWorkshopProposals.find((item) => item.key === proposalId) ?? proposal;
-    await sendRevisionRequest(buildRevisionRequest(currentProposal, instructions), currentProposal);
+    await sendRevisionRequest(instructions, currentProposal);
     state.skillWorkshopRevisionKey = null;
     state.skillWorkshopRevisionDraft = "";
     showActionNotice(state, proposal, "Revision requested");

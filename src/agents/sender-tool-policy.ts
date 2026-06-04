@@ -1,3 +1,8 @@
+/**
+ * Sender-scoped sandbox tool policy resolver.
+ * Applies per-agent toolsBySender matches before global sender policy so
+ * channel delivery can narrow tool access by sender identity.
+ */
 import { resolveToolsBySender } from "../config/group-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
@@ -14,6 +19,7 @@ type SenderToolPolicyParams = {
   senderE164?: string | null;
 };
 
+/** Resolves sender-scoped sandbox tool policy, preferring agent config over global config. */
 export function resolveSenderToolPolicy(
   params: SenderToolPolicyParams,
 ): SandboxToolPolicy | undefined {

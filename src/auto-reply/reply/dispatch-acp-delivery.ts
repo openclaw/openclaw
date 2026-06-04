@@ -1,3 +1,4 @@
+// Delivers ACP turn results through reply payload routing.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -16,6 +17,7 @@ import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
@@ -257,7 +259,7 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     state.settledDirectVisibleText = true;
     hasPendingDirectBlockReplyDelivery = false;
     await params.dispatcher.waitForIdle();
-    const failedCounts = params.dispatcher.getFailedCounts();
+    const failedCounts = readDispatcherFailedCounts(params.dispatcher);
     const failedVisibleCount = failedCounts.block + failedCounts.final;
     if (failedVisibleCount > 0) {
       state.failedVisibleTextDelivery = true;

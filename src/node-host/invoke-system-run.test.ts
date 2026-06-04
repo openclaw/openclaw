@@ -1,3 +1,4 @@
+/** Tests node-host system.run policy, approval, allowlist, and execution behavior. */
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -1746,8 +1747,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           expect(benign.runCommand).toHaveBeenCalledTimes(1);
           expectInvokeOk(benign.sendInvokeResult, { payloadContains: "awk-ok" });
           const allowlist = loadExecApprovals().agents?.main?.allowlist ?? [];
-          expect(allowlist).toHaveLength(1);
+          expect(allowlist).toHaveLength(2);
           expect(allowlist[0]?.pattern).toBe(fs.realpathSync(executablePath));
+          expect(allowlist[0]?.lastUsedCommand).toBeUndefined();
+          expect(allowlist[1]?.pattern).toMatch(/^=node-command:[0-9a-f]{16}$/);
+          expect(allowlist[1]?.lastUsedCommand).toBeUndefined();
 
           const malicious = await runSystemInvoke({
             preferMacAppExecHost: false,

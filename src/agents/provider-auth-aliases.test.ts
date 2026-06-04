@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for provider auth alias resolution.
+ * Verifies plugin metadata aliases, origin priority, trust, and cache behavior.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pluginRegistryMocks = vi.hoisted(() => {
@@ -46,12 +50,50 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
+import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   resetProviderAuthAliasMapCacheForTest,
   resolveProviderIdForAuth,
 } from "./provider-auth-aliases.js";
+
+function createPluginManifestRecord(
+  plugin: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id" | "origin">,
+): PluginManifestRecord {
+  return {
+    channels: [],
+    providers: [],
+    cliBackends: [],
+    skills: [],
+    hooks: [],
+    rootDir: `/plugins/${plugin.id}`,
+    source: `/plugins/${plugin.id}`,
+    manifestPath: `/plugins/${plugin.id}/.codex-plugin/plugin.json`,
+    ...plugin,
+  };
+}
+
+function createInstalledPluginIndexRecord(
+  plugin: PluginManifestRecord,
+): InstalledPluginIndexRecord {
+  return {
+    pluginId: plugin.id,
+    manifestPath: plugin.manifestPath,
+    manifestHash: `${plugin.id}:manifest`,
+    rootDir: plugin.rootDir,
+    origin: plugin.origin,
+    enabled: true,
+    enabledByDefault: true,
+    startup: {
+      sidecar: false,
+      memory: false,
+      deferConfiguredChannelFullLoadUntilAfterListen: false,
+      agentHarnesses: [],
+    },
+    compat: [],
+  };
+}
 
 function createPluginMetadataSnapshot(params: {
   config?: Parameters<typeof resolveInstalledPluginIndexPolicyHash>[0];
@@ -68,16 +110,11 @@ function createPluginMetadataSnapshot(params: {
       policyHash,
       generatedAtMs: 1,
       installRecords: {},
-      plugins: params.plugins.map((plugin) => ({
-        pluginId: plugin.id,
-        origin: plugin.origin ?? "global",
-        enabled: true,
-        enabledByDefault: true,
-      })),
+      plugins: params.plugins.map((plugin) => createInstalledPluginIndexRecord(plugin)),
       diagnostics: [],
     },
     registryDiagnostics: [],
-    manifestRegistry: { plugins: params.plugins, diagnostics: [] },
+    manifestRegistry: { plugins: [...params.plugins], diagnostics: [] },
     plugins: params.plugins,
     diagnostics: [],
     byPluginId: new Map(params.plugins.map((plugin) => [plugin.id, plugin])),
@@ -117,7 +154,7 @@ describe("provider auth aliases", () => {
   it("treats deprecated auth choice ids as provider auth aliases", () => {
     const metadataSnapshot = createPluginMetadataSnapshot({
       plugins: [
-        {
+        createPluginManifestRecord({
           id: "openai",
           origin: "bundled",
           providerAuthChoices: [
@@ -128,7 +165,7 @@ describe("provider auth aliases", () => {
               deprecatedChoiceIds: ["codex-cli", "openai-chatgpt-import"],
             },
           ],
-        },
+        }),
       ],
     });
 
@@ -147,11 +184,11 @@ describe("provider auth aliases", () => {
       createPluginMetadataSnapshot({
         config,
         plugins: [
-          {
+          createPluginManifestRecord({
             id: "one",
             origin: "global",
             providerAuthAliases: { fixture: "provider-one" },
-          },
+          }),
         ],
       }),
       { config, env },
@@ -163,11 +200,11 @@ describe("provider auth aliases", () => {
       createPluginMetadataSnapshot({
         config,
         plugins: [
-          {
+          createPluginManifestRecord({
             id: "two",
             origin: "global",
             providerAuthAliases: { fixture: "provider-two" },
-          },
+          }),
         ],
       }),
       { config, env },

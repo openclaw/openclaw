@@ -1,3 +1,5 @@
+// image_generate tool tests cover provider/model selection, edit inputs,
+// background task handling, media saving, and duplicate-generation guards.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const taskRuntimeInternalMocks = vi.hoisted(() => {
@@ -212,6 +214,8 @@ function createToolWithPrimaryImageModel(
 }
 
 function stubEditedImageFlow(params?: { width?: number; height?: number }) {
+  // Edit tests stub the whole media pipeline so assertions focus on tool input
+  // shaping, provider choice, and saved-media metadata.
   const generateImage = vi.spyOn(imageGenerationRuntime, "generateImage").mockResolvedValue({
     provider: "google",
     model: "gemini-3-pro-image-preview",
@@ -1758,6 +1762,9 @@ describe("createImageGenerateTool", () => {
     const defaultLoadOptions = mockCallArg(webMedia.loadWebMedia, 0, "loadWebMedia", 1);
     expect(defaultLoadUrl).toBe("http://198.18.0.153/reference.png");
     expect(requireRecord(defaultLoadOptions, "loadWebMedia options").ssrfPolicy).toBeUndefined();
+    expect(requireRecord(defaultLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
 
     const tool = requireImageGenerateTool(
       createImageGenerateTool({
@@ -1782,6 +1789,9 @@ describe("createImageGenerateTool", () => {
     expect(requireRecord(configuredLoadOptions, "loadWebMedia options").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });
+    expect(requireRecord(configuredLoadOptions, "loadWebMedia options").readIdleTimeoutMs).toBe(
+      120_000,
+    );
     expect(mockCallArg(generateImage, 1, "generateImage").ssrfPolicy).toEqual({
       allowRfc2544BenchmarkRange: true,
     });

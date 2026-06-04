@@ -1,36 +1,27 @@
+// Gateway post-ready runtime services.
+// Starts delayed maintenance, cron, heartbeat, recovery, and pricing refresh work.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { startHeartbeatRunner, type HeartbeatRunner } from "../infra/heartbeat-runner.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isGatewayModelPricingEnabled } from "./model-pricing-config.js";
 import type { startGatewayMaintenanceTimers } from "./server-maintenance.js";
+import {
+  createNoopHeartbeatRunner,
+  type GatewayRuntimeServiceLogger,
+} from "./server-runtime-service-shared.js";
 export {
   startGatewayChannelHealthMonitor,
   startGatewayRuntimeServices,
   type GatewayChannelManager,
 } from "./server-runtime-startup-services.js";
 
-type GatewayRuntimeServiceLogger = {
-  child: (name: string) => {
-    info: (message: string) => void;
-    warn: (message: string) => void;
-    error: (message: string) => void;
-  };
-  error: (message: string) => void;
-};
 type GatewayPostReadyLogger = {
   warn: (message: string) => void;
 };
 export type GatewayMaintenanceHandles = NonNullable<
   Awaited<ReturnType<typeof startGatewayMaintenanceTimers>>
 >;
-
-function createNoopHeartbeatRunner(): HeartbeatRunner {
-  return {
-    stop: () => {},
-    updateConfig: (_cfg: OpenClawConfig) => {},
-  };
-}
 
 /** Starts cron without making gateway startup wait for cron initialization. */
 export function startGatewayCronWithLogging(params: {
@@ -46,6 +37,8 @@ function clearGatewayMaintenanceHandles(maintenance: GatewayMaintenanceHandles |
   if (!maintenance) {
     return;
   }
+  // Maintenance startup can race shutdown. Clear every interval handle here so
+  // callers can discard partially-created maintenance safely.
   clearInterval(maintenance.tickInterval);
   clearInterval(maintenance.healthInterval);
   clearInterval(maintenance.dedupeCleanup);

@@ -15,6 +15,7 @@ const rootManagedVpsUpgradeCommand =
   "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:root-managed-vps-upgrade";
 const updateRestartAuthCommand =
   "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-restart-auth";
+const CODEX_HARNESS_API_KEY_ENV = "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key";
 
 const LIVE_RETRY_PATTERNS = [
   /529\b/i,
@@ -513,13 +514,17 @@ export const tailLanes = [
     "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-web-search-minimal",
     { stateScenario: "empty", timeoutMs: 8 * 60 * 1000 },
   ),
-  liveLane("live-codex-harness", liveDockerScriptCommand("test-live-codex-harness-docker.sh"), {
-    cacheKey: "codex-harness",
-    provider: "codex-cli",
-    resources: ["npm"],
-    timeoutMs: LIVE_ACP_TIMEOUT_MS,
-    weight: 3,
-  }),
+  liveLane(
+    "live-codex-harness",
+    liveDockerScriptCommand("test-live-codex-harness-docker.sh", CODEX_HARNESS_API_KEY_ENV),
+    {
+      cacheKey: "codex-harness",
+      provider: "openai",
+      resources: ["npm"],
+      timeoutMs: LIVE_ACP_TIMEOUT_MS,
+      weight: 3,
+    },
+  ),
   liveLane(
     "live-codex-media-path",
     liveDockerScriptCommand(
@@ -549,11 +554,11 @@ export const tailLanes = [
     "live-codex-bind",
     liveDockerScriptCommand(
       "test-live-codex-harness-docker.sh",
-      "OPENCLAW_LIVE_CODEX_BIND=1 OPENCLAW_LIVE_CODEX_TEST_FILES=src/gateway/gateway-codex-bind.live.test.ts",
+      `${CODEX_HARNESS_API_KEY_ENV} OPENCLAW_LIVE_CODEX_BIND=1 OPENCLAW_LIVE_CODEX_TEST_FILES=src/gateway/gateway-codex-bind.live.test.ts`,
     ),
     {
       cacheKey: "codex-harness",
-      provider: "codex-cli",
+      provider: "openai",
       resources: ["npm"],
       timeoutMs: LIVE_ACP_TIMEOUT_MS,
       weight: 3,

@@ -1,3 +1,8 @@
+/**
+ * Plans root and plugin-owned model catalog writes. Setup and doctor flows use
+ * this module to merge implicit provider discovery, explicit config, and
+ * preserved secrets before touching models.json.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
@@ -21,6 +26,8 @@ import {
 } from "./plugin-model-catalog.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
+
+/** Dependency hook for resolving implicit model providers while planning models.json. */
 export type ResolveImplicitProvidersForModelsJson = (params: {
   agentDir: string;
   config: OpenClawConfig;
@@ -33,6 +40,7 @@ export type ResolveImplicitProvidersForModelsJson = (params: {
   providerDiscoveryEntriesOnly?: boolean;
 }) => Promise<Record<string, ProviderConfig>>;
 
+/** Planned models.json write/noop/skip result plus plugin catalog sidecar writes. */
 export type ModelsJsonPlan =
   | {
       action: "skip";
@@ -83,6 +91,7 @@ function buildPluginCatalogWrites(
   );
 }
 
+/** Resolves providers for models.json with injectable implicit-provider discovery. */
 export async function resolveProvidersForModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -164,6 +173,7 @@ function filterWritableProviders(
   return Object.keys(next).length === Object.keys(providers).length ? providers : next;
 }
 
+/** Plans root and plugin-owned model catalog writes with injectable provider discovery. */
 export async function planOpenClawModelsJsonWithDeps(
   params: {
     cfg: OpenClawConfig;
@@ -274,6 +284,7 @@ export async function planOpenClawModelsJsonWithDeps(
   };
 }
 
+/** Plans root and plugin-owned model catalog writes for the current runtime. */
 export async function planOpenClawModelsJson(
   params: Parameters<typeof planOpenClawModelsJsonWithDeps>[0],
 ): Promise<ModelsJsonPlan> {

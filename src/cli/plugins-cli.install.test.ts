@@ -12,6 +12,7 @@ import {
 import {
   applyExclusiveSlotSelection,
   buildPluginSnapshotReport,
+  clearPluginRegistryLoadCache,
   enablePluginInConfig,
   findBundledPluginSourceMock,
   installHooksFromNpmSpec,
@@ -563,6 +564,7 @@ describe("plugins cli install", () => {
     expect(replaceConfigCall().nextConfig).toBe(enabledCfg);
     expect(runtimeLogsContain("slot adjusted")).toBe(true);
     expect(runtimeLogsContain("Installed plugin: alpha")).toBe(true);
+    expect(clearPluginRegistryLoadCache).not.toHaveBeenCalled();
   });
 
   it("passes force through as overwrite mode for marketplace installs", async () => {
@@ -1219,6 +1221,11 @@ describe("plugins cli install", () => {
     expect(npmInstallCall().spec).toBe("demo");
     expect(npmInstallCall().mode).toBe("update");
     expect(npmInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
+    expect(
+      runtimeLogsContain(
+        "--dangerously-force-unsafe-install is deprecated and no longer affects plugin installs",
+      ),
+    ).toBe(true);
     expect(installPluginFromClawHub).not.toHaveBeenCalled();
   });
 
@@ -1589,9 +1596,7 @@ describe("plugins cli install", () => {
           dangerouslyForceUnsafeInstall?: boolean;
         },
       ];
-      params.logger?.warn?.(
-        'WARNING: Plugin "demo" forced despite dangerous code patterns via --dangerously-force-unsafe-install: index.js:1',
-      );
+      params.logger?.warn?.("WARNING: installer warning from dry-run probe");
       return {
         ok: true,
         pluginId: "demo",
@@ -1625,9 +1630,10 @@ describe("plugins cli install", () => {
     expect(pathInstallCall().dangerouslyForceUnsafeInstall).toBe(true);
     expect(typeof pathInstallCall().logger?.info).toBe("function");
     expect(typeof pathInstallCall().logger?.warn).toBe("function");
+    expect(runtimeLogsContain("installer warning from dry-run probe")).toBe(true);
     expect(
       runtimeLogsContain(
-        "forced despite dangerous code patterns via --dangerously-force-unsafe-install",
+        "--dangerously-force-unsafe-install is deprecated and no longer affects plugin installs",
       ),
     ).toBe(true);
   });

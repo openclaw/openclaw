@@ -1,3 +1,7 @@
+/**
+ * OpenClaw ACPX runtime adapter. It wraps the upstream acpx runtime with
+ * OpenClaw session metadata, lease tracking, model scoping, and cleanup policy.
+ */
 import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path, { resolve as resolvePath } from "node:path";
@@ -17,6 +21,7 @@ import {
   type AcpRuntimeStatus,
   type AcpRuntimeTurn,
   type AcpRuntimeTurnResult,
+  type SessionAgentOptions,
 } from "acpx/runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
@@ -49,6 +54,8 @@ type AcpxRuntimeTestOptions = Record<string, unknown> & {
   openclawProcessCleanup?: AcpxProcessCleanupDeps;
 };
 type OpenClawRuntimeTurnInput = Parameters<NonNullable<AcpRuntime["startTurn"]>>[0];
+type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0];
+type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
@@ -547,6 +554,16 @@ function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
     : override.model;
 }
 
+function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {
+  const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
+  const model = input.model?.trim() || existingOptions?.model;
+  const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
+  return {
+    ...input,
+    ...(sessionOptions ? { sessionOptions } : {}),
+  } as AcpxDelegateEnsureInput;
+}
+
 function quoteShellArg(value: string): string {
   if (/^[A-Za-z0-9_./:=@+-]+$/.test(value)) {
     return value;
@@ -622,6 +639,7 @@ function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
   return Array.isArray(mcpServers) && mcpServers.length > 0;
 }
 
+/** OpenClaw-managed ACP runtime implementation backed by the upstream acpx runtime. */
 export class AcpxRuntime implements AcpRuntime {
   private readonly sessionStore: ResetAwareSessionStore;
   private readonly agentRegistry: AcpAgentRegistry;
@@ -942,7 +960,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(input),
+            run: () => delegate.ensureSession(withAcpxSessionOptions(input)),
           }),
       });
     }
@@ -962,7 +980,7 @@ export class AcpxRuntime implements AcpRuntime {
           this.withCodexWrapperDiagnostics({
             command: stableLaunchCommand,
             fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(normalizedInput),
+            run: () => delegate.ensureSession(withAcpxSessionOptions(normalizedInput)),
           }),
         ),
     });
@@ -1222,6 +1240,7 @@ export {
   encodeAcpxRuntimeHandleState,
 };
 
+/** Test-only hooks for ACPX runtime behavior that is otherwise private. */
 export const testing = {
   appendCodexAcpConfigOverrides,
   assertSupportedRuntimeSessionMode,

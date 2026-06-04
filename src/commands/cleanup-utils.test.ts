@@ -5,6 +5,7 @@ import { describe, expect, it, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { applyAgentDefaultPrimaryModel } from "../plugins/provider-model-primary.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildCleanupPlan,
   removeStateAndLinkedPaths,
@@ -36,9 +37,6 @@ describe("buildCleanupPlan", () => {
   });
 
   test("includes implicit per-agent workspaces under the state dir", () => {
-    const previousHome = process.env.HOME;
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    const previousWorkspaceDir = process.env.OPENCLAW_WORKSPACE_DIR;
     const tmpRoot = path.join(path.parse(process.cwd()).root, "tmp", "openclaw-cleanup-plan");
     const home = path.join(tmpRoot, "home");
     const stateDir = path.join(home, ".openclaw");
@@ -48,38 +46,25 @@ describe("buildCleanupPlan", () => {
       },
     };
 
-    try {
-      process.env.HOME = home;
-      process.env.OPENCLAW_STATE_DIR = stateDir;
-      delete process.env.OPENCLAW_WORKSPACE_DIR;
+    return withEnvAsync(
+      {
+        HOME: home,
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_WORKSPACE_DIR: undefined,
+      },
+      async () => {
+        const plan = buildCleanupPlan({
+          cfg: cfg as unknown as OpenClawConfig,
+          stateDir,
+          configPath: path.join(stateDir, "openclaw.json"),
+          oauthDir: path.join(stateDir, "credentials"),
+        });
 
-      const plan = buildCleanupPlan({
-        cfg: cfg as unknown as OpenClawConfig,
-        stateDir,
-        configPath: path.join(stateDir, "openclaw.json"),
-        oauthDir: path.join(stateDir, "credentials"),
-      });
-
-      expect(new Set(plan.workspaceDirs)).toEqual(
-        new Set([path.join(stateDir, "workspace"), path.join(stateDir, "workspace-work")]),
-      );
-    } finally {
-      if (previousHome === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previousHome;
-      }
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      if (previousWorkspaceDir === undefined) {
-        delete process.env.OPENCLAW_WORKSPACE_DIR;
-      } else {
-        process.env.OPENCLAW_WORKSPACE_DIR = previousWorkspaceDir;
-      }
-    }
+        expect(new Set(plan.workspaceDirs)).toEqual(
+          new Set([path.join(stateDir, "workspace"), path.join(stateDir, "workspace-work")]),
+        );
+      },
+    );
   });
 });
 

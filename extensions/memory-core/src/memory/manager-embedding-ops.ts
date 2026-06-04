@@ -12,6 +12,7 @@ import {
   chunkMarkdown,
   hashText,
   remapChunkLines,
+  retryTransientMemoryRead,
   type MemoryChunk,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -755,7 +756,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if ("kind" in entry && entry.kind === "multimodal") {
         return;
       }
-      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const content =
+        options.content ??
+        (await retryTransientMemoryRead(
+          () => fs.readFile(entry.absPath, "utf-8"),
+          `read memory markdown for indexing ${entry.absPath}`,
+        ));
       const chunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
       if (options.source === "sessions" && "lineMap" in entry) {
         remapChunkLines(chunks, entry.lineMap);
@@ -785,7 +791,12 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       structuredInputBytes = multimodalChunk.structuredInputBytes;
       chunks = [multimodalChunk.chunk];
     } else {
-      const content = options.content ?? (await fs.readFile(entry.absPath, "utf-8"));
+      const content =
+        options.content ??
+        (await retryTransientMemoryRead(
+          () => fs.readFile(entry.absPath, "utf-8"),
+          `read memory markdown for indexing ${entry.absPath}`,
+        ));
       const baseChunks = filterNonEmptyMemoryChunks(chunkMarkdown(content, this.settings.chunking));
       chunks = this.provider
         ? enforceEmbeddingMaxInputTokens(this.provider, baseChunks, EMBEDDING_BATCH_MAX_TOKENS)

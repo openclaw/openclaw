@@ -1,3 +1,4 @@
+// Coverage for embedded attempt session-file ownership and write locks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +35,7 @@ const lockOptions = {
 const tempDirs: string[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   resetEmbeddedAttemptSessionFileOwnersForTest();
   resetSessionWriteLockStateForTest();
   for (const dir of tempDirs.splice(0)) {
@@ -42,6 +44,8 @@ afterEach(async () => {
 });
 
 async function createTempSessionFile(): Promise<string> {
+  // Use a real file so owner normalization can exercise realpath/symlink
+  // behavior.
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-attempt-session-lock-"));
   tempDirs.push(dir);
   const sessionFile = path.join(dir, "session.jsonl");
@@ -117,6 +121,8 @@ describe("embedded attempt session lock lifecycle", () => {
   });
 
   it("releases the eagerly-held attempt lock on dispose when cleanup is skipped (#86014)", async () => {
+    // Exceptions after prompt submission can skip cleanup acquisition; dispose
+    // still owns the original eager lock.
     const releases: string[] = [];
     const acquireSessionWriteLockLocal27 = vi
       .fn()
@@ -134,6 +140,34 @@ describe("embedded attempt session lock lifecycle", () => {
 
     expect(acquireSessionWriteLockLocal27).toHaveBeenCalledTimes(1);
     expect(releases).toEqual(["held"]);
+  });
+
+  it("releases the eagerly-held lock when the fence read throws during prompt release", async () => {
+    // A filesystem error can occur after the controller clears its in-memory
+    // lock reference; the underlying lease still must be released.
+    const release = vi.fn(async () => {});
+    const acquireSessionWriteLockLocalFad845 = vi.fn(async () => ({ release }));
+    const controller = await createEmbeddedAttemptSessionLockController({
+      acquireSessionWriteLock: acquireSessionWriteLockLocalFad845,
+      lockOptions,
+    });
+
+    // Simulate a transient, non-ENOENT filesystem error (e.g. EIO/EMFILE) while the
+    // prompt-release path reads the session-file fence. This fires AFTER the controller
+    // has cleared its in-memory `heldLock` reference but BEFORE the underlying file lock
+    // is released, which is the window that orphans the lock.
+    const statError = Object.assign(new Error("simulated I/O failure"), { code: "EIO" });
+    const statSpy = vi.spyOn(fs, "stat").mockRejectedValueOnce(statError);
+
+    try {
+      await expect(controller.releaseForPrompt()).rejects.toThrow();
+
+      // The underlying file lock must still be released so later turns do not wait for
+      // the full maxHoldMs watchdog before the stale lease is reclaimed.
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      statSpy.mockRestore();
+    }
   });
 
   it("releaseHeldLockForAbort and dispose are idempotent in succession (#86816)", async () => {

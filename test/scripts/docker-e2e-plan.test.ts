@@ -677,11 +677,11 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { credentials: ["anthropic", "gemini"], name: "live-gateway" },
       { credentials: ["anthropic"], name: "live-cli-backend-claude" },
       { credentials: ["gemini"], name: "live-cli-backend-gemini" },
-      { credentials: ["codex"], name: "live-codex-harness" },
+      { credentials: ["openai"], name: "live-codex-harness" },
       { credentials: ["openai"], name: "live-codex-media-path" },
       { credentials: ["openai"], name: "live-mcp-code-mode-gateway" },
       { credentials: ["openai"], name: "live-subagent-announce" },
-      { credentials: ["codex"], name: "live-codex-bind" },
+      { credentials: ["openai"], name: "live-codex-bind" },
       { credentials: ["anthropic"], name: "live-acp-bind-claude" },
       { credentials: ["codex", "openai"], name: "live-acp-bind-codex" },
       { credentials: ["factory"], name: "live-acp-bind-droid" },
@@ -691,6 +691,18 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     for (const { credentials, name } of cases) {
       expect(planFor({ selectedLaneNames: [name] }).credentials, name).toEqual(credentials);
+    }
+  });
+
+  it("plans Codex harness Docker-all lanes for API-key Testbox auth", () => {
+    for (const name of ["live-codex-harness", "live-codex-bind"]) {
+      const plan = planFor({ selectedLaneNames: [name] });
+      const lane = requireFirstLane(plan);
+
+      expect(plan.credentials, name).toEqual(["openai"]);
+      expect(lane.command, name).toContain("OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key");
+      expect(lane.resources, name).toContain("live:openai");
+      expect(lane.resources, name).not.toContain("live:codex");
     }
   });
 

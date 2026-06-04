@@ -1,3 +1,4 @@
+// Tests miscellaneous run-reply-agent behaviors and artifact output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -99,6 +100,7 @@ vi.mock("../../agents/model-fallback.js", () => ({
 }));
 
 vi.mock("../../agents/model-auth.js", () => ({
+  isMissingProviderAuthError: () => false,
   resolveModelAuthMode: () => "api-key",
 }));
 

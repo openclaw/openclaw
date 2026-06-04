@@ -1,3 +1,4 @@
+// Tests agent runner utility decisions for fallbacks, channels, and reasoning tags.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { FollowupRun } from "./queue.js";
 
@@ -25,6 +26,7 @@ const {
   buildThreadingToolContext,
   buildEmbeddedRunBaseParams,
   buildEmbeddedRunContexts,
+  buildEmbeddedRunExecutionParams,
   resolveModelFallbackOptions,
   resolveEnforceFinalTag,
   resolveProviderScopedAuthProfile,
@@ -138,6 +140,7 @@ describe("agent-runner-utils", () => {
       provider: "openai",
       model: "gpt-4.1-mini",
       runId: "run-1",
+      promptCacheKey: "webchat-cache-key",
       authProfile,
     });
 
@@ -160,6 +163,24 @@ describe("agent-runner-utils", () => {
     expect(resolved.bashElevated).toBe(run.bashElevated);
     expect(resolved.timeoutMs).toBe(run.timeoutMs);
     expect(resolved.runId).toBe("run-1");
+    expect(resolved.promptCacheKey).toBe("webchat-cache-key");
+  });
+
+  it("threads prompt cache affinity through embedded execution params", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: { Provider: "webchat" },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+      promptCacheKey: "stable-session-cache-key",
+    });
+
+    expect(resolved.runBaseParams.runId).toBe("run-1");
+    expect(resolved.runBaseParams.promptCacheKey).toBe("stable-session-cache-key");
   });
 
   it("passes through recovered auto fallback provenance for embedded run params", () => {
@@ -231,6 +252,7 @@ describe("agent-runner-utils", () => {
     expect(resolved.embeddedContext.messageProvider).toBe("openai");
     expect(resolved.embeddedContext.messageTo).toBe("channel-1");
     expect(resolved.embeddedContext.memberRoleIds).toEqual(["admin", "operator"]);
+    expect(resolved.embeddedContext.currentInboundAudio).toBe(false);
     expect(resolved.senderContext).toEqual({
       senderId: "sender-1",
       senderName: undefined,
@@ -255,6 +277,24 @@ describe("agent-runner-utils", () => {
 
     expect(resolved.embeddedContext.messageProvider).toBe("telegram");
     expect(resolved.embeddedContext.messageTo).toBe("268300329");
+  });
+
+  it("carries inbound audio context into embedded message tools", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunContexts({
+      run,
+      sessionCtx: {
+        Provider: "telegram",
+        To: "268300329",
+        MediaType: "audio/ogg; codecs=opus",
+        BodyForCommands: "<media:audio>",
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+    });
+
+    expect(resolved.embeddedContext.currentInboundAudio).toBe(true);
   });
 
   it("uses telegram plugin threading context for native commands", () => {

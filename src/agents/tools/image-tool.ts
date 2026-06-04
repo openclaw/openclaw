@@ -1,3 +1,8 @@
+/**
+ * image built-in tool.
+ *
+ * Describes local, staged, web, and generated media through configured media-understanding providers.
+ */
 import { resolve, isAbsolute } from "node:path";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -59,6 +64,7 @@ import {
 import {
   applyImageModelConfigDefaults,
   buildTextToolResult,
+  REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS,
   resolveMediaToolInboundRoots,
   resolveMediaToolLocalRoots,
   resolveRemoteMediaSsrfPolicy,
@@ -90,6 +96,7 @@ type ImageToolLoadWebMediaOptions = {
   localRoots?: readonly string[] | "any";
   inboundRoots?: readonly string[];
   ssrfPolicy?: ReturnType<typeof resolveRemoteMediaSsrfPolicy>;
+  readIdleTimeoutMs?: number;
 };
 
 type ImageWebMediaRuntime = {
@@ -974,6 +981,7 @@ export function createImageTool(options?: {
                 localRoots: mediaLocalRoots,
                 inboundRoots: mediaInboundRoots,
                 ssrfPolicy: remoteMediaSsrfPolicy,
+                ...(isHttpUrl ? { readIdleTimeoutMs: REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS } : {}),
                 imageCompression,
               });
         if (media.kind !== "image") {

@@ -1,3 +1,8 @@
+/**
+ * Tests Anthropic Messages transport streaming.
+ * Covers request construction, SSE parsing, aborts, tool calls, usage, and
+ * provider transport hooks.
+ */
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
@@ -180,6 +185,7 @@ describe("anthropic transport stream", () => {
   });
 
   beforeEach(() => {
+    vi.unstubAllEnvs();
     buildGuardedModelFetchMock.mockReset();
     guardedFetchMock.mockReset();
     buildGuardedModelFetchMock.mockReturnValue(guardedFetchMock);
@@ -225,6 +231,40 @@ describe("anthropic transport stream", () => {
     expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBe(
       "fine-grained-tool-streaming-2025-05-14",
     );
+  });
+
+  it("honors ANTHROPIC_BASE_URL when model base URL is blank", async () => {
+    vi.stubEnv("ANTHROPIC_BASE_URL", " https://anthropic-proxy.example/v1 ");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ baseUrl: "" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const [url] = guardedFetchCall();
+    expect(url).toBe("https://anthropic-proxy.example/v1/messages");
+    expect(buildGuardedModelFetchMock.mock.calls[0]?.[0]).toMatchObject({
+      baseUrl: "https://anthropic-proxy.example/v1",
+    });
+    expect(latestAnthropicRequestHeaders().get("anthropic-beta")).toBeNull();
+  });
+
+  it("prefers explicit Anthropic base URL over ANTHROPIC_BASE_URL", async () => {
+    vi.stubEnv("ANTHROPIC_BASE_URL", "https://anthropic-proxy.example/v1");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ baseUrl: "https://configured.example" }),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    const [url] = guardedFetchCall();
+    expect(url).toBe("https://configured.example/v1/messages");
   });
 
   it("strips the provider prefix from direct Anthropic request model ids", async () => {

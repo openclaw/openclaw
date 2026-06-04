@@ -1,3 +1,5 @@
+// Role allowlist update tests cover operator-driven gateway updates, node lists,
+// device/node pairing state, restart sentinels, and runtime plugin visibility.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -281,14 +283,30 @@ async function expectCanvasSnapshotDenied(nodeId: string, idempotencyKey: string
 
 function createInvokeCapture() {
   let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
+  const pendingPayloads: Array<{ id?: string; nodeId?: string }> = [];
   return {
-    waitForInvoke: () =>
-      new Promise<{ id?: string; nodeId?: string }>((resolve) => {
+    waitForInvoke: () => {
+      const pending = pendingPayloads.shift();
+      if (pending) {
+        return Promise.resolve(pending);
+      }
+      if (resolveInvoke) {
+        throw new Error("already waiting for a node invoke request");
+      }
+      return new Promise<{ id?: string; nodeId?: string }>((resolve) => {
         resolveInvoke = resolve;
-      }),
+      });
+    },
     onEvent: (evt: { event?: string; payload?: unknown }) => {
       if (evt.event === "node.invoke.request") {
-        resolveInvoke?.(evt.payload as { id?: string; nodeId?: string });
+        const payload = evt.payload as { id?: string; nodeId?: string };
+        if (resolveInvoke) {
+          const resolve = resolveInvoke;
+          resolveInvoke = null;
+          resolve(payload);
+          return;
+        }
+        pendingPayloads.push(payload);
       }
     },
   };
@@ -450,6 +468,7 @@ describe("gateway node command allowlist", () => {
     let systemClient: GatewayClient | undefined;
     let emptyClient: GatewayClient | undefined;
     let allowedClient: GatewayClient | undefined;
+    const invokeCapture = createInvokeCapture();
 
     try {
       const systemDeviceIdentity = loadOrCreateDeviceIdentity(
@@ -500,23 +519,13 @@ describe("gateway node command allowlist", () => {
       await emptyClient.stopAndWait();
       await waitForConnectedCount(0);
 
-      let resolveInvoke: ((payload: { id?: string; nodeId?: string }) => void) | null = null;
-      const waitForInvoke = () =>
-        new Promise<{ id?: string; nodeId?: string }>((resolve) => {
-          resolveInvoke = resolve;
-        });
       allowedClient = await connectNodeClientWithNodePairing({
         port,
         commands: ["canvas.snapshot"],
         instanceId: "node-allowed",
         displayName: "node-allowed",
         deviceIdentity: allowedDeviceIdentity,
-        onEvent: (evt) => {
-          if (evt.event === "node.invoke.request") {
-            const payload = evt.payload as { id?: string; nodeId?: string };
-            resolveInvoke?.(payload);
-          }
-        },
+        onEvent: invokeCapture.onEvent,
       });
       const allowedNodeId = await getConnectedNodeId();
 
@@ -526,7 +535,7 @@ describe("gateway node command allowlist", () => {
         params: { format: "png" },
         idempotencyKey: "allowlist-3",
       });
-      const payload = await waitForInvoke();
+      const payload = await invokeCapture.waitForInvoke();
       const requestId = payload?.id ?? "";
       const nodeIdFromReq = payload?.nodeId ?? "node-allowed";
       await allowedClient.request("node.invoke.result", {
@@ -544,7 +553,7 @@ describe("gateway node command allowlist", () => {
         params: { format: "png" },
         idempotencyKey: "allowlist-null-payloadjson",
       });
-      const payloadNull = await waitForInvoke();
+      const payloadNull = await invokeCapture.waitForInvoke();
       const requestIdNull = payloadNull?.id ?? "";
       const nodeIdNull = payloadNull?.nodeId ?? "node-allowed";
       await allowedClient.request("node.invoke.result", {
