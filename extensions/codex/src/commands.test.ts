@@ -3975,8 +3975,11 @@ describe("codex command", () => {
     );
     const runParams = mockArg(runCodexBoundConversationPrompt, 0, 0) as { prompt?: string };
     const prompt = runParams.prompt ?? "";
-    expect(prompt).toContain("fresh context");
+    expect(prompt).toContain("clean context");
     expect(prompt).not.toContain("<proposed_plan>");
+    // Same first-person framing for the clean-context approval.
+    expect(prompt).toContain("I (Codex) just received");
+    expect(prompt).toContain("\"Approve and execute with clean context\"");
   });
 
   it("approves a Codex plan in the existing context with the stored plan text", async () => {
@@ -4027,6 +4030,13 @@ describe("codex command", () => {
     expect(prompt).toContain("existing Codex thread/context");
     expect(prompt).toContain("Run the focused tests.");
     expect(prompt).not.toContain("<proposed_plan>");
+    // The prompt must address Codex in the first person and call
+    // out the chat-UI button click as the source of the approval
+    // so Codex does not later mis-attribute the button to the
+    // surrounding OpenClaw shell.
+    expect(prompt).toContain("I (Codex) just received");
+    expect(prompt).toContain("\"Approve and execute\" button click");
+    expect(prompt).toContain("OpenClaw routing the user's plan approval");
   });
 
   it("wires buildPlanApprovalProgressReply into runCodexBoundConversationPrompt.sendProgressReply", async () => {

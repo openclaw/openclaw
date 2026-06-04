@@ -1266,7 +1266,7 @@ async function approveConversationPlanWithCleanContext(
 
 function buildCurrentContextPlanApprovalPrompt(planText: string): string {
   return [
-    "The user approved the plan below. Execute it now in this existing Codex thread/context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.",
+    "I (Codex) just received an \"Approve and execute\" button click from the OpenClaw chat UI. That button is OpenClaw routing the user's plan approval back into this Codex thread — it is not a command the user typed. The plan they approved is below. Execute it now in this existing Codex thread/context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.",
     "",
     planText.trim() ||
       "The approved plan was empty; continue from the user's latest approved intent.",
@@ -1275,7 +1275,7 @@ function buildCurrentContextPlanApprovalPrompt(planText: string): string {
 
 function buildCleanContextPlanApprovalPrompt(planText: string): string {
   return [
-    "A previous agent produced the plan below to accomplish the user's task. Implement the plan in a fresh context. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.",
+    "I (Codex) just received an \"Approve and execute with clean context\" button click from the OpenClaw chat UI. That button is OpenClaw routing the user's plan approval back into this Codex thread — it is not a command the user typed. A previous agent produced the plan below to accomplish the user's task; I am being restarted with a clean context to implement it. Treat the plan as the source of user intent, re-read files as needed, and carry the work through implementation and verification.",
     "",
     planText.trim() ||
       "The approved plan was empty; continue from the user's latest approved intent.",
