@@ -1,5 +1,5 @@
-import type { GuardedFetchOptions } from "openclaw/plugin-sdk/fetch-runtime";
 import type { RerankDocument } from "openclaw/plugin-sdk/memory-core-host-engine-reranker";
+import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { fetchGuardMock } = vi.hoisted(() => ({
@@ -29,13 +29,17 @@ function mockOkGuard(results: Array<{ index: number; relevance_score: number }>)
       headers: { "Content-Type": "application/json" },
     }),
     release: vi.fn(async () => {}),
+    finalUrl: "http://mock-final-url",
   });
   setExternalRerankerFetchGuardForTesting(fetchGuardMock);
   return fetchGuardMock;
 }
 
-function guardCallOpts(fn: ReturnType<typeof vi.fn>, index = 0): GuardedFetchOptions {
-  return fn.mock.calls[index]?.[0] as GuardedFetchOptions;
+function guardCallOpts(
+  fn: ReturnType<typeof vi.fn>,
+  index = 0,
+): Parameters<typeof fetchWithSsrFGuard>[0] {
+  return fn.mock.calls[index]?.[0] as Parameters<typeof fetchWithSsrFGuard>[0];
 }
 
 function guardCallBody(fn: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {

@@ -79,7 +79,8 @@ This keeps all endpoint URLs and credentials in one place (`models.providers`) r
 - Jina: `jina-reranker-v2-base-multilingual`
 - Voyage AI: `rerank-2`, `rerank-lite-2`
 - llama.cpp: the model name loaded with `--reranking`
-  </ParamField>
+
+</ParamField>
 
 <ParamField path="plugins.entries.memory-external-reranker.config.modelFallbacks" type="string[]">
   Ordered list of alternate model IDs (on the same provider) to try if the primary model fails.
