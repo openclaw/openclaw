@@ -85,7 +85,7 @@ describe("Codex app-server attempt results", () => {
       }),
     ).toEqual({
       message:
-        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+        "Codex stopped after tool activity before confirming the turn was complete. Some work may already have been performed, so OpenClaw did not replay the turn automatically. Verify the current state before retrying.",
       replayInvalid: true,
       livenessState: "abandoned",
     });

@@ -28,10 +28,19 @@ export function describeNotificationActivity(
   if (!isJsonObject(notification.params)) {
     return { lastNotificationMethod: notification.method };
   }
-  if (notification.method !== "rawResponseItem/completed") {
-    return { lastNotificationMethod: notification.method };
-  }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  if (notification.method !== "rawResponseItem/completed") {
+    return item
+      ? {
+          lastNotificationMethod: notification.method,
+          lastNotificationItemId: readString(item, "id"),
+          lastNotificationItemType: readString(item, "type"),
+          lastNotificationItemRole: readString(item, "role"),
+          lastNotificationItemStatus: readString(item, "status"),
+          lastNotificationTool: readString(item, "tool") ?? readString(item, "name"),
+        }
+      : { lastNotificationMethod: notification.method };
+  }
   if (!item) {
     return { lastNotificationMethod: notification.method };
   }

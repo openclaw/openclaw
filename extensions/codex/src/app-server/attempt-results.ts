@@ -12,7 +12,7 @@ import type { CodexSystemPromptReport } from "./attempt-context.js";
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_USER_MESSAGE =
   "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.";
 const CODEX_APP_SERVER_MISSING_TERMINAL_EVENT_SIDE_EFFECT_USER_MESSAGE =
-  "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.";
+  "Codex stopped after tool activity before confirming the turn was complete. Some work may already have been performed, so OpenClaw did not replay the turn automatically. Verify the current state before retrying.";
 
 /** Joins terminal assistant text blocks into the final attempt answer. */
 export function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
