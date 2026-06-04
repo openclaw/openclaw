@@ -2868,11 +2868,13 @@ export async function dispatchReplyFromConfig(
     }
 
     if (attemptedFinalDelivery && !finalDeliveryFailed) {
-      throwIfDispatchOperationAborted();
+      // Final delivery already succeeded; clear durable pending state before
+      // surfacing a later abort so successful replies cannot strand sessions.
       await clearPendingFinalDeliveryAfterSuccess({
         storePath: sessionStoreEntry.storePath,
         sessionKey: sessionStoreEntry.sessionKey ?? sessionKey,
       });
+      throwIfDispatchOperationAborted();
     }
 
     if (!suppressDelivery) {
