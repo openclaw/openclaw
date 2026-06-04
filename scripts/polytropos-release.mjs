@@ -488,8 +488,8 @@ logStream.end();function currentBranchName() {
 
 function assertValidReleaseBranch() {
   const branch = currentBranchName();
-  if (!/^release\/\d{4}\.\d{2}\.\d{2}$/.test(branch)) {
-    fail(`release script must run from a valid release branch (release/YYYY.MM.DD); current branch: ${branch}`);
+  if (!/^release\/\d{4}\.\d{1,2}\.\d{1,2}$/.test(branch)) {
+    fail(`release script must run from a valid release branch (release/YYYY.M.D (matching the version/tag format)); current branch: ${branch}`);
   }
   return branch;
 }

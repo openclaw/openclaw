@@ -43,7 +43,7 @@ node scripts/polytropos-release.mjs release --tgz /path/to/openclaw-<ver>.tgz
 
 What staging does:
 
-- requires the current branch to match `release/YYYY.MM.DD`
+- requires the current branch to match `release/YYYY.M.D`
 - creates and pushes the next `v<ver>+poly.<N>` tag from that release branch
 - waits for the GitHub Actions release workflow triggered by the tag
 - downloads the built artifact from Actions
@@ -92,9 +92,9 @@ To exit dev mode, reinstall a released tarball (see release procedure above).
 
 ### Important: releases must be cut from a release branch
 
-The release script refuses to run unless the current branch matches `release/YYYY.MM.DD`.
+The release script refuses to run unless the current branch matches `release/YYYY.M.D`.
 
-Polytropos release work should be performed from a dedicated `origin/release/YYYY.MM.DD` branch, not `main`.
+Polytropos release work should be performed from a dedicated `origin/release/YYYY.M.D` branch, not `main`.
 
 ### Release directory invariants (DO NOT VIOLATE)
 
