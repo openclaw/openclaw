@@ -674,6 +674,67 @@ describe("runContextEngineMaintenance", () => {
     });
   });
 
+  it("defers bootstrap maintenance to a background debt consumer for background-mode engines", async () => {
+    await withStateDirEnv("openclaw-bootstrap-maintenance-", async () => {
+      resetCommandQueueStateForTest();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+
+      const sessionKey = "agent:main:bootstrap-1";
+      const maintain = vi.fn(async () => ({
+        changed: false,
+        bytesFreed: 0,
+        rewrittenEntries: 0,
+      }));
+      const backgroundEngine = {
+        info: {
+          id: "test",
+          name: "Test Engine",
+          turnMaintenanceMode: "background" as const,
+        },
+        ingest: async () => ({ ingested: true }),
+        assemble: async ({ messages }: { messages: unknown[] }) => ({
+          messages,
+          estimatedTokens: 0,
+        }),
+        compact: async () => ({ ok: true, compacted: false }),
+        maintain,
+      } as NonNullable<Parameters<typeof runContextEngineMaintenance>[0]["contextEngine"]>;
+
+      let deferred: Promise<void> | undefined;
+      const result = await runContextEngineMaintenance({
+        contextEngine: backgroundEngine,
+        sessionId: "bootstrap-1",
+        sessionKey,
+        sessionFile: "/tmp/session.jsonl",
+        reason: "bootstrap",
+        runtimeContext: {
+          workspaceDir: "/tmp/workspace",
+          tokenBudget: 2048,
+          currentTokenCount: 1536,
+        },
+        onDeferredMaintenance: (promise) => {
+          deferred = promise;
+        },
+      });
+
+      // Foreground bootstrap maintenance cannot pay deferred compaction debt, so
+      // a background consumer must be scheduled instead of running inline.
+      expect(result).toBeUndefined();
+      const queuedTasks = listTasksForOwnerKey(sessionKey).filter(
+        (task) => task.taskKind === TURN_MAINTENANCE_TASK_KIND,
+      );
+      expect(queuedTasks).toHaveLength(1);
+
+      await deferred;
+      expect(maintain).toHaveBeenCalledTimes(1);
+      const maintainParams = firstMaintainParams(maintain);
+      expectRecordFields(requireRecord(maintainParams.runtimeContext, "runtime context"), {
+        allowDeferredCompactionExecution: true,
+      });
+    });
+  });
+
   it("coalesces repeated requests into one active run plus one follow-up run for the same session", async () => {
     await withStateDirEnv("openclaw-turn-maintenance-", async () => {
       vi.useFakeTimers();

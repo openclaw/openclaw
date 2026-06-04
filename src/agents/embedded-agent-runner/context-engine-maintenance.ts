@@ -711,8 +711,12 @@ export async function runContextEngineMaintenance(params: {
   }
 
   const executionMode = params.executionMode ?? "foreground";
+  // Bootstrap/reconcile runs foreground, where deferred compaction debt cannot
+  // execute (allowDeferredCompactionExecution is background-only). For engines
+  // that opt into background maintenance, schedule the same background debt
+  // consumer as turns so bootstrap-created debt is not stranded (issue #67716).
   const shouldDefer =
-    params.reason === "turn" &&
+    (params.reason === "turn" || params.reason === "bootstrap") &&
     executionMode !== "background" &&
     params.contextEngine.info.turnMaintenanceMode === "background";
 
