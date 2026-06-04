@@ -72,6 +72,28 @@ describe("createMinimaxThinkingDisabledWrapper", () => {
     ).toBeUndefined();
   });
 
+  it("does NOT disable thinking for MiniMax-M3 on anthropic-messages", () => {
+    // M3 emits Anthropic-shape thinking blocks and returns empty content
+    // when thinking is disabled — see isMinimaxModelRequiringThinking.
+    expect(
+      captureThinkingPayload({
+        provider: "minimax",
+        api: "anthropic-messages",
+        modelId: "MiniMax-M3",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does NOT disable thinking for MiniMax-M3 on minimax-portal", () => {
+    expect(
+      captureThinkingPayload({
+        provider: "minimax-portal",
+        api: "anthropic-messages",
+        modelId: "MiniMax-M3",
+      }),
+    ).toBeUndefined();
+  });
+
   it("preserves an already-set thinking value", () => {
     let capturedThinking: unknown = undefined;
     const baseStreamFn: StreamFn = (model, context, options) => {
