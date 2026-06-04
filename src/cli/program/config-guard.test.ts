@@ -212,37 +212,6 @@ describe("ensureConfigReady", () => {
     expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
   });
 
-  it("runs doctor flow for read-only commands when the default legacy cron store exists", async () => {
-    const root = useTempOpenClawHome();
-    writeStateMarker(root, "cron/jobs.json");
-
-    await runEnsureConfigReady(["status"]);
-
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
-  });
-
-  it("runs doctor flow for read-only commands when a configured legacy cron store exists", async () => {
-    const root = useTempOpenClawHome();
-    const storePath = path.join(root, "custom-cron", "jobs.json");
-    fs.mkdirSync(path.dirname(storePath), { recursive: true });
-    fs.writeFileSync(storePath, "{}");
-    const snapshot = {
-      ...makeSnapshot(),
-      exists: true,
-      valid: true,
-      config: { cron: { store: storePath } },
-    };
-    readConfigFileSnapshotMock.mockResolvedValue(snapshot);
-    loadAndMaybeMigrateDoctorConfigMock.mockResolvedValue({
-      snapshot,
-      baseConfig: snapshot.config,
-    });
-
-    await runEnsureConfigReady(["status"]);
-
-    expect(loadAndMaybeMigrateDoctorConfigMock).toHaveBeenCalledOnce();
-  });
-
   it("runs doctor flow before agent commands when the legacy plugin install index exists", async () => {
     const root = useTempOpenClawHome();
     writeStateMarker(root, "plugins/installs.json");

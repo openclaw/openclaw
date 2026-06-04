@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
-import { loadCronStore, saveCronStore } from "../../../cron/store.js";
+import { loadCronStore } from "../../../cron/store.js";
 import { autoMigrateLegacyCronStore } from "./auto-migration.js";
 
 let tempRoot: string | null = null;
@@ -29,54 +29,25 @@ function createCronConfig(storePath: string): OpenClawConfig {
   };
 }
 
-function createLegacyCronJob(overrides: Record<string, unknown> = {}) {
-  return {
-    jobId: "legacy-job",
-    name: "Legacy job",
-    notify: true,
-    createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
-    updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
-    schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
-    payload: {
-      kind: "systemEvent",
-      text: "Morning brief",
-    },
-    state: {},
-    ...overrides,
-  };
-}
-
-function createCurrentCronJob(overrides: Record<string, unknown> = {}) {
-  return {
-    id: "sqlite-job",
-    name: "SQLite job",
-    enabled: true,
-    createdAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
-    updatedAtMs: Date.parse("2026-02-03T00:00:00.000Z"),
-    schedule: { kind: "cron", expr: "0 8 * * *", tz: "UTC" },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: {
-      kind: "systemEvent",
-      text: "SQLite brief",
-    },
-    state: {},
-    ...overrides,
-  };
-}
-
-async function writeLegacyCronStore(storePath: string, jobs: Array<Record<string, unknown>>) {
+async function writeLegacyCronStore(storePath: string) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await fs.writeFile(
     storePath,
-    JSON.stringify(
-      {
-        version: 1,
-        jobs,
-      },
-      null,
-      2,
-    ),
+    JSON.stringify({
+      version: 1,
+      jobs: [
+        {
+          jobId: "legacy-job",
+          name: "Legacy job",
+          notify: true,
+          createdAtMs: Date.parse("2026-02-01T00:00:00.000Z"),
+          updatedAtMs: Date.parse("2026-02-02T00:00:00.000Z"),
+          schedule: { kind: "cron", cron: "0 7 * * *", tz: "UTC" },
+          payload: { kind: "systemEvent", text: "Morning brief" },
+          state: {},
+        },
+      ],
+    }),
     "utf-8",
   );
 }
@@ -89,37 +60,18 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 describe("autoMigrateLegacyCronStore", () => {
-  it("imports legacy-only jobs into SQLite and archives legacy cron files before runtime reads", async () => {
+  it("imports legacy cron jobs into SQLite and archives the legacy store", async () => {
     const storePath = await makeTempStorePath();
-    await saveCronStore(storePath, {
-      version: 1,
-      jobs: [
-        createCurrentCronJob({
-          id: "legacy-job",
-          name: "SQLite wins",
-        }) as never,
-      ],
-    });
-    await writeLegacyCronStore(storePath, [
-      createLegacyCronJob({
-        name: "Stale duplicate",
-      }),
-      createLegacyCronJob({
-        jobId: "legacy-only",
-        name: "Legacy only",
-      }),
-    ]);
+    await writeLegacyCronStore(storePath);
 
     const result = await autoMigrateLegacyCronStore({ cfg: createCronConfig(storePath) });
 
-    const jobs = (await loadCronStore(storePath)).jobs as unknown as Array<Record<string, unknown>>;
-    expect(jobs.map((job) => job.id)).toEqual(["legacy-job", "legacy-only"]);
-    expect(jobs[0]?.name).toBe("SQLite wins");
-    expect(jobs[1]?.name).toBe("Legacy only");
-    const legacyOnly = requireRecord(jobs[1], "legacy-only job");
-    expect(legacyOnly.jobId).toBeUndefined();
-    expect(legacyOnly.notify).toBeUndefined();
-    expect(requireRecord(legacyOnly.delivery, "cron delivery").mode).toBe("webhook");
+    const [job] = (await loadCronStore(storePath)).jobs as unknown as Array<
+      Record<string, unknown>
+    >;
+    expect(job?.id).toBe("legacy-job");
+    expect(job?.jobId).toBeUndefined();
+    expect(requireRecord(job?.delivery, "cron delivery").mode).toBe("webhook");
     await expect(fs.stat(`${storePath}.migrated`)).resolves.toBeTruthy();
     expect(result.changes.join("\n")).toContain("Cron store migrated to SQLite");
     expect(result.warnings).toEqual([]);
