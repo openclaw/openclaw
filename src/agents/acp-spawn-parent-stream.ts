@@ -82,14 +82,23 @@ function mergeStreamingConfig(base: unknown, override: unknown): unknown {
   if (!baseRecord || !overrideRecord) {
     return override ?? base;
   }
-  return {
+  const merged = {
     ...baseRecord,
     ...overrideRecord,
-    progress: {
-      ...(asObjectRecord(baseRecord.progress) ?? {}),
-      ...(asObjectRecord(overrideRecord.progress) ?? {}),
-    },
   };
+  const baseProgress = asObjectRecord(baseRecord.progress);
+  const overrideProgress = asObjectRecord(overrideRecord.progress);
+  if (baseProgress && overrideProgress) {
+    merged.progress = {
+      ...baseProgress,
+      ...overrideProgress,
+    };
+  } else if (overrideProgress ?? baseProgress) {
+    merged.progress = overrideProgress ?? baseProgress;
+  } else {
+    delete merged.progress;
+  }
+  return merged;
 }
 
 function mergeStreamingEntry(
@@ -132,12 +141,17 @@ function applyParentPreviewStreamModeDefault(
   if (channelId !== "discord" || hasConfiguredPreviewStreamMode(entry)) {
     return entry;
   }
+  const streaming = asObjectRecord(entry.streaming);
   return {
     ...entry,
-    streaming: {
-      ...(asObjectRecord(entry.streaming) ?? {}),
-      mode: "progress",
-    },
+    streaming: streaming
+      ? {
+          ...streaming,
+          mode: "progress",
+        }
+      : {
+          mode: "progress",
+        },
   };
 }
 
@@ -485,20 +499,20 @@ export function startAcpSpawnParentStreamRelay(params: {
     scheduleFlush();
   };
 
-  const appendItemProgressSnapshot = (params: { itemId: string; text: string }) => {
-    const previous = itemProgressTextById.get(params.itemId) ?? "";
-    if (params.text === previous) {
+  const appendItemProgressSnapshot = (snapshot: { itemId: string; text: string }) => {
+    const previous = itemProgressTextById.get(snapshot.itemId) ?? "";
+    if (snapshot.text === previous) {
       return;
     }
-    const kind = `item:${params.itemId}`;
-    const isPrefixUpdate = Boolean(previous && params.text.startsWith(previous));
+    const kind = `item:${snapshot.itemId}`;
+    const isPrefixUpdate = Boolean(previous && snapshot.text.startsWith(previous));
     const hasPendingSnapshot = pendingProgressKind === kind && Boolean(pendingText);
     if (previous && !isPrefixUpdate && hasPendingSnapshot) {
       pendingText = "";
     }
-    itemProgressTextById.set(params.itemId, params.text);
+    itemProgressTextById.set(snapshot.itemId, snapshot.text);
     const delta =
-      isPrefixUpdate && hasPendingSnapshot ? params.text.slice(previous.length) : params.text;
+      isPrefixUpdate && hasPendingSnapshot ? snapshot.text.slice(previous.length) : snapshot.text;
     appendVisibleProgress(delta, kind);
   };
 
