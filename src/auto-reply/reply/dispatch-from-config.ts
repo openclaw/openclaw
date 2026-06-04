@@ -2109,7 +2109,8 @@ export async function dispatchReplyFromConfig(
               threadId: routeThreadId,
             },
           ),
-        );
+        ),
+      );
       if (beforeDispatchResult?.handled) {
         const text = beforeDispatchResult.text;
         let queuedFinal = false;

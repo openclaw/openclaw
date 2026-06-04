@@ -180,10 +180,14 @@ export default definePluginEntry({
       }),
     );
     api.on("before_dispatch", (event, ctx) => {
+      const channel = event.channel ?? ctx.channelId;
+      if (!channel) {
+        return undefined;
+      }
       const result = answerCodexUserInputFreeform({
         answerText: (event.body ?? event.content).trim(),
         ctx: {
-          channel: event.channel ?? ctx.channelId,
+          channel,
           accountId: event.accountId ?? ctx.accountId,
           senderId: event.senderId ?? ctx.senderId,
           sessionKey: event.sessionKey ?? ctx.sessionKey,

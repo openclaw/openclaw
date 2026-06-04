@@ -4074,6 +4074,91 @@ describe("codex command", () => {
     expect(runParams.prompt).toContain("Run the focused tests.");
   });
 
+  it("plan-approval follow-up turn preserves the conversation target on the synthetic inbound event", async () => {
+    // Regression: previously, /codex plan approve / plan approve-clean built
+    // a synthetic inbound event that lost the user's conversation target
+    // (conversationId / metadata.to / ctx.pluginBinding). The follow-up
+    // Codex turn then silently failed to deliver live progress or
+    // request_user_input prompts back to the chat that approved the
+    // plan, and the turn waited for the 10-minute input timeout.
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const reply = buildCodexPlanDecisionReply({
+      text: "<proposed_plan>Implement the typed input replies.</proposed_plan>",
+      scope: {
+        sessionFile,
+        threadId: "thread-plan",
+        channel: "test",
+        senderId: "user-1",
+      },
+    });
+    const cleanButton = readInteractiveButtons(reply).find((button) =>
+      button.value.includes(":approve-clean"),
+    );
+    const token = cleanButton?.value.split(":").at(-2) ?? "";
+    const runCodexBoundConversationPrompt = vi.fn(async () => ({
+      reply: { text: "implemented" },
+    }));
+    const pluginBinding = {
+      bindingId: "binding-1",
+      pluginId: "codex",
+      pluginRoot: "/plugin",
+      channel: "test",
+      accountId: "default",
+      conversationId: "conv-xyz",
+      boundAt: 1,
+    } as const;
+    const readCodexAppServerBinding = vi.fn(async () => ({
+      schemaVersion: 1 as const,
+      threadId: "thread-plan",
+      sessionFile,
+      cwd: "/repo",
+      authProfileId: "work",
+      model: "gpt-5.5",
+      modelProvider: "openai",
+      approvalPolicy: "never" as const,
+      sandbox: "danger-full-access" as const,
+      serviceTier: "priority" as const,
+      liveProgress: true,
+      collaborationMode: "plan" as const,
+      reasoningEffortDefaults: { execute: "medium" as const, plan: "xhigh" as const },
+      createdAt: "2026-05-01T00:00:00.000Z",
+      updatedAt: "2026-05-01T00:00:00.000Z",
+    }));
+
+    await expect(
+      handleCodexCommand(createContext(`plan approve-clean ${token}`, sessionFile, {
+        to: "user-1:dm",
+        threadParentId: "conv-xyz",
+        sessionId: "msg-1234",
+        getCurrentConversationBinding: async () => pluginBinding,
+      }), {
+        deps: createDeps({
+          readCodexAppServerBinding,
+          runCodexBoundConversationPrompt,
+          startCodexConversationThread: vi.fn(async () => ({
+            kind: "codex-app-server-session" as const,
+            version: 1 as const,
+            sessionFile,
+            workspaceDir: "/repo",
+          })),
+        }),
+      }),
+    ).resolves.toEqual({ text: "implemented" });
+
+    expect(runCodexBoundConversationPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: expect.objectContaining({
+          conversationId: "conv-xyz",
+          parentConversationId: "msg-1234",
+          metadata: expect.objectContaining({ to: "user-1:dm" }),
+        }),
+        ctx: expect.objectContaining({
+          pluginBinding,
+        }),
+      }),
+    );
+  });
+
   it("escapes current bound model status before chat display", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     await fs.writeFile(

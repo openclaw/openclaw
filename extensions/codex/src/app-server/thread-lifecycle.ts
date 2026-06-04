@@ -1048,7 +1048,7 @@ export function buildTurnStartParams(
     skillsCollaborationInstructions?: string;
     memoryCollaborationInstructions?: string;
     heartbeatCollaborationInstructions?: string;
-    collaborationMode?: CodexAppServerCollaborationMode;
+    collaborationMode?: CodexTurnCollaborationMode;
     reasoningEffort?: CodexAppServerReasoningEffort;
   },
 ): CodexTurnStartParams {
@@ -1092,12 +1092,12 @@ function resolveCodexThreadEnvironmentSelection(options: {
   return {};
 }
 
-type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;
+export type CodexTurnCollaborationMode = NonNullable<CodexTurnStartParams["collaborationMode"]>;
 
 export function buildTurnCollaborationMode(
   params: EmbeddedRunAttemptParams,
   options: {
-    mode?: CodexAppServerCollaborationMode;
+    mode?: CodexTurnCollaborationMode | string;
     reasoningEffort?: CodexAppServerReasoningEffort | null;
     turnScopedDeveloperInstructions?: string;
     skillsCollaborationInstructions?: string;
@@ -1105,8 +1105,12 @@ export function buildTurnCollaborationMode(
     heartbeatCollaborationInstructions?: string;
   } = {},
 ): CodexTurnCollaborationMode {
+  const mode: string =
+    typeof options.mode === "string"
+      ? options.mode
+      : (options.mode?.mode ?? "default");
   return {
-    mode: options.mode ?? "default",
+    mode,
     settings: {
       model: params.modelId,
       reasoning_effort:

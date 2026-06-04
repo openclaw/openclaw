@@ -569,6 +569,9 @@ async function runBoundTurn(params: {
   if (!threadId) {
     throw new Error("bound Codex conversation has no thread binding");
   }
+  if (!binding) {
+    throw new Error("bound Codex conversation has no thread binding");
+  }
   const workspaceDir = binding.cwd || params.data.workspaceDir;
   const { execPolicy, runtime } = await resolveConversationAppServerRuntime({
     pluginConfig: params.pluginConfig,
@@ -817,18 +820,18 @@ async function runBoundTurn(params: {
         cwd: workspaceDir,
         approvalPolicy: execPolicy?.touched
           ? runtime.approvalPolicy
-          : (binding.approvalPolicy ?? runtime.approvalPolicy),
+          : (binding!.approvalPolicy ?? runtime.approvalPolicy),
         approvalsReviewer: runtime.approvalsReviewer,
         sandboxPolicy: codexSandboxPolicyForTurn(
-          execPolicy?.touched ? runtime.sandbox : (binding.sandbox ?? runtime.sandbox),
+          execPolicy?.touched ? runtime.sandbox : (binding!.sandbox ?? runtime.sandbox),
           workspaceDir,
         ),
-        ...(binding.model ? { model: binding.model } : {}),
+        ...(binding!.model ? { model: binding!.model } : {}),
         personality: CODEX_NATIVE_PERSONALITY_NONE,
         ...(normalizedReasoningEffort ? { effort: normalizedReasoningEffort } : {}),
         ...(collaborationMode ? { collaborationMode } : {}),
-        ...((binding.serviceTier ?? runtime.serviceTier)
-          ? { serviceTier: binding.serviceTier ?? runtime.serviceTier }
+        ...((binding!.serviceTier ?? runtime.serviceTier)
+          ? { serviceTier: binding!.serviceTier ?? runtime.serviceTier }
           : {}),
       },
       { timeoutMs: runtime.requestTimeoutMs },
@@ -837,7 +840,7 @@ async function runBoundTurn(params: {
     activeTurnId = turnId;
     const activeCleanup = trackCodexConversationActiveTurn({
       sessionFile: params.data.sessionFile,
-      threadId,
+      threadId: threadId!,
       turnId,
     });
     collector.setTurnId(turnId);

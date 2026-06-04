@@ -69,7 +69,9 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
   };
   const readCurrentMessageComponents = (): DiscordRawComponent[] | undefined => {
     const components = params.interaction.message?.rawData?.components;
-    return Array.isArray(components) ? (components as DiscordRawComponent[]) : undefined;
+    return Array.isArray(components)
+      ? (components as unknown as DiscordRawComponent[])
+      : undefined;
   };
   const disableCurrentMessageComponents = async () => {
     const components = readCurrentMessageComponents();
@@ -132,7 +134,7 @@ export async function dispatchPluginDiscordInteractiveEvent(params: {
   );
   if (pluginBindingApproval) {
     const { buildPluginBindingResolvedText, resolvePluginConversationBindingApproval } =
-      conversationRuntime;
+      conversationRuntime!;
     try {
       await respond.acknowledge();
     } catch {

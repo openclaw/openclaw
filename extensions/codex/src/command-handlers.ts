@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import { resolveAgentDir, resolveSessionAgentIds } from "openclaw/plugin-sdk/agent-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import type { PluginCommandContext, PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginCommandContext, PluginCommandResult, PluginConversationBinding } from "openclaw/plugin-sdk/plugin-entry";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
 import {
@@ -1148,14 +1148,19 @@ async function handleConversationPlanDecisionWithStatus(
     workspaceDir: binding?.cwd || deps.resolveCodexDefaultWorkspaceDir(pluginConfig),
   });
   const prompt = buildCurrentContextPlanApprovalPrompt(decision.planText);
+  const pluginBinding = await ctx.getCurrentConversationBinding();
   return {
     consumed: true,
     reply: (
       await deps.runCodexBoundConversationPrompt({
         data,
         prompt,
-        event: buildCommandInboundEvent(ctx, prompt),
-        ctx: buildCommandInboundContext(ctx),
+        event: buildCommandInboundEvent(ctx, prompt, {
+          to: ctx.to,
+          conversationId: ctx.threadParentId,
+          ...(ctx.sessionId ? { parentConversationId: ctx.sessionId } : {}),
+        }),
+        ctx: buildCommandInboundContext(ctx, pluginBinding),
         pluginConfig,
       })
     ).reply,
@@ -1189,12 +1194,17 @@ async function approveConversationPlanWithCleanContext(
       : {}),
   });
   const prompt = buildCleanContextPlanApprovalPrompt(decision.planText);
+  const pluginBinding = await ctx.getCurrentConversationBinding();
   return (
     await deps.runCodexBoundConversationPrompt({
       data,
       prompt,
-      event: buildCommandInboundEvent(ctx, prompt),
-      ctx: buildCommandInboundContext(ctx),
+      event: buildCommandInboundEvent(ctx, prompt, {
+        to: ctx.to,
+        conversationId: ctx.threadParentId,
+        ...(ctx.sessionId ? { parentConversationId: ctx.sessionId } : {}),
+      }),
+      ctx: buildCommandInboundContext(ctx, pluginBinding),
       pluginConfig,
     })
   ).reply;
@@ -1346,6 +1356,12 @@ function resolveCodexConversationControlScope(ctx: PluginCommandContext): { agen
 function buildCommandInboundEvent(
   ctx: PluginCommandContext,
   content: string,
+  routing?: {
+    to?: string;
+    conversationId?: string;
+    parentConversationId?: string;
+    metadata?: Record<string, unknown>;
+  },
 ): Parameters<typeof runCodexBoundConversationPrompt>[0]["event"] {
   return {
     content,
@@ -1356,6 +1372,16 @@ function buildCommandInboundEvent(
     ...(ctx.senderId ? { senderId: ctx.senderId } : {}),
     ...(ctx.messageThreadId != null ? { threadId: ctx.messageThreadId } : {}),
     ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
+    // Preserve the original conversation target so the inbound-claim
+    // pipeline can route replies and request_user_input prompts back to
+    // the chat that approved the plan. Without these fields the
+    // follow-up turn's progress and any user-input prompts it raises
+    // silently fail to deliver (target is unresolvable).
+    ...(routing?.to ? { metadata: { ...routing.metadata, to: routing.to } } : {}),
+    ...(routing?.conversationId ? { conversationId: routing.conversationId } : {}),
+    ...(routing?.parentConversationId
+      ? { parentConversationId: routing.parentConversationId }
+      : {}),
     isGroup: false,
     commandAuthorized: true,
   };
@@ -1363,12 +1389,16 @@ function buildCommandInboundEvent(
 
 function buildCommandInboundContext(
   ctx: PluginCommandContext,
+  binding?: PluginConversationBinding | null,
 ): Parameters<typeof runCodexBoundConversationPrompt>[0]["ctx"] {
   return {
     channelId: ctx.channel,
     ...(ctx.accountId ? { accountId: ctx.accountId } : {}),
     ...(ctx.senderId ? { senderId: ctx.senderId } : {}),
     ...(ctx.sessionKey ? { sessionKey: ctx.sessionKey } : {}),
+    // Carry the plugin binding through so fallback reply paths and
+    // request_user_input handling can resolve the bound thread.
+    ...(binding ? { pluginBinding: binding } : {}),
   };
 }
 

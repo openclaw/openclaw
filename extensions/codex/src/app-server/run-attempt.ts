@@ -220,6 +220,7 @@ import {
   codexDynamicToolsFingerprint,
   type CodexAppServerThreadLifecycleBinding,
   type CodexContextEngineThreadBootstrapProjection,
+  type CodexTurnCollaborationMode,
 } from "./thread-lifecycle.js";
 import {
   inferCodexDynamicToolMeta,
@@ -1854,7 +1855,7 @@ export async function runCodexAppServerAttempt(
       cwd: codexExecutionCwd,
       appServer: pluginAppServer,
       promptText: codexTurnPromptText,
-      collaborationMode: thread.collaborationMode,
+      collaborationMode: thread.collaborationMode as CodexTurnCollaborationMode | undefined,
       reasoningEffort: thread.reasoningEffort,
       sandboxPolicy: codexSandboxPolicy,
       environmentSelection: codexEnvironmentSelection,
