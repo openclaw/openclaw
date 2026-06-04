@@ -141,7 +141,7 @@ export function buildCliAgentSystemPrompt(params: {
   });
 }
 
-/** Alternate export name for the CLI system prompt builder. */
+/** @deprecated Back-compat alias; use `buildCliAgentSystemPrompt` instead. */
 export const buildSystemPrompt = buildCliAgentSystemPrompt;
 
 /** Applies backend model aliases to a requested CLI model id. */
