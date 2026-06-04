@@ -192,6 +192,7 @@ describe("isHeartbeatContentEffectivelyEmpty", () => {
   it("returns true for comments only", () => {
     expect(isHeartbeatContentEffectivelyEmpty("# Header\n# Another comment")).toBe(true);
     expect(isHeartbeatContentEffectivelyEmpty("## Subheader\n### Another")).toBe(true);
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- Runtime template marker -->")).toBe(true);
   });
 
   it("returns false when a template includes plain instructional prose", () => {
@@ -240,6 +241,9 @@ Keep this file empty unless you want a tiny checklist.
     expect(isHeartbeatContentEffectivelyEmpty("- Check email")).toBe(false);
     expect(isHeartbeatContentEffectivelyEmpty("# HEARTBEAT.md\n- Task 1")).toBe(false);
     expect(isHeartbeatContentEffectivelyEmpty("Remind me to call mom")).toBe(false);
+    expect(isHeartbeatContentEffectivelyEmpty("<!-- note --> Check deployment <!-- note -->")).toBe(
+      false,
+    );
   });
 
   it("returns false for content with tasks after header", () => {

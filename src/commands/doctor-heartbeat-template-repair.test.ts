@@ -2,6 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { resolveWorkspaceTemplateDir } from "../agents/workspace-templates.js";
+import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import {
   analyzeHeartbeatTemplateForRepair,
   maybeRepairHeartbeatTemplate,
@@ -31,6 +33,11 @@ async function makeWorkspaceWithHeartbeat(content: string): Promise<{
   const heartbeatPath = path.join(workspaceDir, "HEARTBEAT.md");
   await fs.writeFile(heartbeatPath, content, "utf-8");
   return { workspaceDir, heartbeatPath };
+}
+
+async function readCleanRuntimeHeartbeatTemplate(): Promise<string> {
+  const templateDir = await resolveWorkspaceTemplateDir();
+  return await fs.readFile(path.join(templateDir, DEFAULT_HEARTBEAT_FILENAME), "utf-8");
 }
 
 describe("heartbeat template repair", () => {
@@ -207,11 +214,7 @@ Add short tasks below the comments only when you want the agent to check somethi
     });
 
     await expect(fs.readFile(heartbeatPath, "utf-8")).resolves.toBe(
-      `${[
-        "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
-        "",
-        "# Add tasks below when you want the agent to check something periodically.",
-      ].join("\n")}\n`,
+      await readCleanRuntimeHeartbeatTemplate(),
     );
     expect(mocks.note).toHaveBeenCalledWith(
       expect.stringContaining("clean heartbeat template"),
