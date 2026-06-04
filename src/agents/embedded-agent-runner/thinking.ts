@@ -1,3 +1,6 @@
+/**
+ * Sanitizes reasoning/thinking blocks for replay and recovery.
+ */
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";

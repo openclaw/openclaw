@@ -466,6 +466,7 @@ describe("scripts/run-vitest", () => {
 
     for (const configArg of [
       "--config=test/vitest/vitest.e2e.config.ts",
+      "--config=test/vitest/vitest.gateway.config.ts",
       "--config=./test/vitest/vitest.ui-e2e.config.ts",
       "--config=test/vitest/vitest.full-agentic.config.ts",
       "--config=test/vitest/vitest.full-core-contracts.config.ts",
@@ -476,6 +477,13 @@ describe("scripts/run-vitest", () => {
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: timeout,
       });
     }
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "-c",
+        "/repo/test/vitest/vitest.gateway.config.ts",
+      ]),
+    ).toBe(DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
     expect(
       resolveDefaultVitestNoOutputTimeoutMs([
         "run",

@@ -1869,6 +1869,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
       reason: "source-changed",
       workspaceDir: params.root,
       installRecords: nextInstallRecords,
+      invalidateRuntimeCache: false,
       logger: pluginLogger,
     });
   }

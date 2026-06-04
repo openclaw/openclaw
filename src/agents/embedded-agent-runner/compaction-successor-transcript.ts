@@ -1,3 +1,6 @@
+/**
+ * Rotates compacted sessions into successor transcript files when configured.
+ */
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";

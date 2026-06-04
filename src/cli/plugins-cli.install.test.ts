@@ -12,6 +12,7 @@ import {
 import {
   applyExclusiveSlotSelection,
   buildPluginSnapshotReport,
+  clearPluginRegistryLoadCache,
   enablePluginInConfig,
   findBundledPluginSourceMock,
   installHooksFromNpmSpec,
@@ -563,6 +564,7 @@ describe("plugins cli install", () => {
     expect(replaceConfigCall().nextConfig).toBe(enabledCfg);
     expect(runtimeLogsContain("slot adjusted")).toBe(true);
     expect(runtimeLogsContain("Installed plugin: alpha")).toBe(true);
+    expect(clearPluginRegistryLoadCache).not.toHaveBeenCalled();
   });
 
   it("passes force through as overwrite mode for marketplace installs", async () => {
