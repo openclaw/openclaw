@@ -10,6 +10,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plug
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   canonicalizeSpawnedByForAgent,
+  buildGatewaySessionDiskCompactionCheckpointPreviewsByDirSync,
   buildGatewaySessionInfo,
   buildGatewaySessionRow,
   capArrayByJsonBytes,
@@ -1199,7 +1200,7 @@ describe("gateway session utils", () => {
     }
   });
 
-  test("loadGatewaySessionRow includes disk-discovered checkpoint previews", async () => {
+  test("loadGatewaySessionRow does not disk-discover checkpoint previews", async () => {
     resetConfigRuntimeState();
     try {
       await withStateDirEnv("session-utils-load-row-checkpoint-", async ({ stateDir }) => {
@@ -1232,17 +1233,34 @@ describe("gateway session utils", () => {
         } as OpenClawConfig;
         setRuntimeConfigSnapshot(cfg, cfg);
 
-        const row = loadGatewaySessionRow("agent:main:main");
+        const readdirSyncSpy = vi.spyOn(fs, "readdirSync");
+        const statSyncSpy = vi.spyOn(fs, "statSync");
+        try {
+          const row = loadGatewaySessionRow("agent:main:main");
+          const checkpointDirReadCalls = readdirSyncSpy.mock.calls.filter((call) => {
+            const target = call[0];
+            return typeof target === "string" && path.resolve(target) === sessionsDir;
+          });
+          const checkpointFileStatCalls = statSyncSpy.mock.calls.filter((call) => {
+            const target = call[0];
+            return typeof target === "string" && path.resolve(target) === checkpointFile;
+          });
 
-        expect(row?.compactionCheckpointCount).toBe(1);
-        expect(row?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
+          expect(row?.compactionCheckpointCount).toBeUndefined();
+          expect(row?.latestCompactionCheckpoint).toBeUndefined();
+          expect(checkpointDirReadCalls).toHaveLength(0);
+          expect(checkpointFileStatCalls).toHaveLength(0);
+        } finally {
+          readdirSyncSpy.mockRestore();
+          statSyncSpy.mockRestore();
+        }
       });
     } finally {
       resetConfigRuntimeState();
     }
   });
 
-  test("buildGatewaySessionInfo includes disk-discovered checkpoint previews", async () => {
+  test("buildGatewaySessionInfo uses caller-provided checkpoint previews", async () => {
     await withStateDirEnv("session-utils-info-checkpoint-", async ({ stateDir }) => {
       const sessionsDir = path.join(stateDir, "sessions");
       fs.mkdirSync(sessionsDir, { recursive: true });
@@ -1265,14 +1283,28 @@ describe("gateway session utils", () => {
         "agent:main:main": entry,
       };
 
-      const row = buildGatewaySessionInfo({
+      const defaultRow = buildGatewaySessionInfo({
         cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
         storePath,
         store,
         key: "agent:main:main",
         entry,
       });
+      const checkpointPreviewsByDir = buildGatewaySessionDiskCompactionCheckpointPreviewsByDirSync({
+        storePath,
+        entries: [["agent:main:main", entry]],
+      });
+      const row = buildGatewaySessionInfo({
+        cfg: createModelDefaultsConfig({ primary: "openai/gpt-5.4" }),
+        storePath,
+        store,
+        key: "agent:main:main",
+        entry,
+        checkpointPreviewsByDir,
+      });
 
+      expect(defaultRow.compactionCheckpointCount).toBeUndefined();
+      expect(defaultRow.latestCompactionCheckpoint).toBeUndefined();
       expect(row.compactionCheckpointCount).toBe(1);
       expect(row.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
     });

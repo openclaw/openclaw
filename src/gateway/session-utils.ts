@@ -404,7 +404,10 @@ type SessionCompactionCheckpointPreview = NonNullable<
   GatewaySessionRow["latestCompactionCheckpoint"]
 >;
 
-type DiskCompactionCheckpointPreviewIndex = Map<string, SessionCompactionCheckpointPreview[]>;
+export type DiskCompactionCheckpointPreviewIndex = Map<
+  string,
+  SessionCompactionCheckpointPreview[]
+>;
 
 function buildDiskCompactionCheckpointPreviewIndexSync(
   sessionDir: string,
@@ -966,18 +969,17 @@ function buildSingleRowStoreChildSessionsByKey(params: {
   return storeChildSessions ? new Map([[params.key, storeChildSessions]]) : new Map();
 }
 
-function buildSingleRowDiskCompactionCheckpointPreviewsByDir(params: {
+export function buildGatewaySessionDiskCompactionCheckpointPreviewsByDirSync(params: {
   storePath: string;
-  key: string;
-  entry?: SessionEntry;
+  entries: readonly [string, SessionEntry][];
 }): Map<string, DiskCompactionCheckpointPreviewIndex | null> | undefined {
-  if (!params.entry) {
+  if (params.entries.length === 0) {
     return undefined;
   }
   const checkpointPreviewsByDir = new Map<string, DiskCompactionCheckpointPreviewIndex | null>();
   hydrateDiskCompactionCheckpointPreviewIndexesSync({
     storePath: params.storePath,
-    entries: [[params.key, params.entry]],
+    entries: params.entries,
     checkpointPreviewsByDir,
   });
   return checkpointPreviewsByDir.size > 0 ? checkpointPreviewsByDir : undefined;
@@ -2622,11 +2624,6 @@ export function loadGatewaySessionRow(
     key: canonicalKey,
     now,
   });
-  const checkpointPreviewsByDir = buildSingleRowDiskCompactionCheckpointPreviewsByDir({
-    storePath,
-    key: canonicalKey,
-    entry,
-  });
   return buildGatewaySessionRow({
     cfg,
     storePath,
@@ -2638,7 +2635,6 @@ export function loadGatewaySessionRow(
     includeLastMessage: options?.includeLastMessage,
     transcriptUsageMaxBytes: options?.transcriptUsageMaxBytes,
     storeChildSessionsByKey,
-    checkpointPreviewsByDir,
     ...(options?.agentId ? { agentId: options.agentId } : {}),
   });
 }
@@ -2657,6 +2653,7 @@ export function buildGatewaySessionInfo(params: {
   transcriptUsageMaxBytes?: number;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
+  checkpointPreviewsByDir?: Map<string, DiskCompactionCheckpointPreviewIndex | null>;
 }): GatewaySessionRow {
   const now = params.now ?? Date.now();
   const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
@@ -2664,11 +2661,6 @@ export function buildGatewaySessionInfo(params: {
     store: params.store,
     key: params.key,
     now,
-  });
-  const checkpointPreviewsByDir = buildSingleRowDiskCompactionCheckpointPreviewsByDir({
-    storePath: params.storePath,
-    key: params.key,
-    entry: params.entry,
   });
   return buildGatewaySessionRow({
     cfg: params.cfg,
@@ -2683,7 +2675,7 @@ export function buildGatewaySessionInfo(params: {
     includeLastMessage: params.includeLastMessage,
     transcriptUsageMaxBytes: params.transcriptUsageMaxBytes,
     storeChildSessionsByKey,
-    checkpointPreviewsByDir,
+    checkpointPreviewsByDir: params.checkpointPreviewsByDir,
     skipTranscriptUsageFallback: params.skipTranscriptUsageFallback ?? true,
     lightweightListRow: params.lightweightListRow ?? true,
   });

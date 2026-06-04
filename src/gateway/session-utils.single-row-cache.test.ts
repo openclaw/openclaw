@@ -221,7 +221,7 @@ describe("single gateway session row child-session cache", () => {
     );
   });
 
-  test("includes disk checkpoint previews without reading the subagent registry", async () => {
+  test("does not scan checkpoint directories during single-row loads", async () => {
     await withSingleRowCacheStore(
       "openclaw-single-row-cache-checkpoint-",
       "/tmp/openclaw-single-row-cache-checkpoint",
@@ -245,11 +245,28 @@ describe("single gateway session row child-session cache", () => {
           },
         });
 
-        const row = loadGatewaySessionRow("agent:main:main", { now });
+        const readdirSyncSpy = vi.spyOn(fs, "readdirSync");
+        const statSyncSpy = vi.spyOn(fs, "statSync");
+        try {
+          const row = loadGatewaySessionRow("agent:main:main", { now });
+          const checkpointDirReadCalls = readdirSyncSpy.mock.calls.filter((call) => {
+            const target = call[0];
+            return typeof target === "string" && path.resolve(target) === sessionsDir;
+          });
+          const checkpointFileStatCalls = statSyncSpy.mock.calls.filter((call) => {
+            const target = call[0];
+            return typeof target === "string" && path.resolve(target) === checkpointFile;
+          });
 
-        expect(row?.compactionCheckpointCount).toBe(1);
-        expect(row?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
-        expect(subagentRegistryReadMock.buildSubagentRunReadIndex).not.toHaveBeenCalled();
+          expect(row?.compactionCheckpointCount).toBeUndefined();
+          expect(row?.latestCompactionCheckpoint).toBeUndefined();
+          expect(checkpointDirReadCalls).toHaveLength(0);
+          expect(checkpointFileStatCalls).toHaveLength(0);
+          expect(subagentRegistryReadMock.buildSubagentRunReadIndex).not.toHaveBeenCalled();
+        } finally {
+          readdirSyncSpy.mockRestore();
+          statSyncSpy.mockRestore();
+        }
       },
     );
   });

@@ -438,6 +438,25 @@ test("sessions.compaction.* discovers checkpoint transcript files when store met
     expect(Number.isInteger(main?.latestCompactionCheckpoint?.createdAt)).toBe(true);
     expect(main?.latestCompactionCheckpoint?.createdAt).toBe(expectedCreatedAt);
 
+    const described = await rpcReq<{
+      session: {
+        key: string;
+        compactionCheckpointCount?: number;
+        latestCompactionCheckpoint?: {
+          checkpointId: string;
+          createdAt: number;
+          reason: string;
+        };
+      } | null;
+    }>(ws, "sessions.describe", { key: "main" });
+    expect(described.ok).toBe(true);
+    expect(described.payload?.session?.key).toBe("agent:main:main");
+    expect(described.payload?.session?.compactionCheckpointCount).toBe(1);
+    expect(described.payload?.session?.latestCompactionCheckpoint?.checkpointId).toBe(checkpointId);
+    expect(described.payload?.session?.latestCompactionCheckpoint?.createdAt).toBe(
+      expectedCreatedAt,
+    );
+
     const listedCheckpoints = await rpcReq<{
       ok: true;
       key: string;
