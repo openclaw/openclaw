@@ -124,6 +124,8 @@ describe("entry compile cache", () => {
         currentFile: path.join(root, "dist", "entry.js"),
         env: { NODE_COMPILE_CACHE: "/tmp/openclaw-cache" },
         installRoot: root,
+        nodeVersion: "24.1.0",
+        platform: "linux",
       }),
     ).toBeUndefined();
   });
