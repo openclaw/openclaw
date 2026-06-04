@@ -110,6 +110,8 @@ if (( CHANGED_ONLY && PATHS_PASSED )); then
 fi
 
 resolve_changed_diff_ref() {
+  # Keep this fallback shell resolver in lockstep with scripts/lib/merge-head-diff-base.mjs.
+  # CI can call it before Node helper wiring is available in the OpenGrep workflow.
   local diff_ref="${OPENCLAW_OPENGREP_BASE_REF:-origin/main...HEAD}"
   local base_ref
   local head_ref
