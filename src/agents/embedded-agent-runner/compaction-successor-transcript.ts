@@ -128,7 +128,7 @@ function stripThinkingSignaturesFromEntries(entries: SessionEntry[]): SessionEnt
       continue;
     }
 
-    const msgEntry = entry as SessionMessageEntry;
+    const msgEntry = entry;
     const { message } = msgEntry;
     if (message.role !== "assistant" || !Array.isArray(message.content)) {
       out.push(entry);

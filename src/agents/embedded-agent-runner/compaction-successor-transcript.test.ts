@@ -503,3 +503,82 @@ describe("shouldRotateCompactionTranscript", () => {
     ).toBe(true);
   });
 });
+
+describe("rotateTranscriptAfterCompaction strips thinking signatures", () => {
+  it("removes thinkingSignature from assistant thinking blocks in successor entries", async () => {
+    const dir = await createTmpDir();
+    const manager = SessionManager.create(dir, dir);
+    manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
+    manager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [
+          {
+            type: "thinking",
+            thinking: "some reasoning",
+            thinkingSignature: "sig-abc-123",
+          } as never,
+          { type: "text", text: "old reply" },
+        ],
+        timestamp: 2,
+      }),
+    );
+    const firstKeptId = manager.appendMessage({
+      role: "user",
+      content: "kept user",
+      timestamp: 3,
+    });
+    manager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [
+          {
+            type: "thinking",
+            thinking: "kept reasoning",
+            thinkingSignature: "sig-def-456",
+          } as never,
+          { type: "text", text: "kept reply" },
+        ],
+        timestamp: 4,
+      }),
+    );
+    manager.appendCompaction("Summary of old.", firstKeptId, 5000);
+    manager.appendMessage({ role: "user", content: "post user", timestamp: 5 });
+    manager.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "post reply" }],
+        timestamp: 6,
+      }),
+    );
+
+    const sessionFile = requireString(manager.getSessionFile(), "session file");
+    const result = await rotateTranscriptFileAfterCompaction({
+      sessionFile,
+      now: () => new Date("2026-06-01T12:00:00.000Z"),
+    });
+
+    expect(result.rotated).toBe(true);
+    const successorFile = requireString(result.sessionFile, "successor file");
+    const successor = SessionManager.open(successorFile);
+    const entries = successor.getEntries();
+
+    // Find all assistant message entries and verify no thinking signatures remain
+    const assistantEntries = entries.filter(
+      (e) => e.type === "message" && e.message.role === "assistant",
+    );
+    expect(assistantEntries.length).toBeGreaterThan(0);
+
+    for (const entry of assistantEntries) {
+      if (entry.type !== "message") {
+        continue;
+      }
+      const content = (entry.message as { content: unknown[] }).content;
+      for (const block of content) {
+        const record = block as Record<string, unknown>;
+        if (record.type === "thinking" || record.type === "redacted_thinking") {
+          expect(record.thinkingSignature).toBeUndefined();
+          expect(record.signature).toBeUndefined();
+          expect(record.thought_signature).toBeUndefined();
+        }
+      }
+    }
+  });
+});
