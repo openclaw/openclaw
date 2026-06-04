@@ -17,6 +17,16 @@ const RESUMABLE_ROOM_CONTEXT_OMITTED_PREFIXES = [
   "Chat history since last reply (untrusted, for context):",
 ];
 
+function resolveMediaExtractedContext(params: {
+  ctx: MsgContext;
+  sessionCtx: TemplateContext;
+}): string | undefined {
+  return (
+    normalizeOptionalString(params.ctx.MediaExtractedContext) ??
+    normalizeOptionalString(params.sessionCtx.MediaExtractedContext)
+  );
+}
+
 export function buildReplyPromptBodies(params: {
   ctx: MsgContext;
   sessionCtx: TemplateContext;
@@ -47,21 +57,30 @@ export function buildReplyPromptBodies(params: {
     .join("\n\n");
   const queueBodyBase = [params.threadContextNote, bodyWithEvents].filter(Boolean).join("\n\n");
   const mediaNote = buildInboundMediaNote(params.ctx);
+  const mediaExtractedContext = resolveMediaExtractedContext(params);
   const mediaReplyHint = mediaNote ? REPLY_MEDIA_HINT : undefined;
-  const queuedBodyRaw = mediaNote
-    ? [mediaNote, mediaReplyHint, queueBodyBase].filter(Boolean).join("\n").trim()
+  const hasMediaPromptContext = Boolean(mediaNote || mediaExtractedContext);
+  const queuedBodyRaw = hasMediaPromptContext
+    ? [mediaNote, mediaExtractedContext, mediaReplyHint, queueBodyBase]
+        .filter(Boolean)
+        .join("\n")
+        .trim()
     : queueBodyBase;
-  const prefixedCommandBodyRaw = mediaNote
-    ? [mediaNote, mediaReplyHint, prefixedBody].filter(Boolean).join("\n").trim()
+  const prefixedCommandBodyRaw = hasMediaPromptContext
+    ? [mediaNote, mediaExtractedContext, mediaReplyHint, prefixedBody]
+        .filter(Boolean)
+        .join("\n")
+        .trim()
     : prefixedBody;
   const transcriptBody = params.transcriptBody ?? params.effectiveBaseBody;
-  const includeMediaOnlyTranscript = mediaNote && params.inboundEventKind !== "room_event";
+  const includeMediaOnlyTranscript =
+    hasMediaPromptContext && params.inboundEventKind !== "room_event";
   const transcriptCommandBodyRaw = transcriptBody
-    ? mediaNote
-      ? [mediaNote, transcriptBody].filter(Boolean).join("\n").trim()
+    ? hasMediaPromptContext
+      ? [mediaNote, mediaExtractedContext, transcriptBody].filter(Boolean).join("\n").trim()
       : transcriptBody
     : includeMediaOnlyTranscript
-      ? mediaNote
+      ? [mediaNote, mediaExtractedContext].filter(Boolean).join("\n").trim()
       : "";
   return {
     mediaNote,

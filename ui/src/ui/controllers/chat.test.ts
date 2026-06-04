@@ -1979,6 +1979,30 @@ describe("sendChatMessage", () => {
     expect(attachmentPreview.mimeType).toBe("application/pdf");
   });
 
+  it("serializes large attachment data URLs without recursive regex matching", async () => {
+    const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+    });
+    const base64 = "A".repeat(64 * 1024);
+
+    await sendChatMessage(state, "summarize", [
+      {
+        id: "att-large",
+        dataUrl: `data:application/pdf;base64,${base64}`,
+        mimeType: "application/pdf",
+        fileName: "large.pdf",
+      },
+    ]);
+
+    const [, requestParams] = requireFirstRequestCall(request);
+    const sendParams = requireRecord(requestParams);
+    const attachments = sendParams.attachments as unknown[];
+    const attachmentRecord = requireRecord(attachments[0]);
+    expect(attachmentRecord.content).toBe(base64);
+  });
+
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
     const request = vi.fn().mockResolvedValue({ runId: "run-1", status: "started" });
     const state = createState({

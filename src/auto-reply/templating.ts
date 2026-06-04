@@ -66,6 +66,7 @@ export type SupplementalContextFacts = {
     senderAllowed?: boolean;
   };
   untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
+  MediaExtractedContext?: string;
   groupSystemPrompt?: string;
 };
 
@@ -187,6 +188,7 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  MediaExtractedContext?: string;
   MediaWorkspaceDir?: string;
   /** Attachment indexes whose audio was already transcribed before media understanding runs. */
   MediaTranscribedIndexes?: number[];

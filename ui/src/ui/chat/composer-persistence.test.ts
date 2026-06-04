@@ -207,6 +207,59 @@ describe("chat composer persistence", () => {
     expect(restored.chatQueue).toEqual([failed]);
   });
 
+  it("drops stale stack-overflow failed queued messages when persisting", () => {
+    persistChatComposerState(
+      createState({
+        chatQueue: [
+          {
+            id: "stale-overflow",
+            text: "stale failed send",
+            createdAt: 1,
+            sendState: "failed",
+            sendError: "RangeError: Maximum call stack size exceeded",
+          },
+        ],
+      }),
+    );
+
+    expect(
+      loadChatComposerSnapshot(
+        { settings: { gatewayUrl: "ws://gateway.test/control" } },
+        "agent:lily:main",
+      ),
+    ).toBeNull();
+  });
+
+  it("drops stale stack-overflow failed queued messages when restoring old storage", () => {
+    sessionStorage.setItem(
+      "openclaw.control.chatComposer.v1:ws%3A%2F%2Fgateway.test%2Fcontrol",
+      JSON.stringify({
+        version: 1,
+        sessions: {
+          "agent:lily:main\u0000agent:lily": {
+            updatedAt: 1,
+            queue: [
+              {
+                id: "stale-overflow",
+                text: "stale failed send",
+                createdAt: 1,
+                sendState: "failed",
+                sendError: "RangeError: Maximum call stack size exceeded",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    expect(
+      loadChatComposerSnapshot(
+        { settings: { gatewayUrl: "ws://gateway.test/control" } },
+        "agent:lily:main",
+      ),
+    ).toBeNull();
+  });
+
   it("does not restore in-flight sends that may already have reached the gateway", () => {
     persistChatComposerState(
       createState({

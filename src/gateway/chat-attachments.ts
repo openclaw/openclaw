@@ -147,7 +147,42 @@ function isValidBase64(value: string): boolean {
   if (value.length === 0 || value.length % 4 !== 0) {
     return false;
   }
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  let padding = 0;
+  let sawPadding = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 61) {
+      padding += 1;
+      if (padding > 2) {
+        return false;
+      }
+      sawPadding = true;
+      continue;
+    }
+    const isBase64Char =
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) ||
+      code === 43 ||
+      code === 47;
+    if (sawPadding || !isBase64Char) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function stripBase64DataUrlPrefix(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("data:")) {
+    return trimmed;
+  }
+  const marker = ";base64,";
+  const index = trimmed.toLowerCase().indexOf(marker);
+  if (index <= 5) {
+    return trimmed;
+  }
+  return trimmed.slice(index + marker.length);
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
@@ -209,13 +244,7 @@ function normalizeAttachment(
     throw new Error(`attachment ${label}: only image/* supported`);
   }
 
-  let base64 = content.trim();
-  if (opts.stripDataUrlPrefix) {
-    const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
-    if (dataUrlMatch) {
-      base64 = dataUrlMatch[1];
-    }
-  }
+  const base64 = opts.stripDataUrlPrefix ? stripBase64DataUrlPrefix(content) : content.trim();
   return { label, mime, base64 };
 }
 

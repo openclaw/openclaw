@@ -156,6 +156,28 @@ describe("parseMessageWithAttachments", () => {
     expect(parsed.images[0]?.data).toBe(PNG_1x1);
   });
 
+  it("strips large data URL prefixes without recursive regex matching", async () => {
+    const content = "A".repeat(64 * 1024);
+    const { parsed } = await parseWithWarnings("read this", [
+      pdfAttachment({ content: `data:application/pdf;base64,${content}` }),
+    ]);
+
+    expect(parsed.offloadedRefs).toHaveLength(1);
+    expect(saveMediaBufferMock.mock.calls[0]?.[0]).toHaveLength((content.length / 4) * 3);
+  });
+
+  it("rejects large invalid base64 payloads without recursive regex matching", async () => {
+    const content = `${"A".repeat(64 * 1024 - 1)}!`;
+
+    await expect(
+      parseMessageWithAttachments(
+        "read this",
+        [pdfAttachment({ content: `data:application/pdf;base64,${content}` })],
+        { log: { warn: () => {} } },
+      ),
+    ).rejects.toThrow(/invalid base64 content/);
+  });
+
   it("sniffs mime when missing", async () => {
     const { parsed, logs } = await parseWithWarnings("see this", [
       pngAttachment({ mimeType: undefined }),

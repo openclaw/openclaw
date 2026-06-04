@@ -65,6 +65,7 @@ import {
   appendLocalMediaParentRoots,
   getAgentScopedMediaLocalRoots,
 } from "../../media/local-roots.js";
+import { parseInboundMediaUri } from "../../media/media-reference.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import {
   deleteMediaBuffer,
@@ -1251,6 +1252,18 @@ async function prestageMediaPathOffloads(params: {
   if (mediaPathRefs.length === 0) {
     return { paths: [], types: [] };
   }
+  const managedPdfPassThroughRefs = mediaPathRefs.filter(
+    shouldPassThroughManagedInboundPdfOffloadRef,
+  );
+  const refsToStage = mediaPathRefs.filter(
+    (ref) => !shouldPassThroughManagedInboundPdfOffloadRef(ref),
+  );
+  if (refsToStage.length === 0) {
+    return {
+      paths: mediaPathRefs.map((ref) => ref.path),
+      types: mediaPathRefs.map((ref) => ref.mimeType),
+    };
+  }
 
   try {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
@@ -1272,7 +1285,7 @@ async function prestageMediaPathOffloads(params: {
     // session receiving a file between the two caps would otherwise
     // pass parse, fail staging, and surface as a retryable 5xx even though
     // retry cannot succeed. Reject here as a client-side 4xx instead.
-    const oversizedForSandbox = mediaPathRefs.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
+    const oversizedForSandbox = refsToStage.filter((ref) => ref.sizeBytes > MEDIA_MAX_BYTES);
     if (oversizedForSandbox.length > 0) {
       const details = oversizedForSandbox
         .map((ref) => `${ref.label} (${ref.sizeBytes} bytes)`)
@@ -1284,10 +1297,10 @@ async function prestageMediaPathOffloads(params: {
     }
 
     const stagingCtx: MsgContext = {
-      MediaPath: mediaPathRefs[0].path,
-      MediaPaths: mediaPathRefs.map((ref) => ref.path),
-      MediaType: mediaPathRefs[0].mimeType,
-      MediaTypes: mediaPathRefs.map((ref) => ref.mimeType),
+      MediaPath: refsToStage[0].path,
+      MediaPaths: refsToStage.map((ref) => ref.path),
+      MediaType: refsToStage[0].mimeType,
+      MediaTypes: refsToStage.map((ref) => ref.mimeType),
     };
     const stageResult = await stageSandboxMedia({
       ctx: stagingCtx,
@@ -1304,19 +1317,35 @@ async function prestageMediaPathOffloads(params: {
     // (STAGED_MEDIA_MAX_BYTES = 5MB); check the returned `staged` map so any
     // missing source becomes a 5xx MediaOffloadError the client can retry.
     const stagedSources = stageResult.staged;
-    const missing = mediaPathRefs.filter((ref) => !stagedSources.has(ref.path));
+    const missing = refsToStage.filter((ref) => !stagedSources.has(ref.path));
     if (missing.length > 0) {
       throw new Error(
-        `attachment staging incomplete: ${stagedSources.size}/${mediaPathRefs.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
+        `attachment staging incomplete: ${stagedSources.size}/${refsToStage.length} paths staged into sandbox workspace (missing: ${missing.map((ref) => ref.path).join(", ")})`,
       );
     }
     const stagedPaths = stagingCtx.MediaPaths ?? [];
-    const stagedTypes = stagingCtx.MediaTypes ?? mediaPathRefs.map((ref) => ref.mimeType);
+    const stagedTypes = stagingCtx.MediaTypes ?? refsToStage.map((ref) => ref.mimeType);
+    const stagedByRef = new Map(
+      refsToStage.map((ref, index) => [
+        ref,
+        { path: stagedPaths[index] ?? ref.path, mimeType: stagedTypes[index] ?? ref.mimeType },
+      ]),
+    );
+    for (const ref of managedPdfPassThroughRefs) {
+      stagedByRef.set(ref, { path: ref.path, mimeType: ref.mimeType });
+    }
+    const ordered = mediaPathRefs.map(
+      (ref) => stagedByRef.get(ref) ?? { path: ref.path, mimeType: ref.mimeType },
+    );
 
     // Keep stagedPaths sandbox-relative (e.g. `media/inbound/foo.pdf`) so the
     // agent inside the container can read them. Host-side media-understanding
     // resolves them via ctx.MediaWorkspaceDir, which we carry separately.
-    return { paths: stagedPaths, types: stagedTypes, workspaceDir: sandbox.workspaceDir };
+    return {
+      paths: ordered.map((ref) => ref.path),
+      types: ordered.map((ref) => ref.mimeType),
+      workspaceDir: sandbox.workspaceDir,
+    };
   } catch (err) {
     await Promise.allSettled(
       params.offloadedRefs.map((ref) => deleteMediaBuffer(ref.id, "inbound")),
@@ -1339,6 +1368,28 @@ async function prestageMediaPathOffloads(params: {
 type ChatSendManagedMediaFields = Partial<
   Pick<MsgContext, "MediaPath" | "MediaPaths" | "MediaType" | "MediaTypes">
 >;
+
+function isPdfOffloadedRef(ref: OffloadedRef): boolean {
+  const mime = ref.mimeType.trim().toLowerCase();
+  if (mime === "application/pdf" || mime.endsWith("+pdf")) {
+    return true;
+  }
+  return path.extname(ref.path.split(/[?#]/u)[0] ?? "").toLowerCase() === ".pdf";
+}
+
+function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
+  if (ref.sizeBytes <= MEDIA_MAX_BYTES) {
+    return false;
+  }
+  if (!isPdfOffloadedRef(ref)) {
+    return false;
+  }
+  try {
+    return parseInboundMediaUri(ref.mediaRef) !== null;
+  } catch {
+    return false;
+  }
+}
 
 function resolveChatSendManagedMediaFields(savedImages: SavedMedia[]): ChatSendManagedMediaFields {
   const mediaPaths = savedImages.map((entry) => entry.path);

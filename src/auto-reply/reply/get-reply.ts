@@ -19,6 +19,7 @@ import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { applyInboundPdfContextIfNeeded } from "../../media/inbound-pdf-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -952,6 +953,24 @@ export async function getReplyFromConfig(
         return hookResult.reply ?? { text: SILENT_REPLY_TOKEN };
       }
     }
+  }
+
+  if (
+    !useFastTestBootstrap &&
+    !isFastTestEnv &&
+    (hasInboundMedia(ctx) || hasInboundMedia(sessionCtx))
+  ) {
+    await traceGetReplyPhase("reply.apply_inbound_pdf_context", () =>
+      applyInboundPdfContextIfNeeded({
+        ctx,
+        sessionCtx,
+        cfg,
+        log: {
+          info: (message) => defaultRuntime.log(message),
+          warn: (message) => defaultRuntime.log(message),
+        },
+      }),
+    );
   }
 
   // ctx.MediaStaged=true means the caller (e.g. chat.send RPC) already staged

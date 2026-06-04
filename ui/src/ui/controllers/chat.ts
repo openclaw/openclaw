@@ -835,11 +835,18 @@ async function loadChatHistoryUncached(
 }
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
-  const match = /^data:([^;]+);base64,(.+)$/.exec(dataUrl);
-  if (!match) {
+  if (!dataUrl.startsWith("data:")) {
     return null;
   }
-  return { mimeType: match[1], content: match[2] };
+  const marker = ";base64,";
+  const markerIndex = dataUrl.toLowerCase().indexOf(marker);
+  if (markerIndex <= "data:".length) {
+    return null;
+  }
+  return {
+    mimeType: dataUrl.slice("data:".length, markerIndex),
+    content: dataUrl.slice(markerIndex + marker.length),
+  };
 }
 
 function buildApiAttachments(attachments?: ChatAttachment[]) {

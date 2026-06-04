@@ -317,6 +317,10 @@ import {
 } from "./attempt.bootstrap-context.js";
 export { buildContextEnginePromptCacheInfo } from "./attempt.context-engine-helpers.js";
 import {
+  buildEmbeddedInboundPdfContextFromPrompt,
+  prependInboundPdfContext,
+} from "../../../media/inbound-pdf-context.js";
+import {
   rotateTranscriptAfterCompaction,
   shouldRotateCompactionTranscript,
 } from "../compaction-successor-transcript.js";
@@ -3803,7 +3807,7 @@ export async function runEmbeddedAttempt(
             );
           }
 
-          const promptSubmission = resolveRuntimeContextPromptParts({
+          let promptSubmission = resolveRuntimeContextPromptParts({
             effectivePrompt: promptForRuntimeContextSplit,
             transcriptPrompt: transcriptPromptForRuntimeSplit,
             modelPrompt: hasPromptBuildContext
@@ -3813,6 +3817,25 @@ export async function runEmbeddedAttempt(
               ? "model-prompt"
               : "runtime-event",
           });
+          const embeddedInboundPdfContext = await buildEmbeddedInboundPdfContextFromPrompt({
+            prompt: promptSubmission.prompt,
+            modelPrompt: promptSubmission.modelPrompt,
+            cfg: params.config,
+            log,
+          });
+          if (embeddedInboundPdfContext) {
+            promptSubmission = {
+              ...promptSubmission,
+              prompt: prependInboundPdfContext(promptSubmission.prompt, embeddedInboundPdfContext),
+              modelPrompt:
+                promptSubmission.modelPrompt === undefined
+                  ? undefined
+                  : prependInboundPdfContext(
+                      promptSubmission.modelPrompt,
+                      embeddedInboundPdfContext,
+                    ),
+            };
+          }
           const promptForSession = buildCurrentInboundPrompt({
             context: params.currentInboundContext,
             prompt: promptSubmission.prompt,
