@@ -301,6 +301,72 @@ describe("resolveModelAuthLabel", () => {
     expect(mocks.resolveUsableCustomProviderApiKey).not.toHaveBeenCalled();
   });
 
+  it("prefers literal per-entry apiKey labels over env fallbacks (#82020)", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({
+      kind: "literal",
+      apiKey: "sk-light-only",
+      source: "models.json",
+    });
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "zai-env-key",
+      source: "env: ZAI_API_KEY",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "zai-light",
+      cfg: {
+        models: {
+          providers: {
+            zai: {
+              api: "openai-completions",
+              baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+              models: [],
+            },
+            "zai-light": {
+              api: "openai-completions",
+              baseUrl: "https://open.bigmodel.cn/api/coding/paas/v4",
+              apiKey: "sk-light-only",
+              models: [{ id: "glm-5-turbo" }],
+            },
+          },
+        },
+      },
+    });
+
+    expect(label).toBe("api-key (models.json)");
+    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+  });
+
+  it("prefers models.json custom keys over env when providers share a baseUrl (#82020)", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.resolveProviderEntryApiKeyProfileReference.mockReturnValue({ kind: "none" });
+    mocks.resolveUsableCustomProviderApiKey.mockReturnValue({
+      apiKey: "sk-light-only",
+      source: "models.json",
+    });
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "zai-env-key",
+      source: "env: ZAI_API_KEY",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "zai-light",
+      cfg: {},
+    });
+
+    expect(label).toBe("api-key (models.json)");
+    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+  });
+
   it("does not report incompatible per-entry profile references as literal models.json keys", () => {
     mocks.ensureAuthProfileStore.mockReturnValue({
       version: 1,
