@@ -1554,12 +1554,9 @@ async function migrateLegacyInstalledPluginIndex(params: {
       }
     }
     if (merged.conflicts.length > 0) {
-      return {
-        changes,
-        warnings: [
-          `Left plugin install index in place because shared SQLite state has conflicting plugin install metadata for: ${merged.conflicts.join(", ")}`,
-        ],
-      };
+      changes.push(
+        `Kept shared SQLite plugin install metadata for conflicting legacy records: ${merged.conflicts.join(", ")}`,
+      );
     }
   }
 
