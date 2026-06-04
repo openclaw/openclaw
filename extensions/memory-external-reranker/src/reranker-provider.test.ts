@@ -6,7 +6,11 @@ const { fetchGuardMock } = vi.hoisted(() => ({
   fetchGuardMock: vi.fn(),
 }));
 
-import { ExternalMmrReranker, setExternalRerankerFetchGuardForTesting } from "./reranker.js";
+import {
+  DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS,
+  ExternalMmrReranker,
+  setExternalRerankerFetchGuardForTesting,
+} from "./reranker.js";
 
 afterEach(() => {
   setExternalRerankerFetchGuardForTesting(null);
@@ -71,6 +75,7 @@ describe("ExternalMmrReranker", () => {
 
       expect(mock).toHaveBeenCalledTimes(1);
       expect(guardCallOpts(mock).url).toBe("http://localhost:8080/v1/rerank");
+      expect(guardCallOpts(mock).timeoutMs).toBe(DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS);
       expect(guardCallBody(mock)).toMatchObject({
         query: "neural networks",
         documents: [

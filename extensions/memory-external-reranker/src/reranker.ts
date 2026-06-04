@@ -4,11 +4,14 @@ import type {
   RerankResult,
 } from "openclaw/plugin-sdk/memory-core-host-engine-reranker";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import {
   fetchWithSsrFGuard,
   ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";
+
+export const DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS = 30_000;
 
 let rerankerFetchGuard = fetchWithSsrFGuard;
 
@@ -72,6 +75,7 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
     const candidates = [this.cfg.model, ...(this.cfg.modelFallbacks ?? [])];
     const endpointPath = this.cfg.endpointPath ?? "/v1/rerank";
     const topN = this.cfg.topN ?? limit;
+    const requestTimeoutMs = resolveTimerTimeoutMs(DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS, 1);
 
     console.debug(
       `[memory-external-reranker] reranking with provider=${providerId} model=${this.cfg.model} fallbacks=${this.cfg.modelFallbacks?.join(",") ?? "none"} topN=${topN} documents=${documents.length}`,
@@ -112,6 +116,7 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
               ...this.cfg.additionalBodyParams,
             }),
           },
+          timeoutMs: requestTimeoutMs,
           policy: ssrfPolicyFromDangerouslyAllowPrivateNetwork(true),
           auditContext: "memory-external-reranker",
         });
