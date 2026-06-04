@@ -490,6 +490,38 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("suppresses exec warnings after message-tool-only source replies", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        error: "command failed",
+        mutatingAction: true,
+      },
+      messagingToolSourceReplyPayloads: [{ text: "MCP_CODE_MODE_FILE_FAIL" }],
+      sourceReplyDeliveryMode: "message_tool_only",
+      verboseLevel: "on",
+    });
+
+    expectSinglePayloadText(payloads, "MCP_CODE_MODE_FILE_FAIL");
+  });
+
+  it("keeps non-exec mutating warnings after message-tool-only source replies", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "write",
+        error: "permission denied",
+        mutatingAction: true,
+      },
+      messagingToolSourceReplyPayloads: [{ text: "Attempted update." }],
+      sourceReplyDeliveryMode: "message_tool_only",
+      verboseLevel: "on",
+    });
+
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("Attempted update.");
+    expect(payloads[1]?.text).toContain("Write failed");
+  });
+
   it("shows exec tool error details when verbose mode is full", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
