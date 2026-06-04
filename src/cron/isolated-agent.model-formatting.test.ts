@@ -250,6 +250,36 @@ describe("cron model formatting and precedence edge cases", () => {
       });
     });
 
+    it("keeps catalog-visible allowlist detail readable when payload.model is not allowed", async () => {
+      resolveAllowedModelRefMock.mockReturnValueOnce({
+        error:
+          'model not allowed: codex/gpt-5.4 (model is listed in the catalog, but not allowed by agents.defaults.models; add "codex/gpt-5.4" or "codex/*" to agents.defaults.models)',
+      });
+
+      await expect(
+        selectModel({
+          cfg: {
+            agents: {
+              defaults: {
+                models: {
+                  "anthropic/claude-sonnet-4-6": {},
+                },
+              },
+            },
+          },
+          payload: {
+            kind: "agentTurn",
+            message: DEFAULT_MESSAGE,
+            model: "codex/gpt-5.4",
+          },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          'cron payload.model \'codex/gpt-5.4\' rejected by agents.defaults.models allowlist: codex/gpt-5.4 is not in [anthropic/claude-sonnet-4-6] (model is listed in the catalog, but not allowed by agents.defaults.models; add "codex/gpt-5.4" or "codex/*" to agents.defaults.models)',
+      });
+    });
+
     it("normalizes provider casing", async () => {
       await expectSelectedModel(
         {

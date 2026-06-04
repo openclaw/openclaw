@@ -524,6 +524,28 @@ describe("gateway sessions patch", () => {
     expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
   });
 
+  test("rejects catalog-visible models that are not admitted by agents.defaults.models", async () => {
+    const result = await runPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: ANTHROPIC_SONNET_MODEL },
+            models: {
+              [ANTHROPIC_SONNET_MODEL]: {},
+            },
+          },
+        },
+      } as OpenClawConfig,
+      patch: { key: MAIN_SESSION_KEY, model: OPENAI_GPT_MODEL },
+      loadGatewayModelCatalog: loadCatalog(OPENAI_GPT_MODEL),
+    });
+
+    expectPatchError(
+      result,
+      'model not allowed: openai/gpt-5.4 (model is listed in the catalog, but not allowed by agents.defaults.models; add "openai/gpt-5.4" or "openai/*" to agents.defaults.models)',
+    );
+  });
+
   test("sets spawnDepth for subagent sessions", async () => {
     const entry = expectPatchOk(
       await runPatch({

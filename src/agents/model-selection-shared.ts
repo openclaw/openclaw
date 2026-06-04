@@ -1091,6 +1091,19 @@ export type ModelRefStatus = {
   allowed: boolean;
 };
 
+export function formatModelNotAllowedMessage(status: ModelRefStatus): string {
+  const base = `model not allowed: ${status.key}`;
+  if (!status.inCatalog || status.allowAny) {
+    return base;
+  }
+  const slash = status.key.indexOf("/");
+  const provider = slash > 0 ? status.key.slice(0, slash) : "";
+  if (!provider) {
+    return base;
+  }
+  return `${base} (model is listed in the catalog, but not allowed by agents.defaults.models; add "${status.key}" or "${provider}/*" to agents.defaults.models)`;
+}
+
 export type ResolveAllowedModelRefResult =
   | { ref: ModelRef; key: string }
   | {
@@ -1180,7 +1193,7 @@ export function resolveAllowedModelRefFromAliasIndex(
 
   const status = params.getStatus(resolved.ref);
   if (!status.allowed) {
-    return { error: `model not allowed: ${status.key}` };
+    return { error: formatModelNotAllowedMessage(status) };
   }
 
   return { ref: resolved.ref, key: status.key };

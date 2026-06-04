@@ -4,7 +4,16 @@
  * model catalogs without discarding existing credentials.
  */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
+import {
+  isLocalApiKeyMarker,
+  isLocalBaseUrl,
+  isUsableLocalAuthMarker,
+} from "./model-auth-local.js";
+import {
+  NON_ENV_SECRETREF_MARKER,
+  isNonSecretApiKeyMarker,
+  isOAuthApiKeyMarker,
+} from "./model-auth-markers.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
 /** Existing provider config shape that may carry persisted secret/base URL fields. */
@@ -192,39 +201,96 @@ function shouldPreserveExistingApiKey(params: {
   existing: ExistingProviderConfig;
   nextEntry: ProviderConfig;
   secretRefManagedProviders: ReadonlySet<string>;
-}): boolean {
+}): string | undefined {
   const { providerKey, existing, nextEntry, secretRefManagedProviders } = params;
-  const nextApiKey = typeof nextEntry.apiKey === "string" ? nextEntry.apiKey : "";
+  const nextApiKey = typeof nextEntry.apiKey === "string" ? nextEntry.apiKey.trim() : "";
   if (nextApiKey && isNonSecretApiKeyMarker(nextApiKey)) {
-    return false;
+    return undefined;
   }
-  return (
-    !secretRefManagedProviders.has(providerKey) &&
-    typeof existing.apiKey === "string" &&
-    existing.apiKey.length > 0 &&
-    !isNonSecretApiKeyMarker(existing.apiKey, { includeEnvVarName: false })
-  );
+  if (!nextApiKey && allowsCurrentProviderMissingApiKey(nextEntry.auth)) {
+    return undefined;
+  }
+  if (secretRefManagedProviders.has(providerKey) || typeof existing.apiKey !== "string") {
+    return undefined;
+  }
+  const existingApiKey = existing.apiKey.trim();
+  if (!existingApiKey || isUnusableExistingApiKeyMarker(existingApiKey)) {
+    return undefined;
+  }
+  if (isLocalApiKeyMarker(existingApiKey)) {
+    const preservedBaseUrl = shouldPreserveExistingBaseUrl({ existing, nextEntry });
+    const mergedEntry = {
+      ...nextEntry,
+      ...(preservedBaseUrl ? { baseUrl: preservedBaseUrl } : {}),
+    };
+    return isUsableLocalAuthMarker({
+      api: mergedEntry.api,
+      apiKey: existingApiKey,
+      baseUrl: mergedEntry.baseUrl,
+    })
+      ? existingApiKey
+      : undefined;
+  }
+  return existingApiKey;
 }
 
 function shouldPreserveExistingBaseUrl(params: {
   existing: ExistingProviderConfig;
   nextEntry: ProviderConfig;
-}): boolean {
+}): string | undefined {
   const { existing, nextEntry } = params;
-  if (typeof existing.baseUrl !== "string" || existing.baseUrl.length === 0) {
-    return false;
+  const existingBaseUrl = typeof existing.baseUrl === "string" ? existing.baseUrl.trim() : "";
+  if (!existingBaseUrl) {
+    return undefined;
+  }
+  if (typeof existing.apiKey === "string" && isLocalApiKeyMarker(existing.apiKey)) {
+    const nextBaseUrl = typeof nextEntry.baseUrl === "string" ? nextEntry.baseUrl.trim() : "";
+    if (!isLocalBaseUrl(existingBaseUrl) || !nextBaseUrl || !isLocalBaseUrl(nextBaseUrl)) {
+      return undefined;
+    }
   }
 
   const existingApi = resolveProviderApiSurface(existing);
   const nextApi = resolveProviderApiSurface(nextEntry);
-  return !existingApi || !nextApi || existingApi === nextApi;
+  return !existingApi || !nextApi || existingApi === nextApi ? existingBaseUrl : undefined;
 }
 
 function isExistingProviderSelfContained(entry: ExistingProviderConfig): boolean {
   if (!Array.isArray(entry.models) || entry.models.length === 0) {
     return true;
   }
-  return Boolean(entry.baseUrl?.trim() && entry.apiKey);
+  const hasApiKey = hasUsableExistingProviderApiKey(entry);
+  return Boolean(entry.baseUrl?.trim()) && (hasApiKey || allowsMissingProviderApiKey(entry.auth));
+}
+
+function hasUsableExistingProviderApiKey(entry: ExistingProviderConfig): boolean {
+  if (typeof entry.apiKey !== "string") {
+    return Boolean(entry.apiKey);
+  }
+  const apiKey = entry.apiKey.trim();
+  if (!apiKey) {
+    return false;
+  }
+  if (!isNonSecretApiKeyMarker(apiKey, { includeEnvVarName: false })) {
+    return true;
+  }
+  return (
+    !isUnusableExistingApiKeyMarker(apiKey) &&
+    isUsableLocalAuthMarker({ api: entry.api, apiKey, baseUrl: entry.baseUrl })
+  );
+}
+
+function isUnusableExistingApiKeyMarker(apiKey: string): boolean {
+  const trimmed = apiKey.trim();
+  return trimmed === NON_ENV_SECRETREF_MARKER || isOAuthApiKeyMarker(trimmed);
+}
+
+function allowsMissingProviderApiKey(auth: ExistingProviderConfig["auth"]): boolean {
+  return auth === "aws-sdk";
+}
+
+function allowsCurrentProviderMissingApiKey(auth: ProviderConfig["auth"]): boolean {
+  return auth === "aws-sdk" || auth === "oauth";
 }
 
 /** Merges generated provider config with existing secrets safe to preserve. */
@@ -248,23 +314,21 @@ export function mergeWithExistingProviderSecrets(params: {
       continue;
     }
     const preserved: Record<string, unknown> = {};
-    if (
-      shouldPreserveExistingApiKey({
-        providerKey: key,
-        existing,
-        nextEntry: newEntry,
-        secretRefManagedProviders,
-      })
-    ) {
-      preserved.apiKey = existing.apiKey;
+    const preservedApiKey = shouldPreserveExistingApiKey({
+      providerKey: key,
+      existing,
+      nextEntry: newEntry,
+      secretRefManagedProviders,
+    });
+    if (preservedApiKey) {
+      preserved.apiKey = preservedApiKey;
     }
-    if (
-      shouldPreserveExistingBaseUrl({
-        existing,
-        nextEntry: newEntry,
-      })
-    ) {
-      preserved.baseUrl = existing.baseUrl;
+    const preservedBaseUrl = shouldPreserveExistingBaseUrl({
+      existing,
+      nextEntry: newEntry,
+    });
+    if (preservedBaseUrl) {
+      preserved.baseUrl = preservedBaseUrl;
     }
     mergedProviders[key] = { ...newEntry, ...preserved };
   }

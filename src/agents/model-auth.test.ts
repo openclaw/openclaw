@@ -1237,7 +1237,42 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
     });
   });
 
-  it.each(["docker.orb.internal", "host.docker.internal", "host.orb.internal"])(
+  it("accepts non-secret local markers for private LAN custom OpenAI responses providers", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "responses-192-168-0-222-11434",
+      cfg: {
+        models: {
+          providers: {
+            "responses-192-168-0-222-11434": {
+              baseUrl: "http://192.168.0.222:11434/v1",
+              api: "openai-responses",
+              apiKey: "ollama-local",
+              models: [
+                {
+                  id: "qwen3.5:9b",
+                  name: "Qwen 3.5 9B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: "models.json (local marker)",
+      mode: "api-key",
+    });
+  });
+
+  it.each(["docker.orb.internal", "host.docker.internal", "host.orb.internal", "ollama"])(
     "accepts ollama-local marker auth for host-backed alias %s",
     async (hostname) => {
       const auth = await resolveApiKeyForProvider({
@@ -1274,6 +1309,41 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       });
     },
   );
+
+  it("normalizes lmstudio-local marker auth for local OpenAI-compatible providers", async () => {
+    const auth = await resolveApiKeyForProvider({
+      provider: "lmstudio",
+      cfg: {
+        models: {
+          providers: {
+            lmstudio: {
+              baseUrl: "http://localhost:1234/v1",
+              api: "openai-completions",
+              apiKey: "lmstudio-local",
+              models: [
+                {
+                  id: "qwen3.5:4b",
+                  name: "Qwen 3.5 4B",
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 8192,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+    });
+
+    expectAuthFields(auth, {
+      apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+      source: "models.json (local marker)",
+      mode: "api-key",
+    });
+  });
 
   it("does not accept non-secret local markers for remote custom providers", async () => {
     await expect(
@@ -1423,31 +1493,34 @@ describe("applyLocalNoAuthHeaderOverride", () => {
     vi.restoreAllMocks();
   });
 
-  it("marks synthetic local OpenAI-compatible auth so SDK request headers clear Authorization", () => {
-    const model = applyLocalNoAuthHeaderOverride(
-      {
-        id: "local-llm",
-        name: "local-llm",
-        api: "openai-completions",
-        provider: "custom",
-        baseUrl: "http://127.0.0.1:8080/v1",
-        reasoning: false,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 8192,
-        maxTokens: 4096,
-        headers: { "X-Test": "1" },
-      } as Model<"openai-completions">,
-      {
-        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
-        source: "models.providers.custom (synthetic local key)",
-        mode: "api-key",
-      },
-    );
+  it.each(["openai-completions", "openai-responses"] as const)(
+    "marks synthetic local %s auth so SDK request headers clear Authorization",
+    (api) => {
+      const model = applyLocalNoAuthHeaderOverride(
+        {
+          id: "local-llm",
+          name: "local-llm",
+          api,
+          provider: "custom",
+          baseUrl: "http://127.0.0.1:8080/v1",
+          reasoning: false,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
+          headers: { "X-Test": "1" },
+        } as Model<"openai-completions">,
+        {
+          apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+          source: "models.providers.custom (synthetic local key)",
+          mode: "api-key",
+        },
+      );
 
-    expect(model.headers?.Authorization).toBeNull();
-    expect(model.headers?.["X-Test"]).toBe("1");
-  });
+      expect(model.headers?.Authorization).toBeNull();
+      expect(model.headers?.["X-Test"]).toBe("1");
+    },
+  );
 });
 
 describe("applyAuthHeaderOverride", () => {

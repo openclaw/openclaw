@@ -6,6 +6,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { isRecord } from "../utils.js";
+import { isLocalApiKeyMarker, isUsableLocalAuthMarker } from "./model-auth-local.js";
+import {
+  NON_ENV_SECRETREF_MARKER,
+  isOAuthApiKeyMarker,
+  resolveOAuthApiKeyMarker,
+} from "./model-auth-markers.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
@@ -157,20 +163,74 @@ function resolveProvidersForMode(params: {
   });
 }
 
-function isWritableProviderConfig(provider: ProviderConfig): boolean {
+function isWritableProviderConfig(providerKey: string, provider: ProviderConfig): boolean {
   if (!Array.isArray(provider.models) || provider.models.length === 0) {
     return true;
   }
-  return Boolean(provider.baseUrl?.trim() && provider.apiKey);
+  return (
+    Boolean(provider.baseUrl?.trim()) &&
+    (hasWritableProviderApiKey(providerKey, provider) ||
+      isMissingApiKeyProviderAuthAllowed(provider.auth))
+  );
+}
+
+function hasWritableProviderApiKey(providerKey: string, provider: ProviderConfig): boolean {
+  if (typeof provider.apiKey !== "string") {
+    return Boolean(provider.apiKey);
+  }
+  const apiKey = provider.apiKey.trim();
+  if (!apiKey || isUnusableWritableApiKeyMarker(apiKey)) {
+    return false;
+  }
+  if (isOAuthApiKeyMarker(apiKey)) {
+    return apiKey === resolveOAuthApiKeyMarker(providerKey);
+  }
+  if (!isLocalApiKeyMarker(apiKey)) {
+    return true;
+  }
+  return isUsableLocalAuthMarker({
+    api: provider.api,
+    apiKey,
+    baseUrl: provider.baseUrl,
+  });
+}
+
+function isUnusableWritableApiKeyMarker(apiKey: string): boolean {
+  const trimmed = apiKey.trim();
+  return trimmed === NON_ENV_SECRETREF_MARKER;
+}
+
+function isMissingApiKeyProviderAuthAllowed(auth: ProviderConfig["auth"]): boolean {
+  return auth === "aws-sdk" || auth === "oauth";
 }
 
 function filterWritableProviders(
   providers: Record<string, ProviderConfig>,
 ): Record<string, ProviderConfig> {
   const next = Object.fromEntries(
-    Object.entries(providers).filter(([, provider]) => isWritableProviderConfig(provider)),
+    Object.entries(providers).filter(([providerKey, provider]) =>
+      isWritableProviderConfig(providerKey, provider),
+    ),
   );
   return Object.keys(next).length === Object.keys(providers).length ? providers : next;
+}
+
+function stripBlankProviderApiKeys(
+  providers: Record<string, ProviderConfig>,
+): Record<string, ProviderConfig> {
+  let changed = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [key, provider] of Object.entries(providers)) {
+    if (typeof provider.apiKey === "string" && !provider.apiKey.trim()) {
+      const sanitized = { ...provider };
+      delete sanitized.apiKey;
+      next[key] = sanitized;
+      changed = true;
+      continue;
+    }
+    next[key] = provider;
+  }
+  return changed ? next : providers;
 }
 
 /** Plans root and plugin-owned model catalog writes with injectable provider discovery. */
@@ -257,9 +317,10 @@ export async function planOpenClawModelsJsonWithDeps(
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? normalizedMergedProviders;
-  const finalProviders = applyNativeStreamingUsageCompat(
+  const writableProviders = stripBlankProviderApiKeys(
     filterWritableProviders(secretEnforcedProviders),
   );
+  const finalProviders = applyNativeStreamingUsageCompat(writableProviders);
   const splitProviders = splitProvidersByPluginOwner({
     providers: finalProviders,
     pluginMetadataSnapshot: params.pluginMetadataSnapshot,

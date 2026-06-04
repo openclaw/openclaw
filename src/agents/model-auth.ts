@@ -47,6 +47,7 @@ import {
   type EnvApiKeyLookupOptions,
   type EnvApiKeyResult,
 } from "./model-auth-env.js";
+import { isLocalBaseUrl, isUsableLocalAuthMarker } from "./model-auth-local.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isKnownEnvApiKeyMarker,
@@ -327,9 +328,11 @@ export function resolveUsableCustomProviderApiKey(params: {
   if (
     customProviderConfig &&
     isCustomLocalProviderConfig(customProviderConfig) &&
-    (customProviderConfig.api === "openai-completions" || customProviderConfig.api === "ollama") &&
-    customProviderConfig.baseUrl &&
-    isLocalBaseUrl(customProviderConfig.baseUrl)
+    isUsableLocalAuthMarker({
+      api: customProviderConfig.api,
+      apiKey: customKey,
+      baseUrl: customProviderConfig.baseUrl,
+    })
   ) {
     return {
       apiKey: customProviderConfig.api === "ollama" ? customKey : CUSTOM_LOCAL_AUTH_MARKER,
@@ -594,42 +597,6 @@ function resolveConfiguredAwsSdkProfileAuth(params: {
     profileId: params.profileId,
     source: `profile:${params.profileId}`,
   };
-}
-
-function isLocalBaseUrl(baseUrl: string): boolean {
-  try {
-    let host = normalizeLowercaseStringOrEmpty(new URL(baseUrl).hostname);
-    if (host.startsWith("[") && host.endsWith("]")) {
-      host = host.slice(1, -1);
-    }
-    return (
-      host === "localhost" ||
-      host === "127.0.0.1" ||
-      host === "0.0.0.0" ||
-      host === "::1" ||
-      host === "::ffff:7f00:1" ||
-      host === "::ffff:127.0.0.1" ||
-      host === "docker.orb.internal" ||
-      host === "host.docker.internal" ||
-      host === "host.orb.internal" ||
-      host.endsWith(".local") ||
-      isPrivateIpv4Host(host)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function isPrivateIpv4Host(host: string): boolean {
-  if (!/^\d+\.\d+\.\d+\.\d+$/.test(host)) {
-    return false;
-  }
-  const octets = host.split(".").map((part) => Number.parseInt(part, 10));
-  if (octets.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) {
-    return false;
-  }
-  const [a, b] = octets;
-  return a === 10 || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168);
 }
 
 function hasExplicitProviderApiKeyConfig(providerConfig: ModelProviderConfig): boolean {
@@ -1474,7 +1441,9 @@ export function applyLocalNoAuthHeaderOverride<T extends Model>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,
 ): T {
-  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || model.api !== "openai-completions") {
+  const isOpenAICompatibleLocalApi =
+    model.api === "openai-completions" || model.api === "openai-responses";
+  if (auth?.apiKey !== CUSTOM_LOCAL_AUTH_MARKER || !isOpenAICompatibleLocalApi) {
     return model;
   }
 

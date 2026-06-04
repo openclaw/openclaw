@@ -1,8 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
+import {
+  CUSTOM_LOCAL_AUTH_MARKER,
+  NON_ENV_SECRETREF_MARKER,
+  OLLAMA_LOCAL_AUTH_MARKER,
+  resolveOAuthApiKeyMarker,
+} from "./model-auth-markers.js";
 import {
   CUSTOM_PROXY_MODELS_CONFIG,
   installModelsConfigTestHooks,
@@ -158,6 +165,18 @@ async function runEnvProviderCase(params: {
   }
 }
 
+function createImplicitModelEntry() {
+  return {
+    id: "test-model",
+    name: "test-model",
+    reasoning: false,
+    input: ["text"] as const,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 8192,
+    maxTokens: 4096,
+  };
+}
+
 describe("models-config", () => {
   beforeAll(async () => {
     vi.resetModules();
@@ -209,6 +228,112 @@ describe("models-config", () => {
         expect(providers["openai"]).toBeUndefined();
         expect(providers["minimax"]).toBeUndefined();
         expect(providers["synthetic"]).toBeUndefined();
+      });
+    });
+  });
+
+  it("omits unresolved api-key/token providers and keeps aws-sdk/local auth providers", async () => {
+    await withTempHome(async () => {
+      await withTempEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS], async () => {
+        unsetEnv([...MODELS_CONFIG_IMPLICIT_ENV_VARS]);
+
+        const config = {
+          models: {
+            providers: {
+              unresolved: {
+                baseUrl: "https://unresolved.example/v1",
+                api: "openai-completions",
+                models: [createImplicitModelEntry()],
+                auth: "token",
+              },
+              "unresolved-oauth": {
+                baseUrl: "https://oauth.example/v1",
+                api: "openai-completions",
+                models: [createImplicitModelEntry()],
+                auth: "oauth",
+              },
+              "secretref-marker": {
+                baseUrl: "https://secretref.example/v1",
+                api: "openai-completions",
+                models: [createImplicitModelEntry()],
+                apiKey: NON_ENV_SECRETREF_MARKER,
+              },
+              "oauth-marker": {
+                baseUrl: "https://oauth-marker.example/v1",
+                api: "openai-completions",
+                models: [createImplicitModelEntry()],
+                apiKey: "oauth:stale",
+              },
+              "oauth-local-looking-marker": {
+                baseUrl: "http://localhost:8080/v1",
+                api: "openai-completions",
+                models: [createImplicitModelEntry()],
+                apiKey: "oauth:stale-local",
+              },
+              chutes: {
+                baseUrl: "https://llm.chutes.ai/v1",
+                api: "openai-completions",
+                models: [createImplicitModelEntry()],
+                apiKey: resolveOAuthApiKeyMarker("chutes"),
+              },
+              "responses-local": {
+                baseUrl: "http://localhost:8080/v1",
+                api: "openai-responses",
+                models: [createImplicitModelEntry()],
+                apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+              },
+              "ollama-docker": {
+                baseUrl: "http://ollama:11434",
+                api: "ollama",
+                models: [createImplicitModelEntry()],
+                apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+              },
+              "lmstudio-local": {
+                baseUrl: "http://localhost:1234/v1",
+                api: "openai-completions",
+                models: [createImplicitModelEntry()],
+                apiKey: "lmstudio-local",
+              },
+              "single-label-custom-local-marker": {
+                baseUrl: "http://api:8080/v1",
+                api: "openai-completions",
+                models: [createImplicitModelEntry()],
+                apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+              },
+              "remote-local-marker": {
+                baseUrl: "https://remote.example/v1",
+                api: "ollama",
+                models: [createImplicitModelEntry()],
+                apiKey: OLLAMA_LOCAL_AUTH_MARKER,
+              },
+              "amazon-bedrock": {
+                baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+                api: "bedrock-converse-stream",
+                models: [createImplicitModelEntry()],
+                auth: "aws-sdk",
+                apiKey: "  ",
+              },
+            },
+          },
+        } as unknown as OpenClawConfig;
+
+        await ensureOpenClawModelsJson(config);
+
+        const providers = await readGeneratedProviders(resolveDefaultAgentDir({}));
+
+        expect(providers["unresolved"]).toBeUndefined();
+        expect(providers["unresolved-oauth"]).toBeUndefined();
+        expect(providers["secretref-marker"]).toBeUndefined();
+        expect(providers["oauth-marker"]).toBeUndefined();
+        expect(providers["oauth-local-looking-marker"]).toBeUndefined();
+        expect(providers["chutes"]?.apiKey).toBe(resolveOAuthApiKeyMarker("chutes"));
+        expect(providers["responses-local"]?.apiKey).toBe(CUSTOM_LOCAL_AUTH_MARKER);
+        expect(providers["ollama-docker"]?.apiKey).toBe(OLLAMA_LOCAL_AUTH_MARKER);
+        expect(providers["lmstudio-local"]?.apiKey).toBe("lmstudio-local");
+        expect(providers["single-label-custom-local-marker"]).toBeUndefined();
+        expect(providers["remote-local-marker"]).toBeUndefined();
+        expect(providers["amazon-bedrock"]?.apiKey).toBeUndefined();
+        expect(providers["amazon-bedrock"]?.models?.[0]?.id).toBe("test-model");
       });
     });
   });
