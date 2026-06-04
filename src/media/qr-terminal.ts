@@ -6,11 +6,13 @@ type QrTerminalModules = {
 };
 
 const COMPACT_MARGIN_MODULES = 1;
-const TERMINAL_BLACK_ON_WHITE = "\x1b[47m\x1b[30m";
+const TERMINAL_BLACK_ON_WHITE = "\x1b[48;2;255;255;255m\x1b[38;2;0;0;0m";
 const TERMINAL_RESET = "\x1b[0m";
 const FULL_BLOCK = "█";
 const UPPER_HALF_BLOCK = "▀";
 const LOWER_HALF_BLOCK = "▄";
+const FULL_MODULE = "██";
+const EMPTY_MODULE = "  ";
 
 function readModule(modules: QrTerminalModules, x: number, y: number): boolean {
   if (x < 0 || y < 0 || x >= modules.size || y >= modules.size) {
@@ -44,6 +46,18 @@ function renderCompactTerminalQr(modules: QrTerminalModules): string {
   return lines.join("\n");
 }
 
+function renderFullTerminalQr(modules: QrTerminalModules): string {
+  const lines: string[] = [];
+  for (let y = -COMPACT_MARGIN_MODULES; y < modules.size + COMPACT_MARGIN_MODULES; y += 1) {
+    let line = TERMINAL_BLACK_ON_WHITE;
+    for (let x = -COMPACT_MARGIN_MODULES; x < modules.size + COMPACT_MARGIN_MODULES; x += 1) {
+      line += readModule(modules, x, y) ? FULL_MODULE : EMPTY_MODULE;
+    }
+    lines.push(`${line}${TERMINAL_RESET}`);
+  }
+  return lines.join("\n");
+}
+
 /** Renders QR text for terminal display, with an optional compact half-block mode. */
 export async function renderQrTerminal(
   input: string,
@@ -55,8 +69,5 @@ export async function renderQrTerminal(
     // Avoid qrcode's small terminal mode so we control quiet-zone size and ANSI reset placement.
     return renderCompactTerminalQr(qrCode.create(text).modules);
   }
-  return await qrCode.toString(text, {
-    small: false,
-    type: "terminal",
-  });
+  return renderFullTerminalQr(qrCode.create(text).modules);
 }

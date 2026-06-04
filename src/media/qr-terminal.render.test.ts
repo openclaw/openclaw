@@ -68,6 +68,16 @@ describe("renderQrTerminal (real qrcode runtime)", () => {
     expect(max).toBeLessThanOrEqual(median * 6);
   });
 
+  it("keeps full QR rows on a controlled white background", async () => {
+    const sample = "https://accounts.feishu.cn/oauth/qr-demo";
+    const rendered = await renderQrTerminal(sample);
+    for (const line of rendered.split(/\r?\n/).filter(Boolean)) {
+      expect(line.startsWith("\x1b[48;2;255;255;255m\x1b[38;2;0;0;0m")).toBe(true);
+      expect(line.endsWith("\x1b[0m")).toBe(true);
+      expect((line.match(ansiSgr) ?? []).length).toBe(3);
+    }
+  });
+
   it("renders compact output from the same QR matrix", async () => {
     const sample = "https://wa.me/login/2@SAMPLE-TOKEN-1234567890ABCDEF";
     const qr = QRCode.create(sample);
