@@ -4692,6 +4692,7 @@ public struct ModelChoice: Codable, Sendable {
     public let available: Bool?
     public let contextwindow: Int?
     public let reasoning: Bool?
+    public let agentruntime: [String: AnyCodable]?
 
     public init(
         id: String,
@@ -4700,7 +4701,8 @@ public struct ModelChoice: Codable, Sendable {
         alias: String?,
         available: Bool? = nil,
         contextwindow: Int?,
-        reasoning: Bool?)
+        reasoning: Bool?,
+        agentruntime: [String: AnyCodable]?)
     {
         self.id = id
         self.name = name
@@ -4709,6 +4711,7 @@ public struct ModelChoice: Codable, Sendable {
         self.available = available
         self.contextwindow = contextwindow
         self.reasoning = reasoning
+        self.agentruntime = agentruntime
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4719,6 +4722,7 @@ public struct ModelChoice: Codable, Sendable {
         case available
         case contextwindow = "contextWindow"
         case reasoning
+        case agentruntime = "agentRuntime"
     }
 }
 
