@@ -3604,6 +3604,16 @@ describe("runReplyAgent private message_tool_only final warning (#85714)", () =>
     expect(retryRun?.prompt).toContain("message(action=send)");
   });
 
+  it("suppresses user-message persistence on retry to prevent private-text leak (#85714)", async () => {
+    await runPrivateFinalCase({});
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    // The retry prompt quotes the private message_tool_only final. Persisting it
+    // as a user turn would leak that private text into durable session context,
+    // so the enqueued run must suppress user-message persistence at run.* level.
+    const retryRun = vi.mocked(enqueueFollowupRun).mock.calls[0]?.[1];
+    expect(retryRun?.run?.suppressNextUserMessagePersistence).toBe(true);
+  });
+
   it("does not enqueue a second retry when a stranded-reply retry strands again (#85714)", async () => {
     // The retry turn itself can fail to call message(action=send). Bound the
     // recovery to a single attempt: a run already marked as a stranded-reply

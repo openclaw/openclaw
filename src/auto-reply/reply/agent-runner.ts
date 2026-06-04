@@ -2630,6 +2630,11 @@ export async function runReplyAgent(params: {
               transcriptPrompt: undefined,
               userTurnTranscriptRecorder: undefined,
               currentInboundContext: undefined,
+              // #85714: The synthetic retry prompt quotes the private
+              // message_tool_only final text. Persisting it as a user turn would
+              // leak that private text into durable session context. The followup
+              // runner reads suppression at run.* level, so set it there.
+              run: { ...followupRun.run, suppressNextUserMessagePersistence: true },
             },
             resolvedQueue,
             "none",
