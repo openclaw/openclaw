@@ -72,12 +72,12 @@ describe("wakeRestoredFollowupQueueSessions", () => {
         expect.stringContaining("Restored 1 pending followup message"),
         { sessionKey: key },
       );
-      expect(requestHeartbeat).toHaveBeenCalledWith(
-        expect.objectContaining({
-          source: "followup-queue-restore",
-          sessionKey: key,
-        }),
-      );
+      expect(requestHeartbeat).toHaveBeenCalledWith({
+        source: "followup-queue-restore",
+        intent: "immediate",
+        reason: "restored-followup-queue",
+        sessionKey: key,
+      });
     } finally {
       if (originalStateDir === undefined) {
         delete process.env.OPENCLAW_STATE_DIR;
