@@ -25,8 +25,14 @@ class MockChildProcess extends EventEmitter {
   }
 }
 
-function createMockChildProcess(): ChildProcessWithoutNullStreams {
-  return new MockChildProcess() as unknown as ChildProcessWithoutNullStreams;
+type MockChildHandle = ChildProcessWithoutNullStreams & {
+  stdin: PassThrough;
+  stdout: PassThrough;
+  stderr: PassThrough;
+};
+
+function createMockChildProcess(): MockChildHandle {
+  return new MockChildProcess() as unknown as MockChildHandle;
 }
 
 describe("IMessageRpcClient stdout framing", () => {
