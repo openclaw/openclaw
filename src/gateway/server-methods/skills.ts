@@ -1,3 +1,4 @@
+// Gateway RPC handlers for skill discovery, install/update, and proposal workflows.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -141,6 +142,7 @@ async function runSkillsProposalWorkspaceHandler<TParams, TResult>(params: {
   }
 }
 
+/** Gateway request handlers for skill status, catalogs, installs, updates, and workshop proposals. */
 export const skillsHandlers: GatewayRequestHandlers = {
   ...skillsUploadHandlers,
   "skills.status": ({ params, respond, context }) => {
@@ -433,6 +435,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
         slug: p.slug,
         version: p.version,
         force: Boolean(p.force),
+        config: cfg,
       });
       respond(
         result.ok,
@@ -492,14 +495,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
     const p = params as {
       name: string;
       installId: string;
-      dangerouslyForceUnsafeInstall?: boolean;
       timeoutMs?: number;
     };
     const result = await installSkill({
       workspaceDir: workspaceDirRaw,
       skillName: p.name,
       installId: p.installId,
-      dangerouslyForceUnsafeInstall: p.dangerouslyForceUnsafeInstall,
       timeoutMs: p.timeoutMs,
       config: cfg,
     });
@@ -543,6 +544,7 @@ export const skillsHandlers: GatewayRequestHandlers = {
       const results = await updateSkillsFromClawHub({
         workspaceDir,
         slug: p.slug,
+        config: cfg,
       });
       const errors = results.filter((result) => !result.ok);
       respond(

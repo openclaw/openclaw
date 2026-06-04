@@ -1,5 +1,6 @@
 import path from "node:path";
 
+/** Maximum retained clobbered-config snapshots per config file. */
 export const CONFIG_CLOBBER_SNAPSHOT_LIMIT = 32;
 
 const CONFIG_CLOBBER_LOCK_STALE_MS = 30_000;

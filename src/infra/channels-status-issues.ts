@@ -37,6 +37,8 @@ function collectGenericRuntimeStatusIssues(
       });
       continue;
     }
+    // Generic health issues are derived before plugin-specific checks so every
+    // channel gets the same stale/disconnected runtime warnings.
     const health = evaluateChannelHealth(account, {
       channelId: channel,
       now,
@@ -80,6 +82,7 @@ function collectGenericRuntimeStatusIssues(
   return issues;
 }
 
+/** Collects generic and plugin-specific issues from a channels status payload. */
 export function collectChannelStatusIssues(payload: Record<string, unknown>): ChannelStatusIssue[] {
   const issues: ChannelStatusIssue[] = [];
   const accountsByChannel = payload.channelAccounts as Record<string, unknown> | undefined;

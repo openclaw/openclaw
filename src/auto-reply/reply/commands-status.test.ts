@@ -4,6 +4,7 @@ import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
+import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
@@ -627,18 +628,10 @@ describe("buildStatusReply subagent summary", () => {
 
     await withTempHome(
       async (dir) => {
-        const authPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "agent",
-          "auth-profiles.json",
-        );
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        fs.writeFileSync(
-          authPath,
-          JSON.stringify({
+        const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
+        fs.mkdirSync(agentDir, { recursive: true });
+        saveAuthProfileStore(
+          {
             version: 1,
             profiles: {
               "openai:status": {
@@ -649,8 +642,9 @@ describe("buildStatusReply subagent summary", () => {
                 expires: Date.now() + 60 * 60_000,
               },
             },
-          }),
-          "utf8",
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
         );
         const usageResetBase = Math.floor(Date.now() / 1000);
         providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
@@ -744,18 +738,10 @@ describe("buildStatusReply subagent summary", () => {
 
     await withTempHome(
       async (dir) => {
-        const authPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "agent",
-          "auth-profiles.json",
-        );
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        fs.writeFileSync(
-          authPath,
-          JSON.stringify({
+        const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
+        fs.mkdirSync(agentDir, { recursive: true });
+        saveAuthProfileStore(
+          {
             version: 1,
             profiles: {
               "openai:status": {
@@ -766,8 +752,9 @@ describe("buildStatusReply subagent summary", () => {
                 expires: Date.now() + 60 * 60_000,
               },
             },
-          }),
-          "utf8",
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
         );
         const usageResetBase = Math.floor(Date.now() / 1000);
         providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
@@ -881,18 +868,10 @@ describe("buildStatusReply subagent summary", () => {
   it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
     await withTempHome(
       async (dir) => {
-        const authPath = path.join(
-          dir,
-          ".openclaw",
-          "agents",
-          "main",
-          "agent",
-          "auth-profiles.json",
-        );
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        fs.writeFileSync(
-          authPath,
-          JSON.stringify({
+        const agentDir = path.join(dir, ".openclaw", "agents", "main", "agent");
+        fs.mkdirSync(agentDir, { recursive: true });
+        saveAuthProfileStore(
+          {
             version: 1,
             profiles: {
               "openai:status": {
@@ -908,8 +887,9 @@ describe("buildStatusReply subagent summary", () => {
                 key: "sk-test",
               },
             },
-          }),
-          "utf8",
+          },
+          agentDir,
+          { filterExternalAuthProfiles: false, syncExternalCli: false },
         );
 
         const text = await buildStatusText({

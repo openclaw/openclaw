@@ -37,8 +37,10 @@ import {
 import { checkMinHostVersion } from "./min-host-version.js";
 import { isPathInside } from "./path-safety.js";
 
+/** npm install resolution metadata re-exported for lazy plugin install callers. */
 export type { NpmIntegrityDrift, NpmSpecResolution };
 
+/** Lazy runtime barrel for plugin install helpers used outside the main install module. */
 export {
   checkMinHostVersion,
   root,

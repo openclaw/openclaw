@@ -40,6 +40,7 @@ type DoctorHealthFlowContext = {
   env?: NodeJS.ProcessEnv;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
+  gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../commands/status.types.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;
@@ -553,8 +554,10 @@ async function runStartupChannelMaintenanceHealth(ctx: DoctorHealthFlowContext):
 }
 
 async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const { noteInstallPolicyHealth } = await import("../commands/doctor-install-policy.js");
   const { noteSecurityWarnings } = await import("../commands/doctor-security.js");
   await noteSecurityWarnings(ctx.cfg);
+  await noteInstallPolicyHealth(ctx.cfg, { deep: ctx.options.deep === true, env: ctx.env });
 }
 
 async function runBrowserHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -792,20 +795,21 @@ async function runGatewayHealthChecks(ctx: DoctorHealthFlowContext): Promise<voi
   }
   const { checkGatewayHealth, probeGatewayMemoryStatus } =
     await import("../commands/doctor-gateway-health.js");
-  const { healthOk, status } = await checkGatewayHealth({
+  const { healthOk, authenticated, status } = await checkGatewayHealth({
     runtime: ctx.runtime,
     cfg: ctx.cfg,
     timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
   });
   ctx.gatewayHealthSkipped = false;
   ctx.healthOk = healthOk;
+  ctx.gatewayHealthAuthenticated = authenticated;
   ctx.gatewayStatus = status;
-  ctx.gatewayMemoryProbe = healthOk
+  ctx.gatewayMemoryProbe = authenticated
     ? await probeGatewayMemoryStatus({
         cfg: ctx.cfg,
         timeoutMs: ctx.options.nonInteractive === true ? 3000 : 10_000,
       })
-    : { checked: false, ready: false, skipped: false };
+    : { checked: false, ready: false, skipped: healthOk };
 }
 
 async function runWhatsappResponsivenessHealth(ctx: DoctorHealthFlowContext): Promise<void> {

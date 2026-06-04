@@ -18,6 +18,7 @@ function tryRelative(root: string, filePath: string): string | null {
   return rel.replaceAll("\\", "/");
 }
 
+/** Formats a plugin source path for status tables using known source roots. */
 export function formatPluginSourceForTable(
   plugin: Pick<PluginRecord, "source" | "origin">,
   roots: PluginSourceRoots,

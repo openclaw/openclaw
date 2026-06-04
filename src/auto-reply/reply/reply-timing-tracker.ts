@@ -31,6 +31,7 @@ type ReplyTimingTracker = {
 const DEFAULT_TIMING_WARN_TOTAL_MS = 1_000;
 const DEFAULT_TIMING_WARN_STAGE_MS = 500;
 
+/** Checks config/env diagnostic flags for reply profiling. */
 export function isReplyProfilerEnabled(params?: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -43,6 +44,7 @@ export function isReplyProfilerEnabled(params?: {
   );
 }
 
+/** Creates a lightweight timing tracker for slow reply-stage diagnostics. */
 export function createReplyTimingTracker(params: {
   log: ReplyTimingLogger;
   config?: OpenClawConfig;

@@ -10,6 +10,7 @@ const InstallSourceSchema = z.union([
 
 const PluginInstallSourceSchema = z.union([InstallSourceSchema, z.literal("marketplace")]);
 
+/** Zod object shape for persisted generic install records. */
 export const InstallRecordShape = {
   source: InstallSourceSchema,
   spec: z.string().optional(),

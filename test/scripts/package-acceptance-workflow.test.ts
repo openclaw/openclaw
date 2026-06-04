@@ -141,6 +141,12 @@ describe("package acceptance workflow", () => {
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
     expect(hydratePnpm.run).toContain("COREPACK_HOME");
+    expect(hydratePnpm.run).toContain("reset_crabbox_pnpm_root");
+    expect(hydratePnpm.run).toContain('rm -rf -- "$root"');
+    expect(hydratePnpm.run).toContain("Refusing unsafe pnpm cache root");
+    expect(hydratePnpm.run).toContain(
+      '[ "$(readlink node_modules)" = "${PNPM_CONFIG_MODULES_DIR:-}" ]',
+    );
     expect(workflowStep(hydrate, "Fetch main ref").run).toContain(
       "timeout --signal=TERM --kill-after=10s 30s git",
     );
@@ -162,10 +168,10 @@ describe("package acceptance workflow", () => {
     const hydrateWindowsPnpm = workflowStep(hydrateWindowsDaemon, "Setup pnpm and dependencies");
     expect(hydrateWindowsPnpm.shell).toBe("powershell");
     expect(hydrateWindowsPnpm.run).toContain(
-      '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $cacheRoot "openclaw-pnpm-node-modules"',
+      '$env:PNPM_CONFIG_MODULES_DIR = Join-Path $pnpmCacheRoot "node_modules"',
     );
     expect(hydrateWindowsPnpm.run).toContain(
-      '$env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $env:PNPM_CONFIG_MODULES_DIR ".pnpm"',
+      '$env:PNPM_CONFIG_VIRTUAL_STORE_DIR = Join-Path $pnpmCacheRoot "virtual-store"',
     );
     expect(hydrateWindowsPnpm.run).not.toContain("PNPM_CONFIG_PACKAGE_IMPORT_METHOD");
     expect(hydrateWindowsPnpm.run).toContain("--config.side-effects-cache=false");

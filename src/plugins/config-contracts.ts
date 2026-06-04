@@ -11,10 +11,13 @@ export {
 } from "./config-contract-matches.js";
 
 export type PluginConfigContractMetadata = {
+  /** Runtime origin that supplied the contract metadata. */
   origin: PluginOrigin;
+  /** Manifest-declared config contract paths used by secret/security/config scanners. */
   configContracts: PluginManifestConfigContracts;
 };
 
+/** Resolve config contract metadata for plugin ids through the runtime registry and bundled fallback. */
 export function resolvePluginConfigContractsById(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -93,6 +96,8 @@ export function resolvePluginConfigContractsById(params: {
       if (shouldHydrateBundledMatch) {
         const bundledConfigContracts = findBundledConfigContracts(pluginId);
         if (bundledConfigContracts) {
+          // Bundled metadata can carry richer contract declarations than installed registry entries;
+          // installed declarations still win except for bundled secret input coverage.
           matches.set(pluginId, {
             origin: fallbackBundledPluginIds.has(pluginId) ? "bundled" : existing.origin,
             configContracts: {

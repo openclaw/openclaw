@@ -7,6 +7,7 @@ type RuntimeStatusFormatInput = {
   details?: string[];
 };
 
+/** Formats runtime health/status text with optional pid, state, and extra diagnostic details. */
 export function formatRuntimeStatusWithDetails({
   status,
   pid,
@@ -21,6 +22,8 @@ export function formatRuntimeStatusWithDetails({
   const normalizedState = state?.trim();
   if (
     normalizedState &&
+    // State often mirrors status from different process managers; suppressing
+    // case-only duplicates keeps restart/status output readable.
     normalizeLowercaseStringOrEmpty(normalizedState) !==
       normalizeLowercaseStringOrEmpty(runtimeStatus)
   ) {

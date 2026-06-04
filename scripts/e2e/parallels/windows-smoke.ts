@@ -357,11 +357,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     await this.phase("fresh.gateway-restart", 420, () => this.gatewayAction("restart"));
     await this.phase("fresh.gateway-status", 420, () => this.verifyGatewayReachable());
     this.status.freshGateway = "pass";
-    await this.phase(
-      "fresh.first-agent-turn",
-      this.agentTimeoutSeconds,
-      () => this.verifyTurn(),
-    );
+    await this.phase("fresh.first-agent-turn", this.agentTimeoutSeconds, () => this.verifyTurn());
     this.status.freshAgent = "pass";
   }
 
@@ -403,10 +399,8 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
       this.status.upgradePrecheck = "latest-ref-fail";
     }
     await this.phase("upgrade.gateway-stop-before-update", 420, () => this.gatewayAction("stop"));
-    await this.phase(
-      "upgrade.update-dev",
-      this.updateTimeoutSeconds,
-      () => this.runDevChannelUpdate(),
+    await this.phase("upgrade.update-dev", this.updateTimeoutSeconds, () =>
+      this.runDevChannelUpdate(),
     );
     this.status.upgradeVersion = await this.extractLastVersion("upgrade.update-dev");
     await this.phase("upgrade.verify-dev-channel", 120, () => this.verifyDevChannelUpdate());
@@ -415,11 +409,7 @@ class WindowsSmoke extends SmokeRunController<WindowsOptions> {
     await this.phase("upgrade.gateway-restart", 420, () => this.gatewayAction("restart"));
     await this.phase("upgrade.gateway-status", 420, () => this.verifyGatewayReachable());
     this.status.upgradeGateway = "pass";
-    await this.phase(
-      "upgrade.first-agent-turn",
-      this.agentTimeoutSeconds,
-      () => this.verifyTurn(),
-    );
+    await this.phase("upgrade.first-agent-turn", this.agentTimeoutSeconds, () => this.verifyTurn());
     this.status.upgradeAgent = "pass";
   }
 

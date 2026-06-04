@@ -6,6 +6,7 @@ import {
 } from "./channel-config-metadata.js";
 import { buildConfigSchema as buildConfigSchemaImpl } from "./schema.js";
 
+/** Runtime facade used by docs baseline generation to keep imports narrow. */
 export const loadPluginManifestRegistry = loadPluginManifestRegistryImpl;
 export const collectBundledChannelConfigs = collectBundledChannelConfigsImpl;
 export const collectChannelSchemaMetadata = collectChannelSchemaMetadataImpl;

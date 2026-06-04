@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import type { PluginDiagnostic } from "./manifest-types.js";
 
+/** File metadata signature used to skip unchanged installed plugin files. */
 export type InstalledPluginFileSignature = {
   size: number;
   mtimeMs: number;
@@ -12,10 +13,12 @@ function hashString(value: string): string {
   return crypto.createHash("sha256").update(value).digest("hex");
 }
 
+/** Hashes JSON-serializable data with SHA-256. */
 export function hashJson(value: unknown): string {
   return hashString(JSON.stringify(value));
 }
 
+/** Safely hashes a file, optionally recording required-file diagnostics. */
 export function safeHashFile(params: {
   filePath: string;
   pluginId?: string;
@@ -39,6 +42,7 @@ export function safeHashFile(params: {
   }
 }
 
+/** Reads a safe file signature for installed plugin index freshness checks. */
 export function safeFileSignature(filePath: string): InstalledPluginFileSignature | undefined {
   try {
     const stat = fs.statSync(filePath);
@@ -55,6 +59,7 @@ export function safeFileSignature(filePath: string): InstalledPluginFileSignatur
   }
 }
 
+/** Compares current file metadata with a stored installed-plugin file signature. */
 export function fileSignatureMatches(
   filePath: string,
   signature: InstalledPluginFileSignature | undefined,
