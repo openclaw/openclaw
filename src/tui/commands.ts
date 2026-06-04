@@ -37,6 +37,7 @@ const LOCAL_SHARED_COMMAND_DISCOVERY_KEYS = new Set([
   "elevated",
   "goal",
   "reasoning",
+  "stop",
   "status",
   "think",
   "verbose",

@@ -113,6 +113,7 @@ describe("getSlashCommands", () => {
     expect(names).toContain("btw");
     expect(names).toContain("side");
     expect(names).toContain("t");
+    expect(names).toContain("stop");
     expect(names).not.toContain("commands");
     expect(names).not.toContain("compact");
     expect(names).not.toContain("context");
