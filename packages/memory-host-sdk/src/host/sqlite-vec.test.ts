@@ -49,7 +49,6 @@ describe("loadSqliteVecExtension", () => {
     mockMissingSqliteVecPackage();
     const { loadSqliteVecExtension } = await importLoader();
     const db = {
-      enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),
     };
 
@@ -59,7 +58,6 @@ describe("loadSqliteVecExtension", () => {
         extensionPath: "/opt/openclaw/sqlite-vec.so",
       }),
     ).resolves.toEqual({ ok: true, extensionPath: "/opt/openclaw/sqlite-vec.so" });
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).toHaveBeenCalledWith("/opt/openclaw/sqlite-vec.so");
   });
 
@@ -68,7 +66,6 @@ describe("loadSqliteVecExtension", () => {
     mockPlatformVariantResolver(undefined);
     const { loadSqliteVecExtension } = await importLoader();
     const db = {
-      enableLoadExtension: vi.fn(),
       loadExtension: vi.fn(),
     };
 
@@ -81,7 +78,6 @@ describe("loadSqliteVecExtension", () => {
       ),
     });
     expect(result.error).not.toContain("memory.store.vector.extensionPath");
-    expect(db.enableLoadExtension).toHaveBeenCalledWith(true);
     expect(db.loadExtension).not.toHaveBeenCalled();
   });
 

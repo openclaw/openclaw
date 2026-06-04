@@ -1,11 +1,8 @@
-// Configures SQLite WAL and related pragmas for local stores.
-import type { DatabaseSync } from "node:sqlite";
 import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
-
-// WAL maintenance configures SQLite write-ahead logging and schedules bounded
-// checkpoints so state databases do not accumulate unbounded WAL files.
 export const DEFAULT_SQLITE_WAL_AUTOCHECKPOINT_PAGES = 1000;
 export const DEFAULT_SQLITE_WAL_TRUNCATE_INTERVAL_MS = 30 * 60 * 1000;
+
+type ExecDb = { exec(sql: string): unknown };
 
 type IntervalHandle = ReturnType<typeof setInterval> & {
   unref?: () => void;
@@ -37,7 +34,7 @@ function normalizeNonNegativeInteger(value: number, label: string): number {
 
 /** Configure WAL pragmas and return a handle for checkpoint/close maintenance. */
 export function configureSqliteWalMaintenance(
-  db: DatabaseSync,
+  db: ExecDb,
   options: SqliteWalMaintenanceOptions = {},
 ): SqliteWalMaintenance {
   const autoCheckpointPages = normalizeNonNegativeInteger(

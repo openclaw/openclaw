@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import type { MemoryDb } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   cosineSimilarity,
   parseEmbedding,
@@ -127,7 +127,7 @@ function planKeywordSearch(params: {
 }
 
 export async function searchVector(params: {
-  db: DatabaseSync;
+  db: MemoryDb;
   vectorTable: string;
   providerModel: string;
   queryVec: number[];
@@ -224,7 +224,7 @@ export async function searchVector(params: {
 }
 
 async function searchChunksByEmbedding(params: {
-  db: DatabaseSync;
+  db: MemoryDb;
   providerModel: string;
   sourceFilter: { sql: string; params: SearchSource[] };
   queryVec: number[];
@@ -305,7 +305,7 @@ async function searchChunksByEmbedding(params: {
 }
 
 export async function searchKeyword(params: {
-  db: DatabaseSync;
+  db: MemoryDb;
   ftsTable: string;
   providerModel: string | undefined;
   query: string;

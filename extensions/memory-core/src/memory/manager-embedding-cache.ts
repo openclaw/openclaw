@@ -1,10 +1,10 @@
-import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
   parseEmbedding,
   type MemoryChunk,
+  type MemoryDb,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
-type EmbeddingCacheDb = Pick<DatabaseSync, "prepare">;
+type EmbeddingCacheDb = Pick<MemoryDb, "prepare">;
 
 type EmbeddingProviderRef = {
   id: string;
@@ -38,7 +38,7 @@ export function loadMemoryEmbeddingCache(params: {
 
   const tableName = params.tableName ?? "embedding_cache";
   const out = new Map<string, number[]>();
-  const baseParams: SQLInputValue[] = [provider.id, provider.model, params.providerKey];
+  const baseParams: unknown[] = [provider.id, provider.model, params.providerKey];
   const batchSize = 400;
   for (let start = 0; start < unique.length; start += batchSize) {
     const batch = unique.slice(start, start + batchSize);

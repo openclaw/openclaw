@@ -35,11 +35,11 @@ import {
   buildMemoryReadResultFromSlice,
   DEFAULT_MEMORY_READ_LINES,
   isFileMissingError,
-  type MemoryReadResult,
-  requireNodeSqlite,
-  statRegularFile,
+  requireBetterSqlite3,
+  type MemoryDb,
   type MemoryEmbeddingProbeResult,
   type MemoryProviderStatus,
+  type MemoryReadResult,
   type MemorySearchManager,
   type MemorySearchRuntimeDebug,
   type MemorySearchResult,
@@ -48,6 +48,7 @@ import {
   type ResolvedMemoryBackendConfig,
   type ResolvedQmdConfig,
   type ResolvedQmdMcporterConfig,
+  statRegularFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   addTimerTimeoutGraceMs,
@@ -72,8 +73,6 @@ import {
   type MemoryWatchEventStats,
   type MemoryWatchSettleQueue,
 } from "./watch-settle.js";
-
-type SqliteDatabase = import("node:sqlite").DatabaseSync;
 
 const log = createSubsystemLogger("memory");
 
@@ -377,7 +376,7 @@ export class QmdMemoryManager implements MemorySearchManager {
   private closed = false;
   private readonly closeSignal: Promise<void>;
   private resolveCloseSignal!: () => void;
-  private db: SqliteDatabase | null = null;
+  private db: MemoryDb | null = null;
   private lastUpdateAt: number | null = null;
   private lastEmbedAt: number | null = null;
   private embedBackoffUntil: number | null = null;
@@ -2349,16 +2348,16 @@ export class QmdMemoryManager implements MemorySearchManager {
     }
   }
 
-  private ensureDb(): SqliteDatabase {
+  private ensureDb(): MemoryDb {
     if (this.db) {
       return this.db;
     }
-    const { DatabaseSync } = requireNodeSqlite();
-    this.db = new DatabaseSync(this.indexPath, { readOnly: true });
+    const BetterSqlite3 = requireBetterSqlite3();
+    this.db = new BetterSqlite3(this.indexPath, { readonly: true });
     // busy_timeout is per-connection; set it on every open so concurrent
     // processes retry instead of failing immediately with SQLITE_BUSY.
     // Use a lower value than the write path (5 s) because this read-only
-    // connection runs synchronous queries on the main thread via DatabaseSync.
+    // connection runs synchronous queries on the main thread.
     // In WAL mode readers rarely block, so 1 s is a safe upper bound.
     this.db.exec("PRAGMA busy_timeout = 1000");
     return this.db;

@@ -24,10 +24,13 @@ export {
   readMemoryFile,
   retryTransientMemoryRead,
   remapChunkLines,
+  requireBetterSqlite3,
   requireNodeSqlite,
   resolveMemoryBackendConfig,
   runWithConcurrency,
   statRegularFile,
+  type MemoryDb,
+  type MemoryStatement,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 
 /** Origin bucket for memory search results exposed through the SDK. */

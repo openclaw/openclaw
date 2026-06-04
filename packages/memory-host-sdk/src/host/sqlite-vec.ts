@@ -1,11 +1,11 @@
-import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "./error-utils.js";
 import { resolveSqliteVecPlatformVariant } from "./sqlite-vec-platform-variant.js";
+import type { MemoryDb } from "./sqlite.js";
 import { normalizeOptionalString } from "./string-utils.js";
 
 type SqliteVecModule = {
   getLoadablePath: () => string;
-  load: (db: DatabaseSync) => void;
+  load: (db: { loadExtension(file: string, entrypoint?: string): void }) => void;
 };
 
 const SQLITE_VEC_MODULE_ID = "sqlite-vec";
@@ -28,12 +28,11 @@ function isMissingSqliteVecPackageError(err: unknown): boolean {
 }
 
 export async function loadSqliteVecExtension(params: {
-  db: DatabaseSync;
+  db: MemoryDb;
   extensionPath?: string;
 }): Promise<{ ok: boolean; extensionPath?: string; error?: string }> {
   try {
     const resolvedPath = normalizeOptionalString(params.extensionPath);
-    params.db.enableLoadExtension(true);
     if (resolvedPath) {
       params.db.loadExtension(resolvedPath);
       return { ok: true, extensionPath: resolvedPath };

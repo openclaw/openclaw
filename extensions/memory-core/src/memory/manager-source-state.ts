@@ -1,4 +1,3 @@
-import type { SQLInputValue } from "node:sqlite";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 export type MemorySourceFileStateRow = {
@@ -10,8 +9,8 @@ export type MemorySourceFileStateRow = {
 
 type MemorySourceStateDb = {
   prepare: (sql: string) => {
-    all: (...args: SQLInputValue[]) => unknown;
-    get: (...args: SQLInputValue[]) => unknown;
+    all: (...args: unknown[]) => unknown;
+    get: (...args: unknown[]) => unknown;
   };
 };
 

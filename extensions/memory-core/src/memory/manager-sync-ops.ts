@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import chokidar, { FSWatcher } from "chokidar";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { classifyMemoryMultimodalPath } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -22,6 +21,10 @@ import {
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import type {
+  MemoryDb,
+  MemoryStatement,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   buildFileEntry,
   ensureMemoryIndexSchema,
@@ -261,7 +264,7 @@ export abstract class MemoryManagerSyncOps {
   private lastMetaSerialized: string | null = null;
 
   protected abstract readonly cache: { enabled: boolean; maxEntries?: number };
-  protected abstract db: DatabaseSync;
+  protected abstract db: MemoryDb;
   protected abstract computeProviderKey(): string;
   protected abstract sync(params?: {
     reason?: string;
@@ -445,12 +448,12 @@ export abstract class MemoryManagerSyncOps {
     return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
   }
 
-  protected openDatabase(): DatabaseSync {
+  protected openDatabase(): MemoryDb {
     const dbPath = resolveUserPath(this.settings.store.path);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+    return openMemoryDatabaseAtPath(dbPath);
   }
 
-  private async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {
+  private async seedEmbeddingCache(sourceDb: MemoryDb): Promise<void> {
     if (!this.cache.enabled) {
       return;
     }
@@ -472,7 +475,7 @@ export abstract class MemoryManagerSyncOps {
       // Keep gateway health probes responsive while rebuilding large caches.
       const SEED_EMBEDDING_YIELD_EVERY = 1000;
       let rowCount = 0;
-      let insert: ReturnType<DatabaseSync["prepare"]> | null = null;
+      let insert: MemoryStatement | null = null;
       for (const row of rows) {
         if (!insert) {
           insert = this.db.prepare(
@@ -2020,7 +2023,7 @@ export abstract class MemoryManagerSyncOps {
 
     const dbPath = resolveUserPath(this.settings.store.path);
     const tempDbPath = `${dbPath}.tmp-${randomUUID()}`;
-    const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
+    const tempDb = openMemoryDatabaseAtPath(tempDbPath);
 
     const originalDb = this.db;
     let tempDbClosed = false;
@@ -2037,7 +2040,7 @@ export abstract class MemoryManagerSyncOps {
 
     const restoreOriginalState = () => {
       if (originalDbClosed) {
-        this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+        this.db = openMemoryDatabaseAtPath(dbPath);
       } else {
         this.db = originalDb;
       }
@@ -2128,7 +2131,7 @@ export abstract class MemoryManagerSyncOps {
         },
       });
 
-      this.db = openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+      this.db = openMemoryDatabaseAtPath(dbPath);
       this.resetVectorState();
       this.ensureSchema();
       this.vector.dims = nextMeta?.vectorDims;
