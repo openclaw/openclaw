@@ -393,6 +393,7 @@ export async function persistCliTurnTranscript(params: {
 export function runAgentAttempt(params: {
   providerOverride: string;
   modelOverride: string;
+  agentHarnessRuntimeOverride?: string;
   originalProvider: string;
   cfg: OpenClawConfig;
   sessionEntry: SessionEntry | undefined;
@@ -514,6 +515,7 @@ export function runAgentAttempt(params: {
   });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
+    params.agentHarnessRuntimeOverride ??
     (agentHarnessPolicy.runtime !== "auto" &&
     (agentHarnessPolicy.runtime !== "openclaw" || agentHarnessPolicy.runtimeSource !== "implicit")
       ? agentHarnessPolicy.runtime

@@ -1754,6 +1754,7 @@ async function agentCommandInternal(
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
+              agentHarnessRuntimeOverride: runOptions?.agentHarnessRuntimeOverride,
               modelFallbacksOverride: effectiveFallbacksOverride,
               originalProvider: provider,
               cfg,
