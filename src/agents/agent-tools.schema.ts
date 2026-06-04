@@ -8,6 +8,8 @@ import { copyChannelAgentToolMeta } from "./channel-tools.js";
 
 export { normalizeToolParameterSchema };
 
+type ToolParametersRead = { readable: true; value: unknown } | { readable: false };
+
 function isObjectSchemaWithNoRequiredParams(schema: unknown): boolean {
   if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
     return false;
@@ -59,6 +61,14 @@ function addEmptyObjectArgumentPreparation(tool: AnyAgentTool, parameters: unkno
   };
 }
 
+function readToolParameters(tool: AnyAgentTool): ToolParametersRead {
+  try {
+    return { readable: true, value: tool.parameters };
+  } catch {
+    return { readable: false };
+  }
+}
+
 export function normalizeToolParameters(
   tool: AnyAgentTool,
   options?: ToolParameterSchemaOptions,
@@ -68,9 +78,13 @@ export function normalizeToolParameters(
     copyChannelAgentToolMeta(tool as never, target as never);
     return target;
   }
+  const parametersRead = readToolParameters(tool);
+  if (!parametersRead.readable) {
+    return tool;
+  }
   const schema =
-    tool.parameters && typeof tool.parameters === "object"
-      ? (tool.parameters as Record<string, unknown>)
+    parametersRead.value && typeof parametersRead.value === "object"
+      ? (parametersRead.value as Record<string, unknown>)
       : undefined;
   if (!schema) {
     return tool;

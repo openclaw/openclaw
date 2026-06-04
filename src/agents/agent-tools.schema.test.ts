@@ -2,7 +2,11 @@ import { runAgentLoop, type AgentEvent, type StreamFn } from "openclaw/plugin-sd
 import { createAssistantMessageEventStream, validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { Type, type TSchema } from "typebox";
 import { describe, expect, it, vi } from "vitest";
-import { wrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import {
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "./agent-tools.before-tool-call.js";
+import { wrapToolWithAbortSignal } from "./agent-tools.abort.js";
 import {
   cleanToolSchemaForGemini,
   normalizeToolParameterSchema,
@@ -650,6 +654,64 @@ function makeTool(parameters: TSchema): AnyAgentTool {
 }
 
 describe("normalizeToolParameters", () => {
+  it("leaves unreadable parameter descriptors for runtime projection diagnostics", () => {
+    const tool: AnyAgentTool = {
+      name: "fuzzplugin_unreadable",
+      label: "fuzzplugin_unreadable",
+      description: "Bad plugin tool",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn(),
+    };
+    Object.defineProperty(tool, "parameters", {
+      enumerable: true,
+      get() {
+        throw new Error("fuzzplugin parameters getter exploded");
+      },
+    });
+    Object.defineProperty(tool, "execute", {
+      value: vi.fn(),
+      enumerable: true,
+      configurable: false,
+      writable: false,
+    });
+
+    const normalized = normalizeToolParameters(tool);
+    const hooked = wrapToolWithBeforeToolCallHook(normalized);
+    const wrapped = wrapToolWithAbortSignal(hooked, new AbortController().signal);
+
+    const parametersDescriptor = Object.getOwnPropertyDescriptor(wrapped, "parameters");
+    const readParameters = parametersDescriptor?.get?.bind(wrapped);
+    expect(isToolWrappedWithBeforeToolCallHook(wrapped)).toBe(true);
+    expect(readParameters).toBeTypeOf("function");
+    expect(() => readParameters?.()).toThrow("fuzzplugin parameters getter exploded");
+  });
+
+  it("preserves class-backed tool accessors through runtime wrappers", () => {
+    class ClassBackedTool {
+      readonly name = "class_tool";
+      readonly label = "Class tool";
+      readonly description = "Class-backed plugin tool";
+      readonly #parameters = {
+        type: "object",
+        properties: {
+          q: { type: "string" },
+        },
+      };
+      readonly execute = vi.fn();
+
+      get parameters(): unknown {
+        return this.#parameters;
+      }
+    }
+
+    const tool = new ClassBackedTool() as AnyAgentTool;
+    const hooked = wrapToolWithBeforeToolCallHook(tool);
+    const wrapped = wrapToolWithAbortSignal(hooked, new AbortController().signal);
+
+    expect(wrapped.name).toBe("class_tool");
+    expect(wrapped.parameters).toEqual(tool.parameters);
+  });
+
   it("normalizes truly empty schemas to type:object with properties:{} (MCP parameter-free tools)", () => {
     const tool: AnyAgentTool = {
       name: "get_flux_instance",
