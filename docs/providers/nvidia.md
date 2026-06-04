@@ -72,11 +72,12 @@ try NVIDIA's public featured-model catalog from
 `https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` and
 caches the ranked result for 24 hours. New featured models from build.nvidia.com
 therefore appear in setup and model-selection surfaces without waiting for an
-OpenClaw release.
+OpenClaw release. When the live feed is available, the first returned model is
+the default option shown during NVIDIA setup.
 
 The fetch uses a fixed HTTPS host policy for `assets.ngc.nvidia.com`. If no
 NVIDIA API key is configured, or if that public catalog is unavailable or
-malformed, OpenClaw falls back to the bundled catalog below.
+malformed, OpenClaw falls back to the bundled catalog and bundled default below.
 
 ## Nemotron 3 Ultra
 
