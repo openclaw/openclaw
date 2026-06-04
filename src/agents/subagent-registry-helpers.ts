@@ -22,6 +22,7 @@ import { getDeliveryAttemptCount, getDeliveryLastError } from "./subagent-delive
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import { shouldUpdateRunOutcome } from "./subagent-registry-completion.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isTransientAnnounceDeliveryError } from "./subagent-announce-delivery.js";
 import { isStaleUnendedSubagentRun } from "./subagent-run-liveness.js";
 import {
   getSubagentSessionRuntimeMs,
@@ -96,6 +97,45 @@ export function logAnnounceGiveUp(entry: SubagentRunRecord, reason: "retry-limit
 
 // Session keys may differ only by casing after legacy writes. Prefer exact
 // matches, then fall back to normalized lookup for recovery paths.
+
+const SWEEP_DELETE_RETRY_DELAY_MS = 2_000;
+const SWEEP_DELETE_MAX_RETRIES = 2;
+
+export async function deleteSubagentSessionWithRetry(params: {
+  callGateway: (request: {
+    method: string;
+    params?: Record<string, unknown>;
+    timeoutMs?: number;
+  }) => Promise<unknown>;
+  sessionKey: string;
+}): Promise<void> {
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= SWEEP_DELETE_MAX_RETRIES; attempt++) {
+    try {
+      await params.callGateway({
+        method: "sessions.delete",
+        params: {
+          key: params.sessionKey,
+          deleteTranscript: true,
+          emitLifecycleHooks: false,
+        },
+        timeoutMs: 10_000,
+      });
+      return;
+    } catch (err) {
+      lastError = err;
+      if (attempt >= SWEEP_DELETE_MAX_RETRIES) {
+        break;
+      }
+      if (!isTransientAnnounceDeliveryError(err)) {
+        throw err;
+      }
+      await new Promise((resolve) => setTimeout(resolve, SWEEP_DELETE_RETRY_DELAY_MS));
+    }
+  }
+  // Re-throw the last transient error if all retries were exhausted.
+  throw lastError;
+}
 function findSessionEntryByKey(store: Record<string, SessionEntry>, sessionKey: string) {
   const direct = store[sessionKey];
   if (direct) {

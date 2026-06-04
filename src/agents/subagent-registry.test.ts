@@ -3421,6 +3421,13 @@ describe("subagent registry seam flow", () => {
           workspaceDir: "/tmp/workspace-archive",
         },
       );
+      expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
+        expect.any(Object),
+        expect.objectContaining({
+          agentDir: "/tmp/agent-archive",
+          workspaceDir: "/tmp/workspace-archive",
+        }),
+      );
     });
   });
 

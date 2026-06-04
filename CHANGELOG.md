@@ -2538,6 +2538,9 @@ Docs: https://docs.openclaw.ai
 - Agents/skills: require exact `<location>` skill paths for both single-skill and multi-skill prompt selection, so agents do not guess or hard-code skill file paths. (#74161) Thanks @lanzhi-lee.
 - Agents/skills: rebuild sandboxed non-rw run skill prompts from the sandbox workspace copy, so `<available_skills>` no longer points at host-only `~/.openclaw/skills` paths. Fixes #50590. Thanks @kidroca and @sallyom.
 - Agents/media: tell async music and video completion agents when normal final replies are private, and send completion fallbacks directly to message-tool-only group/channel routes when the completion agent still only writes a private final reply, so generated media does not disappear behind the delivery contract.
+- Agents/subagent: add bounded transient-error retry to sweep delete so gateway close(1006) during archive cleanup no longer silently drops the delete and leaves stale sessions. Also removes unused `deleteSubagentSessionForCleanup` import.
+- Agents/subagent: pin the readiness probe to admin scope instead of read scope so that subsequent write/admin lifecycle calls cannot fail with close(1008) scope-upgrade pairing errors.
+
 - CLI/update: report corrupt or unloadable managed plugins as post-update warnings instead of disabling them or turning a successful OpenClaw package update into a failed update result. Thanks @vincentkoc and @Patrick-Erichsen.
 - Update/restart: probe managed Gateway restarts with the service environment and add a Docker product lane that exercises candidate-owned `openclaw update --yes --json` restarts, so SecretRef-backed local gateway auth cannot regress behind mocked restart checks. Thanks @vincentkoc.
 - Gateway/sessions: cache selected model override resolution while building session-list rows so `openclaw sessions` and Control UI session lists stay responsive on model-heavy stores. (#77650) Thanks @ragesaq.
