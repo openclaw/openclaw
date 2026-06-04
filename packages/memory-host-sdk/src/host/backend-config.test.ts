@@ -508,6 +508,23 @@ describe("resolveMemoryBackendConfig", () => {
     expect(requireQmdConfig(resolved).searchMode).toBe("vsearch");
   });
 
+  it("resolves qmd rerank override", () => {
+    const cfg = {
+      agents: { defaults: { workspace: "/tmp/memory-test" } },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          searchMode: "query",
+          rerank: false,
+        },
+      },
+    } as OpenClawConfig;
+    const resolved = resolveMemoryBackendConfig({ cfg, agentId: "main" });
+    const qmd = requireQmdConfig(resolved);
+    expect(qmd.searchMode).toBe("query");
+    expect(qmd.rerank).toBe(false);
+  });
+
   it("resolves qmd mcporter search tool override", () => {
     const cfg = {
       agents: { defaults: { workspace: "/tmp/memory-test" } },
