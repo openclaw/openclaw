@@ -663,9 +663,9 @@ export class TranscriptFileState {
   }
 }
 
-export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
-  const raw = await fs.readFile(sessionFile, "utf-8");
-  const fileEntries = (parseSessionEntries(raw) as unknown[]).map(fileEntryOrMigrationSlot);
+/** Builds normalized transcript state from stored transcript entries. */
+export function createTranscriptFileStateFromEntries(rawEntries: unknown[]): TranscriptFileState {
+  const fileEntries = rawEntries.map(fileEntryOrMigrationSlot);
   const headerBeforeMigration =
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const headerVersionBeforeMigration = sessionHeaderVersion(headerBeforeMigration);
@@ -675,6 +675,11 @@ export async function readTranscriptFileState(sessionFile: string): Promise<Tran
     fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = readableSessionEntries(fileEntries);
   return new TranscriptFileState({ header, entries, migrated });
+}
+
+export async function readTranscriptFileState(sessionFile: string): Promise<TranscriptFileState> {
+  const raw = await fs.readFile(sessionFile, "utf-8");
+  return createTranscriptFileStateFromEntries(parseSessionEntries(raw) as unknown[]);
 }
 
 export async function writeTranscriptFileAtomic(

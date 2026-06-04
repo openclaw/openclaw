@@ -7,6 +7,7 @@ import {
   appendTranscriptMessage,
   appendTranscriptEvent,
   listSessionEntries,
+  loadExactSessionEntry,
   loadSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry,
@@ -105,6 +106,35 @@ describe("session accessor file-backed seam", () => {
     expect(listSessionEntries({ clone: false, storePath })[0]?.entry).toBe(
       cachedStore["agent:main:main"],
     );
+  });
+
+  it("keeps exact persisted-key lookup separate from canonical entry reads", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:main": {
+          sessionId: "session-1",
+          updatedAt: 10,
+          model: "gpt-5.5",
+        },
+      }),
+      "utf8",
+    );
+
+    const mixedCaseScope = {
+      sessionKey: "AGENT:MAIN:MAIN",
+      storePath,
+    };
+
+    expect(loadSessionEntry(mixedCaseScope)?.sessionId).toBe("session-1");
+    expect(loadExactSessionEntry(mixedCaseScope)).toBeUndefined();
+    expect(loadExactSessionEntry({ sessionKey: "agent:main:main", storePath })).toEqual({
+      sessionKey: "agent:main:main",
+      entry: expect.objectContaining({
+        sessionId: "session-1",
+        model: "gpt-5.5",
+      }),
+    });
   });
 
   it("updates existing entries without creating missing sessions", async () => {
@@ -207,6 +237,34 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
     });
     expect(loadSessionEntry(scope)?.model).toBeUndefined();
+  });
+
+  it("can patch metadata without refreshing session activity", async () => {
+    const scope = {
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, {
+      sessionId: "session-1",
+      updatedAt: 10,
+    });
+    const beforePatch = loadSessionEntry(scope);
+
+    await patchSessionEntry(
+      scope,
+      () => ({
+        model: "gpt-5.5",
+        updatedAt: 20,
+      }),
+      { preserveActivity: true },
+    );
+
+    expect(loadSessionEntry(scope)).toMatchObject({
+      model: "gpt-5.5",
+      sessionId: "session-1",
+      updatedAt: beforePatch?.updatedAt,
+    });
   });
 
   it("loads and appends transcript events through a session scope", async () => {

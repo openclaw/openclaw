@@ -40,6 +40,10 @@ export type SessionTranscriptAccessScope = SessionAccessScope & {
   threadId?: string | number;
 };
 
+export type SessionTranscriptReadScope = Omit<SessionTranscriptAccessScope, "sessionKey"> & {
+  sessionKey?: string;
+};
+
 export type SessionTranscriptRuntimeScope = SessionAccessScope & {
   sessionId: string;
   threadId?: string | number;
@@ -50,6 +54,12 @@ export type SessionTranscriptWriteScope = Omit<SessionTranscriptAccessScope, "se
 };
 
 export type SessionEntrySummary = {
+  sessionKey: string;
+  entry: SessionEntry;
+};
+
+/** Session entry read by the exact persisted session key, without alias resolution. */
+export type ExactSessionEntry = {
   sessionKey: string;
   entry: SessionEntry;
 };
@@ -88,6 +98,7 @@ export type SessionEntryUpdateOptions = {
 
 export type SessionEntryPatchOptions = {
   fallbackEntry?: SessionEntry;
+  preserveActivity?: boolean;
   replaceEntry?: boolean;
 };
 
@@ -105,6 +116,23 @@ export function loadSessionEntry(scope: SessionAccessScope): SessionEntry | unde
     return resolveSessionStoreEntry({ store, sessionKey: scope.sessionKey }).existing;
   }
   return getSessionEntry(scope);
+}
+
+/**
+ * Loads one entry only when the persisted key exactly matches the requested key.
+ * Approval routing uses this to avoid canonical alias lookup crossing accounts.
+ */
+export function loadExactSessionEntry(scope: SessionAccessScope): ExactSessionEntry | undefined {
+  const sessionKey = scope.sessionKey.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  const store = loadSessionStore(resolveAccessStorePath(scope), {
+    ...(scope.clone === false ? { clone: false } : {}),
+    ...(scope.hydrateSkillPromptRefs === false ? { hydrateSkillPromptRefs: false } : {}),
+  });
+  const entry = Object.hasOwn(store, sessionKey) ? store[sessionKey] : undefined;
+  return entry ? { sessionKey, entry } : undefined;
 }
 
 /** Lists session entries through the storage-neutral accessor seam. */
@@ -170,6 +198,7 @@ export async function patchSessionEntry(
   return await patchFileSessionEntry({
     ...scope,
     fallbackEntry: options.fallbackEntry,
+    preserveActivity: options.preserveActivity,
     replaceEntry: options.replaceEntry,
     update,
   });
@@ -194,9 +223,9 @@ export async function updateSessionEntry(
 
 /** Loads raw transcript events through the storage-neutral accessor seam. */
 export async function loadTranscriptEvents(
-  scope: SessionTranscriptAccessScope,
+  scope: SessionTranscriptReadScope,
 ): Promise<TranscriptEvent[]> {
-  const transcript = await resolveTranscriptAccess(scope);
+  const transcript = await resolveTranscriptReadAccess(scope);
   const events: TranscriptEvent[] = [];
   for await (const line of streamSessionTranscriptLines(transcript.sessionFile)) {
     events.push(JSON.parse(line) as TranscriptEvent);
@@ -354,5 +383,20 @@ async function resolveTranscriptAccess(scope: SessionTranscriptWriteScope): Prom
   return await resolveSessionTranscriptRuntimeTarget({
     ...scope,
     sessionId: scope.sessionId,
+  });
+}
+
+async function resolveTranscriptReadAccess(scope: SessionTranscriptReadScope): Promise<{
+  sessionFile: string;
+}> {
+  if (scope.sessionFile?.trim()) {
+    return { sessionFile: scope.sessionFile };
+  }
+  if (!scope.sessionKey) {
+    throw new Error("Cannot resolve transcript read scope without a session file or session key");
+  }
+  return await resolveTranscriptAccess({
+    ...scope,
+    sessionKey: scope.sessionKey,
   });
 }
