@@ -542,7 +542,11 @@ export async function runPreparedCliAgent(
           };
     const output = await executePreparedCliRun(attemptContext, cliSessionIdToUse);
     const assistantText = output.text.trim();
-    if (!assistantText && params.allowEmptyAssistantReplyAsSilent !== true) {
+    if (
+      !assistantText &&
+      output.hadToolCalls !== true &&
+      params.allowEmptyAssistantReplyAsSilent !== true
+    ) {
       throw new FailoverError("CLI backend returned an empty response.", {
         reason: "empty_response",
         provider: params.provider,
