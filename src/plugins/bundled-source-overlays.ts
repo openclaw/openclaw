@@ -9,6 +9,7 @@ function decodeMountInfoPath(value: string): string {
   );
 }
 
+/** Parses Linux mountinfo content into absolute mount points. */
 export function parseLinuxMountInfoMountPoints(mountInfo: string): Set<string> {
   const mountPoints = new Set<string>();
   for (const line of mountInfo.split(/\r?\n/u)) {
@@ -49,6 +50,7 @@ function sourceOverlaysDisabled(env: NodeJS.ProcessEnv): boolean {
   return raw === "1" || raw === "true";
 }
 
+/** True when a path appears to be a mounted bundled source overlay. */
 export function isBundledSourceOverlayPath(params: {
   sourcePath: string;
   mountPoints?: ReadonlySet<string>;
@@ -58,6 +60,7 @@ export function isBundledSourceOverlayPath(params: {
   return mountPoints.has(resolved) || isFilesystemMountPoint(resolved);
 }
 
+/** Lists source overlay directories that shadow packaged bundled plugin dirs. */
 export function listBundledSourceOverlayDirs(params: {
   bundledRoot?: string;
   env?: NodeJS.ProcessEnv;

@@ -12,6 +12,7 @@ const CORE_BUILT_IN_MODEL_APIS = new Set([
   "openai-responses",
 ]);
 
+/** Returns the plugin API id that owns a provider config when it is not core built-in. */
 export function resolveProviderConfigApiOwnerHint(params: {
   provider: string;
   config?: OpenClawConfig;

@@ -147,6 +147,11 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
   );
 }
 
+/**
+ * Determines whether a `message.send` tool call should end the turn in
+ * message-tool-only delivery mode. Only implicit-route, non-dry-run, delivered
+ * sends qualify; explicit routes and errors keep the model loop alive.
+ */
 export function shouldTerminateAfterMessageToolOnlySend(params: {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   context: AfterToolCallContext;
@@ -183,6 +188,7 @@ export function shouldTerminateAfterMessageToolOnlySend(params: {
   return true;
 }
 
+/** Installs an after-tool hook that terminates the turn after a qualifying message send. */
 export function installMessageToolOnlyTerminalHook(params: {
   agent: Agent;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

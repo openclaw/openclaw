@@ -4,11 +4,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentDir } from "../agents/agent-scope-config.js";
 import type { AuthProfileStore } from "../agents/auth-profiles.js";
-import { AUTH_PROFILE_FILENAME } from "../agents/auth-profiles/path-constants.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveOAuthPath } from "../config/paths.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { clearSecretsRuntimeSnapshot } from "./runtime.js";
 import { asConfig } from "./runtime.test-support.js";
 
@@ -56,9 +57,8 @@ function requireGatewayAuth(
 
 function writeAuthProfileStore(agentDir: string): void {
   mkdirSync(agentDir, { recursive: true });
-  writeFileSync(
-    path.join(agentDir, AUTH_PROFILE_FILENAME),
-    `${JSON.stringify({
+  saveAuthProfileStore(
+    {
       version: 1,
       profiles: {
         "openai:default": {
@@ -67,7 +67,9 @@ function writeAuthProfileStore(agentDir: string): void {
           key: "sk-test",
         },
       },
-    })}\n`,
+    },
+    agentDir,
+    { filterExternalAuthProfiles: false, syncExternalCli: false },
   );
 }
 
@@ -79,6 +81,7 @@ describe("secrets runtime fast path", () => {
     clearSecretsRuntimeSnapshot();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
+    closeOpenClawAgentDatabasesForTest();
     vi.resetModules();
   });
 

@@ -54,6 +54,7 @@ const SAFE_BIN_SEMANTIC_RULES: Readonly<Record<string, SafeBinSemanticRule>> = {
   },
 };
 
+/** Normalizes a configured safe-bin entry to its executable basename without Windows suffixes. */
 export function normalizeSafeBinName(raw: string): string {
   const trimmed = normalizeLowercaseStringOrEmpty(raw);
   if (!trimmed) {
@@ -69,10 +70,12 @@ function getSafeBinSemanticRule(binName?: string): SafeBinSemanticRule | undefin
   return normalized ? SAFE_BIN_SEMANTIC_RULES[normalized] : undefined;
 }
 
+/** Applies command-specific semantic gates for executables that are risky as broad safeBins. */
 export function validateSafeBinSemantics(params: SafeBinSemanticValidationParams): boolean {
   return getSafeBinSemanticRule(params.binName)?.validate?.(params) ?? true;
 }
 
+/** Lists configured safeBins that need operator warnings because their semantics are broad. */
 export function listRiskyConfiguredSafeBins(entries: Iterable<string>): Array<{
   bin: string;
   warning: string;

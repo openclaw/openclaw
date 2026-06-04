@@ -4,6 +4,7 @@ import { resolveUserPath } from "../utils.js";
 import { normalizeBundledLookupPath } from "./bundled-load-path-aliases.js";
 import { resolveBundledPluginSources, type BundledPluginSource } from "./bundled-sources.js";
 
+/** Stale install record that points at old compiled bundled plugin output. */
 export type StaleLocalBundledPluginInstallRecord = {
   pluginId: string;
   record: PluginInstallRecord;
@@ -49,6 +50,7 @@ function hasStaleBundledVersion(
   return Boolean(recordVersion && bundledVersion && recordVersion !== bundledVersion);
 }
 
+/** Lists path install records that still point at stale compiled bundled plugin output. */
 export function listStaleLocalBundledPluginInstallRecords(params: {
   installRecords: Record<string, PluginInstallRecord>;
   workspaceDir?: string;
@@ -100,6 +102,7 @@ export function listStaleLocalBundledPluginInstallRecords(params: {
   return stale;
 }
 
+/** Removes stale compiled bundled plugin path records from an install record map. */
 export function pruneStaleLocalBundledPluginInstallRecords(params: {
   installRecords: Record<string, PluginInstallRecord>;
   workspaceDir?: string;
