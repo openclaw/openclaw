@@ -9,7 +9,7 @@ const autoMigrateLegacyState = vi.hoisted(() =>
 const autoMigrateLegacyTaskStateSidecars = vi.hoisted(() =>
   vi.fn(async () => ({ migrated: true, skipped: false, changes: ["task-imported"], warnings: [] })),
 );
-const autoMigrateLegacyCronStore = vi.hoisted(() =>
+const repairLegacyCronStoreWithoutPrompt = vi.hoisted(() =>
   vi.fn(async () => ({ changes: ["cron-imported"], warnings: [] })),
 );
 const readConfigFileSnapshot = vi.hoisted(() =>
@@ -31,8 +31,8 @@ vi.mock("./doctor-state-migrations.js", () => ({
   autoMigrateLegacyTaskStateSidecars,
 }));
 
-vi.mock("./doctor/cron/auto-migration.js", () => ({
-  autoMigrateLegacyCronStore,
+vi.mock("./doctor/cron/index.js", () => ({
+  repairLegacyCronStoreWithoutPrompt,
 }));
 
 vi.mock("../config/io.js", () => ({
@@ -54,7 +54,7 @@ describe("runDoctorConfigPreflight state migration", () => {
 
     expect(autoMigrateLegacyStateDir).toHaveBeenCalledOnce();
     expect(readConfigFileSnapshot).toHaveBeenCalledOnce();
-    expect(autoMigrateLegacyCronStore).toHaveBeenCalledWith({
+    expect(repairLegacyCronStoreWithoutPrompt).toHaveBeenCalledWith({
       cfg: { gateway: { mode: "local", port: 19091 } },
     });
     expect(autoMigrateLegacyState).toHaveBeenCalledWith({
@@ -100,7 +100,7 @@ describe("runDoctorConfigPreflight state migration", () => {
     });
 
     expect(autoMigrateLegacyState).not.toHaveBeenCalled();
-    expect(autoMigrateLegacyCronStore).not.toHaveBeenCalled();
+    expect(repairLegacyCronStoreWithoutPrompt).not.toHaveBeenCalled();
     expect(autoMigrateLegacyTaskStateSidecars).toHaveBeenCalledWith({ env: process.env });
     expect(note).toHaveBeenCalledWith("- task-imported", "Doctor changes");
   });

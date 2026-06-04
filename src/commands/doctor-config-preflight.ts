@@ -16,19 +16,19 @@ import { noteIncludeConfinementWarning } from "./doctor-config-analysis.js";
 import { findDoctorLegacyConfigIssues } from "./doctor/shared/legacy-config-issues.js";
 
 type DoctorStateMigrationsModule = typeof import("./doctor-state-migrations.js");
-type DoctorCronAutoMigrationModule = typeof import("./doctor/cron/auto-migration.js");
+type DoctorCronModule = typeof import("./doctor/cron/index.js");
 
 let doctorStateMigrationsPromise: Promise<DoctorStateMigrationsModule> | null = null;
-let doctorCronAutoMigrationPromise: Promise<DoctorCronAutoMigrationModule> | null = null;
+let doctorCronPromise: Promise<DoctorCronModule> | null = null;
 
 function loadDoctorStateMigrations(): Promise<DoctorStateMigrationsModule> {
   doctorStateMigrationsPromise ??= import("./doctor-state-migrations.js");
   return doctorStateMigrationsPromise;
 }
 
-function loadDoctorCronAutoMigration(): Promise<DoctorCronAutoMigrationModule> {
-  doctorCronAutoMigrationPromise ??= import("./doctor/cron/auto-migration.js");
-  return doctorCronAutoMigrationPromise;
+function loadDoctorCron(): Promise<DoctorCronModule> {
+  doctorCronPromise ??= import("./doctor/cron/index.js");
+  return doctorCronPromise;
 }
 
 async function maybeMigrateLegacyConfig(): Promise<string[]> {
@@ -182,8 +182,8 @@ export async function runDoctorConfigPreflight(
   const baseConfig = snapshot.sourceConfig ?? snapshot.config ?? {};
   if (options.migrateState !== false) {
     if (snapshot.valid) {
-      const { autoMigrateLegacyCronStore } = await loadDoctorCronAutoMigration();
-      const cronResult = await autoMigrateLegacyCronStore({ cfg: baseConfig });
+      const { repairLegacyCronStoreWithoutPrompt } = await loadDoctorCron();
+      const cronResult = await repairLegacyCronStoreWithoutPrompt({ cfg: baseConfig });
       noteStateMigrationResult(cronResult);
     }
     const { autoMigrateLegacyState, autoMigrateLegacyTaskStateSidecars } =
