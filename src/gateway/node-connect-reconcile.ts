@@ -112,7 +112,7 @@ export async function reconcileNodePairingOnConnect(params: {
   connectParams: ConnectParams;
   pairedNode: NodePairingPairedNode | null;
   reportedClientIp?: string;
-  requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult>;
+  requestPairing: (input: NodePairingRequestInput) => Promise<RequestNodePairingResult | null>;
 }): Promise<NodeConnectPairingReconcileResult> {
   const nodeId = params.connectParams.device?.id ?? params.connectParams.client.id;
   const policyNode = {
@@ -142,6 +142,9 @@ export async function reconcileNodePairingOnConnect(params: {
         remoteIp: params.reportedClientIp,
       }),
     );
+    if (!pendingPairing) {
+      throw new Error("node pairing request required");
+    }
     return {
       nodeId,
       declaredCaps,
@@ -204,7 +207,7 @@ export async function reconcileNodePairingOnConnect(params: {
       effectiveCommands: effectiveApprovedDeclaredCommands,
       declaredPermissions,
       effectivePermissions: effectiveApprovedDeclaredPermissions,
-      pendingPairing,
+      ...(pendingPairing ? { pendingPairing } : {}),
     };
   }
 

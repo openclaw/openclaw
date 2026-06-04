@@ -1,3 +1,9 @@
+/**
+ * MCP client transport factory.
+ *
+ * This module turns normalized MCP server config into stdio, SSE, or
+ * streamable-HTTP SDK transports with OpenClaw auth, redirect, and logging rules.
+ */
 import {
   SSEClientTransport,
   type SSEClientTransportOptions,
@@ -150,6 +156,7 @@ function buildStreamableHttpFetch(baseFetch: FetchLike): FetchLike {
       let nextInit = rewriteRedirectInitForMethod(currentInit, response.status);
       if (nextParsedUrl.origin !== parsedUrl.origin) {
         if (nextInit?.headers) {
+          // Cross-origin redirects must not forward auth or other unsafe headers.
           nextInit = {
             ...nextInit,
             headers: retainSafeHeadersForCrossOriginRedirect(nextInit.headers),
@@ -195,6 +202,7 @@ function buildSseEventSourceFetch(
   };
 }
 
+/** Resolves a configured MCP server into a live SDK transport instance. */
 export function resolveMcpTransport(
   serverName: string,
   rawServer: unknown,

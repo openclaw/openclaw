@@ -43,6 +43,9 @@ import {
 } from "./state.js";
 import type { AuthProfileStore } from "./types.js";
 
+// Auth profile store orchestration. This module merges persisted stores,
+// runtime snapshots, inherited main-agent OAuth profiles, and external CLI
+// overlays while keeping save paths local and secret-safe.
 type LoadAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;
   config?: OpenClawConfig;
@@ -108,6 +111,8 @@ function preserveLegacyOAuthRefsOnSave(params: {
     ) {
       continue;
     }
+    // Preserve legacy oauthRef ownership when current save data did not replace
+    // inline OAuth material; otherwise older credential references would be lost.
     nextProfiles ??= { ...params.payload.profiles };
     nextProfiles[profileId] = {
       ...credential,
@@ -159,6 +164,8 @@ function isInheritedMainOAuthCredential(params: {
     return false;
   }
 
+  // Local agent stores can inherit main OAuth credentials. Do not persist the
+  // inherited copy unless the local store actually owns or improves it.
   const mainCredential = loadPersistedAuthProfileStore()?.profiles[params.profileId];
   return (
     mainCredential?.type === "oauth" &&
@@ -308,6 +315,8 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
   }
 
   try {
+    // External CLI sync writes only profiles that still match the loaded
+    // baseline, avoiding overwrite of concurrent local auth changes.
     return runAuthProfileWriteTransaction(params.agentDir, (database) => {
       const latestStore = loadPersistedAuthProfileStore(params.agentDir, {
         ...resolvePersistedLoadOptions(params.options),
@@ -373,6 +382,8 @@ function shouldKeepProfileInLocalStore(params: {
     return true;
   }
   if (params.store.runtimeExternalProfileIds?.includes(params.profileId)) {
+    // Runtime external profiles are normally overlays. Persist only when they
+    // have explicit local state or differ from the runtime snapshot.
     const persistedCredential = loadPersistedAuthProfileStore(params.agentDir)?.profiles[
       params.profileId
     ];
@@ -702,6 +713,7 @@ function mergeRuntimeExternalProfileState(params: {
   return merged;
 }
 
+/** Apply an auth store update inside the SQLite write lock. */
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
   saveOptions?: SaveAuthProfileStoreOptions;
@@ -725,6 +737,7 @@ export async function updateAuthProfileStoreWithLock(params: {
   }
 }
 
+/** Load the main auth profile store with runtime external profiles overlaid. */
 export function loadAuthProfileStore(): AuthProfileStore {
   const asStore = loadPersistedAuthProfileStore();
   if (asStore) {
@@ -797,6 +810,7 @@ export function loadAuthProfileStoreForRuntime(
   );
 }
 
+/** Load auth profiles for secret resolution without keychain prompts or writes. */
 export function loadAuthProfileStoreForSecretsRuntime(
   agentDir?: string,
   options?: Pick<
@@ -811,6 +825,7 @@ export function loadAuthProfileStoreForSecretsRuntime(
   });
 }
 
+/** Load auth profiles with runtime external profiles removed from the result. */
 export function loadAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
   loadOptions?: Pick<LoadAuthProfileStoreOptions, "allowKeychainPrompt">,
@@ -832,6 +847,7 @@ export function loadAuthProfileStoreWithoutExternalProfiles(
   });
 }
 
+/** Ensure an auth store is available, including runtime/external profile overlays. */
 export function ensureAuthProfileStore(
   agentDir?: string,
   options?: {
@@ -862,6 +878,7 @@ export function ensureAuthProfileStore(
   });
 }
 
+/** Ensure an auth store is available without external profile overlays. */
 export function ensureAuthProfileStoreWithoutExternalProfiles(
   agentDir?: string,
   options?: {
@@ -894,6 +911,7 @@ export function ensureAuthProfileStoreWithoutExternalProfiles(
   });
 }
 
+/** Find a persisted credential in the scoped store, falling back to the main store. */
 export function findPersistedAuthProfileCredential(params: {
   agentDir?: string;
   profileId: string;
@@ -913,6 +931,7 @@ export function findPersistedAuthProfileCredential(params: {
   return loadPersistedAuthProfileStore()?.profiles[params.profileId];
 }
 
+/** Resolve which agent dir owns a persisted profile, accounting for inherited OAuth. */
 export function resolvePersistedAuthProfileOwnerAgentDir(params: {
   agentDir?: string;
   profileId: string;
@@ -941,6 +960,7 @@ export function resolvePersistedAuthProfileOwnerAgentDir(params: {
   return mainStore?.profiles[params.profileId] ? undefined : params.agentDir;
 }
 
+/** Load the store shape used when applying local-only auth updates. */
 export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthProfileStore {
   const options: LoadAuthProfileStoreOptions = { syncExternalCli: false };
   const store = loadAuthProfileStoreForAgent(agentDir, options);
@@ -961,22 +981,26 @@ export function ensureAuthProfileStoreForLocalUpdate(agentDir?: string): AuthPro
 
 export { hasAnyAuthProfileStoreSource, hasLocalAuthProfileStoreSource } from "./source-check.js";
 
+/** Return the current runtime auth-profile snapshot for an agent dir. */
 export function getRuntimeAuthProfileStoreSnapshot(
   agentDir?: string,
 ): AuthProfileStore | undefined {
   return getRuntimeAuthProfileStoreSnapshotImpl(agentDir);
 }
 
+/** Replace runtime auth-profile snapshots, used by tests and prepared runtimes. */
 export function replaceRuntimeAuthProfileStoreSnapshots(
   entries: Array<{ agentDir?: string; store: AuthProfileStore }>,
 ): void {
   replaceRuntimeAuthProfileStoreSnapshotsImpl(entries);
 }
 
+/** Clear all runtime auth-profile snapshots. */
 export function clearRuntimeAuthProfileStoreSnapshots(): void {
   clearRuntimeAuthProfileStoreSnapshotsImpl();
 }
 
+/** Save the auth profile store plus sidecar state, preserving runtime overlay metadata. */
 export function saveAuthProfileStore(
   store: AuthProfileStore,
   agentDir?: string,

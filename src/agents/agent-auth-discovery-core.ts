@@ -6,12 +6,14 @@ import {
 } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 
+/** Options for discovering env-backed credentials during agent auth discovery. */
 export type AgentDiscoveryAuthLookupOptions = {
   config?: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 };
 
+/** Adds provider credentials resolvable from env/config without mutating existing credentials. */
 export function addEnvBackedAgentCredentials(
   credentials: AgentCredentialMap,
   options: AgentDiscoveryAuthLookupOptions = {},

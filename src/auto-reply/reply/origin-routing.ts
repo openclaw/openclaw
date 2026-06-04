@@ -1,3 +1,4 @@
+// Normalizes origin route fields from inbound messages and provider context.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OriginatingChannelType } from "../templating.js";
 

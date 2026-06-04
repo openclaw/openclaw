@@ -2,6 +2,8 @@ import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./types.js";
 
+// Upserts normalize literal secrets before persistence; SecretRef fields are
+// preserved by leaving non-string key/token values untouched.
 function normalizeAuthProfileCredential(credential: AuthProfileCredential): AuthProfileCredential {
   if (credential.type === "api_key") {
     if (typeof credential.key !== "string") {
@@ -25,6 +27,7 @@ function normalizeAuthProfileCredential(credential: AuthProfileCredential): Auth
   return credential;
 }
 
+/** Upserts an auth profile under the store lock, returning null on write failure. */
 export async function upsertAuthProfileWithLock(params: {
   profileId: string;
   credential: AuthProfileCredential;
