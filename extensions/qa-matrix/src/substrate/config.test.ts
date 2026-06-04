@@ -127,6 +127,10 @@ describe("matrix qa config", () => {
           spawnSessions: true,
         },
         threadReplies: "always",
+        audio: {
+          echoTranscript: false,
+          enabled: true,
+        },
         toolProfile: "coding",
       },
       observerAccessToken: "observer-token",
@@ -147,6 +151,10 @@ describe("matrix qa config", () => {
       minChars: 1,
     });
     expect(next.tools?.profile).toBe("coding");
+    expect(next.tools?.media?.audio).toEqual({
+      echoTranscript: false,
+      enabled: true,
+    });
     const observer = next.channels?.matrix?.accounts?.["qa-observer-bot-source"];
     expect(observer?.accessToken).toBe("observer-token");
     expect(observer?.enabled).toBe(false);

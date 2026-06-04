@@ -500,6 +500,11 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
   },
   {
     id: "matrix-voice-preflight-mention",
+    configOverrides: {
+      audio: {
+        enabled: true,
+      },
+    },
     providerMode: "live-frontier",
     timeoutMs: 180_000,
     title: "Matrix voice notes can trigger mention gating through transcription",
