@@ -464,6 +464,7 @@ import {
 import {
   buildCurrentInboundPrompt,
   buildRuntimeContextCustomMessage,
+  RUNTIME_SELF_CONTEXT_TOOL_NAME,
   appendRuntimeSelfContextToPrompt,
   resolveRuntimeContextPromptParts,
 } from "./runtime-context-prompt.js";
@@ -1307,6 +1308,9 @@ export async function runEmbeddedAttempt(
         })();
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
+    const runtimeSelfContextToolAvailable = toolsRaw.some(
+      (tool) => tool.name === RUNTIME_SELF_CONTEXT_TOOL_NAME,
+    );
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapWarn = makeBootstrapWarn({
       sessionLabel,
@@ -3853,6 +3857,7 @@ export async function runEmbeddedAttempt(
             promptForRuntimeContextSplit = appendRuntimeSelfContextToPrompt({
               prompt: promptForRuntimeContextSplit,
               config: params.config ?? getRuntimeConfig(),
+              runtimeToolAvailable: runtimeSelfContextToolAvailable,
             });
           }
         }
