@@ -3,8 +3,8 @@
  *
  * Implements only the Gateway calls needed by session tools and rejects unsupported methods.
  */
-import fs from "fs";
-import path from "path";
+import fs from "node:fs";
+import path from "node:path";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   SessionsListParams,

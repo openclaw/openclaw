@@ -1,8 +1,8 @@
 // Embedded gateway stub tests cover in-process gateway methods used by agent
 // tools when no external gateway transport is available.
-import fs from "fs";
-import os from "os";
-import path from "path";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmbeddedCallGateway } from "./embedded-gateway-stub.js";
 
