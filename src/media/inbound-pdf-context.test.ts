@@ -101,4 +101,64 @@ describe("inbound PDF prompt context", () => {
     expect(context).toContain("PDF attachment text extracted from inbound media");
     expect(context).toContain("Quarterly revenue increased 22%.");
   });
+
+  it("extracts managed inbound PDFs in the chat.send pass-through range above the old 10 MB default", async () => {
+    // chat.send accepts and passes managed PDFs through up to the default 20 MB
+    // limit, so a 15 MB PDF must still be extracted (not skipped) or a
+    // locked-down agent only sees the attachment marker without document text.
+    const largePdfPath = path.join(tempDir, "large-report.pdf");
+    await fs.writeFile(largePdfPath, "%PDF-1.4\n");
+    await fs.truncate(largePdfPath, 15 * 1024 * 1024);
+    runtimeMocks.resolveInboundMediaReference.mockResolvedValue({
+      id: "large-report.pdf",
+      normalizedSource: "media://inbound/large-report.pdf",
+      physicalPath: largePdfPath,
+      sourceType: "uri",
+    });
+
+    const ctx: { MediaPath: string; MediaType: string; MediaExtractedContext?: string } = {
+      MediaPath: "media://inbound/large-report.pdf",
+      MediaType: "application/pdf",
+    };
+
+    await expect(
+      applyInboundPdfContextIfNeeded({
+        ctx,
+        cfg: {} as OpenClawConfig,
+      }),
+    ).resolves.toBe(true);
+
+    expect(runtimeMocks.extractPdfContent).toHaveBeenCalled();
+    expect(ctx.MediaExtractedContext).toContain("PDF attachment text extracted from inbound media");
+    expect(ctx.MediaExtractedContext).toContain("Quarterly revenue increased 22%.");
+    expect(ctx.MediaExtractedContext).not.toContain("safety limit");
+  });
+
+  it("still skips inbound PDFs above the extraction safety ceiling", async () => {
+    const hugePdfPath = path.join(tempDir, "huge-report.pdf");
+    await fs.writeFile(hugePdfPath, "%PDF-1.4\n");
+    await fs.truncate(hugePdfPath, 26 * 1024 * 1024);
+    runtimeMocks.resolveInboundMediaReference.mockResolvedValue({
+      id: "huge-report.pdf",
+      normalizedSource: "media://inbound/huge-report.pdf",
+      physicalPath: hugePdfPath,
+      sourceType: "uri",
+    });
+
+    const ctx: { MediaPath: string; MediaType: string; MediaExtractedContext?: string } = {
+      MediaPath: "media://inbound/huge-report.pdf",
+      MediaType: "application/pdf",
+    };
+
+    await expect(
+      applyInboundPdfContextIfNeeded({
+        ctx,
+        cfg: {} as OpenClawConfig,
+      }),
+    ).resolves.toBe(true);
+
+    expect(runtimeMocks.extractPdfContent).not.toHaveBeenCalled();
+    expect(ctx.MediaExtractedContext).toContain("extraction skipped");
+    expect(ctx.MediaExtractedContext).toContain("safety limit");
+  });
 });

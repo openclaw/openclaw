@@ -37,6 +37,13 @@ const inboundPdfContextRuntimeLoader = createLazyImportLoader(
 const INBOUND_PDF_CONTEXT_MAX_ATTACHMENTS = 3;
 const INBOUND_PDF_CONTEXT_MAX_CHARS = 120_000;
 const INBOUND_PDF_CONTEXT_MAX_BYTES_CAP = 25 * 1024 * 1024;
+const INBOUND_PDF_CONTEXT_MAX_BYTES_CAP_MB = INBOUND_PDF_CONTEXT_MAX_BYTES_CAP / (1024 * 1024);
+// Default inbound PDF text-extraction size, kept in sync with the gateway
+// chat.send accept default (DEFAULT_CHAT_ATTACHMENT_MAX_MB in
+// src/gateway/chat-attachments.ts). chat.send passes managed PDFs up to that
+// size through to locked-down agents, so extraction must cover the same range or
+// the agent only sees the attachment marker without the document text.
+const DEFAULT_INBOUND_PDF_CONTEXT_MAX_MB = 20;
 const INBOUND_PDF_CONTEXT_MAX_PAGES_CAP = 150;
 const INBOUND_PDF_CONTEXT_TIMEOUT_MS = 15_000;
 const INBOUND_PDF_REF_PATTERN = /\bmedia:\/\/inbound\/[^\]\s|)]+/gi;
@@ -66,7 +73,22 @@ function normalizePdfContextNumber(
 
 function resolveInboundPdfContextLimits(cfg: OpenClawConfig | undefined) {
   const defaults = cfg?.agents?.defaults ?? {};
-  const maxBytesMb = normalizePdfContextNumber(defaults.pdfMaxBytesMb, 10, 1, 25);
+  // Mirror the gateway chat.send accept limit (mediaMaxMb, else
+  // DEFAULT_CHAT_ATTACHMENT_MAX_MB) so managed PDFs that pass through chat.send
+  // are not silently skipped for extraction. pdfMaxBytesMb still overrides, and
+  // INBOUND_PDF_CONTEXT_MAX_BYTES_CAP remains the hard safety ceiling.
+  const chatAttachmentMaxMb =
+    typeof defaults.mediaMaxMb === "number" &&
+    Number.isFinite(defaults.mediaMaxMb) &&
+    defaults.mediaMaxMb > 0
+      ? defaults.mediaMaxMb
+      : DEFAULT_INBOUND_PDF_CONTEXT_MAX_MB;
+  const maxBytesMb = normalizePdfContextNumber(
+    defaults.pdfMaxBytesMb,
+    chatAttachmentMaxMb,
+    1,
+    INBOUND_PDF_CONTEXT_MAX_BYTES_CAP_MB,
+  );
   const maxPages = normalizePdfContextNumber(
     defaults.pdfMaxPages,
     20,
