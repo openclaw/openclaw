@@ -63,7 +63,6 @@ describe("searchKeyword trigram fallback", () => {
       return await searchKeyword({
         db,
         ftsTable: "chunks_fts",
-        providerModel: "mock-embed",
         query: params.query,
         ftsTokenizer: "trigram",
         limit: 10,
@@ -247,7 +246,6 @@ describe("searchKeyword FTS MATCH fallback", () => {
       const results = await searchKeyword({
         db,
         ftsTable: "chunks_fts",
-        providerModel: "mock-embed",
         query: "Agent",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -286,7 +284,6 @@ describe("searchKeyword FTS MATCH fallback", () => {
       const results = await searchKeyword({
         db,
         ftsTable: "chunks_fts",
-        providerModel: "mock-embed",
         query: "Transformer",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -319,7 +316,6 @@ describe("searchKeyword FTS MATCH fallback", () => {
       const results = await searchKeyword({
         db,
         ftsTable: "chunks_fts",
-        providerModel: "mock-embed",
         query: "Agent",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -370,7 +366,6 @@ describe("searchKeyword FTS MATCH fallback", () => {
       const results = await searchKeyword({
         db,
         ftsTable: "chunks_fts",
-        providerModel: "mock-embed",
         query: "Agent cron",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -400,7 +395,6 @@ describe("searchKeyword FTS MATCH fallback", () => {
       await searchKeyword({
         db,
         ftsTable: "chunks_fts",
-        providerModel: "mock-embed",
         query: "test",
         ftsTokenizer: "unicode61",
         limit: 10,
@@ -420,6 +414,82 @@ describe("searchKeyword FTS MATCH fallback", () => {
       ).toBe(true);
     } finally {
       warnSpy.mockRestore();
+      db.close();
+    }
+  });
+});
+
+
+describe("searchKeyword cross-model FTS visibility (issue #48300)", () => {
+  const { DatabaseSync } = requireNodeSqlite();
+
+  function supportsFts(): boolean {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const result = ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: true,
+      });
+      return result.ftsAvailable;
+    } finally {
+      db.close();
+    }
+  }
+
+  const itWithFts = supportsFts() ? it : it.skip;
+
+  itWithFts("returns FTS hits indexed under a different embedding model", async () => {
+    const db = new DatabaseSync(":memory:");
+    try {
+      const result = ensureMemoryIndexSchema({
+        db,
+        embeddingCacheTable: "embedding_cache",
+        cacheEnabled: false,
+        ftsTable: "chunks_fts",
+        ftsEnabled: true,
+      });
+      if (!result.ftsAvailable) {
+        throw new Error(result.ftsError ?? "FTS unavailable");
+      }
+      const insert = db.prepare(
+        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      );
+      insert.run(
+        "Persona notes for Clyde the assistant",
+        "clyde-old",
+        "memory/persona.md",
+        "memory",
+        "bge-m3",
+        1,
+        3,
+      );
+      insert.run(
+        "Persona notes for Clyde the assistant",
+        "clyde-new",
+        "memory/persona.md",
+        "memory",
+        "nomic-embed-text",
+        1,
+        3,
+      );
+
+      const results = await searchKeyword({
+        db,
+        ftsTable: "chunks_fts",
+        query: "Clyde",
+        ftsTokenizer: "unicode61",
+        limit: 10,
+        snippetMaxChars: 200,
+        sourceFilter: { sql: "", params: [] },
+        buildFtsQuery,
+        bm25RankToScore,
+      });
+
+      expect(results.map((row) => row.id).sort()).toEqual(["clyde-new", "clyde-old"]);
+    } finally {
       db.close();
     }
   });

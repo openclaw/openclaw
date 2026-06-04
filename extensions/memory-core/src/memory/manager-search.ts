@@ -307,7 +307,6 @@ async function searchChunksByEmbedding(params: {
 export async function searchKeyword(params: {
   db: DatabaseSync;
   ftsTable: string;
-  providerModel: string | undefined;
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
@@ -329,9 +328,10 @@ export async function searchKeyword(params: {
     return [];
   }
 
-  // When providerModel is undefined (FTS-only mode), search all models
-  const modelClause = params.providerModel ? " AND model = ?" : "";
-  const modelParams = params.providerModel ? [params.providerModel] : [];
+  // Lexical FTS is model-agnostic (issue #48300): keyword hits must survive
+  // embedding provider/model changes. Vector search remains model-scoped.
+  const modelClause = "";
+  const modelParams: never[] = [];
   const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
 
