@@ -86,7 +86,7 @@ function normalizeMutationConfidence(
 
 export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemoryWikiMutation {
   const params = rawParams as {
-    op: ApplyMemoryWikiMutation["op"];
+    op: string;
     title?: string;
     body?: string;
     lookup?: string;
@@ -98,7 +98,7 @@ export function normalizeMemoryWikiMutationInput(rawParams: unknown): ApplyMemor
     status?: string;
   };
   // Normalize CLI aliases to internal op names so agents can pass "synthesis"/"metadata".
-  const op: ApplyMemoryWikiMutation["op"] =
+  const op =
     params.op === "synthesis"
       ? "create_synthesis"
       : params.op === "metadata"
