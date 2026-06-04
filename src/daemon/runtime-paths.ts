@@ -218,21 +218,12 @@ export async function resolvePreferredNodePath(params: {
   if (currentExecPath && isNodeExecPath(currentExecPath, platform)) {
     const version = await resolveNodeVersion(currentExecPath, execFileImpl);
     if (isSupportedNodeVersion(version)) {
-      const stableCurrentPath = await resolveStableNodePath(currentExecPath);
-      if (!isVersionManagedNodePath(currentExecPath, platform)) {
-        return stableCurrentPath;
-      }
-      // Prefer system Node over a version-manager shim so daemon launch survives
-      // shell setup differences and package manager upgrades.
-      const systemNode = await resolveSystemNodeInfo({
-        env: params.env,
-        platform,
-        execFile: execFileImpl,
-      });
-      if (systemNode?.supported) {
-        return systemNode.path;
-      }
-      return stableCurrentPath;
+      // Always prefer the currently active node when it meets the version
+      // requirement, even if it lives inside a version manager like mise or
+      // nvm.  The previous logic fell back to the system-installed node when
+      // one was found, which caused the generated systemd unit to ignore the
+      // user's explicitly chosen mise node (issue #89376).
+      return await resolveStableNodePath(currentExecPath);
     }
   }
 
