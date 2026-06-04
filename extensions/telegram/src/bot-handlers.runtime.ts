@@ -164,6 +164,7 @@ import { parseTelegramOpaqueCallbackData } from "./native-command-callback-data.
 import {
   isTelegramEditTargetMissingError,
   isTelegramMessageHasNoTextError,
+  isTelegramMessageNotModifiedError,
 } from "./network-errors.js";
 import { resolveTelegramPromptMediaPath } from "./prompt-media-path.js";
 import { buildInlineKeyboard } from "./send.js";
@@ -2496,6 +2497,10 @@ export const registerTelegramHandlers = ({
       const callbackThreadId = resolvedThreadId ?? dmThreadId;
       const callbackConversationId =
         callbackThreadId != null ? `${chatId}:topic:${callbackThreadId}` : String(chatId);
+      const callbackInlineKeyboard = callbackMessage.reply_markup?.inline_keyboard;
+      const hasCallbackInlineKeyboard =
+        Array.isArray(callbackInlineKeyboard) &&
+        callbackInlineKeyboard.some((row) => Array.isArray(row) && row.length > 0);
       const pluginBindingApproval = parsePluginBindingApprovalCustomId(data);
       if (pluginBindingApproval) {
         let resolved: Awaited<ReturnType<typeof resolvePluginConversationBindingApproval>>;
@@ -3011,6 +3016,18 @@ export const registerTelegramHandlers = ({
         return;
       }
 
+      if (hasCallbackInlineKeyboard) {
+        try {
+          await clearCallbackButtons();
+        } catch (editErr) {
+          if (
+            !isTelegramMessageNotModifiedError(editErr) &&
+            !isPermanentTelegramCallbackEditError(editErr)
+          ) {
+            throw new TelegramRetryableCallbackError(editErr);
+          }
+        }
+      }
       const syntheticMessage = buildSyntheticTextMessage({
         base: withResolvedTelegramForumFlag(callbackMessage, isForum),
         from: callback.from,
