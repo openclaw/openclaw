@@ -2236,11 +2236,16 @@ export function installPromptSubmissionLockRelease(params: {
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 
-// Default to disabling SDK-level retries inside the embedded prompt lock window:
-// model-fallback owns retries, and SDK retries here race with session takeover.
-// This is a default only — an explicit settings.retry.provider.maxRetries (surfaced
-// via options.maxRetries) still wins, so the caller-provided options spread last.
-export function installEmbeddedPromptRetryDefault(session: unknown): void {
+// Inject the provider retry default for SDK calls inside the embedded prompt lock
+// window. The injected default is the configured settings.retry.provider.maxRetries
+// (passed in by the caller); when unset it falls back to 0 so SDK retries stay out of
+// the prompt-lock release window where model-fallback owns retries and SDK retries
+// race with session takeover. Explicit per-call options.maxRetries still wins because
+// the caller-provided options spread last over the injected default.
+export function installEmbeddedPromptRetryDefault(
+  session: unknown,
+  options?: { maxRetries?: number },
+): void {
   const agent = (session as SessionWithAgentPrompt).agent;
   if (typeof agent?.streamFn !== "function") {
     return;
@@ -2249,11 +2254,12 @@ export function installEmbeddedPromptRetryDefault(session: unknown): void {
   if (currentStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] === true) {
     return;
   }
+  const defaultMaxRetries = options?.maxRetries ?? 0;
   const innerStreamFn = currentStreamFn;
   const wrappedStreamFn: PromptReleaseStreamFn = (...args: unknown[]) => {
-    const [model, context, options] = args;
-    const requestOptions = options as { maxRetries?: number } | undefined;
-    return innerStreamFn(model, context, { maxRetries: 0, ...requestOptions });
+    const [model, context, callOptions] = args;
+    const requestOptions = callOptions as { maxRetries?: number } | undefined;
+    return innerStreamFn(model, context, { maxRetries: defaultMaxRetries, ...requestOptions });
   };
   wrappedStreamFn["__openclawEmbeddedPromptRetryDefaultInstalled"] = true;
   // The outermost wrapper hides inner markers, so carry the lock-release marker
