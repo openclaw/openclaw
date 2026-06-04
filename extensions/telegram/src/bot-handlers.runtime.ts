@@ -255,7 +255,6 @@ export const registerTelegramHandlers = ({
   const shouldBypassInboundDebounceForPrivateControlDm = (params: {
     msg: Message;
     botUsername?: string;
-    hasMedia?: boolean;
   }): boolean => {
     if (params.msg.chat.type !== "private") {
       return false;
@@ -264,11 +263,12 @@ export const registerTelegramHandlers = ({
     if (!text.trim()) {
       return false;
     }
+    // Media payloads are non-debounceable for attachment-safety reasons, but media alone is not a
+    // control-lane signal. Evaluate only the text here so ordinary captioned DMs keep their key.
     return !shouldDebounceTextInbound({
       text,
       cfg,
       chatType: "direct",
-      hasMedia: params.hasMedia,
       commandOptions: { botUsername: params.botUsername },
     });
   };
@@ -1977,7 +1977,6 @@ export const registerTelegramHandlers = ({
         shouldBypassInboundDebounceForPrivateControlDm({
           msg,
           botUsername,
-          hasMedia: allMedia.length > 0,
         })
           ? null
           : debounceKey,

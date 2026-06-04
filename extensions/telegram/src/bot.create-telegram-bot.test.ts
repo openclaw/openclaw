@@ -936,6 +936,127 @@ describe("createTelegramBot", () => {
     expect(sendMessageSpy).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps ordinary captioned private Telegram media keyed in interrupt queue mode", async () => {
+    loadConfig.mockReturnValue({
+      agents: {
+        defaults: {
+          envelopeTimezone: "utc",
+        },
+      },
+      messages: {
+        queue: {
+          byChannel: {
+            telegram: "interrupt",
+          },
+        },
+      },
+      channels: {
+        telegram: { dmPolicy: "open", allowFrom: ["*"] },
+      },
+    });
+
+    installPerKeySequentializer();
+
+    const startedBodies: string[] = [];
+    let releaseFirstRun: (() => void) | undefined;
+    const firstRunGate = new Promise<void>((resolve) => {
+      releaseFirstRun = resolve;
+    });
+
+    replySpy.mockImplementation(async (ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onReplyStart?.();
+      const body = ctx.Body ?? "";
+      startedBodies.push(body);
+      if (body.includes("long task")) {
+        await firstRunGate;
+      }
+      return { text: `reply:${body}` };
+    });
+
+    const privateTextCtx = (messageId: number, text: string): TelegramMiddlewareTestContext => ({
+      update: { update_id: messageId },
+      message: {
+        chat: { id: 7, type: "private" },
+        text,
+        date: 1736380800 + messageId,
+        message_id: messageId,
+        from: { id: 42, first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({}),
+    });
+    const privateCaptionedMediaCtx = (
+      messageId: number,
+      caption: string,
+    ): TelegramMiddlewareTestContext => ({
+      update: { update_id: messageId },
+      message: {
+        chat: { id: 7, type: "private" },
+        caption,
+        photo: [{ file_id: "photo-1", file_unique_id: "photo-1-u", width: 1, height: 1 }],
+        date: 1736380800 + messageId,
+        message_id: messageId,
+        from: { id: 42, first_name: "Ada" },
+      },
+      me: { username: "openclaw_bot" },
+      getFile: async () => ({ file_path: "photos/photo-1.jpg" }),
+    });
+
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response(new Uint8Array([0xff, 0xd8, 0xff, 0x00]), {
+          status: 200,
+          headers: { "content-type": "image/jpeg" },
+        }),
+    );
+
+    try {
+      createTelegramBot({ token: "tok" });
+      const messageHandler = getOnHandler("message") as (
+        ctx: TelegramMiddlewareTestContext,
+      ) => Promise<void>;
+
+      const firstPromise = runTelegramMiddlewareChain({
+        ctx: privateTextCtx(201, "long task"),
+        finalHandler: messageHandler,
+      });
+
+      await vi.waitFor(
+        () => {
+          expect(startedBodies).toHaveLength(1);
+        },
+        { interval: 1, timeout: 500 },
+      );
+
+      let secondResolved = false;
+      const secondPromise = runTelegramMiddlewareChain({
+        ctx: privateCaptionedMediaCtx(202, "ordinary photo follow-up"),
+        finalHandler: messageHandler,
+      }).finally(() => {
+        secondResolved = true;
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(secondResolved).toBe(false);
+      expect(startedBodies).toHaveLength(1);
+      expect(startedBodies[0]).toContain("long task");
+      expect(fetchSpy).not.toHaveBeenCalled();
+      expect(sendMessageSpy).toHaveBeenCalledTimes(0);
+
+      if (!releaseFirstRun) {
+        throw new Error("Expected first Telegram run release callback to be initialized");
+      }
+      releaseFirstRun();
+      await Promise.all([firstPromise, secondPromise]);
+
+      expect(secondResolved).toBe(true);
+      expect(startedBodies.length).toBeGreaterThanOrEqual(1);
+      expect(startedBodies[0]).toContain("long task");
+    } finally {
+      fetchSpy.mockRestore();
+    }
+  });
+
   it.each(["stop", "/stop@openclaw_bot"] as const)(
     "lets %s bypass and cancel pending same-chat inbound debounce",
     async (stopText) => {
