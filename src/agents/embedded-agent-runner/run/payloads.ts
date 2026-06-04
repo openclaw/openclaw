@@ -166,7 +166,7 @@ function resolveToolErrorWarningPolicy(params: {
   hasUserFacingReply: boolean;
   hasUserFacingErrorReply: boolean;
   hasUserFacingFailureAcknowledgement: boolean;
-  hasMessageToolOnlySourceReply: boolean;
+  hasMessageToolOnlyFailureAcknowledgement: boolean;
   suppressToolErrors: boolean;
   suppressToolErrorWarnings?: boolean | (() => boolean | undefined);
   isCronTrigger?: boolean;
@@ -200,9 +200,12 @@ function resolveToolErrorWarningPolicy(params: {
   if (params.suppressToolErrors) {
     return { showWarning: false, includeDetails };
   }
-  // message_tool_only runs already surfaced the source reply directly to the
-  // user, so a follow-on exec warning would duplicate that visible failure.
-  if (params.hasMessageToolOnlySourceReply && isExecLikeToolName(params.lastToolError.toolName)) {
+  // message_tool_only runs can already surface the failure directly to the
+  // user, but only when the visible source reply explicitly acknowledges it.
+  if (
+    params.hasMessageToolOnlyFailureAcknowledgement &&
+    isExecLikeToolName(params.lastToolError.toolName)
+  ) {
     return { showWarning: false, includeDetails };
   }
   const isMutatingToolError =
@@ -283,9 +286,13 @@ export function buildEmbeddedRunPayloads(params: {
     params.sourceReplyDeliveryMode === "message_tool_only"
       ? (params.messagingToolSourceReplyPayloads ?? [])
       : [];
+  let hasSourceReplyFailureAcknowledgement = false;
   const sourceReplyStartIndex = replyItems.length;
   sourceReplyPayloads.forEach((payload, index) => {
     const text = normalizeOptionalString(payload.text) ?? "";
+    if (text && hasExplicitMutatingToolFailureAcknowledgement(text)) {
+      hasSourceReplyFailureAcknowledgement = true;
+    }
     const media = Array.from(
       new Set([...(payload.mediaUrl ? [payload.mediaUrl] : []), ...(payload.mediaUrls ?? [])]),
     ).filter((value) => value.trim().length > 0);
@@ -535,8 +542,10 @@ export function buildEmbeddedRunPayloads(params: {
       hasUserFacingReply: hasUserFacingAssistantReply,
       hasUserFacingErrorReply,
       hasUserFacingFailureAcknowledgement,
-      hasMessageToolOnlySourceReply:
-        params.sourceReplyDeliveryMode === "message_tool_only" && hasSourceReplyPayload,
+      hasMessageToolOnlyFailureAcknowledgement:
+        params.sourceReplyDeliveryMode === "message_tool_only" &&
+        hasSourceReplyPayload &&
+        hasSourceReplyFailureAcknowledgement,
       suppressToolErrors: Boolean(params.config?.messages?.suppressToolErrors),
       suppressToolErrorWarnings: params.suppressToolErrorWarnings,
       isCronTrigger: params.isCronTrigger,

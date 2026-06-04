@@ -490,7 +490,27 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("suppresses exec warnings after message-tool-only source replies", () => {
+  it("suppresses exec warnings after message-tool-only source replies that acknowledge failure", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        error: "command failed",
+        mutatingAction: true,
+      },
+      messagingToolSourceReplyPayloads: [
+        { text: "I couldn't run the command because the fixture note was missing." },
+      ],
+      sourceReplyDeliveryMode: "message_tool_only",
+      verboseLevel: "on",
+    });
+
+    expectSinglePayloadText(
+      payloads,
+      "I couldn't run the command because the fixture note was missing.",
+    );
+  });
+
+  it("keeps exec warnings after benign message-tool-only source replies", () => {
     const payloads = buildPayloads({
       lastToolError: {
         toolName: "exec",
@@ -502,7 +522,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       verboseLevel: "on",
     });
 
-    expectSinglePayloadText(payloads, "MCP_CODE_MODE_FILE_FAIL");
+    expect(payloads).toHaveLength(2);
+    expect(payloads[0]?.text).toBe("MCP_CODE_MODE_FILE_FAIL");
+    expect(payloads[1]?.text).toContain("Exec failed");
   });
 
   it("keeps non-exec mutating warnings after message-tool-only source replies", () => {
