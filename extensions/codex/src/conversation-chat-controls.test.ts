@@ -461,6 +461,123 @@ describe("codex conversation chat controls", () => {
     ).toEqual({ matched: false });
   });
 
+  it("accepts typed numeric or label replies for sequential prompts as a fallback to button clicks", async () => {
+    // Regression: a user that replies '1' (or pastes the option label
+    // instead of pressing a rendered button) should still resolve the
+    // active request_user_input instead of being routed to a new
+    // turn. Channels that cannot render or keep buttons (e.g. plain
+    // text relays) rely on this fallback.
+    let resolveText: (text: string) => void = () => undefined;
+    const answered = new Promise<string>((resolve) => {
+      resolveText = resolve;
+    });
+    const emittedPayloads: Array<{ labels: string[] }> = [];
+    const { token, payload } = createCodexUserInputSequentialControl({
+      scope,
+      resolveText,
+      questions: [
+        {
+          id: "feature",
+          header: "Feature",
+          question: "Which feature?",
+          isOther: false,
+          isSecret: false,
+          options: [
+            { label: "Demo panel (Recommended)", description: "Visible" },
+            { label: "CLI flag", description: "No-op" },
+          ],
+        },
+        {
+          id: "approval",
+          header: "Approval",
+          question: "Approve?",
+          isOther: true,
+          isSecret: false,
+          options: [{ label: "Approve (Recommended)", description: "Proceed" }],
+        },
+      ],
+      emitNextPrompt: async (nextIndex) => {
+        const next = buildCodexUserInputSequentialPrompt({
+          token,
+          questions: [
+            {
+              id: "feature",
+              header: "Feature",
+              question: "Which feature?",
+              isOther: false,
+              isSecret: false,
+              options: [
+                { label: "Demo panel (Recommended)", description: "Visible" },
+                { label: "CLI flag", description: "No-op" },
+              ],
+            },
+            {
+              id: "approval",
+              header: "Approval",
+              question: "Approve?",
+              isOther: true,
+              isSecret: false,
+              options: [{ label: "Approve (Recommended)", description: "Proceed" }],
+            },
+          ],
+          questionIndex: nextIndex,
+        });
+        emittedPayloads.push({ labels: readButtons(next).map((b) => b.label) });
+      },
+    });
+    emittedPayloads.push({ labels: readButtons(payload).map((b) => b.label) });
+
+    // User types the numeric prefix instead of pressing the button.
+    const result = answerCodexUserInputFreeform({
+      answerText: "2",
+      ctx,
+      sessionFile: scope.sessionFile,
+    });
+    expect(result).toEqual({ matched: true, consumed: true, message: "" });
+    expect(emittedPayloads).toHaveLength(2);
+    expect(emittedPayloads[1]?.labels).toEqual(["Approve (Recommended)"]);
+
+    // The label-form reply should also resolve the final question.
+    const q2Callback = readButtons(
+      buildCodexUserInputSequentialPrompt({
+        token,
+        questions: [
+          {
+            id: "feature",
+            header: "Feature",
+            question: "Which feature?",
+            isOther: false,
+            isSecret: false,
+            options: [
+              { label: "Demo panel (Recommended)", description: "Visible" },
+              { label: "CLI flag", description: "No-op" },
+            ],
+          },
+          {
+            id: "approval",
+            header: "Approval",
+            question: "Approve?",
+            isOther: true,
+            isSecret: false,
+            options: [{ label: "Approve (Recommended)", description: "Proceed" }],
+          },
+        ],
+        questionIndex: 1,
+      }),
+    )[0]?.value?.slice(6) ?? "";
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "Approve (Recommended)",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: true, consumed: true, message: "Sent answer to Codex." });
+    await expect(answered).resolves.toBe(
+      "feature: CLI flag\napproval: Approve (Recommended)",
+    );
+    expect(q2Callback).toBeTypeOf("string");
+  });
+
   it("omits buttons for secret or freeform-only prompts", () => {
     const secret = createCodexUserInputPrompt({
       scope,
@@ -786,23 +903,26 @@ describe("codex conversation chat controls", () => {
     });
     emittedPayloads.push({ labels: readButtons(payload).map((b) => b.label) });
 
-    // Q1 has no isOther, so a freeform reply is rejected (no matching
-    // pending input with the currently-shown question set to other).
+    // Q1 has a numbered/label button row. A user reply that
+    // matches neither the numeric prefix nor an option label is
+    // rejected (the legacy safety net stays in place).
     expect(
       answerCodexUserInputFreeform({
-        answerText: "anything",
+        answerText: "totally unrelated reply",
         ctx,
         sessionFile: scope.sessionFile,
       }),
     ).toEqual({ matched: false });
 
-    // Click Q1 -> emitNextPrompt(1) -> Q2 with isOther becomes active.
-    const q1Callback = readButtons(payload)[0]?.value?.slice(6) ?? "";
-    expect(resolveCodexUserInputCallback({ payload: q1Callback, ctx })).toEqual({
-      matched: true,
-      consumed: true,
-      message: "",
-    });
+    // Q1 has a numeric prefix; a user typing "1" instead of pressing
+    // the button should still resolve the active turn.
+    expect(
+      answerCodexUserInputFreeform({
+        answerText: "1",
+        ctx,
+        sessionFile: scope.sessionFile,
+      }),
+    ).toEqual({ matched: true, consumed: true, message: "" });
     expect(emittedPayloads).toHaveLength(2);
     expect(emittedPayloads[1]?.labels).toEqual(["Approve"]);
 

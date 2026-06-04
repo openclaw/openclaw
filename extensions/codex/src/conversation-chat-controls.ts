@@ -338,7 +338,18 @@ export function answerCodexUserInputFreeform(params: {
     // bookkeeping below.
     if (pending.emitNextPrompt && pending.questions.length > 1) {
       const current = pending.questions[pending.currentQuestionIndex];
-      if (!current?.isOther) {
+      if (!current) {
+        return false;
+      }
+      // Sequential entries show a numbered/label button row for the
+      // current question. A user that replies with the numeric
+      // prefix (e.g. "1") or pastes the label instead of clicking
+      // should still resolve the active turn; do not require the
+      // currently-shown question to be isOther. Reject replies that
+      // do not normalize to one of the rendered options so a stray
+      // message does not consume the request.
+      const normalized = resolveFreeformOptionAnswer(current, answerText);
+      if (normalized === answerText && !current.isOther) {
         return false;
       }
       return !readControlScopeMismatch(pending, params.ctx, params.sessionFile);
@@ -374,7 +385,12 @@ export function answerCodexUserInputFreeform(params: {
     if (!currentQuestion) {
       return { matched: false };
     }
-    pending.selectedAnswers[currentQuestion.id] = answerText;
+    // Normalize typed numeric/label replies against the rendered
+    // options. Users who reply '1' or paste the option label instead
+    // of pressing the button should still resolve the active turn
+    // (the channel may not be able to render or keep the buttons).
+    const normalized = resolveFreeformOptionAnswer(currentQuestion, answerText);
+    pending.selectedAnswers[currentQuestion.id] = normalized;
     const complete = pending.questions.every((entry) => pending.selectedAnswers[entry.id]);
     if (!complete) {
       const nextIndex = pending.currentQuestionIndex + 1;
@@ -793,6 +809,39 @@ function parseCodexFreeformAnswersForUnselectedQuestions(
     answers[question.id] = answer;
   }
   return answers;
+}
+
+/**
+ * Normalize a typed freeform reply against a single question's rendered
+ * options. Accepts: the numeric prefix the prompt renders (e.g. "1"),
+ * the exact option label (case-insensitive), or the raw text. Returns
+ * the raw answer when no match, so the question's isOther / typed-text
+ * path still works for genuinely freeform answers.
+ */
+function resolveFreeformOptionAnswer(
+  question: UserInputQuestion,
+  answerText: string,
+): string {
+  const options = question.options ?? [];
+  if (options.length === 0) {
+    return answerText;
+  }
+  const trimmed = answerText.trim();
+  // Numeric prefix: the prompt renders "1. label", "2. label" etc.
+  if (/^\d+$/.test(trimmed)) {
+    const index = Number(trimmed) - 1;
+    const option = options[index];
+    if (option) {
+      return option.label;
+    }
+  }
+  // Exact label match (case-insensitive).
+  const lowered = trimmed.toLowerCase();
+  const exact = options.find((option) => option.label.toLowerCase() === lowered);
+  if (exact) {
+    return exact.label;
+  }
+  return answerText;
 }
 
 function canFreeformAnswerAllQuestions(
