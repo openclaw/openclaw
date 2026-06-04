@@ -47,7 +47,7 @@ export { resolveControlUiLinks };
 export function guardCancel<T>(value: T | symbol, runtime: RuntimeEnv): T {
   if (isCancel(value)) {
     cancel(stylePromptTitle("Setup cancelled.") ?? "Setup cancelled.");
-    runtime.exit(0);
+    runtime.exit(1);
     throw new Error("unreachable");
   }
   return value;

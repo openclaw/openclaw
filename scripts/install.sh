@@ -32,6 +32,21 @@ cleanup_tmpfiles() {
 }
 trap cleanup_tmpfiles EXIT
 
+abort_install_int() {
+    cleanup_tmpfiles
+    echo ""
+    ui_warn "Installation interrupted"
+    exit 130
+}
+abort_install_term() {
+    cleanup_tmpfiles
+    echo ""
+    ui_warn "Installation terminated"
+    exit 143
+}
+trap abort_install_int INT
+trap abort_install_term TERM
+
 mktempfile() {
     local f
     f="$(mktemp)"
@@ -495,12 +510,15 @@ run_quiet_step() {
     log="$(mktempfile)"
     local showed_progress=false
 
+    local cmd_exit=0
+
     if [[ -n "$GUM" ]] && gum_is_tty && ! is_shell_function "${1:-}"; then
         local cmd_quoted=""
         local log_quoted=""
         printf -v cmd_quoted '%q ' "$@"
         printf -v log_quoted '%q' "$log"
-        if run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1"; then
+        run_with_spinner "$title" bash -c "${cmd_quoted}>${log_quoted} 2>&1" || cmd_exit=$?
+        if (( cmd_exit == 0 )); then
             return 0
         fi
         showed_progress=true
@@ -508,7 +526,8 @@ run_quiet_step() {
         # Keep users informed even when gum spinner cannot run (for example shell functions).
         ui_info "${title}"
         showed_progress=true
-        if "$@" >"$log" 2>&1; then
+        "$@" >"$log" 2>&1 || cmd_exit=$?
+        if (( cmd_exit == 0 )); then
             return 0
         fi
     fi
@@ -520,6 +539,12 @@ run_quiet_step() {
     ui_error "${title} failed — re-run with --verbose for details"
     if [[ -s "$log" ]]; then
         tail -n 80 "$log" >&2 || true
+    fi
+    # Preserve signal exit codes (130=SIGINT, 143=SIGTERM) so callers
+    # like run_doctor can distinguish user cancellation from normal errors.
+    # Return 1 for all other failures to keep existing caller semantics.
+    if (( cmd_exit > 128 )); then
+        return "$cmd_exit"
     fi
     return 1
 }
@@ -2805,7 +2830,11 @@ run_doctor() {
         warn_openclaw_not_found
         return 0
     fi
-    run_quiet_step "Running doctor" "$claw" doctor --non-interactive || true
+    local doctor_exit=0
+    run_quiet_step "Running doctor" "$claw" doctor --non-interactive || doctor_exit=$?
+    if (( doctor_exit == 130 )); then
+        abort_install_int
+    fi
     ui_success "Doctor complete"
 }
 
@@ -3261,10 +3290,17 @@ main() {
             fi
             ui_info "Running openclaw doctor"
             local doctor_ok=0
+            local doctor_exit=0
             if (( ${#doctor_args[@]} )); then
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null && doctor_ok=1
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor "${doctor_args[@]}" </dev/null || doctor_exit=$?
             else
-                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty && doctor_ok=1
+                OPENCLAW_UPDATE_IN_PROGRESS=1 "$claw" doctor </dev/tty || doctor_exit=$?
+            fi
+            if (( doctor_exit == 130 )); then
+                abort_install_int
+            fi
+            if (( doctor_exit == 0 )); then
+                doctor_ok=1
             fi
             if (( doctor_ok )); then
                 ui_info "Updating plugins"
