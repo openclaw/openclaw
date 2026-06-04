@@ -3,8 +3,10 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
 import { parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
 
+/** Plugin install record update with the target plugin id attached. */
 export type PluginInstallUpdate = PluginInstallRecord & { pluginId: string };
 
+/** Builds install record fields from resolved npm package metadata. */
 export function buildNpmResolutionInstallFields(
   resolution?: NpmSpecResolution,
 ): Pick<
@@ -31,6 +33,7 @@ export function resolveNpmInstallRecordSpec(params: {
   return resolvedSpec;
 }
 
+/** Records or updates a plugin install record in OpenClaw config. */
 export function recordPluginInstall(
   cfg: OpenClawConfig,
   update: PluginInstallUpdate,

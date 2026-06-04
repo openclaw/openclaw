@@ -2,14 +2,60 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 
 const assertionsPath = path.resolve("scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs");
+const disableExperimentalWarning = "--disable-warning=ExperimentalWarning";
+
+function nodeOptionsWithoutExperimentalWarnings(): string {
+  const current = process.env.NODE_OPTIONS ?? "";
+  return current.includes(disableExperimentalWarning)
+    ? current
+    : [current, disableExperimentalWarning].filter(Boolean).join(" ");
+}
 
 function writeConfig(home: string, channels: Record<string, unknown>): void {
   const configDir = path.join(home, ".openclaw");
   fs.mkdirSync(configDir, { recursive: true });
   fs.writeFileSync(path.join(configDir, "openclaw.json"), JSON.stringify({ channels }));
+}
+
+function writeOnboardConfig(home: string): void {
+  const configDir = path.join(home, ".openclaw");
+  fs.mkdirSync(configDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(configDir, "openclaw.json"),
+    JSON.stringify({
+      auth: {
+        profiles: {
+          "openai:api-key": { provider: "openai", mode: "api_key" },
+        },
+      },
+    }),
+  );
+}
+
+function writeAuthProfileStoreSqlite(agentDir: string, store: unknown): void {
+  fs.mkdirSync(agentDir, { recursive: true });
+  const db = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
+  try {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS auth_profile_store (
+        store_key TEXT NOT NULL PRIMARY KEY,
+        store_json TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+    db.prepare(
+      `
+        INSERT INTO auth_profile_store (store_key, store_json, updated_at)
+        VALUES (?, ?, ?)
+      `,
+    ).run("primary", JSON.stringify(store), Date.now());
+  } finally {
+    db.close();
+  }
 }
 
 function runAssert(home: string, channel: string, ...tokens: string[]) {
@@ -21,9 +67,20 @@ function runAssert(home: string, channel: string, ...tokens: string[]) {
       env: {
         ...process.env,
         HOME: home,
+        NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
       },
     },
   );
+}
+
+function runOnboardAssert(home: string) {
+  return spawnSync(process.execPath, [assertionsPath, "assert-onboard-state", home], {
+    encoding: "utf8",
+    env: {
+      ...process.env,
+      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
+    },
+  });
 }
 
 function runStatusAssert(channel: string, channelsStatus: unknown, statusText: string) {
@@ -46,6 +103,33 @@ function runStatusAssert(channel: string, channelsStatus: unknown, statusText: s
 }
 
 describe("npm onboard channel agent assertions", () => {
+  it("validates OpenAI env refs from the SQLite auth profile store", () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-onboard-assertions-"));
+    const agentDir = path.join(tempDir, ".openclaw", "agents", "main", "agent");
+
+    try {
+      writeOnboardConfig(tempDir);
+      writeAuthProfileStoreSqlite(agentDir, {
+        version: 1,
+        profiles: {
+          "openai:api-key": {
+            type: "api_key",
+            provider: "openai",
+            keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+          },
+        },
+      });
+
+      const result = runOnboardAssert(tempDir);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("validates channel tokens in their canonical config fields", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-channel-assertions-"));
     try {

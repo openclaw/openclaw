@@ -233,14 +233,16 @@ describe("managed npm root", () => {
   });
 
   it("reads package-level npm overrides for managed plugin installs", async () => {
-    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual({
+    const manifest = JSON.parse(
+      await fs.readFile(path.resolve(process.cwd(), "package.json"), "utf8"),
+    ) as { overrides?: Record<string, unknown> };
+    const expectedOverrides = manifest.overrides ?? {};
+
+    expect(expectedOverrides).toMatchObject({
       axios: "1.16.0",
-      "fast-uri": "3.1.2",
-      "follow-redirects": "1.16.0",
-      "ip-address": "10.2.0",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
-      uuid: "14.0.0",
     });
+    await expect(readOpenClawManagedNpmRootOverrides()).resolves.toEqual(expectedOverrides);
   });
 
   it("resolves package-level npm overrides from packaged dist chunks", async () => {

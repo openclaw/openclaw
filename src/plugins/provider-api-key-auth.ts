@@ -90,6 +90,7 @@ async function applyApiKeyConfig(params: {
   return params.defaultModel ? applyPrimaryModel(next, params.defaultModel) : next;
 }
 
+/** Creates a provider auth method that captures, stores, and configures API-key credentials. */
 export function createProviderApiKeyAuthMethod(
   params: ProviderApiKeyAuthMethodOptions,
 ): ProviderAuthMethod {

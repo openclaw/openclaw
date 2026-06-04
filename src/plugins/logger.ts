@@ -7,6 +7,7 @@ type LoggerLike = {
   debug?: (message: string) => void;
 };
 
+/** Adapts a generic logger to the plugin loader logger interface. */
 export function createPluginLoaderLogger(logger: LoggerLike): PluginLogger {
   return {
     info: (msg) => logger.info(msg),

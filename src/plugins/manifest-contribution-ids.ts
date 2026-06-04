@@ -6,12 +6,14 @@ import {
   type PluginRegistrySnapshot,
 } from "./plugin-registry.js";
 
+/** Parameters for listing manifest contribution ids from a registry snapshot. */
 export type ListManifestContributionIdsParams = LoadPluginRegistryParams & {
   contribution: PluginRegistryContributionKey;
   index?: PluginRegistrySnapshot;
   includeDisabled?: boolean;
 };
 
+/** Lists ids contributed by plugin manifests for one contribution kind. */
 export function listManifestContributionIds(
   params: ListManifestContributionIdsParams,
 ): readonly string[] {
@@ -35,6 +37,7 @@ export function listManifestContributionIds(
   });
 }
 
+/** Lists channel ids contributed by plugin manifests. */
 export function listManifestChannelContributionIds(
   params: Omit<ListManifestContributionIdsParams, "contribution"> = {},
 ): readonly string[] {
@@ -44,6 +47,7 @@ export function listManifestChannelContributionIds(
   });
 }
 
+/** Lists provider ids contributed by plugin manifests. */
 export function listManifestProviderContributionIds(
   params: Omit<ListManifestContributionIdsParams, "contribution"> = {},
 ): readonly string[] {
